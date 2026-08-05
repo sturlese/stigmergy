@@ -1,0 +1,70 @@
+{
+  "entities": {
+    "aurora-systems": {
+      "name": "Aurora Systems",
+      "type": "organization",
+      "aliases": [
+        "Aurora"
+      ]
+    },
+    "borealis-logistics": {
+      "name": "Borealis Logistics",
+      "type": "organization",
+      "aliases": [
+        "Borealis"
+      ]
+    },
+    "cascade-foods": {
+      "name": "Cascade Foods",
+      "type": "organization",
+      "aliases": [
+        "Cascade"
+      ]
+    },
+    "delta-robotics": {
+      "name": "Delta Robotics",
+      "type": "organization",
+      "aliases": [
+        "Delta"
+      ]
+    },
+    "globex": {
+      "name": "Globex",
+      "type": "organization",
+      "aliases": [
+        "Globex Corporation"
+      ]
+    },
+    "initech": {
+      "name": "Initech",
+      "type": "organization",
+      "aliases": []
+    },
+    "everest-analytics": {
+      "name": "Everest Analytics",
+      "type": "organization",
+      "aliases": [
+        "Everest"
+      ]
+    },
+    "foxglove-health": {
+      "name": "Foxglove Health",
+      "type": "organization",
+      "aliases": [
+        "Foxglove"
+      ]
+    },
+    "hooli": {
+      "name": "Hooli",
+      "type": "organization",
+      "aliases": []
+    },
+    "stigmergy": {
+      "name": "Stigmergy",
+      "type": "product",
+      "aliases": [
+        "the brain"
+      ]
+    }
+  }
+}

@@ -1,0 +1,22 @@
+# Lint config for the whole repo.
+line-length = 120
+target-version = "py312"
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = [
+  "SIM105",  # try/except/pass is fine for best-effort cleanup
+  "SIM108",  # ternary is not always clearer
+]
+
+[lint.isort]
+known-first-party = ["stigmergy"]
+
+[lint.per-file-ignores]
+"**/tests/*" = ["SIM115"]   # quick open().read()/.write() is fine in tests
+# A frozen, byte-for-byte copy of the real `stigmergy` repo's `.claude/tools/stigmergy_lint.py`
+# (tests/librarian/support.py explains why: the librarian test fixtures need a real contract
+# linter and must not depend on a local checkout of that repo existing). Left un-linted on
+# purpose so a future resync stays a trivial diff against the source instead of silently drifting
+# to satisfy this repo's own lint config.
+"tests/librarian/fixtures/repo/.claude/tools/stigmergy_lint.py" = ["B007"]

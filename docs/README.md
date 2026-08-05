@@ -1,0 +1,119 @@
+# docs — how the platform works and why
+
+Four kinds of document, answering different questions:
+
+| Where | Answers |
+|---|---|
+| [`decisions/`](./decisions) | **why** a mechanism is built the way it is — the ADRs |
+| [`reference/`](./reference) | **what** each stage does, in prose, for someone operating or reading it |
+| `src/stigmergy/*/index.md` | **where** things live: module by module, one map per package |
+| [`archive/`](./archive) | superseded material kept for the record, never load-bearing |
+
+**Read the ADR before changing the mechanism it describes.** Each one records a choice that
+cost something to reach — code vetoing an agent's diff instead of an LLM reviewing an LLM,
+bounded agency instead of open-ended tool loops, one enforcement point for access instead of
+per-surface checks. Changing the code without reading the ADR usually means rediscovering the
+option that was already rejected.
+
+## Reference docs (what each stage does)
+
+| Doc | Covers |
+|---|---|
+| [`reference/knowledge-repo.md`](./reference/knowledge-repo.md) | the repository this platform reads and writes: the three zones, the fast lane's three creatable types, the optional `ops/` files, and what the platform will never do to it. **Start here if you are setting one up** |
+| [`reference/index.md`](./reference/index.md) | `stigmergy.index` — the hybrid derived index, the ranking batch, and the `stigmergy-index --check` substrate lint |
+| [`reference/server.md`](./reference/server.md) | `stigmergy.server` — the single MCP server and its **ten** tools: stdio + streamable HTTP, auth, audit, rate limiting |
+| [`reference/answer.md`](./reference/answer.md) | `stigmergy.answer` — the answering agent + strict verifier; three agent tools |
+| [`reference/capture.md`](./reference/capture.md) | `stigmergy.capture` — the durable capture queue, attribution, the evidence plane, retention, the human loop |
+| [`reference/librarian.md`](./reference/librarian.md) | `stigmergy.librarian` — the filing engine: the worker, the agent, the eight gates, the commit |
+| [`reference/meeting-distiller.md`](./reference/meeting-distiller.md) | `stigmergy-meeting` + the librarian's meeting flow: a transcript becomes a page SET (source + meeting + N decisions), filed atomically with per-page anchoring |
+| [`reference/views.md`](./reference/views.md) | `stigmergy-views` + `stigmergy.views`: a derived, per-entity rollup — a deterministic skeleton (timeline, backlinks) plus an agent-written synthesis, `acl` the intersection of its members' audiences, regenerated after a meeting files or on demand |
+| [`reference/slack.md`](./reference/slack.md) | `stigmergy.slack` — the third transport: identity resolution, the `@brain`/DM ask, the 🧠 capture gesture, the push-channel poller, the steward doorbell and the Block Kit review surface |
+| [`reference/navigation.md`](./reference/navigation.md) | `stigmergy.server` — the graph served (`read_page`'s `links`/`backlinks`), `list_entities`/`describe_entity`, entity-first resolution in the service layer so every client inherits it |
+| [`reference/gardener-digest.md`](./reference/gardener-digest.md) | `stigmergy.gardener` + `stigmergy.digest` — `stigmergy-gardener`'s **eight** deterministic corpus-health checks plus a bounded model editorial sweep, findings persisted and reported, plus an SLA Slack notice that cannot fire today (nothing produces an `sla` finding); `stigmergy-digest`'s two-section Slack post, ACL-scoped at the destination channel, `--dry-run` byte-identical. The digest is a command, not a cron; the daily cron runs the gardener alone |
+| [`reference/admin-console.md`](./reference/admin-console.md) | `stigmergy.admin` — the ops console at `/admin`, mounted on the SAME app process group rather than a fourth service: the steward drain, remote control of the three crons, gardener/digest/index panels and an activity view. One bearer credential, minted by `stigmergy-admin-token`, stored only as a hash; INERT until `STIGMERGY_ADMIN_TOKEN_HASH` is configured |
+| [`reference/page-contract.md`](./reference/page-contract.md) | the FAST-LANE anchor rule: what `entity:` means, who writes it, how it is read |
+| [`reference/brain-page-contract.md`](./reference/brain-page-contract.md) | the wider frontmatter dialect of pages already in the repo — a READ contract, since nothing writes it any more |
+| [`reference/operator-runbook.md`](./reference/operator-runbook.md) | operator runbook: deploy, tokens, audit trail, object-store smoke check, the two databases, the librarian + its GitHub App, the Slack transport, the steward doorbell, the gardener cron and the digest command |
+| [`archive/socket-mode-spike.md`](./archive/socket-mode-spike.md) | archived: the Slack Socket Mode spike that preceded the transport |
+
+## Code maps (where things live)
+
+Twelve per-package maps live **beside the code**, one per package, in the standard
+Purpose / Key entry points / Use these / Avoid / Data & contracts / Tests / Common tasks shape:
+
+[`kernel`](../src/stigmergy/kernel/index.md) ·
+[`index`](../src/stigmergy/index/index.md) ·
+[`server`](../src/stigmergy/server/index.md) ·
+[`answer`](../src/stigmergy/answer/index.md) ·
+[`capture`](../src/stigmergy/capture/index.md) ·
+[`librarian`](../src/stigmergy/librarian/index.md) ·
+[`entities`](../src/stigmergy/entities/index.md) ·
+[`views`](../src/stigmergy/views/index.md) ·
+[`slack`](../src/stigmergy/slack/index.md) ·
+[`gardener`](../src/stigmergy/gardener/index.md) ·
+[`digest`](../src/stigmergy/digest/index.md) ·
+[`admin`](../src/stigmergy/admin/index.md) ·
+plus [`evals/index.md`](../evals/index.md) for the measurement rig.
+
+Two packages have a code map and **no** `reference/` page of their own. `stigmergy.kernel` has none
+deliberately: it is a library other packages import — the model dispatch, the page contract's
+constants and emitter, the ACL resolver, the entity registry, and the document converters the Drive
+door runs — with no operator surface and no narrative to tell. `stigmergy.entities` does have an
+operator surface, and its narrative lives under other titles: the runbook's
+[draining parked rows](./reference/operator-runbook.md#draining-parked-rows) section is where
+governed entity birth is operated from, the ask-back half of
+[`reference/capture.md`](./reference/capture.md) is where it is triggered, and
+[ADR 016](./decisions/016-human-loop-and-entity-governance.md) is the design record.
+
+## Decisions
+
+**On the numbering.** The surviving records start at 006, and there are gaps: no 001–005, 009, 011,
+019 or 025. Eight of those were **deleted, not superseded**, when their subjects were removed from
+the system whole: 002 (ingest-time deterministic verification), 003 (the ingest worker's bounded
+agency), 004 (the pipeline supervisor and its agent memory), 005 (the facts layer), 009 (the first
+rollup design, superseded by 021), 011 (the connector source contract), 019 (the canon lane) and
+025 (the fleet supervisor and its playbook). Each one's subject was removed from the system whole,
+so the record went with it rather than being kept as a description of something that is not there.
+
+Nothing was renumbered to close a gap, because a stable ADR number is worth more than a tidy
+sequence: a reference to "ADR 015" in a commit message or a code comment should still resolve years
+later. [ADR 026](./decisions/026-the-purge.md) and
+[ADR 027](./decisions/027-the-contraction.md) record the two removals that account for most of them.
+
+| ADR | Decides |
+|---|---|
+| [006](./decisions/006-time-semantics.md) | provable `as_of`, near-duplicate lineage, supersedes chains |
+| [007](./decisions/007-answer-layer.md) | the answer path is owned server-side: one MCP server enforces the contract and ACLs |
+| [008](./decisions/008-entity-registry.md) | entity resolution is path-based and deterministic, plus a curated registry |
+| [010](./decisions/010-acl.md) | ordered path rules produce audience labels; malformed config fails loudly |
+| [012](./decisions/012-hybrid-index.md) | the hybrid derived index: Postgres+pgvector, RRF, explainable contract ranking, wipe-and-rebuild |
+| [013](./decisions/013-http-transport-and-token-auth.md) | streamable HTTP transport, per-user hashed-token auth, mandatory stateless mode, cloud staging deploy |
+| [014](./decisions/014-capture-queue-and-attribution.md) | the durable capture queue and its single writer, server-side attribution that cannot be forged, the content-addressed evidence plane, retention |
+| [015](./decisions/015-librarian.md) | the librarian: the agent judges and code vetoes the diff, an ephemeral worktree as the blast radius, declared-not-performed edits, a figure that cannot be traced bounces rather than shipping behind a banner, the App as the committer |
+| [016](./decisions/016-human-loop-and-entity-governance.md) | the human loop and governed entity birth: the librarian asks back instead of guessing, a steward approves an entity before it exists, the registry as a derived view |
+| [017](./decisions/017-slack-transport.md) | the Slack transport: in-process (not over HTTP), the channel scopes the thread and the asker gets the rest by DM, the 🧠 gesture captures verbatim, five identity outcomes, a pure renderer that never trusts `confidence` |
+| [018](./decisions/018-pilot-readiness.md) | incremental index upsert on merge via a narrowly-scoped webhook exception, the withheld excerpt closes when the librarian has looked (not at a terminal state), immediate purge on a secret/PII rejection, a refusal's prose composed by the server from structured facts (never the model), entity-first retrieval (hard-scoped then; a rank-time boost since ADR 022 D4's amendment), `audit_log.result` as a per-tool summary |
+| [020](./decisions/020-meeting-distiller.md) | the meeting distiller: a second flow rather than a branch, one capture filing an atomic page SET where the write path had always filed exactly one page; `kind` is the material's shape and the flow that reads it, validated at the enqueue seam so the drop CLI is genuinely the only door; anchoring goes per decision page because a meeting's decisions belong to different entities; flow policy is passed into `GateContext` and every default is closed |
+| [021](./decisions/021-views.md) | views: a derived per-entity rollup, members read from the repo and never the index; the skeleton must not wait on the synthesis; the audience rule needs TWO gates — the member intersection AND a separate read gate for the non-member sources (backlinks) that also feed the page; one commit per entity, diverging from ADR 020's atomic page set because entities share no invariant; the withheld synthesis is prose with a stated reason, never a new enum value; a derived view's failure never taints the fact it derives from |
+| [022](./decisions/022-entity-navigation.md) | entity navigation: the graph (`links`) becomes a served, ACL-scoped, first-class column computed once at build time, never re-derived from untrusted body text at read time; `read_page`'s links/backlinks ride the existing ACL-visibility check, filtered before the cap; entity-first resolution moves down into the service layer so every client inherits it, not just `ask`; `describe_entity` resolves through the registry or exact scoped-set membership — one existence rule, never a second resolver, closing a `list_entities`/`describe_entity` disagreement and a timing oracle |
+| [023](./decisions/023-learning-loop.md) | **HISTORICAL — the subject was deleted whole** (superseded by ADR 027), kept because a rebuild would start here. `stigmergy.loop`, `loop_candidates`, staging and the `candidate` review kind exist nowhere in the code today. The reasoning that outlived it: `UserRef` is a type only hashing can construct; the capture hook lives at the tool-closure seam so a transport's own direct calls are never double-staged; staging is thread-scoped, not speaker-scoped; promotion is decide-and-enqueue in one transaction riding the ordinary fast lane, no new write path |
+| [024](./decisions/024-gardener-digest.md) | the gardener and the digest: deterministic checks as the provable core plus a bounded model sweep for what only judgment sees; watermarks live in `job_runs.stats`, anchored to a captured instant rather than `started_at`; `job_runs.status` grows a third value, `partial`, so a failed sweep never poisons the watermark it would otherwise advance; the digest broadcasts, so it and the SLA notice are ACL-scoped at the destination channel, with the redaction residual named rather than hidden; `views/staleness.py` exists so an architecture test's "no git plumbing" claim is true rather than merely asserted; page selection runs outside the sweep's own failure boundary on purpose |
+| [026](./decisions/026-the-purge.md) | **the purge**: the canon lane goes whole; ingest-time figure verification dies and answer-time verification becomes the whole of it (a field nothing computes is not stamped); the fleet supervisor and its playbook go, and `ops/` reverts to one path-scoped writer; the corpus-distillation pipeline becomes `stigmergy.kernel`, a library that imports nothing from this project, keeping the document converters the Drive door runs; the eval floor becomes the two real golden instruments over a frozen corpus |
+| [027](./decisions/027-the-contraction.md) | **the contraction**: the learning loop is deleted rather than left dormant — every one of its tentacles out of the live files, with ADR 023 holding the design if it is ever rebuilt; the `date-bearing-body-link` veto steps down to a gardener finding (`gardener.checks.check_date_bearing_body_links`, which reports and never vetoes); `meeting-links-mismatch` folds out, the mismatch class having become structurally impossible; the PII gate stays, on evidence |
+| [028](./decisions/028-drive-door.md) | the Drive door: `stigmergy-drive` fetches through the operator's own Google auth, writes evidence and ONE queue row, and calls no model and performs no conversion — the conversion happens at the worker, over the evidence blob. Agent-side extraction is rejected, and `kernel.doctools` was deleted with it |
+| [029](./decisions/029-admin-console.md) | the admin console: `/admin` on the existing app rather than a fourth process group; dispatch, never re-execute; one bearer credential minted by `stigmergy-admin-token`, stored only as a hash, with the console inert until that hash is set |
+
+## A note on vocabulary
+
+Some of these documents predate the current layout, and the module set moved more than once. They
+were written for a flat module set in a per-package project where there is now one repo root, and
+for the zone names the repo carried before they became `wiki/` · `sources/` · `views/`. What used
+to be `stigmergy.pipeline` is gone; the modules the living system still uses were re-homed to
+`stigmergy.kernel`, which is the bottom of the stack and imports nothing from this project — a rule
+enforced by `tests/test_architecture.py`, not by this paragraph.
+
+Three whole subjects were removed, and are named here so that a stale sentence elsewhere is
+recognizable as stale rather than as something to go looking for: **the facts store** (`facts.db`,
+the `query_metrics` tool, ingest-time figure verification), **the canon lane** (`brain_propose`,
+`brain_promote`, `canon_proposals`, canon PRs) and **the learning loop** (`stigmergy.loop`,
+`loop_candidates`, staging). Nothing in `src/` implements any of them.

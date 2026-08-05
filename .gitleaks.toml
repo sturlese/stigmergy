@@ -1,0 +1,39 @@
+# gitleaks configuration for this repository.
+#
+# The default rule set, plus ONE allowlisted string. The scan CI runs (`gitleaks detect --source .`)
+# reads the whole git history, not the working tree, so a credential-shaped fixture that ever existed
+# in a commit keeps being found long after the file stops containing it — and rewriting published
+# history to erase a dead fixture would be a far larger act than the thing it fixes.
+#
+# **Why an exact value and not a path or a commit.** A path exemption (`tests/**`) would blind the
+# scan to a real credential pasted into a test tomorrow, which is a likely accident. A commit
+# exemption would blind it to 92 files at once. A single literal can hide exactly itself, and that
+# self is a random string that grants nothing anywhere — so the exemption cannot grow to cover
+# something that matters.
+#
+# The doctrine this serves is `tests/adversarial_payloads.py`'s own: a secrets fixture lives in ONE
+# place, "since each copy would need its own exemption and each exemption is a place a real
+# credential could later hide." That file's `GITHUB_PAT` carries an inline `gitleaks:allow` and is
+# the fixture every test should import. A second literal was once written in
+# `tests/entities/test_cli.py` instead; the code now imports the shared one, and this entry retires
+# the copy that is stranded in history at `8faf268`.
+#
+# Do not add entries here to make a scan quiet. A finding is a question about a credential, and the
+# answer is almost never "allowlist it" — it is "rotate it, then remove it".
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Dead fixture tokens that exist only in this repository's history"
+regexes = [
+  # The stranded copy of the github-pat fixture, committed in 8faf268 and removed from the
+  # working tree in the same branch that added this file. Random, never valid anywhere.
+  '''ghp_2vXk9QpL7mNr4TzB8sWyH3dJfC1aEgU6ZiXo''',
+  # The same mistake a THIRD time: a server test wrote its own AWS-shaped
+  # literal for a secret-in-a-note test instead of importing the shared fixture. The
+  # working tree now imports `adversarial_payloads.GITHUB_PAT`; this entry retires the copy
+  # stranded in b46029c. Not a real key — twenty characters of alphabet after the AKIA prefix,
+  # which is why gitleaks' `aws-access-token` rule fires on it and why it grants nothing.
+  '''AKIAABCDEFGHIJKLMNOP''',
+]

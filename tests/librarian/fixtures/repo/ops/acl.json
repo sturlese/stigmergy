@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "description": "Fixture ACL config for the librarian test suite, written in the ON-DISK dialect a real knowledge repo uses (path/acl/default) — not the reader dialect acl_rules.py adapts it to. Keeping the fixture in the on-disk shape exercises the adapter as part of every integration test that runs it, rather than only in acl_rules.py's own unit tests.",
+  "default": [],
+  "rules": [
+    { "path": "wiki/**", "acl": [] }
+  ]
+}

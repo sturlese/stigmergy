@@ -1,0 +1,7 @@
+{
+  "_comment": "Identities for the golden QA run (evals/run_qa.py). 'steward' is unrestricted (sees every page, including the sales-scoped ones) and answers the answerable questions. 'analyst' is scoped to audiences=['all'] and deliberately does NOT carry 'sales', so the acl-probe questions that target sales-scoped pages are correctly out of scope and must be refused with no existence leak.",
+  "steward": "*",
+  "analyst": [
+    "all"
+  ]
+}

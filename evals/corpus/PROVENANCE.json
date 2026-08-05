@@ -1,0 +1,12 @@
+{
+ "_comment": "Read by evals/run_retrieval.py and run_qa.py so every evals/history.ndjson entry says which corpus produced it. Lives at the corpus ROOT on purpose: `corpus.load_pages` walks only *.md under the ZONES (wiki, sources, views), so nothing here is ever indexed as a page.",
+ "frozen_at": "2026-08-01",
+ "why": "Both golden instruments once ran on a gitignored build artifact whose synthetic pages were produced by generators that no longer exist. A corpus that cannot be regenerated cannot anchor a baseline, so the tree is committed instead: scores from different runs are comparable BY CONSTRUCTION rather than by hoping the generator was deterministic.",
+ "pages": 38,
+ "source_sha": "a5ed35aed1f1c303545d2a42073b7f418581ba1a",
+ "source_sha_note": "The three wiki/decisions pages are real prose, copied from a knowledge repo at this commit. Freezing the tree makes the provenance a property of the corpus rather than of the run, so it can never drift under a live librarian.",
+ "content": "Synthetic throughout. The organizations (aurora-systems, borealis-logistics, cascade-foods, delta-robotics, globex, initech, hooli, everest-analytics, foxglove-health) are invented, and so are their figures. The three wiki/decisions pages describe this system's own architecture. Nothing here is anyone's real data — keep it that way when the corpus grows. The corpus also carries its own ops/entity-registry.json registering those organizations, so a run that passes --repo exercises entity-first resolution instead of silently measuring a server with it switched off. Nothing under ops/ is indexed as a page — corpus.load_pages walks the zones only.",
+ "known_gaps": {
+  "foxglove-health": "evals/retrieval_golden.json's `benchmark: foxglove prospect` lists an expectation, `foxglove-health`, that matches no page id or stem here, capping that one question's recall at 0.5. Pinned by tests/evals/test_golden_corpus_fixture.py so it cannot silently grow."
+ }
+}

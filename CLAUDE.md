@@ -1,0 +1,74 @@
+# stigmergy — working notes for an AI agent
+
+This repository holds the **code**: the durable capture queue, the librarian service that drains it,
+the hybrid index builder, the single MCP server (the only API), the governed entity-birth tooling
+(`stigmergy-entities`), the Slack transport, the meeting distiller, the view layer, the gardener, the
+admin console, `docker-compose` for the local test stack, and the evals.
+
+**This repo never stores pages.** Knowledge content lives in a separate git repository — the
+knowledge repo — that you point at with `STIGMERGY_REPO`. Its page format is
+[`docs/reference/page-contract.md`](./docs/reference/page-contract.md).
+
+Human-facing setup, workflow and PR expectations are in
+[`CONTRIBUTING.md`](./CONTRIBUTING.md). What follows is the part that is easy to get wrong.
+
+## Orientation
+
+Read [`README.md`](./README.md) first for the annotated tree, then the `index.md` code map inside
+whichever package you are about to touch — each one lists what its modules are for, what to reuse
+and what to avoid. [`docs/reference/`](./docs/reference) is what each subsystem does;
+[`docs/decisions/`](./docs/decisions) is why it is built that way.
+
+## The invariants a change has to respect
+
+Not style — these are enforced, and the enforcement is where to look when one fails:
+
+| Invariant | Enforced by |
+|---|---|
+| `stigmergy.kernel` and `stigmergy.text` import nothing from this project — they are the bottom of the stack | `tests/test_architecture.py` |
+| The librarian never imports the server; every cross-package reach is a named, exercised exception | same file, per-package |
+| Every reader of `pages_index` names an ACL predicate, or is a listed exception | same file |
+| No exception list keeps an entry that has stopped being used | same file, the pruning tests |
+| The UNTRUSTED-DATA fence is built in `stigmergy.text` only | same file |
+| The frozen contract linter and the frozen meeting brief match the knowledge repo's own | `tests/librarian/test_frozen_linter.py`, `test_meeting_brief_contract.py` |
+| The diff the eight gates approved is the diff that lands | `gitcmd.commit(gated_entries=…)` + `tests/librarian/test_gitcmd_unit.py` |
+| `acl.visible()` is the ONE place read access is decided | `server/acl.py`, and the table above |
+| The README's countable claims match the code | `tests/test_readme_claims.py` |
+
+## Working rules
+
+- **Tests are the contract.** The suites under `tests/` are the behavioural invariant. Restructure
+  freely; change what the code DOES only with a decision behind it.
+- **Reproduce before you fix.** A bug gets a failing test that demonstrates it *before* production
+  code is touched, and the test's own comment says what the old behaviour was. Several of this
+  repo's worst defects were invisible to 3,000 green tests and visible in one deliberate mutation:
+  *a rule nothing has tried to break is not a rule you know about.*
+- **This repo owns everything it documents.** Documentation here never links to another project —
+  not to a predecessor, not to a private checkout, not to anything that could be archived or made
+  private. Corollary: never satisfy "remove the external reference" by deleting a link to an
+  explanation — that leaves the repo clean and dumber. Port the explanation.
+- **Documentation is rewritten, not appended to.** `README.md`, this file and every `index.md`
+  describe what EXISTS. A code map that was appended to at every change and rewritten at none
+  becomes a changelog whose accuracy is inversely proportional to its age. If a change makes a
+  sentence false, correct the sentence in the same commit.
+- **Do not write a comment the code will outlive.** A comment states a constraint the code cannot
+  show: the failure that motivated a design, the attack a defense exists for, the "if you change
+  this you must also change that". Counts, signatures and module names drift — prefer a sentence
+  that stays true, or pin the fact in a test.
+
+## Testing doctrine, in four lines
+
+- **A benign twin for every defense.** A test that only proves a gate fires measures its
+  sensitivity and never its specificity, and every gate here can bounce someone's real work.
+- **A message containing a command is an executable promise.** If a refusal tells a human to run
+  something, a test runs it.
+- **Never fake what you are claiming to prove.** Real git, real Postgres, real gates — a faked git
+  proves nothing about the property being claimed.
+- **A check that stops running must be impossible to miss.** Skipped and retired dimensions are
+  printed, counted and asserted — never quietly dropped. A permanently-green test is worse than no
+  test, because it reads as coverage.
+
+## Before you finish
+
+`make lint` and `make test` both green. The suite is keyless by construction — if something you
+wrote needs an API key to pass, it is in the wrong place.

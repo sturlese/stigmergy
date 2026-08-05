@@ -1,0 +1,10 @@
+{
+  "_comment": "E2E question set for the docker idempotency proof over tests/index/fixtures/repo: run with the FAKE embedder, so the recall numbers are meaningless by design — what matters is that build -> query -> wipe -> rebuild -> query yields IDENTICAL hit lists. Same format as evals/retrieval_golden.json.",
+  "questions": [
+    { "id": "e2e: globex revenue", "q": "How did the quarter go for Globex? quarterly revenue impact", "expect": { "pages": ["drive:G2"] } },
+    { "id": "e2e: kestrel deposit", "q": "Kestrel Lodge deposit booking balance", "expect": { "pages": ["drive:local-kestrel"] } },
+    { "id": "e2e: refund policy", "q": "refund policy annual plans", "expect": { "pages": ["refund-policy"] } },
+    { "id": "e2e: canonical store", "q": "git canonical store knowledge repository", "expect": { "pages": ["git-canonical-store"] } },
+    { "id": "e2e: globex view", "q": "globex view renewal status", "expect": { "pages": ["globex"] } }
+  ]
+}

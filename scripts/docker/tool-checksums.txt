@@ -1,0 +1,30 @@
+# SHA-256 of every third-party binary the image downloads, in `sha256sum -c` format.
+#
+# The Dockerfile fetches exactly the two archives its build architecture needs and verifies them
+# against this file with `sha256sum --ignore-missing -c` — which fails when a downloaded archive
+# does not match, and also when NOTHING was verified (coreutils exits non-zero if no listed file
+# was present, so a silently-skipped download cannot pass).
+#
+# Both architectures are listed because the image is built in two places: linux/amd64 for Fly, and
+# whatever `docker compose build` is running on for the librarian e2e (an arm64 Mac, today).
+#
+# The Claude Code CLI is here for the same reason and was NOT, which was the asymmetry: it was
+# version-pinned and installed straight from the npm registry, so a rebuild trusted whatever bytes
+# the registry served for that version while the two binaries beside it were digest-verified. A
+# version pin says WHICH release; a digest says which BYTES. Its npm tarball is a ~13KB
+# platform-independent wrapper, so ONE line covers every architecture — the ~500MB native binary it
+# places comes from a per-platform optional dependency, which npm still verifies against the
+# registry's own integrity metadata and this file does not yet pin (named as a residual in the
+# Dockerfile rather than left to be discovered).
+#
+# To bump a version: change it in the Dockerfile's ARG, then replace the line(s) here from upstream —
+#   gitleaks:    https://github.com/gitleaks/gitleaks/releases/download/v<V>/gitleaks_<V>_checksums.txt
+#   node:        https://nodejs.org/dist/v<V>/SHASUMS256.txt
+#   claude-code: npm view @anthropic-ai/claude-code@<V> dist.tarball   (then sha256sum the download)
+# Never hand-edit a digest: the point of the file is that nobody can.
+
+551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks_8.30.1_linux_x64.tar.gz
+e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080  gitleaks_8.30.1_linux_arm64.tar.gz
+55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742  node-v24.18.0-linux-x64.tar.xz
+58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6  node-v24.18.0-linux-arm64.tar.xz
+df33087481fcf5fe9b848b3f7ae7ee6bb1b893c327b0793f052987f9c5b4eee3  claude-code-2.1.220.tgz

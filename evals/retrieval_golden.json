@@ -1,0 +1,182 @@
+{
+  "_comment": "Retrieval golden set: natural-language questions over the frozen reference corpus at evals/corpus/, scoring Recall@5 per arm (lexical, vector, RRF, final) so a ranking change shows which arm moved. Run with --embedder fake for a keyless plumbing check and --embedder openai for the real measurement.",
+  "_filters_comment": "The questions whose SUBJECT is a named entity declare filters.entity, so the run exercises the entity-membership clause of the query rather than being structurally blind to it. Each value is the entity: frontmatter of that question's expected page(s), and tests/evals/test_golden_corpus_fixture.py asserts that every filtered question's expected pages really carry that entity — a filter naming an entity its own answer does not have would delete its own answer from both arms and score 0 forever while reading as a retrieval regression.",
+  "questions": [
+    {
+      "id": "real: git canonical store",
+      "q": "Why do we use a git repository as the canonical store of our knowledge?",
+      "expect": {
+        "pages": [
+          "Git as the Canonical Store"
+        ]
+      }
+    },
+    {
+      "id": "real: evidence plane",
+      "q": "Where are the original documents that serve as evidence kept?",
+      "expect": {
+        "pages": [
+          "The Evidence Plane"
+        ]
+      }
+    },
+    {
+      "id": "real: ownership zones",
+      "q": "Who owns each zone of the knowledge repository?",
+      "expect": {
+        "pages": [
+          "Two Ownership Zones"
+        ]
+      }
+    },
+    {
+      "id": "benchmark: aurora arr",
+      "q": "What was the final ARR for Aurora Systems in the first quarter of 2026?",
+      "expect": {
+        "pages": [
+          "drive:local-07f593861c43"
+        ]
+      },
+      "filters": {
+        "entity": "aurora-systems"
+      }
+    },
+    {
+      "id": "benchmark: delta active users",
+      "q": "How many active users did Delta Robotics have each month of 2026?",
+      "expect": {
+        "pages": [
+          "drive:local-12f20646c1f1"
+        ]
+      },
+      "filters": {
+        "entity": "delta-robotics"
+      }
+    },
+    {
+      "id": "benchmark: cascade nps",
+      "q": "What NPS does Cascade Foods have?",
+      "expect": {
+        "pages": [
+          "drive:local-ae1045d13e98"
+        ]
+      },
+      "filters": {
+        "entity": "cascade-foods"
+      }
+    },
+    {
+      "id": "benchmark: borealis february meeting",
+      "q": "What was discussed in the February meeting with Borealis Logistics?",
+      "expect": {
+        "pages": [
+          "drive:local-ae8cf07406d2"
+        ]
+      },
+      "filters": {
+        "entity": "borealis-logistics"
+      }
+    },
+    {
+      "id": "benchmark: borealis growth",
+      "q": "How much did Borealis Logistics grow this quarter?",
+      "expect": {
+        "pages": [
+          "drive:local-a4a55507547d"
+        ]
+      },
+      "filters": {
+        "entity": "borealis-logistics"
+      }
+    },
+    {
+      "id": "benchmark: product roadmap",
+      "q": "What is on the product roadmap for 2026?",
+      "expect": {
+        "pages": [
+          "drive:local-f96ae2c17a19"
+        ]
+      }
+    },
+    {
+      "id": "benchmark: sales strategy",
+      "q": "What is the sales strategy for 2026?",
+      "expect": {
+        "pages": [
+          "drive:local-49b6839cd6c6"
+        ]
+      }
+    },
+    {
+      "id": "benchmark: everest pitch",
+      "q": "What does the Everest Analytics pitch deck propose?",
+      "expect": {
+        "pages": [
+          "drive:local-dda43a7b849b"
+        ]
+      },
+      "filters": {
+        "entity": "everest-analytics"
+      }
+    },
+    {
+      "id": "benchmark: foxglove prospect",
+      "q": "What do we know about the prospect Foxglove Health?",
+      "expect": {
+        "pages": [
+          "drive:local-b4de5f2bcbfb",
+          "foxglove-health"
+        ]
+      },
+      "filters": {
+        "entity": "foxglove-health"
+      }
+    },
+    {
+      "id": "benchmark: aurora dossier",
+      "q": "Dame un resumen del cliente Aurora Systems",
+      "expect": {
+        "pages": [
+          "aurora-systems"
+        ]
+      },
+      "filters": {
+        "entity": "aurora-systems"
+      }
+    },
+    {
+      "id": "demo: globex quarter",
+      "q": "How did the quarter go for Globex?",
+      "expect": {
+        "pages": [
+          "drive:local-8cb904b68e2b",
+          "drive:local-0bc40d64d4fb"
+        ]
+      },
+      "filters": {
+        "entity": "globex"
+      }
+    },
+    {
+      "id": "demo: initech kpis",
+      "q": "What KPI metrics does Initech have in 2026?",
+      "expect": {
+        "pages": [
+          "drive:local-0811ce3ef594"
+        ]
+      },
+      "filters": {
+        "entity": "initech"
+      }
+    },
+    {
+      "id": "demo: benchmark study",
+      "q": "What benchmark study did the product team run?",
+      "expect": {
+        "pages": [
+          "drive:local-8fc290749812"
+        ]
+      }
+    }
+  ]
+}

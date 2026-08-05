@@ -1,0 +1,21 @@
+.git
+.github
+.venv
+.pytest_cache
+.ruff_cache
+.coverage
+out
+tests
+evals
+examples
+docs
+*.pyc
+__pycache__
+
+# Never let a credential enter the build context, even if no COPY names it today.
+.env
+.env.*
+.claude
+*.pem
+*.key
+*.p8

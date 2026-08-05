@@ -1,0 +1,76 @@
+[project]
+name = "stigmergy"
+version = "0.1.0"
+description = "The Distributed Brain platform: capture queue, one librarian writer, hybrid index, MCP/HTTP/Slack surfaces."
+requires-python = ">=3.12"
+readme = "README.md"
+authors = [{ name = "The Stigmergy contributors" }]
+# SPDX expression + the files that carry it. `THIRD-PARTY-LICENSES.md` is listed because the
+# Dockerfile bundles psycopg, which is LGPL-3.0-only: shipping the image without the dependency
+# notices beside the licence is the part of §4/§6 that a published wheel would otherwise miss.
+license = "Apache-2.0"
+license-files = ["LICENSE", "THIRD-PARTY-LICENSES.md"]
+dependencies = [
+  "pydantic>=2.0",
+  "pydantic-ai==2.13.0",      # the agents (answer synthesizer, view synthesis, gardener sweep) — pinned exactly: the agent framework's API drives tool wiring and output schemas, so a float would let a minor bump silently change behavior between CI and dev
+  "httpx>=0.27",
+  "openpyxl>=3.1",
+  "xlrd>=2.0",                # legacy .xls (old BIFF); openpyxl only reads .xlsx
+  "python-docx>=1.1",
+  "pyyaml>=6.0",              # kernel/page.py frontmatter emitter: round-trip plain-scalar validation
+  "google-genai>=1.0",        # vision OCR (Gemini) — kernel/converters.py's vision_extract, the drive flow's scanned-PDF fallback (ADR 028 D4)
+  "psycopg[binary]>=3.2",     # the hybrid derived index: Postgres + pgvector
+  "mcp>=1.28,<2",             # the single MCP server: FastMCP stdio adapter (major-pinned)
+  "starlette>=0.37",          # the streamable HTTP transport + the per-user auth ASGI middleware (already an mcp[http] transitive dep — declared explicitly since transport_http.py imports it directly)
+  "uvicorn>=0.29",            # the HTTP transport's ASGI server (same rationale as starlette above)
+  "boto3>=1.34",              # the evidence plane's real store (stigmergy.capture.evidence) and its smoke check (scripts/r2_smoke.py) — S3-compatible, MinIO locally and R2 in staging
+  "claude-agent-sdk==0.2.128", # the librarian agent (Claude Code headless) — pinned EXACTLY, same rationale as pydantic-ai above: the framework's API drives the options object, the permission model and the hook signatures, so a minor bump could silently change what the agent is allowed to do between CI and dev. Imported lazily inside the 'sdk' backend only; the offline double never loads it
+  "pyjwt>=2.8",               # the librarian GitHub App's RS256 assertion (githubapp.py) — already present transitively, declared explicitly because this repo imports it directly (same posture as starlette above)
+  "slack-bolt==1.30.0",       # the Slack transport — pinned EXACTLY, same rationale as pydantic-ai/claude-agent-sdk above: the framework's API drives event dispatch, the socket-mode client and the ack contract, so a minor bump could silently change behaviour between CI and dev
+  "aiohttp>=3.9",             # slack-bolt's async Socket Mode handler needs it directly (already a slack-bolt[async] transitive dep — declared explicitly, same posture as starlette/pyjwt above: this repo imports the async handler directly)
+]
+
+[project.optional-dependencies]
+# `pytest-timeout` is not optional tooling: this suite spawns real subprocesses (the librarian CLI,
+# the worker's signal tests), and a subprocess that never exits turns a test run into silence rather
+# than a failure. Nine CI runs died on GitHub's 6-hour ceiling before anyone noticed, because a
+# job-level kill names no test. A per-test timeout names one, with a traceback.
+dev = ["pytest>=8.0", "pytest-cov>=5.0", "pytest-timeout>=2.3", "ruff>=0.6"]
+
+[project.scripts]
+stigmergy-index = "stigmergy.index.cli:index_main"
+stigmergy-search = "stigmergy.index.cli:search_main"
+stigmergy-server = "stigmergy.server.mcp_server:main"
+stigmergy-issue-token = "stigmergy.server.issue_token:main"
+stigmergy-queue = "stigmergy.capture.cli:main"
+stigmergy-meeting = "stigmergy.capture.meeting_cli:main"                   # the drop CLI — the meeting flow's only door, and the webhook's future target
+stigmergy-drive = "stigmergy.capture.drive_cli:main"                       # the Drive door (ADR 028) — operator CLI over the operator's own Google auth; fetch + evidence + ONE drive row, no model, no conversion
+stigmergy-librarian = "stigmergy.librarian.cli:main"
+stigmergy-librarian-boot = "stigmergy.librarian.bootstrap:main"          # the DEPLOYED worker's entry point — clone the knowledge repo, verify checkout == base ref, strip the read path's secrets, exec `stigmergy-librarian run`
+stigmergy-librarian-credential = "stigmergy.librarian.gitcredential:main" # git credential helper backed by the GitHub App, so the fetch before every claim authenticates in a container with no operator git config
+stigmergy-entities = "stigmergy.entities.cli:main"                       # governed entity birth + the registry generator — the ONE path-scoped writer of ops/ (registry + wiki/entities/), and a human drives it
+stigmergy-views = "stigmergy.views.cli:main"                             # per-entity view regeneration (deterministic skeleton + verified synthesis) — the ONLY writer of views/, App-bot-authored
+stigmergy-slack = "stigmergy.slack.app:main"                             # the Slack transport — the third process group's entry point, Socket Mode, one process
+stigmergy-pilot-report = "stigmergy.server.pilot_report:main"            # the pilot-checkpoint table, from real audit_log/capture_queue rows — reads only
+stigmergy-gardener = "stigmergy.gardener.cli:main"                       # eight deterministic corpus-health checks, findings + job_runs persisted, severity-grouped report, SLA notice
+stigmergy-admin-token = "stigmergy.admin.cli:main"                       # admin console (ADR 029): mint the console's ONE bearer credential — prints plaintext once + the STIGMERGY_ADMIN_TOKEN_HASH line, stores nothing
+stigmergy-digest = "stigmergy.digest.cli:main"                           # the week in one Slack post — corpus health and corpus deltas; --dry-run to preview
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stigmergy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# "." makes `tests` importable (shared helpers like `tests.librarian.support`) under BARE `pytest`
+# too, not just `python -m pytest`: relying on the implicit cwd entry passes locally and breaks in
+# CI.
+pythonpath = ["src", "."]
+addopts = "--cov --cov-report=term-missing"
+
+[tool.coverage.run]
+source_pkgs = ["stigmergy"]
+omit = ["tests/*"]

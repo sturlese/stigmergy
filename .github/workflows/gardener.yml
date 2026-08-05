@@ -1,0 +1,93 @@
+name: gardener
+
+# Daily (+ on-demand) corpus-health check against the staging Supabase Postgres.
+#
+# **The gardener is on a cron; the digest is not.** `stigmergy-digest` is a full, independently
+# runnable operator command, deliberately left off a schedule — its own watermark is what makes
+# that free: each post covers exactly the window since the previous one, so a run by hand
+# tomorrow, or next month, still covers everything since the last one. Nothing is lost by not
+# scheduling it, only timeliness.
+#
+# The scheduling ceiling, restated here exactly as every other scheduled workflow in this repo
+# states it: this is a CRON IN GITHUB ACTIONS, never a process group — nothing in this system runs
+# unattended outside Actions, and `stigmergy-gardener`/`stigmergy-digest` remain full, independently
+# runnable operator commands; this workflow only calls one of them, on a schedule, exactly the way
+# `index-rebuild.yml`/`retention-purge.yml` already call `stigmergy-index`/`stigmergy-queue`.
+#
+# Placed after `index-rebuild` (04:17) and `retention-purge` (04:42) so the corpus view the
+# gardener reads is the morning's, not last night's.
+#
+# Secret surface: `SUPABASE_DSN`/`OPENAI_API_KEY` (reused from `index-rebuild.yml`) plus
+# `SLACK_BOT_TOKEN` (the gardener's SLA notice) and `STIGMERGY_READONLY_PAT` (the knowledge-repo
+# checkout, reused from `index-rebuild.yml`). `STIGMERGY_DIGEST_CHANNEL_ID` and
+# `STIGMERGY_GARDENER_MODEL` are repository VARIABLES, not secrets — a Slack channel id and a model
+# name are not credentials. `ci.yml` (tests/lint) stays keyless by design and is untouched by this
+# file — the offline `FakeGardenerSweep`/`FakeSlackGateway` (`CLEAN_LLM=fake`) are what CI's own
+# test suite exercises instead, never a real key or a real post.
+#
+# Third-party actions pinned by full commit SHA, not a floating tag (same posture as
+# `index-rebuild.yml`/`retention-purge.yml`) — a tag can be moved by the action's maintainer (or,
+# if compromised, by an attacker) to point at different code without this file changing; a SHA
+# cannot. The trailing `# vN` comment records which release that SHA was at resolution time.
+on:
+  schedule:
+    - cron: "7 5 * * *"   # daily, ~05:07 UTC — after index-rebuild's 17 4 and retention-purge's 42 4
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Concurrency: the realistic collision is cron + a manual `workflow_dispatch` (or a retry of one)
+# landing close together, not a genuine race this system needs elsewhere — overlap here is
+# genuinely bounded (append-only findings, per-run ids, forward-only watermarks; worst case is a
+# duplicate post, a duplicate SLA notice and doubled model spend, with last-writer-wins skewing
+# the sweep's rotation only), but closing the one realistic Actions-vs-Actions overlap is a single
+# line. `cancel-in-progress: false`: a queued run WAITS rather than kills an in-flight one —
+# cancelling a gardener run mid-write would discard real, already-computed work for no benefit,
+# and queueing is strictly safer than cancelling for a job whose whole point is a complete daily
+# read. A concurrent LOCAL run (`stigmergy-gardener`/`stigmergy-digest` invoked directly, outside
+# Actions) is a DIFFERENT collision this group cannot see at all — accepted and left
+# operator-owned, the same posture the local-only operator targets already take.
+concurrency:
+  group: gardener
+  cancel-in-progress: false
+
+jobs:
+  gardener:
+    name: corpus-health findings
+    # A fork inherits this file but not the secrets or the knowledge repo behind it.
+    # Skip cleanly there instead of failing a scheduled run every night: the job runs
+    # only where an operator has actually configured it.
+    if: vars.STIGMERGY_KNOWLEDGE_REPO != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout stigmergy (this repo — the stigmergy-gardener CLI + deps)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Checkout stigmergy (the knowledge repo, read-only — the gardener's registry/view reads)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ vars.STIGMERGY_KNOWLEDGE_REPO }}
+          token: ${{ secrets.STIGMERGY_READONLY_PAT }}
+          path: stigmergy-knowledge
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install stigmergy
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      # Findings + job_runs persisted, the severity-grouped report printed, an SLA notice posted
+      # (SlackApiError/GardenerError on that ONE precondition are the only things that make this
+      # step itself fail — the deterministic checks and the sweep are otherwise independent).
+      - name: stigmergy-gardener — eight deterministic checks + the model editorial sweep
+        run: stigmergy-gardener --repo stigmergy-knowledge
+        env:
+          STIGMERGY_INDEX_DSN: ${{ secrets.SUPABASE_DSN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          STIGMERGY_GARDENER_MODEL: ${{ vars.STIGMERGY_GARDENER_MODEL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          STIGMERGY_DIGEST_CHANNEL_ID: ${{ vars.STIGMERGY_DIGEST_CHANNEL_ID }}

@@ -1,0 +1,166 @@
+name: platform
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Everything here runs OFFLINE. No API keys, ever: a green CI that silently needed a key would be
+# a CI that cannot be trusted.
+#
+# CLEAN_LLM is deliberately NOT set job-wide. It selects the backend at runtime, so exporting
+# it globally makes build_processor() hand back a fake even to the tests that construct a REAL
+# pydantic-ai Agent against an offline TestModel — which is how the first run of this workflow
+# turned an agent-wiring test red while the same suite was green locally. The runners that need a
+# fake backend already default to one themselves.
+#
+# The eval instruments live in `evals/` — golden retrieval and golden QA over the frozen corpus at
+# `evals/corpus/`. Both need an API key, so both run by hand and never here: this job stays keyless
+# by design. The fixture's own integrity IS checked here, keylessly, by
+# `tests/evals/test_golden_corpus_fixture.py`.
+
+jobs:
+  platform:
+    name: tests + lint + docker e2e
+    runs-on: ubuntu-latest
+    # A hanging job is worse than a red one: a red says no, a hang says nothing at all and every
+    # reader takes "still running" for "probably fine". Runs of this workflow once froze partway
+    # through the test step and died on GitHub's 6-hour ceiling — nine of them, 2568 runner-minutes,
+    # which is the whole monthly allowance and then some, while the entire rest of this repo's
+    # history cost 33. Two changes merged on a gate that never reported.
+    #
+    # 30 minutes is far above what this suite costs when it works and far below what silence costs.
+    # The bound is what made the diagnosis possible at all — a job killed at 30 min publishes its
+    # log and an in-progress one does not — and the hang it was written for is now FIXED
+    # (`tests/librarian/test_worker_signals.py::_read_until`: a deadline consulted between lines
+    # while `readline()` blocked forever during one). Keep the bound anyway: the next hang will not
+    # announce itself either.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full history for the secret scan
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"  # the interpreter the imported suites were green on
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check src tests evals scripts
+
+      - name: Platform composition up (postgres+pgvector + minio; still zero API keys)
+        run: docker compose up -d --wait
+
+      # BEFORE the tests, not after. `gitleaks` is the librarian's secrets gate, and
+      # `tests/librarian/conftest.py::require_gitleaks` skips the entire processing suite without
+      # it. Installed after the test step, as it was, CI silently skipped every secrets-gate test
+      # and still went green — the one gate whose failure mode is "passes everything quietly" was
+      # the one gate CI never ran. Installed here it is on `PATH` for the suite, and the
+      # repo-wide scan below reuses the same binary instead of downloading it twice.
+      # CHECKSUM-pinned, not only version-pinned. A tag is a mutable pointer and this is the binary
+      # the whole secrets gate depends on in CI — the one gate whose failure mode is "passes
+      # everything quietly", executed with the repo checked out. A version pin says which release was
+      # intended; only the digest says the bytes that arrived are the bytes that release published.
+      #
+      # Downloaded to a FILE and verified BEFORE anything unpacks it, rather than piped into `tar`:
+      # a pipeline cannot check a digest it has already handed to an extractor. Same doctrine
+      # `agent.read_outcome` and `agent.check_skill_size` apply to a ceiling — a check applied after
+      # the thing has been consumed is decoration.
+      #
+      # Both digests come from the release's own `_checksums.txt` and were verified independently by
+      # hashing the downloaded artifacts (2026-07-27). Bumping VERSION without bumping them fails the
+      # job loudly, which is the intended coupling.
+      #
+      # TWO of them, selected by `uname -m`, because `runs-on` is one line away from an arm64 runner
+      # and a digest pinned to one architecture is a pin that silently becomes wrong. An architecture
+      # with no pinned digest EXITS rather than downloading unverified bytes: the whole point of the
+      # digest is that the gate's binary is not taken on trust, so falling back to "no digest for this
+      # arch, install it anyway" would spend the pin on the one case it exists for. Either way the
+      # failure is loud — a wrong digest fails the check, an unknown arch fails here.
+      - name: Install gitleaks (the librarian's secrets gate — needed BY the test step)
+        run: |
+          # MUST match the Dockerfile's GITLEAKS_VERSION and whatever a developer has locally.
+          # It did not, and that is what broke this workflow for weeks: CI pinned
+          # 8.18.4 while the code was written and tested against 8.30.1, whose CLI differs. The
+          # gate exited rc=1, `gates` refused to file without a working secrets scanner — the
+          # correct behaviour — and every test that files went red. Bumping this without bumping
+          # the Dockerfile (or vice versa) re-creates the same silent divergence.
+          VERSION=8.30.1
+          case "$(uname -m)" in
+            x86_64|amd64)
+              ARCH=x64
+              SHA256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;;
+            aarch64|arm64)
+              ARCH=arm64
+              SHA256=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080 ;;
+            *)
+              echo "gitleaks: no pinned digest for $(uname -m). The secrets gate is the one gate"
+              echo "  whose failure mode is 'passes everything quietly', so this job refuses to"
+              echo "  install an unverified binary. Add the digest for this architecture from"
+              echo "  gitleaks_${VERSION}_checksums.txt."
+              exit 1 ;;
+          esac
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_${ARCH}.tar.gz"
+          echo "${SHA256}  gitleaks.tar.gz" | sha256sum --check --strict
+          tar -xzf gitleaks.tar.gz gitleaks
+          install -m 0755 gitleaks /usr/local/bin/gitleaks
+          rm -f gitleaks.tar.gz gitleaks
+          gitleaks version
+
+      - name: Install poppler-utils (pdftotext — the drive flow's text-layer hand)
+        # From Ubuntu's own signed archive (apt verifies), unlike gitleaks' GitHub tarball —
+        # no hand-pinned digest needed. The drive conversion tests call the REAL pdftotext over
+        # a fixture PDF; without the binary they would skip, and a suite that skips in CI is a
+        # suite that rots there unnoticed.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils && pdftotext -v 2>&1 | head -1
+
+      - name: Tests — the frozen invariant + the index (coverage gate 75%)
+        # `--timeout` and `-ra`, not a bare `-q`, and both earn their place:
+        #
+        # `--timeout=90 --timeout-method=thread` makes a hung test NAME ITSELF. This suite spawns
+        # real subprocesses and one of them once hung here; a job-level kill at the 6-hour ceiling
+        # reports nothing at all, which is why it survived as long as it did. `thread` rather than
+        # the default `signal` because such a hang is usually in a blocking subprocess wait, where a
+        # signal-based timeout can be swallowed by the very call it is trying to interrupt.
+        #
+        # `-ra` prints the short summary of every non-passing test at the end. Dots are unreadable
+        # once a run has failures spread across it — the count is visible and the names are not.
+        run: pytest --timeout=90 --timeout-method=thread -ra --cov-fail-under=75
+        env:
+          # `stigmergy_test`, NOT `stigmergy`: the suites truncate capture_queue/job_runs/
+          # ingest_errors/audit_log at fixture setup, and `stigmergy` is the database a running
+          # brain serves. Setting the variable at all is also the "CI mode" signal — with it set,
+          # an unreachable database FAILS the run instead of skipping every Postgres suite.
+          STIGMERGY_TEST_DSN: postgresql://stigmergy:stigmergy@localhost:54321/stigmergy_test
+
+      - name: E2E in docker — build -> golden (fake embedder) -> wipe -> rebuild -> identical hit lists
+        run: PY=python bash scripts/e2e.sh
+
+      - name: Write-path E2E in docker — submit -> archive -> claim -> dead worker -> purge
+        run: PY=python bash scripts/e2e_write.sh
+
+      # Keyless, like everything above it: the librarian runs on the OFFLINE DOUBLE here (the script
+      # forces `--backend double`), so this step exercises the whole filing path — the worktree, the
+      # gates, the commit, the push to a real bare remote — with no API key at all.
+      - name: Librarian E2E in docker — 15 captures -> gates -> commits on a bare git remote
+        run: PY=python bash scripts/e2e_librarian.sh
+
+      # The drill nobody runs by hand: the DEPLOYED IMAGE from empty volumes — clone, file, SIGTERM
+      # drain, and the mid-item SIGKILL that exercises lease redelivery. It rotted twice while it
+      # lived outside CI; keyless like everything above (the composition's librarian service runs
+      # the offline double).
+      - name: Librarian CONTAINER E2E — deployed image, SIGTERM/SIGKILL, lease redelivery
+        run: PY=python bash scripts/e2e_librarian_container.sh
+
+      # Reuses the binary the test step already needed (installed above) — one version, one source.
+      - name: Secret scan (gitleaks) — the whole repo's history
+        run: gitleaks detect --source . --no-banner --redact --exit-code 1

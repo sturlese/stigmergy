@@ -1,0 +1,57 @@
+name: index-rebuild
+
+# Nightly (+ on-demand) rebuild of the hybrid index against the staging Supabase Postgres.
+#
+# This workflow invokes the existing `stigmergy-index --rebuild` CLI unchanged and touches no
+# index-builder code.
+#
+# Secret surface: this workflow carries the index builder's embedding key — ci.yml (tests/lint)
+# stays keyless by design and is untouched by this file.
+#
+# Third-party actions are pinned by full commit SHA, not a floating tag — a tag can be
+# moved by the action's maintainer (or, if compromised, by an attacker) to point at different
+# code without this file changing; a SHA cannot. Resolved via
+# `git ls-remote --tags https://github.com/actions/<name>.git` against the named release tag; the
+# trailing `# vN` comment records which release that SHA was at resolution time — re-resolve the
+# same way for a deliberate version bump.
+on:
+  schedule:
+    - cron: "17 4 * * *"   # nightly, ~04:17 UTC — off the hour to dodge Actions' peak-minute queueing
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild:
+    name: rebuild the hybrid index from stigmergy HEAD
+    # A fork inherits this file but not the secrets or the knowledge repo behind it.
+    # Skip cleanly there instead of failing a scheduled run every night: the job runs
+    # only where an operator has actually configured it.
+    if: vars.STIGMERGY_KNOWLEDGE_REPO != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout stigmergy (this repo — the stigmergy-index CLI + its deps)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Checkout stigmergy (the knowledge repo, read-only)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: ${{ vars.STIGMERGY_KNOWLEDGE_REPO }}
+          token: ${{ secrets.STIGMERGY_READONLY_PAT }}
+          path: stigmergy-knowledge
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install stigmergy
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Rebuild the index
+        run: stigmergy-index --rebuild --repo stigmergy-knowledge
+        env:
+          STIGMERGY_INDEX_DSN: ${{ secrets.SUPABASE_DSN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
