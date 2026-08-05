@@ -81,7 +81,7 @@ kill_timeout = "300s"
   # The knowledge repo it clones and files into — yours to set. https, not ssh: the App
   # authenticates over https through `stigmergy-librarian-credential`, and an ssh key would be a
   # second credential to manage.
-  STIGMERGY_LIBRARIAN_REPO_URL = "https://github.com/CHANGEME/your-knowledge-repo.git"
+  STIGMERGY_LIBRARIAN_REPO_URL = "https://github.com/CHANGEME/stigmergy-brain.git"
   # `sdk` runs the REAL agent. The default everywhere else is the offline double, which files
   # fabricated pages — this is the one deployment where that default would be catastrophic, so it
   # is explicit here exactly as it is explicit in `make librarian-walk`.

@@ -11,9 +11,9 @@ internal detail. Each closure echoes only messages proven safe by construction a
 everything unanticipated to a class name; the per-tool comments below say which is which.
 
 Run:
-    stigmergy-server --identity steward --repo ../knowledge-repo                # stdio
-    stigmergy-server --transport http --port 8080 --repo ../knowledge-repo      # HTTP, per-token identity
-    python -m stigmergy.server.mcp_server --identity steward --repo ../knowledge-repo
+    stigmergy-server --identity steward --repo ../stigmergy-brain                # stdio
+    stigmergy-server --transport http --port 8080 --repo ../stigmergy-brain      # HTTP, per-token identity
+    python -m stigmergy.server.mcp_server --identity steward --repo ../stigmergy-brain
 """
 import argparse
 import json

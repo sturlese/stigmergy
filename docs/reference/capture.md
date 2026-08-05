@@ -586,7 +586,7 @@ row keeps its payload, and therefore keeps both.
 make db-up                                   # postgres + minio (the evidence plane)
 make e2e-write                               # the write-path e2e, from empty volumes
 
-.venv/bin/stigmergy-server --identity steward@example.com --repo ../knowledge-repo   # submit over stdio
+.venv/bin/stigmergy-server --identity steward@example.com --repo ../stigmergy-brain   # submit over stdio
 .venv/bin/stigmergy-queue list                 # what is waiting
 ```
 

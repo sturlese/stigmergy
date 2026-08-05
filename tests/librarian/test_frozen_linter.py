@@ -24,7 +24,7 @@ FROZEN = (pathlib.Path(__file__).parent / "fixtures" / "repo" / ".claude" / "too
 NOTES = FROZEN.parent / "FROZEN.md"
 
 # The same resolution the librarian itself uses (`config.Settings.repo`): `$STIGMERGY_REPO`, else
-# `../knowledge-repo` beside this checkout. No absolute path is hardcoded — one machine's layout is not a
+# `../stigmergy-brain` beside this checkout. No absolute path is hardcoded — one machine's layout is not a
 # test's business.
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 

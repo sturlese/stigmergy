@@ -112,7 +112,7 @@ librarian-status: venv ## Queue depth, the item in flight (and whether its lease
 # exists to keep them out of a shell history and out of `.mcp.json`. Extra flags via `SLACK_ARGS`.
 slack-run: venv ## Run the Slack bot against $STIGMERGY_REPO (needs the env file: SLACK_APP_TOKEN, SLACK_BOT_TOKEN, SLACK_TEAM_ID, OPENAI_API_KEY)
 	@test -f .env || { echo "make slack-run: there is no .env at the repo root, and the bot cannot start without it. It carries SLACK_APP_TOKEN (xapp-, Socket Mode), SLACK_BOT_TOKEN (xoxb-), SLACK_TEAM_ID (T...) and OPENAI_API_KEY; see docs/reference/operator-runbook.md for how to obtain each."; exit 2; }
-	$(VENV)/bin/stigmergy-slack --repo $${STIGMERGY_REPO:-../knowledge-repo} $(SLACK_ARGS)
+	$(VENV)/bin/stigmergy-slack --repo $${STIGMERGY_REPO:-../stigmergy-brain} $(SLACK_ARGS)
 
 retrieval-golden: venv ## Recall@5 per arm over evals/retrieval_golden.json (fake embedder; pass EMBEDDER=openai for the real measurement)
 	$(PY) evals/run_retrieval.py --embedder $(or $(EMBEDDER),fake) $(RETRIEVAL_ARGS)
@@ -122,10 +122,10 @@ retrieval-golden: venv ## Recall@5 per arm over evals/retrieval_golden.json (fak
 # needs this first. Same env-file reason as the targets above: OPENAI_API_KEY reaches a target, not
 # a bare shell. `EMBEDDER=fake` for a keyless rebuild.
 index-rebuild: venv ## Rebuild the LOCAL index from $STIGMERGY_REPO with the real embedder (needs the env file's OPENAI_API_KEY)
-	$(VENV)/bin/stigmergy-index --rebuild --repo $${STIGMERGY_REPO:-../knowledge-repo} --embedder $(or $(EMBEDDER),openai) $(INDEX_ARGS)
+	$(VENV)/bin/stigmergy-index --rebuild --repo $${STIGMERGY_REPO:-../stigmergy-brain} --embedder $(or $(EMBEDDER),openai) $(INDEX_ARGS)
 
 index-check: venv ## Lint the LIVE index: exit 1 on any ERROR finding
-	$(VENV)/bin/stigmergy-index --check --repo $${STIGMERGY_REPO:-../knowledge-repo}
+	$(VENV)/bin/stigmergy-index --check --repo $${STIGMERGY_REPO:-../stigmergy-brain}
 
 # The real half of the golden QA set: the real embedder AND the real model, which is the only
 # instrument that runs through `AnswerBrain.search_text` and can therefore detect a regression from
@@ -168,7 +168,7 @@ deploy-staging: ## Bake the knowledge repo's ops/ files from $STIGMERGY_REPO and
 
 rebuild-staging: venv ## Rebuild the STAGING index (needs STAGING_DSN + OPENAI_API_KEY, e.g. from the local env file)
 	@test -n "$(STAGING_DSN)" || { echo "rebuild-staging: STAGING_DSN is not set (put it in the gitignored local env file; deliberately NOT STIGMERGY_INDEX_DSN so 'make test' can never point at staging)"; exit 2; }
-	$(VENV)/bin/stigmergy-index --rebuild --repo $${STIGMERGY_REPO:-../knowledge-repo} --dsn "$(STAGING_DSN)"
+	$(VENV)/bin/stigmergy-index --rebuild --repo $${STIGMERGY_REPO:-../stigmergy-brain} --dsn "$(STAGING_DSN)"
 
 r2-smoke: venv ## R2 smoke check: put+get+delete one object (needs R2_ENDPOINT_URL/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET)
 	$(PY) scripts/r2_smoke.py

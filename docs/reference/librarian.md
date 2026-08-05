@@ -99,7 +99,7 @@ and must not speak different dialects.
 ### `once`, and the preamble it prints first
 
 ```
-filing into /path/to/knowledge-repo against origin/main@a1b2c3d4e5f6
+filing into /path/to/stigmergy-brain against origin/main@a1b2c3d4e5f6
   swept 1 stranded claim(s) back to the queue and failed 0 that had burned every delivery
   (claims held longer than 900s (15 min))
 #42 filed — wiki/notes/Acme renewal.md@9f8e7d…, anchored to Acme Corp. Becomes searchable…
@@ -125,7 +125,7 @@ nothing else at all, including the refused-diff line: that path is only on the p
 ### `run`
 
 ```
-filing into /path/to/knowledge-repo against origin/main@a1b2c3d4e5f6
+filing into /path/to/stigmergy-brain against origin/main@a1b2c3d4e5f6
   polling every 3s; lease 900s (15 min); Ctrl-C stops after the item in flight
 #42 -> filed
 ^C
@@ -213,7 +213,7 @@ landmine.
 
 | Var (flag) | Default | Meaning |
 |---|---|---|
-| `STIGMERGY_REPO` (`--repo`) | `../knowledge-repo` | the knowledge-repo checkout the worktrees branch from |
+| `STIGMERGY_REPO` (`--repo`) | `../stigmergy-brain` | the knowledge-repo checkout the worktrees branch from |
 | `STIGMERGY_LIBRARIAN_BRANCH` (`--branch`) | `main` | the branch the fast lane commits to |
 | `STIGMERGY_LIBRARIAN_BACKEND` (`--backend`) | `double` | `sdk` runs the real agent; `double` is offline |
 | `STIGMERGY_LIBRARIAN_MODEL` | `claude-sonnet-5` | a Sonnet-class model is right for routine filing |

@@ -23,7 +23,7 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
 1. **Fly app** — `fly launch --no-deploy` (or `fly apps create <your-app>`), then edit
    [`fly.toml`](../../fly.toml). It ships with **placeholders, not a real deployment**:
    `app = "CHANGEME-your-fly-app"`, `STIGMERGY_PUBLIC_HOST = "CHANGEME-your-fly-app.fly.dev"` and
-   `STIGMERGY_LIBRARIAN_REPO_URL = "https://github.com/CHANGEME/your-knowledge-repo.git"` all have
+   `STIGMERGY_LIBRARIAN_REPO_URL = "https://github.com/CHANGEME/stigmergy-brain.git"` all have
    to be replaced before anything deploys. Set `primary_region` nearest your Postgres, not
    nearest you. `STIGMERGY_PUBLIC_HOST` must stay equal to the app's real hostname as a **bare
    hostname, no scheme** — see Troubleshooting for what breaks when these drift.
@@ -57,7 +57,7 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    fly secrets set SLACK_TEAM_ID="T..."
    # the incremental index webhook (`app` group) — the KNOWLEDGE repo, the one being pushed to
    fly secrets set STIGMERGY_GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"
-   fly secrets set STIGMERGY_GITHUB_REPO="<owner>/<knowledge-repo>"
+   fly secrets set STIGMERGY_GITHUB_REPO="<owner>/stigmergy-brain"
    # the admin console (`app` group, ADR 029) — OPTIONAL; unset = the console does not exist.
    # Hash from `stigmergy-admin-token`; PAT = fine-grained, Actions read+write, THIS repo only.
    # STIGMERGY_ADMIN_GITHUB_REPO is THIS platform repo (where the workflows live) — a different
@@ -87,7 +87,7 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
 
    | Settings → Variables → Actions | Used by |
    |---|---|
-   | `STIGMERGY_KNOWLEDGE_REPO` (`<owner>/<knowledge-repo>`) | all three — **and it is the on/off switch** |
+   | `STIGMERGY_KNOWLEDGE_REPO` (`<owner>/stigmergy-brain`) | all three — **and it is the on/off switch** |
    | `STIGMERGY_DIGEST_CHANNEL_ID`, `STIGMERGY_GARDENER_MODEL` | `gardener` (a channel id and a model name are not credentials) |
 
    **Every scheduled job is guarded by `if: vars.STIGMERGY_KNOWLEDGE_REPO != ''` and skips
@@ -119,7 +119,7 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
 ### The deploy loop
 
 ```sh
-make deploy-staging          # = scripts/deploy_staging.sh, STIGMERGY_REPO defaults to ../knowledge-repo
+make deploy-staging          # = scripts/deploy_staging.sh, STIGMERGY_REPO defaults to ../stigmergy-brain
 ```
 
 Bakes **four** files out of `$STIGMERGY_REPO/ops/` into the `deploy/` directory, which the
@@ -419,7 +419,7 @@ so a failed one retries clean). The visibility timeout derives from this value a
 ### Local
 
 ```sh
-make index-rebuild                                     # $STIGMERGY_REPO (default ../knowledge-repo), real embedder
+make index-rebuild                                     # $STIGMERGY_REPO (default ../stigmergy-brain), real embedder
 .venv/bin/stigmergy-index --rebuild --repo $STIGMERGY_REPO    # the same, bare (env: OPENAI_API_KEY, STIGMERGY_INDEX_DSN)
 ```
 

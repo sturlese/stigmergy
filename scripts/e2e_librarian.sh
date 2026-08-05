@@ -27,7 +27,7 @@ PY="${PY:-.venv/bin/python}"   # CI overrides with its own interpreter (PY=pytho
 
 # What is specific to THIS e2e, because it is the only one that runs the librarian:
 #   * `STIGMERGY_LIBRARIAN_BACKEND=sdk` would spend real money running a real agent on fixtures;
-#   * `STIGMERGY_REPO` would aim the whole thing at the operator's real `../knowledge-repo` checkout;
+#   * `STIGMERGY_REPO` would aim the whole thing at the operator's real `../stigmergy-brain` checkout;
 #   * `STIGMERGY_LIBRARIAN_WORKTREE_ROOT` would put this run's worktrees where another librarian's
 #     startup reap can see them.
 unset STIGMERGY_LIBRARIAN_BACKEND STIGMERGY_REPO STIGMERGY_LIBRARIAN_WORKTREE_ROOT

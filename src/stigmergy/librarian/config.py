@@ -69,7 +69,7 @@ DEFAULT_POLL_INTERVAL_S = 3.0
 DEFAULT_DEDUP_WINDOW_S = 600
 
 REPO_ENV = "STIGMERGY_REPO"
-REPO_DEFAULT = "../knowledge-repo"
+REPO_DEFAULT = "../stigmergy-brain"
 
 # Where the deployed worker clones the knowledge repo FROM. Absent on a laptop, where `repo` is
 # already a checkout a human maintains; set on the container, where there is no checkout until

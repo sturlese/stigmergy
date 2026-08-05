@@ -154,7 +154,7 @@ def test_a_quoted_trust_field_still_parses_the_same_as_unquoted_on_an_authored_p
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # Read-only verification against the real repo's OWN rule-by-rule test suite (never writes to it)
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-REAL_REPO = os.environ.get("STIGMERGY_REPO", "../knowledge-repo")
+REAL_REPO = os.environ.get("STIGMERGY_REPO", "../stigmergy-brain")
 
 
 def test_the_real_repos_own_linter_test_suite_passes_read_only():

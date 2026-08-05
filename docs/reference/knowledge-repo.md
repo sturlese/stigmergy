@@ -2,7 +2,7 @@
 
 This platform stores no pages. It reads and writes a **separate git repository** — the knowledge
 repo — which is where your knowledge actually lives. Point at it with `STIGMERGY_REPO` (or `--repo`);
-with neither set, every command looks for `../knowledge-repo`, a sibling of this checkout.
+with neither set, every command looks for `../stigmergy-brain`, a sibling of this checkout.
 
 The separation is the point: delete this platform and you still have your knowledge, as markdown
 files, with history. This document is the contract that repository has to satisfy. For what goes
@@ -18,7 +18,7 @@ directory has to exist before something writes into it — the corpus walk skips
 there.
 
 ```
-knowledge-repo/
+stigmergy-brain/
 ├── wiki/              # what people wrote — the zone the agent may file into
 │   ├── notes/         # type: note      ─┐ the three folders the librarian agent
 │   ├── decisions/     # type: decision   │ may CREATE a page in

@@ -17,13 +17,13 @@ def _args(**overrides) -> argparse.Namespace:
 
 
 def test_explicit_entity_registry_flag_wins_over_repo_derivation():
-    settings = Settings.from_args(_args(repo="../knowledge-repo", entity_registry="/app/entity-registry.json"))
+    settings = Settings.from_args(_args(repo="../stigmergy-brain", entity_registry="/app/entity-registry.json"))
     assert settings.entity_registry_path == "/app/entity-registry.json"
 
 
 def test_falls_back_to_repo_derivation_when_no_explicit_flag_given():
-    settings = Settings.from_args(_args(repo="../knowledge-repo"))
-    assert settings.entity_registry_path == "../knowledge-repo/ops/entity-registry.json"
+    settings = Settings.from_args(_args(repo="../stigmergy-brain"))
+    assert settings.entity_registry_path == "../stigmergy-brain/ops/entity-registry.json"
 
 
 def test_empty_string_when_neither_flag_nor_repo_is_given():

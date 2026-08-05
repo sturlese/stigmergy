@@ -203,7 +203,7 @@ def test_regenerate_survives_an_interrupted_write_by_never_leaving_a_half_writte
 # read (`generator.check`/`snapshot`/`derive_registry`), and `save_registry` below is pointed at
 # a TEMPORARY path, never at the real repo's own file.
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-REAL_REPO = os.environ.get("STIGMERGY_REPO", "../knowledge-repo")
+REAL_REPO = os.environ.get("STIGMERGY_REPO", "../stigmergy-brain")
 
 
 def _real_repo_or_skip():

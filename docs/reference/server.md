@@ -209,15 +209,15 @@ missing `OPENAI_API_KEY` with `ANSWER_LLM=openai` yields a clean `ask` error (ne
 
 ```sh
 make db-up                                                          # postgres+pgvector (the index)
-.venv/bin/stigmergy-index --rebuild --repo ../knowledge-repo          # build/refresh the index (needs a key)
-.venv/bin/stigmergy-index --rebuild --repo ../knowledge-repo --embedder fake   # keyless (tests/CI double)
+.venv/bin/stigmergy-index --rebuild --repo ../stigmergy-brain          # build/refresh the index (needs a key)
+.venv/bin/stigmergy-index --rebuild --repo ../stigmergy-brain --embedder fake   # keyless (tests/CI double)
 
 # stdio: one process = one identity
-.venv/bin/stigmergy-server --identity steward@example.com --repo ../knowledge-repo
+.venv/bin/stigmergy-server --identity steward@example.com --repo ../stigmergy-brain
 
 # HTTP, per-request identity (no --identity — see "HTTP transport" below)
 STIGMERGY_TOKEN_STORE='{"<sha256hex>":"steward@example.com"}' \
-  .venv/bin/stigmergy-server --transport http --port 8080 --repo ../knowledge-repo
+  .venv/bin/stigmergy-server --transport http --port 8080 --repo ../stigmergy-brain
 ```
 
 `--repo` defaults `--identities` to `<repo>/ops/identities.json` **and** `--entity-registry` to
@@ -248,7 +248,7 @@ per client, so the identity is fixed per connection:
   "mcpServers": {
     "stigmergy": {
       "command": "/path/to/stigmergy/.venv/bin/stigmergy-server",
-      "args": ["--identity", "steward@example.com", "--repo", "/path/to/knowledge-repo"],
+      "args": ["--identity", "steward@example.com", "--repo", "/path/to/stigmergy-brain"],
       "env": { "STIGMERGY_INDEX_DSN": "postgresql://stigmergy:stigmergy@localhost:54321/stigmergy" }
     }
   }
@@ -465,14 +465,14 @@ surfaces the actionable `--rebuild` hint instead of a raw database error.
 Manual:
 
 ```sh
-.venv/bin/stigmergy-index --rebuild --repo ../knowledge-repo
+.venv/bin/stigmergy-index --rebuild --repo ../stigmergy-brain
 ```
 
 Local cron (e.g. hourly, keyless double shown; drop `--embedder fake` and add `OPENAI_API_KEY`
 for the real model):
 
 ```cron
-0 * * * *  cd /path/to/stigmergy && .venv/bin/stigmergy-index --rebuild --repo ../knowledge-repo >> /tmp/stigmergy-index.log 2>&1
+0 * * * *  cd /path/to/stigmergy && .venv/bin/stigmergy-index --rebuild --repo ../stigmergy-brain >> /tmp/stigmergy-index.log 2>&1
 ```
 
 If you edit a page and forget the rebuild, search "misses" it until the next build — check the

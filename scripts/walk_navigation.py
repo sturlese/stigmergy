@@ -142,7 +142,7 @@ def main() -> int:
     print("\nMECHANISM WALK COMPLETE — every navigation surface served, existence-scoped.")
     print("""
 THE LIVE HALF (hand steps, real corpus + real model):
-  1. make index-rebuild                              # real embedder over ../knowledge-repo
+  1. make index-rebuild                              # real embedder over ../stigmergy-brain
   2. generate the real views (one per anchored entity):
        .venv/bin/stigmergy-views regenerate --all   # commits+pushes as the App bot (normal op)
      then make index-rebuild again so describe_entity's view layer sees them.

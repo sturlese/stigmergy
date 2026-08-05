@@ -137,8 +137,8 @@ See [capture.md](./capture.md).
 
 ```sh
 make db-up                                   # postgres+pgvector + minio (docker-compose.yml; loopback-only)
-.venv/bin/stigmergy-index --rebuild --repo ../knowledge-repo            # real embedder: needs OPENAI_API_KEY
-.venv/bin/stigmergy-index --rebuild --repo ../knowledge-repo --embedder fake   # keyless (tests/CI double)
+.venv/bin/stigmergy-index --rebuild --repo ../stigmergy-brain            # real embedder: needs OPENAI_API_KEY
+.venv/bin/stigmergy-index --rebuild --repo ../stigmergy-brain --embedder fake   # keyless (tests/CI double)
 
 .venv/bin/stigmergy-search "How much was the deposit on the Kestrel Lodge booking?"
 .venv/bin/stigmergy-search "globex quarterly revenue" --filter entity=globex -k 10

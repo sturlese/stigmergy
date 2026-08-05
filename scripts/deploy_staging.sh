@@ -11,7 +11,7 @@
 # ALREADY-created app.
 set -euo pipefail
 
-STIGMERGY_REPO="${STIGMERGY_REPO:-../knowledge-repo}"
+STIGMERGY_REPO="${STIGMERGY_REPO:-../stigmergy-brain}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DEPLOY_DIR="$HERE/deploy"
 

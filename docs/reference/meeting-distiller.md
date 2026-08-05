@@ -217,7 +217,7 @@ submitter reads the report and the filed page.
 ## The brief↔gates two-sided contract
 
 The distiller's brief (`.claude/skills/meeting-distiller/SKILL.md`) lives in the **knowledge repo**
-— the sibling checkout this repository's own tooling assumes at `../knowledge-repo` relative to this
+— the sibling checkout this repository's own tooling assumes at `../stigmergy-brain` relative to this
 repo's root (`librarian.config.REPO_DEFAULT`). It is read from the
 SAME ephemeral worktree the ordinary flow's `SKILL.md` is (`agent.read_meeting_brief`, checked out
 `--detach` at `base.sha` by `gitcmd.ephemeral_worktree`), never by a second `base_inputs` reader —
