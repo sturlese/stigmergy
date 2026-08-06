@@ -115,6 +115,18 @@ be attributable to a person.
    fine-grained PAT secret and runs the CLI unchanged against a DSN secret — the keyless test CI
    (`ci.yml`) is untouched, and no index-builder code is touched either.
 
+   **Reversed 2026-08-07, when this repository became public.** D9's premise was that the code
+   lives here and the data lives there, so the job should run where the code is. Publishing added a
+   term the original decision could not weigh: **Actions logs on a public repository are readable
+   by anyone**, and these jobs narrate the corpus — the gardener prints entity ids and page paths,
+   and repository *variables* are not masked at all. The three operational crons therefore run from
+   the knowledge repo, which is private; this repo keeps the workflow files as adopter templates,
+   disabled. The premise survives the reversal intact, because `pip` closes the gap D9 was avoiding:
+   the CLI is installed from this repo's published tree rather than copied, so no code moved. Two
+   things improve — the cross-repo read-only PAT loses its last reader (the workflow's own
+   `GITHUB_TOKEN` covers a checkout of its own repository), and the platform version the crons run
+   is pinnable. See the runbook's Actions section.
+
 ## Consequences
 
 - The identity seam ([ADR 010](./010-acl.md)) is proven exactly as designed: per-request token
