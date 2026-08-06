@@ -39,12 +39,19 @@ def pytest_configure(config) -> None:
     os.environ[store.DSN_ENV] = testdb.dsn()
 
 
-# The App's four environment variables — same tuple `tests/librarian/conftest.py::
+# The App's five environment variables — same tuple `tests/librarian/conftest.py::
 # no_real_github_app` clears for its own package. Duplicated here deliberately rather than
 # imported from there: the whole point is that THIS fixture must not depend on that file, or on
 # any other file, continuing to exist or to be wired up correctly.
+#
+# `APP_LOGIN_ENV` belongs here for a reason the other four do not make obvious: it is not a
+# credential, so it looks harmless, and it is the one an operator whose App is not named the
+# default MUST set. The moment they do, an `.env` naming their slug reaches every test asserting
+# the bot's commit identity, and five of them fail on a machine where nothing is wrong. Found
+# exactly that way.
 _LIBRARIAN_APP_ENV = (githubapp.APP_ID_ENV, githubapp.INSTALLATION_ID_ENV,
-                      githubapp.PRIVATE_KEY_ENV, githubapp.PRIVATE_KEY_FILE_ENV)
+                      githubapp.PRIVATE_KEY_ENV, githubapp.PRIVATE_KEY_FILE_ENV,
+                      githubapp.APP_LOGIN_ENV)
 
 
 @pytest.fixture(autouse=True)

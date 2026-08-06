@@ -68,25 +68,40 @@ def test_the_gardener_check_count_matches_all_check_slugs(readme):
     assert _claimed(readme, "deterministic checks") == len(ALL_CHECK_SLUGS)
 
 
+def _packages_listed_in_the_readme(readme: str) -> set[str]:
+    """The package names the README's own table claims exist.
+
+    The table is bounded by its `#### src/stigmergy/` heading and the next heading, so a second
+    table underneath it (the `tests/`, `evals/`, `docs/` one) can never leak entries in — those
+    are not packages, and counting them would make the reverse check below unfalsifiable.
+
+    It used to be an indented code block, parsed by leading whitespace. Both readings are equally
+    fragile against a rewrite of the front page, which is why the assertion below fires on an
+    EMPTY result: a parser that quietly matches nothing turns both of these tests permanently
+    green, which is worse than the drift they exist to catch.
+    """
+    block = readme[readme.index("#### `src/stigmergy/`"):]
+    rest = block[len("#### `src/stigmergy/`"):]
+    end = rest.find("\n#")
+    return set(re.findall(r"^\|\s*`([a-z_]+)/`", rest[:end] if end != -1 else rest, re.MULTILINE))
+
+
 def test_every_package_the_readme_lists_actually_exists(readme):
-    """The failure this catches: a package deleted whole, still described in the tree as present
+    """The failure this catches: a package deleted whole, still described in the table as present
     and dormant. Nothing else in the suite reads the README, so nothing else noticed."""
-    block = readme[readme.index("src/stigmergy/"):]
-    block = block[:block.index("```")]
-    listed = set(re.findall(r"^\s{2}([a-z_]+)/", block, re.MULTILINE))
-    assert listed, "the README's package tree no longer parses — update this check"
+    listed = _packages_listed_in_the_readme(readme)
+    assert listed, "the README's package table no longer parses — update this check"
     missing = sorted(p for p in listed if not (STIGMERGY / p / "__init__.py").is_file())
     assert not missing, f"README lists packages that do not exist: {missing}"
 
 
 def test_every_package_that_exists_is_listed_in_the_readme(readme):
     """The other direction: a package added without the front door catching up."""
-    block = readme[readme.index("src/stigmergy/"):]
-    block = block[:block.index("```")]
-    listed = set(re.findall(r"^\s{2}([a-z_]+)/", block, re.MULTILINE))
+    listed = _packages_listed_in_the_readme(readme)
+    assert listed, "the README's package table no longer parses — update this check"
     real = {p.name for p in STIGMERGY.iterdir()
             if p.is_dir() and (p / "__init__.py").is_file() and not p.name.startswith("_")}
-    assert not sorted(real - listed), f"packages missing from the README tree: {sorted(real - listed)}"
+    assert not sorted(real - listed), f"packages missing from the README table: {sorted(real - listed)}"
 
 
 def test_the_fast_lane_and_item_kind_vocabularies_are_small_and_stated_once():

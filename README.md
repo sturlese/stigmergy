@@ -1,5 +1,7 @@
 # Stigmergy
 
+![Stigmergy — coordination through indirect signals](./docs/assets/stigmergy.png)
+
 **A team's knowledge, captured where the work happens, filed by an agent, and answered with
 citations you can check.**
 
@@ -7,6 +9,36 @@ Notes, meeting transcripts and documents arrive from Slack or a CLI. An agent tu
 page in a plain git repository — but *code*, not the model, decides what is allowed to land. Reads
 go through a single MCP server that answers questions with sources, and refuses when it cannot
 support an answer. Everything it stores is a markdown file in a repo you own.
+
+## The idea, and what a team does to it
+
+The starting shape is Andrej Karpathy's **LLM wiki**: instead of re-deriving an answer from raw
+sources on every question, let a model keep a markdown wiki current — reading each new source,
+folding it into the pages it touches, and maintaining the cross-references. It works for a reason
+worth stating plainly: a model does not get bored doing the bookkeeping, and that bookkeeping is
+precisely the chore that makes people abandon wikis. Knowledge then compounds in one place rather
+than being recomputed per query. *(Original write-up:
+[karpathy/442a6bf5…](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — the idea
+is restated here in full, because nothing this repository explains should depend on a link.)*
+
+That model assumes one person, curating their own vault. Point it at a **team** and three things
+stop being optional:
+
+**A mistake is now somebody else's problem.** In a personal vault a bad edit costs you one undo. In
+a shared one it quietly becomes what the company believes, and the person it misleads is not the
+person who made it. That asymmetry is why nothing here is left to the model's judgement — the next
+section is the whole answer.
+
+**The vocabulary has to be agreed, not coined.** A solo wiki can let the model invent a page for
+every name it meets. With several writers that yields three pages for one customer under three
+spellings, and every link pointing at the wrong one. Here an entity is **born through a human**: the
+agent proposes, a steward approves in Slack, and only then does a governed writer mint the page and
+the registry entry. A capture naming something unknown parks and asks — once — rather than guessing.
+
+**Not everyone may read everything.** A team wiki holds salaries, board material and a customer's
+confidential figures. Visibility is enforced at one point (`acl.visible()`), on every read surface,
+by an architecture test that refuses to let a new reader skip it — and an unknown page and a
+forbidden page return the same string, because *which* one it was is itself a leak.
 
 ## Why it is built this way
 
@@ -76,50 +108,36 @@ real models or real cloud resources are opt-in, need the env file, and are docum
 
 ## What is here
 
-One package, its tests beside it:
+One package, its tests beside it. Every row has a code map (`index.md`) beside it in the source.
 
-```
-src/stigmergy/
-  text.py        the bottom of the stack: the hardened UNTRUSTED-DATA fence, sanitize, clamp,
-                 and the one parser for a capture's `<path>@<sha>` result ref
-  review_kinds.py  the review inbox's TWO kind constants (entity-proposal, parked-capture) —
-                 dependency-free, so a Block Kit renderer can name them without importing
-                 the server
-  kernel/        a LIBRARY that imports nothing from this project: the model dispatch, the page
-                 contract's cap + scalar emitter, frontmatter parsing, the ACL resolver, the
-                 entity registry, and the document converters the Drive door runs — text
-                 extraction plus the vision OCR fallback
-  index/         the hybrid derived index: postgres+pgvector, reciprocal rank fusion, contract
-                 ranking
-  server/        the single MCP server — the ONLY API over the brain; HTTP transport with
-                 per-request bearer auth, audit log, rate limits, the capture surface, the
-                 incremental-index webhook, entity navigation and the review lane
-  answer/        the answering agent + deterministic verifier: powers the `ask` tool
-  capture/       the durable capture queue: submit, claim, the evidence plane, retention; the
-                 human loop's write surfaces; and the TWO operator drop CLIs — the meeting
-                 one, and the Drive door (fetch with the operator's own Google auth, original
-                 bytes to evidence, one `kind="drive"` row, no model)
-  librarian/     the filing engine: the worker, the agent, the eight gates, the commit; ask-back,
-                 the deployed worker, the meeting flow
-  entities/      governed entity birth: proposal -> approve -> registry regenerate — the ONE
-                 path-scoped writer of the knowledge repo's `ops/entity-registry.json` and
-                 `wiki/entities/`
-  slack/         the Slack transport: 🧠 capture, Q&A, the steward doorbell
-  views/         per-entity rollups: a deterministic skeleton + a bounded synthesis
-  gardener/      corpus health on demand: eight deterministic checks + a bounded model editorial
-                 sweep, findings persisted and reported — fixes nothing, writes nothing, vetoes
-                 nothing
-  digest/        the week's activity in one Slack post
-  admin/         the ops console: `/admin` on the same app process group — queue drain, cron
-                 remote-control, gardener/digest/index panels, activity. INERT until its token
-                 hash is configured, and never a read surface over knowledge
-tests/           the behavioural invariant + the architecture tests that make the seams rules
-evals/           two real instruments — golden retrieval and golden QA — over a frozen reference
-                 corpus, plus the git-resident score series
-docs/            decisions/ (why) · reference/ (what)
-scripts/         the end-to-end harnesses
-docker-compose.yml   the local test stack: postgres+pgvector, minio, a bare git remote
-```
+#### `src/stigmergy/`
+
+| Module | What it is |
+|---|---|
+| `text.py` | the bottom of the stack: the hardened UNTRUSTED-DATA fence, sanitize, clamp, and the one parser for a capture's `<path>@<sha>` result ref |
+| `review_kinds.py` | the review inbox's TWO kind constants (entity-proposal, parked-capture) — dependency-free, so a Block Kit renderer can name them without importing the server |
+| `kernel/` | a LIBRARY that imports nothing from this project: the model dispatch, the page contract's cap + scalar emitter, frontmatter parsing, the ACL resolver, the entity registry, and the document converters the Drive door runs — text extraction plus the vision OCR fallback |
+| `index/` | the hybrid derived index: postgres+pgvector, reciprocal rank fusion, contract ranking |
+| `server/` | the single MCP server — the ONLY API over the brain; HTTP transport with per-request bearer auth, audit log, rate limits, the capture surface, the incremental-index webhook, entity navigation and the review lane |
+| `answer/` | the answering agent + deterministic verifier: powers the `ask` tool |
+| `capture/` | the durable capture queue: submit, claim, the evidence plane, retention; the human loop's write surfaces; and the TWO operator drop CLIs — the meeting one, and the Drive door (fetch with the operator's own Google auth, original bytes to evidence, one `kind="drive"` row, no model) |
+| `librarian/` | the filing engine: the worker, the agent, the eight gates, the commit; ask-back, the deployed worker, the meeting flow |
+| `entities/` | governed entity birth: proposal → approve → registry regenerate — the ONE path-scoped writer of the knowledge repo's `ops/entity-registry.json` and `wiki/entities/` |
+| `slack/` | the Slack transport: 🧠 capture, Q&A, the steward doorbell |
+| `views/` | per-entity rollups: a deterministic skeleton + a bounded synthesis |
+| `gardener/` | corpus health on demand: eight deterministic checks + a bounded model editorial sweep, findings persisted and reported — fixes nothing, writes nothing, vetoes nothing |
+| `digest/` | the week's activity in one Slack post |
+| `admin/` | the ops console: `/admin` on the same app process group — queue drain, cron remote-control, gardener/digest/index panels, activity. INERT until its token hash is configured, and never a read surface over knowledge |
+
+#### Around it
+
+| Path | What it is |
+|---|---|
+| `tests/` | the behavioural invariant + the architecture tests that make the seams rules |
+| `evals/` | two real instruments — golden retrieval and golden QA — over a frozen reference corpus, plus the git-resident score series |
+| `docs/` | `decisions/` (why) · `reference/` (what) |
+| `scripts/` | the end-to-end harnesses |
+| `docker-compose.yml` | the local test stack: postgres+pgvector, minio, a bare git remote |
 
 ### The read path
 

@@ -17,9 +17,13 @@ from stigmergy.librarian import githubapp
 from tests import testdb
 from tests.librarian import support
 
-# The App's four environment variables. Cleared for every test in this package — see below.
+# The App's five environment variables. Cleared for every test in this package — see below.
+# `APP_LOGIN_ENV` is in the group because it decides the identity commits are AUTHORED by: an
+# operator whose App is not named the default sets it, and without this their `.env` reaches the
+# tests that assert that identity.
 _APP_ENV = (githubapp.APP_ID_ENV, githubapp.INSTALLATION_ID_ENV,
-            githubapp.PRIVATE_KEY_ENV, githubapp.PRIVATE_KEY_FILE_ENV)
+            githubapp.PRIVATE_KEY_ENV, githubapp.PRIVATE_KEY_FILE_ENV,
+            githubapp.APP_LOGIN_ENV)
 
 # What the `sdk` backend authenticates with, plus the gateway variable whose mere presence counts
 # as "authentication is somebody else's problem" (`agent.credential_present`).

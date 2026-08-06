@@ -214,3 +214,4 @@ def test_an_absent_or_empty_slug_falls_back_to_the_default_rather_than_an_empty_
     assert githubapp.identity(env)[0] == f"{githubapp.APP_LOGIN_DEFAULT}[bot]"
 
 
+
