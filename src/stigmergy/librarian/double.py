@@ -544,7 +544,7 @@ class DoubleAgent:
 
         This was `re.sub(r"[^A-Za-z0-9 ]+", " ", text)`, an ASCII whitelist, and it destroyed every
         non-ASCII title it ever saw: "Zürich Review with Meridian Partners" became "Z rich Review
-        Partners" — in the filename, the H1, the `title` frontmatter and the commit subject, on the
+        with Meridian Partners" — in the filename, the H1, the `title` frontmatter and the commit subject, on the
         real `main`, permanently. The body was byte-correct throughout, so nothing about the
         encoding was broken; the sanitizer was.
 

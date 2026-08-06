@@ -133,7 +133,7 @@ def main() -> int:
     qa_report = out / "qa.json"
     verdicts["qa"] = _instrument(
         "qa", [args.python, "evals/run_qa.py",
-               "--golden", "evals/qa_golden_es.json", "--embedder", "openai",
+               "--golden", "evals/qa_golden.json", "--embedder", "openai",
                "--llm", "openai", "--rebuild", "--repo", args.repo, "--report", qa_report],
         qa_report, judge_qa, "qa")
 

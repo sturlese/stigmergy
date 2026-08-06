@@ -30,7 +30,7 @@
       "id": "memo-arr-eur",
       "q": "How much did ARR amount to according to the 2026 Strategy Memo?",
       "kind": "exact",
-      "expect_contains": "1.234.567",
+      "expect_contains": "1,234,567",
       "cites": "sources/units/sales/strategy-memo-2026-14530b.md",
       "family": "answerable"
     },

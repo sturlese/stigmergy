@@ -15,7 +15,7 @@ sources: []
 
 This page exists for its FILENAME, not its prose. `git diff --name-status` C-quotes any path
 containing a non-ASCII byte under the default `core.quotePath=true`, so this page's path arrives
-as `"wiki/notes/Caf\303\251 Renovaci\303\263n.md"` unless every diff invocation disables
+as `"wiki/notes/Caf\303\251 Z\303\274rich Renewal.md"` unless every diff invocation disables
 that. A quoted path matches none of the `wiki/...` prefix tests, which had two consequences
 and neither of them was visible in a green suite.
 

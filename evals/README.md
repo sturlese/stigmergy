@@ -146,6 +146,7 @@ yardstick and silently changing a yardstick destroys comparability with every en
 series:
 
 - `globex-meeting-budget` expects the literal word "budget", which an answer is free to
+  paraphrase around.
 - `benchmark: foxglove prospect` names a second expected page (`foxglove-health`) that matches no
   page id or stem, capping that question's recall at 0.5 forever.
 

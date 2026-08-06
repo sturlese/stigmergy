@@ -7,9 +7,9 @@
 The brain's corpus (authored `wiki/`, machine `sources/` + `views/`) was only
 reachable by grepping or reading files — which fails exactly where the product must win:
 questions arrive as whole sentences, and in a **different language from the pages**, and
-loses recall systematically. A spike measured it instead of assuming it, over a 41-page
+lexical search loses recall systematically on both counts. A spike measured it instead of
 assuming it, over a 41-page mixed corpus (7 real + benchmark/demo synthetic) and 20 real
-real embedder:
+cross-lingual questions, with the real embedder:
 
 | Arm | hit@5 |
 |---|---|
@@ -31,7 +31,8 @@ holds that door shut — the index reaches for no writer.
 
 1. **Both arms, RRF-fused.** Lexical: native FTS, **OR-of-lexemes** (AND semantics measure
    0 on whole natural-language questions by construction). Semantic: pgvector cosine over
-   `text-embedding-3-large` — the spike measured ES→EN hit@5 = 1.00 with it. Fusion:
+   OpenAI `text-embedding-3-large` — the spike measured cross-lingual hit@5 = 1.00 with it.
+   Fusion:
    Reciprocal Rank Fusion, k=60.
 
    RRF is kept **despite** vec-only winning the spike (1.00 vs 0.95): at 41 pages the
@@ -98,7 +99,8 @@ holds that door shut — the index reaches for no writer.
 
 ## Alternatives rejected
 
-- **FTS only** — measured at 0.60 hit@5 on ES→EN; below the product bar, not an opinion.
+- **FTS only** — measured at 0.60 hit@5 on the cross-lingual spike; below the product bar, not
+  an opinion.
 - **`pg_search`/ParadeDB/BM25 upgrade** — only reconsidered if golden recall shows native
   FTS lacking; the spike's data closed the question for now.
 - **Cross-encoder reranker** — deferred; the factor model must stay explainable while trust in
@@ -106,6 +108,18 @@ holds that door shut — the index reaches for no writer.
 - **Voyage embeddings**, the original assumption — replaced by OpenAI after the spike validated
   its multilingual quality; provider re-evaluation is out of scope until the model-change
   procedure triggers it.
+
+## Amendment — the cross-lingual arm is no longer measured
+
+**2026-08-07.** The corpus, both golden sets and the recency-word list were re-expressed in one
+language, so every question this ADR's spike asked in a second one is now asked in the pages'
+own. The decision stands on its other leg — a whole-sentence question is what AND-semantics FTS
+scores 0 on, language aside — but the specific number above (cross-lingual hit@5 0.60 vs 1.00)
+**is no longer re-measured by anything in this repository**, and a later reader must not read the
+goldens as evidence for it. Restoring it means adding questions in a second language back to
+`evals/retrieval_golden.json` and the matching words to `rank._RECENCY_WORDS`; it is named here
+rather than left to be inferred from a silence, because a dimension that stops being checked and
+says nothing is the failure this repo's testing doctrine exists to prevent.
 
 A full rebuild stayed the only write path for a while, on the grounds that it is cheap at this
 scale and keeps the cache property provable. It is no longer the only one: a GitHub webhook

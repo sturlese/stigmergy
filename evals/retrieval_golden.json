@@ -134,7 +134,7 @@
     },
     {
       "id": "benchmark: aurora dossier",
-      "q": "Dame un resumen del cliente Aurora Systems",
+      "q": "Give me a summary of the customer Aurora Systems",
       "expect": {
         "pages": [
           "aurora-systems"

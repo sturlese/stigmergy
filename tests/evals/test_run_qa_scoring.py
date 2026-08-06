@@ -37,15 +37,16 @@ def _exact(expect, cites=PAGE):
     ("1074", "In 2026-03 Aurora Systems had **1.074** active users."),        # thousands dot
     ("512000", "February ARR was 512.000 USD."),                             # thousands dot
     ("512000", "February ARR was 512k USD."),                                # magnitude suffix
-    ("1.234.567", "El ARR alcanzó 1234567 EUR."),                            # grouping dropped
-    ("1.234.567", "El ARR alcanzó 1,234,567 EUR."),                          # English grouping
+    ("1,234,567", "ARR reached 1234567 EUR."),                               # grouping dropped
+    ("1,234,567", "ARR reached 1.234.567 EUR."),                             # other grouping
     ("2.3x", "Our engine is 2,3x faster."),                                  # decimal comma
     ("2.3x", "It is 2.3 times faster on the 10k-stop dataset."),             # 'x' spelled out
-    ("18%", "Plantea un ahorro del 18 % sobre los costes de routing."),      # spaced percent
+    ("18%", "It puts forward an 18 % saving on routing costs."),             # spaced percent
 ])
 def test_a_figure_scores_as_found_when_it_is_numerically_equivalent(expected, answer):
     """The literal `in` test made the scorer fail answers that are RIGHT — a model writing
-    writing 1.074 for 1074 was recorded as a groundedness miss."""
+    1.074 for 1074 was recorded as a groundedness miss. The model picks the notation; the
+    question set does not, which is why these equivalences survive an English golden."""
     scored = run_qa._score(_exact(expected), _res(answer, cites=[PAGE]))
     assert scored["ok"], scored.get("miss")
 
@@ -234,7 +235,7 @@ def test_the_three_false_premise_cases_carry_expected_refutation_fields():
     """The values come from the frozen corpus, never invented here."""
     import json
 
-    golden = json.loads((run_qa.ROOT / "evals" / "qa_golden_es.json").read_text(encoding="utf-8"))
+    golden = json.loads((run_qa.ROOT / "evals" / "qa_golden.json").read_text(encoding="utf-8"))
     cases = [q for q in golden["questions"] if q["family"] == "false-premise"]
 
     assert len(cases) == 3
@@ -248,23 +249,25 @@ def test_the_golden_set_size_is_pinned():
     comparable against another score over the same question set."""
     import json
 
-    golden = json.loads((run_qa.ROOT / "evals" / "qa_golden_es.json").read_text(encoding="utf-8"))
+    golden = json.loads((run_qa.ROOT / "evals" / "qa_golden.json").read_text(encoding="utf-8"))
     assert len(golden["questions"]) == 26
 
 
 # ------------------------------------------------------------------------ date equivalence
-def test_an_iso_expectation_matches_the_spanish_long_form():
+def test_an_iso_expectation_matches_the_long_form_either_way_round():
     """`aurora-timeline-q1`'s measured miss: right page, right date, verdict verified — the
     yardstick just couldn't read a long-form spelling of the day as 2026-02-10. Both orders
+    are accepted because English writes both."""
     case = {"expect_contains": "2026-02-10"}
     assert run_qa._expectation_met(case, "The agreed date was 10 February 2026.")
+    assert run_qa._expectation_met(case, "The agreed date was February 10, 2026.")
 
 
 def test_an_iso_expectation_still_matches_itself_and_numeric_forms():
     case = {"expect_contains": "2026-02-10"}
     assert run_qa._expectation_met(case, "the deadline is 2026-02-10")
-    assert run_qa._expectation_met(case, "el 10/02/2026 se cierra")
-    assert run_qa._expectation_met(case, "el 10-2-2026 se cierra")
+    assert run_qa._expectation_met(case, "it closes on 10/02/2026")
+    assert run_qa._expectation_met(case, "it closes on 10-2-2026")
 
 
 def test_a_wrong_date_is_still_a_miss_the_benign_twin_of_equivalence():
@@ -276,10 +279,10 @@ def test_a_wrong_date_is_still_a_miss_the_benign_twin_of_equivalence():
     assert not run_qa._expectation_met(case, "10 February 2025")
 
 
-def test_a_yearless_spanish_date_matches_when_no_year_contradicts():
-    """`premise-ledgerly-api`'s measured miss: a correct, cited, verified correction wrote "se
+def test_a_yearless_date_matches_when_no_year_contradicts():
+    """`premise-ledgerly-api`'s measured miss: a correct, cited, verified correction wrote that
     it was agreed "to check with the vendor on 12 August" — prose leaves the year contextual —
-    contextual — and the full-form-only matcher failed the right answer."""
+    and the full-form-only matcher failed the right answer."""
     case = {"expect_contains": "2026-08-12"}
     assert run_qa._expectation_met(case, "it was agreed to check with the vendor on 12 August")
     assert run_qa._expectation_met(case, "the call is on August 12, with the vendor")
@@ -291,6 +294,7 @@ def test_a_yearless_match_still_refuses_a_spelled_out_wrong_year():
     case = {"expect_contains": "2026-08-12"}
     assert not run_qa._expectation_met(case, "the call was on 12 August 2025")
     assert not run_qa._expectation_met(case, "the call was on August 12, 2025")
+    assert not run_qa._expectation_met(case, "on 13 August")
 
 
 # --------------------------------------------------- the retry tax rides along on `ok` questions

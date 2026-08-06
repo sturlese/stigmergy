@@ -15,9 +15,9 @@ both run BY HAND and append to a git-resident series; CI stays keyless and never
 | Entry | File |
 |---|---|
 | `make retrieval-golden` → Recall@5 per arm | `run_retrieval.py` (needs `make db-up`; `--rebuild --repo evals/corpus`) |
-| retrieval golden (16 ES questions) | `retrieval_golden.json` — page-id expectations, 10 carrying `filters.entity` |
+| retrieval golden (16 questions) | `retrieval_golden.json` — page-id expectations, 10 carrying `filters.entity` |
 | `make qa-golden` → honesty · groundedness · refutation · retry rate · seconds/question | `run_qa.py` (needs `make db-up` + `OPENAI_API_KEY`) |
-| QA golden ES (26 questions) | `qa_golden_es.json`; ACL-probe identities in `qa_identities.json` |
+| QA golden (26 questions) | `qa_golden.json`; ACL-probe identities in `qa_identities.json` |
 | `make gates` → one verdict, one exit code | `run_gates.py`; the armed thresholds live in `bars.py` |
 | **the frozen reference corpus** | `corpus/` — 38 committed pages + `PROVENANCE.json` + its own `ops/entity-registry.json`; both runners take `--repo evals/corpus`, and for `run_qa.py` that flag is also what gives `Settings` an alias map (without it entity-first resolution is inert for the whole measurement). Guarded keylessly by `tests/evals/test_golden_corpus_fixture.py` |
 | durable eval-score series | `eval_history.py` (`append_run`/`read_history`/`resolve_git_sha`/`corpus_provenance`) → `history.ndjson`, appended by a REAL-instrument run only |

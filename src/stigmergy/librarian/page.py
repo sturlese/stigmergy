@@ -699,6 +699,7 @@ def unnameable_reason(basename: str) -> str:
 
     Deliberately short: a path separator or a control byte. Accents, ideographs, emoji and
     punctuation all pass — a corpus naming European customers carries these routinely, so they
+    are the normal case rather than the edge one.
     """
     if not basename:
         return "it has no name at all"

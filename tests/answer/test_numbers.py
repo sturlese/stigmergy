@@ -12,8 +12,9 @@ from stigmergy.answer.numbers import claimed, number_pool, unverified_figures
 # ── the x multiplier: a REAL false refusal, measured against a live corpus, not theorized ──────
 
 
-def test_the_benchmark_speed_witness_a_spanish_draft_of_a_multiplier_page_now_verifies():
+def test_the_benchmark_speed_witness_a_decimal_comma_draft_now_verifies():
     """The page says 2.3x; the model's draft wrote 2,3 — a decimal comma, which a model may
+    reach for whatever language the question was asked in. The token regex used to read
     `2.3x` as a bare 2, so no overlap existed and the strict gate withheld a correct answer — the
     one measured groundedness cost of the old tokenizer. Both spellings pool as 2.3 now."""
     assert unverified_figures("The engine is 2,3 times faster.", "the engine is 2.3x faster") == []

@@ -16,4 +16,4 @@ version control, and every derived system — including the search index — can
 rebuilt from a checkout. Nothing derived is ever authoritative.
 
 A second paragraph of ordinary prose: the git repository is the canonical store of the
-conocimiento. See also [[refund-policy]] for a governed page example.
+knowledge. See also [[refund-policy]] for a governed page example.

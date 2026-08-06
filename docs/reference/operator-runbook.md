@@ -726,7 +726,7 @@ Three instruments, three bars, one verdict (exit 0/1), printed as a `PASS`/`FAIL
 |---|---|---|
 | adversarial suite | — | categories **1** (injection via content), **2** (ACL leakage/existence), **7** (forged frontmatter) all pass — collected by name, and the collection floor is itself a CI test (`tests/test_adversarial_gate.py`), so `-k` cannot fail open |
 | retrieval golden (`evals/retrieval_golden.json`) | 16 questions | `final` **R@5 ≥ 0.80** |
-| QA golden (`evals/qa_golden_es.json`) | 26 questions | **honesty ≥ 0.90** · **groundedness ≥ 0.84**; refutation REPORTED, never gated |
+| QA golden (`evals/qa_golden.json`) | 26 questions | **honesty ≥ 0.90** · **groundedness ≥ 0.84**; refutation REPORTED, never gated |
 
 Both goldens run against the frozen reference corpus `evals/corpus/` (`--repo` defaults to it), so
 a bar is a statement about that corpus and nothing else.

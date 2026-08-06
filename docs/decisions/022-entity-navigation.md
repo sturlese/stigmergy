@@ -75,7 +75,7 @@ The cost is structural, not a ranking nit. A resolved entity with ANY hits eclip
 ranking entirely, so a page that is genuinely company-wide — `entity: []`, which is the correct
 declaration for a policy, a process, a cross-cutting decision — became unreachable through EVERY
 query naming a registered company. That is most real questions. Observed on staging: `demo pipeline
-extracción Globex` returned only the three pages anchored to `globex`, each carrying
+extraction Globex` returned only the three pages anchored to `globex`, each carrying
 `factors: ["entity:globex"]`, while the page that actually answered the question ranked #2 on raw
 hybrid search over the same DSN and was absent from `search_brain` altogether. The substrate was
 healthy; the filter was the whole cause.

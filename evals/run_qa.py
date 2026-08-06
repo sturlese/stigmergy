@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Golden QA runner — honesty + groundedness at the answer.
 
-On-demand instrument (NOT wired into CI — CI stays keyless): drives `evals/qa_golden_es.json`
+On-demand instrument (NOT wired into CI — CI stays keyless): drives `evals/qa_golden.json`
 (26 questions) through the full answering loop over the Postgres index and reports THREE
 quality axes — plus, beside them, the two LATENCY numbers described after the list:
 
@@ -77,7 +77,7 @@ from stigmergy.server.settings import Settings  # noqa: E402
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--golden", default=str(ROOT / "evals" / "qa_golden_es.json"))
+    ap.add_argument("--golden", default=str(ROOT / "evals" / "qa_golden.json"))
     ap.add_argument("--identities", default=str(ROOT / "evals" / "qa_identities.json"))
     ap.add_argument("--dsn", default=None)
     ap.add_argument("--embedder", choices=["openai", "fake"], default=None,
@@ -199,24 +199,28 @@ def _figures(text: str) -> set[str]:
 
 
 # An ISO date in an expectation must match the date HOWEVER the answering system writes it.
-# `aurora-timeline-q1` is the measured case — `expect_contains: "2026-02-10"` against "10 de
+# `aurora-timeline-q1` is the measured case — `expect_contains: "2026-02-10"` against a long-form
 # rendering of the same day: right page, right date, verdict `verified`, scored a MISS. Same class
-# numeric equivalence above (the yardstick in the wrong language), same shape: equivalence, never
-# a wider literal match.
+# as the numeric equivalence above (the yardstick in the wrong notation), same shape: equivalence,
+# never a wider literal match.
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August",
-             "septiembre", "octubre", "noviembre", "diciembre")
+           "September", "October", "November", "December")
 
 
 def _date_renderings(iso: str) -> list[str]:
     """Every spelling of one calendar date this scorer accepts: the ISO form itself, both long
-    long form (with and without the leading zero), and the numeric d/m/Y variants."""
+    forms (day-first and month-first, with and without the leading zero), and the numeric
+    variants. Day-first AND month-first are both accepted because English writes both, and an
+    expectation that already fixes the calendar day cannot be made ambiguous by the spelling of
+    it."""
     year, month, day = (int(part) for part in iso.split("-"))
-    month_es = _MONTHS_ES[month - 1]
+    name = _MONTHS[month - 1]
     return [iso,
-            f"{day} de {month_es} de {year}",
-            f"{day:02d} de {month_es} de {year}",
+            f"{day} {name} {year}", f"{day:02d} {name} {year}",
+            f"{name} {day}, {year}", f"{name} {day:02d}, {year}",
             f"{day}/{month}/{year}", f"{day:02d}/{month:02d}/{year}",
+            f"{month}/{day}/{year}", f"{month:02d}/{day:02d}/{year}",
             f"{day}-{month}-{year}", f"{day:02d}-{month:02d}-{year}"]
 
 
@@ -224,25 +228,27 @@ def _date_matches(iso: str, answer: str) -> bool:
     """The renderings above, plus the YEARLESS long forms — measured: a correct, cited, verified
     correction wrote that something was agreed "on 12 August", the year contextual, as prose
     actually writes it, and the full-form-only matcher scored the right answer a miss. The
-    right answer a miss. The
-    yearless form keeps year discrimination where the answer DOES state one: a negative
+    yearless form keeps year discrimination where the answer DOES state one: a negative lookahead
+    refuses "12 August 2025" (or "August 12, 2025") against an expectation of 2026-08-12 — the
     full-form renderings above are the only way a year-bearing spelling can match."""
-    rendering above is the only way a year-bearing spelling can match)."""
     if any(rendering in answer for rendering in _date_renderings(iso)):
         return True
     year, month, day = (int(part) for part in iso.split("-"))
-    month_es = _MONTHS_ES[month - 1]
-    return bool(re.search(rf"\b0?{day} de {month_es}(?! de \d)", answer))
+    name = _MONTHS[month - 1]
+    return bool(re.search(rf"\b0?{day} {name}\b(?!,? \d)", answer)
+                or re.search(rf"\b{name} 0?{day}\b(?!,? \d)", answer))
 
 
 def _expectation_met(case: dict, answer: str) -> bool:
     """Literal first, then numeric equivalence for a figure, then date equivalence for an ISO
     date.
 
-    The literal `in` test alone made the scorer report a MISS for answers that are RIGHT: a
+    The literal `in` test alone made the scorer report a MISS for answers that are RIGHT: a model
     writing `1.074` for `1074` (a thousands separator this locale does not use), `512k` for
     `512000`, `2,3x` for `2.3x`, or `10 February 2026` for `2026-02-10`. Those were recorded as
-    the BRAIN, when they were failures of the yardstick.
+    groundedness failures of the BRAIN, when they were failures of the yardstick. The equivalences
+    stay in place even with an English question set: the model chooses the notation, not the
+    question.
     """
     expected = case.get("expect_contains", "")
     if not expected:

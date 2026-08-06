@@ -204,7 +204,7 @@ that no longer applies.
   | `status-evergreen` | 0.8 | `status == "evergreen"`. RE-BOUND from `canonical`, which died with the canon lane; rebinding rather than deleting kept the maturity axis attached to a real producer |
   | `entity:<id>` | 0.5 | `entity_hint` matches an element of the page's `entity` list (case-insensitive). Once per page, never once per element; no hint ⇒ no factor |
   | `period-match` | 0.6 | a period parsed from the query prefix-matches the page's `as_of` (`as_of` alone — there is no `period` column) |
-  | `fresh:<as_of>` | 0.7 | the query carries a recency word (ES + EN sets) AND the page has `as_of` AND is not superseded |
+  | `fresh:<as_of>` | 0.7 | the query carries a recency word AND the page has `as_of` AND is not superseded |
   | `stale:<value>` | 1.3 | `today - _period_end(as_of or updated) > 365 days`. Only when `today` is injected — never the wall clock |
 
   `_period_end` treats a coarse value as its LATEST plausible day (a page dated `2026` is fresh

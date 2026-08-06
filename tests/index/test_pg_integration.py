@@ -137,7 +137,7 @@ class _Rollback(Exception):
     probe costs the fixture nothing. `pytest.raises` catches it at the call site."""
 
 
-def test_spanish_query_returns_hits_with_factors(conn):
+def test_a_natural_language_query_returns_hits_with_factors(conn):
     """A whole question, not a keyword bag, returns top-k hits with their factors attached."""
     hits = search.search(conn, "How did the quarter go for Globex? quarterly revenue impact",
                          today=date(2026, 7, 19))

@@ -832,17 +832,17 @@ def test_an_accented_title_survives_into_the_filename_the_h1_the_title_field_and
     assert result.status == schema.FILED, result.report.get("summary")
 
     page_path, sha = result.result_ref.rsplit("@", 1)
-    assert "ó" in _nfc(page_path), f"the filename lost its accent: {page_path!r}"
-    assert "Reuni n" not in _nfc(page_path)
+    assert "ü" in _nfc(page_path), f"the filename lost its accent: {page_path!r}"
+    assert "Z rich" not in _nfc(page_path)
 
     filed_page = _nfc(support.read_filed_page(env.repo, sha, page_path))
     assert "# Zürich" in filed_page
     assert 'title: "Zürich' in filed_page
-    assert "Reuni n" not in filed_page
+    assert "Z rich" not in filed_page
 
     subject = _nfc(support.commit_subject(env.repo, sha))
     assert "Zürich" in subject
-    assert "Reuni n" not in subject
+    assert "Z rich" not in subject
 
 
 def test_the_double_is_refused_by_confined_write_when_its_title_collides_with_an_existing_page(

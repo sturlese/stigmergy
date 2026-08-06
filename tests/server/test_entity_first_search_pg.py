@@ -197,7 +197,7 @@ def test_the_served_hit_carries_the_told_entity_factor(service_entity_first_inde
 
 
 # ── entity-first LAYERS on the ranking; it does not replace it ──────────────────────────────────
-# Observed on staging: `demo pipeline extracción Globex` returned ONLY the three pages anchored to
+# Observed on staging: `demo pipeline extraction Globex` returned ONLY the three pages anchored to
 # `globex`, each with `factors: ["entity:globex"]`, while the page actually about the asked topic
 # — unanchored — never appeared. Raw hybrid search over the same DSN ranked it #2. The substrate
 # was healthy; the scoped pass simply returned hits, so the unscoped pass never ran.

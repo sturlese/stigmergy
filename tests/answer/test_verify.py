@@ -318,12 +318,12 @@ def test_a_true_quote_differing_only_in_typographic_punctuation_verifies(body, q
     assert v["verdict"] == "verified"
 
 
-def test_a_decomposed_vs_composed_spanish_accent_verifies_either_direction():
+def test_a_decomposed_vs_composed_accent_verifies_either_direction():
     """Sensitivity, the NFC half: an accented letter reaching the matcher decomposed on one side
-    letter reaching the matcher decomposed on one side (combining acute accent) and composed on the
-    other (precomposed accented codepoint) is ordinary formatting drift, not an attack — Unicode
-    itself defines the two spellings as the same text."""
-    composed = "Revisión de política de créditos"          # precomposed ó, í, é
+    (combining acute accent) and composed on the other (precomposed accented codepoint) is
+    ordinary formatting drift, not an attack — Unicode itself defines the two spellings as the
+    same text, and any corpus naming a European customer will carry both."""
+    composed = "Café Zürich crédit review"                 # precomposed é, ü, é
     decomposed = unicodedata.normalize("NFD", composed)                    # base letter + combining accent
     assert composed != decomposed                                         # sanity: genuinely different bytes
 

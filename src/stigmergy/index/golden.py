@@ -1,7 +1,7 @@
 """Golden-set scoring: Recall@5 per retrieval arm. Pure logic — the runner in
 `evals/run_retrieval.py` wires it to a live index.
 
-Golden format follows `evals/qa_golden_es.json`: a `questions` list where each entry carries `q` and
+Golden format follows `evals/qa_golden.json`: a `questions` list where each entry carries `q` and
 `expect.pages` (page ids — frontmatter `id`, or the file stem for pages without one), plus an
 OPTIONAL `filters` object handed straight to `search.search_arms(filters=...)`. The set grows with
 every observed miss, and the arm's mean recall@5 is gated at 0.80 in CI.

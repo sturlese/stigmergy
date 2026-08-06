@@ -64,7 +64,7 @@ def test_the_root_readme_and_provenance_are_not_indexed_as_pages(pages):
 
 
 def test_every_qa_citation_resolves_to_a_real_page(pages):
-    qa = json.loads((ROOT / "evals" / "qa_golden_es.json").read_text(encoding="utf-8"))
+    qa = json.loads((ROOT / "evals" / "qa_golden.json").read_text(encoding="utf-8"))
     paths = {p.path for p in pages}
 
     missing = []
@@ -73,7 +73,7 @@ def test_every_qa_citation_resolves_to_a_real_page(pages):
         if isinstance(chain, str):
             chain = [chain]
         missing += [f"{case['id']} -> {c}" for c in chain if c not in paths]
-    assert not missing, f"qa_golden_es.json cites pages absent from the frozen corpus: {missing}"
+    assert not missing, f"qa_golden.json cites pages absent from the frozen corpus: {missing}"
 
 
 def test_every_retrieval_expectation_resolves_apart_from_the_named_known_gap(

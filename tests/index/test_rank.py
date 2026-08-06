@@ -303,7 +303,7 @@ def test_entity_boost_does_not_fire_per_character_when_entity_is_a_bare_string()
     assert not any(label.startswith("entity:") for label in factors)
 
 
-def test_recency_words_prefer_fresh_as_of_in_both_languages():
+def test_recency_words_prefer_fresh_as_of():
     page = _page("p.md", as_of="2026-06")
     for query in ("latest revenue", "current figures", "the most recent number"):
         labels = [label for _f, label in rank.contract_factors(page, query, TODAY)]

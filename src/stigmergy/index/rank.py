@@ -39,9 +39,9 @@ STALE_AFTER_DAYS = 365
 
 # 'current/latest'-style words prefer fresher as_of. The set is English because the corpus and
 # the questions are: a deployment answering in another language extends it, and the boost is
-_RECENCY_WORDS = {"current", "latest", "now", "today", "newest", "most recent",
+# simply not applied to a word nothing here recognizes — silently, which is why a set that has
 # stopped matching the language people ask in is worth checking before it is worth widening.
-                  "ultimo", "ultima"}
+_RECENCY_WORDS = {"current", "latest", "now", "today", "newest", "most recent"}
 
 
 # A split page's continuation parts carry a trailing part marker on their id. TWO conventions
