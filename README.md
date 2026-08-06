@@ -1,6 +1,6 @@
 # Stigmergy
 
-![Stigmergy — coordination through indirect signals](./docs/assets/stigmergy.png)
+![Stigmergy — robot ants leaving glowing traces between documents that link into a network, feeding a cloud and an insights panel: AI agents that follow traces, knowledge that emerges](./docs/assets/stigmergy.png)
 
 **A team's knowledge, captured where the work happens, filed by an agent, and answered with
 citations you can check.**
