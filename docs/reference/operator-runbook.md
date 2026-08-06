@@ -960,6 +960,36 @@ at it. Flip it in the Slack App's App Home settings.
 usually a local `make slack-run` beside the staging machine (the singleton advisory lock is per
 DATABASE, so they don't exclude each other). Stop the local bot.
 
+**The `slack` machine refuses to start and names a process that no longer exists.** The refusal is
+literal — *"another `stigmergy-slack` process already holds the singleton lock"* — and you can
+prove no such machine is running. **A CONNECTION POOLER outlives the machine that opened it.**
+`pg_try_advisory_lock` is held for the life of the *session*, and against Supabase the session
+belongs to Supavisor, not to your VM: destroy the machine and the pooler keeps its upstream
+session — lock and all — until it decides to reap it. The defense then correctly refuses to start a
+second bot, on behalf of a first one that is already gone.
+
+Seen on the very first deploy of a fresh app, where Fly creates an HA standby for the group and
+`deploy_staging.sh`'s `fly scale count slack=1` immediately destroys one of the pair. Find the
+holder and release it:
+
+```sql
+SELECT a.pid, a.state, now() - a.backend_start AS session_age
+FROM pg_locks l JOIN pg_stat_activity a USING (pid)
+WHERE l.locktype = 'advisory';
+-- Only after confirming `fly status` shows no running slack machine:
+SELECT pg_terminate_backend(<pid>);
+```
+
+Then `fly machine restart <slack machine>`. **Confirm the holder is an orphan before terminating**,
+because the same query answers "the lock is doing its job" and "the lock is stale" identically —
+`fly status -a <app> | grep slack` is what tells them apart. Note that `session_age` measures the
+POOLER's connection, which is reused across clients, so an age older than your deploy proves
+nothing either way.
+
+*(This is also why the Socket Mode spike never found it: that walk killed a bot against a local
+docker Postgres, with no pooler between them, so the lock died with the process exactly as
+expected.)*
+
 **The 🧠 gesture never shows the hourglass/checkmark, but captures still land.** The app's token
 lacks `reactions:write` (see [slack.md](./slack.md#what-the-slack-app-has-to-be-configured-with)
 for the full scope list) — every reaction call is best-effort
