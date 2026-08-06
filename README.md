@@ -64,55 +64,16 @@ read as commands.
 
 ## Architecture
 
-Three pictures. They use one convention, and it is the argument of the whole system rather than
-decoration: **colour is who decides.**
-
-| | |
-|---|---|
-| 🟪 **the model** | drafts, gathers, proposes. Never the last word on anything. |
-| 🟩 **code** | decides. Deterministic, testable, and the same answer twice. |
-| 🟧 **a human** | the cases code should not decide alone — and the queue is honest about owing them. |
-| ⬛ **git** | where knowledge actually lives. Everything else is rebuildable. |
+Three pictures, under one convention that is the argument of the system rather than decoration:
+**colour is who decides.** Purple is a model — it drafts, gathers and proposes, and is never the last
+word on anything. Grey is code, which decides. Amber is a human, for the cases code should not decide
+alone. Green is git, the one thing here that is not rebuildable. Each diagram carries that key.
 
 ### The shape
 
-```mermaid
-flowchart LR
-    SLACK["Slack<br/>🧠 react · @mention"]
-    CLI["operator CLIs<br/>meeting · Drive drop"]
-    MCP["your MCP client"]
-
-    QUEUE[["capture queue<br/><i>durable · attributed by the server</i>"]]
-    LIB["librarian<br/><i>the only writer</i>"]
-    SRV["MCP server<br/><i>the only API</i>"]
-
-    GIT[("knowledge repo<br/><b>git · markdown · yours</b>")]
-    IDX[("Postgres + pgvector<br/><i>derived · disposable</i>")]
-    BLOB[("object store<br/><i>raw bytes, as they arrived</i>")]
-
-    SLACK --> QUEUE
-    CLI --> QUEUE
-    MCP --> QUEUE
-    QUEUE --> BLOB
-    QUEUE --> LIB
-    LIB -->|"commit + push"| GIT
-    GIT -->|"rebuild · webhook upsert"| IDX
-    MCP --> SRV
-    SLACK --> SRV
-    SRV --> IDX
-
-    classDef human fill:#FFF1E0,stroke:#E8751A,stroke-width:2px,color:#7A3E00
-    classDef code fill:#E4F6F4,stroke:#12A594,stroke-width:2px,color:#0A4F48
-    classDef model fill:#F1EDFF,stroke:#7C5CFF,stroke-width:2px,color:#3B2A80
-    classDef truth fill:#FFFFFF,stroke:#1F2328,stroke-width:3px,color:#1F2328
-    classDef store fill:#F1F3F5,stroke:#868E96,stroke-width:2px,color:#343A40
-
-    class SLACK,CLI,MCP human
-    class QUEUE,SRV code
-    class LIB model
-    class GIT truth
-    class IDX,BLOB store
-```
+<p align="center">
+  <img src="docs/assets/architecture.svg" alt="the shape: Slack, operator CLIs and MCP clients all submit into one durable capture queue (raw bytes to an evidence store); the librarian is the ONE writer and commits to the knowledge repo (git, markdown, yours — the only thing not rebuildable); the repo rebuilds pages_index in Postgres+pgvector, which the MCP server — the only API, filtering through acl.visible() — serves back to the same people" width="100%">
+</p>
 
 **Read that diagram by asking what survives deleting this software.** The knowledge repo does: it
 is markdown in git, with history, and it is yours. Postgres is a cache — `stigmergy-index --rebuild`
@@ -124,36 +85,9 @@ Two narrow seams do all the work: **one writer** into git, and **one API** out o
 
 ### The write path
 
-```mermaid
-flowchart TD
-    IN["material arrives<br/>Slack thread · transcript · document"]
-    Q[["capture queue<br/><i>attributed to the identity the SERVER resolved</i>"]]
-    DRAFT["the agent drafts a page<br/><i>in a throwaway git worktree</i>"]
-    KNOWN{"names an entity<br/>the registry knows?"}
-    ASK["asks ONE question<br/><i>never guesses</i>"]
-    PARK[["parked — a human owes something"]]
-    STEW["steward answers, or mints<br/>the entity through review"]
-    GATES["<b>8 deterministic gates</b><br/>zone · binary-page · body-rewrite · secrets<br/>pii · frontmatter · contract · anchoring"]
-    LAND["the diff the gates approved<br/><b>is</b> the diff that lands"]
-    BOUNCE["bounced back, with the reason"]
-    GIT[("knowledge repo")]
-
-    IN --> Q --> DRAFT --> KNOWN
-    KNOWN -->|"yes"| GATES
-    KNOWN -->|"no"| ASK --> PARK --> STEW --> DRAFT
-    GATES -->|"all pass"| LAND --> GIT
-    GATES -->|"any fails"| BOUNCE
-
-    classDef human fill:#FFF1E0,stroke:#E8751A,stroke-width:2px,color:#7A3E00
-    classDef code fill:#E4F6F4,stroke:#12A594,stroke-width:2px,color:#0A4F48
-    classDef model fill:#F1EDFF,stroke:#7C5CFF,stroke-width:2px,color:#3B2A80
-    classDef truth fill:#FFFFFF,stroke:#1F2328,stroke-width:3px,color:#1F2328
-
-    class IN,PARK,STEW human
-    class Q,KNOWN,GATES,LAND,BOUNCE code
-    class DRAFT,ASK model
-    class GIT truth
-```
+<p align="center">
+  <img src="docs/assets/write-path.svg" alt="the write path: material enters the capture queue, the server attributes it, the agent drafts a page in a throwaway worktree; a name the registry does not know makes it ask ONCE and park until a steward answers, which puts the capture back in the queue; the draft is a diff, and 8 deterministic gates — zone, binary-page, body-rewrite, secrets, pii, frontmatter, contract, anchoring — either bounce it back with the reason or commit exactly the diff they approved" width="100%">
+</p>
 
 The purple box is the only place a model decides anything, and everything downstream of it is a
 gate it cannot argue with. **The loop back through orange is the point of the whole design**: when
@@ -182,28 +116,9 @@ whose ACL is the intersection of their members').
 
 ### The read path
 
-```mermaid
-flowchart TD
-    ASKQ["a question"]
-    ACL["<b>acl.visible()</b><br/><i>the ONE place read access is decided</i>"]
-    RETR["hybrid retrieval<br/>full-text + vector, fused<br/><i>then ranked by the page contract</i>"]
-    AGENT["answering agent<br/><i>search · read_page · describe_entity,<br/>under the caller's identity</i>"]
-    VERIFY{"can every figure be traced<br/>to what the tools returned<br/><i>this run</i>?"}
-    ANSWER["a cited answer<br/><i>quotes you can check</i>"]
-    REFUSE["an honest refusal<br/><i>saying what was missing</i>"]
-
-    ASKQ --> ACL --> RETR --> AGENT --> VERIFY
-    VERIFY -->|"yes"| ANSWER
-    VERIFY -->|"no"| REFUSE
-
-    classDef human fill:#FFF1E0,stroke:#E8751A,stroke-width:2px,color:#7A3E00
-    classDef code fill:#E4F6F4,stroke:#12A594,stroke-width:2px,color:#0A4F48
-    classDef model fill:#F1EDFF,stroke:#7C5CFF,stroke-width:2px,color:#3B2A80
-
-    class ASKQ human
-    class ACL,RETR,VERIFY,ANSWER,REFUSE code
-    class AGENT model
-```
+<p align="center">
+  <img src="docs/assets/read-path.svg" alt="the read path: a question passes acl.visible() BEFORE anything is fetched (a forbidden page and a non-existent one answer identically), then hybrid full-text and vector retrieval, then the answering agent under the caller's own identity; a verifier then asks whether every figure and quote traces back to what the tools returned this run, yielding either a cited answer or an honest refusal" width="100%">
+</p>
 
 Same shape, mirrored: a model gathers, and code decides what ships. Access is checked *before*
 retrieval rather than filtered out of the results afterwards, and the verifier runs *after* the

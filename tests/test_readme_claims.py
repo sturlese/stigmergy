@@ -113,33 +113,31 @@ def test_the_fast_lane_and_item_kind_vocabularies_are_small_and_stated_once():
 
 
 # ── the architecture diagrams ─────────────────────────────────────────────────────────────────
-# GitHub renders these; nothing else does. A block that stops parsing there degrades in the one
-# place a newcomer meets the project, and does it silently — the README still looks fine in an
-# editor. Validating Mermaid properly needs a browser, which this suite will not grow a dependency
-# on, so this pins the drift that is actually likely: a node renamed and its `class` line left
-# behind, which Mermaid ignores in silence rather than reporting.
-def _mermaid_blocks(readme: str) -> list[str]:
-    return re.findall(r"```mermaid\n(.*?)```", readme, re.DOTALL)
+# Hand-authored SVG rather than a fenced diagram language, because these are the first thing a
+# newcomer looks at and they have to be worth looking at. The cost of that choice is that the
+# README references them by PATH: a renamed or moved file leaves a broken image on the front page
+# and nothing else notices — markdown link checkers do not read `<img src=...>`, and the file
+# still exists, just not where the page says.
+DIAGRAMS = ("architecture", "write-path", "read-path")
 
 
-def test_the_architecture_section_still_carries_its_diagrams(readme):
-    blocks = _mermaid_blocks(readme)
-    assert len(blocks) == 3, (
-        f"expected the shape, the write path and the read path — found {len(blocks)} mermaid "
-        f"blocks. If a diagram was deliberately dropped, drop its claim here too.")
+@pytest.mark.parametrize("name", DIAGRAMS)
+def test_the_readme_shows_each_architecture_diagram_and_the_file_is_there(readme, name):
+    src = f"docs/assets/{name}.svg"
+    assert src in readme, (
+        f"the README no longer shows {src}. If the diagram was deliberately dropped, drop it from "
+        f"DIAGRAMS here too — otherwise this check silently stops checking the other two.")
+    assert (ROOT / src).is_file(), f"{src} is referenced by the README but not in the repository"
 
 
-@pytest.mark.parametrize("n", range(3))
-def test_every_node_a_diagram_styles_is_a_node_it_defines(readme, n):
-    """`class A,B human` naming a node that no longer exists is not an error in Mermaid: the
-    styling is dropped and the diagram renders in default grey, so the colour convention the
-    section explains quietly stops being true for that box."""
-    block = _mermaid_blocks(readme)[n]
-    defined = set(re.findall(r"^\s{4}([A-Z][A-Z0-9]*)[\[\{\(]", block, re.MULTILINE))
-    assert defined, f"diagram {n} defines no nodes — this check has lost its subject"
-    styled = {name
-              for line in re.findall(r"^\s{4}class\s+([A-Za-z0-9,]+)\s+\w+$", block, re.MULTILINE)
-              for name in line.split(",")}
-    assert not styled - defined, (
-        f"diagram {n} styles nodes it does not define: {sorted(styled - defined)} — the colour "
-        f"convention silently stops applying to them")
+@pytest.mark.parametrize("name", DIAGRAMS)
+def test_every_diagram_carries_alt_text(readme, name):
+    """A diagram is the one part of this page that says nothing at all to a screen reader, or to
+    anyone whose images failed to load, unless it is described. The alt text is the description —
+    not the file name."""
+    tag = readme[readme.index(f"docs/assets/{name}.svg"):]
+    tag = tag[:tag.index(">")]
+    alt = re.search(r'alt="([^"]*)"', tag)
+    assert alt and len(alt.group(1)) > 80, (
+        f"{name}.svg has no useful alt text — describe what the picture SAYS, in a sentence "
+        f"someone who cannot see it could act on.")
