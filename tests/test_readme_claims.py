@@ -110,3 +110,36 @@ def test_the_fast_lane_and_item_kind_vocabularies_are_small_and_stated_once():
     next change to either has one obvious place that turns red."""
     assert len(FAST_LANE_TYPES) == 3
     assert len(ITEM_KINDS) == 2
+
+
+# ── the architecture diagrams ─────────────────────────────────────────────────────────────────
+# GitHub renders these; nothing else does. A block that stops parsing there degrades in the one
+# place a newcomer meets the project, and does it silently — the README still looks fine in an
+# editor. Validating Mermaid properly needs a browser, which this suite will not grow a dependency
+# on, so this pins the drift that is actually likely: a node renamed and its `class` line left
+# behind, which Mermaid ignores in silence rather than reporting.
+def _mermaid_blocks(readme: str) -> list[str]:
+    return re.findall(r"```mermaid\n(.*?)```", readme, re.DOTALL)
+
+
+def test_the_architecture_section_still_carries_its_diagrams(readme):
+    blocks = _mermaid_blocks(readme)
+    assert len(blocks) == 3, (
+        f"expected the shape, the write path and the read path — found {len(blocks)} mermaid "
+        f"blocks. If a diagram was deliberately dropped, drop its claim here too.")
+
+
+@pytest.mark.parametrize("n", range(3))
+def test_every_node_a_diagram_styles_is_a_node_it_defines(readme, n):
+    """`class A,B human` naming a node that no longer exists is not an error in Mermaid: the
+    styling is dropped and the diagram renders in default grey, so the colour convention the
+    section explains quietly stops being true for that box."""
+    block = _mermaid_blocks(readme)[n]
+    defined = set(re.findall(r"^\s{4}([A-Z][A-Z0-9]*)[\[\{\(]", block, re.MULTILINE))
+    assert defined, f"diagram {n} defines no nodes — this check has lost its subject"
+    styled = {name
+              for line in re.findall(r"^\s{4}class\s+([A-Za-z0-9,]+)\s+\w+$", block, re.MULTILINE)
+              for name in line.split(",")}
+    assert not styled - defined, (
+        f"diagram {n} styles nodes it does not define: {sorted(styled - defined)} — the colour "
+        f"convention silently stops applying to them")
