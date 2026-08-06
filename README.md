@@ -10,7 +10,7 @@ page in a plain git repository — but *code*, not the model, decides what is al
 go through a single MCP server that answers questions with sources, and refuses when it cannot
 support an answer. Everything it stores is a markdown file in a repo you own.
 
-## The idea, and what a team does to it
+## One person's wiki, and a team's
 
 The starting shape is Andrej Karpathy's **LLM wiki**: instead of re-deriving an answer from raw
 sources on every question, let a model keep a markdown wiki current — reading each new source,
