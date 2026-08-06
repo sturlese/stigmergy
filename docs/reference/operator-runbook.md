@@ -47,6 +47,8 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    fly secrets set STIGMERGY_LIBRARIAN_APP_ID="123456"
    fly secrets set STIGMERGY_LIBRARIAN_INSTALLATION_ID="87654321"
    fly secrets set STIGMERGY_LIBRARIAN_PRIVATE_KEY="$(cat ~/.config/stigmergy/librarian.private-key.pem)"
+   # Only if your App is not named `stigmergy-librarian` — its slug is what the bot commits as.
+   fly secrets set STIGMERGY_LIBRARIAN_APP_LOGIN="my-librarian"
    fly secrets set ANTHROPIC_API_KEY="sk-ant-..."
    # OPTIONAL, worker only: the Drive door's OCR fallback for a scanned PDF. Unset means a
    # scanned deck refuses honestly instead of being OCR'd (see "Capture from Drive").

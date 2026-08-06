@@ -36,6 +36,7 @@ APP_ID_ENV = "STIGMERGY_LIBRARIAN_APP_ID"
 INSTALLATION_ID_ENV = "STIGMERGY_LIBRARIAN_INSTALLATION_ID"
 PRIVATE_KEY_ENV = "STIGMERGY_LIBRARIAN_PRIVATE_KEY"           # PEM contents
 PRIVATE_KEY_FILE_ENV = "STIGMERGY_LIBRARIAN_PRIVATE_KEY_FILE"  # or a path to the PEM
+APP_LOGIN_ENV = "STIGMERGY_LIBRARIAN_APP_LOGIN"                # the App's own slug — see below
 
 # GitHub rejects a JWT with `exp` more than 10 minutes out, and clock skew between this machine
 # and GitHub is real, so we ask for 9 and backdate `iat` by 60s — the shape GitHub's own docs
@@ -43,7 +44,24 @@ PRIVATE_KEY_FILE_ENV = "STIGMERGY_LIBRARIAN_PRIVATE_KEY_FILE"  # or a path to th
 _JWT_TTL_S = 540
 _JWT_BACKDATE_S = 60
 
-APP_LOGIN = "stigmergy-librarian"
+# The App's slug, which GitHub derives from the App's NAME and which in turn derives the identity
+# every librarian commit is authored by (`app_identity` below). It is deployment-specific, not a
+# property of this software: whoever installs their own GitHub App gets their own slug, and this
+# default is only the name of the App you would create by following the operator runbook.
+#
+# **Getting it wrong is silent and expensive.** Commits authored as a slug GitHub does not know
+# still push — they simply stop rendering as the App, and any authorship check the knowledge repo
+# runs (`.claude/tools/check_trust_authorship.py`) rejects every one of them, because such a check
+# necessarily pins one identity. So a deployment whose App is named anything else MUST set this,
+# and renaming an App that already has commits in the repo splits the history across two
+# identities — the reason to leave a working App's name alone.
+APP_LOGIN_DEFAULT = "stigmergy-librarian"
+
+
+def app_login(env: dict | None = None) -> str:
+    """The App slug this deployment's commits are authored by."""
+    env = os.environ if env is None else env
+    return env.get(APP_LOGIN_ENV) or APP_LOGIN_DEFAULT
 
 
 def configured(env: dict | None = None) -> bool:
@@ -107,7 +125,7 @@ def installation_token(env: dict | None = None, *, opener=None) -> str:
         headers={"Authorization": f"Bearer {token_jwt}",
                  "Accept": "application/vnd.github+json",
                  "X-GitHub-Api-Version": "2022-11-28",
-                 "User-Agent": APP_LOGIN})
+                 "User-Agent": app_login(env)})
     try:
         with (opener or urllib.request.urlopen)(request, timeout=30) as response:
             payload = json.loads(response.read().decode("utf-8"))
@@ -162,8 +180,9 @@ def identity(env: dict | None = None) -> tuple[str, str]:
     `<id>+<slug>[bot]@users.noreply.github.com` address is GitHub's own convention for App
     commits — it is what makes the commit render as the App rather than as an unknown user."""
     env = os.environ if env is None else env
+    login = app_login(env)
     app_id = env.get(APP_ID_ENV, "")
     if not app_id:
-        return (APP_LOGIN, f"{APP_LOGIN}@users.noreply.github.com")
-    return (f"{APP_LOGIN}[bot]",
-            f"{app_id}+{APP_LOGIN}[bot]@users.noreply.github.com")
+        return (login, f"{login}@users.noreply.github.com")
+    return (f"{login}[bot]",
+            f"{app_id}+{login}[bot]@users.noreply.github.com")

@@ -59,7 +59,7 @@ def test_the_commit_identity_falls_back_to_the_unnumbered_app_login_with_no_app_
     """The consequence for the fixtures: an unconfigured run commits as the plain app login and
     pushes to `origin`, which in every test is a local bare repo."""
     name, email = githubapp.identity()
-    assert name == githubapp.APP_LOGIN
+    assert name == githubapp.APP_LOGIN_DEFAULT
     assert email.endswith("@users.noreply.github.com")
     assert "[bot]" not in name
 
@@ -181,5 +181,36 @@ def test_identity_falls_back_to_the_plain_login_with_no_app_id():
     name, email = githubapp.identity({})
     assert name == "stigmergy-librarian"
     assert email == "stigmergy-librarian@users.noreply.github.com"
+
+
+# ── the slug is the DEPLOYMENT's, not this software's ──────────────────────────────────────────
+# The failure this pins, which is silent in every direction that matters: an App named anything
+# other than the default still mints tokens, still pushes, and still returns 200 — the commits
+# simply stop rendering as the App, and the knowledge repo's own authorship check rejects every
+# one of them, because a check against forged authorship necessarily pins ONE identity. Nothing
+# fails at the seam where the mistake was made. It fails one repository over.
+def test_the_app_slug_comes_from_the_environment_when_the_deployment_names_its_own():
+    env = {**FULL_ENV, githubapp.APP_LOGIN_ENV: "acme-librarian"}
+    name, email = githubapp.identity(env)
+    assert name == "acme-librarian[bot]"
+    assert email == "123456+acme-librarian[bot]@users.noreply.github.com"
+    assert githubapp.app_login(env) == "acme-librarian"
+
+
+def test_the_configured_slug_also_governs_the_unnumbered_fallback():
+    """Both legs of `identity`, so a deployment cannot be right when its App is reachable and
+    wrong when it is not — the fallback is what a local operator run commits as."""
+    name, email = githubapp.identity({githubapp.APP_LOGIN_ENV: "acme-librarian"})
+    assert (name, email) == ("acme-librarian", "acme-librarian@users.noreply.github.com")
+
+
+@pytest.mark.parametrize("value", ["", None])
+def test_an_absent_or_empty_slug_falls_back_to_the_default_rather_than_an_empty_login(value):
+    """An empty string is what a `fly secrets set STIGMERGY_LIBRARIAN_APP_LOGIN=""` leaves behind,
+    and `[bot]@users.noreply.github.com` with no name in front is a commit author nothing can
+    attribute — worse than the default, which is at least a real shape."""
+    env = {**FULL_ENV} if value is None else {**FULL_ENV, githubapp.APP_LOGIN_ENV: value}
+    assert githubapp.app_login(env) == githubapp.APP_LOGIN_DEFAULT
+    assert githubapp.identity(env)[0] == f"{githubapp.APP_LOGIN_DEFAULT}[bot]"
 
 
