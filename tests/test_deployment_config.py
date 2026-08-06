@@ -164,3 +164,31 @@ def test_every_deploy_copy_has_a_placeholder_in_the_container_e2e():
         f"will fail at that COPY on any checkout without it, while every local test stays "
         f"green. Add a line beside its siblings: "
         f"`[ -f deploy/<name> ] || echo '<empty json>' > deploy/<name>`")
+
+
+# ── the metadata files pyproject NAMES have to reach the build context ─────────────────────────
+def test_every_file_pyproject_names_is_copied_into_the_image():
+    """**A file `pyproject.toml` names and the Dockerfile does not COPY breaks the image and
+    nothing local.** `readme` and `license-files` are read by the build backend while it generates
+    metadata, so their absence fails `pip install .` with `Readme file does not exist` — inside the
+    build, before any of this project's code runs, and long after `make test` has gone green.
+
+    This is the sibling of the `deploy/` placeholder rule below, and it has now happened once:
+    adding `readme`/`license-files` to declare the licence (a wheel built without them declared
+    none at all) turned the container e2e red on the first CI run of the open-source repo, while
+    the whole local suite passed. Same shape, same lesson: the local gate never builds the image.
+    """
+    with open(ROOT / "pyproject.toml", "rb") as f:
+        project = tomllib.load(f)["project"]
+    named = ([project["readme"]] if isinstance(project.get("readme"), str) else []) \
+        + list(project.get("license-files", []))
+    assert named, "pyproject names no readme or licence files — this check has lost its subject"
+
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    install = text.index("pip install --no-cache-dir .")
+    copied = " ".join(re.findall(r"^COPY\s+(.*)$", text[:install], re.MULTILINE))
+    missing = sorted(name for name in named if name not in copied)
+    assert not missing, (
+        f"pyproject.toml names {missing} but no COPY before `pip install` puts them in the build "
+        f"context — the image build will fail while every local test stays green. Add them to the "
+        f"`COPY pyproject.toml ...` line.")

@@ -129,7 +129,15 @@ COPY --from=toolchain /usr/local/bin/gitleaks /usr/local/bin/gitleaks
 COPY --from=toolchain /opt/node /opt/node
 ENV PATH="/opt/node/bin:${PATH}"
 
-COPY pyproject.toml ./
+# `README.md` and the two licence files are here because `pyproject.toml` NAMES them (`readme`,
+# `license-files`): hatchling reads them while generating metadata, so a build context missing any
+# one of them fails at `pip install` with `Readme file does not exist` — before a single line of
+# this project's own code runs. `tests/test_deployment_config.py` pins the correspondence, because
+# the local gate (`make test`) never builds this image and so cannot notice.
+#
+# THIRD-PARTY-LICENSES.md also has to travel INSIDE the image on its own merits: this image bundles
+# psycopg, which is LGPL-3.0-only, and §4/§6 wants the dependency notices shipped with the artifact.
+COPY pyproject.toml README.md LICENSE THIRD-PARTY-LICENSES.md ./
 COPY src ./src
 RUN pip install --no-cache-dir .
 
