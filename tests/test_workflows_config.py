@@ -9,6 +9,7 @@ mirroring `test_deployment_config.py`'s posture for `fly.toml`.
 """
 import pathlib
 
+import pytest
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -235,16 +236,22 @@ def test_gardener_carries_its_own_slack_and_channel_configuration():
     assert "vars.STIGMERGY_DIGEST_CHANNEL_ID" in text
 
 
-def test_gardener_actions_are_sha_pinned_like_its_siblings():
-    """Same posture as `retention-purge.yml`/`index-rebuild.yml`: a `uses:` value must be a full
-    commit SHA (`@` followed by 40 hex characters), never a floating tag a maintainer (or an
-    attacker) could move."""
+@pytest.mark.parametrize("workflow", sorted(WORKFLOWS.glob("*.yml")), ids=lambda p: p.name)
+def test_every_workflow_pins_its_actions_to_a_full_commit_sha(workflow):
+    """A `uses:` value must be a full commit SHA (`@` followed by 40 hex characters), never a
+    floating tag a maintainer — or whoever compromises the action's repository — could move.
+
+    This checked ONE workflow for a long time, while `gardener.yml`'s own header claimed the
+    posture held across "its siblings". `ci.yml` was outside the check and outside the posture: two
+    floating tags, in the one workflow that will run on every fork's pull request the moment this
+    repository is public. Found by a pre-publication audit. A per-file parametrization is what
+    makes the claim and the check the same statement.
+    """
     import re
-    text = GARDENER.read_text(encoding="utf-8")
-    uses_lines = re.findall(r"uses:\s*(\S+)", text)
-    assert uses_lines, "no `uses:` action reference found — the fixture regex went blind"
-    for ref in uses_lines:
-        assert re.search(r"@[0-9a-f]{40}\b", ref), f"{ref!r} is not pinned to a full commit SHA"
+    refs = re.findall(r"uses:\s*(\S+)", workflow.read_text(encoding="utf-8"))
+    assert refs, f"no `uses:` reference found in {workflow.name} — the regex went blind"
+    floating = [r for r in refs if not re.search(r"@[0-9a-f]{40}\b", r)]
+    assert not floating, f"{workflow.name} uses floating action refs: {floating}"
 
 
 

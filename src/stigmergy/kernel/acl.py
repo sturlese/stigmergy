@@ -127,11 +127,3 @@ def visible_to_view(row_acl: list[str] | None, view_acl: list[str] | None) -> bo
     if view_acl is None:
         return False
     return set(view_acl) <= set(row_acl)
-
-
-def visible(acl: list[str] | None, audiences: set[str] | None) -> bool:
-    """The one visibility rule, shared vocabulary with the answer layer: no ACL -> visible to
-    all; unrestricted client (None) -> sees everything; otherwise intersect."""
-    if acl is None or audiences is None:
-        return True
-    return bool(set(acl) & audiences)

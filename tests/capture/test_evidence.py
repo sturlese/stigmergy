@@ -242,3 +242,24 @@ def test_host_of_strips_credentials_ports_and_paths():
     assert evidence.host_of("https://acc.r2.cloudflarestorage.com/bucket") == (
         "acc.r2.cloudflarestorage.com")
     assert evidence.host_of("http://[::1]:9000") == "[::1]"
+
+
+def test_the_s3_client_bounds_how_long_a_degraded_store_can_stall_the_process():
+    """boto3's defaults are 60 s connect, 60 s read and a retrying mode — which is a bound on ONE
+    caller's patience everywhere else, and a bound on the WHOLE SERVER here.
+
+    `put`/`get` are reached from `brain_submit`, which the MCP SDK invokes as a sync tool body:
+    directly on the event loop, no threadpool. So an unreachable object store does not slow one
+    submit, it freezes the single process serving every other identity for minutes. Found by a
+    pre-publication audit; the numbers are the bound, so they are asserted rather than described.
+    """
+    store = evidence.S3EvidenceStore(endpoint_url="http://127.0.0.1:9", bucket="b",
+                                     access_key_id="k", secret_access_key="s")
+    config = store.client().meta.config          # constructing the client does no I/O
+    assert config.connect_timeout == evidence.CONNECT_TIMEOUT_S == 5
+    assert config.read_timeout == evidence.READ_TIMEOUT_S == 10
+    # botocore reads `max_attempts` as RETRIES and resolves it to `total_max_attempts`. The bound
+    # that matters is the PRODUCT, so it is what gets asserted: a caller cannot stall the shared
+    # process for longer than this, whatever the store is doing.
+    assert config.retries["total_max_attempts"] == evidence.RETRIES + 1 == 2
+    assert evidence.WORST_CASE_STALL_S == 30

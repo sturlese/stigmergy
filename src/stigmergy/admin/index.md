@@ -23,7 +23,9 @@ digest), [`index.check`](../index/index.md) (the substrate lint),
 [`server.pilot_report`](../server/index.md) (the measurement table). The ONLY state it owns is
 `admin_actions`, its own bookkeeping table.
 
-**What it must never become is a read surface over the corpus.** No search, no `ask`, no
+**What it must never become is a read surface over the corpus.** (The Activity tab does show the
+`ask` questions themselves — user content, not corpus content; `docs/reference/admin-console.md`
+states the distinction.) No search, no `ask`, no
 page bodies — `test_admin_never_imports_the_read_path_or_the_mcp_adapter` bans
 `stigmergy.index.search`, `stigmergy.answer`, `stigmergy.server.mcp_server`, `stigmergy.server.service`
 and `stigmergy.server.transport_http` from every module here, so the rule is a property of the

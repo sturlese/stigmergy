@@ -12,6 +12,8 @@ What it deliberately is NOT: a brain client. No search, no page rendering, no `a
 architecture tests enforce that boundary on the package. It reads page *paths* in two places
 (the substrate check and the gardener's findings) and page *bodies* nowhere.
 
+**The one thing that boundary does not cover, said plainly:** the Activity tab renders the `ask` QUESTIONS in `audit_log`. No answer, no page, no snippet — but a question is user content, and it sits behind the console's single shared credential with a free-text actor. Read "never a read surface over the corpus" as being about pages, because that is what it is about.
+
 ## Enabling it
 
 The console is INERT until its token hash is configured — every `/admin` path answers 404, no

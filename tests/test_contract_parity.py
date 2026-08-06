@@ -1,21 +1,25 @@
-"""The two cross-package contracts that are implemented TWICE, pinned where they actually run.
+"""The cross-package contracts implemented TWICE, pinned where they actually run.
 
 They lived in an eval harness once, behind a capability probe for a top-level `answer` package a
 consolidation had already folded away. The probe was False on every run, so the check its own
 comment called *"the one harness that imports both sides"* never actually executed — while the
-scorecard reported green over its absence. Nothing proved the two halves agreed for a long
-stretch, and during it two ACL dialects got written for one system. That is why these run in the
-suite, on every `make test`, rather than in a harness nobody invokes: a check that stops running
-must be impossible to miss.
+scorecard reported green over its absence. That is why these run in the suite, on every
+`make test`: a check that stops running must be impossible to miss.
 
-A third contract used to be pinned here — two hand-written SQL paths over one facts store — and
-has no sides left to disagree, the store and both of its readers being gone. What remains is the
-ACL contract, still implemented twice (`kernel.acl.visible` on the curation path,
-`server.acl.visible` on the serving one), plus the `[]`-stays-`[]` invariant below.
+**Two contracts have since stopped having two sides, and both are recorded rather than quietly
+dropped.** The first was two hand-written SQL paths over one facts store; the store and both of
+its readers are gone. The second was `visible()` — hand-mirrored in `kernel.acl` and
+`server.acl`, and pinned here against drift. A pre-publication audit found the kernel half had NO
+production caller at all: not the kernel itself, not one package, only this file. It was also the
+FAIL-OPEN half (`True` for a malformed value), it sat in the one module every package may import,
+and its docstring called itself "the one visibility rule" — so the likeliest way it would ever get
+a caller was somebody reaching for an ACL predicate and picking that one. It was deleted, which
+closes the drift this file was pinning by removing the second side rather than by watching it.
+
+What remains here is the `[]`-stays-`[]` invariant, which genuinely has two sides that must agree.
 """
 import pytest
 
-from stigmergy.kernel.acl import visible as kernel_visible
 from stigmergy.server.acl import visible as serving_visible
 
 _WELL_FORMED = [
@@ -31,13 +35,17 @@ _WELL_FORMED = [
 ]
 
 
-@pytest.mark.parametrize(("acl", "audiences"), _WELL_FORMED)
-def test_the_two_visible_implementations_agree_on_every_well_formed_case(acl, audiences):
-    """`kernel.acl.visible` and `server.acl.visible` are hand-mirrored halves of one rule, living
-    in packages that share no code on purpose — packages that share no code talk through files,
-    never through imports. Nothing imports one from the other, so only a test that calls both can
-    prove they still say the same thing."""
-    assert kernel_visible(acl, audiences) == serving_visible(acl, audiences)
+def test_there_is_exactly_one_visible_implementation_to_disagree_with():
+    """The deletion, asserted rather than remembered. `stigmergy.kernel` is importable from every
+    package by construction, so a second `visible` there is a fail-open predicate one autocomplete
+    away from becoming an enforcement point. If one is ever added back, this is the check that says
+    so — and adding it back means restoring the parity test that used to live here."""
+    from stigmergy.kernel import acl as kernel_acl
+    assert not hasattr(kernel_acl, "visible"), (
+        "a second `visible()` is back in stigmergy.kernel.acl — `server.acl.visible` is the ONE "
+        "place read access is decided (SECURITY.md, CLAUDE.md's invariant table). If this one is "
+        "deliberate, it needs a name that cannot be mistaken for the enforcement predicate AND a "
+        "parity test against the serving half.")
 
 
 @pytest.mark.parametrize(("acl", "audiences"), _WELL_FORMED)
@@ -51,13 +59,13 @@ def test_the_serving_half_reads_the_csv_shape_identically_to_the_list_shape(acl,
 
 
 @pytest.mark.parametrize("malformed", [{"a": 1}, True, 7, [None], [{"x": 1}], object()])
-def test_the_two_halves_diverge_on_malformed_values_and_that_divergence_is_deliberate(malformed):
-    """The ONE case where they are meant to disagree, pinned so it cannot drift into an accident.
+def test_a_stored_value_that_cannot_be_parsed_fails_closed_for_every_client(malformed):
+    """`server/acl.py` states it outright: a stored value we cannot parse must never resolve to
+    "open" at the point access is decided, *not even for an unrestricted client*.
 
-    `server/acl.py` states it outright: a stored value we cannot parse must never resolve to "open"
-    at the point access is decided, *not even for an unrestricted client*. `kernel.acl`'s half is a
-    curation-time helper with no such duty. Asserting the divergence is what keeps someone from
-    "fixing" the serving half into agreement and quietly turning a fail-closed into a fail-open."""
+    This used to assert a deliberate DIVERGENCE from the kernel half, which returned `True` here.
+    That half is gone; the property it was contrasted against is the one that mattered, so it is
+    asserted on its own terms now."""
     assert serving_visible(malformed, None) is False
     assert serving_visible(malformed, {"eng"}) is False
 

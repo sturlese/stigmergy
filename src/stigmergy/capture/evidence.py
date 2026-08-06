@@ -47,9 +47,23 @@ ACCESS_KEY_ENV = "STIGMERGY_EVIDENCE_ACCESS_KEY_ID"
 SECRET_KEY_ENV = "STIGMERGY_EVIDENCE_SECRET_ACCESS_KEY"
 
 ENDPOINT_DEFAULT = "http://127.0.0.1:9000"
+
 BUCKET_DEFAULT = "stigmergy-evidence"
 ACCESS_KEY_DEFAULT = "minioadmin"
 SECRET_KEY_DEFAULT = "minioadmin"
+
+# **These bound a STALL, not a slow upload.** `put`/`get` are reached from `brain_submit`, which
+# the MCP SDK invokes as a SYNC tool body — directly on the event loop, with no threadpool. So a
+# degraded object store does not slow one caller's submit: it freezes the single process serving
+# every other identity. boto3's defaults (60 s connect, 60 s read, retrying) make that minutes.
+#
+# botocore reads `max_attempts` as RETRIES and resolves it to `total_max_attempts = RETRIES + 1`,
+# so the bound is the PRODUCT, not any one number. Written as the arithmetic because three
+# constants nobody multiplies is how a 30-second bound quietly becomes a three-minute one.
+CONNECT_TIMEOUT_S = 5
+READ_TIMEOUT_S = 10
+RETRIES = 1
+WORST_CASE_STALL_S = (RETRIES + 1) * (CONNECT_TIMEOUT_S + READ_TIMEOUT_S)
 
 _NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound", "NoSuchBucket"}
 
@@ -187,12 +201,15 @@ class S3EvidenceStore:
     def client(self):
         if self._client is None:
             import boto3
+            from botocore.config import Config
             self._client = boto3.client(
                 "s3",
                 endpoint_url=self.endpoint_url,
                 aws_access_key_id=self._access_key_id,
                 aws_secret_access_key=self._secret_access_key,
                 region_name=self.region,   # R2's convention: the endpoint carries the routing
+                config=Config(connect_timeout=CONNECT_TIMEOUT_S, read_timeout=READ_TIMEOUT_S,
+                              retries={"max_attempts": RETRIES, "mode": "standard"}),
             )
         return self._client
 

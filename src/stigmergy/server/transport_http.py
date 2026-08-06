@@ -46,9 +46,15 @@ Sharing one Postgres connection and one query embedder across every identity is 
 because FastMCP invokes a sync tool body directly on the event loop (never via a thread pool —
 verified against the installed `mcp` package), so at most one blocking DB call is ever in flight
 per process — more precisely, no DB helper here holds a cursor open across an `await` (`ask` is
-async and awaits the LLM BETWEEN its own read calls, never mid-cursor). That is the actual
-invariant, and anything adding a connection pool or a concurrent write path must preserve it
-explicitly; see `stigmergy.server.audit.AuditWriter`'s docstring for the same reasoning applied to
+async and awaits the LLM BETWEEN its own read calls, never mid-cursor). That is one half of the actual
+invariant. The other half is the one that actually bites, and it went unstated until an audit
+named it: **no sync tool body may perform blocking network or subprocess I/O**, because the same
+"directly on the event loop" fact that makes the shared cursor safe makes a slow socket a freeze
+of the whole process for every identity. `brain_submit`'s object-store write bounds itself for
+this reason (`capture.evidence.WORST_CASE_STALL_S`); `review_decide`'s entity mint clones a repo
+and shells out to gitleaks and does NOT yet. Anything adding a connection pool, a concurrent write
+path, or a new outbound call must preserve both halves explicitly; see
+`stigmergy.server.audit.AuditWriter`'s docstring for the same reasoning applied to
 the audit writes. `RateLimiter` and `AuditWriter` are constructed once and shared by every
 per-request `BrainService`, so the 30/10 req/min budgets are honestly per-identity across the
 whole process, not per connection.

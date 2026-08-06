@@ -57,10 +57,11 @@ argued with. A gate cannot.
 returned *this run*: any figure that cannot be traced back is withheld and the answer becomes a
 refusal that says so. A system that never refuses is the failure, not the success.
 
-There is a fourth, quieter one: **untrusted content is never read as instructions.** Everything a
-model sees is wrapped by one hardened fence, built in one place, with in-band neutralization — so
-captured material containing the closing delimiter cannot end the fence early and have the rest
-read as commands.
+There is a fourth, quieter one: **untrusted content is never read as instructions.** Page bodies
+reach a model inside one hardened fence, built in one place, with in-band neutralization — so
+captured material carrying the closing delimiter cannot end the fence early and have the rest read
+as commands. Fields that travel as structure rather than as content are neutralized at the service
+boundary instead; `SECURITY.md` states exactly which, and where that is not yet true.
 
 ## Architecture
 
@@ -119,7 +120,7 @@ whose ACL is the intersection of their members').
 ### The read path
 
 <p align="center">
-  <img src="docs/assets/read-path.svg" alt="the read path: a question passes acl.visible() BEFORE anything is fetched (a forbidden page and a non-existent one answer identically), then hybrid full-text and vector retrieval, then the answering agent under the caller's own identity; a verifier then asks whether every figure and quote traces back to what the tools returned this run, yielding either a cited answer or an honest refusal" width="100%">
+  <img src="docs/assets/read-path.svg" alt="the read path: a question passes acl.visible() BEFORE anything is fetched (a forbidden page and a non-existent one answer identically), then hybrid full-text and vector retrieval, then the answering agent — under the caller's own identity in a DM, and under the CHANNEL's scope for a public mention, which is a grant and not a narrowing; a verifier then asks whether every figure and quote traces back to what the tools returned this run, yielding either a cited answer or an honest refusal" width="100%">
 </p>
 
 Same shape, mirrored: a model gathers, and code decides what ships. Access is checked *before*
@@ -230,7 +231,7 @@ One package, its tests beside it. Every row has a code map (`index.md`) beside i
 | `views/` | per-entity rollups: a deterministic skeleton + a bounded synthesis |
 | `gardener/` | corpus health on demand: eight deterministic checks + a bounded model editorial sweep, findings persisted and reported — fixes nothing, writes nothing, vetoes nothing |
 | `digest/` | the week's activity in one Slack post |
-| `admin/` | the ops console: `/admin` on the same app process group — queue drain, cron remote-control, gardener/digest/index panels, activity. INERT until its token hash is configured, and never a read surface over knowledge |
+| `admin/` | the ops console: `/admin` on the same app process group — queue drain, cron remote-control, gardener/digest/index panels, activity. INERT until its token hash is configured, and never a read surface over pages — though its Activity tab does show the QUESTIONS people asked, which is user content behind one shared credential |
 
 #### Around it
 

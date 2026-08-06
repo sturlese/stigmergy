@@ -85,6 +85,10 @@ def test_the_right_token_reaches_the_handler_with_the_security_headers(app):
     assert "default-src 'none'" in response.headers["content-security-policy"]
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["cache-control"] == "no-store"
+    # The admin token is TYPED INTO A FORM on this origin. Fly's `force_https` only REDIRECTS, so
+    # without this the first request of a session can still leave the browser over http; HSTS is
+    # what stops there being a first time. Added after a pre-publication audit named it.
+    assert response.headers["strict-transport-security"] == "max-age=31536000; includeSubDomains"
 
 
 def test_the_root_path_redirects_into_the_shell(app):

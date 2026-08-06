@@ -161,6 +161,11 @@ class _AdminGate:
                 headers.append((b"content-security-policy", _CSP.encode("ascii")))
                 headers.append((b"x-content-type-options", b"nosniff"))
                 headers.append((b"referrer-policy", b"no-referrer"))
+                # The admin token is TYPED INTO A FORM on this origin. Fly's `force_https` only
+                # redirects, which means the first request of a session can still leave the browser
+                # over http; HSTS is what stops there being a first time.
+                headers.append((b"strict-transport-security",
+                                b"max-age=31536000; includeSubDomains"))
                 if api:
                     headers.append((b"cache-control", b"no-store"))
                 message = {**message, "headers": headers}

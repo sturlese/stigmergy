@@ -323,9 +323,16 @@ def process_push(conn, embedder, payload: dict, settings: WebhookSettings, *, op
 # A hard cap on this endpoint's body — this is the one path on the public server exempt from
 # bearer auth (module docstring), so it is the one path an unauthenticated
 # caller can throw arbitrarily large, concurrent bodies at, exhausting the memory of the SAME
-# process serving every bearer-authenticated identity. GitHub's own delivery ceiling is 25 MB;
-# 26 MB leaves it exactly one MB of slack for framing, never enough to matter for a real delivery.
-MAX_BODY_BYTES = 26 * 1024 * 1024
+# process serving every bearer-authenticated identity.
+#
+# **The bound that matters is what this handler will ever ACT on, not what GitHub could send.**
+# It was 26 MB, sized against GitHub's own 25 MB delivery ceiling — a bound on the wrong quantity.
+# Only `changed_paths_from_push` reads this body, it stops at `DEFAULT_FILE_CAP` (50) in-zone
+# paths, and a real push for a knowledge repo is kilobytes. Meanwhile the `app` machine is 512 MB
+# and single-process (`fly.toml`), so a handful of concurrent anonymous requests just under the
+# old cap could take down the server for every authenticated identity. Sizing to the work instead
+# of to the protocol costs a real delivery nothing and removes the amplifier.
+MAX_BODY_BYTES = 1024 * 1024
 
 
 async def _read_body_capped(request: Request, max_bytes: int) -> bytes | None:

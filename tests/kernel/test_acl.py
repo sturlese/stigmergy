@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from stigmergy.kernel.acl import load_acl_config, resolve_acl, view_acl, visible
+from stigmergy.kernel.acl import load_acl_config, resolve_acl, view_acl
 
 
 def _config(tmp_path, cfg):
@@ -60,14 +60,11 @@ def test_view_acl_is_intersection():
     assert view_acl([["sales"], ["finance"]]) == []                  # disjoint -> restricted, never open
 
 
-def test_visible_rule():
-    assert visible(None, {"eng"}) is True                               # unlabeled page: open
-    assert visible(["sales"], None) is True                             # unrestricted client
-    assert visible(["sales"], {"sales", "eng"}) is True
-    assert visible(["sales"], {"eng"}) is False
-    assert visible([], {"eng"}) is False                                # empty acl: nobody scoped sees it
-
-
+# `test_visible_rule` lived here, over `kernel.acl.visible`. That predicate is gone — it had no
+# production caller, it was the fail-open half, and it sat in the module every package may import
+# (a pre-publication audit; `tests/test_contract_parity.py` carries the record and fails if one
+# comes back). The truth table it asserted is not lost: `tests/server/test_acl_visibility.py` pins
+# every one of its cases against `server.acl.visible`, which is now the only implementation.
 # Two tests used to close this file — `test_worker_stamps_pages_facts_and_result` and
 # `test_view_page_carries_intersection`. They drove an ingest worker and a legacy view builder
 # end to end, and neither exists any more. The PROPERTIES they held are still held, by tests that

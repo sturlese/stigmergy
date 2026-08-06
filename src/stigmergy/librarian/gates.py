@@ -1079,6 +1079,15 @@ def gate_contract(ctx: GateContext) -> list[Finding]:
         # our contract gate. It once ran with no `env=` at all.
         # The list is `gitcmd.SUBPROCESS_BASE_ENV` — "what any process needs to run at all" — shared
         # with the agent's own allow-list rather than retyped here.
+        #
+        # **What this does NOT do, stated so nobody reads it as more than it is.** The linter runs
+        # as the worker's own uid in the worker's own container, so it can read
+        # `/proc/<worker>/environ` and get every value this list withholds, and it can run
+        # `stigmergy-librarian-credential` off `PATH` for a fresh installation token. The allow-list
+        # prevents the secrets being HANDED to it; the control that prevents it TAKING them is that
+        # only reviewed commits reach `.claude/tools/` in the knowledge repo. Write access to that
+        # repo is therefore equivalent to execution on the worker — recorded in SECURITY.md's threat
+        # model. Closing it needs a separate uid or a sandbox, which is a decision, not a patch.
         env=gitcmd.base_env())
     if proc.returncode == 2 or not proc.stdout.strip():
         raise LibrarianConfigError(

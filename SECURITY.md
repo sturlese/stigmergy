@@ -17,12 +17,21 @@ This platform ingests **untrusted material** — documents, transcripts, Slack t
 to language models that also read **trusted instructions**. It then writes to a git repository and
 serves answers to callers with different permissions. Three properties carry the weight:
 
-**1. Untrusted content must never be read as instructions.** Everything that reaches a model is
-wrapped by a single hardened fence built in one place (`stigmergy.text`), with in-band neutralization
-so that content containing the closing delimiter cannot end the fence early. A way to make captured
-material act as an instruction is a vulnerability.
+**1. Untrusted content must never be read as instructions.** Page *bodies* — the bulk of what a
+model ever sees — are wrapped by a hardened fence with in-band neutralization, so content carrying
+the closing delimiter cannot end the fence early. Page-derived *fields* that travel as structure
+(a title, an entity name, a link's label) are `neutralize_fence`d at the service boundary rather
+than fenced, so they cannot break a fence either, but they do reach the model outside one. A way
+to make captured material act as an instruction is a vulnerability; so is a page-derived string
+that reaches a model neither fenced nor neutralized.
 
-**2. `acl.visible()` is the one place read access is decided.** Every read surface filters through
+*Known gap, stated rather than implied: `views/synthesis.py` puts member titles into its prompt
+with neither treatment.*
+
+**2. `server.acl.visible()` is the one place read access is decided — and now the only
+implementation of it.** A second, fail-open `visible()` used to live in `stigmergy.kernel`, the
+module every package may import, with no caller at all; it was deleted rather than documented,
+and `tests/test_contract_parity.py` fails if one comes back. Every read surface filters through
 it, and an architecture test fails the build if a module reads the page index without naming an ACL
 predicate or appearing on a declared exception list. Anything that returns a page — or merely
 *confirms the existence* of a page — to an identity whose audiences do not cover it is a

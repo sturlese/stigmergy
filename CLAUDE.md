@@ -32,7 +32,7 @@ Not style — these are enforced, and the enforcement is where to look when one 
 | The UNTRUSTED-DATA fence is built in `stigmergy.text` only | same file |
 | The frozen contract linter and the frozen meeting brief match the knowledge repo's own | `tests/librarian/test_frozen_linter.py`, `test_meeting_brief_contract.py` |
 | The diff the eight gates approved is the diff that lands | `gitcmd.commit(gated_entries=…)` + `tests/librarian/test_gitcmd_unit.py` |
-| `acl.visible()` is the ONE place read access is decided | `server/acl.py`, and the table above |
+| `server.acl.visible()` is the ONE place read access is decided, and the only implementation of it | `server/acl.py`, `tests/test_contract_parity.py` |
 | The README's countable claims match the code | `tests/test_readme_claims.py` |
 
 ## Working rules

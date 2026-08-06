@@ -857,3 +857,20 @@ def test_process_push_never_propagates_across_directories(webhook_conn):
         assert cur.fetchone()[0] == ""   # the stranger keeps its own truth
 
     store.delete_pages(webhook_conn, [primary_path, twin_path])
+
+
+def test_the_body_cap_is_sized_to_the_work_this_handler_does_not_to_githubs_ceiling():
+    """It was 26 MB, sized against GitHub's 25 MB delivery ceiling — a bound on the wrong quantity.
+
+    This is the one path on the public server exempt from bearer auth, on a 512 MB single-process
+    machine, so the cap is the only thing between an anonymous caller and the memory of the process
+    serving every authenticated identity. What the handler will ever ACT on is bounded by
+    `DEFAULT_FILE_CAP` in-zone paths; a real push for a knowledge repo is kilobytes.
+    """
+    assert webhook.MAX_BODY_BYTES == 1024 * 1024
+    # A realistic delivery — 50 changed paths, the cap `changed_paths_from_push` itself stops at —
+    # has to fit with room to spare, or this bound would refuse real work.
+    realistic = json.dumps({"ref": "refs/heads/main", "repository": {"full_name": "acme/knowledge"},
+                            "commits": [{"added": [f"wiki/notes/page-{i}.md" for i in range(50)],
+                                         "modified": [], "removed": []}]})
+    assert len(realistic.encode()) * 4 < webhook.MAX_BODY_BYTES
