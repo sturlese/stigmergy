@@ -72,7 +72,7 @@ alone. Green is git, the one thing here that is not rebuildable. Each diagram ca
 ### The shape
 
 <p align="center">
-  <img src="docs/assets/architecture.svg" alt="the shape: Slack, operator CLIs and MCP clients all submit into one durable capture queue (raw bytes to an evidence store); the librarian is the ONE writer and commits to the knowledge repo (git, markdown, yours — the only thing not rebuildable); the repo rebuilds pages_index in Postgres+pgvector, which the MCP server — the only API, filtering through acl.visible() — serves back to the same people" width="100%">
+  <img src="docs/assets/architecture.svg" alt="the shape: Slack, operator CLIs and MCP clients all submit into one durable capture queue (raw bytes to an evidence store); the librarian is the ONE writer and commits to the knowledge repo (git, markdown, yours — the only thing not rebuildable); the repo rebuilds pages_index in Postgres+pgvector, which the MCP server — the only API, filtering through acl.visible() — serves back to the same people — alongside it, on the same process group but behind its own token and its own ASGI branch, the /admin operations console, which never reads pages" width="100%">
 </p>
 
 **Read that diagram by asking what survives deleting this software.** The knowledge repo does: it
@@ -82,6 +82,8 @@ runs without anybody flinching. The object store keeps the raw bytes a page was 
 claim can always be walked back to what actually arrived.
 
 Two narrow seams do all the work: **one writer** into git, and **one API** out of it.
+
+The dashed box on the right is the part people are usually surprised by: **there is a web console**, at `/admin`, for the operations you would otherwise do from a terminal — draining a parked capture, running or disabling the three crons, reading the gardener's findings, previewing the digest, watching the worker. It rides the same process group as MCP but is an ASGI branch in *front* of the bearer middleware, so it never borrows MCP's auth: it has its own token, it is a **404 until that token's hash is configured**, and an architecture test keeps it from ever becoming a reader of pages. Full tour: [`docs/reference/admin-console.md`](./docs/reference/admin-console.md).
 
 ### The write path
 

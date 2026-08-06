@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 452" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 528" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
   <defs>
     <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 1 L 9 5 L 0 9 z" fill="#8b949e"/>
@@ -32,7 +32,7 @@
     </style>
   </defs>
 
-  <rect x="1" y="1" width="1058" height="450" rx="18" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+  <rect x="1" y="1" width="1058" height="526" rx="18" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
 
   <text x="26" y="46" class="sect">CAPTURE · MANY DOORS</text>
   <text x="820" y="46" class="sect">SERVING · ONE API</text>
@@ -89,25 +89,37 @@
   <line class="edgeT" x1="788" y1="140" x2="832" y2="115" marker-end="url(#arrg)"/>
   <text x="812" y="98" class="elabT" text-anchor="middle">rebuild</text>
 
-  <rect class="node" x="836" y="176" width="200" height="76" rx="10"/>
-  <text x="936" y="202" class="title">MCP server</text>
-  <text x="936" y="220" class="tag">the ONLY API over this</text>
-  <text x="936" y="236" class="tag">acl.visible() · 10 tools</text>
-  <line class="edge" x1="936" y1="144" x2="936" y2="172" marker-end="url(#arr)"/>
+  <!-- ONE process group, TWO surfaces, TWO tokens — `/admin` is an ASGI branch IN FRONT of the
+       bearer middleware, so it never borrows MCP's auth, and it is inert until its hash is set. -->
+  <rect x="820" y="162" width="232" height="190" rx="14" fill="none" stroke="#3d444d"
+        stroke-width="1.1" stroke-dasharray="3 4"/>
+  <text x="936" y="344" class="elab" text-anchor="middle">one process group, two tokens</text>
 
-  <rect class="human" x="836" y="284" width="200" height="48" rx="24"/>
-  <text x="936" y="313" class="tagH" font-size="12">people · agents · Slack</text>
-  <line class="edge" x1="936" y1="252" x2="936" y2="280" marker-end="url(#arr)"/>
+  <rect class="node" x="836" y="190" width="200" height="66" rx="10"/>
+  <text x="936" y="214" class="title">MCP server</text>
+  <text x="936" y="232" class="tag">the only API over the</text>
+  <text x="936" y="247" class="tag">knowledge · acl.visible()</text>
+  <line class="edge" x1="936" y1="144" x2="936" y2="186" marker-end="url(#arr)"/>
+
+  <rect class="node" x="836" y="268" width="200" height="60" rx="10"/>
+  <text x="936" y="291" class="title">/admin console</text>
+  <text x="936" y="308" class="tag">operations, never pages</text>
+  <text x="936" y="322" class="tag">inert until its hash is set</text>
+
+  <rect class="human" x="836" y="372" width="200" height="48" rx="24"/>
+  <text x="936" y="401" class="tagH" font-size="12">people · agents · Slack</text>
+  <line class="edge" x1="906" y1="352" x2="906" y2="368" marker-end="url(#arr)"/>
+  <line class="edge" x1="966" y1="352" x2="966" y2="368" marker-end="url(#arr)"/>
 
   <!-- the same people, both ends -->
-  <path class="edge" d="M 90 270 L 90 356 L 936 356 L 936 336" stroke-dasharray="5 4" marker-end="url(#arr)"/>
-  <text x="513" y="348" class="elab" text-anchor="middle">the same people at both ends — they submit on the left and ask on the right</text>
+  <path class="edge" d="M 90 270 L 90 456 L 936 456 L 936 424" stroke-dasharray="5 4" marker-end="url(#arr)"/>
+  <text x="513" y="448" class="elab" text-anchor="middle">the same people at both ends — they submit on the left and ask on the right</text>
 
   <!-- the sentence the picture is for -->
   <text x="692" y="240" class="elabT" text-anchor="middle">delete the rest — the knowledge remains</text>
 
   <!-- ── legend ───────────────────────────────────────────────────────────── -->
-  <g transform="translate(26,414)">
+  <g transform="translate(26,494)">
     <rect x="0" y="-9" width="12" height="12" rx="3" fill="#1c1332" stroke="#8957e5" stroke-width="1.2"/>
     <text x="20" y="1" class="elab">a model — drafts, never decides</text>
     <rect x="250" y="-9" width="12" height="12" rx="3" fill="#161b22" stroke="#30363d" stroke-width="1.2"/>
