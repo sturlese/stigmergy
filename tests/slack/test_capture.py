@@ -382,7 +382,7 @@ def test_a_very_long_thread_does_not_overflow_max_hint_chars_forever(indexed, cl
     assert len(hints["client"]["source_message_timestamps"]) <= 8192
 
 
-# ── the progress-reaction lifecycle (LATENCY-PLAN.md §3.4) ────────────────────────────────────
+# ── the progress-reaction lifecycle ───────────────────────────────────────────────────────────
 # `mark_in_progress`/`finish_progress` are exercised directly here (they are called from
 # `app.on_reaction_added`, never from `handle_reaction_added` itself — see the module docstring),
 # and end to end through the listener in `tests/slack/test_app_wiring.py`.

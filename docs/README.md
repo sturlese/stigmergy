@@ -7,7 +7,6 @@ Four kinds of document, answering different questions:
 | [`decisions/`](./decisions) | **why** a mechanism is built the way it is — the ADRs |
 | [`reference/`](./reference) | **what** each stage does, in prose, for someone operating or reading it |
 | `src/stigmergy/*/index.md` | **where** things live: module by module, one map per package |
-| [`archive/`](./archive) | superseded material kept for the record, never load-bearing |
 
 **Read the ADR before changing the mechanism it describes.** Each one records a choice that
 cost something to reach — code vetoing an agent's diff instead of an LLM reviewing an LLM,
@@ -34,7 +33,6 @@ option that was already rejected.
 | [`reference/page-contract.md`](./reference/page-contract.md) | the FAST-LANE anchor rule: what `entity:` means, who writes it, how it is read |
 | [`reference/brain-page-contract.md`](./reference/brain-page-contract.md) | the wider frontmatter dialect of pages already in the repo — a READ contract, since nothing writes it any more |
 | [`reference/operator-runbook.md`](./reference/operator-runbook.md) | operator runbook: deploy, tokens, audit trail, object-store smoke check, the two databases, the librarian + its GitHub App, the Slack transport, the steward doorbell, the gardener cron and the digest command |
-| [`archive/socket-mode-spike.md`](./archive/socket-mode-spike.md) | archived: the Slack Socket Mode spike that preceded the transport |
 
 ## Code maps (where things live)
 

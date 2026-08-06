@@ -230,8 +230,9 @@ def test_every_relative_link_in_every_live_doc_resolves():
     all. This is the mechanical version of that reading pass: it costs one grep and cannot get
     bored.
 
-    Scope is what a reader actually follows: `docs/` (minus `archive/`), every package code map,
-    the eval docs and the two front doors.
+    Scope is what a reader actually follows: `docs/`, every package code map, the eval docs and
+    the two front doors. There is no exemption for superseded material — this repo keeps none, and
+    an exemption nothing uses reads as coverage of a case that cannot arise.
 
     **Links that leave this repo are skipped, and that is not laziness.** A front door may
     deliberately route to a SIBLING checkout — the knowledge repo lives beside this one, exists on
@@ -241,7 +242,7 @@ def test_every_relative_link_in_every_live_doc_resolves():
     different rule, owned by `test_no_librarian_document_links_out_of_this_repo` below.
     """
     surfaces = [
-        *(p for p in (ROOT / "docs").rglob("*.md") if "archive" not in p.parts),
+        *(ROOT / "docs").rglob("*.md"),
         *(ROOT / "src" / "stigmergy").glob("*/index.md"),
         *(ROOT / "evals").glob("*.md"),
         ROOT / "README.md", ROOT / "CLAUDE.md",

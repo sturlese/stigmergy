@@ -80,8 +80,8 @@ class SlackGateway(Protocol):
         ...
 
     async def reactions_add(self, channel_id: str, message_ts: str, name: str) -> dict:
-        """Add an emoji reaction to a message — the 🧠 gesture's instant progress marker
-        (LATENCY-PLAN.md §3.4), fired before any identity work. Raises `SlackApiError` on a real
+        """Add an emoji reaction to a message — the 🧠 gesture's instant progress marker,
+        fired before any identity work. Raises `SlackApiError` on a real
         API failure (a missing `reactions:write` scope, a timeout, a rate limit); `already_reacted`
         — reachable whenever Slack redelivers the triggering event — is treated as success at the
         real gateway's boundary, never surfaced as a failure a caller has to special-case."""

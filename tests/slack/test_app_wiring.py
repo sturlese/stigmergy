@@ -176,7 +176,7 @@ def test_reaction_added_from_a_foreign_workspace_produces_zero_traffic_and_no_qu
         assert cur.fetchone()[0] == 0
 
 
-# ── the progress-reaction lifecycle, wired through the REAL listener (LATENCY-PLAN.md §3.4) ────
+# ── the progress-reaction lifecycle, wired through the REAL listener ───────────────────────────
 def test_reaction_added_success_upgrades_the_progress_reaction_to_a_done_mark(indexed, clean_tables):
     conn, fixture = indexed
     gw = FakeSlackGateway()

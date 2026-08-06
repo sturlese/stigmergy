@@ -61,6 +61,17 @@ Three secrets, from the environment only — never a flag, never `.mcp.json`
 **Socket Mode**, so the bot needs no public URL and no inbound port at all (it is the one process
 group in the deployment with no HTTP service).
 
+**An event that arrives while the bot is down is delayed, not lost.** Measured against a real
+workspace: a question asked with the process killed was buffered by Slack and delivered on
+reconnect about a minute later, and answered. That is also the real reason the single-instance pin
+survives scrutiny — not because one Socket Mode connection is inherently stable, but because
+Slack's own redelivery covers the gap a single instance leaves. It is a behaviour this system
+observes and does not control, so if it ever changes, the design's safety margin changes with it.
+(The measurement that established this also produced the instructive mistake: a screenshot taken
+seconds after a restart showed no reply and was read as "events during downtime are silently
+lost". The bot had simply not finished connecting. **Absence of a reply is not evidence of loss
+until a control question proves the listener was live.**)
+
 **Four event subscriptions**, and the code registers exactly these
 (`app.build_bolt_app`): `app_mention` · `message` (DMs and the ask-back reply) · `reaction_added` (the
 🧠 gesture) · `reaction_removed` (registered so it can be acknowledged and deliberately ignored —
@@ -171,7 +182,7 @@ stays a stored column (the gesture's own provenance) without being part of the k
 filed, and an undo the system cannot honour is worse than no undo.
 
 **The instant progress reaction.** Before the "queued" thread ack — which used to be the reactor's
-first feedback, 1.5-4s after the 🧠, behind 6+N sequential Web API calls (LATENCY-PLAN.md §3.4) —
+first feedback, 1.5-4s after the 🧠, behind 6+N sequential Web API calls —
 `app.on_reaction_added` adds an hourglass (`capture.mark_in_progress`) as close to the raw event as
 it can: after `is_ignorable_event` and `is_configured_workspace` (a foreign workspace or an ignored
 event gets no reaction, exactly like it gets no other Slack traffic), but before any identity
@@ -274,8 +285,8 @@ Every handler takes a `SlackGateway` (`gateway.py`) as a plain argument — no m
 test double every suite under `tests/slack/` drives: it RECORDS every call (so a test can assert
 exactly what would have been posted) and every failure mode is SCRIPTED explicitly (a set of
 ids that always raise, or a countdown of failures before success) — the same posture `fake_llm`
-and `fake_embedder` already take elsewhere in this repo. Everything except the Socket Mode spike
-and the real-workspace walk runs and is tested with no network.
+and `fake_embedder` already take elsewhere in this repo. Everything except the manual
+real-workspace walk runs and is tested with no network.
 
 ## Rendering, and the property it exists to guarantee
 
@@ -331,5 +342,5 @@ thread-keyed dedup migration), `test_doorbell.py` (the three doorbell properties
 the requeue-and-reprocess-back-into-the-same-status regression) and `test_review.py` (the Block Kit
 button/modal flow against `review_decide_safe`, identity re-resolved at click and at submission).
 `tests/test_architecture.py`'s slack-boundary tests pin the import list; `tests/test_deployment_config.py`
-pins the third process group. The real-workspace walk is manual, and its notes are at
-[`../archive/socket-mode-spike.md`](../archive/socket-mode-spike.md).
+pins the third process group. The real-workspace walk is manual and this repository keeps no
+record of any particular run, so live behaviour is measured, never assumed from a green suite.

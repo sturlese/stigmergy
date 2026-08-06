@@ -7,7 +7,7 @@ enforces nothing itself — it just builds the scoped service). The dedup key
 ever producing a second `capture_queue` row: `reserve()` is the only write that can race, and it
 races against Postgres's own UNIQUE index.
 
-The instant progress reaction (`mark_in_progress`/`finish_progress`, LATENCY-PLAN.md §3.4) is a
+The instant progress reaction (`mark_in_progress`/`finish_progress`) is a
 SEPARATE lifecycle from all of that: `app.on_reaction_added` marks before this module is even
 called and finishes in a `finally`, driven by this module's own boolean return, so every one of
 `handle_reaction_added`'s several early returns clears it the same way without a reaction call
@@ -61,8 +61,7 @@ async def _react_or_log(gateway, *, channel_id: str, message_ts: str, name: str,
 async def mark_in_progress(gateway, *, channel_id: str, message_ts: str) -> None:
     """The instant progress marker — called from `app.on_reaction_added` as close to the raw
     event as possible, before any identity work: visible in ~200ms instead of the 1.5-4s of
-    silence the un-instrumented pipeline left before its "queued" thread ack
-    (LATENCY-PLAN.md §3.4)."""
+    silence the un-instrumented pipeline left before its "queued" thread ack."""
     await _react_or_log(gateway, channel_id=channel_id, message_ts=message_ts,
                         name=PROGRESS_REACTION, add=True, what="progress reaction")
 

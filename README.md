@@ -116,7 +116,7 @@ src/stigmergy/
 tests/           the behavioural invariant + the architecture tests that make the seams rules
 evals/           two real instruments — golden retrieval and golden QA — over a frozen reference
                  corpus, plus the git-resident score series
-docs/            decisions/ (why) · reference/ (what) · archive/ (superseded)
+docs/            decisions/ (why) · reference/ (what)
 scripts/         the end-to-end harnesses
 docker-compose.yml   the local test stack: postgres+pgvector, minio, a bare git remote
 ```

@@ -16,12 +16,10 @@ about to edit this package, not run it.
 **`tests/slack/` proves this package's own logic, never a real workspace's behavior.** The whole
 suite is offline (`FakeSlackGateway`, real Postgres, the `fake` embedder/answer synthesizer), so
 rate limits, real event-payload quirks and Socket Mode reconnect behavior are outside what a green
-run says anything about. One measured walk against a real workspace exists and is written up at
-[`docs/archive/socket-mode-spike.md`](../../../docs/archive/socket-mode-spike.md): steady-state
-answering, the singleton refusing a second process, `kill -9` and reconnect, and events delivered
-while the connection was down (redelivered, not lost). Read it before making any claim about live
-behavior — including the per-database scope limit in Data & contracts below, which that walk is
-where the hazard was found.
+run says anything about. What IS known about live behavior was measured by hand once, and only the
+conclusions survive in this repository: the per-database scope limit in Data & contracts below, and
+downtime redelivery in [`docs/reference/slack.md`](../../../docs/reference/slack.md). Neither is
+reachable from a green run, so treat both as facts to re-measure rather than as guarantees.
 
 ## Purpose
 
@@ -269,8 +267,7 @@ listener acks immediately, then delegates to `mention`/`capture`/`replies`, none
   cleanly, and **double-handle every event Slack delivers**. The mechanism protects one deployment
   from itself; it cannot protect one Slack app from two deployments, and nothing else does either.
   The operational rule that follows: stop the local bot before a second deployment against the same
-  app goes live. Measured, not theorised — see
-  [`docs/archive/socket-mode-spike.md`](../../../docs/archive/socket-mode-spike.md).
+  app goes live. Measured against a real workspace, not theorised.
 - **`render.render_answer`** contract — `(answer: dict, link_resolver: Callable[[str], str | None],
   *, asker_slack_user_id="", mint_token=...) -> list[dict]`. `link_resolver` is injected
   configuration — `settings.no_link_resolver` (every path resolves to `None`) is `SlackContext`'s
@@ -376,10 +373,11 @@ package), and the workspace-check AST rule described in Avoid, above.
 `tests/test_deployment_config.py` pins the third `fly.toml` process group (`slack`, no HTTP
 service, never scaled past one machine).
 
-**No test here, and no test anywhere in this repo, exercises a real Slack workspace.** The one
-walk that did was manual and is written up at
-[`docs/archive/socket-mode-spike.md`](../../../docs/archive/socket-mode-spike.md); a claim about
-live behavior cites that document or it cites nothing.
+**No test here, and no test anywhere in this repo, exercises a real Slack workspace.** The only
+walk that ever did was manual, and this repository keeps no record of the run — so a claim about
+live behavior has nothing here to cite, and the honest move is to measure it again rather than to
+inherit it. The two conclusions that were kept are stated where they are load-bearing (the
+per-database lock scope, above; downtime redelivery, in `docs/reference/slack.md`).
 
 ## Common tasks
 
