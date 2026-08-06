@@ -61,13 +61,16 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    fly secrets set STIGMERGY_GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"
    fly secrets set STIGMERGY_GITHUB_REPO="<owner>/stigmergy-brain"
    # the admin console (`app` group, ADR 029) — OPTIONAL; unset = the console does not exist.
-   # Hash from `stigmergy-admin-token`; PAT = fine-grained, Actions read+write, THIS repo only.
-   # STIGMERGY_ADMIN_GITHUB_REPO is THIS platform repo (where the workflows live) — a different
-   # fact from STIGMERGY_GITHUB_REPO above, and there is no default: without it the crons tab is
-   # read-only. The digest channel id is not sensitive; secrets are simply Fly's env mechanism.
+   # Hash from `stigmergy-admin-token`; PAT = fine-grained, Actions read+write, one repo only.
+   # STIGMERGY_ADMIN_GITHUB_REPO is WHEREVER THE CRON WORKFLOWS RUN, which is the knowledge repo
+   # (see step 4) — so in practice it holds the same value as STIGMERGY_GITHUB_REPO above, and
+   # the PAT must be scoped to THAT repo. They are still two settings because they answer two
+   # questions (which repo is pushed to vs which repo's Actions the console drives), and there is
+   # no default: without it the crons tab is read-only. The digest channel id is not sensitive;
+   # secrets are simply Fly's env mechanism.
    fly secrets set STIGMERGY_ADMIN_TOKEN_HASH="<from stigmergy-admin-token>"
    fly secrets set STIGMERGY_ADMIN_GITHUB_TOKEN="<fine-grained PAT>"
-   fly secrets set STIGMERGY_ADMIN_GITHUB_REPO="<owner>/stigmergy"
+   fly secrets set STIGMERGY_ADMIN_GITHUB_REPO="$STIGMERGY_GITHUB_REPO"   # same repo as above
    fly secrets set STIGMERGY_DIGEST_CHANNEL_ID="C..."
    ```
 
@@ -78,21 +81,35 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
 3. **Supabase Postgres** must already have the index built at least once
    (`.venv/bin/stigmergy-index --rebuild --repo $STIGMERGY_REPO` against `STIGMERGY_INDEX_DSN`) — the
    server refuses to serve an empty index.
-4. **GitHub Actions secrets and variables** (for the three crons), on THIS repo:
+4. **GitHub Actions secrets and variables** (for the three crons), on the **knowledge repo**:
+
+   **The crons run from the knowledge repo, not from this one, and that is a privacy property
+   rather than a preference.** Actions logs on a PUBLIC repository are world-readable, and these
+   jobs describe the corpus out loud — `stigmergy-gardener` prints its whole report, entity ids
+   and page paths included. Repository *variables* are not masked either (only secrets are), so
+   the knowledge-repo slug and the digest channel id would be in the clear on every run. This
+   repo still carries the three workflow files as adopter templates, **disabled**; copy them into
+   your knowledge repo, which is private, and run them there.
 
    | Settings → Secrets → Actions | Used by |
    |---|---|
    | `INDEX_DSN` | all three workflows |
    | `OPENAI_API_KEY` | `index-rebuild`, `gardener` |
-   | `STIGMERGY_READONLY_PAT` | `index-rebuild`, `gardener` — fine-grained PAT on the **knowledge** repo, contents: read-only |
    | `SLACK_BOT_TOKEN` | `gardener`, for the SLA notice |
 
    | Settings → Variables → Actions | Used by |
    |---|---|
-   | `STIGMERGY_KNOWLEDGE_REPO` (`<owner>/stigmergy-brain`) | all three — **and it is the on/off switch** |
+   | `STIGMERGY_CRONS_ENABLED` (`true`) | all three — **and it is the on/off switch** |
+   | `STIGMERGY_PLATFORM_REF` (a release tag; default `main`) | all three — which platform version `pip` installs |
    | `STIGMERGY_DIGEST_CHANNEL_ID`, `STIGMERGY_GARDENER_MODEL` | `gardener` (a channel id and a model name are not credentials) |
 
-   **Every scheduled job is guarded by `if: vars.STIGMERGY_KNOWLEDGE_REPO != ''` and skips
+   **No cross-repo PAT is involved.** The knowledge repo is the workflow's own repository, so the
+   job's read-only `GITHUB_TOKEN` covers the checkout; the CLI arrives by
+   `pip install git+https://github.com/<owner>/stigmergy.git@$STIGMERGY_PLATFORM_REF`, so no code
+   is copied and nothing has to be kept in sync. An earlier layout needed a
+   `STIGMERGY_READONLY_PAT` for exactly this; it has no reader left.
+
+   **Every scheduled job is guarded by `if: vars.STIGMERGY_CRONS_ENABLED == 'true'` and skips
    cleanly when it is unset.** That is what keeps a fork from failing a scheduled run every night
    — and it is also the failure mode to check first when "the crons stopped running": a skipped
    job is green, so read `job_runs`, not the Actions tab (below).

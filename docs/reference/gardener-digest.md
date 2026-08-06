@@ -249,12 +249,14 @@ sections.
 `stigmergy-digest` run by hand next month still covers everything since the last post, because its
 own watermark says so; only timeliness is lost by not scheduling it.
 
-The gardener's daily cron lives in its own workflow, `.github/workflows/gardener.yml`. It runs
+The gardener's daily cron lives in its own workflow, `gardener.yml` — shipped here as a template
+and **run from the knowledge repo**, whose Actions logs are private (this report names entity ids
+and page paths; see the runbook). It runs
 daily at ~05:07 UTC, after `index-rebuild` (04:17) and `retention-purge` (04:42), so the corpus
 view the gardener reads is the morning's, not last night's. It checks out the knowledge repo
 read-only and runs one command — `stigmergy-gardener --repo stigmergy-knowledge` — persisting findings
 and posting the SLA notice (today, never — see above) in the same run. The whole job is guarded by
-`if: vars.STIGMERGY_KNOWLEDGE_REPO != ''`, so a fork that inherits the file but not the repository
+`if: vars.STIGMERGY_CRONS_ENABLED == 'true'`, so a fork that inherits the file but not the deployment
 behind it skips cleanly instead of failing a scheduled run every night. A `concurrency` group
 queues a second run rather than cancelling one in flight: cancelling mid-write would discard real,
 already-computed work.
