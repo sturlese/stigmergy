@@ -150,7 +150,7 @@ def test_answer_sys_carries_the_topology_paragraph():
 def test_the_entity_filter_is_taught_as_enumeration_with_its_cost_named():
     """OLD BEHAVIOUR (batch audit F2): the prompt said "Prefer search(filters={"entity": <id>})
     once an id is known" — which told the agent to reapply, on every turn after it learned an id,
-    exactly the scoping issue #33 removed one layer down. A company-wide page (`entity: []`) is
+    exactly the scoping that was removed one layer down. A company-wide page (`entity: []`) is
     excluded by that filter and is often the best answer, so the fix has to reach the layer that
     was telling the agent to undo it."""
     assert "ENUMERATES" in ANSWER_SYS, "the filter is a tool for one job, not the default"

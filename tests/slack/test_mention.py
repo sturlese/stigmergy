@@ -400,7 +400,7 @@ def test_edit_fails_twice_then_falls_back_to_a_new_message_in_the_thread(indexed
         "512000" in b["text"]["text"] for b in (fallback[0].blocks or []) if b.get("type") == "section")
 
 
-# ── issue #32: a duplicate-citation answer must not strand the placeholder ─────────────────────
+# ── a duplicate-citation answer must not strand the placeholder ────────────────────────────────
 # `render.render_answer` (see the render-level reproduction in `tests/slack/test_render.py`) can be
 # handed a LEGAL `answer` shape where `citations` cites the same page twice —
 # `stigmergy.answer.synthesize.Citation` carries no uniqueness constraint on `path`, and
@@ -459,7 +459,7 @@ def _delivery_text(delivery) -> str:
 
 def test_a_duplicate_citation_answer_is_delivered_not_stranded_as_a_placeholder(
         indexed, clean_tables, monkeypatch):
-    """The reproduction (issue #32, observed live on staging): the answer cites ONE page TWICE.
+    """The reproduction (observed live on staging): the answer cites ONE page TWICE.
     Before the fix, `render.render_answer` builds two "Show it here" actions blocks sharing
     `block_id = f"show_it_here:{path}"`; against the block_id-uniqueness-enforcing
     `FakeSlackGateway` (real Slack behaviour, mirrored — see `gateway._raise_if_invalid_blocks`),

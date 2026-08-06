@@ -53,5 +53,5 @@ jobs:
       - name: Rebuild the index
         run: stigmergy-index --rebuild --repo stigmergy-knowledge
         env:
-          STIGMERGY_INDEX_DSN: ${{ secrets.SUPABASE_DSN }}
+          STIGMERGY_INDEX_DSN: ${{ secrets.INDEX_DSN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

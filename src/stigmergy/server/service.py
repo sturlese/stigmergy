@@ -391,7 +391,7 @@ class BrainService:
         # not truthiness — an explicit `filters={"entity": ""}` is still an explicit filter, just
         # one that matches nothing, `search._filter_clause`'s own documented contract).
         #
-        # **It LAYERS on the ranking; it does not replace it** (ADR 022 D4, amended — issue #33).
+        # **It LAYERS on the ranking; it does not replace it** (ADR 022 D4, amended).
         # Resolution used to run a SCOPED search first and fall back to the unscoped one only on
         # ZERO hits, which meant a resolved entity with any hits at all eclipsed the blended
         # ranking entirely: a page that is genuinely company-wide (`entity: []` — a policy, a

@@ -65,7 +65,7 @@ only client that had it. It has since moved DOWN into `BrainService._search`
 ([ADR 022](./022-entity-navigation.md) D4), where every client gets it and `search_text` is a thin
 renderer again.
 
-*Amended 2026-08-05 (issue #33):* the SEMANTICS above are no longer current either. Hard-scoping
+*Amended 2026-08-05:* the SEMANTICS above are no longer current either. Hard-scoping
 with a zero-hit fallback eclipsed rather than layered — any hits at all for the resolved entity
 meant the blended ranking never ran, so a company-wide page (`entity: []`) was unreachable through
 every query naming a registered company. Resolution now feeds the rank-time boost and the lexical

@@ -86,7 +86,7 @@ def _show_it_here_button(path: str, asker_slack_user_id: str, mint_token) -> dic
     `block_id` is opaque for a DIFFERENT reason than the value token: Slack rejects an entire
     `blocks` payload outright when two blocks share one explicit `block_id`
     (`gateway._raise_if_invalid_blocks` mirrors this), and the old path-derived id
-    (`f"show_it_here:{path}"`) collided the moment one page was cited twice — issue #32's own
+    (`f"show_it_here:{path}"`) collided the moment one page was cited twice — a recorded
     production failure. A random suffix can never collide, no matter how many buttons one render
     builds, so `_citation_blocks` dedupes buttons by path only to avoid showing the same affordance
     twice — not to keep block_id unique. Only `action_id` and the `value` token are ever read back
@@ -109,7 +109,7 @@ def _citation_blocks(citations: list[dict], link_resolver, asker_slack_user_id: 
     """One Sources LINE per citation — every quote stays visible, even two of the same page — but
     at most one "Show it here" BUTTON per DISTINCT page, in first-occurrence order.
     `stigmergy.answer.synthesize.Citation` carries no uniqueness constraint on `path`, so a model may
-    legally cite one page twice with two different quotes (issue #32, observed live on staging); a
+    legally cite one page twice with two different quotes (observed live on staging); a
     button per citation would mint the identical page's affordance twice in one message — both
     buttons open the same page — for no reason a user could act on."""
     if not citations:

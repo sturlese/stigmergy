@@ -290,7 +290,7 @@ that accepts `admin/service.py` as a named exception.
   worker, and failed it outright once its attempts were spent — telling the submitter it failed
   while the worker was still filing it. `queue.release_expired` now takes no default at all, so a
   caller must state the horizon; this function is what the console states, and it is why the one
-  librarian import exists. It was a static CLASS default until issue #38, which is the same defect
+  librarian import exists. It was a static CLASS default until it was derived, which is the same defect
   one layer over: staging's `$STIGMERGY_LIBRARIAN_TIMEOUT_S=600` derives a 1500 s lease while the
   constant read 900, so the meter called a healthy in-flight item expired and the button swept it.
   Reading the env per call is correct because `fly.toml`'s `[env]` is app-wide — this process's

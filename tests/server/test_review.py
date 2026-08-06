@@ -501,7 +501,7 @@ def test_review_decide_refuses_a_secret_in_a_note(env, conn, require_gitleaks):
     assert status == capture_schema.TRIAGE, "the refused note must never reach a submitter report"
 
 
-# ── ISSUE #34: a deployment with no checkout still has stewards ────────────────────────────────
+# ── a deployment with no checkout still has stewards ───────────────────────────────────────────
 # `fly.toml` starts the `app` and `slack` groups with baked identities and registry and NO
 # `--repo`, so `load_stewards`' read at `origin/main` had nothing to read. Observed on staging:
 # an item parked 20+ minutes as an entity-proposal with `steward_notifications` empty, and

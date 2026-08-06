@@ -82,7 +82,7 @@ def test_no_element_carries_both_a_title_hint_and_a_disabled_flag():
     """A `disabled` control fires no pointer events in Chrome/Firefox/Safari — no hover, so the
     `title` tooltip never shows — and it cannot receive focus, so keyboard and screen-reader users
     have no path to it either. `title:` alongside `disabled:` on the SAME element is therefore a
-    reason NO user, on any input method, can ever reach (issue #35: the queue detail card's three
+    reason NO user, on any input method, can ever reach (the queue detail card's three
     disposition buttons). The guard scans every shipped file, not one card — this exact anti-
     pattern is a class of bug, and it turns out to already live in two more places."""
     offenders = []
@@ -143,7 +143,7 @@ def test_the_console_loads_no_external_resource():
 def test_admin_console_docs_do_not_promise_an_unreachable_hover_reason():
     """docs/reference/admin-console.md's Queue bullet promises the three disposition buttons are
     "disabled ... with the reason on hover" — an affordance no browser delivers on a disabled
-    control (issue #35; see the two tests above). Pinned the way `tests/test_readme_claims.py`
+    control (see the two tests above). Pinned the way `tests/test_readme_claims.py`
     pins README claims against the code: a documented affordance must be checkable against what
     ships, or it rots silently the moment the two drift."""
     doc = (ROOT / "docs" / "reference" / "admin-console.md").read_text(encoding="utf-8")

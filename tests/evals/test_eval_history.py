@@ -151,3 +151,49 @@ def test_an_unprobeable_tree_reads_as_dirty_never_as_clean(tmp_path, monkeypatch
 
 def test_resolve_git_sha_is_best_effort_outside_any_repo(tmp_path):
     assert eval_history.resolve_git_sha(tmp_path) == ""
+
+
+# ── the committed series itself, not just the function that appends to it ──────────────────────
+# The gap this closes: `evals/history.ndjson` was committed carrying a `<<<<<<< Updated upstream`
+# conflict marker from a stash pop, and 3,555 tests passed over it — because every test above
+# drives `append_run` against a tmp_path and NOTHING read the real file. A series whose whole
+# purpose is that two entries are comparable is worth one check that the series still parses.
+def test_the_committed_series_is_valid_ndjson_in_chronological_order():
+    """Every line of the real `evals/history.ndjson` is one JSON object, and timestamps ascend.
+
+    Append-only means the file is only ever touched by a runner adding a line at the end and an
+    operator committing it — so the two ways it breaks are a hand edit and a merge. Both show up
+    here as a line that will not parse, or a timestamp that goes backwards.
+    """
+    raw = eval_history.HISTORY_PATH.read_text(encoding="utf-8").splitlines()
+    assert raw, "the score series is empty — it is committed, not generated"
+
+    rows = []
+    for n, line in enumerate(raw, start=1):
+        assert line.strip(), f"line {n} is blank; this file is one JSON object per line"
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError as ex:
+            raise AssertionError(
+                f"{eval_history.HISTORY_RELPATH} line {n} is not JSON ({ex.msg}): {line[:80]!r}"
+            ) from ex
+
+    stamps = [r["ts"] for r in rows]
+    assert stamps == sorted(stamps), (
+        "entries are out of order, so the file was edited rather than appended to:\n  "
+        + "\n  ".join(f"line {n}: {a} then {b}"
+                      for n, (a, b) in enumerate(zip(stamps, stamps[1:], strict=True), start=1)
+                      if a > b))
+
+
+def test_every_entry_says_what_it_was_measured_on():
+    """`corpus` is the entry's answer to "is this number comparable to that one?".
+
+    Nine early entries were measured against a private knowledge repo rather than the frozen
+    corpus, and their `corpus` says so in words instead of naming a path nobody else can check
+    out. That is the honest shape, and it must not silently become a path again.
+    """
+    rows = [json.loads(line) for line in
+            eval_history.HISTORY_PATH.read_text(encoding="utf-8").splitlines()]
+    missing = [r["ts"] for r in rows if not r.get("corpus")]
+    assert not missing, f"entries with no corpus recorded: {missing}"

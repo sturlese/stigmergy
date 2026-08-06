@@ -324,7 +324,7 @@ still goes through `acl.visible()` like every other read.
 share one explicit `block_id`.** The id used to be derived from the cited path
 (`show_it_here:<path>`), which collided the moment one answer cited the same page twice — ordinary
 on a small corpus — and Slack's rejection stranded the entire render, "thinking…" placeholder
-included (issue #32). Each button's `block_id` now carries a random suffix instead, so it can never
+included. Each button's `block_id` now carries a random suffix instead, so it can never
 collide however many buttons one render builds; a page cited twice still gets exactly one button,
 deduped by PATH before rendering — a presentation choice, unrelated to why the id itself is random.
 The fix has a floor beneath it for the wider `invalid_blocks` class (an unsupported block, a

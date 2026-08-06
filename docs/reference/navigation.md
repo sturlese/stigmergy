@@ -172,7 +172,7 @@ original shape and it eclipsed rather than layered: any hits at all for the reso
 the blended ranking never ran, so a company-wide page (`entity: []` — a policy, a process, a
 cross-cutting decision) was unreachable through every query naming a registered company. Resolving
 an entity can now only change the ORDER of the results, never their membership (ADR 022 D4,
-amended — issue #33).
+amended).
 
 **There is no filter left to drop, and the hint is the whole mechanism.** The rank-time boost and
 the lexical alias expansion below are what "entity-first" now means: the named entity's own

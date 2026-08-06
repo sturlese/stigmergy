@@ -16,7 +16,7 @@ def test_resolved_report_with_page_and_commit_names_both_and_says_not_searchable
                                        page="wiki/entities/Jordan Reyes.md", commit="abc123")
     assert out["status"] == schema.RESOLVED
     assert "wiki/entities/Jordan Reyes.md@abc123" in out["summary"]
-    # Issue #29: this used to assert `schema.NOT_SEARCHABLE in out["summary"]` — true whatever the
+    # this used to assert `schema.NOT_SEARCHABLE in out["summary"]` — true whatever the
     # constant said, so it never pinned the WORDING. The constant used to claim the page was
     # "invisible to search_brain/ask until the next index rebuild", which is false on
     # webhook-enabled deployments (observed live on staging: searchable seconds after the
@@ -41,7 +41,7 @@ def test_resolved_report_with_commit_only_names_it_without_claiming_a_page():
     assert "Committed as abc123" in out["summary"]
     assert out["page_path"] == ""
     assert out["commit"] == "abc123"
-    # Issue #29: the commit-only shape composes its own copy of the wording contract
+    # the commit-only shape composes its own copy of the wording contract
     # (dispositions.py's `resolved_report`, `elif commit:` branch) — pinned literally here too.
     assert "at the next index rebuild" in out["summary"]
     assert "incremental upsert" in out["summary"]
@@ -55,7 +55,7 @@ def test_resolved_report_with_page_only_names_it_without_claiming_a_commit():
     assert "wiki/entities/Jordan Reyes.md" in out["summary"]
     assert out["page_path"] == "wiki/entities/Jordan Reyes.md"
     assert out["commit"] == ""
-    # Issue #29: the page-only shape composes its own copy of the wording contract
+    # the page-only shape composes its own copy of the wording contract
     # (dispositions.py's `resolved_report`, `elif page:` branch) — pinned literally here too.
     assert "at the next index rebuild" in out["summary"]
     assert "incremental upsert" in out["summary"]

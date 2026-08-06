@@ -165,7 +165,7 @@ def _raise_if_invalid_blocks(blocks: list | None, *, fail_any_blocks: bool) -> N
     """Slack's REAL `chat.postMessage`/`chat.update` reject the WHOLE message — not just the
     offending block — for a `blocks` payload that names the same explicit `block_id` on two
     blocks: the real failure is `invalid_blocks`, with a message of the shape "block_id
-    show_it_here:<path> already exists" (issue #32's own recorded production failure, from two
+    show_it_here:<path> already exists" (a recorded production failure, from two
     "Show it here" actions blocks built one-per-citation for two citations of the same page).
     Enforced UNCONDITIONALLY, on every call, because this mirrors real Slack API behaviour rather
     than scripting a failure a test opts into — a fake that stayed silent here would let a caller

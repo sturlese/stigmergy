@@ -48,7 +48,7 @@ async def _edit_or_fallback(ctx, *, channel_id: str, ts: str, thread_ts: str, bl
     answer as a NEW message in the same thread. If EVERY blocks-carrying attempt above is refused
     — Slack's real `invalid_blocks` (an unsupported block, a nesting/length limit, a colliding
     `block_id`; `gateway._raise_if_invalid_blocks` mirrors the whole class, not only the collision
-    issue #32 was filed for) — one more attempt strips `blocks` entirely and sends `text` alone:
+    that was hit in production) — one more attempt strips `blocks` entirely and sends `text` alone:
     `text` is `_answer_fallback_text`'s own REAL rendering of the answer, never a stub, so this
     floor still gets the asker their answer even when Block Kit itself is what keeps failing. Only
     if THAT also fails does this give up and log — never drop an answer the system already paid
@@ -105,7 +105,7 @@ def _answer_fallback_text(answer: dict) -> str:
     """The plain-text `text=` companion `_edit_or_fallback` sends alongside `blocks` on every
     attempt — including its own last, blocks-free one, which makes this the ONLY thing an asker
     ever sees when every blocks-carrying attempt is refused (`_edit_or_fallback`'s degrade leg,
-    issue #32). A refusal keeps its short existing shape; an actual answer needs a REAL rendering
+    reached live). A refusal keeps its short existing shape; an actual answer needs a REAL rendering
     rather than a stub that says nothing once blocks are gone: the answer body through the same
     `escape_mrkdwn`-then-`to_mrkdwn` order `render._render_markdown` uses (escaping first protects
     a literal `&`/`<`/`>` in the MODEL-derived text; running it after would corrupt the `<url|text>`

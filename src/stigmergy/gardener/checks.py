@@ -99,8 +99,8 @@ ORPHAN_EXEMPT_TYPES = {
         "entity pages are addressed through `entity:` frontmatter anchoring, never through a "
         "wikilink — nothing in this corpus links `[[<entity-id>]]` by convention, so a "
         "zero-inbound entity page reflects the anchoring mechanism working as designed, not "
-        "neglect (the hub precedent: a page meant to be pointed AT by a different "
-        "mechanism, not to accumulate inbound links of its own)"),
+        "neglect (the hub shape: a page meant to be pointed AT by a different mechanism, not to "
+        "accumulate inbound links of its own)"),
 }
 
 _ORPHANS_SQL = """

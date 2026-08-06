@@ -102,7 +102,7 @@ def test_to_finding_suggested_action_is_the_fixed_string_never_derived_from_the_
     assert "curl" not in finding["suggested_action"]
 
 
-# ── suggested_action wording: a re-anchor is not something a capture can file (issue #37) ───────
+# ── suggested_action wording: a re-anchor is not something a capture can file ───────────────────
 # `src/stigmergy/librarian/gates.py::gate_body_rewrite` allows an existing page's frontmatter to
 # change in exactly ONE way — `related:` growth — and vetoes every other change, `entity:`
 # included, as `body-rewrite`, `repairable=False` (pinned directly against the gate in

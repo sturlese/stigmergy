@@ -80,7 +80,7 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
 
    | Settings → Secrets → Actions | Used by |
    |---|---|
-   | `SUPABASE_DSN` | all three workflows |
+   | `INDEX_DSN` | all three workflows |
    | `OPENAI_API_KEY` | `index-rebuild`, `gardener` |
    | `STIGMERGY_READONLY_PAT` | `index-rebuild`, `gardener` — fine-grained PAT on the **knowledge** repo, contents: read-only |
    | `SLACK_BOT_TOKEN` | `gardener`, for the SLA notice |
@@ -130,7 +130,7 @@ Dockerfile then `COPY`s to `/app/`:
 | `ops/identities.json` | `/app/identities.json` | **the script exits 2** — this is the one required file |
 | `ops/entity-registry.json` | `/app/entity-registry.json` | `{"entities": {}}` — `ask` searches without entity-first resolution |
 | `ops/slack-channels.json` | `/app/slack-channels.json` | `{}` — every audience falls back to the safe empty default |
-| `ops/stewards.json` | `/app/stewards.json` | `{}` — no scope resolves to a steward, so the doorbell records an undeliverable and every review decision fails closed (issue #34; see Troubleshooting) |
+| `ops/stewards.json` | `/app/stewards.json` | `{}` — no scope resolves to a steward, so the doorbell records an undeliverable and every review decision fails closed (see Troubleshooting) |
 
 All four are always written, so the unconditional `COPY` can never fail on a missing source.
 
@@ -176,7 +176,7 @@ THIS knob need" has one place to look it up instead of five.
 |---|---|---|
 | Baked into the image at deploy time | `ops/identities.json`, `ops/entity-registry.json`, `ops/slack-channels.json`, `ops/stewards.json` — the copies `fly.toml` points the `app`/`slack` groups at (`--identities`/`--entity-registry`/`--stewards`, `$STIGMERGY_ADMIN_CHANNELS_PATH`) | a commit and a push in the knowledge repo, then `make deploy-staging` to re-bake `deploy/` and redeploy |
 | A Fly secret, read once at process startup | `STIGMERGY_TOKEN_STORE`, `OPENAI_API_KEY`, `STIGMERGY_INDEX_DSN`, the `STIGMERGY_EVIDENCE_*` group, the librarian App triple, `ANTHROPIC_API_KEY`, `STIGMERGY_ADMIN_TOKEN_HASH`/`STIGMERGY_ADMIN_GITHUB_TOKEN`, the three `SLACK_*` tokens, `STIGMERGY_GITHUB_WEBHOOK_SECRET` | `fly secrets set …` — triggers the redeploy that applies it; effective once the new machines are healthy, not before |
-| A non-secret env var in `fly.toml`'s `[env]`, app-wide | `STIGMERGY_LIBRARIAN_TIMEOUT_S` — the worker's per-item agent budget, and what its lease (`config.resolved_visibility_timeout_s`) is derived from | edit `fly.toml`, then `make deploy-staging`/`fly deploy` — every process group's machines restart on the new value together. The admin console re-derives the DEPENDENT lease fresh on every request rather than caching a class default (issue #38), so its meter and Reclaim horizon can never disagree with the worker's own once the new machines are up — see "A dead worker mid-item" below |
+| A non-secret env var in `fly.toml`'s `[env]`, app-wide | `STIGMERGY_LIBRARIAN_TIMEOUT_S` — the worker's per-item agent budget, and what its lease (`config.resolved_visibility_timeout_s`) is derived from | edit `fly.toml`, then `make deploy-staging`/`fly deploy` — every process group's machines restart on the new value together. The admin console re-derives the DEPENDENT lease fresh on every request rather than caching a class default, so its meter and Reclaim horizon can never disagree with the worker's own once the new machines are up — see "A dead worker mid-item" below |
 | Committed to the knowledge repo, read at a base commit, wherever a checkout exists | `ops/acl.json`, `ops/entity-registry.json` and the contract linter (the WORKER's own reads — distinct from the `app`/`slack` groups' baked copies above), `ops/stewards.json` (same distinction, for the worker and any locally-run server passed `--repo`) | a commit and a push — no deploy; picked up at the very next item the worker claims, or the very next decision a checked-out server resolves |
 
 The two rows that name `ops/stewards.json` are the same file read two different ways by two

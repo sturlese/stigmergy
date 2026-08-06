@@ -106,7 +106,7 @@ def test_a_raised_agent_timeout_raises_the_derived_visibility_with_it(monkeypatc
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-# `resolved_visibility_timeout_s` — ISSUE #38. A caller with no `argparse.Namespace` to hand
+# `resolved_visibility_timeout_s`. A caller with no `argparse.Namespace` to hand
 # `Settings.from_args` (the admin console's Worker tab: `meta()`, `worker_status()`,
 # `_in_flight()`'s three verdicts, and `queue_reclaim()`'s default horizon — all four in
 # `stigmergy.admin.service`) still needs the SAME derived lease the deployed worker actually holds,
@@ -124,7 +124,7 @@ def test_resolved_visibility_timeout_s_is_the_class_default_with_no_env_var(monk
 
 
 def test_resolved_visibility_timeout_s_derives_1500_from_stagings_own_env_var(monkeypatch):
-    """The exact number issue #38 is about: staging sets `STIGMERGY_LIBRARIAN_TIMEOUT_S=600`
+    """The exact number at stake: staging sets `STIGMERGY_LIBRARIAN_TIMEOUT_S=600`
     (`fly.toml`), which derives a 1500s lease — 2 agent attempts * 600s + 120s gate budget + 180s
     headroom, the SAME arithmetic `test_a_raised_agent_timeout_raises_the_derived_visibility_
     with_it` above pins on `Settings.from_args`."""
@@ -295,7 +295,7 @@ def test_require_remote_base_has_no_cli_flag_it_is_a_fact_about_the_environment(
     assert config.Settings.from_args(args).require_remote_base is True
 
 
-# ── ISSUE #38 (audit follow-up): a budget this worker cannot use is REFUSED, never propagated ──
+# ── a budget this worker cannot use is REFUSED, never propagated ───────────────────────────────
 # `check_domains` validates `poll_interval_s` and `max_attempts` and never `timeout_s`, and
 # `startup_checks`' lease rule is RELATIVE (`visibility <= minimum(timeout)`) — which a negative
 # pair satisfies. So a worker booted happily on `-1000`. Survivable while the number stayed

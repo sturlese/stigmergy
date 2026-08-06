@@ -70,7 +70,7 @@ DISPATCHABLE = tuple(w["file"] for w in CRON_WORKFLOWS)
 # (`query_in_flight`'s docstring names this exact mistake). The one declared reach into
 # `stigmergy.librarian`, config module only, webhook-style (tests/test_architecture.py).
 #
-# The lease is a FUNCTION, not a constant, and that is the correction issue #38 paid for. The
+# The lease is a FUNCTION, not a constant, and that is the correction a live mismatch paid for. The
 # worker's real lease is derived from its resolved agent budget
 # (`config.resolved_visibility_timeout_s`, 2xtimeout + gates + headroom), so a deployment that
 # raises `$STIGMERGY_LIBRARIAN_TIMEOUT_S` moves it — staging's 600s budget derives 1500s while this

@@ -192,7 +192,7 @@ def test_reclaim_still_releases_a_claim_that_outlived_the_workers_lease(conn, se
     assert queue.current_status(conn, ack["id"]) == capture_schema.QUEUED
 
 
-# ── ISSUE #38: the flagless reclaim horizon must DERIVE from the env, like the worker's real lease ─
+# ── the flagless reclaim horizon must DERIVE from the env, like the worker's real lease ────────────
 # The console USED to read `librarian_config.DEFAULT_VISIBILITY_TIMEOUT_S` — the librarian's
 # CLASS default (900s), frozen at import time. The deployed worker's real lease
 # derives from `$STIGMERGY_LIBRARIAN_TIMEOUT_S` (`librarian.config.Settings.from_args`; staging's
@@ -205,7 +205,7 @@ def test_reclaim_default_horizon_derives_from_the_env_var_and_does_not_release_a
     """OLD BEHAVIOUR: the flagless reclaim swept against the CLASS default (900s) regardless of
     `$STIGMERGY_LIBRARIAN_TIMEOUT_S`, so a capture aged 1000s — inside the 1500s lease staging's
     worker actually holds — gets swept anyway. A wasteful redelivery of an item a healthy worker
-    still holds (issue #38)."""
+    still holds."""
     monkeypatch.setenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", "600")
     ack = submit_one(conn)
     queue.claim_next(conn)
@@ -296,7 +296,7 @@ def test_worker_status_reads_the_lease_against_the_workers_own_numbers(conn, ser
     assert "within its lease" in row["verdict"]
 
 
-# ── ISSUE #38: the console meter must DERIVE its lease, not default to the librarian's class
+# ── the console meter must DERIVE its lease, not default to the librarian's class
 # constant ─────────────────────────────────────────────────────────────────────────────────────
 # The console USED to resolve its lease ONCE, at import time, from the librarian's CLASS
 # default (900s) — never from `$STIGMERGY_LIBRARIAN_TIMEOUT_S`. The deployed worker's REAL lease derives from that
@@ -743,7 +743,7 @@ def test_the_console_schedule_table_matches_the_workflow_files():
             f"{row['schedule_utc']!r} — update CRON_WORKFLOWS")
 
 
-# ── ISSUE #38 (audit follow-up): the flagless horizon is clamped, whatever the env says ────────
+# ── the flagless horizon is clamped, whatever the env says ─────────────────────────────────────
 # The caller-supplied branch was always clamped; the DEFAULT branch was not, and after #38 it is
 # the branch carrying operator-controlled data. `release_expired`'s predicate is
 # `claimed_at < now() - make_interval(secs => %s)`, so a negative horizon reads as `now() + N` and

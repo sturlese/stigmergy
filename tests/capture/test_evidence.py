@@ -184,7 +184,7 @@ def test_real_minio_head_object_of_a_never_written_key_is_false():
     assert store.exists(bogus) is False
 
 
-# ── ISSUE #41: the queue and the evidence plane have to belong to the same deployment ──────────
+# ── the queue and the evidence plane have to belong to the same deployment ─────────────────────
 # Live on staging: a drop queued against the staging database while uploading the bytes to the
 # operator's own MinIO, because the two halves are configured by INDEPENDENT env vars and nothing
 # checked they named the same world. The capture died 8s later with NoSuchKey — queue row in the

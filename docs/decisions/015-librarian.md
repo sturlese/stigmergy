@@ -286,7 +286,7 @@ gitleaks runs, two whole-repo linter runs, a commit and a retrying push.
   as a trailing footnote an edit can drop. An incremental upsert on push arrived later, but it is
   best-effort — inert until an operator configures it, and deferring to the nightly rebuild whenever
   it cannot keep up — so the promise the report made stayed the conservative one for a while.
-  *Amended 2026-08-04 (issue #29):* on a webhook-enabled deployment the conservative wording was
+  *Amended 2026-08-04:* on a webhook-enabled deployment the conservative wording was
   false in the common case — the page was searchable seconds after the push while the report still
   promised invisibility — so the report's sentence now names both paths ("at the next index rebuild
   or at the webhook's incremental upsert, whichever lands first"). The clause is still welded to the

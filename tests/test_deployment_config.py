@@ -78,7 +78,7 @@ def test_the_slack_process_command_carries_every_baked_file_it_needs():
     """The `app` command is pinned byte-for-byte against the Dockerfile CMD below; the `slack`
     command has no CMD to be identical to, so its flags are pinned here instead.
 
-    A dropped `--stewards` returns the slack group to issue #34 — an inert doorbell and every
+    A dropped `--stewards` returns the slack group to the broken shape — an inert doorbell and every
     review button refusing the configured steward — and nothing else in the suite would notice:
     the group starts fine, serves Slack fine, and simply never rings. The same is true of the
     other two, which is why all three are checked against the Dockerfile's own COPY targets rather

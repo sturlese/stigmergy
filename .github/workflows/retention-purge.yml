@@ -24,7 +24,7 @@ name: retention-purge
 # (`librarian.worker._finish` -> `capture.retention.purge_secret_capture_immediately`). This
 # workflow is the ORDINARY 30-day window over every other terminal capture row.
 #
-# Secret surface: `SUPABASE_DSN`, and nothing else — no model is called from this workflow.
+# Secret surface: `INDEX_DSN`, and nothing else — no model is called from this workflow.
 # `ci.yml` (tests/lint) stays keyless by design and is untouched by this file.
 #
 # Third-party actions pinned by full commit SHA, not a floating tag (same posture as
@@ -78,4 +78,4 @@ jobs:
             stigmergy-queue purge
           fi
         env:
-          STIGMERGY_INDEX_DSN: ${{ secrets.SUPABASE_DSN }}
+          STIGMERGY_INDEX_DSN: ${{ secrets.INDEX_DSN }}

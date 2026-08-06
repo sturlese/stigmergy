@@ -118,7 +118,7 @@ def test_the_documented_quote_cap_is_enforced_not_merely_described():
     assert Citation(path="p.md", quote="x" * 200).quote      # the boundary itself is allowed
 
 
-# ── ISSUE #39: a citation must not fail because a renderer's markers were dropped ──────────────
+# ── a citation must not fail because a renderer's markers were dropped ─────────────────────────
 # Observed on staging: the SAME question returned `verified` on one run and `partial` on the next.
 # The citation was TRUE — the page says `- **Payments** — internal MVP ready; …` and the agent
 # quoted it as a reader sees it, without the emphasis markers. `_normalize` folded whitespace and

@@ -23,7 +23,7 @@ def test_filed_names_the_page_the_commit_and_says_the_brain_cannot_answer_about_
                        overlaps=[], findings=[])
     assert out["summary"].startswith(schema.FILED)
     assert "wiki/notes/X.md@abc123" in out["summary"]
-    # Issue #29: this used to assert `report.NOT_SEARCHABLE in out["summary"]` — true whatever the
+    # this used to assert `report.NOT_SEARCHABLE in out["summary"]` — true whatever the
     # constant said, so it never pinned the WORDING. The constant used to claim the page was
     # "invisible to search_brain/ask until the next index rebuild", which is false on
     # webhook-enabled deployments (observed live on staging: searchable seconds after the
@@ -125,7 +125,7 @@ def test_filed_with_overlaps_reads_differently_from_a_plain_filed_and_names_both
     assert plain["summary"] != overlapping["summary"]
     assert "wiki/notes/Y.md" in overlapping["summary"]
     assert "nothing was deleted or rewritten" in overlapping["summary"]
-    # Issue #29: the OVERLAP branch composes its own copy of the summary sentence (report.py's
+    # the OVERLAP branch composes its own copy of the summary sentence (report.py's
     # `filed`, second `summary =`) — the same wording contract pinned literally here too, so a
     # future edit cannot fix the plain-filed branch and leave this one stale.
     assert "at the next index rebuild" in overlapping["summary"]
@@ -468,7 +468,7 @@ def test_filed_meeting_names_every_page_path_and_every_decisions_own_anchor():
                                       "of them)")
     # the reason also has to survive into the rendered prose a human actually reads
     assert "applies to every customer, not one of them" in out["summary"]
-    # Issue #29: `filed_meeting`'s `head` sentence composes its own copy of the wording contract
+    # `filed_meeting`'s `head` sentence composes its own copy of the wording contract
     # (report.py, ~line 355) rather than reusing `filed`'s — pinned literally here too.
     assert "at the next index rebuild" in out["summary"]
     assert "incremental upsert" in out["summary"]

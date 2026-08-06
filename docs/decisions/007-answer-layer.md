@@ -67,7 +67,7 @@ serves both:
 - One enforcement point: access control and superseded-awareness live in the service, so no
   client re-implements them and none can drift.
 
-## Amendment — 2026-08-04: a citation is checked as a READER sees the page (issue #39)
+## Amendment — 2026-08-04: a citation is checked as a READER sees the page
 
 The original ruling checked a citation quote against the page's raw bytes, whitespace- and
 case-normalized. That was correct until the corpus filled with inline emphasis — the page

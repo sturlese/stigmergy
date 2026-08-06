@@ -364,7 +364,7 @@ def load_stewards(repo: str, baked_path: str = "") -> dict:
     **The fallback exists because two deployed process groups hold no checkout at all.** `fly.toml`
     starts `app` and `slack` with baked identities and registry and NO `--repo`, so this read had
     nothing to read: the doorbell returned 0 in silence and every entity-proposal decision failed
-    closed on a server whose steward was correctly configured (issue #34). The snapshot is the same
+    closed on a server whose steward was correctly configured. The snapshot is the same
     mechanism the deploy already uses for the three other `ops/` files, and it costs the same
     thing: a redeploy to change it, which is exactly the trade `identities.json` — a STRONGER
     authority — already accepted. Where a checkout exists nothing changes, so the worker and a

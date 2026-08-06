@@ -352,7 +352,7 @@ async def poll_once(ctx) -> int:
     baked = getattr(ctx.settings.server, "stewards_path", "") or ""
     if not repo and not baked:
         # Nothing to resolve against: no checkout AND no baked snapshot. This branch used to
-        # `return 0` in SILENCE, which is how issue #34 stayed invisible — an item sat parked for
+        # `return 0` in SILENCE, which is how the defect stayed invisible — an item sat parked for
         # twenty minutes with `steward_notifications` empty, no `job_runs` row and nothing in the
         # logs, while the empty-map branch three blocks below logged loudly and recorded an
         # undeliverable for a configuration that is barely worse. This module's own docstring

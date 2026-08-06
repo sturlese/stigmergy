@@ -66,7 +66,7 @@ else
        "the safe empty default (not a failure)" >&2
 fi
 
-# Issue #34: the `app` and `slack` groups hold NO checkout, so `review.load_stewards`' read at
+# the `app` and `slack` groups hold NO checkout, so `review.load_stewards`' read at
 # `origin/main` had nothing to read — the doorbell never rang and every entity-proposal decision
 # failed closed on a deployment whose steward was correctly configured. Baked like the three files
 # above, and the trade is the one `identities.json` already accepted: a redeploy to change it. The

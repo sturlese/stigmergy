@@ -184,7 +184,7 @@ def load_stewards(repo: str, base: gitcmd.BaseRef) -> dict:
 
 def load_stewards_file(path: str) -> dict:
     """The same map from a PLAIN FILE — the deploy-time snapshot a process with no checkout reads
-    (`server.review.load_stewards`'s fallback, issue #34). Same three postures as the git read
+    (`server.review.load_stewards`'s fallback). Same three postures as the git read
     above, deliberately: absent is an empty map, malformed is loud, and the shape is checked. It
     is a separate entry point rather than a `repo=""` branch of the reader above because the two
     answer different questions — "what did the commit governing this corpus say" and "what did the

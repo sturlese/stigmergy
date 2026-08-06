@@ -661,7 +661,7 @@ def test_submit_rate_limit_refusal_returns_the_same_generic_shape_as_a_read_tool
     assert fx.ANA not in message
 
 
-# ── ISSUE #41's negative twin: the OPERATOR CLI names its store; the WIRE never does ───────────
+# ── the negative twin: the OPERATOR CLI names its store; the WIRE never does ────────────────────
 # The drop CLIs now print the bucket and endpoint host they uploaded to — operator-CLI posture,
 # local and specific. That must not migrate here by imitation: `server.md`'s leak table forbids a
 # bucket, an endpoint or a credential in any body an HTTP client can receive, and `EvidenceError`

@@ -571,7 +571,7 @@ def test_entity_mint_modal_submission_missing_repo_url_names_the_capability(env,
     """Missing URL/credential -> `CapabilityUnavailableError` posture (ADR 030 D3), Slack's own
     confirmation shape — the real refusal, no monkeypatch needed: `make_ctx`'s default
     `librarian_repo_url=""` (every OTHER test in this file that does not mint for real) is exactly
-    the shape issue #34 hit in production — the `slack` process group runs with no knowledge-repo
+    the shape that hit production — the `slack` process group runs with no knowledge-repo
     checkout and no `$STIGMERGY_LIBRARIAN_REPO_URL`, so `_authenticated_url` refuses for real."""
     gw = FakeSlackGateway()
     ctx = make_ctx(env, conn, gateway=gw)   # no librarian_repo_url override — the missing capability

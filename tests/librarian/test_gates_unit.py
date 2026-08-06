@@ -936,7 +936,7 @@ def test_a_real_superset_growth_is_the_benign_twin_and_passes_clean(tmp_path):
 
 
 # ── gate_body_rewrite rule 3, off `related:`: NO other frontmatter field may change at all,
-# `entity:` included — the mechanism that makes gardener's old re-anchor wording (issue #37) a
+# `entity:` included — the mechanism that makes gardener's old re-anchor wording a
 # lie. `checks.py`'s `check_company_page_names_entity` and `sweep.py`'s
 # `MODEL_SUGGESTED_ACTIONS[CHECK_MODEL_ANCHOR_FIT]` used to tell the operator "a re-anchor is a
 # correction, filed the same way as any other (the \U0001f9e0 gesture in Slack, or an MCP

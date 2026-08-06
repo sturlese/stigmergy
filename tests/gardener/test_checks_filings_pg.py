@@ -296,7 +296,7 @@ def test_company_page_names_entity_the_punctuation_alias_benign_twin_fires_nothi
     assert checks.check_company_page_names_entity(conn, registry) == []
 
 
-# ── suggested_action: a re-anchor is not something a capture/gesture can file (issue #37) ───────
+# ── suggested_action: a re-anchor is not something a capture/gesture can file ───────────────────
 # `src/stigmergy/librarian/gates.py::gate_body_rewrite` allows an existing page's frontmatter to
 # change in exactly ONE way — `related:` growth (rule 4) — and vetoes every other frontmatter
 # change, `entity:` included, as `body-rewrite`, `repairable=False` (pinned directly against the
@@ -340,7 +340,7 @@ def test_company_page_names_entity_suggested_action_names_the_real_routes(conn, 
 
 def test_both_reanchor_suggested_actions_drop_the_capture_claim_and_name_the_real_routes(
         conn, repo):
-    """Both call sites of the same broken promise (issue #37), walked TOGETHER, so a fix that
+    """Both call sites of the same broken promise, walked TOGETHER, so a fix that
     corrects one and forgets its sibling fails loudly rather than passing on the half that got
     fixed: `checks.py`'s own emitted finding, AND `sweep.py`'s static `MODEL_SUGGESTED_ACTIONS`
     dict entry for `CHECK_MODEL_ANCHOR_FIT` (`sweep.py`'s own docstring: `suggested_action` for a

@@ -38,7 +38,7 @@ def test_an_unknown_filter_column_raises():
         search._filter_clause({"body": "nope"})
 
 
-# ── ISSUE #41 audit: a DSN's host, and NEVER its password ─────────────────────────────────────
+# ── a DSN's host, and NEVER its password ───────────────────────────────────────────────────────
 # The keyword form (`host=h port=5432 password=…`) is a DSN too, and string surgery on it returns
 # the whole connstring. That mattered the moment a refusal started PRINTING the queue's location:
 # this repo has legislated the rule twice already (`tests/testdb.describe`,

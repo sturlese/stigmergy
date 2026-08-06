@@ -28,8 +28,8 @@ BRAIN_REACTION = "brain"   # Slack's own name for 🧠
 # The progress marker's own two faces — an hourglass while the pipeline runs, upgraded to a
 # checkmark on a genuine success. Never a third emoji: `finish_progress` always removes the
 # hourglass, and adds the checkmark ONLY on success, so a refusal/failure/duplicate leaves no
-# trace of an attempt that produced no capture (the exact "stranded placeholder" shape issue #32
-# was, for the reaction lifecycle rather than a message edit).
+# trace of an attempt that produced no capture (the exact "stranded placeholder" shape seen live,
+# for the reaction lifecycle rather than a message edit).
 PROGRESS_REACTION = "hourglass_flowing_sand"
 DONE_REACTION = "white_check_mark"
 

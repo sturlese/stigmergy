@@ -65,7 +65,7 @@ itself hint at hidden entries. `_capped` is the ONE place that "filter, then cap
 shared by `read_page`'s links/backlinks and `describe_entity`'s timeline, never reimplemented per
 surface, because the order is the property and a second copy is a second chance to get it backwards.
 
-**D4 — AMENDED 2026-08-04 (issue #33). Entity-first resolution LAYERS on the ranking; it does
+**D4 — AMENDED 2026-08-04. Entity-first resolution LAYERS on the ranking; it does
 not replace it.** The original ruling (kept below) moved resolution down to `BrainService._search`
 with its semantics unchanged: search the resolved entity's own material FIRST, fall back to the
 unscoped call only on ZERO hits. Moving it down was right. Carrying the scope-then-fallback shape

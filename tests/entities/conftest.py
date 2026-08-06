@@ -39,13 +39,13 @@ REGISTRY = {
     "entities": {
         "jordan-reyes": {"aliases": ["Jordan Reyes Gaya"], "name": "Jordan Reyes",
                           "type": "person"},
-        "stigmergy": {"aliases": ["Distributed Brain"], "name": "Stigmergy", "type": "product"},
+        "stigmergy": {"aliases": ["The Company Brain"], "name": "Stigmergy", "type": "product"},
     }
 }
 
 PAGES = {
     "Jordan Reyes": {"entity_type": "person", "aliases": ["Jordan Reyes Gaya"]},
-    "Stigmergy": {"entity_type": "product", "aliases": ["Distributed Brain"]},
+    "Stigmergy": {"entity_type": "product", "aliases": ["The Company Brain"]},
 }
 
 STEWARD_NAME = "Test Steward"

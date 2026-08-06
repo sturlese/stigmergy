@@ -243,7 +243,7 @@ def test_file_id_from_every_url_shape(ref, expected):
     assert drive_client.file_id_from(ref) == expected
 
 
-# ── ISSUE #41: the queue and the evidence store must belong to the same deployment ─────────────
+# ── the queue and the evidence store must belong to the same deployment ────────────────────────
 # Hit live on staging: capture #9 (kind=drive) went `failed` 8s after being claimed with
 # `EvidenceError — evidence store unavailable (NoSuchKey)`. The row was in the staging database
 # and the bytes were on the operator's laptop, because `.env` carries the bucket under `R2_*`

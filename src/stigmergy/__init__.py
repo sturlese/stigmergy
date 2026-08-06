@@ -1,8 +1,8 @@
-"""stigmergy — the Distributed Brain platform.
+"""stigmergy — a team's knowledge, filed by an agent and answered with citations.
 
-A company brain in the Karpathy LLM-wiki shape: a markdown wiki in git (the `stigmergy` repo),
-written by one bounded librarian model, judged by code, navigated through a curated entity spine.
-This package is everything that is not the wiki itself.
+A markdown wiki in git — the knowledge repo, which this package never contains — written by one
+bounded librarian model, judged by code, navigated through a curated entity spine. This package is
+everything that is not the wiki itself.
 
 Subpackages, roughly bottom-up:
 

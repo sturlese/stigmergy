@@ -74,7 +74,7 @@ def test_a_question_naming_the_alias_resolves_to_its_entity_before_searching(ent
     title or id) to its entity, demonstrated on a question that names the alias rather than the
     canonical title — and the resolved entity's own material comes FIRST in what the agent reads.
 
-    OLD BEHAVIOUR (issue #33): `CONTOSO_PAGE not in listing`, because resolution scoped the search
+    OLD BEHAVIOUR: `CONTOSO_PAGE not in listing`, because resolution scoped the search
     and filtered everything else away. That filter is what made a company-wide page unreachable
     for any question naming a registered company, so resolution feeds the rank-time boost now:
     the alias still resolves, its entity still leads, and nothing has been removed to achieve it.
@@ -89,7 +89,7 @@ def test_a_question_naming_the_alias_resolves_to_its_entity_before_searching(ent
 def test_the_canonical_name_also_resolves_the_same_way(entity_first_indexed):
     """The registry's own canonical `name` field is itself a valid alias (`load_aliases` indexes
     id, name AND every declared alias) — "Borealis Inc" resolves exactly like "BorealisCo" does,
-    and ranks its entity first the same way (issue #33: it used to FILTER the same way)."""
+    and ranks its entity first the same way (it used to FILTER the same way)."""
     conn, fx = entity_first_indexed
     brain = _brain(conn, fx)
     listing = brain.search_text("Borealis Inc renewal terms uplift this quarter")
@@ -98,7 +98,7 @@ def test_the_canonical_name_also_resolves_the_same_way(entity_first_indexed):
 
 
 def test_a_resolved_entity_never_costs_the_agent_a_page(entity_first_indexed):
-    """OLD BEHAVIOUR (issue #33): this pinned the fallback that ran when a scoped search came back
+    """OLD BEHAVIOUR: this pinned the fallback that ran when a scoped search came back
     empty. There is no scoping and so no fallback now; the property it was protecting — resolving
     an entity must never SHOW LESS — is stated directly, and more strongly, as a superset."""
     conn, fx = entity_first_indexed

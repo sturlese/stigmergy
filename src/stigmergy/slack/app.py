@@ -251,8 +251,8 @@ def build_bolt_app(ctx: SlackContext):
                     identity_result=identity_result)
             finally:
                 # Every exit path clears the progress reaction — a refused/failed capture must
-                # never leave a dangling ⏳ (issue #32 was exactly this shape, for a message edit
-                # rather than a reaction).
+                # never leave a dangling ⏳ — a live failure of exactly this shape, for a message
+                # edit rather than a reaction, is why every exit path clears it.
                 if reacted:
                     await capture.finish_progress(ctx.gateway, channel_id=channel_id,
                                                   message_ts=message_ts, ok=queued)

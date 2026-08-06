@@ -1,4 +1,4 @@
-# stigmergy
+# Stigmergy
 
 **A team's knowledge, captured where the work happens, filed by an agent, and answered with
 citations you can check.**

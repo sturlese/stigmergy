@@ -20,7 +20,7 @@ from tests.server.conftest import call_json, connect_or_skip, mcp_session, write
 
 BOREALIS_PAGE = "wiki/entities/borealis/quarterly-update.md"
 CONTOSO_PAGE = "wiki/entities/contoso/quarterly-update.md"
-# ISSUE #33: company-wide (`entity: []`), never anchored, and the BEST answer to a question that
+# company-wide (`entity: []`), never anchored, and the BEST answer to a question that
 # happens to name a registered entity. Under scope-first-then-fallback it was structurally
 # unreachable: the scoped pass returned hits, so the unscoped pass never ran, and this page could
 # not appear for any query naming a company — which is most real questions.
@@ -85,7 +85,7 @@ def _service(conn, fx) -> BrainService:
 # ── first witness: directly against BrainService.search ────────────────────────────────────────
 def test_brain_service_search_resolves_a_registered_alias_and_boosts_it(
         service_entity_first_indexed):
-    """OLD BEHAVIOUR (issue #33): resolution SCOPED the search — `CONTOSO_PAGE` was absent because
+    """OLD BEHAVIOUR: resolution SCOPED the search — `CONTOSO_PAGE` was absent because
     a filter removed it, not because it ranked lower. That filter is what made a company-wide page
     unreachable for any query naming a registered company, so resolution now feeds the rank-time
     boost instead: the alias still resolves, its entity still comes first, and everything else is
@@ -111,7 +111,7 @@ def test_brain_service_search_an_explicit_entity_filter_is_never_overridden(
 
 
 def test_a_resolved_entity_never_narrows_what_can_be_found(service_entity_first_indexed):
-    """OLD BEHAVIOUR (issue #33): this pinned a FALLBACK — the unscoped search ran only when the
+    """OLD BEHAVIOUR: this pinned a FALLBACK — the unscoped search ran only when the
     scoped one returned zero hits. There is no fallback now because there is no scoping: one
     blended search, with the resolved id told to the ranker. The property that replaces it is
     stronger and is what the old branch was groping towards — resolving an entity can only ever
@@ -169,7 +169,7 @@ def test_search_brain_mcp_surface_sees_the_resolved_entity_ranked_first(
 
     out = asyncio.run(go())
     paths = [h["path"] for h in out["hits"]]
-    # OLD BEHAVIOUR (issue #33): `CONTOSO_PAGE not in paths` — the scoped pass had filtered it
+    # OLD BEHAVIOUR: `CONTOSO_PAGE not in paths` — the scoped pass had filtered it
     # away. The second witness now shows what the first one does: the resolved entity ranks
     # first, over the real MCP protocol, and nothing has been removed to achieve it.
     assert paths.index(BOREALIS_PAGE) == 0
@@ -196,7 +196,7 @@ def test_the_served_hit_carries_the_told_entity_factor(service_entity_first_inde
     assert "entity:borealis" in hit["factors"]
 
 
-# ── ISSUE #33: entity-first LAYERS on the ranking; it does not replace it ───────────────────────
+# ── entity-first LAYERS on the ranking; it does not replace it ──────────────────────────────────
 # Observed on staging: `demo pipeline extracción Globex` returned ONLY the three pages anchored to
 # `globex`, each with `factors: ["entity:globex"]`, while the page actually about the asked topic
 # — unanchored — never appeared. Raw hybrid search over the same DSN ranked it #2. The substrate

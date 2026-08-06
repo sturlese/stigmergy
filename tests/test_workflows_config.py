@@ -50,12 +50,12 @@ def test_retention_purge_invokes_the_stigmergy_queue_purge_cli():
 
 
 def test_retention_purge_reuses_the_index_rebuild_dsn_secret_not_a_new_one():
-    """No NEW secret surface — the same `SUPABASE_DSN` `index-rebuild.yml` already carries, since
+    """No NEW secret surface — the same `INDEX_DSN` `index-rebuild.yml` already carries, since
     retention operates on the same Postgres the index (and the queue) live in."""
     retention_text = RETENTION.read_text(encoding="utf-8")
     rebuild_text = INDEX_REBUILD.read_text(encoding="utf-8")
-    assert "secrets.SUPABASE_DSN" in retention_text
-    assert "secrets.SUPABASE_DSN" in rebuild_text
+    assert "secrets.INDEX_DSN" in retention_text
+    assert "secrets.INDEX_DSN" in rebuild_text
 
 
 def test_retention_purge_declares_read_only_contents_permission():
@@ -66,10 +66,10 @@ def test_retention_purge_declares_read_only_contents_permission():
 
 
 def test_ci_workflow_stays_keyless_and_untouched_by_the_new_secret():
-    """`ci.yml` (tests/lint) carries no secret at all — retention's `SUPABASE_DSN` must not leak
+    """`ci.yml` (tests/lint) carries no secret at all — retention's `INDEX_DSN` must not leak
     into the keyless pipeline."""
     ci_text = CI.read_text(encoding="utf-8")
-    assert "SUPABASE_DSN" not in ci_text
+    assert "INDEX_DSN" not in ci_text
     assert "secrets." not in ci_text
 
 
@@ -211,15 +211,15 @@ def test_gardener_step_itself_carries_no_if_its_own_failure_must_still_fail_the_
 
 
 def test_gardener_reuses_the_existing_dsn_and_openai_secrets_not_new_ones():
-    """No NEW secret surface for the DSN/model-call secrets — the same `SUPABASE_DSN`
+    """No NEW secret surface for the DSN/model-call secrets — the same `INDEX_DSN`
     `retention-purge.yml` already carries and the same `OPENAI_API_KEY` `index-rebuild.yml` does,
     reused verbatim. `retention-purge.yml` calls no model at all and carries only the DSN, which
     is why it is asserted to be WITHOUT the key rather than with it."""
     gd_text = GARDENER.read_text(encoding="utf-8")
     retention_text = RETENTION.read_text(encoding="utf-8")
     index_text = INDEX_REBUILD.read_text(encoding="utf-8")
-    assert "secrets.SUPABASE_DSN" in gd_text
-    assert "secrets.SUPABASE_DSN" in retention_text
+    assert "secrets.INDEX_DSN" in gd_text
+    assert "secrets.INDEX_DSN" in retention_text
     assert "secrets.OPENAI_API_KEY" in gd_text
     assert "secrets.OPENAI_API_KEY" in index_text
     assert "secrets.OPENAI_API_KEY" not in retention_text

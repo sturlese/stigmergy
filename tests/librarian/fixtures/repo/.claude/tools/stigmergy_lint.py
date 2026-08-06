@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Deterministic contract linter for the `stigmergy` knowledge repository.
 
-Extends an earlier project's contract linter with the Distributed Brain page
-contract (DESIGN Appendix A) and the two-zone repository layout (Appendix B).
+Enforces the page contract and the two-zone repository layout — the same
+contract `docs/reference/page-contract.md` states in prose for readers, stated
+here as the check a commit has to survive.
 
 Scans the content zones (wiki/, sources/, views/) and reports contract
 violations:
@@ -36,17 +37,17 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-# --- the page contract (DESIGN Appendix A / D4) -----------------------------
+# --- the page contract ------------------------------------------------------
 
-# R-2 (P2 open, 2026-08-01): SEVEN types, one per writer. The an earlier project PERSONAL/COMPANY
-# split is gone with them — it distinguished a single-user vault's own pages from company ones,
-# and this repo has only company ones. Three are the fast lane's genre choice, the rest each have
+# R-2 (P2 open, 2026-08-01): SEVEN types, one per writer. An earlier design also split pages into
+# PERSONAL and COMPANY; that axis went with it, because it only earns its keep in a single-user
+# vault and every page here belongs to a team. Three are the fast lane's genre choice, the rest each have
 # exactly one stamper: `entity` the governed door, `meeting` the distiller, `source` provenance
 # (the transcript today, P4's Drive door next), `view` the regenerator.
 #
 # CUT at R-2 and why, so nobody re-adds one by pattern-matching: `person`/`team`/`product`/
 # `customer` are ENTITY KINDS (the registry carries `type` per entity — one spine, not two
-# taxonomies); `project` is an entity here, unlike a design with no registry; `meta`
+# taxonomies); `project` is an entity here, which it cannot be without a registry to carry it; `meta`
 # because index/log/schema are Postgres, git history and CLAUDE.md; `dataset`/`metric` died with
 # the facts store at P1; `playbook`/`postmortem`/`policy` appear in no reference and no code.
 VALID_TYPES = {"note", "decision", "concept", "entity", "meeting", "source", "view"}
@@ -59,8 +60,8 @@ VALID_TIER = {"1", "2", "3"}
 
 REQUIRED_FIELDS = ["type", "title", "created", "updated", "tags", "status"]
 # Machine-owned pages (sources/, views/) are validated against their
-# provenance/trust field group (Appendix A "provenance (sources/source
-# pages)"), not the authored-page conventions: no created/updated/status —
+# provenance/trust field group, not the authored-page conventions:
+# no created/updated/status —
 # they carry `extracted_at` and the D8 lifecycle (supersedes) instead. Some of
 # that machine vocabulary is still the pipeline's own dialect awaiting M1b's
 # mapping to the contract enum (kit SI-02, resolution A) — `sources/`'s
@@ -106,7 +107,7 @@ PROVENANCE_REQUIRED = ["content_hash", "tier"]
 # `submitted_by` (criterion 13). `content_hash` is deliberately NOT here — the knowledge repo's
 # CI author check polices it over commit history, which a stateless scan of one working tree
 # cannot do. The ONE machine-stamped field an authored page must never claim; it was four until
-# P2 (`extraction_method`, `blob`, `source_uri` were a retired pipeline's vocabulary with no writer left —
+# P2 (`extraction_method`, `blob`, `source_uri` were a retired pipeline's vocabulary, no writer left —
 # a rule listing ghosts is a rule that teaches the ghosts' names).
 MACHINE_ONLY_FIELDS = ("extracted_at",)
 
@@ -962,7 +963,7 @@ def scan(root):
 
         # size rule (30-150 body lines): oversize errors, undersize warns. The
         # `representation: full` escape hatch went at P2 — nothing has written that field since
-        # that pipeline was retired, and an oversize source page is SPLIT into cross-linked parts
+        # the pipeline that did was retired, and an oversize source page is SPLIT into cross-linked parts
         # by the librarian rather than kept whole, so the branch could never fire.
         n = body_line_count(text)
         if n > SIZE_MAX:

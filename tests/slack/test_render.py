@@ -142,7 +142,7 @@ def test_no_citations_produces_no_sources_block():
     assert "Sources" not in _text(blocks)
 
 
-# ── issue #32: two citations of the SAME page must not collide on block_id ─────────────────────
+# ── two citations of the SAME page must not collide on block_id ────────────────────────────────
 # `stigmergy.answer.synthesize.Citation` carries no uniqueness constraint on `path`, and
 # `AnswerService._shape` ships `out.citations` straight through with no dedup
 # (`[{"path": c.path, "quote": c.quote} for c in out.citations]`) — a real model citing one page

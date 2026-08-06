@@ -869,7 +869,7 @@ def test_cli_reclaim_without_a_horizon_refuses_and_says_what_to_run(clean_queue,
     worker whose work it was seizing. A capture held 400s into a 900s lease was requeued while its
     worker ran. There is no safe default, so the command asks.
 
-    ISSUE #30, a second defect in the SAME refusal: it pointed the operator at
+    A second defect in the SAME refusal: it pointed the operator at
     `$STIGMERGY_LIBRARIAN_VISIBILITY_TIMEOUT` — a variable this repo reads NOWHERE (this message was
     its only occurrence in the whole tree). An operator who set it got silently nothing back: the
     worker's real lease is DERIVED from `$STIGMERGY_LIBRARIAN_TIMEOUT_S` (900s at the class default;
@@ -891,9 +891,9 @@ def test_cli_reclaim_without_a_horizon_refuses_and_says_what_to_run(clean_queue,
     assert "worker's own lease" in captured.err
 
     # ... but the SECOND horizon now points at its real source, not a variable nothing reads
-    # (issue #30): the derived lease, read through the command that actually answers it.
+    # the derived lease, read through the command that actually answers it.
     assert "STIGMERGY_LIBRARIAN_VISIBILITY_TIMEOUT" not in captured.err, (
-        "the refusal still advertises a variable this repo reads nowhere (issue #30)")
+        "the refusal still advertises a variable this repo reads nowhere")
     assert "STIGMERGY_LIBRARIAN_TIMEOUT_S" in captured.err
     assert "stigmergy-librarian status --json" in captured.err
     assert "visibility_timeout_s" in captured.err

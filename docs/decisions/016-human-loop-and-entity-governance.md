@@ -97,7 +97,7 @@ fast lane gains the ability to write either location.
   librarian's GitHub App. `git blame` answering "who approved this identity" with a named human is the
   whole of the governance: a PR flow with one steward and no branch protection would be ceremony
   rather than review.
-  *Amended 2026-08-04 ([ADR 030](./030-server-side-entity-minting.md), issue #36):* this describes
+  *Amended 2026-08-04 ([ADR 030](./030-server-side-entity-minting.md)):* this describes
   the CLI's own commit, unchanged. A server-driven mint from MCP, Slack or the console now exists
   beside it and DOES commit as the librarian's GitHub App — carrying an `Approved-by:` trailer in
   place of the steward's own git identity, so the governance answer moves from `git blame` alone to
@@ -132,7 +132,7 @@ fast lane gains the ability to write either location.
   fast-lane pages; the steward's own git identity commits entity births. Keeping them distinct is the
   point — `git blame` must answer "was this reviewed by a human or filed by the fast lane" without
   ambiguity, and a shared identity for both would erase that distinction.
-  *Amended 2026-08-04 ([ADR 030](./030-server-side-entity-minting.md), issue #36):* a third shape
+  *Amended 2026-08-04 ([ADR 030](./030-server-side-entity-minting.md)):* a third shape
   joins these two — a server-driven mint, App-authored like the fast lane but carrying an
   `Approved-by:` trailer a fast-lane commit never has. The trailer plus the zone (`wiki/entities/`
   and the registry, never a fast-lane page) is what now tells a governed mint from a fast-lane

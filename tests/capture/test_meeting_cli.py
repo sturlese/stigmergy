@@ -142,7 +142,7 @@ def test_a_missing_submitted_by_is_refused_naming_the_flag(monkeypatch, clean_qu
     assert "--submitted-by" in capsys.readouterr().err
 
 
-# ── ISSUE #41: the same guard, on the door the walkthrough hit FIRST ───────────────────────────
+# ── the same guard, on the door the walkthrough hit FIRST ──────────────────────────────────────
 # The split-stores mistake bit the staging walkthrough twice, once per drop door — which is why
 # the guard is on both rather than on the one the issue happened to be filed against.
 def test_a_remote_queue_with_a_local_evidence_store_is_refused_before_the_transcript_is_read(

@@ -124,7 +124,7 @@ Nothing in this package imports any of them. `test_server_never_imports_slack` p
   ownership-scoped) and `items_for_doorbell` (management, unscoped). Two consumers, one answer to
   "which rows are open" and "which kind is this row".
 - **`review._is_steward` / `load_stewards` / `resolve_stewards_for_scope`** — the ONE steward
-  resolution, read fresh at `origin/main`'s tip on every call WHERE A CHECKOUT EXISTS — the worker and a local stdio server. The deployed `app`/`slack` groups hold none and read the snapshot the deploy baked (issue #34), so there a steward's authority changes at the next redeploy, not the next push; the fast lever for cutting someone off entirely is their token in `STIGMERGY_TOKEN_STORE`.
+  resolution, read fresh at `origin/main`'s tip on every call WHERE A CHECKOUT EXISTS — the worker and a local stdio server. The deployed `app`/`slack` groups hold none and read the snapshot the deploy baked, so there a steward's authority changes at the next redeploy, not the next push; the fast lever for cutting someone off entirely is their token in `STIGMERGY_TOKEN_STORE`.
   Never cached on that path; `slack.doorbell`'s own 300 s cache is a deliberately looser bound for
   a notifier only.
 - **`review._mint_entity_proposal`** — the ONE call into the governed door for a server-driven
@@ -197,8 +197,8 @@ Nothing in this package imports any of them. `test_server_never_imports_slack` p
   it now feeds the rank-time boost rather than scoping the search — resolving an entity may change
   the ORDER of the results, never their membership. It used to search the entity's own material
   first and fall back only on zero hits, which meant any hits at all eclipsed the blended ranking:
-  a company-wide page was unreachable through every query naming a registered company (issue #33,
-  ADR 022 D4 amended). Retrieval here has a measured floor (the golden set), and this property is
+  a company-wide page was unreachable through every query naming a registered company (ADR 022 D4
+  amended). Retrieval here has a measured floor (the golden set), and this property is
   what keeps a resolution mistake off it.
 - **Never re-infer the entity boost inside the ranker.** `entity_hint` is TOLD: `_search` resolves
   it, `_run_search` threads it into `search.search_arms`, and `rank.contract_factors` matches it by

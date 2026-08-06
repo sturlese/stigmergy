@@ -664,7 +664,7 @@ def test_run_doorbell_survives_a_bad_pass_and_keeps_looping(env, conn, monkeypat
 
 
 def test_no_stewards_source_at_all_is_recorded_not_swallowed(conn):
-    """OLD BEHAVIOUR (issue #34): this branch returned 0 in SILENCE — no log line, no `job_runs`
+    """OLD BEHAVIOUR: this branch returned 0 in SILENCE — no log line, no `job_runs`
     row — so a deployment whose `app`/`slack` groups hold no checkout produced an item parked for
     twenty minutes with `steward_notifications` empty and nothing anywhere saying why. The
     empty-map branch three blocks below has always logged loudly AND recorded an undeliverable for
@@ -690,7 +690,7 @@ def test_no_stewards_source_at_all_is_recorded_not_swallowed(conn):
 
 
 def test_a_baked_stewards_map_rings_the_doorbell_with_no_checkout_at_all(conn, tmp_path):
-    """The benign twin, and the deployed shape issue #34 exists for: the `slack` group holds no
+    """The benign twin, and the deployed shape this exists for: the `slack` group holds no
     checkout, so the ONLY thing that can make the bell ring is the map the deploy baked into the
     image. Nothing covered this road before — the suite proved the refusal and not the delivery."""
     baked = tmp_path / "stewards.json"

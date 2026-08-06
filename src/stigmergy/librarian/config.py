@@ -177,7 +177,7 @@ def resolved_visibility_timeout_s(*, timeout_s: int | None = None) -> int:
     never cached, never read at import (the module's standing rule). Exists so a reader that is
     not the worker — the admin console's lease meter and its Reclaim default — can state the
     deployed worker's real number instead of the class default: `fly.toml`'s `[env]` is app-wide,
-    so the env this reads IS the env the worker resolved (issue #38, where the meter read 900s
+    so the env this reads IS the env the worker resolved (the meter once read 900s
     while the deployed worker held 1500s)."""
     budget = resolved_timeout_s() if timeout_s is None else timeout_s
     return minimum_visibility_timeout_s(timeout_s=budget) + VISIBILITY_HEADROOM_S
@@ -248,7 +248,7 @@ class Settings:
         #
         # Both halves are module functions rather than inline arithmetic because a SECOND reader
         # exists: the admin console states this same lease on its meter and its Reclaim default,
-        # and it read the class default instead until issue #38 — one derivation, two callers.
+        # and it read the class default instead until this was derived — one derivation, two callers.
         # ONE resolution, threaded into the derivation — not two independent env reads. The lease
         # must be derived from THIS settings object's own budget; re-reading the environment for
         # the second half would make that a coincidence rather than an invariant.

@@ -3,8 +3,8 @@
 **Status:** accepted · 2026-08-04 · supersedes ADR 029's "entity writes stay CLI" consequence,
 which deferred exactly this decision to its own record ("web-native entity birth needs an
 authorship decision (operator identity vs App bot) that deserves its own ADR"). This is that ADR.
-Requested and argued in issue #36; unblocked by issue #34 (steward resolution on the deployed
-groups).
+Requested and argued before it was written; unblocked by steward resolution reaching the
+deployed groups.
 
 ## Context
 
@@ -48,7 +48,7 @@ and this change is not done until both repos are green.
 ### D2 — Authorization per surface: enforce where identity is real, attribute where it is not
 
 - **MCP and Slack**: the caller's identity is resolved (token / Slack profile), the steward check
-  runs against `ops/stewards.json` through issue #34's mechanism (repo read where a checkout
+  runs against `ops/stewards.json` through the steward-resolution mechanism (repo read where a checkout
   exists, baked snapshot where none does), and `SELF_APPROVAL_REFUSED` is enforced — the proposer
   of an entity may never be its approver. These lanes come out **stronger** than the terminal they
   replace.
@@ -121,7 +121,7 @@ the two doors is the defect class this decision exists to prevent.
   second tool) breaks the pinned ten-tool list and the README's counted claim to serve a
   transition window with no beneficiary. The old call shape — approve with no metadata — fails
   **loud and actionable**, naming the now-required fields; it never silently records-without-
-  minting. Sign-off: the operator's, recorded on issue #36.
+  minting. Sign-off: the operator's.
 - **Data**: none migrated. `review_decisions` is append-only; new rows carry the mint outcome in
   the existing `extra` column (additive). Entity pages and the registry produced by the new door
   are byte-compatible with the CLI's own output.
@@ -142,4 +142,4 @@ the two doors is the defect class this decision exists to prevent.
   (and transitively `librarian.gitcmd`/`githubapp`, the webhook precedent one edge over) — named
   in `tests/test_architecture.py`, never a general license.
 - A revoked steward's approve authority on the deployed groups still moves at re-bake speed
-  (issue #34's recorded trade); the fast lever remains the identity's token.
+  (steward resolution's own recorded trade); the fast lever remains the identity's token.

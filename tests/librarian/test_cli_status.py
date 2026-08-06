@@ -317,10 +317,10 @@ def test_json_output_carries_the_percentiles_once_there_are_enough(capsys, clean
     assert payload["latency"]["p95_ms"] is not None
 
 
-# ── the derived visibility timeout, reported through --json (issue #30's executable promise) ────
+# ── the derived visibility timeout, reported through --json — an executable promise ──────────────
 def test_json_status_reports_the_visibility_timeout_derived_from_the_agent_timeout_env_var(
         capsys, clean_queue, monkeypatch):
-    """The other half of issue #30's fix. `stigmergy-queue reclaim`'s no-flag refusal used to point an
+    """The other half of that fix. `stigmergy-queue reclaim`'s no-flag refusal used to point an
     operator at `$STIGMERGY_LIBRARIAN_VISIBILITY_TIMEOUT` — a variable this repo reads nowhere — and
     now names the real source (`$STIGMERGY_LIBRARIAN_TIMEOUT_S`) plus the command that answers it:
     `stigmergy-librarian status --json`'s `visibility_timeout_s` field. A message containing a command

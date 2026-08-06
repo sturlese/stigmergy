@@ -30,7 +30,7 @@ EMPTY_DEFAULTS = {
     "identities.json": {},
     "entity-registry.json": {"entities": {}},
     "slack-channels.json": {},
-    # Issue #34: the deployed app/slack groups hold no checkout, so the steward map has to ride
+    # the deployed app/slack groups hold no checkout, so the steward map has to ride
     # the image like the three above. Empty means "nobody is on call" — which is the fail-closed
     # posture every reader already takes, not a broken deploy.
     "stewards.json": {},
