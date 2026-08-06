@@ -44,6 +44,7 @@ line. A layering that lives only in a README is decoration; these are tests:
 | the UNTRUSTED-DATA fence is built only in `stigmergy.text` | six separate copies once existed and one took the weak variant, so hostile content could close the fence early |
 | every declared exception must still be used | an exception list nobody prunes becomes a permission slip |
 | the README's countable claims match the code | `tests/test_readme_claims.py` — four of them had already drifted |
+| the reference docs name no command, variable or count the code does not have | `tests/test_docs_claims.py` — 60k words nobody can afford to re-read, so the checkable part is checked. `docs/decisions/` is exempt: an ADR records a decision, not the present |
 
 If you need to cross a seam, add the exception **by name with its reason** rather than widening a
 rule. The pruning tests will delete it for you when it stops being used.
