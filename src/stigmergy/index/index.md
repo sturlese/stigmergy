@@ -16,7 +16,8 @@ This file is the code map — for whoever is about to edit this package, not run
 A derived, disposable search layer over a checkout of the knowledge repo: Postgres + pgvector, a
 lexical (FTS) arm and a semantic (vector) arm fused with RRF, then explainable contract ranking.
 **Never a source of truth — git is.** `pages_index` is dropped and rebuilt from the repo whenever
-convenient (`build.rebuild`, nightly via `.github/workflows/index-rebuild.yml` at 04:17 UTC), or
+convenient (`build.rebuild`, nightly via the `index-rebuild` cron at 04:17 UTC — a template in
+`deploy/workflows/`, run from the knowledge repo), or
 upserted/deleted one changed file at a time (`server.webhook`). Every hit carries the factors
 that shaped its score, so "why did this page rank here" is always answerable.
 

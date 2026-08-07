@@ -118,7 +118,8 @@ def test_every_stigmergy_command_the_reference_docs_run_is_a_real_entry_point():
 
 
 def test_every_environment_variable_the_reference_docs_name_is_read_somewhere():
-    """`src/` and `tests/` are where Python reads one; `.github/workflows/` is where Actions does
+    """`src/` and `tests/` are where Python reads one; `.github/workflows/` and the cron templates
+    in `deploy/workflows/` are where Actions does
     (`STIGMERGY_READONLY_PAT` is a repository secret and appears in no Python at all). A variable
     in none of the three is one an operator would set to no effect."""
     def declared(paths) -> set[str]:
@@ -128,7 +129,8 @@ def test_every_environment_variable_the_reference_docs_name_is_read_somewhere():
 
     read = (declared((ROOT / "src").rglob("*.py"))
             | declared((ROOT / "tests").rglob("*.py"))
-            | declared((ROOT / ".github" / "workflows").rglob("*.yml")))
+            | declared((ROOT / ".github" / "workflows").rglob("*.yml"))
+            | declared((ROOT / "deploy" / "workflows").rglob("*.yml")))
     assert read, "no STIGMERGY_* variable found in the code — this check lost its source of truth"
 
     ghosts = sorted({f"{_rel(doc)}: {name}"

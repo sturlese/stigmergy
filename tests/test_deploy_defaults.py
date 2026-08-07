@@ -54,11 +54,26 @@ def test_the_committed_deploy_file_is_the_empty_default(name):
         f"deploy/{name} is not empty. {_RESYNC}")
 
 
+# The one directory `deploy/` is allowed to contain. It holds the three cron workflows an
+# operator copies into their own knowledge repo — deliberately NOT under `.github/workflows/`,
+# where GitHub would register them on this public repo and show three "Disabled" rows.
+EXPECTED_SUBDIRS = {"workflows"}
+
+
 def test_no_other_file_has_appeared_in_deploy():
     """A file here that the deploy script does not write would be baked by nobody and reviewed by nobody."""
     unexpected = sorted(p.name for p in DEPLOY.iterdir()
                         if p.is_file() and p.name not in EMPTY_DEFAULTS)
     assert not unexpected, f"unexpected files in deploy/: {unexpected}"
+
+
+def test_no_other_directory_has_appeared_in_deploy():
+    """The file check above asks only about FILES, so a whole subdirectory could arrive here
+    unreviewed — as `workflows/` itself did, sliding under a guard that could not see it. Naming
+    the allowed set is what makes the next one a decision instead of an accident."""
+    unexpected = sorted(p.name for p in DEPLOY.iterdir()
+                        if p.is_dir() and p.name not in EXPECTED_SUBDIRS)
+    assert not unexpected, f"unexpected directories in deploy/: {unexpected}"
 
 
 # ── the real script, run end to end ──────────────────────────────────────────────────────────
