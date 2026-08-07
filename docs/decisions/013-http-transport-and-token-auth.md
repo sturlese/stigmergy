@@ -121,7 +121,9 @@ be attributable to a person.
    by anyone**, and these jobs narrate the corpus — the gardener prints entity ids and page paths,
    and repository *variables* are not masked at all. The three operational crons therefore run from
    the knowledge repo, which is private; this repo keeps the workflow files as adopter templates,
-   disabled. The premise survives the reversal intact, because `pip` closes the gap D9 was avoiding:
+   disabled, in `deploy/workflows/` rather than `.github/workflows/` so GitHub does not register
+   them here at all. The premise survives the reversal intact, because `pip` closes the gap D9 was
+   avoiding:
    the CLI is installed from this repo's published tree rather than copied, so no code moved. Two
    things improve — the cross-repo read-only PAT loses its last reader (the workflow's own
    `GITHUB_TOKEN` covers a checkout of its own repository), and the platform version the crons run

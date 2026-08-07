@@ -732,7 +732,11 @@ def test_the_console_schedule_table_matches_the_workflow_files():
 
     import yaml
 
-    workflows_dir = pathlib.Path(__file__).resolve().parents[2] / ".github" / "workflows"
+    # The three cron files are TEMPLATES an operator copies into their knowledge repo, so they
+    # live outside `.github/workflows/` (a file there is registered by GitHub whether enabled or
+    # not, and three "Disabled" rows on a public Actions tab read as a broken project). The
+    # console still dispatches them by the same file NAME, in whichever repo they were copied to.
+    workflows_dir = pathlib.Path(__file__).resolve().parents[2] / "deploy" / "workflows"
     for row in CRON_WORKFLOWS:
         with open(workflows_dir / row["file"], encoding="utf-8") as f:
             config = yaml.safe_load(f)

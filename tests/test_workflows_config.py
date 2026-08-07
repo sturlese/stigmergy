@@ -13,11 +13,18 @@ import pytest
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+# `ci.yml` is this repository's own CI and lives where GitHub runs it. The three operational
+# crons deliberately do NOT: they are templates an operator copies into their (private)
+# knowledge repo, and a file under `.github/workflows/` is REGISTERED by GitHub whether or not
+# it is enabled — three greyed-out "Disabled" rows on a public repo's Actions tab read as a
+# broken project rather than as a deliberate handoff. Moving them out of that directory is what
+# makes them invisible there; `deploy/workflows/README.md` is the handoff.
 WORKFLOWS = ROOT / ".github" / "workflows"
-RETENTION = WORKFLOWS / "retention-purge.yml"
-INDEX_REBUILD = WORKFLOWS / "index-rebuild.yml"
+CRON_TEMPLATES = ROOT / "deploy" / "workflows"
+RETENTION = CRON_TEMPLATES / "retention-purge.yml"
+INDEX_REBUILD = CRON_TEMPLATES / "index-rebuild.yml"
 CI = WORKFLOWS / "ci.yml"
-GARDENER = WORKFLOWS / "gardener.yml"
+GARDENER = CRON_TEMPLATES / "gardener.yml"
 
 
 def _workflow(path: pathlib.Path) -> dict:
@@ -236,7 +243,14 @@ def test_gardener_carries_its_own_slack_and_channel_configuration():
     assert "vars.STIGMERGY_DIGEST_CHANNEL_ID" in text
 
 
-@pytest.mark.parametrize("workflow", sorted(WORKFLOWS.glob("*.yml")), ids=lambda p: p.name)
+# BOTH directories, and that is the point: when the three crons moved out of `.github/workflows/`
+# this parametrization silently went from four cases to one — the templates kept their pinned
+# SHAs by luck, not by check, which is the same silent-coverage-loss this test's own history
+# below is about. A glob that follows the files is the fix; the suite count moving is what
+# surfaced it.
+@pytest.mark.parametrize("workflow",
+                         sorted(WORKFLOWS.glob("*.yml")) + sorted(CRON_TEMPLATES.glob("*.yml")),
+                         ids=lambda p: p.name)
 def test_every_workflow_pins_its_actions_to_a_full_commit_sha(workflow):
     """A `uses:` value must be a full commit SHA (`@` followed by 40 hex characters), never a
     floating tag a maintainer — or whoever compromises the action's repository — could move.

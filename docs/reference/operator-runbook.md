@@ -262,9 +262,13 @@ fly deploy --image <that image ref>   # redeploy it directly
 
 | Workflow | When (UTC) | What |
 |---|---|---|
-| `.github/workflows/index-rebuild.yml` | nightly ~04:17 | full staging index rebuild from `@main` |
-| `.github/workflows/retention-purge.yml` | nightly ~04:42 | `stigmergy-queue purge` (30-day terminal rows) |
-| `.github/workflows/gardener.yml` | daily ~05:07 | `stigmergy-gardener` corpus-health run |
+| `index-rebuild.yml` | nightly ~04:17 | full staging index rebuild from `@main` |
+| `retention-purge.yml` | nightly ~04:42 | `stigmergy-queue purge` (30-day terminal rows) |
+| `gardener.yml` | daily ~05:07 | `stigmergy-gardener` corpus-health run |
+
+They run from the **knowledge repo's** own `.github/workflows/`; this repository ships them as
+templates in [`deploy/workflows/`](../../deploy/workflows/README.md), outside `.github/` so that
+GitHub does not register them here.
 
 All three have `workflow_dispatch` for a manual run (`gh workflow run index-rebuild.yml`, etc.;
 `retention-purge.yml` is the only one taking an input, `dry_run`) — and the admin console's Crons
