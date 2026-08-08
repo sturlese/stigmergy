@@ -490,7 +490,7 @@ Everything else is reached FROM `processing.py`; read it first when tracing one 
 | `test_testdb_guard.py` | the guard itself: `tests/testdb.py` refuses a non-test DSN before any connection |
 | `test_operator_surface.py` | the docs (ADR / reference / runbook) match what the code's refusals actually name |
 | `test_base_inputs.py` | `base_inputs.read_at`/`load_acl`/`load_registry`/`linter_at` are a pure function of `(repo, base)` — an uncommitted working-tree edit changes nothing, pure git, no Postgres |
-| `test_refusal_routing.py` | `processing._refuse`'s routing for a branch the double cannot reach (`zone/type-not-creatable`) — proven by patching one table entry rather than waiting for a real double directive |
+| `test_refusal_routing.py` | `processing._refuse` / `_refuse_meeting`'s routing: the branch the double cannot reach (`zone/type-not-creatable`), proven by patching one table entry rather than waiting for a real double directive; and the secrets locator — both routers read `Finding.values`, never a re-parsed `locator`, over the real scanner's ordinary and REJOINED (no-line) shapes alike |
 | `test_human_loop_pg.py` | the ask-back loop end to end: ask → `BrainService.reply` (the real service object, not a stub) → next pass files, identity enforcement, the one-ask budget across a requeue and a redelivery |
 | `test_stale_base_pg.py` | `StaleBaseError`: a REAL failed fetch (the remote rewritten to an unreachable path) walks a per-item base back to the local branch, and the worker refuses rather than filing against a stale clone |
 | `test_acl_per_item_pg.py` | the ACL config is re-read at EACH item's own base commit, proven on the stamped page at the end of a real run — not only on `base_inputs.load_acl` in isolation |
