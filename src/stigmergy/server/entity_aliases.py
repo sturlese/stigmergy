@@ -63,14 +63,41 @@ def _load_entities(path: str | None) -> dict:
     return entities
 
 
+def _record_name(record: dict) -> str:
+    """One record's display name as TEXT, `""` when it is absent or null.
+
+    Shared by both readers, because `_load_entities` promises they behave identically on a
+    malformed file and that has to hold one level down too. `str(None)` is `"none"`, and a
+    `"name": null` in the registry used to become a real alias spelled `none` — so every question
+    containing that ordinary English word resolved to that entity. It failed OPEN: no error, just
+    a wrong `entity_hint` and a wrong `fts_expansion` handed to ranking.
+    """
+    return str(record.get("name", "") or "")
+
+
+def _record_aliases(record: dict) -> list[str]:
+    """One record's `aliases` as a list of TEXT, `[]` for any shape that is not a list of scalars.
+
+    The list-ness matters as much as the elements: `aliases` is unpacked with `*`, and a bare
+    STRING unpacks one character at a time — `"acme corp"` became eight single-letter aliases, so
+    a lone "a" in ordinary prose resolved to that entity. `None` raised outright.
+    """
+    aliases = record.get("aliases")
+    if not isinstance(aliases, list):
+        return []
+    return [str(a) for a in aliases if isinstance(a, str | int | float)]
+
+
 def load_aliases(path: str | None) -> dict[str, str]:
     """Normalized alias/name/id text -> canonical entity id. See `_load_entities` for the
-    missing-file / malformed-file postures this shares with `load_registry`."""
+    missing-file / malformed-file postures this shares with `load_registry`, and `_record_name` /
+    `_record_aliases` for the per-FIELD defences it shares with it — the two readers take their
+    record fields through the same two helpers so neither can be hardened without the other."""
     aliases: dict[str, str] = {}
     for cid, e in _load_entities(path).items():
         if not isinstance(e, dict):
             continue
-        for alias in (cid, e.get("name", ""), *e.get("aliases", [])):
+        for alias in (cid, _record_name(e), *_record_aliases(e)):
             key = _norm(str(alias))
             if key:
                 aliases[key] = cid
@@ -87,13 +114,11 @@ def load_registry(path: str | None) -> dict[str, dict]:
     for cid, e in _load_entities(path).items():
         if not isinstance(e, dict):
             continue
-        aliases = e.get("aliases")
         out[cid] = {
             "id": cid,
-            "name": str(e.get("name", "") or ""),
+            "name": _record_name(e),
             "type": str(e.get("type", "") or ""),
-            "aliases": [str(a) for a in aliases if isinstance(a, str | int | float)]
-                      if isinstance(aliases, list) else [],
+            "aliases": _record_aliases(e),
         }
     return out
 

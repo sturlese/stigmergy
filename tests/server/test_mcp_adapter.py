@@ -23,7 +23,7 @@ import pytest
 
 from stigmergy.capture.errors import CaptureError, EvidenceError, ReplyRejected, SubmissionRejected
 from stigmergy.index.errors import StigmergyIndexError
-from stigmergy.server.errors import CapabilityUnavailableError, RateLimitError
+from stigmergy.server.errors import CapabilityUnavailableError, RateLimitError, RegistryError
 from stigmergy.server.mcp_server import build_mcp
 from stigmergy.server.service import BrainService
 from stigmergy.server.settings import Settings
@@ -96,6 +96,29 @@ def test_search_brain_maps_service_errors_to_a_clean_json_error(fake_service, ex
     out = _call(mcp, "search_brain", query="q")
 
     assert out == {"error": str(exc)}
+
+
+def test_search_brain_does_not_echo_a_malformed_registrys_path(fake_service):
+    """OLD BEHAVIOUR: `search_brain` echoed this verbatim, filesystem path and all.
+
+    `entity_aliases._load_entities` names the registry PATH on purpose — that message is written
+    for the operator who has to fix the file — and it was a plain `ValueError`, which this closure
+    echoes because its OWN unknown-filter rejection is safe to show a caller. The two were
+    compatible until entity-first resolution moved inside the search path (ADR 022 D4), and then
+    the loader's message started arriving at a branch chosen for a different error entirely.
+
+    `list_entities` has always refused to echo this exact exception
+    (`test_list_entities_maps_an_unanticipated_exception_to_class_name_only`, which uses the same
+    string); that asymmetry between two tools reading the same file is what made this a defect
+    rather than a judgement call. The service now raises `RegistryError` here instead.
+    """
+    fake_service.search.side_effect = RegistryError("the entity registry could not be read")
+    mcp = build_mcp(fake_service)
+
+    out = _call(mcp, "search_brain", query="q")
+
+    assert out == {"error": "search_brain failed (RegistryError)"}
+    assert "/" not in json.dumps(out)
 
 
 def test_read_page_forwards_the_path_and_returns_the_service_payload(fake_service):

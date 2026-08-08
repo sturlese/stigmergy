@@ -38,6 +38,23 @@ class CapabilityUnavailableError(StigmergyServerError):
     """
 
 
+class RegistryError(StigmergyServerError):
+    """The entity registry file exists but could not be read as one.
+
+    A TYPE rather than the loader's own `ValueError`, and the distinction is a confidentiality one.
+    `entity_aliases._load_entities` puts the registry's PATH in its message on purpose — that error
+    was written for the operator who has to go and fix the file. But `search_brain` echoes
+    `ValueError` verbatim, because its own unknown-filter rejection is safe to show a caller (the
+    caller's own filter key plus a static column list), and entity-first resolution later moved
+    INSIDE the search path — so the loader's message started reaching a branch chosen for a
+    different error entirely, and `mcp_server.py`'s "no error may leak a filesystem path" rule was
+    broken by two functions that were each individually right.
+
+    Raised at the service's call sites, never inside the loader: the loader keeps its
+    path-bearing message for `stigmergy-index check` and the operator CLIs, which want it.
+    """
+
+
 class RateLimitError(StigmergyServerError):
     """Fail-closed rate limiting: an identity exceeded its per-minute token bucket (the shared
     overall bucket, or the stricter `ask` bucket). The message names no other identity and carries
