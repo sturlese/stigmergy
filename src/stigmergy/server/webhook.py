@@ -110,12 +110,25 @@ def webhook_settings_from_env(env: dict | None = None) -> WebhookSettings:
 def verify_signature(secret: str, raw_body: bytes, header_value: str | None) -> bool:
     """Constant-time HMAC-SHA256 check over the RAW body, before any JSON parse.
     Never raises — every malformed shape (no secret configured, no header,
-    a header with no `sha256=` prefix) fails closed to `False`, the same outcome a wrong digest
-    gets, so there is no second, more-specific error an attacker could distinguish."""
+    a header with no `sha256=` prefix, a digest that is not ASCII) fails closed to `False`, the
+    same outcome a wrong digest gets, so there is no second, more-specific error an attacker could
+    distinguish."""
     if not secret or not header_value:
         return False
     scheme, _, digest = header_value.partition("=")
     if scheme != "sha256" or not digest:
+        return False
+    # Refused BEFORE the comparison, because `hmac.compare_digest` raises `TypeError` on a `str`
+    # carrying any non-ASCII character — and `digest` is attacker-supplied, handed over by
+    # Starlette as a latin-1 decode of the raw header bytes, so a single byte >= 0x80 reached it.
+    # It escaped this function (`webhook_endpoint` calls it OUTSIDE its only `try`), so eight bytes
+    # turned the generic 401 into a 500 on the one unauthenticated route this server has.
+    #
+    # A guard rather than an encode: `.encode("utf-8")` would still raise on a lone surrogate,
+    # which no latin-1 decode produces but which is a perfectly legal `str` — and the promise
+    # above is about every `str`, not only the ones a header can currently carry. `isascii()`
+    # cannot raise for any of them, and a valid digest is hex, so this rejects nothing real.
+    if not digest.isascii():
         return False
     expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, digest)

@@ -72,12 +72,50 @@ def test_verify_signature_rejects_a_malformed_header():
     body = b"x"
     assert webhook.verify_signature(SECRET, body, "not-a-signature") is False
     assert webhook.verify_signature(SECRET, body, "sha1=deadbeef") is False
+    # `partition` splits on the FIRST `=`, so everything after it is the digest verbatim — a
+    # second `sha256=` is part of the digest, not a second scheme to be re-parsed.
+    assert webhook.verify_signature(SECRET, body, "sha256=sha256=x") is False
 
 
 def test_verify_signature_fails_closed_when_no_secret_is_configured():
     body = b"x"
     header = _sign("", body)
     assert webhook.verify_signature("", body, header) is False
+
+
+@pytest.mark.parametrize("digest", ["ÿÿÿÿÿÿÿÿ", "café", "夜", "\ud800"],
+                         ids=["high-latin-1", "latin-1-accent", "beyond-latin-1", "lone-surrogate"])
+def test_verify_signature_fails_closed_on_a_non_ascii_digest(digest):
+    """OLD BEHAVIOUR: every one of these ESCAPED the function — `hmac.compare_digest` raises
+    `TypeError` when either `str` argument holds a non-ASCII character.
+
+    This is load-bearing rather than tidy. The contract is that this function NEVER raises: "every
+    malformed shape fails closed to `False`, the same outcome a wrong digest gets, so there is no
+    second, more-specific error an attacker could distinguish" — and a raised exception is exactly
+    that second, more-specific outcome.
+
+    The arms are deliberately of two kinds, because the promise is about every `str`, not only the
+    reachable ones. `high-latin-1` is the REACHABLE shape: it is byte-for-byte what a real header
+    of `\\xff` bytes becomes once Starlette decodes it as latin-1 (see `transport_http`'s own
+    `.decode("latin-1")`), and it is what the HTTP-level test below sends over the wire.
+    `beyond-latin-1` and `lone-surrogate` are NOT reachable through that decode — no byte maps
+    above `U+00FF` — but they are legal `str` values a future or non-HTTP caller could pass, and
+    the lone surrogate is the one that survives a naive `.encode("utf-8")` fix by raising
+    `UnicodeEncodeError` instead. They are here to hold the promise as an absolute.
+    """
+    assert webhook.verify_signature(SECRET, b'{"hello": "world"}', f"sha256={digest}") is False
+
+
+def test_verify_signature_still_accepts_a_valid_signature_compared_as_bytes():
+    """The benign twin for the encode above: the real delivery must still verify, and a digest
+    differing in one hex character must still be refused — the comparison has to keep MEANING the
+    same thing, not merely stop raising."""
+    body = b'{"hello": "world"}'
+    good = _sign(SECRET, body)
+    assert webhook.verify_signature(SECRET, body, good) is True
+
+    flipped = good[:-1] + ("0" if good[-1] != "0" else "1")
+    assert webhook.verify_signature(SECRET, body, flipped) is False
 
 
 # ── `STIGMERGY_GITHUB_WEBHOOK_FILE_CAP` parsing ──────────────────────────────────────────────────
@@ -547,6 +585,31 @@ def test_the_401_body_is_byte_identical_to_every_other_auth_failures_body(fixtur
                               headers={"Content-Type": "application/json"})
     assert webhook_resp.status_code == mcp_resp.status_code == 401
     assert webhook_resp.json() == mcp_resp.json() == {"error": "unauthorized"}
+
+
+def test_a_raw_non_ascii_signature_header_gets_the_generic_401_not_a_500(fixture, webhook_env):
+    """OLD BEHAVIOUR: eight raw bytes turned this endpoint's generic 401 into a 500.
+
+    Header bytes >= 0x80 are legal on the wire and Starlette hands them to the handler as a
+    latin-1 `str`, so `hmac.compare_digest` raised `TypeError` — which nothing here catches
+    (`verify_signature` is called outside the endpoint's only `try`). The result was an
+    unauthenticated, no-secret-knowledge way to get a distinguishable response out of the one
+    public route on this server, defeating exactly the property
+    `test_the_401_body_is_byte_identical_to_every_other_auth_failures_body` exists to hold.
+
+    Asserted at the HTTP level on purpose: the unit test above pins the function, but only a real
+    request proves the raw bytes survive the wire and reach it as the shape that used to crash.
+    """
+    app = build_test_http_app(fixture, {})
+    with run_http_server(app) as url:
+        base = url.rsplit("/", 1)[0]
+        body = json.dumps(_push_payload()).encode()
+        resp = httpx.post(f"{base}{webhook.WEBHOOK_PATH}", content=body,
+                          headers={b"X-Hub-Signature-256": b"sha256=" + b"\xff" * 8,
+                                   b"X-GitHub-Event": b"push"})
+
+    assert resp.status_code == 401, resp.text
+    assert resp.json() == {"error": "unauthorized"}
 
 
 @pytest.mark.parametrize("event", ["ping", "pull_request", "issues"])
