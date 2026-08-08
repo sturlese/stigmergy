@@ -41,6 +41,47 @@ def test_stale_view_the_benign_twin_a_fresh_view_fires_nothing(repo):
     assert checks.check_stale_views(repo) == []
 
 
+def test_stale_view_survives_a_hand_written_page_sitting_in_views(repo):
+    """OLD BEHAVIOUR: this raised `ViewError` and took the WHOLE gardener run down with it.
+
+    `views/` is one of `index.corpus.ZONES`, so a hand-written page can legitimately sit beside the
+    generated ones. `list_stale_entities` derived its population from `os.listdir` and fed every
+    `.md` STEM into `view_relpath`, whose entity-id assertion then refused `README` — an assertion
+    that exists to stop a CALLER-supplied id escaping `views/`, firing here on an id that came from
+    inside that directory and so could never traverse anywhere.
+
+    The blast radius is why this is not a niceties bug: `run_gardener` catches `Exception`, records
+    `status='error'` with ZERO findings and re-raises, and `gardener/cli.py`'s last-resort handler
+    prints only the class name — so one stray file killed the daily run with no diagnosable message.
+    """
+    support.write_page(repo, "wiki", "entities/acme-corp.md",
+                       frontmatter={"type": "entity", "title": "Acme Corp",
+                                   "entity": ["acme-corp"], "status": "developing"})
+    real_hash = skeleton.member_hash(skeleton.members_of(repo, "acme-corp"))
+    support.write_view(repo, "acme-corp", member_hash=real_hash)
+    support.write_page(repo, "views", "README.md",
+                       frontmatter={"type": "view", "title": "About these views"},
+                       body="Generated pages live here.\n")
+
+    assert checks.check_stale_views(repo) == []
+
+
+def test_stale_view_still_fires_beside_a_hand_written_page(repo):
+    """The benign twin of the case above: ignoring the foreign file must not cost the check its
+    eyesight for the real views sitting next to it."""
+    support.write_page(repo, "wiki", "entities/acme-corp.md",
+                       frontmatter={"type": "entity", "title": "Acme Corp",
+                                   "entity": ["acme-corp"], "status": "developing"})
+    support.write_view(repo, "acme-corp", member_hash="sha256:stale-and-wrong")
+    support.write_page(repo, "views", "README.md",
+                       frontmatter={"type": "view", "title": "About these views"},
+                       body="Generated pages live here.\n")
+
+    findings = checks.check_stale_views(repo)
+
+    assert [f["subject"] for f in findings] == ["acme-corp"]
+
+
 def test_stale_view_an_entity_with_no_view_yet_is_not_reported_stale(repo):
     """`list_stale_entities`' own population is "entities WITH an existing view" — an anchored
     entity that has never had one regenerated is a different, unrelated fact, not this check's
