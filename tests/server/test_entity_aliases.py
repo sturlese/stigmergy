@@ -148,3 +148,86 @@ def test_resolve_exact_unknown_input_returns_none():
 def test_resolve_exact_empty_aliases_or_text_returns_none():
     assert entity_aliases.resolve_exact({}, "acme") is None
     assert entity_aliases.resolve_exact({"acme": "acme"}, "") is None
+
+
+# ── a malformed RECORD, not a malformed file ────────────────────────────────────────────────────
+# `_load_entities`' docstring promises a missing file and a malformed one "behave IDENTICALLY for
+# both readers"; `load_registry`'s promises "a record whose own shape is not a mapping is skipped,
+# same as `load_aliases`". Parity was asserted only for the TOP level and the non-mapping record —
+# one level down, `load_registry` defended every field and `load_aliases` defended none.
+
+@pytest.mark.parametrize("record, expected, why", [
+    ({"name": "Acme", "aliases": None}, {"acme"},
+     "aliases null crashed load_aliases with a TypeError"),
+    ({"name": None, "aliases": []}, {"acme"},
+     "name null minted the phantom alias 'none'"),
+    ({"name": "Acme", "aliases": "acme corp"}, {"acme"},
+     "a string was unpacked into one-character aliases"),
+    # The scalar survives on purpose — `load_registry` keeps `str | int | float` elements and
+    # stringifies them, so `7` is a real alias to BOTH readers. Only the null is dropped, and the
+    # point of this arm is that the two readers agree about which is which.
+    ({"name": "Acme", "aliases": [None, 7]}, {"acme", "7"},
+     "a null ELEMENT became the alias 'none'"),
+])
+def test_load_aliases_survives_a_malformed_record_like_load_registry_does(
+        tmp_path, record, expected, why):
+    """OLD BEHAVIOUR, per arm, all reachable from one hand-edited registry file:
+
+    - `"aliases": null` -> `TypeError: Value after * must be an iterable` out of `load_aliases`,
+      which `search_brain` then reported as `search_brain failed (TypeError)` — a whole-server
+      retrieval outage from one JSON null, while `list_entities` kept working.
+    - `"name": null` -> `str(None)` normalizes to `"none"`, so the registry gained an alias
+      `none` and `resolve_entity` mapped ANY question containing that word to this entity. That is
+      the arm that fails OPEN: no error anywhere, just a wrong `entity_hint` and a wrong
+      `fts_expansion` fed into ranking.
+    - `"aliases": "acme corp"` -> the STRING is unpacked by `*`, one character per alias, so a
+      bare "a" in ordinary prose resolved to this entity.
+
+    `load_registry` already survived all four; that asymmetry is the bug.
+    """
+    repo = _write_registry(tmp_path, {"acme": record})
+
+    aliases = entity_aliases.load_aliases(entity_aliases.default_path(repo))
+
+    assert set(aliases) == expected, f"{why}: got {aliases}"
+    assert entity_aliases.resolve_entity(aliases, "we have none of that data yet") is None
+    assert entity_aliases.resolve_entity(aliases, "a report about a company") is None
+
+
+@pytest.mark.parametrize("record", [
+    {"name": "Acme", "aliases": None},
+    {"name": None, "aliases": []},
+    {"name": "Acme", "aliases": "acme corp"},
+    {"name": "Acme", "aliases": [None, 7]},
+])
+def test_both_readers_survive_the_same_malformed_record(tmp_path, record):
+    """The parity itself, asserted directly: whatever one reader tolerates, the other must too.
+    Pinned as a property so the next field added to a record cannot be defended in one and
+    forgotten in the other."""
+    path = entity_aliases.default_path(_write_registry(tmp_path, {"acme": record}))
+
+    aliases = entity_aliases.load_aliases(path)
+    registry = entity_aliases.load_registry(path)
+
+    assert registry["acme"]["id"] == "acme"
+    assert all(isinstance(a, str) for a in registry["acme"]["aliases"])
+    # The parity itself: every alias one reader recognizes is a field the OTHER reader kept.
+    record = registry["acme"]
+    from_registry = {entity_aliases._norm(t)
+                     for t in ("acme", record["name"], *record["aliases"])} - {""}
+    assert set(aliases) == from_registry
+
+
+def test_a_well_formed_record_still_registers_every_alias(tmp_path):
+    """The benign twin. Defending the fields must not cost a real registry its aliases — the
+    canonical id, the display name and every listed alias all still resolve."""
+    repo = _write_registry(tmp_path, {
+        "acme-corp": {"name": "Acme Corp", "type": "organization",
+                      "aliases": ["Acme", "ACME Corporation"]},
+    })
+
+    aliases = entity_aliases.load_aliases(entity_aliases.default_path(repo))
+
+    assert entity_aliases.resolve_entity(aliases, "how is Acme Corp doing?") == "acme-corp"
+    assert entity_aliases.resolve_entity(aliases, "any news on ACME Corporation?") == "acme-corp"
+    assert entity_aliases.resolve_entity(aliases, "what about acme-corp?") == "acme-corp"

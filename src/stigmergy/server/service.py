@@ -60,7 +60,7 @@ from stigmergy.index.errors import EmptyIndexError
 from stigmergy.server import entity_aliases, identity, review
 from stigmergy.server.acl import visible
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
-from stigmergy.server.errors import CapabilityUnavailableError, StartupError
+from stigmergy.server.errors import CapabilityUnavailableError, RegistryError, StartupError
 from stigmergy.server.settings import Settings
 
 # Re-exported for `stigmergy.slack.context`: the slack package may import only
@@ -133,7 +133,10 @@ def check_arg_length(name: str, value: str) -> None:
     carry untrusted LLM output or internal field paths) — without needing a distinguishable class
     name. `search_brain` is unaffected: it already catches `ValueError` broadly for its own
     unknown-filter errors (also safe: they echo only the caller's own filter key plus a static
-    allowed-column list — ADR 013), and keeps doing so."""
+    allowed-column list — ADR 013), and keeps doing so. What that breadth costs is paid at the
+    OTHER end: any `ValueError` reaching it is echoed, so a reader whose message is not safe to
+    show a caller must not arrive as one — see `_registry_aliases`, which converts the entity
+    registry's path-bearing `ValueError` into a `RegistryError` for exactly that reason."""
     if len(value) > MAX_ARG_CHARS:
         ex = ValueError(f"{name} too long (max {MAX_ARG_CHARS} characters)")
         ex.is_arg_length_error = True
@@ -408,10 +411,32 @@ class BrainService:
         # positions rather than a page's existence, and anchoring stops being retrieval-fatal.
         entity_id = None
         if not (filters and "entity" in filters):
-            aliases = entity_aliases.load_aliases(self.settings.entity_registry_path)
+            aliases = self._registry_aliases()
             entity_id = entity_aliases.resolve_entity(aliases, query)
         return self._run_search(query, filters, max_results, include_superseded,
                                 entity_hint=entity_id)
+
+    def _registry_aliases(self) -> dict[str, str]:
+        """`load_aliases`, with a malformed file surfaced as `RegistryError`.
+
+        The loader's own `ValueError` names the registry PATH — written for the operator who has to
+        fix it — and `search_brain` echoes `ValueError` VERBATIM for its own unknown-filter
+        rejection. Entity-first resolution runs inside the search path, so that message reached a
+        branch chosen for a different error and put a server filesystem path in a caller's reply.
+        `RegistryError` falls to the class-name-only branch instead; `list_entities` has always
+        refused to echo this same exception, and this is the other half of that.
+        """
+        try:
+            return entity_aliases.load_aliases(self.settings.entity_registry_path)
+        except ValueError as ex:
+            raise RegistryError("the entity registry could not be read") from ex
+
+    def _registry_records(self) -> dict[str, dict]:
+        """`load_registry`, same reason and same posture as `_registry_aliases` above."""
+        try:
+            return entity_aliases.load_registry(self.settings.entity_registry_path)
+        except ValueError as ex:
+            raise RegistryError("the entity registry could not be read") from ex
 
     def _expansion_terms(self, entity_id: str | None) -> tuple[str, ...]:
         """The registry's OTHER names for a resolved entity — canonical name + aliases — handed
@@ -421,7 +446,7 @@ class BrainService:
         raises, the standing posture."""
         if not entity_id:
             return ()
-        record = entity_aliases.load_registry(self.settings.entity_registry_path).get(entity_id)
+        record = self._registry_records().get(entity_id)
         if not record:
             return ()
         return tuple(t for t in (record.get("name") or "", *(record.get("aliases") or ())) if t)
