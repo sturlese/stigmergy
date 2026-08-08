@@ -573,3 +573,66 @@ def test_on_review_note_modal_submission_records_the_typed_note(indexed, clean_t
     assert verdict == "reject"
     assert notes == "not useful"
     assert len(gw.posted) == 1
+
+
+# ── a DM's question reaches the answering agent as a QUESTION, not as raw Slack text ────────────
+def test_a_dm_that_mentions_the_bot_asks_the_question_without_the_mention_token(
+        indexed, clean_tables, monkeypatch):
+    """OLD BEHAVIOUR: the DM branch passed `event["text"]` RAW, so the answering agent was asked
+    `"<@UBOT> what is the pricing floor?"` — mention token and all.
+
+    `on_app_mention` has always passed `mention.strip_mention(...)`, so the same sentence asked in
+    a channel and in a DM became two different questions, and the DM one carried a literal Slack
+    user id into the prompt (and into the audit row, and into retrieval) as if it were part of what
+    the person wanted to know. A DM needs no mention to reach the bot — but people write one
+    anyway, which is exactly why this branch sees it.
+    """
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    gw.seed_user("U_ANA", fixture.ANA)
+    ctx = build_slack_context(fixture, conn, gateway=gw)
+    app = build_bolt_app(ctx)
+    listener = _listener(app, "on_message")
+
+    asked = {}
+
+    async def _record(_ctx, **kw):
+        asked.update(kw)
+
+    monkeypatch.setattr("stigmergy.slack.mention.handle_mention", _record)
+
+    event = {"user": "U_ANA", "channel": "D1", "channel_type": "im",
+             "text": "<@UBOT> what is the pricing floor?", "ts": "1.1", "team": TEAM_ID}
+    context = {"bot_user_id": "UBOT", "team_id": TEAM_ID}
+    _run(listener(event=event, context=context, ack=_noop_ack,
+                  body={"team_id": TEAM_ID, "event": event}))
+
+    assert asked["question"] == "what is the pricing floor?"
+    assert "<@" not in asked["question"]
+    assert asked["is_dm"] is True
+
+
+def test_a_plain_dm_still_asks_exactly_what_was_typed(indexed, clean_tables, monkeypatch):
+    """The benign twin: stripping mentions must not eat an ordinary DM's words. Most DMs carry no
+    mention at all, and this is the shape that must survive the fix untouched."""
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    gw.seed_user("U_ANA", fixture.ANA)
+    ctx = build_slack_context(fixture, conn, gateway=gw)
+    app = build_bolt_app(ctx)
+    listener = _listener(app, "on_message")
+
+    asked = {}
+
+    async def _record(_ctx, **kw):
+        asked.update(kw)
+
+    monkeypatch.setattr("stigmergy.slack.mention.handle_mention", _record)
+
+    event = {"user": "U_ANA", "channel": "D1", "channel_type": "im",
+             "text": "what is the pricing floor?", "ts": "1.1", "team": TEAM_ID}
+    context = {"bot_user_id": "UBOT", "team_id": TEAM_ID}
+    _run(listener(event=event, context=context, ack=_noop_ack,
+                  body={"team_id": TEAM_ID, "event": event}))
+
+    assert asked["question"] == "what is the pricing floor?"

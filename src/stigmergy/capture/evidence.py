@@ -29,6 +29,7 @@ import hashlib
 import ipaddress
 import logging
 import os
+import socket
 
 from stigmergy.capture.errors import EvidenceError
 
@@ -113,9 +114,21 @@ def is_loopback_host(host: str) -> bool:
     value = (host or "").strip().lower().rstrip(".")
     if value in _LOOPBACK_HOSTS:
         return True
+    literal = value.strip("[]")
     try:
-        return ipaddress.ip_address(value.strip("[]")).is_loopback
+        return ipaddress.ip_address(literal).is_loopback
     except ValueError:
+        pass
+    # `ipaddress` is deliberately STRICT: it takes full dotted-quad IPv4 and nothing else, so it
+    # refuses `127.1`, `2130706433`, `0x7f000001` and `017700000001` — every abbreviated spelling
+    # the docstring above promises. `socket.getaddrinfo` resolves all four to 127.0.0.1, so each
+    # one is a WORKING local endpoint, and reading them as REMOTE is the direction that hurts:
+    # `split_stores_reason` then admits the cloud-queue/laptop-evidence pair it exists to refuse.
+    # `inet_aton` accepts exactly this classic family and still rejects a HOSTNAME, so
+    # `127.evil.com` stays remote — the case the string test this replaced got wrong.
+    try:
+        return ipaddress.ip_address(socket.inet_ntoa(socket.inet_aton(literal))).is_loopback
+    except OSError:
         return False
 
 

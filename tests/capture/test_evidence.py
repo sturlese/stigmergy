@@ -202,6 +202,41 @@ def test_a_remote_queue_with_a_loopback_evidence_store_is_refused(endpoint):
     assert evidence.ENDPOINT_ENV in reason          # names what to export, not just what is wrong
 
 
+@pytest.mark.parametrize("host", ["127.1", "2130706433", "0x7f000001", "017700000001"],
+                         ids=["abbreviated", "decimal", "hex", "octal"])
+def test_the_shorthand_spellings_of_127_0_0_1_are_loopback_too(host):
+    """OLD BEHAVIOUR: every one of these read as REMOTE.
+
+    `is_loopback_host`'s own docstring promises "the octal/decimal/hex spellings of 127.0.0.1 all
+    resolve correctly", but `ipaddress.ip_address` takes full dotted-quad IPv4 and nothing else and
+    raised `ValueError` on all four — which the caller read as "not loopback".
+
+    They are not academic: `socket.getaddrinfo` resolves each one to 127.0.0.1, so
+    `STIGMERGY_EVIDENCE_ENDPOINT=http://127.1:9000` is a WORKING local MinIO endpoint. Reading it
+    as remote is the direction that hurts — see the split-stores test below.
+    """
+    assert evidence.is_loopback_host(host)
+
+
+def test_a_remote_queue_with_a_shorthand_loopback_endpoint_is_still_refused():
+    """The guard exists for one failure: "queue row in the cloud, evidence on a laptop", found on
+    staging and recorded in this file's own comment above. A shorthand spelling of the laptop was
+    admitted straight through it."""
+    reason = evidence.split_stores_reason(
+        db_host="db.abcdef.supabase.co", endpoint_url="http://127.1:9000")
+
+    assert reason
+    assert "--allow-split-stores" in reason
+
+
+@pytest.mark.parametrize("host", ["127.evil.com", "1270.0.0.1", "example.com", "999.1", ""])
+def test_a_hostname_that_merely_looks_loopback_is_still_remote(host):
+    """The benign twin, and the reason this is not a `startswith("127.")` test: accepting the
+    classic abbreviated FAMILY must not accept a hostname whose text happens to begin with it.
+    `127.evil.com` resolves to whatever its owner points it at."""
+    assert not evidence.is_loopback_host(host)
+
+
 @pytest.mark.parametrize("db_host,endpoint", [
     # the compose default: both halves on this machine — the everyday local path
     ("localhost", "http://127.0.0.1:9000"),

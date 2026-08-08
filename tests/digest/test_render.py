@@ -154,6 +154,17 @@ def test_deltas_populated():
     assert "born" not in body
 
 
+def test_deltas_singular_page_for_exactly_one():
+    """OLD BEHAVIOUR: `• 1 pages filed`. The pages clause hard-coded the plural while every
+    sibling clause in this module is pluralized — `_plural` sits twelve lines above it, the
+    stale-run clause uses it, and the entity clause has its own dedicated plural test. A digest
+    for a quiet week posted the ungrammatical line next to a correctly singular one."""
+    body = build_body(since=SINCE, until=UNTIL, health=_health_never_run(),
+                      deltas=_deltas(pages_count=1, titles=["Q3 Pricing Floor"], entities=1))
+    assert '• 1 page filed — "Q3 Pricing Floor"' in body
+    assert "• 1 entity birth approved" in body
+
+
 def test_deltas_zero_activity():
     body = build_body(since=SINCE, until=UNTIL, health=_health_never_run(),
                       deltas=_deltas())

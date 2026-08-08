@@ -182,7 +182,12 @@ def build_bolt_app(ctx: SlackContext):
                 identity_result = await _resolve(team_id, event["user"])
                 await mention.handle_mention(
                     ctx, event_team_id=team_id, channel_id=channel_id, thread_ts=event["ts"],
-                    is_dm=True, asker_slack_user_id=event["user"], question=event.get("text", ""),
+                    is_dm=True, asker_slack_user_id=event["user"],
+                    # Stripped, exactly as `on_app_mention` above does it. A DM needs no mention to
+                    # reach the bot, but people write one anyway — and the raw text handed the
+                    # answering agent a literal `<@UBOT>` as part of the question, so the same
+                    # sentence asked in a channel and in a DM became two different questions.
+                    question=mention.strip_mention(event.get("text", "")),
                     identity_result=identity_result)
                 return
 
