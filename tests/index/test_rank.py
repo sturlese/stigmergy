@@ -1,11 +1,18 @@
 """Contract ranking, offline: the contract factors over fabricated candidates — no database, no
 embedder. The adversarial case (a superseded chain carrying a figure the successor corrects) is
 planted explicitly."""
+import os
+import pathlib
+import subprocess
+import sys
 from datetime import date
+
+import pytest
 
 from stigmergy.index import rank
 
 TODAY = date(2026, 7, 19)
+_REPO_ROOT = str(pathlib.Path(__file__).resolve().parents[2])
 
 
 def _page(path, **kw):
@@ -305,11 +312,56 @@ def test_entity_boost_does_not_fire_per_character_when_entity_is_a_bare_string()
 
 def test_recency_words_prefer_fresh_as_of():
     page = _page("p.md", as_of="2026-06")
-    for query in ("latest revenue", "current figures", "the most recent number"):
+    for query in ("latest revenue", "current figures", "the most recent number",
+                  # A possessive is the same question. Matching the vocabulary against
+                  # `query_tokens` instead of on word boundaries would drop this one, because that
+                  # tokenizer keeps the apostrophe inside the token ("today's" != "today").
+                  "today's number", "what are the current figures?"):
         labels = [label for _f, label in rank.contract_factors(page, query, TODAY)]
         assert any(label.startswith("fresh:") for label in labels), query
     labels = [label for _f, label in rank.contract_factors(page, "plain question", TODAY)]
     assert not any(label.startswith("fresh:") for label in labels)
+
+
+@pytest.mark.parametrize("query", [
+    "what do we know about Acme",                # "know"       contains "now"
+    "who owns each zone of the knowledge repo",  # "knowledge"  contains "now"
+    "concurrent sessions",                       # "concurrent" contains "current"
+    "snow closed the office",                    # "snow"       contains "now"
+])
+def test_a_word_merely_CONTAINING_a_recency_word_earns_no_freshness_boost(query):
+    """The benign twin of the test above. OLD BEHAVIOUR: `wants_fresh` was substring containment
+    (`w in q_low`) over a set of WORDS, so "know" contains "now" and the archetypal broad question
+    — "what do we know about X" — boosted every `as_of`-bearing page in the pool, demoting the
+    pages without one. Three of the sixteen questions in `evals/retrieval_golden.json` fired it.
+
+    That query shape is not an incidental example: `rank.py`'s own comment on why `inlinks` is not
+    a factor records a measured regression on exactly "a broad 'what do we know about X' question".
+    """
+    page = _page("p.md", as_of="2026-06")
+    labels = [label for _f, label in rank.contract_factors(page, query, TODAY)]
+    assert not any(label.startswith("fresh:") for label in labels), labels
+
+
+def test_the_recency_vocabulary_matches_whole_words_and_the_one_phrase():
+    """The contract `index.md` states — "the query carries a recency word" — held against the
+    vocabulary itself rather than against four hand-picked queries, so a word ADDED to
+    `_RECENCY_WORDS` later inherits the guarantee instead of quietly re-opening the substring hole.
+
+    Every single word must fire on its own and must NOT fire when merely embedded in a longer
+    word; `most recent` is the one multi-word entry and is matched as a phrase.
+    """
+    page = _page("p.md", as_of="2026-06")
+
+    def fires(query):
+        return any(lbl.startswith("fresh:")
+                   for _f, lbl in rank.contract_factors(page, query, TODAY))
+
+    for word in rank._RECENCY_WORDS:
+        assert fires(f"the {word} numbers"), word
+        if " " not in word:
+            assert not fires(f"the {word}xyz numbers"), f"{word}: suffix"
+            assert not fires(f"the xyz{word} numbers"), f"{word}: prefix"
 
 
 # --- fusion -----------------------------------------------------------------------------------
@@ -372,3 +424,40 @@ def test_snippets_strip_control_characters_from_hostile_content():
     # `rank.sanitize` is `stigmergy.text.sanitize`, which `rank` imports to clean every snippet;
     # `tests/test_text.py` owns that seam's own tests.
     assert rank.sanitize("a\x1b[2Jb") == "a[2Jb"
+
+
+def test_the_snippet_anchor_does_not_depend_on_set_iteration_order():
+    """OLD BEHAVIOUR: `_snippet` iterated `sorted(q_tokens, key=len, reverse=True)` over a SET.
+    `sorted` is stable, so two query tokens of EQUAL length were ordered by set iteration — which
+    CPython randomizes per process via the string hash seed. The same body and the same query
+    therefore produced a different snippet window after a restart.
+
+    That is not cosmetic: the snippet is user-visible on every wire hit (`server/service.py`), is
+    printed by `stigmergy-index search`, and `answer/brain.py` splices it into the prompt the
+    answering agent reads — so the same question could yield a different agent prompt from two
+    identical processes. `rank.py`'s own header promises the ranking is deterministic "so ranking
+    is testable and reproducible".
+
+    Run in real subprocesses with pinned, differing seeds: hash randomization cannot be changed
+    once an interpreter is up, so an in-process test could not observe this at all.
+    """
+    body = "BRAVO region: " + "x" * 400 + " ALPHA region: " + "y" * 100
+    prog = ("import sys; sys.path[:0] = ['src', '.']\n"
+            "from stigmergy.index import rank\n"
+            f"print(rank._snippet({body!r}, rank.query_tokens('alpha bravo')))\n")
+
+    outs = {subprocess.run([sys.executable, "-c", prog], capture_output=True, text=True,
+                           cwd=_REPO_ROOT, env={**os.environ, "PYTHONHASHSEED": str(seed)},
+                           check=True).stdout
+            for seed in range(8)}
+
+    assert len(outs) == 1, f"the snippet varied with PYTHONHASHSEED: {outs}"
+
+
+def test_the_snippet_prefers_the_longest_matching_token():
+    """The behaviour the tie-break must not have cost. Anchoring on the longest matching token is
+    the point of the sort — a short common word appearing early would otherwise drag the window
+    away from the specific term the reader searched for."""
+    body = "the of and " + "z" * 300 + " distinctive-term sits here"
+    snippet = rank._snippet(body, rank.query_tokens("the of and distinctive-term"))
+    assert "distinctive-term" in snippet

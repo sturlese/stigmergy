@@ -43,6 +43,19 @@ STALE_AFTER_DAYS = 365
 # stopped matching the language people ask in is worth checking before it is worth widening.
 _RECENCY_WORDS = {"current", "latest", "now", "today", "newest", "most recent"}
 
+# Matched on WORD BOUNDARIES, never as bare substrings. `"now" in "what do we know about X"` is
+# true, and that one character of slack put the boost on the single most common broad question
+# shape there is — three of the sixteen questions in `evals/retrieval_golden.json` fired it,
+# demoting every page WITHOUT an `as_of` on questions that had asked nothing about time.
+#
+# A regex rather than `query_tokens`, for two reasons it is worth not rediscovering: `\b` spans
+# the multi-word entry ("most recent") in the same pass, and `query_tokens` keeps the apostrophe
+# inside a token, so matching against it would drop "today's numbers" — a real recency question —
+# while fixing the false ones. Longest-first alternation so a future two-word entry cannot be
+# shadowed by a one-word prefix of itself.
+_RECENCY_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(w) for w in sorted(_RECENCY_WORDS, key=len, reverse=True)) + r")\b")
+
 
 # A split page's continuation parts carry a trailing part marker on their id. TWO conventions
 # exist: the historical `<id>#p2`, and the live meeting/document flow's `<stem>-p2`
@@ -132,7 +145,7 @@ def contract_factors(page: dict, query: str, today: date | None = None,
     Returns (factor, label) pairs; factors > 1 demote, < 1 boost."""
     q_low = query.lower()
     periods = query_periods(query)
-    wants_fresh = any(w in q_low for w in _RECENCY_WORDS)
+    wants_fresh = _RECENCY_RE.search(q_low) is not None
 
     factors: list[tuple[float, str]] = []
     if page.get("superseded_by"):
@@ -237,10 +250,18 @@ def rank(candidates: dict[str, dict], fts_ranking: list[str], vec_ranking: list[
 
 
 def _snippet(body: str, q_tokens: set[str], width: int = 240) -> str:
-    """First region of the body containing a query token (fallback: the head)."""
+    """The region around the LONGEST query token present in the body (fallback: the head).
+
+    Ties are broken alphabetically, not by iteration order. `q_tokens` is a `set`, and `sorted` is
+    stable, so two tokens of equal length used to be ordered by however the set happened to yield
+    them — which CPython randomizes per process. The same body and query then produced a different
+    snippet from two identical processes, and the snippet is user-visible: it ships on every wire
+    hit, `stigmergy-index search` prints it, and `answer/brain.py` splices it into the prompt the
+    answering agent reads. This module promises determinism; that promise has to include this.
+    """
     low = body.lower()
     best = 0
-    for t in sorted(q_tokens, key=len, reverse=True):
+    for t in sorted(q_tokens, key=lambda tok: (-len(tok), tok)):
         if len(t) < 3:
             continue
         i = low.find(t)
