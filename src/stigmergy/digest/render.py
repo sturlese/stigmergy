@@ -94,7 +94,7 @@ def _render_deltas(deltas: dict) -> list[str]:
         lines.append("• 0 pages filed")
     else:
         titles = ", ".join(_fmt_title(t) for t in deltas["pages_filed_titles"])
-        lines.append(f"• {n_pages} pages filed — {titles}")
+        lines.append(f"• {n_pages} {_plural(n_pages, 'page')} filed — {titles}")
 
     n_entities = deltas["entities_born_count"]
     # "approved", not "born": this counts `review_decisions` APPROVALS
