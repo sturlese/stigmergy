@@ -397,6 +397,15 @@ async def webhook_endpoint(request: Request, *, conn, embedder, settings: Webhoo
         # still 200 (never an error to GitHub), simply nothing to act on.
         log.warning("webhook: signature verified but the body did not parse as JSON")
         return JSONResponse({"ok": True, "ignored": "unparseable body"})
+    if not isinstance(payload, dict):
+        # `json.loads` accepts any JSON VALUE, so `123`, `[]`, `"a string"` and `null` all parse
+        # and none of them has `.get`. That call sits below this point and outside the `try`
+        # above, so an `AttributeError` escaped the handler and GitHub's delivery log showed a
+        # 500 for a body there was never anything to do with. Same verdict as the branch above,
+        # for the reason it already states: a signature that verified over something which is not
+        # a GitHub delivery is nothing to act on, and never an error to GitHub.
+        log.warning("webhook: signature verified but the body is not a JSON object")
+        return JSONResponse({"ok": True, "ignored": "body is not a JSON object"})
 
     event = request.headers.get("x-github-event", "")
     if event != "push":

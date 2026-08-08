@@ -501,6 +501,38 @@ def test_review_decide_refuses_a_secret_in_a_note(env, conn, require_gitleaks):
     assert status == capture_schema.TRIAGE, "the refused note must never reach a submitter report"
 
 
+def test_the_secret_refusal_names_the_rule_cleanly(require_gitleaks):
+    """OLD BEHAVIOUR: the steward was told `(rule: github-pat))` — with a stray closing paren.
+
+    The rule id was recovered by re-parsing the finding's own display message
+    (`message.rsplit("rule: ", 1)[-1]`), which returns everything after that marker INCLUDING the
+    `)` the message itself ends with; the f-string here then added a second one. `Finding.values`
+    carries `(line, rule)` structurally for exactly this reason, and `librarian.processing` was
+    taught the same lesson on its own refusal path — this is the same defect one package over.
+
+    Asserted on the sentence a human reads rather than on the exception type: the existing test
+    above already proves it raises, and a refusal whose text is garbled still raises.
+    """
+    note = f"the token is {adversarial_payloads.GITHUB_PAT}, use it to redeploy"
+
+    with pytest.raises(review.ReviewError) as caught:
+        review._refuse_secret_note(note)
+
+    message = str(caught.value)
+    assert "(rule: github-pat)" in message, message
+    assert "))" not in message, message
+    # The value itself is never repeated back — the property the whole refusal exists for.
+    assert adversarial_payloads.GITHUB_PAT not in message
+
+
+def test_an_ordinary_note_is_not_refused(require_gitleaks):
+    """The benign twin. This gate bounces a steward's real work when it is wrong, and a note that
+    merely talks ABOUT credentials in prose must still record."""
+    assert review._refuse_secret_note(
+        "rejected: the vendor rotated their API credentials last week, so this is stale") is None
+    assert review._refuse_secret_note("") is None
+
+
 # ── a deployment with no checkout still has stewards ───────────────────────────────────────────
 # `fly.toml` starts the `app` and `slack` groups with baked identities and registry and NO
 # `--repo`, so `load_stewards`' read at `origin/main` had nothing to read. Observed on staging:
