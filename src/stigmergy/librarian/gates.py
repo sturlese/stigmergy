@@ -112,8 +112,10 @@ class Finding:
     (whitespace-collapsed, control-stripped, clamped to `MAX_BRIEF_NAME_LEN` with an ellipsis) for
     a human or a prompt, and a presentation transform is exactly what silently broke
     `processing._unanchorable`'s identity comparison for a plural anchor, an NFD-vs-NFC spelling,
-    or a name over the clamp. Empty by default — only `gate_anchoring`'s unresolved finding
-    populates it today.
+    or a name over the clamp. Empty by default; `gate_anchoring`'s unresolved finding and
+    `_secret_findings`' `(line, rule)` populate it today. The secrets case is the same lesson from
+    the other side: a hit visible only once adjacent lines were rejoined has NO line number, and
+    the refusal routing that recovered one by splitting `locator` reported the page path as a line.
     """
     gate: str
     code: str

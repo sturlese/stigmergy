@@ -340,7 +340,9 @@ Everything else is reached FROM `processing.py`; read it first when tracing one 
   identity is what silently broke `processing._unanchorable` for a plural anchor, an NFD-composed
   accent and any name over the clamp. Two producers: `gate_anchoring`'s unresolved finding carries
   every declared value that did not resolve, and a secrets hit carries `(line, rule)` so
-  `report.py` and `processing._pre_agent` never re-parse a message they wrote. Plus
+  `report.py`, `processing._pre_agent` and both refusal routers never re-parse a message they
+  wrote — the rejoined hit's line is EMPTY and its locator holds no line at all, so a router that
+  recovered one by splitting the locator reported the page path as a line number. Plus
   `repairable` (default `True`): whether there is anything the agent could do differently at all. A
   gate that sets it `False` — SIX findings today: `zone/body-rewrite`, `zone/unparseable` and
   `zone/unreadable-edit` (each judges a MODIFIED page, which only `edits.apply_declared` produces),
