@@ -612,6 +612,36 @@ def test_a_raw_non_ascii_signature_header_gets_the_generic_401_not_a_500(fixture
     assert resp.json() == {"error": "unauthorized"}
 
 
+@pytest.mark.parametrize("body", [b"123", b"[]", b'"a string"', b"null"],
+                         ids=["number", "list", "string", "null"])
+def test_a_signed_body_that_is_not_a_json_object_is_ignored_not_a_500(fixture, webhook_env, body):
+    """OLD BEHAVIOUR: a raw `500 Internal Server Error`.
+
+    `json.loads` is guarded, but the guard ends at the parse: `payload.get("repository")` runs
+    OUTSIDE it. Every one of these parses fine and is simply not a mapping, so `.get` raised
+    `AttributeError` and escaped the handler — the same shape of gap as the signature crash above,
+    one step further down the same function.
+
+    This one needs the webhook secret to reach (GitHub itself, or an operator with the secret), so
+    it is a robustness fault rather than the unauthenticated hole. It still matters: a 500 is what
+    GitHub shows in its delivery log and what an operator would be asked to redeliver, for a body
+    there was never anything to do with.
+
+    The verdict matches the unparseable-body branch immediately above it, and for the same stated
+    reason: a signature that verified over something that is not a GitHub delivery is nothing to
+    act on, and never an error to GitHub.
+    """
+    app = build_test_http_app(fixture, {})
+    with run_http_server(app) as url:
+        base = url.rsplit("/", 1)[0]
+        resp = httpx.post(f"{base}{webhook.WEBHOOK_PATH}", content=body,
+                          headers={"X-Hub-Signature-256": _sign(SECRET, body),
+                                   "X-GitHub-Event": "push"})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ok"] is True
+
+
 @pytest.mark.parametrize("event", ["ping", "pull_request", "issues"])
 def test_a_non_push_event_returns_200_and_ignores(fixture, webhook_env, event):
     app = build_test_http_app(fixture, {})

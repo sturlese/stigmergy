@@ -457,9 +457,15 @@ def _refuse_secret_note(notes: str) -> None:
     gitleaks_bin = os.environ.get("STIGMERGY_GITLEAKS_BIN", "gitleaks")
     hits = gates.scan_secrets(notes, gitleaks_bin=gitleaks_bin, label="a review note")
     if hits:
+        # The rule id from `values`, never re-parsed out of the finding's own display message.
+        # `message.rsplit("rule: ", 1)[-1]` returns everything after that marker INCLUDING the
+        # `)` the message ends with, and the sentence below adds its own — so a steward was told
+        # `(rule: github-pat))`. `Finding.values` carries `(line, rule)` structurally for exactly
+        # this; `librarian.processing._refuse` learned the same lesson on its own refusal path.
+        _line, rule = hits[0].values
         raise ReviewError(
             "refusing to record this note — it matches a likely secret "
-            f"(rule: {hits[0].message.rsplit('rule: ', 1)[-1]}). Nothing was recorded; remove "
+            f"(rule: {rule}). Nothing was recorded; remove "
             "the credential and try again")
 
 
