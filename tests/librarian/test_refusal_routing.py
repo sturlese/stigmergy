@@ -1,11 +1,12 @@
-"""`processing._refuse`: which terminal state a surviving veto earns, and why.
+"""`processing._refuse` and `_refuse_meeting`: which terminal state a surviving veto earns, what it
+tells the submitter, and why.
 
-The routing that turns a set of findings into a terminal state is pure — it reads gates and codes,
-never a worktree — and most of it is proven end to end in `test_processing_pg.py`, over a real
-queue, a real git repo and the offline double. That is the right place for a refusal the double can
-actually stage.
+The routing that turns a set of findings into a terminal state reads gates and codes, and most of it
+is proven end to end in `test_processing_pg.py`, over a real queue, a real git repo and the offline
+double. That is the right place for a refusal the double can actually stage. Two kinds of routing
+are left over, and this module is for both of them.
 
-**This module is for the branch it cannot reach.** `zone/type-not-creatable` is a defensive veto:
+**The branch the double cannot reach.** `zone/type-not-creatable` is a defensive veto:
 `gates._check_created_type` documents that both derived views of `page.PAGE_TYPES` currently agree,
 so `ensure_creatable` cannot raise for a type `type_for_folder` just returned, and no capture — and
 no double directive — can produce the finding today. The routing behind it is still worth writing
@@ -18,6 +19,14 @@ The future is simulated with ONE line — a governed type given a folder
 (`FOLDER_BY_TYPE["meeting"]`) — which is exactly the table change that makes the guard live. Both
 halves are driven by the real code under that patch: the gate helper produces the finding, and the
 router derives the type back out of its locator.
+
+**The sentence a person actually receives.** The secrets section at the bottom is the opposite case:
+an ordinary, reachable refusal, where the routing decides not just the terminal state but WHERE it
+tells a submitter their credential is. Those tests write real pages and shell out to the real
+gitleaks binary (so this module skips, loudly in CI, without it — see `require_gitleaks`), because a
+finding a test author typed out proves only that the router handles a shape someone imagined. Every
+case there runs against BOTH routers: the defect they were written for was duplicated verbatim
+across the two, and a fix to one site alone would otherwise have shipped green.
 """
 import json
 from types import SimpleNamespace
@@ -27,6 +36,7 @@ import pytest
 from stigmergy.capture import schema
 from stigmergy.librarian import gates, processing
 from stigmergy.librarian import page as page_policy
+from tests import adversarial_payloads as payloads
 
 ITEM = {"id": 7, "attempts": 1, "submitted_by": "someone@acme.test"}
 OUTCOME = SimpleNamespace(summary="it reads like a meeting, so it went to the meetings folder",
@@ -459,3 +469,142 @@ def test_a_repairable_zone_finding_beside_a_declared_category_still_routes_as_st
 
     assert result.status == schema.REJECTED
     assert result.report[schema.REASON_CODE_KEY] == schema.REASON_STEERING
+
+
+# ── the secrets locator: what the person is told to go and look at ────────────────────────────
+#
+# `gates._secret_findings` emits two shapes. `Finding.values` carries `(line, rule)` so this
+# routing never has to recover either by re-reading the sentence the gate printed — the same
+# contract `_pre_agent` already honours. The REJOINED shape (a credential only visible once
+# adjacent lines were rejoined) carries an empty line and a locator with no line number in it,
+# because no single line points at the value.
+
+
+@pytest.fixture()
+def rejoined_secret_veto(tmp_path, require_gitleaks):
+    """The rejoined finding, from the real scanner rather than typed out here.
+
+    A hand-built `Finding` would prove only that the router handles a shape a test author
+    imagined. `scan_worktree_files` is what actually reaches `_refuse`, and the split payload is
+    the one case where it has no line number to hand over.
+    """
+    page = tmp_path / "wiki" / "notes" / "Renewal Terms.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(f"# Notes\n\nwe agreed on {payloads.GITHUB_PAT_SPLIT_ACROSS_LINES} "
+                    f"before lunch\n", encoding="utf-8")
+    findings = gates.scan_worktree_files(str(tmp_path), ["wiki/notes/Renewal Terms.md"],
+                                         gitleaks_bin="gitleaks")
+    assert [f.code for f in findings] == ["secret"]
+    assert findings[0].values == ("", "github-pat"), (
+        f"this fixture must stage the REJOINED shape — an empty line, and the bare page as the "
+        f"locator; got values={findings[0].values!r} locator={findings[0].locator!r}")
+    return findings
+
+
+@pytest.fixture()
+def rejoined_secret_veto_on_an_edited_page(require_gitleaks):
+    """The SECOND surface the same defect reaches, where the locator is not a path at all.
+
+    `gate_secrets`' edited-page branch scans the added lines with `label="the drafted page"`, and
+    `scan_secrets` uses that label as the locator — so the rejoined finding there carries neither a
+    line NOR a path. It matters because it is what separates a real fix from one that only looks
+    for a `/` or a `:` before deciding whether the locator holds a line number.
+    """
+    findings = gates.scan_secrets(
+        f"we agreed on {payloads.GITHUB_PAT_SPLIT_ACROSS_LINES} before lunch",
+        gitleaks_bin="gitleaks", label="the drafted page")
+    assert [f.code for f in findings] == ["secret"]
+    assert findings[0].values == ("", "github-pat"), (
+        f"this fixture must stage the REJOINED shape; got values={findings[0].values!r} "
+        f"locator={findings[0].locator!r}")
+    return findings
+
+
+@pytest.fixture()
+def one_line_secret_veto(tmp_path, require_gitleaks):
+    """The benign twin's finding: an ordinary hit that really does sit on one line."""
+    page = tmp_path / "wiki" / "notes" / "Plain Terms.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(f"key: {payloads.GITHUB_PAT}\n", encoding="utf-8")
+    findings = gates.scan_worktree_files(str(tmp_path), ["wiki/notes/Plain Terms.md"],
+                                         gitleaks_bin="gitleaks")
+    assert [f.code for f in findings] == ["secret"]
+    return findings
+
+
+@pytest.mark.parametrize("veto_fixture", ["rejoined_secret_veto",
+                                          "rejoined_secret_veto_on_an_edited_page"],
+                         ids=["new-page", "edited-page"])
+@pytest.mark.parametrize("refuse", [processing._refuse, processing._refuse_meeting],
+                         ids=["fast-lane", "meeting"])
+def test_a_secret_split_across_a_line_break_is_not_reported_as_a_line_number(
+        refuse, veto_fixture, request):
+    """OLD BEHAVIOUR: both routers recovered the line with `locator.rsplit(":", 1)[-1]`. For the
+    rejoined shape the locator IS the page path and holds no line, so that expression returned the
+    path — and the submitter was told the credential sat "near line wiki/notes/Renewal Terms.md".
+    `rejected_secret`'s "split across a line break" branch, written for precisely this finding,
+    was unreachable from here. This reason code purges the person's material immediately, so the
+    locator in this sentence is the only thing they have left to act on.
+    """
+    result = refuse(ITEM, request.getfixturevalue(veto_fixture), OUTCOME, agent_attempts=2)
+
+    summary = result.report["summary"]
+    assert result.status == schema.REJECTED
+    assert result.report[schema.REASON_CODE_KEY] == schema.REASON_SECRET
+    assert "split across a line break" in summary, summary
+    assert "near line" not in summary, summary
+    assert "wiki/notes" not in summary, summary
+    assert "(rule: github-pat)" in summary, summary
+
+
+@pytest.mark.parametrize("refuse", [processing._refuse, processing._refuse_meeting],
+                         ids=["fast-lane", "meeting"])
+def test_an_ordinary_secret_still_names_the_line_its_author_wrote(refuse, one_line_secret_veto):
+    """The benign twin. The fix must not flatten every secret refusal into "somewhere in the page":
+    a hit that does sit on one line keeps that line, because the number is most of the message's
+    value to whoever has to go and remove the credential."""
+    result = refuse(ITEM, one_line_secret_veto, OUTCOME, agent_attempts=2)
+
+    summary = result.report["summary"]
+    assert result.status == schema.REJECTED
+    assert result.report[schema.REASON_CODE_KEY] == schema.REASON_SECRET
+    assert "near line 1 of the drafted page" in summary, summary
+    assert "split across a line break" not in summary, summary
+    assert "(rule: github-pat)" in summary, summary
+
+
+def test_every_secrets_finding_carries_the_pair_the_routing_unpacks(
+        rejoined_secret_veto, one_line_secret_veto, rejoined_secret_veto_on_an_edited_page):
+    """The invariant both routers now depend on, pinned rather than left to inspection.
+
+    They read `line, rule = secret.values`, so a secrets finding that ever reached them without a
+    2-tuple would raise inside the worker — and `worker._finish` keys the immediate purge on the
+    reason code, so a crash here turns the one capture that must not linger into a `failed` row
+    that keeps its payload. Both shapes are asserted together because the pair is a property of
+    the GATE, not of whichever branch produced a given finding.
+    """
+    for findings in (rejoined_secret_veto, one_line_secret_veto,
+                     rejoined_secret_veto_on_an_edited_page):
+        for f in findings:
+            assert f.gate == "secrets", f
+            assert isinstance(f.values, tuple) and len(f.values) == 2, f
+            line, rule = f.values
+            assert rule, f
+            assert line == "" or line.isdigit(), f
+
+
+def test_a_knowledge_repo_linter_check_named_secret_is_not_read_as_a_gitleaks_hit():
+    """`gate_contract` builds its `code` VERBATIM from the knowledge repo's linter JSON, so `code`
+    alone is not this repo's namespace to promise. Selecting on it alone, a linter check named
+    `secret` would reach the secrets branch carrying the default empty `values` and raise — and a
+    `failed` row does not trigger the immediate purge that `rejected`/secret does. It must route as
+    the ordinary contract refusal it is."""
+    veto = [gates.Finding("contract", "secret", "wiki/notes/A.md: some linter complaint",
+                          locator="wiki/notes/A.md")]
+
+    for refuse in (processing._refuse, processing._refuse_meeting):
+        result = refuse(ITEM, veto, OUTCOME, agent_attempts=2)   # selecting on code alone: raises
+
+        assert result.status == schema.FAILED, result.report
+        assert result.report.get(schema.REASON_CODE_KEY) != schema.REASON_SECRET, result.report
+        assert "gitleaks" not in result.report["summary"], result.report

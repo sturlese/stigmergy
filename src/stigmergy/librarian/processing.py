@@ -924,17 +924,26 @@ def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
     veto = gates.vetoes(findings)
     notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
 
-    # Selected by CODE, not by gate. The secrets and PII gates also emit `unscanned-diff` — "the
-    # diff produced no readable added lines, so I refused rather than pass unscanned" — which is a
-    # SYSTEM fault, not a finding about the submitter's material. Routing it through
+    # Selected by CODE and not by gate ALONE. The secrets and PII gates also emit `unscanned-diff`
+    # — "the diff produced no readable added lines, so I refused rather than pass unscanned" —
+    # which is a SYSTEM fault, not a finding about the submitter's material. Routing it through
     # `rejected_secret` would tell a person gitleaks matched a secret in their capture when it
     # matched nothing at all, and send them hunting for a credential that is not there.
-    secret = next((f for f in veto if f.code == "secret"), None)
+    #
+    # The gate is named too, because `code` alone is not this repo's namespace to promise:
+    # `gate_contract` builds its code VERBATIM from the knowledge repo's linter JSON, so a linter
+    # check named `secret` would land here carrying the default empty `values` and take the read
+    # below from a clean refusal to a `ValueError` — and `worker._finish` keys the immediate purge
+    # on the reason code, so the one capture that must never linger would be the one that did.
+    secret = next((f for f in veto if f.gate == "secrets" and f.code == "secret"), None)
     if secret:
+        # Read from `values`, never re-parsed out of `message`/`locator` — same contract as
+        # `_pre_agent` above. A hit visible only once adjacent lines were rejoined carries an
+        # EMPTY line and a locator with no `:<line>` in it, so recovering the line by splitting
+        # the locator handed `rejected_secret` the page path and reported it as a line number.
+        line, rule = secret.values
         return Result(schema.REJECTED, "",
-                      report.rejected_secret(line=secret.locator.rsplit(":", 1)[-1],
-                                             rule_id=secret.message.rsplit("rule: ", 1)[-1]
-                                             .rstrip(")"),
+                      report.rejected_secret(line=line, rule_id=rule,
                                              where="the drafted page"),
                       diagnostics_path=diagnostics_path)
     pii = next((f for f in veto if f.code == "pii"), None)
@@ -2521,12 +2530,14 @@ def _refuse_meeting(item, findings, outcome, *, agent_attempts: int = 0,
     veto = gates.vetoes(findings)
     notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
 
-    secret = next((f for f in veto if f.code == "secret"), None)
+    secret = next((f for f in veto if f.gate == "secrets" and f.code == "secret"), None)
     if secret:
+        # From `values`, for the reason `_refuse` records: the rejoined shape has no line number.
+        # Gate AND code, for the reason it records too: `code` is a namespace the knowledge repo's
+        # linter also writes into.
+        line, rule = secret.values
         return Result(schema.REJECTED, "",
-                      report.rejected_secret(line=secret.locator.rsplit(":", 1)[-1],
-                                             rule_id=secret.message.rsplit("rule: ", 1)[-1]
-                                             .rstrip(")"),
+                      report.rejected_secret(line=line, rule_id=rule,
                                              where="the drafted page"),
                       diagnostics_path=diagnostics_path)
     pii = next((f for f in veto if f.code == "pii"), None)
