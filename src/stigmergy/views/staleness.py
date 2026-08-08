@@ -64,10 +64,21 @@ def existing_member_hash(repo: str, entity_id: str) -> str | None:
 
 
 def existing_view_ids(repo: str) -> set[str]:
+    """The GENERATED views on disk. A stem that is not a well-formed entity id is not one of them.
+
+    `views/` is an indexed corpus zone, so a hand-written page (`views/README.md`) may legitimately
+    sit beside the generated files — and every id here goes on to `view_relpath`, whose assertion
+    then refused it and took the caller down. That assertion guards a CALLER-supplied id from
+    escaping `views/`; a name read back out of that directory cannot traverse anywhere, so the
+    population is what needed narrowing, not the guard. Nothing legitimate is lost: `view_relpath`
+    is the ONE place view files are named, so a view it would refuse to build was never written by
+    this system.
+    """
     d = os.path.join(repo, VIEWS_RELDIR)
     if not os.path.isdir(d):
         return set()
-    return {name[:-3] for name in os.listdir(d) if name.endswith(".md")}
+    return {stem for name in os.listdir(d) if name.endswith(".md")
+            for stem in (name[:-3],) if _ENTITY_ID_RE.fullmatch(stem)}
 
 
 def list_stale_entities(repo: str) -> list[str]:
