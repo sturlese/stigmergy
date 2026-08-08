@@ -226,9 +226,18 @@ def build_test_http_app(fixture: Fixture, token_store: dict[str, str], *,
     to any other connection on the same database, e.g. a test's `indexed` conn used to assert on
     `audit_log` afterwards). `llm` defaults to 'fake' (unlike `Settings`' own production default
     'openai') so `ask` runs keyless here — the auth tests run with the fake embedder and no
-    keys."""
+    keys.
+
+    **Gated on Postgres through the SAME seam every other suite uses.** `build_http_app` opens its
+    own connection directly, so this whole tier used to bypass `connect_or_skip` and die with a raw
+    `psycopg.OperationalError` on a laptop with no docker — while every other Postgres-backed suite
+    skipped cleanly, which is the posture `testdb.required()`'s own docstring states. The guard
+    below restores it in both directions: a skip without a stack, and a LOUD failure in CI, where
+    `$STIGMERGY_TEST_DSN` is set and an unreachable database must never be silently skipped.
+    """
     from stigmergy.server.settings import Settings
     from stigmergy.server.transport_http import build_http_app
+    testdb.connect_or_skip("server-http").close()
     settings = Settings(identities_path=identities_path or fixture.identities_path,
                         embedder="fake",
                         dsn=testdb.require_test_database(dsn) if dsn else testdb.dsn(),
