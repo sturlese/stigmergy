@@ -118,6 +118,25 @@ def test_the_documented_quote_cap_is_enforced_not_merely_described():
     assert Citation(path="p.md", quote="x" * 200).quote      # the boundary itself is allowed
 
 
+def test_the_citation_path_is_bounded_too_because_it_ships_into_the_audit_column():
+    """OLD BEHAVIOUR: `path` carried no `max_length` at all — the twin of the cap above, left
+    unfixed one field over.
+
+    `answer.service.audit_summary` writes `[c["path"] for c in citations]` into `audit_log.result`,
+    on the stated argument that "a path is the same identifying fact `verdict` and `surfaced`
+    already carry — no new disclosure, and 'no question or answer text in this column' stays true
+    by construction". That argument holds only while the value IS a path. `path` is model-authored
+    free text like `quote` is, so unbounded it is a free channel into the one column whose whole
+    contract is that it carries no transcript — and it renders to a reader as a citation link. The
+    routine partial path needs no attacker: a citation whose path does not resolve is a citation
+    problem, not a dropped citation, so it is logged either way."""
+    with pytest.raises(ValidationError):
+        Citation(path="wiki/" + "x" * 200, quote="q")
+    # The benign twin: the boundary and every real brain path are well inside it.
+    assert Citation(path="x" * 200, quote="q").path
+    assert Citation(path="wiki/customers/initech.md", quote="q").path
+
+
 # ── a citation must not fail because a renderer's markers were dropped ─────────────────────────
 # Observed on staging: the SAME question returned `verified` on one run and `partial` on the next.
 # The citation was TRUE — the page says `- **Payments** — internal MVP ready; …` and the agent

@@ -181,3 +181,40 @@ def test_a_note_at_exactly_the_max_note_chars_boundary_is_not_truncated(width_no
     out = build(note)
     assert note in out["summary"]
     assert "…" not in out["summary"]
+
+
+def test_the_commit_and_page_a_steward_types_cross_the_same_seam_the_note_does():
+    """OLD BEHAVIOUR: `--commit` reached the summary raw (ANSI escapes, BEL and newlines all
+    survived), and BOTH `--page` and `--commit` landed raw in the report's own `page_path`/`commit`
+    fields — cleaned only where the summary quoted the page, and never for the commit.
+
+    `clean`'s docstring calls itself THE seam every operator-typed string that reaches a
+    submitter's report crosses, and states why it sits below the CLIs: "a rule each CLI has to
+    remember is a rule the next CLI forgets". These two were the fields the seam itself forgot.
+    Nothing validates that `--commit` is a sha — `stigmergy-queue resolve --commit "$(...)"` takes
+    whatever the steward typed — so this is the same channel `--note` already crosses."""
+    hostile = "abc\x1b[31mRED\x1b[0m\nsecond line\x07"
+    out = dispositions.resolved_report(submission_id=7, actor="steward@example.com",
+                                       note="handled by hand", page=f"wiki/{hostile}.md",
+                                       commit=hostile)
+    for field in (out["summary"], out["page_path"], out["commit"]):
+        assert "\x1b" not in field
+        assert "\x07" not in field
+        assert "\n" not in field
+    assert "RED" in out["commit"]        # the TEXT survives — only control bytes are cut
+
+
+def test_an_ordinary_page_and_sha_are_reported_and_referenced_untouched(monkeypatch):
+    """The benign twin: the real shape of both fields — a plain path and a 40-hex sha — reaches the
+    submitter whole, and `result_ref` still spells the `<page>@<sha>` convention every surface
+    reads."""
+    calls = {}
+    monkeypatch.setattr(dispositions.queue, "dispose",
+                        lambda conn, sid, **kw: calls.update(kw) or {"ok": True})
+    sha = "a" * 40
+    dispositions.resolve(None, 7, actor="steward@example.com", note="handled",
+                         page="wiki/notes/q3-plan.md", commit=sha)
+    assert calls["result_ref"] == f"wiki/notes/q3-plan.md@{sha}"
+    assert calls["report"]["page_path"] == "wiki/notes/q3-plan.md"
+    assert calls["report"]["commit"] == sha
+    assert f"wiki/notes/q3-plan.md@{sha}" in calls["report"]["summary"]

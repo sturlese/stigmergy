@@ -36,7 +36,15 @@ def answer_limits():
 
 
 class Citation(BaseModel):
-    path: str = Field(description="brain-md page path exactly as returned by the tools")
+    # Bounded for the same reason `quote` is, and it was not: a path is model-authored free text
+    # too, and `service.audit_summary` ships it into `audit_log.result` on the argument that "a
+    # path is the same identifying fact `verdict` and `surfaced` already carry — no new
+    # disclosure". That argument holds only while the value IS a path. Unbounded, it is a free
+    # channel a steered model can write a transcript into, in the one column whose whole contract
+    # is that it carries none — and it renders to a reader as a citation link.
+    path: str = Field(max_length=200,
+                      description="brain-md page path exactly as returned by the tools "
+                                  "(<=200 chars)")
     # `max_length` is the constraint; the description is what the MODEL reads. Both say 200,
     # because the cap used to live only in the description — prose the model could ignore — while
     # `service._QUERY_CAP` justified its own bound by pointing at "`Citation.quote`'s own <=200

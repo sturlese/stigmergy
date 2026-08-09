@@ -76,6 +76,47 @@ def _translate_rule(path_label: str, rule: dict) -> dict:
     return {"path_prefix": pattern.removesuffix(_GLOB_SUFFIX), "audiences": list(rule["acl"])}
 
 
+def _adopt_reader_rule(path_label: str, rule: dict) -> dict:
+    """A rule that already matches in the READER's dialect, checked for the half it may be missing.
+
+    Dialect detection is per KEY, not per rule, so "has a reader matcher" never implied "is a
+    reader rule": `{"path_prefix": "wiki/private", "acl": ["leadership"]}` is a half-migrated rule —
+    the matcher migrated, the labels did not — and it used to be adopted verbatim. The final
+    normalization then keeps only `(*_MATCHERS, "audiences")`, so `acl` was DROPPED, and the rule
+    reached `resolve_acl` carrying a matcher and no labels at all. Two ways that ended, neither
+    of them the intended restriction:
+
+    - the rule matched, and `resolve_acl`'s `rule["audiences"]` raised `KeyError` — not a
+      `LibrarianError`, so it escaped every handler, on EVERY item, from a config that had passed
+      the startup validation whose whole job is to be the loud place this is caught;
+    - the rule did not match, and the page fell through to `default`, which in the real
+      `ops/acl.json` is `[]` — OPEN. A rule written to restrict something resolving to open is
+      the one failure mode this file may not have (module docstring), and it is why the
+      unsupported-matcher check above already refuses rather than letting a never-matching rule
+      fall through.
+
+    So: `audiences` wins if present; `acl` is translated when it is the only one, which is the
+    same faithful translation `_translate_rule` performs for the fully on-disk dialect; both
+    present and disagreeing is refused rather than guessed at; neither is refused too.
+    """
+    adopted = {k: rule[k] for k in acl_model._MATCHERS if k in rule}
+    has_audiences = isinstance(rule.get("audiences"), list)
+    has_acl = isinstance(rule.get("acl"), list)
+    if has_audiences and has_acl and list(rule["audiences"]) != list(rule["acl"]):
+        raise LibrarianConfigError(
+            f"acl config {path_label}: rule {sorted(rule)} carries BOTH 'audiences' and 'acl' and "
+            f"they disagree ({sorted(rule['audiences'])} vs {sorted(rule['acl'])}) — say the "
+            f"audience once; an access-control rule with two answers is not one this will guess at")
+    if not has_audiences and not has_acl:
+        raise LibrarianConfigError(
+            f"acl config {path_label}: rule {sorted(rule)} matches on "
+            f"{', '.join(sorted(k for k in acl_model._MATCHERS if k in rule))} but names no "
+            f"audience — it has neither an 'audiences' list nor an 'acl' one, so it would resolve "
+            f"to nothing at all. Give it the audiences it is meant to grant, or remove it")
+    adopted["audiences"] = list(rule["audiences"] if has_audiences else rule["acl"])
+    return adopted
+
+
 def load(path: str | None):
     """Load the ACL config from a FILE, whichever dialect it is written in.
 
@@ -139,7 +180,12 @@ def load_text(text: str | None, *, label: str):
                 f"match, so it would silently fall through to the default. Rewrite it as a "
                 f"'path_prefix' rule, or remove it")
         if any(k in rule for k in acl_model._MATCHERS):
-            translated.append(dict(rule))
+            # A rule whose LABELS still come from `acl` is half-migrated, not pure reader dialect:
+            # the delegation below re-validates the original TEXT with the reader's own loader,
+            # which requires `audiences` on every rule and would refuse the very rule this adopts.
+            if not isinstance(rule.get("audiences"), list):
+                on_disk_dialect = True
+            translated.append(_adopt_reader_rule(label, rule))
             continue
         if not isinstance(rule.get("acl"), list):
             raise LibrarianConfigError(

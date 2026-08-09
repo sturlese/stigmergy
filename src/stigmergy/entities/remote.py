@@ -37,7 +37,7 @@ import tempfile
 from stigmergy.entities import mint as mint_lib
 from stigmergy.entities.errors import CapabilityUnavailableError, EntityError
 from stigmergy.librarian import gitcmd, githubapp
-from stigmergy.librarian.errors import GitError, LibrarianConfigError
+from stigmergy.librarian.errors import GitError, LibrarianConfigError, LibrarianError
 
 # One network leg of a server-driven mint. Generous enough for a cold clone of a knowledge repo
 # and short enough that a stalled remote cannot pin an HTTP worker indefinitely (audit M2).
@@ -69,16 +69,31 @@ def mint_via_clone(repo_url: str, branch: str, credential, *, entity_id: str, na
             # `str(ex)` is already scrubbed by `gitcmd.run` itself (args and stderr both pass
             # through `_scrub` before the exception is built) — safe to re-embed, never the URL.
             raise EntityError(f"could not clone the knowledge repo to mint this entity: {ex}") from ex
-        # Configured on the clone too (not only handed to `mint()` as `author`): the bounded
-        # rebase-and-retry inside `clone.commit_and_push` replays this commit with `git rebase`,
-        # which needs SOME committer identity reachable from wherever git looks, and a throwaway
-        # clone in a fresh temp directory cannot assume a global `~/.gitconfig` supplies one.
-        gitcmd.run("config", "user.name", author[0], cwd=repo)
-        gitcmd.run("config", "user.email", author[1], cwd=repo)
-        return mint_lib.mint(
-            repo, entity_id=entity_id, name=name, entity_type=entity_type, aliases=aliases,
-            role=role, branch=branch, today=today, author=author, submission_id=submission_id,
-            trailer=f"Approved-by: {_trailer_actor(approved_by)}", on_output=on_output)
+        try:
+            # Configured on the clone too (not only handed to `mint()` as `author`): the bounded
+            # rebase-and-retry inside `clone.commit_and_push` replays this commit with `git
+            # rebase`, which needs SOME committer identity reachable from wherever git looks, and a
+            # throwaway clone in a fresh temp directory cannot assume a global `~/.gitconfig`
+            # supplies one.
+            gitcmd.run("config", "user.name", author[0], cwd=repo)
+            gitcmd.run("config", "user.email", author[1], cwd=repo)
+            return mint_lib.mint(
+                repo, entity_id=entity_id, name=name, entity_type=entity_type, aliases=aliases,
+                role=role, branch=branch, today=today, author=author, submission_id=submission_id,
+                trailer=f"Approved-by: {_trailer_actor(approved_by)}", on_output=on_output)
+        except LibrarianError as ex:
+            # The seam the module docstring promises, on the half of the call that had none. The
+            # clone above was wrapped and `_authenticated_url` renames both of `githubapp`'s config
+            # faults, but everything AFTER the clone reached the caller as a librarian type:
+            # `gates.ensure_scanner` — which `mint._refuse_secrets` runs on this very path —
+            # raises `LibrarianConfigError` when gitleaks is absent, and the MCP server is a
+            # different process from the librarian worker, so a server host without the scanner is
+            # the ordinary deployment, not an exotic one. `server.review._mint_entity_proposal`
+            # catches this package's vocabulary and nothing else, so that config fault came out of
+            # a steward's Approve as an unmapped exception instead of a refusal they could act on.
+            # `LibrarianError` (the base) rather than the two subclasses seen so far: a seam that
+            # holds only for the faults already observed is the one that breaks on the next.
+            raise EntityError(f"the mint could not be completed: {ex}") from ex
 
 
 def _trailer_actor(approved_by: str) -> str:
