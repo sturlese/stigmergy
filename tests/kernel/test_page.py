@@ -50,3 +50,17 @@ def test_the_split_budget_leaves_room_for_the_per_part_chrome():
     continuation links) — if they were equal, every part the splitter emitted would land exactly at
     the cap and the chrome would push it over."""
     assert SPLIT_CHUNK_LINES < MAX_BODY_LINES
+
+
+def test_control_characters_still_yield_parseable_frontmatter():
+    """OLD BEHAVIOUR: PyYAML refused the WHOLE document with `ReaderError`.
+
+    Only `\\n`, `\\t` and `\\r` were escaped, so every other C0/C1 control was emitted RAW inside a
+    double-quoted scalar — which YAML forbids. That breaks the "quote (which always round-trips)"
+    promise the plain/quoted decision above is written on. It matters beyond hygiene: `views/render`
+    builds a whole frontmatter block through `_yaml`, `acl:` included, so one control character in
+    an entity title produced a view page no consumer could parse — and an unparseable page is
+    exactly what `corpus.page_row` now has to fail closed on.
+    """
+    for hostile in ["x\x1by", "a\x00b", "d\x7fe", "\x9bcsi"]:
+        assert _round_trip(hostile) == hostile, hostile
