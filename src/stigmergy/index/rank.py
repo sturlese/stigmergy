@@ -123,19 +123,26 @@ def query_periods(query: str) -> set[str]:
 def _period_end(value: str) -> date | None:
     """Latest plausible day of a (possibly coarse) as_of/updated value — a page dated '2026'
     is treated as fresh through 2026, so coarse-but-recent pages are never punished."""
+    # EVERY branch is guarded, not only the full-date one. `\d{4}` matches `0000`, and `date()`
+    # rejects year 0 — so `as_of: "0000"` (or `"0000-07"`, or `"0000-Q1"`) raised `ValueError`
+    # out of three of the four branches. That escapes `contract_factors` -> `rank()` ->
+    # `search_arms`, so ONE page dated that way broke every search whose candidate pool touched
+    # it, and `search_brain` echoed the message verbatim. The suite's own name for this contract
+    # is `test_period_end_rejects_invalid_values_instead_of_crashing`; a year of zero is just
+    # another invalid value, and `None` is what the other invalid ones already get.
     v = value.strip().strip('"')
-    if m := re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", v):
-        try:
+    try:
+        if m := re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", v):
             return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        except ValueError:
-            return None
-    if m := re.fullmatch(r"(\d{4})-Q([1-4])", v, re.I):
-        return date(int(m.group(1)), int(m.group(2)) * 3, 28)
-    if m := re.fullmatch(r"(\d{4})-(\d{2})", v):
-        month = int(m.group(2))
-        return date(int(m.group(1)), month, 28) if 1 <= month <= 12 else None
-    if m := re.fullmatch(r"\d{4}", v):
-        return date(int(v), 12, 31)
+        if m := re.fullmatch(r"(\d{4})-Q([1-4])", v, re.I):
+            return date(int(m.group(1)), int(m.group(2)) * 3, 28)
+        if m := re.fullmatch(r"(\d{4})-(\d{2})", v):
+            month = int(m.group(2))
+            return date(int(m.group(1)), month, 28) if 1 <= month <= 12 else None
+        if m := re.fullmatch(r"\d{4}", v):
+            return date(int(v), 12, 31)
+    except ValueError:
+        return None
     return None
 
 

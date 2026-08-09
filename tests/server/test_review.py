@@ -675,3 +675,68 @@ def test_the_ledger_records_the_canonical_id_not_the_callers_spelling(env, conn)
     with conn.cursor() as cur:
         cur.execute("SELECT item_id FROM review_decisions WHERE verdict = 'reject'")
         assert [r[0] for r in cur.fetchall()] == [str(parked)]
+
+
+def test_the_entity_proposal_ledger_records_the_canonical_id_too(env, conn):
+    """OLD BEHAVIOUR: the twin of a fix that landed for `parked-capture` was never applied here.
+
+    `_decide_parked_capture` canonicalizes and says why; `_decide_entity_proposal`, on the
+    identical `_parse_id` road, stored the caller's raw string on BOTH its branches. It matters
+    most on `approve` without `requeue`, where the row stays `triage` and therefore stays in
+    `review_queue`: `_latest_decisions` keys on `(item_kind, item_id)` against items built as
+    `str(row["id"])`, so the item renders with no decision forever and a second steward sees an
+    undecided proposal for an entity that has already been minted and pushed.
+    """
+    evidence = MemoryEvidenceStore()
+    proposal = _park_capture(conn, evidence,
+                             situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    steward = make_service(env, conn, identity_name=STEWARD, audiences=None, evidence=evidence)
+
+    result = review.review_decide(steward, item_kind=review.KIND_ENTITY_PROPOSAL,
+                                  item_id=f" {proposal} ", verdict="reject", notes="nope")
+
+    assert result["item_id"] == str(proposal)
+    with conn.cursor() as cur:
+        cur.execute("SELECT item_id FROM review_decisions WHERE item_kind = %s",
+                    (review.KIND_ENTITY_PROPOSAL,))
+        assert [r[0] for r in cur.fetchall()] == [str(proposal)]
+
+
+def test_a_scoped_queue_with_no_resolved_identity_refuses_instead_of_widening(env, conn):
+    """OLD BEHAVIOUR: it returned EVERY identity's parked items, labelled `scope: "own"`.
+
+    `submitted_by=None` is the management scope in `query_submissions`, and a scoped caller with
+    no identity passed exactly that. `capture_queue.list_own_submissions` makes the same mistake
+    impossible for the fast-lane queue — this surface reached the query directly and skipped it,
+    while this module's docstring claims it applies "the same ownership scope … rather than
+    invented a second way for them".
+
+    Not reachable through any shipped transport (each resolves an identity first), which is why
+    the twin surface is asserted alongside: they must fail the same way.
+    """
+    evidence = MemoryEvidenceStore()
+    _park_capture(conn, evidence, submitted_by=ALICE)
+    _park_capture(conn, evidence, submitted_by="mallory@example.com")
+    scoped_but_anonymous = make_service(env, conn, identity_name=None, audiences={"finance"},
+                                        evidence=evidence)
+
+    with pytest.raises(ValueError):
+        scoped_but_anonymous.submissions()          # the fast-lane twin already fails closed
+    with pytest.raises(ValueError):
+        review.review_queue(scoped_but_anonymous)
+
+
+def test_an_unrestricted_queue_and_a_scoped_one_both_still_work(env, conn):
+    """The benign twin: the guard must only bite the impossible combination. A steward still sees
+    everything, and an identified scoped caller still sees exactly its own."""
+    evidence = MemoryEvidenceStore()
+    _park_capture(conn, evidence, submitted_by=ALICE)
+    _park_capture(conn, evidence, submitted_by="mallory@example.com")
+
+    steward = make_service(env, conn, identity_name=STEWARD, audiences=None, evidence=evidence)
+    alice = make_service(env, conn, identity_name=ALICE, audiences={"finance"}, evidence=evidence)
+
+    assert review.review_queue(steward)["count"] == 2
+    own = review.review_queue(alice)
+    assert own["scope"] == "own"
+    assert [i["submitted_by"] for i in own["items"]] == [ALICE]

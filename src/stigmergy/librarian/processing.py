@@ -1884,13 +1884,26 @@ def _decision_stems(titles: list) -> list:
     """One filesystem-safe stem per decision title, collision-safe within this one capture: two
     decisions that slugify to the same stem get `-2`, `-3`, ... suffixes rather than silently
     colliding onto one file (`page_policy.open_for_new`'s `O_EXCL` would otherwise turn a same-slug
-    second decision into a crash rather than a routed refusal)."""
-    seen: dict = {}
+    second decision into a crash rather than a routed refusal).
+
+    The SUFFIXED stem is registered too, not just the base. Counting bases alone meant the `-2`
+    minted for a duplicate could collide with a title that slugifies to `<base>-2` on its own:
+    `["Pricing", "Pricing", "Pricing (2)"]` produced `["pricing", "pricing-2", "pricing-2"]`, and
+    `O_EXCL` then raised `FileExistsError` — which is not a `LibrarianError`, so it escaped every
+    handler in the meeting flow and landed in `worker.process_next`'s generic catch as stage
+    `unexpected`, on the FIRST pass, with the worktree already half-written. Exactly the "the
+    librarian broke" outcome this function exists to prevent.
+    """
+    taken: set = set()
     stems = []
     for title in titles:
         base = slugify(title) or "decision"
-        seen[base] = seen.get(base, 0) + 1
-        stems.append(base if seen[base] == 1 else f"{base}-{seen[base]}")
+        stem, n = base, 1
+        while stem in taken:
+            n += 1
+            stem = f"{base}-{n}"
+        taken.add(stem)
+        stems.append(stem)
     return stems
 
 

@@ -137,3 +137,35 @@ def test_a_stored_file_outcome_with_no_decisions_is_not_reused():
     outcome, why_not = processing._reusable_outcome(_item(_stored(raw=empty_raw)), MATERIAL)
     assert outcome is None
     assert "no decisions to file" in why_not
+
+
+# ── `_decision_stems`: collision-safe WITHIN one capture ───────────────────────────────────────
+def test_two_decisions_that_slugify_alike_never_share_a_stem():
+    """OLD BEHAVIOUR: `["Pricing", "Pricing", "Pricing (2)"]` produced `pricing-2` TWICE.
+
+    The suffix counter was keyed on the base alone, so the `-2` minted to disambiguate a duplicate
+    could collide with a title that slugifies to `<base>-2` by itself. `page.open_for_new`'s
+    `O_EXCL` then raised `FileExistsError`, which is not a `LibrarianError` — it escaped
+    `_one_meeting_pass`, `_run_meeting_in_worktree` and `process_meeting_item` alike and landed in
+    `worker.process_next`'s generic catch as stage `unexpected`, on the FIRST pass, with the
+    worktree already half-written.
+
+    This function's own docstring promises exactly the opposite: a same-slug decision gets a
+    routed refusal, never a crash. `parse_meeting_outcome` neither dedupes nor rejects duplicate
+    titles, and the titles are model-generated free text, so nothing upstream prevents the shape.
+    """
+    for titles in (["Pricing", "Pricing", "Pricing (2)"],
+                   ["Pricing (2)", "Pricing", "Pricing"],
+                   ["Q3 Pricing", "Q3 Pricing", "Q3 Pricing 2", "Q3 Pricing-2"]):
+        stems = processing._decision_stems(titles)
+        assert len(set(stems)) == len(stems), f"{titles} -> {stems}"
+        assert len(stems) == len(titles), f"{titles} -> {stems}"
+
+
+def test_ordinary_decision_titles_keep_their_plain_stems():
+    """The benign twin: disambiguation must appear only where there is something to disambiguate.
+    Distinct titles keep their bare slugs, and a plain duplicate still gets the documented `-2` —
+    which `test_gates_unit.py` builds a path from, so the shape is load-bearing elsewhere too."""
+    assert processing._decision_stems(["Alpha", "Beta"]) == ["alpha", "beta"]
+    assert processing._decision_stems(["Pricing", "Pricing"]) == ["pricing", "pricing-2"]
+    assert processing._decision_stems(["X", "X", "X"]) == ["x", "x-2", "x-3"]
