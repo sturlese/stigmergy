@@ -38,6 +38,7 @@ filesystem). `page.path_key` and `page.is_inside` are that shared seam.
 import logging
 import os
 
+from stigmergy.index import corpus
 from stigmergy.librarian import gates
 from stigmergy.librarian import page as page_policy
 
@@ -54,18 +55,25 @@ def _finding(code: str, message: str, locator: str = "") -> gates.Finding:
 
 
 def page_names(worktree: str) -> set[str]:
-    """Every page basename (without `.md`) in the worktree's `wiki/` tree.
+    """Every page basename (without `.md`) in EVERY content zone of the worktree.
 
     A wikilink resolves by bare basename, which is what the contract linter does too — so this is
     the same question "does `[[X]]` resolve" is answered with there, asked early enough that the
     refusal names the DECLARATION rather than surfacing later as a dead link on somebody's page.
+
+    "The same question" is why this walks all three zones. It used to walk `wiki/` alone while the
+    linter's `by_name` index is built from `CONTENT_ROOTS = ("wiki", "sources", "views")`, so a
+    declared link to a meeting transcript, an attached source or a regenerated view was refused
+    here as `edits/dead-link` — "resolves to no page in the graph" — about a page that plainly
+    exists. `apply_declared` is all-or-nothing, so nothing was applied, the capture burned its one
+    corrective retry and landed `failed`.
     """
     names = set()
-    root = os.path.join(worktree, "wiki")
-    for _parent, _dirs, files in os.walk(root):
-        for name in files:
-            if name.endswith(".md") and not name.startswith("."):
-                names.add(name[: -len(".md")])
+    for zone in corpus.ZONES:
+        for _parent, _dirs, files in os.walk(os.path.join(worktree, zone)):
+            for name in files:
+                if name.endswith(".md") and not name.startswith("."):
+                    names.add(name[: -len(".md")])
     return names
 
 

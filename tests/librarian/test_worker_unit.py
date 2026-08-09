@@ -438,3 +438,42 @@ def test_a_broken_descriptor_does_not_turn_a_shutdown_into_a_crash():
 # the same refusal shape.
 #
 # Removed: `test_a_failure_on_the_corrective_retry_reports_two_agent_attempts`
+
+
+def test_ctrl_c_while_idle_claims_no_further_item(rig, monkeypatch):
+    """OLD BEHAVIOUR: one more item was claimed, filed, committed and PUSHED after Ctrl-C.
+
+    The loop's own guard tested `releasing`, which a first Ctrl-C does not set — it sets
+    `stopping`. `_sleep` returns immediately once `stopping` is set, control went back to the top,
+    and `process_next` ran again; the `break` is checked only AFTER the claim. The handler prints
+    "finishing the item in flight, then stopping — no further items will be claimed" one
+    instruction earlier, and `docs/reference/librarian.md` states the same contract: the flags
+    affect only whether the NEXT item is claimed.
+
+    Driven through `Worker.run` itself with the signal arriving while IDLE — the existing
+    end-to-end signal tests deliver it mid-item, which is the path where the trailing `break` does
+    fire, and with a single queued row, where the extra claim finds an empty queue.
+    """
+    _, deps = rig
+    loop = worker.Worker(None, deps, on_output=lambda _msg: None)
+    claims = []
+
+    def _claim(_conn, _deps):
+        claims.append(1)
+        return None                      # nothing to do: the loop goes to sleep, as when idle
+
+    def _sleep_then_ctrl_c(_seconds):
+        loop._on_sigint(signal.SIGINT, None)      # the first press, arriving while idle
+
+    monkeypatch.setattr(worker, "process_next", _claim)
+    monkeypatch.setattr(worker, "sweep", lambda *_a, **_k: None)
+    monkeypatch.setattr(worker, "swept_clause", lambda *_a, **_k: "")
+    monkeypatch.setattr(contextlib, "nullcontext", contextlib.nullcontext)
+    monkeypatch.setattr(worker.ops, "job_run",
+                        lambda *_a, **_k: contextlib.nullcontext({}))
+    monkeypatch.setattr(loop, "_sleep", _sleep_then_ctrl_c)
+
+    loop.run()
+
+    assert len(claims) == 1, f"claimed {len(claims)} times after Ctrl-C; the contract is one"
+    assert loop.stopping is True

@@ -608,3 +608,65 @@ def test_a_knowledge_repo_linter_check_named_secret_is_not_read_as_a_gitleaks_hi
         assert result.status == schema.FAILED, result.report
         assert result.report.get(schema.REASON_CODE_KEY) != schema.REASON_SECRET, result.report
         assert "gitleaks" not in result.report["summary"], result.report
+
+
+@pytest.mark.parametrize("refuse", [processing._refuse, processing._refuse_meeting],
+                         ids=["fast-lane", "meeting"])
+def test_a_knowledge_repo_linter_check_named_pii_does_not_purge_the_submitters_material(refuse):
+    """OLD BEHAVIOUR: the submitter's payload and hints were DESTROYED over a lint finding.
+
+    The sibling test above pins the same hazard for `secret`; this is the branch two lines below
+    it, which was still selecting on `code` alone. `gate_contract` builds its code VERBATIM from
+    the knowledge repo's linter JSON, so a check named `pii` reached `report.rejected_pii` and set
+    `reason_code = pii` — which is in `schema.WITHHELD_REASONS`, so `worker._finish` calls
+    `retention.purge_secret_capture_immediately`. Irreversible, for a contract-lint complaint.
+
+    It also read `locator.rsplit(":", 1)[-1]` as a line number (the page path) and echoed the
+    linter's whole message as the "pattern label", inside a sentence promising the value is not
+    repeated in this report.
+    """
+    veto = [gates.Finding("contract", "pii",
+                          "wiki/notes/A.md: page mentions a person without an entity link",
+                          locator="wiki/notes/A.md")]
+
+    result = refuse(ITEM, veto, OUTCOME, agent_attempts=2)
+
+    assert result.status == schema.FAILED, result.report
+    assert result.report.get(schema.REASON_CODE_KEY) != schema.REASON_PII, result.report
+
+
+@pytest.mark.parametrize("refuse", [processing._refuse, processing._refuse_meeting],
+                         ids=["fast-lane", "meeting"])
+def test_an_unrepairable_zone_finding_is_a_system_fault_in_both_routers(refuse):
+    """OLD BEHAVIOUR: `_refuse` blamed the SUBMITTER for work the agent could not have done.
+
+    `gate_body_rewrite`'s findings are all `repairable=False`, and its docstring says why: on the
+    fast lane a modified page came from `edits.apply_declared` or from nothing, so the message
+    "describes work the agent did not do and cannot reach". Beside a declared injection category,
+    `_refuse` routed it to `rejected_steering` — telling the submitter their material had tried to
+    write outside the lane, and naming a colleague's page — for a fault this module's own docstring
+    classifies as a system fault. `_refuse_meeting` already carried the `and f.repairable` clause.
+    """
+    veto = [gates.Finding("zone", "body-rewrite", "rewrote existing content in wiki/notes/V.md",
+                          locator="wiki/notes/V.md", repairable=False)]
+
+    result = refuse(MEETING_ITEM, veto, STEERED_CATEGORY, agent_attempts=2)
+
+    assert result.status == schema.FAILED, result.report
+    assert schema.REASON_STEERING not in json.dumps(result.report)
+
+
+@pytest.mark.parametrize("refuse", [processing._refuse, processing._refuse_meeting],
+                         ids=["fast-lane", "meeting"])
+def test_a_repairable_zone_finding_beside_a_category_still_reaches_the_submitter(refuse):
+    """The benign twin for the clause above, in BOTH routers: a REPAIRABLE zone finding beside a
+    declared category is exactly the case that branch exists for — the material really may have
+    steered the agent — so it must still reach `rejected`/steering."""
+    veto = [gates.Finding("zone", "outside-lane",
+                          "wrote wiki/entities/Rogue.md, outside the fast lane's folders",
+                          locator="wiki/entities/Rogue.md")]
+
+    result = refuse(MEETING_ITEM, veto, STEERED_CATEGORY, agent_attempts=2)
+
+    assert result.status == schema.REJECTED
+    assert result.report[schema.REASON_CODE_KEY] == schema.REASON_STEERING

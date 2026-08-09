@@ -550,6 +550,17 @@ def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _is_encodable(material: str) -> bool:
+    """Can this string be archived at all? `str` is wider than UTF-8: an unpaired surrogate has no
+    encoding, and every byte-shaped thing downstream (the digest, the evidence blob, the payload)
+    needs one."""
+    try:
+        (material or "").encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def material_digest(material: str) -> tuple[str, int]:
     """`(sha256 hex, byte length)` of the material as it will be archived.
 
@@ -806,6 +817,16 @@ def prepare_submission(kind: str, material: str, hints: dict | None = None) -> S
         raise SubmissionRejected(f"unknown kind {kind!r} (allowed: {', '.join(KINDS)})")
     if not isinstance(material, str) or not material.strip():
         raise SubmissionRejected("material is empty — there is nothing to capture")
+    # Refused HERE, as a rejection, because the very next line encodes it. A lone surrogate is a
+    # legal `str` that `json.loads` will happily produce (`"\ud800"`), so it survives any JSON-RPC
+    # transport and reaches this seam — where `.encode("utf-8")` raised `UnicodeEncodeError`, a
+    # `ValueError` and not a `CaptureError`. Every door's `except CaptureError` missed it and it
+    # landed in the generic handler that says "cannot reach the queue database or evidence store",
+    # so a rejected INPUT was reported to the operator as the infrastructure being down.
+    if not _is_encodable(material):
+        raise SubmissionRejected(
+            "material contains unpaired surrogate characters, which are not text this can archive "
+            "— re-send it as valid UTF-8")
     digest, size = material_digest(material)
     if size > MAX_MATERIAL_BYTES:
         raise SubmissionRejected(

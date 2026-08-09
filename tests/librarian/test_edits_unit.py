@@ -11,6 +11,8 @@ a human-authored page — then did it again on the corrective retry that was han
 finding. So the tests below are as much about the REFUSALS as the writes: a declaration is
 untrusted input, and half of it landing would be a worktree nobody can reason about.
 """
+import os
+
 import pytest
 
 from stigmergy.librarian import edits
@@ -228,3 +230,44 @@ def test_page_names_reads_every_page_in_the_knowledge_tree(worktree):
 def test_page_names_ignores_dotfiles(worktree):
     (worktree / "wiki" / "notes" / ".hidden.md").write_text("x", encoding="utf-8")
     assert ".hidden" not in edits.page_names(str(worktree))
+
+
+def test_a_link_to_a_source_or_view_page_is_not_a_dead_link(tmp_path):
+    """OLD BEHAVIOUR: `edits/dead-link` — "resolves to no page in the graph" — about a page that
+    plainly exists.
+
+    `page_names` walked `wiki/` alone while the contract linter's `by_name` index, the thing this
+    check exists to agree with, is built from `CONTENT_ROOTS = ("wiki", "sources", "views")`. So a
+    declared link to a meeting transcript, an attached source or a regenerated view was refused
+    here — and `apply_declared` is all-or-nothing, so nothing was applied, the capture burned its
+    one corrective retry and landed `failed`, over a link that was correct.
+    """
+    worktree = str(tmp_path)
+    for rel in ("wiki/notes/Target.md", "sources/meetings/acme-sync-transcript.md",
+                "views/acme-corp.md"):
+        os.makedirs(os.path.join(worktree, os.path.dirname(rel)), exist_ok=True)
+        with open(os.path.join(worktree, rel), "w", encoding="utf-8") as f:
+            f.write("---\ntype: note\n---\nbody\n")
+
+    for link in ("acme-sync-transcript", "acme-corp"):
+        findings = edits.validate(worktree,
+                                  [{"path": "wiki/notes/Target.md", "kind": "backlink",
+                                    "link": link}],
+                                  new_pages=[])
+        assert findings == [], f"{link}: {[f.code for f in findings]}"
+
+
+def test_a_genuinely_absent_link_is_still_a_dead_link(tmp_path):
+    """The benign twin: widening the namespace must not stop the check catching a real dead link
+    — that is the whole reason it runs before anything is written."""
+    worktree = str(tmp_path)
+    os.makedirs(os.path.join(worktree, "wiki/notes"), exist_ok=True)
+    with open(os.path.join(worktree, "wiki/notes/Target.md"), "w", encoding="utf-8") as f:
+        f.write("---\ntype: note\n---\nbody\n")
+
+    findings = edits.validate(worktree,
+                              [{"path": "wiki/notes/Target.md", "kind": "backlink",
+                                "link": "no-such-page"}],
+                              new_pages=[])
+
+    assert [f.code for f in findings] == ["dead-link"]
