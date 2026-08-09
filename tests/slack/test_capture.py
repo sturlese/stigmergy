@@ -12,7 +12,7 @@ from stigmergy.slack.capture import (
     handle_reaction_added,
     mark_in_progress,
 )
-from stigmergy.slack.gateway import FakeSlackGateway
+from stigmergy.slack.gateway import FakeSlackGateway, SlackApiError
 from stigmergy.slack.identity import NoAccess, Resolved, TransientFailure, resolve_slack_identity
 from tests.slack.conftest import FINANCE_CHANNEL, TEAM_ID, build_context
 
@@ -518,3 +518,36 @@ def test_the_reactors_display_name_is_served_from_the_identity_cache_not_a_secon
 
     assert calls["n"] == 1   # neither the participant fan-out nor the ack's own lookup called it again
     assert "Ana" in gw.posted[0].text
+
+
+def test_a_thread_read_failure_tells_the_reactor_instead_of_vanishing(indexed, clean_tables,
+                                                                      monkeypatch):
+    """OLD BEHAVIOUR: the reactor saw the ⏳ appear, vanish, and nothing else — ever.
+
+    `conversations.info` above was guarded and answered with an honest ephemeral; the two reads
+    right after it were not. `conversations.replies` needs `channels:history` and is rate-limited,
+    so a missing scope or a Tier-3 429 escaped `handle_reaction_added` entirely. `on_reaction_added`
+    then ran its `finally` with `queued` still False (hourglass removed, no checkmark) and the outer
+    handler logged the exception — no capture, no refusal, no acknowledgement of any kind.
+    """
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    _seed_thread(gw, FINANCE_CHANNEL, "100.1")
+    ctx = build_context(fixture, conn, gateway=gw)
+    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
+
+    async def _boom(*_a, **_k):
+        raise SlackApiError("conversations.replies failed (missing_scope)")
+
+    monkeypatch.setattr(gw, "conversations_replies", _boom)
+
+    ok = _run(handle_reaction_added(ctx, reaction="brain", team_id=TEAM_ID,
+                                    channel_id=FINANCE_CHANNEL, message_ts="100.1",
+                                    slack_user_id="U_ANA", identity_result=identity))
+
+    assert ok is False
+    assert len(gw.ephemeral) == 1, "the reactor must be told something"
+    assert gw.ephemeral[0].text == copy.server_error()
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        assert cur.fetchone()[0] == 0   # nothing queued, and nothing half-queued

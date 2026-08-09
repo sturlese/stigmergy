@@ -735,3 +735,33 @@ def test_a_channel_ask_spends_the_ask_bucket_so_a_second_one_is_rate_limited(
     rows = _audit_rows_for(conn, Fixture.ANA)
     ask_outcomes = sorted(r["outcome"] for r in rows if r["tool"] == "ask")
     assert ask_outcomes == ["error", "ok"]   # even the rate-limited attempt left its own audit row
+
+
+# ── the addressing token is noise; a mention inside the question is part of it ──────────────────
+def test_only_the_bots_own_mention_is_stripped_from_a_question():
+    """OLD BEHAVIOUR: the pattern was a bare `<@\\w+>` over the whole text, so a question naming a
+    colleague reached the answering agent — and retrieval, and the `audit_log` row — with its
+    SUBJECT deleted: "what did  agree to?".
+    """
+    asked = mention.strip_mention("<@UBOT> what did <@U123> agree to?", "UBOT")
+    assert asked == "what did <@U123> agree to?"
+
+
+def test_the_labelled_spelling_of_the_bots_mention_is_stripped_too():
+    """Slack writes `<@U123|name>` when the mention carries a display label. The old pattern
+    (`<@\\w+>`) did not match it at all, so that spelling reached the agent verbatim."""
+    assert mention.strip_mention("<@UBOT|brain> what is the pricing floor?", "UBOT") == \
+        "what is the pricing floor?"
+
+
+def test_without_a_bot_id_only_the_leading_mention_goes():
+    """The fallback when Bolt gave us no `bot_user_id`: strip the addressing token whatever its id,
+    and never guess about a mention in the body of the sentence."""
+    assert mention.strip_mention("<@UBOT> what did <@U123> agree to?") == \
+        "what did <@U123> agree to?"
+    assert mention.strip_mention("what did <@U123> agree to?") == "what did <@U123> agree to?"
+
+
+def test_a_question_with_no_mention_at_all_is_untouched():
+    assert mention.strip_mention("what is the pricing floor?", "UBOT") == \
+        "what is the pricing floor?"

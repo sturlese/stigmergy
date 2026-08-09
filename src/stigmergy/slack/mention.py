@@ -28,12 +28,26 @@ ASK_TIMEOUT_S = 90
 # one filtered query each — a fraction of the cost of a second full `ask()` run.
 COMPARISON_MAX_RESULTS = 10
 
-_MENTION_RE = re.compile(r"<@\w+>")
+# Slack writes a mention as `<@U123>` or, when it carries a display label, `<@U123|name>`.
+_LEADING_MENTION_RE = re.compile(r"^\s*<@\w+(?:\|[^>]*)?>")
 
 
-def strip_mention(text: str) -> str:
-    """The bot's own `<@U…>` mention(s), stripped — what's left is the question."""
-    return _MENTION_RE.sub("", text or "").strip()
+def strip_mention(text: str, bot_user_id: str = "") -> str:
+    """The BOT's own mention(s), stripped — what's left is the question.
+
+    Targeted, not a blanket sweep. The pattern used to be a bare `<@\\w+>` applied to the whole
+    text, so a question that named a colleague — "@brain what did `<@U123>` agree to?" — reached
+    the answering agent, retrieval and the audit row as "what did  agree to?", with its subject
+    deleted. Only the addressing token is noise; a mention INSIDE the question is part of it.
+
+    `bot_user_id` is what every caller already has (Bolt puts it in `context`). Without it, only a
+    LEADING mention is removed: that is the addressing token whatever its id, and it keeps this
+    function from guessing about mentions in the body of a sentence.
+    """
+    s = text or ""
+    if bot_user_id:
+        return re.sub(rf"<@{re.escape(bot_user_id)}(?:\|[^>]*)?>", "", s).strip()
+    return _LEADING_MENTION_RE.sub("", s).strip()
 
 
 def _short_id() -> str:

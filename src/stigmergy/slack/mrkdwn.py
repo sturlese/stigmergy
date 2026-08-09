@@ -75,7 +75,12 @@ def to_mrkdwn(markdown: str) -> str:
     text = _carve(_FENCED_CODE_RE, text, store, _strip_fence_lang)
     text = _carve(_INLINE_CODE_RE, text, store)
 
-    text = _HEADING_RE.sub(lambda m: f"*{m.group(2)}*", text)
+    # The heading's own bold markers are DROPPED, not kept: mrkdwn has exactly one emphasis level,
+    # so a heading that is already bold cannot be bolded again. Wrapping the still-`**`-marked text
+    # produced `***X***`, which `_BOLD_RE` below then re-paired from the left into `**X**` — and for
+    # a heading with two bold runs (`### **A** and **B**`) into `**A* and *B**`, whose asterisks do
+    # not pair at all, so Slack renders stray literal ones mid-answer.
+    text = _HEADING_RE.sub(lambda m: f"*{_BOLD_RE.sub(r'\1', m.group(2))}*", text)
     text = _BULLET_RE.sub(lambda m: f"{m.group(1)}• ", text)
     text = _BOLD_RE.sub(lambda m: f"*{m.group(1)}*", text)
     text = _LINK_RE.sub(lambda m: f"<{m.group(2)}|{m.group(1)}>" if m.group(1) else f"<{m.group(2)}>",
