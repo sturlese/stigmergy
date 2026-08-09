@@ -486,6 +486,19 @@ def _decide_parked_capture(service, item_id: str, verdict: str, notes: str, acto
     submission_id = _parse_id(item_id)
     row = capture_queue.get_submission_trace(service.conn, submission_id) \
         if submission_id is not None else None
+    # An entity situation is NOT a parked capture, and this is where that has to be enforced.
+    # `_collect_open_items` classifies with `situations.classify` FIRST and only an unclassified
+    # row is listed as `parked-capture` — but the LISTING's disjointness is not the decide path's.
+    # Without this, the caller's `item_kind` chose the authorization rule: an entity proposal
+    # (steward-only, a governance act with no self-approval carve-out) was decidable by its own
+    # SUBMITTER simply by passing `item_kind="parked-capture"`, because this kind's looser guard
+    # returns as soon as the identity matches `submitted_by`. Proven end to end before the fix.
+    #
+    # Treated as NOT FOUND rather than given its own refusal, deliberately: this module's posture
+    # is that "a nonexistent id is refused by the SAME sentence an unauthorized one is", and a
+    # distinct message here would tell a caller which ids exist under the other kind.
+    if row is not None and situations.classify(row):
+        row = None
     _guard_parked_capture_decision(service, found=row is not None,
                                    submitted_by=(row or {}).get("submitted_by", ""))
 
@@ -505,20 +518,24 @@ def _decide_parked_capture(service, item_id: str, verdict: str, notes: str, acto
         if not notes:
             raise ReviewError("reject requires a reason")
         result = dispositions.reject(service.conn, submission_id, actor=actor, reason=notes)
-    record_decision(service.conn, item_kind=KIND_PARKED_CAPTURE, item_id=item_id, verdict=verdict,
-                    actor=actor, notes=notes)
+    # `str(submission_id)`, never the caller's raw `item_id`: `_parse_id` accepts anything
+    # `int()` does (" 204 ", "007", "+7"), so the disposition hit row 204 while the ledger
+    # stored " 204 " — and `_latest_decisions` keys on `(item_kind, item_id)` against items
+    # built as `str(row["id"])`, so that row could never join back to the item it decided.
+    record_decision(service.conn, item_kind=KIND_PARKED_CAPTURE, item_id=str(submission_id),
+                    verdict=verdict, actor=actor, notes=notes)
     # Composed HERE, once, so a Slack response and any other reader relay the SAME sentence rather
     # than re-deriving their own: a decision's confirmation text is composed by code, not by
     # whichever surface happens to be showing it.
     if verdict == dispositions.RESOLVE:
-        message = (f"recorded: resolve on {KIND_PARKED_CAPTURE} #{item_id} by {actor}. "
+        message = (f"recorded: resolve on {KIND_PARKED_CAPTURE} #{submission_id} by {actor}. "
                   f"Note: \"{notes}\"\nNothing else happens automatically — this was not filed "
                   f"as a page.")
     elif verdict == dispositions.REJECT:
-        message = f"recorded: reject on {KIND_PARKED_CAPTURE} #{item_id} by {actor}."
+        message = f"recorded: reject on {KIND_PARKED_CAPTURE} #{submission_id} by {actor}."
     else:
-        message = f"recorded: requeue on {KIND_PARKED_CAPTURE} #{item_id} by {actor}."
-    return {"recorded": verdict, "item_kind": KIND_PARKED_CAPTURE, "item_id": item_id,
+        message = f"recorded: requeue on {KIND_PARKED_CAPTURE} #{submission_id} by {actor}."
+    return {"recorded": verdict, "item_kind": KIND_PARKED_CAPTURE, "item_id": str(submission_id),
            "actor": actor, "result": result, "message": message}
 
 
@@ -559,7 +576,7 @@ def _decide_entity_proposal(service, item_id: str, verdict: str, notes: str, act
         if not notes:
             raise ReviewError("reject requires a reason")
         dispositions.reject(service.conn, submission_id, actor=actor, reason=notes)
-        message = f"recorded: reject on {KIND_ENTITY_PROPOSAL} #{item_id} by {actor}."
+        message = f"recorded: reject on {KIND_ENTITY_PROPOSAL} #{submission_id} by {actor}."
         record_decision(service.conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=item_id,
                         verdict=verdict, actor=actor, notes=notes)
         return {"recorded": verdict, "item_kind": KIND_ENTITY_PROPOSAL, "item_id": item_id,

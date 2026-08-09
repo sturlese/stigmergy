@@ -23,8 +23,11 @@ that already exist and puts them next to each other.
 """
 import argparse
 import json
+import sys
 from collections import defaultdict
 from datetime import datetime
+
+import psycopg
 
 from stigmergy.capture import latency as latency_mod
 from stigmergy.capture import queue as capture_queue
@@ -157,17 +160,36 @@ def main(argv=None) -> int:
     ap.add_argument("--json", action="store_true", help="machine-readable output for the record")
     args = ap.parse_args(argv)
 
-    since = datetime.strptime(args.since, "%Y-%m-%d") if args.since else None
+    # Refused before any I/O, and as a return code rather than a traceback: this module's package
+    # promises "the console entry point maps them to a clean stderr line and a non-zero exit code —
+    # no traceback ever reaches an operator's terminal" (`server/errors.py`), and every sibling CLI
+    # honours it. `--since not-a-date` used to raise a bare `ValueError` out of `strptime`.
+    try:
+        since = datetime.strptime(args.since, "%Y-%m-%d") if args.since else None
+    except ValueError:
+        print(f"--since must be an ISO date (YYYY-MM-DD), not {args.since!r}", file=sys.stderr)
+        return 2
 
-    conn = store.connect(args.dsn)
+    try:
+        conn = store.connect(args.dsn)
+    except psycopg.Error as ex:
+        print(f"cannot reach the database: {ex.__class__.__name__}", file=sys.stderr)
+        return 1
     try:
         # No DDL here. "It reads; it writes nothing" rules out `ensure_audit_table`/
         # `ensure_capture_schema` too, because a read-only database role cannot execute
         # `CREATE TABLE`/`ALTER TABLE` even when it is a no-op against a table that already
-        # exists. A missing table surfaces as an honest "no data yet" (`read_meta`-style absence,
-        # not a crash) rather than this command silently provisioning schema on a read-only
-        # reporting run.
+        # exists — so this command never silently provisions schema on a read-only reporting run.
+        #
+        # The consequence is that a not-yet-provisioned database is a REFUSAL here, not an empty
+        # report: a clean stderr line and a non-zero exit, the posture `server/errors.py` states
+        # for every console entry point in this package. It used to be a raw `UndefinedTable`
+        # traceback, which is the one thing that posture rules out.
         report = build_report(conn, since=since)
+    except psycopg.errors.UndefinedTable:
+        print("this database has no stigmergy tables yet — run the server once to provision "
+              "them, then re-run this report", file=sys.stderr)
+        return 1
     finally:
         conn.close()
 

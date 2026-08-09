@@ -621,8 +621,14 @@ class BrainService:
         # element), not free text a person typed, so fuzzing the comparison could only risk a
         # false match. This is what lets an anchored-but-unregistered id (`list_entities` already
         # serves it honestly as `{"id": ...}`) resolve here too, closing the navigation loop.
-        entity_id = entity_aliases.resolve_exact(aliases, entity) or (
-            entity if entity in scoped else None)
+        # The registry hit only WINS when it is in scope. `resolve_exact(...) or (...)` short-
+        # circuited on any truthy result, so a raw id that IS scoped was refused whenever the
+        # registry happened to fold it to a canonical id that is NOT — e.g. pages anchored to the
+        # display name "Globex" while the registry calls it `globex-robotics`. `list_entities` then
+        # advertised `{"id": "Globex"}` and this tool answered "unknown entity: Globex", which is
+        # exactly the drift this fallback was added (ADR 022 D5) to close.
+        resolved = entity_aliases.resolve_exact(aliases, entity)
+        entity_id = resolved if resolved in scoped else (entity if entity in scoped else None)
         absence = {"error": f"unknown entity: {entity}"}
         if entity_id is None or entity_id not in scoped:
             return absence
