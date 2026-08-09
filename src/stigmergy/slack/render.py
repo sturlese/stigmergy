@@ -60,6 +60,10 @@ SECTION_TEXT_MAX = 3000
 # half-written entity renders as literal `&am` in the middle of a page excerpt.
 _PARTIAL_ENTITY_RE = re.compile(r"&[a-z]{0,3}$")
 
+# What a reader sees where the text was cut. Italic, so it reads as the bot's own note rather than
+# as part of the material, and unambiguous: silence here is indistinguishable from a short answer.
+TRUNCATION_MARKER = "\n\n_[…truncated to fit Slack's block limit]_"
+
 
 def clamp_section_text(text: str, limit: int = SECTION_TEXT_MAX) -> str:
     """Hold one section's text to Slack's ceiling.
@@ -69,10 +73,19 @@ def clamp_section_text(text: str, limit: int = SECTION_TEXT_MAX) -> str:
     arrived here at over 14000 and Slack rejected the WHOLE `blocks` payload with `invalid_blocks`
     — which the caller logs and swallows, so the person who clicked got nothing at all: no page, no
     refusal, no sign anything had happened.
+
+    **A cut says so.** Without the marker this traded a loud failure for a silent one — which is
+    the wrong trade, and specifically so here: the old `invalid_blocks` path degraded to
+    `mention._edit_or_fallback`'s text-only post, which carries the answer body COMPLETE. So the
+    old behaviour lost the chrome and kept every word; clamping silently keeps the chrome and drops
+    the tail — exactly where a model puts its caveats ("figures are unaudited", "as of Q2"). A
+    reader cannot tell a clamped answer from a short one, and the missing sentence is the one that
+    changes what they do. The marker costs its own length out of the budget so the result still
+    fits.
     """
     if len(text) <= limit:
         return text
-    return _PARTIAL_ENTITY_RE.sub("", text[:limit])
+    return _PARTIAL_ENTITY_RE.sub("", text[:limit - len(TRUNCATION_MARKER)]) + TRUNCATION_MARKER
 
 
 def _section(text: str) -> dict:
@@ -101,8 +114,19 @@ def _context(text: str) -> dict:
     blocks. Rendering the REAL Sources block and verdict line as `context` blocks instead gives
     them Slack's own smaller, grey chrome: a channel the answer body (always a `section`) cannot
     reach into, no matter what it contains. Structural, not string-scrubbing — a scrubber here
-    would be exactly the proxy defense this project rejects."""
-    return {"type": "context", "elements": [{"type": "mrkdwn", "text": text}]}
+    would be exactly the proxy defense this project rejects.
+
+    **Clamped too, and for the same reason `_section` is.** Putting the rule in "the ONE builder
+    every section goes through" closed the hole for sections and left it open one block type over:
+    `_citation_blocks` builds the Sources context from citation QUOTES, which are verbatim page
+    text at up to `Citation.quote`'s 200 characters each and up to `MAX_CITATIONS` of them —
+    measured at 21459 characters against a 3000 ceiling, and 3225 with only three citations. Slack
+    rejects the whole payload the same way, so the `invalid_blocks` degrade this clamp exists to
+    prevent was still reachable, by a page AUTHOR rather than by the answering model. That is the
+    threat model `_section`'s own docstring names.
+    """
+    return {"type": "context",
+            "elements": [{"type": "mrkdwn", "text": clamp_section_text(text)}]}
 
 
 _DIVIDER = {"type": "divider"}

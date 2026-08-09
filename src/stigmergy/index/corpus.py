@@ -83,10 +83,11 @@ class PageRow:
 # page written on Windows (or normalized by a `.gitattributes` rule) matched NOTHING here, so its
 # whole frontmatter — `acl:` included — was silently invisible and it indexed as body-only. That is
 # the same silent leak as an unparseable block below, applied to an entire checkout at once.
-# A BOM and leading blank lines are TOLERATED, and `...` is accepted as the closer YAML itself
-# allows: an editor that writes a BOM, or an author who left a blank first line, wrote a page whose
-# frontmatter is perfectly readable, and refusing to see it is how `acl:` went missing.
-_FRONTMATTER_RE = re.compile(r"^﻿?---\r?\n(.*?)\r?\n---\r?\n?(.*)$", re.S)
+# A BOM is TOLERATED — an editor that writes one wrote a page whose frontmatter is perfectly
+# readable, and refusing to see it is how `acl:` went missing. So is horizontal whitespace after
+# either fence, which is invisible in every editor and cost a well-formed, CLOSED page its entire
+# `acl:` line for one trailing space.
+_FRONTMATTER_RE = re.compile(r"^﻿?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n?(.*)$", re.S)
 
 # The frontmatter block a page contract declares starts at byte zero — after a BOM an editor may
 # have written, and nothing else. Widening this to `\s*---` or to a `...` closer was tried and is
@@ -99,12 +100,44 @@ _FRONTMATTER_RE = re.compile(r"^﻿?---\r?\n(.*?)\r?\n---\r?\n?(.*)$", re.S)
 # title, dropped `acl:` into the body and indexed the page OPEN.
 #
 # `malformed` is not "the regex did not match" for the same reason. It is the narrower, actual
-# question — did this page ASK for restriction in a block that cannot be read — so it is decided by
-# looking for the declaration itself in the unreadable text. A page that opens `---` and closes
-# nothing but declares no audience is not restricted; failing it closed would trade a silent leak
-# for a silent retrieval gap, which is not an improvement.
-_OPENS_FRONTMATTER_RE = re.compile(r"^﻿?---\r?\n")
-_DECLARES_ACL_RE = re.compile(r"^\s*acl\s*:", re.M)
+# question — did this page ASK for restriction in a block that cannot be read. A page that opens
+# `---` and closes nothing but declares no audience is not restricted; failing it closed trades a
+# silent leak for a retrieval gap, which is only an improvement if it is LOUD (`page_row` logs it).
+_OPENS_FRONTMATTER_RE = re.compile(r"^﻿?---[ \t]*\r?\n")
+
+# The last-resort probe, used only when the candidate region will not parse at all. It looks for a
+# TOP-LEVEL key, which is the only kind that is a restriction request: at column zero, or after the
+# `{`/`,` of a flow mapping. Quoted spellings count — `"acl": [finance]` is the same declaration
+# YAML-wise, and a net that catches one and not the other is a net with a documented hole in it.
+# What it must NOT match is an INDENTED `acl:`, nested under some other key: `^\s*` allowed that,
+# and turned `meta:\n  acl: [x]` into a page visible to nobody.
+_DECLARES_ACL_RE = re.compile(r"""(?m)(?:^|[,{][ \t]*)['"]?acl['"]?[ \t]*:""")
+
+
+def _asked_for_an_audience(after_opener: str) -> bool:
+    """Whether the unreadable region below an unclosed `---` declares an audience.
+
+    Reading it, not grepping the file. `re.search` over the WHOLE text was the first attempt and it
+    was wrong in both directions at once. Too generous: a page starting with a thematic break
+    (`---` at byte zero, never closed) plus one line-initial `acl:` ANYWHERE below — inside a
+    fenced ```yaml example, in prose explaining how restriction works, or nested two levels under
+    another key where it was never a top-level request — indexed `acl=[]`, invisible to every
+    client. Too narrow: `"acl": [finance]` and the flow form `{title: Q3, acl: [finance]}` are the
+    same declaration and matched nothing.
+
+    So the region is bounded the way YAML bounds it — a frontmatter block is contiguous, and the
+    first blank line ends it — and then PARSED. A top-level `acl` key in what parses is the
+    request; anything nested under another key is not. The regex survives only for the region that
+    will not parse at all, which is the shape the original defect had
+    (`title: Q3\\nacl: [finance]\\nbody with no closing fence`: a mapping and a bare scalar, which
+    YAML refuses outright).
+    """
+    block = after_opener.replace("\r\n", "\n").partition("\n\n")[0]
+    try:
+        parsed = yaml.safe_load(block)
+    except yaml.YAMLError:
+        return bool(_DECLARES_ACL_RE.search(block))
+    return isinstance(parsed, dict) and "acl" in parsed
 
 
 def split_frontmatter_checked(text: str) -> tuple[dict, str, bool]:
@@ -138,7 +171,8 @@ def split_frontmatter_checked(text: str) -> tuple[dict, str, bool]:
     # No block extracted. A page that opened one and declared an audience inside it asked for
     # restriction in text nothing here can read: that, and only that, is unreadable rather than
     # absent.
-    unreadable = bool(_OPENS_FRONTMATTER_RE.match(text)) and bool(_DECLARES_ACL_RE.search(text))
+    opener = _OPENS_FRONTMATTER_RE.match(text)
+    unreadable = bool(opener) and _asked_for_an_audience(text[opener.end():])
     return {}, text, unreadable
 
 
@@ -278,6 +312,16 @@ def page_row(rel_path: str, zone: str, text: str) -> PageRow:
     rebuild. A genuinely NEW page (no existing row to conflict with) still lands at 0 here, which
     is the correct answer for a page nothing has ever resolved the graph for yet."""
     fm, body, malformed = split_frontmatter_checked(text)
+    if malformed:
+        # THE operator signal, and the sentence below depends on it: "a loud retrieval gap beats a
+        # silent leak" is only true if the gap is loud. Nothing else says this anywhere — not the
+        # rebuild's stats, not a gardener check — so without this line a page flipping from
+        # visible-to-everyone to visible-to-NOBODY produced no output at all, and the fix for one
+        # silent failure was another. Per page, at WARNING, naming the path, because the fix is a
+        # one-line edit to that file and the reader needs to know which.
+        log.warning("%s: frontmatter could not be read and the page declares an audience — "
+                    "indexing it visible to nobody rather than to everyone; fix the block and "
+                    "the next rebuild restores it", rel_path)
     stem = Path(rel_path).stem
     tags = fm.get("tags")
     page_type = str(fm.get("type", "") or "")
