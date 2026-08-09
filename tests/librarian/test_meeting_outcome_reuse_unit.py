@@ -169,3 +169,30 @@ def test_ordinary_decision_titles_keep_their_plain_stems():
     assert processing._decision_stems(["Alpha", "Beta"]) == ["alpha", "beta"]
     assert processing._decision_stems(["Pricing", "Pricing"]) == ["pricing", "pricing-2"]
     assert processing._decision_stems(["X", "X", "X"]) == ["x", "x-2", "x-3"]
+
+
+# ── the double must predict production's filename, not invent its own ──────────────────────────
+@pytest.mark.parametrize("title", [
+    "Zürich Review with Meridian Partners",   # the exact title the double's own sanitizer docstring
+                                              # records losing to an ASCII whitelist once already
+    "Café & Bar renewal",
+    "Renewal: Acme — Ø risk",
+    "A" * 70 + " tail",                       # past the double's 80-char cap, inside slugify's 60
+])
+def test_the_double_predicts_the_same_meeting_stem_processing_will_compute(title):
+    """OLD BEHAVIOUR: `DoubleAgent._slug` was a second, hand-written slugifier — it stripped
+    non-ASCII instead of transliterating it and capped at 80 where `kernel.normalize.slugify` caps
+    at 60 — so "Zürich Review" predicted `z-rich-review` while the real flow filed `zurich-review`.
+
+    Its one call site says it computes "the SAME stem `processing._meeting_stem` will compute for
+    this capture's own meeting page — matched here (not an arbitrary date) so `meeting-body-date-
+    link`'s wikilink resolves against a page genuinely being created in this diff, not a dead link
+    the contract linter's OWN `dead_links` rule would refuse for an unrelated reason". With the two
+    disagreeing, that scenario failed for exactly the unrelated reason the comment rules out, and
+    only for non-ASCII or long titles — so the suite stayed green and the coverage was fictional.
+
+    A test double that predicts production's filename must not own its own idea of what that
+    filename is: `_slug` now calls what `_meeting_stem` calls."""
+    from stigmergy.librarian.double import DoubleAgent
+    date = "2026-07-29"
+    assert DoubleAgent._slug(f"{date}-{title}") == processing._meeting_stem(date, title)

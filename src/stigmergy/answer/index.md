@@ -110,10 +110,13 @@ adapter — all three pinned as separate tests.
 ## Data & contracts
 
 - **`synthesize.AnswerOutput`** — `answer_markdown`, `citations` (`list[Citation]`, each `path` +
-  `quote`), `confidence` (closed enum), `refused` (bool). No `reason` field. `Citation.quote` is
-  capped at 200 characters by a pydantic `max_length`, not only by the Field description — a
-  description is prose the model may ignore, and `service._QUERY_CAP` justifies its own bound by
-  pointing at this one, so the two must both be real.
+  `quote`), `confidence` (closed enum), `refused` (bool). No `reason` field. BOTH `Citation`
+  fields are capped by a pydantic `max_length`, not only by the Field description — a description
+  is prose the model may ignore, and `service._QUERY_CAP` justifies its own bound by pointing at
+  `quote`'s, so they must be real. The two numbers differ because the fields do: `quote` is prose,
+  capped at 200; `path` is an identifier, capped at 400 — the librarian's own
+  `agent.MAX_IDENTIFIER_LEN`, past which it refuses to file a page at all, so no legitimate corpus
+  path can trip it.
 - **`synthesize.SynthesisContext`** — per-question state: `evidence` (every tool result,
   verbatim), `read_paths` (set — the verifier's membership check), `read_paths_order` (same
   facts, first-surfaced order — a refusal names pages in a stable, testable order), `searched`

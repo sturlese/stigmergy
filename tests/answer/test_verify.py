@@ -118,6 +118,28 @@ def test_the_documented_quote_cap_is_enforced_not_merely_described():
     assert Citation(path="p.md", quote="x" * 200).quote      # the boundary itself is allowed
 
 
+def test_the_citation_path_is_bounded_too_because_it_ships_into_the_audit_column():
+    """OLD BEHAVIOUR: `path` carried no `max_length` at all — the twin of the cap above, left
+    unfixed one field over.
+
+    `answer.service.audit_summary` writes `[c["path"] for c in citations]` into `audit_log.result`,
+    on the stated argument that "a path is the same identifying fact `verdict` and `surfaced`
+    already carry — no new disclosure, and 'no question or answer text in this column' stays true
+    by construction". That argument holds only while the value IS a path. `path` is model-authored
+    free text like `quote` is, so unbounded it is a free channel into the one column whose whole
+    contract is that it carries no transcript — and it renders to a reader as a citation link. The
+    routine partial path needs no attacker: a citation whose path does not resolve is a citation
+    problem, not a dropped citation, so it is logged either way."""
+    with pytest.raises(ValidationError):
+        Citation(path="wiki/" + "x" * 400, quote="q")
+    # The benign twin, and it is the point of the number: 400 is the librarian's own
+    # `agent.MAX_IDENTIFIER_LEN`, the ceiling past which it refuses to FILE a page at all — so no
+    # legitimate corpus path can trip this, while `quote`'s 200 would have turned a real page into
+    # a `ValidationError` out of `ask`, which catches `UsageLimitExceeded` only.
+    assert Citation(path="x" * 400, quote="q").path
+    assert Citation(path="wiki/customers/initech.md", quote="q").path
+
+
 # ── a citation must not fail because a renderer's markers were dropped ─────────────────────────
 # Observed on staging: the SAME question returned `verified` on one run and `partial` on the next.
 # The citation was TRUE — the page says `- **Payments** — internal MVP ready; …` and the agent
@@ -466,3 +488,32 @@ def test_bold_emphasis_at_the_span_boundary_with_an_ellipsis_still_strips_its_ma
     v = _verify_quote(body, quote)
     assert v["citation_problems"] == [], "a true reader-form quote must not be flagged"
     assert v["verdict"] == "verified"
+
+
+def test_the_audit_column_gets_a_citation_COUNT_not_the_model_authored_paths():
+    """OLD BEHAVIOUR: `audit_summary` wrote `[c["path"] for c in citations]`, so up to
+    `MAX_CITATIONS` model-authored strings landed in `audit_log.result` — the column whose whole
+    contract is that it carries no transcript.
+
+    Bounding `Citation.path` narrows that channel; it does not close it. Nothing checks that the
+    value is a path the run actually READ — an unresolvable citation is a citation *problem*, not a
+    dropped citation, so it is logged either way — and a steered model needs no attacker's help to
+    fill the field with prose. A count closes it and costs nothing that is read:
+    `pilot_report.answer_shape` tests `r.get("citations")` for TRUTH ("did this answer cite
+    anything"), which `0`/`n` answers exactly as `[]`/`[…]` did. The same reduction
+    `_verdict_shape` already makes one field over, for the same reason."""
+    from stigmergy.answer.service import audit_summary
+    smuggled = "SMUGGLED-TRANSCRIPT-4a91 the answer is that revenue was 512000"
+    result = {"refused": False, "suppressed": False, "retried": False,
+              "verdict": {"verdict": "verified"}, "first_verdict": None,
+              "citations": [{"path": smuggled, "quote": "q"},
+                            {"path": "wiki/customers/initech.md", "quote": "q"}]}
+
+    summary = audit_summary(result)
+
+    assert smuggled not in str(summary)
+    assert summary["citations"] == 2
+    # The benign twin, and the property `pilot_report` actually depends on: the truthiness that
+    # separates "answered with a citation" from "answered with none" is unchanged.
+    assert bool(summary["citations"]) is True
+    assert bool(audit_summary({**result, "citations": []})["citations"]) is False

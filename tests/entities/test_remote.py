@@ -273,3 +273,60 @@ def test_the_server_seam_and_the_cli_seam_mint_equivalent_artifacts(tmp_path, re
     assert server_author != cli_author, (
         "D1: the App writes, the human is named in a trailer — the author line is how a reader "
         "of git log tells which door a mint came through, and it must not converge")
+
+
+def test_a_librarian_fault_after_the_clone_is_renamed_into_this_packages_vocabulary(
+        tmp_path, monkeypatch):
+    """OLD BEHAVIOUR: it escaped as `librarian.errors.LibrarianConfigError`, and the module
+    docstring's "This module's public seam raises only `entities.errors.EntityError`" was false for
+    everything after the clone.
+
+    `gates.ensure_scanner` runs on this exact path (`mint._refuse_secrets` scans what the commit
+    will carry) and raises `LibrarianConfigError` when gitleaks is absent. The MCP server is a
+    different process from the librarian worker, so a server host without the scanner is the
+    ordinary deployment — and `server.review._mint_entity_proposal` catches
+    `EntityCapabilityUnavailableError` and `EntityError` only, so that fault came out of a
+    steward's Approve as an unmapped exception rather than a refusal naming what to install.
+    `GitError` from the push had the identical shape.
+    """
+    from tests.librarian import support
+    env = support.build_repo(str(tmp_path / "git"))
+
+    def scanner_missing(repo, **kwargs):
+        raise LibrarianConfigError(
+            "the secret scanner '/opt/operator/bin/gitleaks' is not runnable (FileNotFoundError)")
+
+    monkeypatch.setattr(remote.mint_lib, "mint", scanner_missing)
+
+    with pytest.raises(EntityError) as caught:
+        remote.mint_via_clone(env.bare, "main", None, entity_id="acme-two", name="Acme Two",
+                              entity_type="organization", today="2026-01-01",
+                              approved_by="steward@example.com")
+
+    assert str(caught.value) == remote.MINT_FAULT_MESSAGE
+    # …and the librarian fault's own text does NOT ride along. `server.review` turns this into a
+    # `ReviewError` "echoed verbatim over MCP", and `librarian/index.md` forbids putting a
+    # filesystem path — or any `str(exception)` — on the wire for a mid-run fault. Both of this
+    # seam's real faults carry one: git names the throwaway clone's absolute path, and
+    # `ensure_scanner` interpolates the operator-supplied `$STIGMERGY_GITLEAKS_BIN`.
+    assert "/opt/operator/bin/gitleaks" not in str(caught.value)
+    assert caught.value.__cause__ is not None, "the cause is kept for the log, not for the wire"
+
+
+def test_an_entity_error_from_the_mint_is_not_rewrapped_by_that_rename(tmp_path, monkeypatch):
+    """The benign twin: the rename above catches `LibrarianError`, which `EntityError` is not, so
+    every refusal this package already words for a human (a collision, a lost push race, a secret
+    in the role text) still reaches the caller as itself and keeps its own sentence."""
+    from stigmergy.entities.errors import CollisionError
+    from tests.librarian import support
+    env = support.build_repo(str(tmp_path / "git"))
+
+    def collide(repo, **kwargs):
+        raise CollisionError("that identity already resolves to Acme Corp")
+
+    monkeypatch.setattr(remote.mint_lib, "mint", collide)
+
+    with pytest.raises(CollisionError, match="already resolves"):
+        remote.mint_via_clone(env.bare, "main", None, entity_id="acme-two", name="Acme Two",
+                              entity_type="organization", today="2026-01-01",
+                              approved_by="steward@example.com")

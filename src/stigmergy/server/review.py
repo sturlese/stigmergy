@@ -202,11 +202,16 @@ def _neutralize_leaves(value, depth: int = 0):
     defect this replaces, and every field added to the dict later inherits the protection for free.
 
     Depth-bounded with the same constant the audit shaper uses (`server.service.MAX_AUDIT_DEPTH`),
-    lazily imported for the same module-cycle reason `_neutralize` already is.
+    lazily imported for the same module-cycle reason `_neutralize` already is. Past the bound the
+    subtree is DROPPED, which is the half of the mirroring that was not mirrored: this returned the
+    value untouched while `_neutralize_report` returns `None`, so the one branch reached only by a
+    structure too deep to walk was the one branch that shipped raw strings. A recursion limit that
+    hands back exactly what it declined to check is a fail-open bound, and the depth of a JSONB
+    object read back out of Postgres is not this boundary's to assume.
     """
     from stigmergy.server.service import MAX_AUDIT_DEPTH
     if depth > MAX_AUDIT_DEPTH:
-        return value
+        return None
     if isinstance(value, str):
         return _neutralize(value)
     if isinstance(value, dict):

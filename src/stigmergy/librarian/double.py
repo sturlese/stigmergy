@@ -64,6 +64,7 @@ import json
 import os
 import re
 
+from stigmergy.kernel import normalize
 from stigmergy.kernel import registry as registry_module
 from stigmergy.librarian import gitcmd
 from stigmergy.librarian.agent import (
@@ -435,9 +436,18 @@ class DoubleAgent:
 
     @staticmethod
     def _slug(text: str) -> str:
-        cleaned = _UNSAFE_IN_TITLE.sub(" ", text or "").strip().lower()
-        words = "-".join(cleaned.split())
-        return (re.sub(r"[^a-z0-9-]", "", words) or "meeting")[:80]
+        """`processing._meeting_stem`'s slug, by calling the same function it calls.
+
+        Its one caller says it computes "the SAME stem `processing._meeting_stem` will compute" —
+        and it did not. This was a second, hand-written slugifier: it dropped non-ASCII instead of
+        transliterating it and capped at 80 instead of 60, so "Zürich Review" predicted
+        `z-rich-review` while the real flow filed `zurich-review`. The double then wrote a
+        `[[wikilink]]` at the predicted path, the meeting page landed at the real one, and the
+        `meeting-body-date-link` scenario failed on the contract linter's `dead_links` rule — the
+        exact unrelated reason its caller's comment exists to rule out. A test double that predicts
+        production's filename must not own its own idea of what that filename is.
+        """
+        return normalize.slugify(text or "")
 
     @classmethod
     def _registry_entities(cls, worktree: str) -> list[str]:

@@ -125,3 +125,82 @@ def test_load_rejects_an_invalid_audience_label_containing_a_comma(tmp_path):
 # ── resolve(): the label lookup itself ──────────────────────────────────────────────────────
 def test_resolve_with_no_config_at_all_is_open():
     assert acl_rules.resolve(None, "wiki/notes/anything.md") is None
+
+
+# ── a reader matcher is not, by itself, a reader rule ─────────────────────────────────────────
+def test_a_half_migrated_rule_keeps_the_audiences_it_names_in_acl(tmp_path):
+    """OLD BEHAVIOUR: `{"path_prefix": ..., "acl": [...]}` was adopted verbatim because it carries
+    a reader MATCHER, the final normalization then kept only `(*_MATCHERS, "audiences")` — dropping
+    `acl` — and `resolve_acl`'s `rule["audiences"]` raised a bare `KeyError` on every page the rule
+    matched. Not a `LibrarianError`, so it escaped every handler, per item, from a config that had
+    passed the startup validation whose whole job is to be the loud place this is caught.
+
+    Dialect detection is per KEY, so a rule can migrate its matcher and not its labels. The
+    module's own docstring promises exactly this shape is readable ("a half-migrated file is still
+    readable"); translating `acl` here is the same faithful translation `_translate_rule` already
+    performs for the fully on-disk dialect."""
+    path = _write(tmp_path, {"default": [], "rules": [
+        {"path_prefix": "wiki/private", "acl": ["leadership"]},
+    ]})
+    config = acl_rules.load(path)
+    assert acl_rules.resolve(config, "wiki/private/board.md") == ["leadership"]
+    assert acl_rules.resolve(config, "wiki/notes/ordinary.md") is None
+
+
+def test_a_rule_with_a_matcher_and_no_audience_at_all_is_refused_at_startup(tmp_path):
+    """OLD BEHAVIOUR: accepted at startup, then `KeyError: 'audiences'` per matching item.
+
+    The other half of the same defect, and the worse one when the rule does NOT match: it fell
+    through to `default`, which in the real `ops/acl.json` is `[]` — OPEN. A rule written to
+    restrict something must never resolve to something weaker than intended; that is why the
+    unsupported-matcher check above already refuses rather than letting a never-matching rule
+    through, and this shape had escaped it."""
+    path = _write(tmp_path, {"default": [], "rules": [{"path_contains": "board"}]})
+    with pytest.raises(LibrarianConfigError, match="names no audience"):
+        acl_rules.load(path)
+
+
+def test_a_rule_naming_two_different_audiences_is_refused_rather_than_guessed_at(tmp_path):
+    path = _write(tmp_path, {"default": [], "rules": [
+        {"path_prefix": "wiki/private", "audiences": ["leadership"], "acl": ["all"]},
+    ]})
+    with pytest.raises(LibrarianConfigError, match="different audiences"):
+        acl_rules.load(path)
+
+
+def test_the_same_audiences_in_a_different_order_are_the_same_rule(tmp_path):
+    """The benign twin of that refusal, and the one it got wrong first time: the check compared
+    ORDERED lists, so `["a","b"]` vs `["b","a"]` stopped the worker — over a config that had been
+    resolving correctly — with a message that rendered both sides `sorted()`, telling the operator
+    to reconcile two lists it had just printed identical. An audience list is a SET everywhere it
+    is used: `resolve_acl` hands it on and `server.acl.visible()` does membership."""
+    path = _write(tmp_path, {"default": ["all"], "rules": [
+        {"path_prefix": "wiki/private", "audiences": ["finance", "leadership"],
+         "acl": ["leadership", "finance"]},
+    ]})
+    config = acl_rules.load(path)
+    assert acl_rules.resolve(config, "wiki/private/board.md") == ["finance", "leadership"]
+
+
+def test_a_pure_reader_rule_is_still_adopted_unchanged(tmp_path):
+    """The benign twin — it passes without the fix, which is the point: tightening what a rule
+    must name may not disturb the dialect this adapter exists to pass through untouched."""
+    path = _write(tmp_path, {"default": ["all"], "rules": [
+        {"path_prefix": "wiki/finance", "audiences": ["finance"]},
+    ]})
+    config = acl_rules.load(path)
+    assert acl_rules.resolve(config, "wiki/finance/q3.md") == ["finance"]
+    assert acl_rules.resolve(config, "wiki/elsewhere.md") == ["all"]
+
+
+def test_an_empty_acl_on_a_half_migrated_rule_still_spells_open(tmp_path):
+    """Empty audiences are how the on-disk dialect says "open", and a half-migrated rule may say it
+    too — the refusal above is for a rule that names no audience AT ALL, which is a different
+    thing from one that names none deliberately. (This one also fails without the fix: on `main`
+    the `acl` key was dropped and the rule reached `resolve_acl` with no `audiences` to read.)"""
+    path = _write(tmp_path, {"default": ["all"], "rules": [
+        {"path_prefix": "wiki/open", "acl": []},
+    ]})
+    config = acl_rules.load(path)
+    assert acl_rules.resolve(config, "wiki/open/notes.md") is None
+    assert acl_rules.resolve(config, "wiki/elsewhere.md") == ["all"]

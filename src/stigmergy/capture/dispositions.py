@@ -105,18 +105,28 @@ def resolved_report(*, submission_id: int, actor: str, note: str, page: str = ""
 
     No verification verdict is claimed, because there is none to claim: a steward wrote whatever
     they wrote, under their own name.
+
+    `--page` and `--commit` are operator-typed too, and they cross `clean` here rather than at
+    their display sites. They used to cross it only where the SUMMARY quotes them, so the same
+    values landed raw in `page_path`/`commit` — the report FIELDS every surface renders — and
+    `--commit` reached the summary raw as well, on the assumption that a sha cannot carry anything.
+    Nothing checks that it is a sha: `stigmergy-queue resolve --commit "$(...)"` takes whatever the
+    steward typed, so ANSI escapes and newlines reached the submitter's terminal through exactly
+    the channel this seam exists to close. Cleaning them once, here, means `resolve` can build
+    `result_ref` from the cleaned values instead of remembering to clean them a third time.
     """
     who = clean(actor, 120)
     said = clean(note)
+    page = clean(page, 200)
+    commit = clean(commit, 120)
     head = (f"{schema.RESOLVED} — a steward ({who}) looked at capture #{submission_id} and handled "
             f"it outside the fast lane")
     if page and commit:
-        summary = (f"{head}: {said} Folded into {clean(page, 200)}@{commit}. "
-                   f"{schema.SEARCHABILITY_NOTE}")
+        summary = f"{head}: {said} Folded into {page}@{commit}. {schema.SEARCHABILITY_NOTE}"
     elif commit:
         summary = f"{head}: {said} Committed as {commit}. {schema.SEARCHABILITY_NOTE}"
     elif page:
-        summary = f"{head}: {said} The material is in {clean(page, 200)}. {schema.SEARCHABILITY_NOTE}"
+        summary = f"{head}: {said} The material is in {page}. {schema.SEARCHABILITY_NOTE}"
     else:
         summary = (f"{head}: {said} No page or commit is recorded for this one — ask {who} directly "
                    f"if you want to know exactly what happened to the material.")
@@ -167,8 +177,13 @@ def resolve(conn, submission_id: int, *, actor: str, note: str, page: str = "",
                              commit=commit)
     # `result_ref` follows the `filed` convention (`<page path>@<sha>`) so the one field every
     # surface already reads for "where did the material go" answers it here too — and stays empty
-    # rather than inventing half of it when the steward named only one of the two.
-    result_ref = f"{page}@{commit}" if page and commit else (page or commit or "")
+    # rather than inventing half of it when the steward named only one of the two. Built from the
+    # REPORT's own values, not from the arguments: those crossed `clean` on the way into the
+    # report, and rebuilding this from the raw arguments would put the uncleaned text back on a
+    # second field beside the cleaned one.
+    ref_page, ref_commit = report["page_path"], report["commit"]
+    result_ref = f"{ref_page}@{ref_commit}" if ref_page and ref_commit else (
+        ref_page or ref_commit or "")
     return queue.dispose(conn, submission_id, status=schema.RESOLVED, actor=actor,
                          event=schema.EVENT_RESOLVED, action=RESOLVE, note=clean(note),
                          error=report["summary"], result_ref=result_ref, report=report)

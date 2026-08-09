@@ -31,17 +31,36 @@ exception type crossing this package's own boundary — every one `librarian.git
 raise is caught here and re-raised as one of this package's own, so a caller (`stigmergy.server.
 review`) only ever has to know this package's vocabulary.
 """
+import logging
 import os
 import tempfile
 
 from stigmergy.entities import mint as mint_lib
 from stigmergy.entities.errors import CapabilityUnavailableError, EntityError
 from stigmergy.librarian import gitcmd, githubapp
-from stigmergy.librarian.errors import GitError, LibrarianConfigError
+from stigmergy.librarian.errors import GitError, LibrarianConfigError, LibrarianError
+
+log = logging.getLogger(__name__)
 
 # One network leg of a server-driven mint. Generous enough for a cold clone of a knowledge repo
 # and short enough that a stalled remote cannot pin an HTTP worker indefinitely (audit M2).
 MINT_GIT_TIMEOUT_S = 60
+
+# What a caller is told about a git/config fault on this path, and all they are told. `server.
+# review` turns every `EntityError` from here into a `ReviewError` "echoed verbatim over MCP", so
+# a message built by splicing in `str(exception)` puts the SERVER's filesystem on a client's
+# screen: git names the throwaway clone's absolute path in `fatal: … outside repository at …`, and
+# `gates.ensure_scanner` interpolates `$STIGMERGY_GITLEAKS_BIN`, an operator-supplied path.
+# `librarian/index.md` states the rule this obeys — "do not put a filesystem path, or any
+# `str(exception)`, on the wire for a mid-run fault… do not 'improve' a message here by splicing
+# in the caught exception's text" — and records that it regressed once already. The detail is not
+# lost, it is MOVED: logged at ERROR with the traceback, where an operator can read it and a
+# steward cannot. The sentence still says which of the two things to do about it, because a
+# refusal that names no next step is its own defect.
+MINT_FAULT_MESSAGE = (
+    "the mint could not be completed — the server hit a git or configuration fault partway "
+    "through, not a problem with the identity you approved. Nothing was pushed. The details are "
+    "in the server log; ask whoever runs this deployment to look, then approve again")
 
 
 def mint_via_clone(repo_url: str, branch: str, credential, *, entity_id: str, name: str,
@@ -66,19 +85,41 @@ def mint_via_clone(repo_url: str, branch: str, credential, *, entity_id: str, na
             gitcmd.run("clone", "--quiet", "--branch", branch, clone_url, repo,
                        timeout=MINT_GIT_TIMEOUT_S)
         except GitError as ex:
-            # `str(ex)` is already scrubbed by `gitcmd.run` itself (args and stderr both pass
-            # through `_scrub` before the exception is built) — safe to re-embed, never the URL.
-            raise EntityError(f"could not clone the knowledge repo to mint this entity: {ex}") from ex
-        # Configured on the clone too (not only handed to `mint()` as `author`): the bounded
-        # rebase-and-retry inside `clone.commit_and_push` replays this commit with `git rebase`,
-        # which needs SOME committer identity reachable from wherever git looks, and a throwaway
-        # clone in a fresh temp directory cannot assume a global `~/.gitconfig` supplies one.
-        gitcmd.run("config", "user.name", author[0], cwd=repo)
-        gitcmd.run("config", "user.email", author[1], cwd=repo)
-        return mint_lib.mint(
-            repo, entity_id=entity_id, name=name, entity_type=entity_type, aliases=aliases,
-            role=role, branch=branch, today=today, author=author, submission_id=submission_id,
-            trailer=f"Approved-by: {_trailer_actor(approved_by)}", on_output=on_output)
+            # `_scrub` keeps the CREDENTIAL out of `str(ex)`, which is what the re-embedding here
+            # used to be justified by — but scrubbed is not the same as safe to publish: what
+            # remains is git's own stderr, naming this host's temp directory. Logged, not echoed,
+            # for the reason `MINT_FAULT_MESSAGE` states.
+            log.error("server-driven mint: could not clone the knowledge repo", exc_info=True)
+            raise EntityError(
+                "the knowledge repo could not be cloned to mint this entity — the server could "
+                "not reach it or is not credentialed for it. Nothing was pushed. The details are "
+                "in the server log; ask whoever runs this deployment to look") from ex
+        try:
+            # Configured on the clone too (not only handed to `mint()` as `author`): the bounded
+            # rebase-and-retry inside `clone.commit_and_push` replays this commit with `git
+            # rebase`, which needs SOME committer identity reachable from wherever git looks, and a
+            # throwaway clone in a fresh temp directory cannot assume a global `~/.gitconfig`
+            # supplies one.
+            gitcmd.run("config", "user.name", author[0], cwd=repo)
+            gitcmd.run("config", "user.email", author[1], cwd=repo)
+            return mint_lib.mint(
+                repo, entity_id=entity_id, name=name, entity_type=entity_type, aliases=aliases,
+                role=role, branch=branch, today=today, author=author, submission_id=submission_id,
+                trailer=f"Approved-by: {_trailer_actor(approved_by)}", on_output=on_output)
+        except LibrarianError as ex:
+            # The seam the module docstring promises, on the half of the call that had none. The
+            # clone above was wrapped and `_authenticated_url` renames both of `githubapp`'s config
+            # faults, but everything AFTER the clone reached the caller as a librarian type:
+            # `gates.ensure_scanner` — which `mint._refuse_secrets` runs on this very path —
+            # raises `LibrarianConfigError` when gitleaks is absent, and the MCP server is a
+            # different process from the librarian worker, so a server host without the scanner is
+            # the ordinary deployment, not an exotic one. `server.review._mint_entity_proposal`
+            # catches this package's vocabulary and nothing else, so that config fault came out of
+            # a steward's Approve as an unmapped exception instead of a refusal they could act on.
+            # `LibrarianError` (the base) rather than the two subclasses seen so far: a seam that
+            # holds only for the faults already observed is the one that breaks on the next.
+            log.error("server-driven mint: a librarian fault after the clone", exc_info=True)
+            raise EntityError(MINT_FAULT_MESSAGE) from ex
 
 
 def _trailer_actor(approved_by: str) -> str:

@@ -471,10 +471,20 @@ def audit_summary(result: dict) -> dict:
     share (`mcp_server.py`'s `ask` tool and `slack.mention._run_ask`), so the two transports cannot
     describe the same outcome differently.
 
-    `citations` is PATHS only, never quotes: a citation quote is drafted-answer text, which stays
-    out of every log, while a path is the same identifying fact `verdict` and `surfaced` already
-    carry elsewhere in this response — no new disclosure, and "no question or answer text in this
-    column" stays true by construction.
+    `citations` is a COUNT, and it used to be the list of paths. The argument for the list was
+    that "a path is the same identifying fact `verdict` and `surfaced` already carry — no new
+    disclosure", and it was wrong in the way this whole column is designed against: a citation
+    `path` is MODEL-authored, not corpus-authored. Nothing here checks that the value is a path
+    the run actually read — an unresolvable citation is a citation *problem*, not a dropped
+    citation, so it is logged either way — which made up to `MAX_CITATIONS` free-text fields a
+    steered model could write a transcript into, in the one column whose whole contract is that it
+    carries none. `Citation.path`'s own `max_length` bounds each one, but a bound is a narrower
+    channel, not a closed one.
+
+    A count closes it, and costs nothing that is read: `pilot_report.answer_shape` tests
+    `r.get("citations")` for TRUTH — "did this answer cite anything" — and `0`/`n` answers that
+    exactly as `[]`/`[…]` did. It is the same reduction `_verdict_shape` makes one field over, for
+    the same reason, and this module had already made it once without applying it here.
 
     `verdict` is `_verdict_shape`'s COUNT-only rendering, not `result["verdict"]` verbatim — see
     that function's docstring for why the verbatim dict is itself a transcript leak.
@@ -494,6 +504,6 @@ def audit_summary(result: dict) -> dict:
         "suppressed": result["suppressed"],
         "verdict": _verdict_shape(result["verdict"]),
         "first_verdict": _verdict_shape(first) if first else None,
-        "citations": [c["path"] for c in result.get("citations") or []],
+        "citations": len(result.get("citations") or []),
         "retried": result["retried"],
     }

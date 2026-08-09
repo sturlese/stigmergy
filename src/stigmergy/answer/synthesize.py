@@ -36,7 +36,19 @@ def answer_limits():
 
 
 class Citation(BaseModel):
-    path: str = Field(description="brain-md page path exactly as returned by the tools")
+    # Bounded, and it was not — but at the bound a PATH has, not at `quote`'s. This is the
+    # librarian's own `agent.MAX_IDENTIFIER_LEN`, whose comment says why an identifier gets a
+    # ceiling at all: "its length is bounded by the thing it names, so a 401-character one is not
+    # a long name — it is a defect". Written as a literal rather than imported, because `answer`
+    # importing `librarian` is exactly what `tests/test_architecture.py` forbids.
+    #
+    # 400 and not `quote`'s 200: the librarian refuses to FILE a page whose path is longer, so no
+    # legitimate corpus path can exceed this, while 200 would have turned a real (if absurd) page
+    # into a `ValidationError` out of `ask` — `service.ask` catches `UsageLimitExceeded` only, so
+    # an over-tight cap here is a crash, not a degraded answer.
+    path: str = Field(max_length=400,
+                      description="brain-md page path exactly as returned by the tools "
+                                  "(<=400 chars)")
     # `max_length` is the constraint; the description is what the MODEL reads. Both say 200,
     # because the cap used to live only in the description — prose the model could ignore — while
     # `service._QUERY_CAP` justified its own bound by pointing at "`Citation.quote`'s own <=200
