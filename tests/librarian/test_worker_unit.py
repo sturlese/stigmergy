@@ -11,11 +11,12 @@ import io
 import json
 import os
 import signal
+from types import SimpleNamespace
 
 import pytest
 
 from stigmergy.librarian import worker
-from stigmergy.librarian.errors import AgentError, LibrarianConfigError
+from stigmergy.librarian.errors import AgentError, LibrarianConfigError, StaleBaseError
 from tests.librarian import support
 
 
@@ -477,3 +478,38 @@ def test_ctrl_c_while_idle_claims_no_further_item(rig, monkeypatch):
 
     assert len(claims) == 1, f"claimed {len(claims)} times after Ctrl-C; the contract is one"
     assert loop.stopping is True
+
+
+def test_a_run_that_dies_mid_drain_still_records_the_work_it_already_pushed(rig, monkeypatch):
+    """OLD BEHAVIOUR: `job_runs` recorded `stats={}` for a run that had already filed and PUSHED.
+
+    `stats["processed"]` was written once, AFTER the loop. `process_next` deliberately re-raises
+    `StaleBaseError` rather than turning it into a `failed` row, so it escapes the loop and that
+    line never runs; `ops.job_run`'s own `except Exception` then persists whatever the dict holds.
+    A worker that drained five captures before its installation token expired recorded a run that
+    read as having done nothing at all.
+
+    `views/regenerate` states the rule this now follows, in prose, for exactly this reason:
+    updating only at the end writes "a `job_runs` audit trail lying by omission about real,
+    already-pushed work".
+    """
+    _, deps = rig
+    loop = worker.Worker(None, deps, on_output=lambda _msg: None)
+    recorded = {}
+    calls = []
+
+    def _process(_conn, _deps):
+        calls.append(1)
+        if len(calls) <= 2:
+            return ({"id": len(calls)}, SimpleNamespace(status="filed"))
+        raise StaleBaseError("the base moved under this item")
+
+    monkeypatch.setattr(worker, "process_next", _process)
+    monkeypatch.setattr(worker, "sweep", lambda *_a, **_k: None)
+    monkeypatch.setattr(worker, "swept_clause", lambda *_a, **_k: "")
+    monkeypatch.setattr(worker.ops, "job_run", lambda *_a, **_k: contextlib.nullcontext(recorded))
+
+    with pytest.raises(StaleBaseError):
+        loop.run()
+
+    assert recorded.get("processed") == 2, f"two items were filed and pushed; stats say {recorded}"

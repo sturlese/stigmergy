@@ -557,6 +557,16 @@ class Worker:
                     processed += 1
                     item, result = outcome
                     self.on_output(f"#{item['id']} -> {result.status}")
+                    # Written after EVERY item, not once after the loop. `process_next`
+                    # deliberately re-raises `StaleBaseError` rather than turning it into a
+                    # `failed` row, so it escapes this loop — and `ops.job_run`'s own
+                    # `except Exception` then persists whatever `stats` holds, which was `{}`.
+                    # A worker that filed, committed and PUSHED five captures before its
+                    # installation token expired recorded a run that looked like it had done
+                    # nothing. `views/regenerate` states the rule this now follows: updating only
+                    # at the end writes "a `job_runs` audit trail lying by omission about real,
+                    # already-pushed work".
+                    stats["processed"] = processed
                 if self.stopping:
                     break
                 if outcome is None:

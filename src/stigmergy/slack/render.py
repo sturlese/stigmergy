@@ -76,7 +76,21 @@ def clamp_section_text(text: str, limit: int = SECTION_TEXT_MAX) -> str:
 
 
 def _section(text: str) -> dict:
-    return {"type": "section", "text": {"type": "mrkdwn", "text": text}}
+    """Every section, clamped HERE — not at each caller.
+
+    The clamp first landed on `render_show_it_here_success` alone, and the answer body (the
+    biggest section this module builds, straight from unbounded model output) kept going out
+    unclamped: `"&" * 2800` rendered to 14000 characters against a 3000 ceiling. Slack answers
+    `invalid_blocks` for the whole payload, and `mention._edit_or_fallback` then degrades to a
+    text-only post — which costs the citation links, the "Show it here" buttons, and the
+    `context`-block verdict line this module's own docstring calls trust chrome "a prompt-injected
+    body cannot imitate". Everything collapses into one plain blob a forged `*Sources*` header is
+    indistinguishable from, and a page author who can make an answer entity-dense can force it.
+
+    Putting the rule in the ONE builder every section already goes through is what stops the next
+    caller from being the one that forgot.
+    """
+    return {"type": "section", "text": {"type": "mrkdwn", "text": clamp_section_text(text)}}
 
 
 def _context(text: str) -> dict:
@@ -276,8 +290,8 @@ def render_reply_already_answered() -> list[dict]:
 
 
 def render_show_it_here_success(*, page_title: str, excerpt: str) -> list[dict]:
-    return [_section(clamp_section_text(
-        copy.show_it_here_success(escape_mrkdwn(page_title), escape_mrkdwn(excerpt))))]
+    # No clamp here any more: `_section` applies it to every section, this one included.
+    return [_section(copy.show_it_here_success(escape_mrkdwn(page_title), escape_mrkdwn(excerpt)))]
 
 
 def render_show_it_here_refusal(path: str) -> list[dict]:

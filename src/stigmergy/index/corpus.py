@@ -83,30 +83,43 @@ class PageRow:
 # page written on Windows (or normalized by a `.gitattributes` rule) matched NOTHING here, so its
 # whole frontmatter — `acl:` included — was silently invisible and it indexed as body-only. That is
 # the same silent leak as an unparseable block below, applied to an entire checkout at once.
-_FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?(.*)$", re.S)
+# A BOM and leading blank lines are TOLERATED, and `...` is accepted as the closer YAML itself
+# allows: an editor that writes a BOM, or an author who left a blank first line, wrote a page whose
+# frontmatter is perfectly readable, and refusing to see it is how `acl:` went missing.
+_FRONTMATTER_RE = re.compile(r"^﻿?\s*---\r?\n(.*?)\r?\n(?:---|\.\.\.)\r?\n?(.*)$", re.S)
+
+# "This page MEANT to carry frontmatter" — the question `malformed` really turns on. Anchoring it
+# on `text.startswith("---")` alone was too narrow in one direction and too generous in the other.
+_INTENDED_FRONTMATTER_RE = re.compile(r"^﻿?\s*---\r?\n")
 
 
 def split_frontmatter_checked(text: str) -> tuple[dict, str, bool]:
     """(frontmatter dict, body, malformed).
 
-    `malformed` is True when the page HAS a frontmatter block that does not yield a mapping —
-    a YAML syntax error, or a block that parses to a scalar or a list. It is the signal
-    `page_row` needs to tell "this page carries no frontmatter" apart from "this page's
+    `malformed` is True when the page MEANT to carry frontmatter and this could not read it. It is
+    the signal `page_row` needs to tell "this page carries no frontmatter" apart from "this page's
     frontmatter could not be read", which the dict alone cannot express: both arrive as `{}`.
+
+    **Every unreadable shape sets it, not just a YAML syntax error.** That distinction was drawn too
+    narrowly once already: the fail-closed ACL was reached only when the block regex MATCHED and
+    `yaml.safe_load` then raised, so four other shapes still indexed a page carrying
+    `acl: [finance]` as open to everyone — an unterminated block, a block closed with `...`, a
+    leading blank line, and a BOM. The first two are genuinely unreadable and now fail closed; the
+    last two are readable and now simply parse, which is the better answer for both.
     """
-    if text.startswith("---"):
-        m = _FRONTMATTER_RE.match(text)
-        if m:
-            try:
-                fm = yaml.safe_load(m.group(1))
-            except yaml.YAMLError:
-                return {}, text, True
-            if fm is None:
-                return {}, m.group(2), False      # an EMPTY block is well-formed, just empty
-            if not isinstance(fm, dict):
-                return {}, m.group(2), True
-            return fm, m.group(2), False
-    return {}, text, False
+    m = _FRONTMATTER_RE.match(text)
+    if m:
+        try:
+            fm = yaml.safe_load(m.group(1))
+        except yaml.YAMLError:
+            return {}, text, True
+        if fm is None:
+            return {}, m.group(2), False      # an EMPTY block is well-formed, just empty
+        if not isinstance(fm, dict):
+            return {}, m.group(2), True
+        return fm, m.group(2), False
+    # No block extracted. If the page opened one anyway, it is unreadable — not absent.
+    return {}, text, bool(_INTENDED_FRONTMATTER_RE.match(text))
 
 
 def split_frontmatter(text: str) -> tuple[dict, str]:

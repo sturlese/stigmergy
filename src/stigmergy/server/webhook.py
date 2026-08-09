@@ -151,10 +151,23 @@ def changed_paths_from_push(payload: dict) -> dict[str, str]:
 
 
 def in_zone_changes(changes: dict[str, str]) -> dict[str, str]:
-    """Filtered to `corpus.ZONES` — bound to the constant `index.corpus` already declares, never a
-    fresh list this module would have to keep in sync by hand."""
+    """The same population `corpus.load_pages` walks — zone, extension and dot-files alike.
+
+    Bound to `corpus.ZONES` rather than a fresh list, and that half was always right. The zone
+    prefix ALONE was not: `load_pages` globs `*.md` and skips any name starting with `.`, so this
+    filter admitted files the full rebuild never produces a row for. A push adding
+    `wiki/data.csv`, `wiki/.hidden.md` or `wiki/.obsidian/workspace.json` was fetched and upserted
+    into `pages_index` — and `page_row` finds no frontmatter in them, so `acl` came out `None`,
+    which is the OPEN value at `server.acl.visible()`. A spreadsheet export committed under
+    `wiki/` became searchable and readable by every client until the nightly rebuild silently
+    dropped the row again, which also makes the state transient and hard to catch.
+
+    An Obsidian-facing knowledge repo is exactly the case: `.obsidian/` lives inside the vault.
+    """
     prefixes = tuple(f"{zone}/" for zone in corpus.ZONES)
-    return {path: status for path, status in changes.items() if path.startswith(prefixes)}
+    return {path: status for path, status in changes.items()
+            if path.startswith(prefixes) and path.endswith(".md")
+            and not any(part.startswith(".") for part in path.split("/"))}
 
 
 def fetch_file_content(repo_slug: str, path: str, sha: str, token: str, *, opener=None) -> str:

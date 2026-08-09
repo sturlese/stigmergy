@@ -1,6 +1,8 @@
 """Corpus loading: zone walk, frontmatter -> columns, wikilink inlinks, content hashing."""
 from pathlib import Path
 
+import pytest
+
 from stigmergy.index import corpus
 
 FIXTURE = str(Path(__file__).parent / "fixtures" / "repo")
@@ -483,3 +485,49 @@ def test_an_explicit_md_suffix_in_a_link_is_still_accepted():
     by_stem = corpus.by_stem_index(["wiki/entities/Booking.com.md"])
     assert corpus.resolve_links("wiki/n.md", corpus.link_targets("[[Booking.com.md]]"), by_stem) \
         == ["wiki/entities/Booking.com.md"]
+
+
+# ── the fail-closed ACL was route-scoped; these are the routes it missed ───────────────────────
+@pytest.mark.parametrize("label, text", [
+    ("unterminated block", "---\ntitle: Q3\nacl: [finance]\nbody with no closing fence\n"),
+    ("parses to a list", "---\n- a\n- b\n---\nbody\n"),
+    ("syntax error", "---\ntitle: Q3: oops\nacl: [finance]\n---\nsecret\n"),
+])
+def test_every_unreadable_frontmatter_fails_the_acl_closed(label, text):
+    """OLD BEHAVIOUR: only ONE of these failed closed; the rest indexed OPEN TO EVERYONE.
+
+    The `malformed` signal was raised only when the block regex MATCHED and `yaml.safe_load` then
+    raised — so a page carrying `acl: [finance]` whose block was merely *unterminated* never
+    reached the check at all, and `_acl_labels({})` answered `None`, the open value.
+
+    The rule the module states is about intent, not about which parser step failed: "a page that
+    ASKED for restriction must never index as open because its author mistyped the YAML". A page
+    that opens a `---` block meant to carry frontmatter; if it cannot be read, it is unreadable,
+    not absent.
+    """
+    assert corpus.page_row("wiki/x.md", "wiki", text).acl == [], label
+
+
+@pytest.mark.parametrize("label, text", [
+    ("closed with ...", "---\ntitle: Q3\nacl: [finance]\n...\nsecret\n"),
+    ("leading blank line", "\n---\ntitle: Q3\nacl: [finance]\n---\nsecret\n"),
+    ("leading BOM", "﻿---\ntitle: Q3\nacl: [finance]\n---\nsecret\n"),
+    ("CRLF", "---\r\ntitle: Q3\r\nacl: [finance]\r\n---\r\nsecret\r\n"),
+])
+def test_a_readable_page_keeps_its_acl_whatever_the_editor_wrote(label, text):
+    """The other half, and the better answer where it applies: these four are all READABLE. An
+    editor that writes a BOM, an author who left a blank first line, and YAML's own `...` document
+    terminator are not malformed pages — they were simply not matched, so their `acl:` went
+    missing and they indexed open. Failing them closed would swap a silent leak for a silent
+    retrieval gap; parsing them is what the author meant."""
+    row = corpus.page_row("wiki/x.md", "wiki", text)
+    assert row.acl == ["finance"], label
+    assert row.title == "Q3", label
+
+
+def test_a_page_with_no_frontmatter_at_all_is_still_open():
+    """The benign twin that bounds the widening: "unreadable" must not swallow "absent". A page
+    that never opened a block carries no restriction request, and stays open."""
+    assert corpus.page_row("wiki/a.md", "wiki", "just a body, nothing else\n").acl is None
+    assert corpus.page_row("wiki/b.md", "wiki", "---\ntitle: Q3\n---\nbody\n").acl is None
+    assert corpus.page_row("wiki/c.md", "wiki", "---\ntitle: Q3\nacl: null\n---\nbody\n").acl is None
