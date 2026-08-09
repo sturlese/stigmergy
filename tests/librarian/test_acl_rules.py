@@ -164,8 +164,22 @@ def test_a_rule_naming_two_different_audiences_is_refused_rather_than_guessed_at
     path = _write(tmp_path, {"default": [], "rules": [
         {"path_prefix": "wiki/private", "audiences": ["leadership"], "acl": ["all"]},
     ]})
-    with pytest.raises(LibrarianConfigError, match="disagree"):
+    with pytest.raises(LibrarianConfigError, match="different audiences"):
         acl_rules.load(path)
+
+
+def test_the_same_audiences_in_a_different_order_are_the_same_rule(tmp_path):
+    """The benign twin of that refusal, and the one it got wrong first time: the check compared
+    ORDERED lists, so `["a","b"]` vs `["b","a"]` stopped the worker — over a config that had been
+    resolving correctly — with a message that rendered both sides `sorted()`, telling the operator
+    to reconcile two lists it had just printed identical. An audience list is a SET everywhere it
+    is used: `resolve_acl` hands it on and `server.acl.visible()` does membership."""
+    path = _write(tmp_path, {"default": ["all"], "rules": [
+        {"path_prefix": "wiki/private", "audiences": ["finance", "leadership"],
+         "acl": ["leadership", "finance"]},
+    ]})
+    config = acl_rules.load(path)
+    assert acl_rules.resolve(config, "wiki/private/board.md") == ["finance", "leadership"]
 
 
 def test_a_pure_reader_rule_is_still_adopted_unchanged(tmp_path):

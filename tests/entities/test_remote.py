@@ -293,14 +293,24 @@ def test_a_librarian_fault_after_the_clone_is_renamed_into_this_packages_vocabul
     env = support.build_repo(str(tmp_path / "git"))
 
     def scanner_missing(repo, **kwargs):
-        raise LibrarianConfigError("the secret scanner 'gitleaks' is not runnable (FileNotFound)")
+        raise LibrarianConfigError(
+            "the secret scanner '/opt/operator/bin/gitleaks' is not runnable (FileNotFoundError)")
 
     monkeypatch.setattr(remote.mint_lib, "mint", scanner_missing)
 
-    with pytest.raises(EntityError, match="secret scanner"):
+    with pytest.raises(EntityError) as caught:
         remote.mint_via_clone(env.bare, "main", None, entity_id="acme-two", name="Acme Two",
                               entity_type="organization", today="2026-01-01",
                               approved_by="steward@example.com")
+
+    assert str(caught.value) == remote.MINT_FAULT_MESSAGE
+    # …and the librarian fault's own text does NOT ride along. `server.review` turns this into a
+    # `ReviewError` "echoed verbatim over MCP", and `librarian/index.md` forbids putting a
+    # filesystem path — or any `str(exception)` — on the wire for a mid-run fault. Both of this
+    # seam's real faults carry one: git names the throwaway clone's absolute path, and
+    # `ensure_scanner` interpolates the operator-supplied `$STIGMERGY_GITLEAKS_BIN`.
+    assert "/opt/operator/bin/gitleaks" not in str(caught.value)
+    assert caught.value.__cause__ is not None, "the cause is kept for the log, not for the wire"
 
 
 def test_an_entity_error_from_the_mint_is_not_rewrapped_by_that_rename(tmp_path, monkeypatch):

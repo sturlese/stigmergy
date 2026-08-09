@@ -102,11 +102,17 @@ def _adopt_reader_rule(path_label: str, rule: dict) -> dict:
     adopted = {k: rule[k] for k in acl_model._MATCHERS if k in rule}
     has_audiences = isinstance(rule.get("audiences"), list)
     has_acl = isinstance(rule.get("acl"), list)
-    if has_audiences and has_acl and list(rule["audiences"]) != list(rule["acl"]):
+    # Compared as SETS, and the message says so: an audience list is a set everywhere it is
+    # actually used (`resolve_acl` hands the list on, `server.acl.visible()` does membership), so
+    # `["a", "b"]` and `["b", "a"]` are the same rule. Comparing them as ordered lists refused a
+    # config that had been resolving correctly — and refused it with a message that rendered both
+    # sides `sorted()`, telling the operator to reconcile two lists it had just printed identical.
+    if has_audiences and has_acl and set(map(str, rule["audiences"])) != set(map(str, rule["acl"])):
         raise LibrarianConfigError(
             f"acl config {path_label}: rule {sorted(rule)} carries BOTH 'audiences' and 'acl' and "
-            f"they disagree ({sorted(rule['audiences'])} vs {sorted(rule['acl'])}) — say the "
-            f"audience once; an access-control rule with two answers is not one this will guess at")
+            f"they name different audiences ({sorted(map(str, rule['audiences']))} vs "
+            f"{sorted(map(str, rule['acl']))}) — say the audience once; an access-control rule "
+            f"with two answers is not one this will guess at")
     if not has_audiences and not has_acl:
         raise LibrarianConfigError(
             f"acl config {path_label}: rule {sorted(rule)} matches on "
