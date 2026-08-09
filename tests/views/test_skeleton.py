@@ -109,6 +109,39 @@ def test_member_set_going_empty_is_detectable(tmp_path):
     assert skeleton.members_of(clone, "acme-corp") == []
 
 
+def test_member_hash_changes_when_a_member_only_moves_its_as_of(tmp_path):
+    """OLD BEHAVIOUR: the hash was identical, so the view stayed stale FOREVER.
+
+    `as_of` is the most visible frontmatter-only field there is — `timeline_order` sorts the whole
+    Timeline by it, `render_timeline` prints it as the bold lead of every bullet, and
+    `write_synthesis` puts it in the agent's prompt — but `content_hash` covers title+body only, so
+    a date edit moved the rendered view and left this hash untouched. `list_stale_entities` then
+    returned nothing, `check_stale_views` reported nothing, `--stale` skipped it and `--entity`
+    answered "unchanged"; only `--force` recovered it. That is precisely the silently-stale failure
+    `member_hash`'s own docstring says it strengthened the key to prevent, for `superseded_by` and
+    `acl`, and this field was left out of it.
+    """
+    import dataclasses
+    _remote, clone = build_repo(str(tmp_path / "git"), n_decisions=2)
+    members = skeleton.members_of(clone, "acme-corp")
+    moved = [dataclasses.replace(m, as_of="2020-01-01") if m.type == "decision" else m
+             for m in members]
+
+    assert skeleton.render_timeline(moved) != skeleton.render_timeline(members), \
+        "the fixture must actually move the rendered view, or this proves nothing"
+    assert skeleton.member_hash(moved) != skeleton.member_hash(members)
+
+
+def test_member_hash_is_unchanged_when_nothing_moved(tmp_path):
+    """The benign twin: the hash must still mean "the member set did not change". Hashing more
+    fields must not make an untouched repo look stale on every pass — that would turn `--stale`
+    into `--all` and regenerate the whole corpus every night."""
+    _remote, clone = build_repo(str(tmp_path / "git"), n_decisions=2)
+    first = skeleton.member_hash(skeleton.members_of(clone, "acme-corp"))
+    second = skeleton.member_hash(skeleton.members_of(clone, "acme-corp"))
+    assert first == second
+
+
 def test_member_hash_changes_when_a_member_gains_superseded_by(tmp_path):
     """A frontmatter-only change (no body edit) still moves the hash — the strengthening beyond
     the bare (id, content_hash, path) triple, documented in `skeleton.member_hash`."""
