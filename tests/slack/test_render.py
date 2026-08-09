@@ -425,3 +425,34 @@ def test_needs_input_still_addresses_the_submitter_with_a_real_mention():
     text = render.render_needs_input(situation_prose="an ordinary situation",
                                      slack_user_id="U123")[0]["text"]["text"]
     assert text.startswith("<@U123> —")
+
+
+# ── Slack's section ceiling is measured on the ESCAPED string ──────────────────────────────────
+def test_a_show_it_here_excerpt_stays_within_slacks_section_ceiling():
+    """OLD BEHAVIOUR: the whole `blocks` payload was rejected and the clicker got NOTHING.
+
+    `replies` cut the excerpt to `SHOW_IT_HERE_EXCERPT_CHARS` and `render` escaped it afterwards —
+    but `escape_mrkdwn` EXPANDS (`&` -> `&amp;`), so an entity-heavy page arrived at over 14000
+    characters against Slack's 3000 ceiling. Slack answers `invalid_blocks` for the whole message,
+    `handle_show_it_here` logs and swallows the `SlackApiError`, and the person who pressed the
+    button saw no page, no refusal and no sign anything had happened — on the only affordance that
+    reads a page from Slack.
+    """
+    for excerpt in ("&" * 2800, "<" * 2800, ("a & b <c> " * 400)[:2800]):
+        blocks = render.render_show_it_here_success(page_title="Q3 Pricing", excerpt=excerpt)
+        text = blocks[0]["text"]["text"]
+        assert len(text) <= render.SECTION_TEXT_MAX, len(text)
+        assert not text.endswith("&"), "a cut must not leave a half-written entity"
+
+
+def test_a_plain_excerpt_is_not_truncated_by_the_ceiling():
+    """The benign twin: the clamp must only bite when escaping actually pushed the text over.
+    An ordinary page excerpt has to arrive whole."""
+    excerpt = "x" * 2800
+    text = render.render_show_it_here_success(page_title="Q3", excerpt=excerpt)[0]["text"]["text"]
+    assert excerpt in text
+    assert len(text) <= render.SECTION_TEXT_MAX
+
+
+def test_clamp_leaves_a_short_string_byte_identical():
+    assert render.clamp_section_text("already short") == "already short"

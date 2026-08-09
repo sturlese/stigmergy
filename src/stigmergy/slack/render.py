@@ -23,6 +23,7 @@ escaping first protects any literal `&`/`<`/`>` the source text itself contained
 AFTER `to_mrkdwn` would corrupt the `<url|text>` link syntax that conversion deliberately
 introduces.
 """
+import re
 import uuid
 
 # These constants deliberately do NOT come from the server module: a "pure Block Kit renderer"
@@ -49,6 +50,29 @@ def _unbound_token(path: str, asker_slack_user_id: str) -> str:
     random token with no server-side entry behind it looks up to nothing, so a caller that actually
     needs the button to be clickable must pass a real `mint_token`."""
     return uuid.uuid4().hex
+
+
+# Slack's own ceiling for one `section` block's text. Enforced on the FINAL string, after every
+# escape and interpolation, because that is the only length Slack measures.
+SECTION_TEXT_MAX = 3000
+
+# A trailing `&`, `&l`, `&g`, `&am`… left by cutting mid-entity. Dropped rather than served: a
+# half-written entity renders as literal `&am` in the middle of a page excerpt.
+_PARTIAL_ENTITY_RE = re.compile(r"&[a-z]{0,3}$")
+
+
+def clamp_section_text(text: str, limit: int = SECTION_TEXT_MAX) -> str:
+    """Hold one section's text to Slack's ceiling.
+
+    Callers that clamp their own input BEFORE `escape_mrkdwn` are not clamping what Slack sees:
+    escaping expands (`&` -> `&amp;` is 5x), so an entity-heavy page excerpt cut to 2800 characters
+    arrived here at over 14000 and Slack rejected the WHOLE `blocks` payload with `invalid_blocks`
+    — which the caller logs and swallows, so the person who clicked got nothing at all: no page, no
+    refusal, no sign anything had happened.
+    """
+    if len(text) <= limit:
+        return text
+    return _PARTIAL_ENTITY_RE.sub("", text[:limit])
 
 
 def _section(text: str) -> dict:
@@ -252,7 +276,8 @@ def render_reply_already_answered() -> list[dict]:
 
 
 def render_show_it_here_success(*, page_title: str, excerpt: str) -> list[dict]:
-    return [_section(copy.show_it_here_success(escape_mrkdwn(page_title), escape_mrkdwn(excerpt)))]
+    return [_section(clamp_section_text(
+        copy.show_it_here_success(escape_mrkdwn(page_title), escape_mrkdwn(excerpt))))]
 
 
 def render_show_it_here_refusal(path: str) -> list[dict]:

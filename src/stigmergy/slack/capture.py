@@ -211,8 +211,23 @@ async def handle_reaction_added(ctx, *, reaction: str, team_id: str, channel_id:
             what=f"private-channel refusal in {channel_id}")
         return False
 
-    messages = await ctx.gateway.conversations_replies(channel_id, message_ts)
-    permalink = await ctx.gateway.get_permalink(channel_id, message_ts)
+    # Guarded for the SAME reason `conversations.info` above is, and it was the asymmetry that made
+    # this a defect: `conversations.replies` needs `channels:history` and is rate-limited, and an
+    # error here escaped the handler entirely. `on_reaction_added`'s `finally` then removed the
+    # hourglass with `ok=False` and the outer handler logged it — so the person who reacted saw the
+    # ⏳ appear, vanish, and nothing else: no capture, no refusal, no acknowledgement at all.
+    try:
+        messages = await ctx.gateway.conversations_replies(channel_id, message_ts)
+        permalink = await ctx.gateway.get_permalink(channel_id, message_ts)
+    except SlackApiError:
+        log.error("slack capture: reading the thread failed for %s/%s", channel_id, message_ts,
+                  exc_info=True)
+        await ctx.post_or_log(
+            ctx.gateway.chat_post_ephemeral(channel_id, slack_user_id,
+                                            blocks=render.render_server_error(),
+                                            text=copy.server_error()),
+            what=f"capture server-error ephemeral in {channel_id}")
+        return False
     material, hints, thread_ts = await _material_and_hints(
         ctx.gateway, ctx.cache, messages, team_id=team_id, channel_id=channel_id,
         channel_name=channel_meta.get("name", ""), permalink=permalink)

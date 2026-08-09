@@ -608,8 +608,36 @@ def test_a_dm_that_mentions_the_bot_asks_the_question_without_the_mention_token(
                   body={"team_id": TEAM_ID, "event": event}))
 
     assert asked["question"] == "what is the pricing floor?"
-    assert "<@" not in asked["question"]
     assert asked["is_dm"] is True
+
+
+def test_a_dm_keeps_a_mention_of_someone_else_inside_the_question(
+        indexed, clean_tables, monkeypatch):
+    """The other half of the same contract, and the reason the assertion above no longer says
+    `"<@" not in question`: that phrasing encoded the OLD, over-broad strip, where every mention
+    was deleted — so "what did `<@U123>` agree to?" lost its subject on the way to the agent.
+    Only the bot's own addressing token is noise."""
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    gw.seed_user("U_ANA", fixture.ANA)
+    ctx = build_slack_context(fixture, conn, gateway=gw)
+    app = build_bolt_app(ctx)
+    listener = _listener(app, "on_message")
+
+    asked = {}
+
+    async def _record(_ctx, **kw):
+        asked.update(kw)
+
+    monkeypatch.setattr("stigmergy.slack.mention.handle_mention", _record)
+
+    event = {"user": "U_ANA", "channel": "D1", "channel_type": "im",
+             "text": "<@UBOT> what did <@U123> agree to?", "ts": "1.1", "team": TEAM_ID}
+    context = {"bot_user_id": "UBOT", "team_id": TEAM_ID}
+    _run(listener(event=event, context=context, ack=_noop_ack,
+                  body={"team_id": TEAM_ID, "event": event}))
+
+    assert asked["question"] == "what did <@U123> agree to?"
 
 
 def test_a_plain_dm_still_asks_exactly_what_was_typed(indexed, clean_tables, monkeypatch):

@@ -82,3 +82,24 @@ def test_escape_mrkdwn_does_not_double_escape_an_existing_entity():
 def test_escape_mrkdwn_handles_empty_and_none():
     assert escape_mrkdwn("") == ""
     assert escape_mrkdwn(None) == ""
+
+
+def test_a_heading_that_is_already_bold_does_not_double_the_asterisks():
+    """OLD BEHAVIOUR: `## **Q3 results**` came out as `**Q3 results**`, and a heading with two
+    bold runs as `**A* and *B**` — asterisks that do not pair at all, so Slack renders stray
+    literal ones in the middle of an answer.
+
+    The heading rewrite wrapped the still-`**`-marked text in one more pair, and `_BOLD_RE` then
+    re-paired the resulting run from the left. mrkdwn has ONE emphasis level, so a heading that is
+    already bold cannot be bolded again: the inner markers are dropped, which is exactly what this
+    module's own contract line says a heading becomes (`headings # text -> *text*`).
+    """
+    assert to_mrkdwn("## **Q3 results**") == "*Q3 results*"
+    assert to_mrkdwn("# **Title**") == "*Title*"
+    assert to_mrkdwn("### **A** and **B**") == "*A and B*"
+
+
+def test_a_plain_heading_and_ordinary_bold_are_untouched():
+    """The benign twin: the fix must not cost the two shapes that already worked."""
+    assert to_mrkdwn("## Section title") == "*Section title*"
+    assert to_mrkdwn("some **bold** prose") == "some *bold* prose"

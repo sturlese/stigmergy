@@ -160,7 +160,8 @@ def build_bolt_app(ctx: SlackContext):
                 thread_ts=event.get("thread_ts") or event["ts"],
                 is_dm=_is_dm(channel_type=event.get("channel_type", "")),
                 asker_slack_user_id=event["user"],
-                question=mention.strip_mention(event.get("text", "")),
+                question=mention.strip_mention(event.get("text", ""),
+                                                   context.get("bot_user_id", "")),
                 identity_result=identity_result)
         except Exception:
             _log_listener_failure("on_app_mention")
@@ -187,7 +188,8 @@ def build_bolt_app(ctx: SlackContext):
                     # reach the bot, but people write one anyway — and the raw text handed the
                     # answering agent a literal `<@UBOT>` as part of the question, so the same
                     # sentence asked in a channel and in a DM became two different questions.
-                    question=mention.strip_mention(event.get("text", "")),
+                    question=mention.strip_mention(event.get("text", ""),
+                                                   context.get("bot_user_id", "")),
                     identity_result=identity_result)
                 return
 
