@@ -408,3 +408,78 @@ def test_propagation_never_crosses_directories(tmp_path):
     (b / "report-p2.md").write_text("---\ntitle: Unrelated\n---\nbody")
     rows = {r.path: r for r in corpus.load_pages(str(tmp_path))}
     assert rows["wiki/b/report-p2.md"].superseded_by == ""
+
+
+# ── a page that could not be READ is not a page that asked for nothing ─────────────────────────
+def test_a_page_that_asked_for_an_acl_never_indexes_open_because_its_yaml_broke():
+    """OLD BEHAVIOUR: `acl=None` — the OPEN value — for a page carrying `acl: [finance]`.
+
+    A YAML syntax error blanked the whole frontmatter to `{}`, so `_acl_labels` saw no `acl` key
+    and answered "this page carries no restriction". That is the exact leak its own docstring
+    refuses: "a page that ASKED for restriction must never index as open because its author
+    mistyped the YAML". The shape checks below it fail closed; the syntax error skipped them.
+
+    An unquoted colon in a title is the everyday way to write one.
+    """
+    row = corpus.page_row("wiki/x.md", "wiki",
+                          "---\ntitle: Q3 revenue: the real numbers\nacl: [finance]\n---\nsecret\n")
+    assert row.acl == [], f"expected fail-closed (nobody), got {row.acl!r}"
+
+
+def test_a_frontmatter_that_parses_to_a_list_also_fails_closed():
+    """The same hole by the other route: a block that parses fine but is not a MAPPING was
+    flattened to `{}` too, and reached `_acl_labels` as "no acl key"."""
+    assert corpus.page_row("wiki/x.md", "wiki", "---\n- a\n- b\n---\nbody\n").acl == []
+
+
+def test_a_crlf_page_keeps_its_acl():
+    """OLD BEHAVIOUR: `acl=None` for every page in a CRLF checkout.
+
+    The block regex anchored on `\\n` alone, so `---\\r\\n` matched nothing at all and the page was
+    read as having no frontmatter — title, entity and `acl:` alike. One `.gitattributes` rule or
+    one Windows author was enough to open a whole corpus.
+    """
+    row = corpus.page_row("wiki/x.md", "wiki",
+                          "---\r\ntitle: Q3\r\nacl: [finance]\r\n---\r\nRestricted.\r\n")
+    assert row.acl == ["finance"]
+    assert row.title == "Q3"
+
+
+def test_an_ordinary_page_is_still_open_and_readable():
+    """The benign twin, and the reason this is not "fail closed on everything": a page with no
+    `acl:` at all must stay open, and a well-formed restricted page must keep its exact labels."""
+    assert corpus.page_row("wiki/a.md", "wiki", "---\ntitle: Q3\n---\nbody\n").acl is None
+    assert corpus.page_row("wiki/b.md", "wiki", "just a body\n").acl is None
+    assert corpus.page_row("wiki/c.md", "wiki",
+                           "---\ntitle: Q3\nacl: [finance]\n---\nbody\n").acl == ["finance"]
+    assert corpus.page_row("wiki/d.md", "wiki",
+                           "---\ntitle: Q3\nacl: null\n---\nbody\n").acl is None
+
+
+# ── a wikilink target is a NAME, not a file path ───────────────────────────────────────────────
+def test_a_dotted_page_name_resolves_to_itself_not_to_its_dotless_neighbour():
+    """OLD BEHAVIOUR: `[[Booking.com]]` resolved to `Booking.md` — a different page.
+
+    Both halves of the resolution used `Path(...).stem`, but on different KINDS of string. On a
+    file path that strips the `.md` extension, which is right; on link text, which carries no
+    extension by convention, it strips whatever follows the last dot — so the link key was
+    `booking` while the page indexed under `booking.com`. With no neighbour the link simply died;
+    with one, the wrong edge landed in `links`, in `inlinks`, and in the backlinks `read_page`
+    serves — and the contract linter reported nothing, because the link did resolve.
+    """
+    by_stem = corpus.by_stem_index(["wiki/entities/Booking.com.md", "wiki/entities/Booking.md"])
+
+    assert corpus.link_targets("we work with [[Booking.com]]") == ["booking.com"]
+    assert corpus.resolve_links("wiki/n.md", corpus.link_targets("[[Booking.com]]"), by_stem) == \
+        ["wiki/entities/Booking.com.md"]
+    # the dotless neighbour still resolves to itself
+    assert corpus.resolve_links("wiki/n.md", corpus.link_targets("[[Booking]]"), by_stem) == \
+        ["wiki/entities/Booking.md"]
+
+
+def test_an_explicit_md_suffix_in_a_link_is_still_accepted():
+    """The one suffix that IS an extension keeps coming off, so a link written the long way still
+    finds its page."""
+    by_stem = corpus.by_stem_index(["wiki/entities/Booking.com.md"])
+    assert corpus.resolve_links("wiki/n.md", corpus.link_targets("[[Booking.com.md]]"), by_stem) \
+        == ["wiki/entities/Booking.com.md"]

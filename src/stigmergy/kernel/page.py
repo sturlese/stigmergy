@@ -35,6 +35,23 @@ def _yaml(v) -> str:
             # datetime.date() raise a bare ValueError; an over-limit int likewise. Either way the
             # scalar is not provably plain-safe — fall through and quote (which always round-trips).
             pass
-    esc = (s.replace("\\", "\\\\").replace('"', '\\"')
-           .replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r"))
-    return f'"{esc}"'
+    return '"' + "".join(_escape_char(ch) for ch in s) + '"'
+
+
+def _escape_char(ch: str) -> str:
+    """One character, escaped for a YAML double-quoted scalar.
+
+    Every C0/C1 control gets an escape, not just the three with a friendly spelling. YAML forbids a
+    RAW non-printable inside a quoted scalar, so emitting one made PyYAML refuse the whole document
+    with `ReaderError` on read-back — breaking the "quote (which always round-trips)" promise the
+    fall-through above is written on, for the one input class that cannot be spotted by eye.
+    """
+    if ch in _NAMED_ESCAPES:
+        return _NAMED_ESCAPES[ch]
+    code = ord(ch)
+    if code < 0x20 or code == 0x7F or 0x80 <= code <= 0x9F:
+        return f"\\x{code:02x}"
+    return ch
+
+
+_NAMED_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\t": "\\t", "\r": "\\r"}

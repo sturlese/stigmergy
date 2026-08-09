@@ -79,17 +79,44 @@ class PageRow:
         return f"{self.title}\n{self.body}"
 
 
-def split_frontmatter(text: str) -> tuple[dict, str]:
-    """(frontmatter dict, body); tolerant — an unparseable page indexes as body-only."""
+# `\r?\n` throughout: a CRLF checkout is not a malformed page. Anchoring on `\n` alone meant a
+# page written on Windows (or normalized by a `.gitattributes` rule) matched NOTHING here, so its
+# whole frontmatter — `acl:` included — was silently invisible and it indexed as body-only. That is
+# the same silent leak as an unparseable block below, applied to an entire checkout at once.
+_FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?(.*)$", re.S)
+
+
+def split_frontmatter_checked(text: str) -> tuple[dict, str, bool]:
+    """(frontmatter dict, body, malformed).
+
+    `malformed` is True when the page HAS a frontmatter block that does not yield a mapping —
+    a YAML syntax error, or a block that parses to a scalar or a list. It is the signal
+    `page_row` needs to tell "this page carries no frontmatter" apart from "this page's
+    frontmatter could not be read", which the dict alone cannot express: both arrive as `{}`.
+    """
     if text.startswith("---"):
-        m = re.match(r"^---\n(.*?)\n---\n?(.*)$", text, re.S)
+        m = _FRONTMATTER_RE.match(text)
         if m:
             try:
-                fm = yaml.safe_load(m.group(1)) or {}
-                return (fm if isinstance(fm, dict) else {}), m.group(2)
+                fm = yaml.safe_load(m.group(1))
             except yaml.YAMLError:
-                return {}, text
-    return {}, text
+                return {}, text, True
+            if fm is None:
+                return {}, m.group(2), False      # an EMPTY block is well-formed, just empty
+            if not isinstance(fm, dict):
+                return {}, m.group(2), True
+            return fm, m.group(2), False
+    return {}, text, False
+
+
+def split_frontmatter(text: str) -> tuple[dict, str]:
+    """(frontmatter dict, body); tolerant — an unparseable page indexes as body-only.
+
+    Callers that make an ACCESS decision from the result must use `split_frontmatter_checked`
+    instead: this signature cannot distinguish an absent block from an unreadable one.
+    """
+    fm, body, _malformed = split_frontmatter_checked(text)
+    return fm, body
 
 
 def entity_list(value) -> list[str]:
@@ -163,8 +190,17 @@ def link_targets(text: str) -> list[str]:
     targets = []
     for m in WIKILINK_RE.finditer(_strip_code(text)):
         t = m.group(1).split("|")[0].split("#")[0].strip()
+        # Only a trailing `.md` comes off — NOT `Path(t).stem`, which strips the last dotted
+        # suffix of whatever it is given. On a FILE PATH that suffix is the extension, which is
+        # what `by_stem_index` wants; on LINK TEXT, which carries no extension by convention, it
+        # amputates part of the name: `[[Booking.com]]` became the key `booking` while the page
+        # indexed under `booking.com`. The link then died — or, with a `Booking.md` in the corpus,
+        # silently resolved to that OTHER page, and the wrong edge landed in `links`, in `inlinks`
+        # and in the backlinks `read_page` serves.
+        if t.lower().endswith(".md"):
+            t = t[:-3]
         if t:
-            targets.append(Path(t).stem.lower())
+            targets.append(t.lower())
     return targets
 
 
@@ -208,7 +244,7 @@ def page_row(rel_path: str, zone: str, text: str) -> PageRow:
     ranking would otherwise take on every incrementally-edited page until the next nightly
     rebuild. A genuinely NEW page (no existing row to conflict with) still lands at 0 here, which
     is the correct answer for a page nothing has ever resolved the graph for yet."""
-    fm, body = split_frontmatter(text)
+    fm, body, malformed = split_frontmatter_checked(text)
     stem = Path(rel_path).stem
     tags = fm.get("tags")
     page_type = str(fm.get("type", "") or "")
@@ -227,7 +263,14 @@ def page_row(rel_path: str, zone: str, text: str) -> PageRow:
         updated=str(fm.get("updated", "") or fm.get("extracted_at", "") or "")[:10],
         superseded_by=str(fm.get("superseded_by", "") or ""),
         supersedes=str(fm.get("supersedes", "") or ""),
-        acl=_acl_labels(fm),
+        # A page whose frontmatter could not be READ is the one case `_acl_labels` cannot judge:
+        # every key is gone, so `"acl" not in fm` is true and it answers `None` — the OPEN value —
+        # for a page that may well have asked to be restricted. That is precisely the leak its own
+        # docstring refuses ("a page that ASKED for restriction must never index as open because
+        # its author mistyped the YAML"), reached by the one route that skips the shape checks: a
+        # syntax error rather than a wrong shape. `[]` (visible to nobody) is the same fail-closed
+        # answer a malformed SHAPE already gets — a loud retrieval gap beats a silent leak.
+        acl=[] if malformed else _acl_labels(fm),
         tags=" ".join(str(t) for t in tags if t) if isinstance(tags, list) else "",
         mentions=_mentions_text(fm),
         entity_meta=_entity_meta_text(fm, page_type),
