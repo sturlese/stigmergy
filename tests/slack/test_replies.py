@@ -6,6 +6,7 @@ import pytest
 
 from stigmergy.capture import queue
 from stigmergy.capture import schema as capture_schema
+from stigmergy.server.errors import RateLimitError
 from stigmergy.slack import copy, replies
 from stigmergy.slack.gateway import FakeSlackGateway
 from stigmergy.slack.store import attach_submission, reserve
@@ -358,3 +359,42 @@ def test_an_older_needs_input_capture_is_found_even_when_a_newer_capture_shares_
     with conn.cursor() as cur:
         cur.execute("SELECT reply FROM capture_queue WHERE id = %s", (older_id,))
         assert cur.fetchone()[0] == "it's Acme Corp"
+
+
+def test_a_read_page_fault_tells_the_clicker_instead_of_going_silent(indexed, clean_tables,
+                                                                     monkeypatch):
+    """OLD BEHAVIOUR: the token's rightful owner clicked and got absolutely nothing.
+
+    Silence is this handler's DELIBERATE answer to a wrong clicker, an expired token and an
+    identity failure — which is exactly why a real fault must not borrow it. `read_page` goes
+    through `BrainService._call`, which checks the rate limiter FIRST, so `RateLimitError` is an
+    ordinary, user-reachable raise; unwrapped, it escaped to `app.py`'s listener backstop, which
+    logs and posts nothing. An asker over their budget was told, by silence, that they were not the
+    owner of their own answer — while `mention.py` renders the rate-limit copy for that same
+    exception one surface over.
+    """
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    gw.seed_user("U_ANA", fixture.ANA)
+    ctx = build_context(fixture, conn, gateway=gw)
+    value = ctx.mint_show_it_here_token(fixture.OPEN_PAGE, "U_ANA")
+
+    real_build_service = ctx.build_service
+
+    def _service_that_faults(*a, **kw):
+        service = real_build_service(*a, **kw)
+
+        def _boom(_path):
+            raise RateLimitError("slow down")
+
+        service.read_page = _boom
+        return service
+
+    monkeypatch.setattr(ctx, "build_service", _service_that_faults)
+
+    _run(replies.handle_show_it_here(ctx, action_value=value, clicking_slack_user_id="U_ANA",
+                                     channel_id="C1", thread_ts="1.1", is_dm=False,
+                                     event_team_id=TEAM_ID))
+
+    assert len(gw.ephemeral) == 1, "the clicker must be told something"
+    assert gw.ephemeral[0].text == copy.server_error()

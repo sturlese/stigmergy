@@ -103,6 +103,39 @@ async def _post_decision_confirmation(ctx, *, channel_id: str, result: dict, kin
     await ctx.post_or_log(ctx.gateway.chat_post_message(channel_id, text=text), what=what)
 
 
+async def _decide_and_confirm(ctx, service, *, channel_id: str, kind: str, item_id: str,
+                              verdict: str, what: str, **decide_kwargs) -> None:
+    """Make the decision and say what happened — including when it goes wrong.
+
+    `review_decide_safe` converts CLEAN refusals into a result dict, and its docstring is explicit
+    about what it deliberately does NOT do: "An UNANTICIPATED exception still propagates… The
+    caller here is expected to do the same: catch broad `Exception` separately and show a GENERIC
+    failure (the same rule `stigmergy.slack.replies` already follows for `service.reply`)." All
+    three call sites below skipped that half, so anything outside `(CaptureError,
+    CapabilityUnavailableError)` — a psycopg blip on `record_decision`, an `OSError` inside the
+    mint — escaped to `app.py`'s listener backstop, which LOGS and posts nothing. A steward's
+    Approve button was indistinguishable from a dead one.
+
+    The ordering inside `_decide_entity_proposal` is what makes the silence expensive: it mints and
+    PUSHES before it records the decision, so a fault after the push left the entity born in the
+    knowledge repo, the steward told nothing, the doorbell still ringing about an open item, and
+    the obvious retry — click Approve again — hitting a collision refusal for an entity they were
+    never told they had created.
+    """
+    try:
+        result = review.review_decide_safe(service, item_kind=kind, item_id=item_id,
+                                           verdict=verdict, **decide_kwargs)
+    except Exception:
+        log.error("slack review: review_decide failed for %s:%s", kind, item_id, exc_info=True)
+        await ctx.post_or_log(
+            ctx.gateway.chat_post_message(channel_id, blocks=render.render_server_error(),
+                                          text=copy.server_error()),
+            what=f"review-decide server-error for {kind}:{item_id}")
+        return
+    await _post_decision_confirmation(ctx, channel_id=channel_id, result=result, kind=kind,
+                                      item_id=item_id, verdict=verdict, what=what)
+
+
 async def _open_modal(ctx, *, trigger_id: str, view: dict, what: str) -> None:
     """`views.open`, failure logged and swallowed — never raised into the listener (Slack's
     `trigger_id` is single-use and expires quickly, so a failed open cannot be retried with the
@@ -225,9 +258,8 @@ async def handle_block_action(ctx, *, action_id: str, value: str, trigger_id: st
 
     verdict = _verdict_for(verdict_token)
     service = ctx.build_service(identity_result.email, identity_result.audiences)
-    result = review.review_decide_safe(service, item_kind=kind, item_id=item_id, verdict=verdict)
-    await _post_decision_confirmation(
-        ctx, channel_id=channel_id, result=result, kind=kind, item_id=item_id, verdict=verdict,
+    await _decide_and_confirm(
+        ctx, service, channel_id=channel_id, kind=kind, item_id=item_id, verdict=verdict,
         what=f"review-decide confirmation for {kind}:{item_id}")
 
 
@@ -263,11 +295,9 @@ async def handle_note_modal_submission(ctx, *, private_metadata: str, state_valu
         return
 
     service = ctx.build_service(identity_result.email, identity_result.audiences)
-    result = review.review_decide_safe(service, item_kind=kind, item_id=item_id, verdict=verdict,
-                                      notes=text_value)
-    await _post_decision_confirmation(
-        ctx, channel_id=channel_id, result=result, kind=kind, item_id=item_id, verdict=verdict,
-        what=f"review-decide (modal) confirmation for {kind}:{item_id}")
+    await _decide_and_confirm(
+        ctx, service, channel_id=channel_id, kind=kind, item_id=item_id, verdict=verdict,
+        what=f"review-decide (modal) confirmation for {kind}:{item_id}", notes=text_value)
 
 
 async def handle_entity_mint_modal_submission(ctx, *, private_metadata: str, state_values: dict,
@@ -309,9 +339,7 @@ async def handle_entity_mint_modal_submission(ctx, *, private_metadata: str, sta
         return
 
     service = ctx.build_service(identity_result.email, identity_result.audiences)
-    result = review.review_decide_safe(
-        service, item_kind=kind, item_id=item_id, verdict="approve", name=name,
+    await _decide_and_confirm(
+        ctx, service, channel_id=channel_id, kind=kind, item_id=item_id, verdict="approve",
+        what=f"entity-mint confirmation for {kind}:{item_id}", name=name,
         entity_type=entity_type, aliases=aliases, role=role, requeue=requeue)
-    await _post_decision_confirmation(
-        ctx, channel_id=channel_id, result=result, kind=kind, item_id=item_id, verdict="approve",
-        what=f"entity-mint confirmation for {kind}:{item_id}")

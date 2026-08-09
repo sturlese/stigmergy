@@ -140,7 +140,23 @@ async def handle_show_it_here(ctx, *, action_value: str, clicking_slack_user_id:
         return   # silently declined — including an identity failure of the clicking user
 
     service = ctx.build_service(identity_result.email, identity_result.audiences)
-    result = service.read_page(path)
+    try:
+        result = service.read_page(path)
+    except Exception:
+        # Silence is this function's DELIBERATE answer to a wrong clicker, an expired token and an
+        # identity failure (see the declines above) — which is exactly why a real fault must not
+        # borrow it. `read_page` goes through `BrainService._call`, which checks the rate limiter
+        # FIRST, so `RateLimitError` is an ordinary, user-reachable raise; unwrapped, it escaped to
+        # `app.py`'s listener backstop, which logs and posts nothing. The asker over their budget
+        # was told, by silence, that they were not the owner of their own answer. `mention.py`
+        # already renders the rate-limit copy for this same exception one surface over.
+        log.error("slack show-it-here: read_page failed for %s", path, exc_info=True)
+        await ctx.post_or_log(
+            ctx.gateway.chat_post_ephemeral(channel_id, clicking_slack_user_id,
+                                            blocks=render.render_server_error(),
+                                            text=copy.server_error()),
+            what=f"show-it-here server-error in {channel_id}")
+        return
     if "error" in result:
         blocks = render.render_show_it_here_refusal(path)
         text = copy.show_it_here_refusal(path)

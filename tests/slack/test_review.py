@@ -809,3 +809,53 @@ def test_a_stale_action_id_from_an_older_deploy_is_declined_not_a_crash(env, con
     assert len(gw.posted) == 1
     assert "older version of this card" in gw.posted[0].text
 
+
+
+def test_an_unanticipated_fault_tells_the_steward_instead_of_going_silent(env, conn, monkeypatch):
+    """OLD BEHAVIOUR: the Approve button was indistinguishable from a dead one.
+
+    `review_decide_safe` turns CLEAN refusals into a result dict, and its docstring is explicit
+    about the half it deliberately leaves to the caller: "An UNANTICIPATED exception still
+    propagates… The caller here is expected to do the same: catch broad `Exception` separately and
+    show a GENERIC failure (the same rule `stigmergy.slack.replies` already follows for
+    `service.reply`)." All three call sites in this module skipped it, so a psycopg blip on
+    `record_decision`, or an `OSError` inside the mint, escaped to `app.py`'s listener backstop —
+    which logs a reference id and posts NOTHING.
+
+    That silence is expensive because of the ORDER inside `_decide_entity_proposal`: it mints and
+    PUSHES before it records the decision. A fault after the push left the entity born in the
+    knowledge repo, the steward told nothing, the doorbell still ringing about an open item, and
+    the obvious retry — click Approve again — hitting a collision refusal for an entity they were
+    never told they had created.
+    """
+    gw = FakeSlackGateway()
+    ctx = make_ctx(env, conn, gateway=gw)
+    item_id = _park_capture(conn, MemoryEvidenceStore())
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("psycopg fell over after the push")
+
+    monkeypatch.setattr(server_review, "review_decide_safe", _boom)
+
+    _run(review.handle_block_action(
+        ctx, action_id="review:parked-capture:requeue", value=str(item_id), trigger_id="T1",
+        channel_id=STEWARD_SLACK_ID, slack_user_id=STEWARD_SLACK_ID, event_team_id=TEAM_ID))
+
+    assert len(gw.posted) == 1, "the steward must be told something"
+    assert gw.posted[0].text == copy.server_error()
+
+
+def test_an_ordinary_decision_still_confirms_normally(env, conn):
+    """The benign twin: the broad catch must only bite a real fault. A clean decision still posts
+    its own confirmation, not the generic failure."""
+    gw = FakeSlackGateway()
+    ctx = make_ctx(env, conn, gateway=gw)
+    item_id = _park_capture(conn, MemoryEvidenceStore())
+
+    _run(review.handle_block_action(
+        ctx, action_id="review:parked-capture:requeue", value=str(item_id), trigger_id="T1",
+        channel_id=STEWARD_SLACK_ID, slack_user_id=STEWARD_SLACK_ID, event_team_id=TEAM_ID))
+
+    assert len(gw.posted) == 1
+    assert gw.posted[0].text != copy.server_error()
+    assert "requeue" in gw.posted[0].text

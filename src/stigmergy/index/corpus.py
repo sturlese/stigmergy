@@ -83,30 +83,97 @@ class PageRow:
 # page written on Windows (or normalized by a `.gitattributes` rule) matched NOTHING here, so its
 # whole frontmatter — `acl:` included — was silently invisible and it indexed as body-only. That is
 # the same silent leak as an unparseable block below, applied to an entire checkout at once.
-_FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?(.*)$", re.S)
+# A BOM is TOLERATED — an editor that writes one wrote a page whose frontmatter is perfectly
+# readable, and refusing to see it is how `acl:` went missing. So is horizontal whitespace after
+# either fence, which is invisible in every editor and cost a well-formed, CLOSED page its entire
+# `acl:` line for one trailing space.
+_FRONTMATTER_RE = re.compile(r"^﻿?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n?(.*)$", re.S)
+
+# The frontmatter block a page contract declares starts at byte zero — after a BOM an editor may
+# have written, and nothing else. Widening this to `\s*---` or to a `...` closer was tried and is
+# the reason both are spelled out here: both LOST pages that had been indexing correctly.
+# `\s*` claimed a leading thematic break (`\n---\n\n# Notes`) as an unterminated block, so an
+# ordinary page indexed `acl=[]` — visible to NOBODY — and, when a second `---` appeared further
+# down, everything above it vanished from the body, the content hash and the embedding. A `...`
+# closer is worse still, because it fails in the direction this whole rule exists to prevent: the
+# lazy group stops at the FIRST `...`, so `---\ntitle: Q3\n...\nacl: [finance]\n---` parsed as a
+# title, dropped `acl:` into the body and indexed the page OPEN.
+#
+# `malformed` is not "the regex did not match" for the same reason. It is the narrower, actual
+# question — did this page ASK for restriction in a block that cannot be read. A page that opens
+# `---` and closes nothing but declares no audience is not restricted; failing it closed trades a
+# silent leak for a retrieval gap, which is only an improvement if it is LOUD (`page_row` logs it).
+_OPENS_FRONTMATTER_RE = re.compile(r"^﻿?---[ \t]*\r?\n")
+
+# The last-resort probe, used only when the candidate region will not parse at all. It looks for a
+# TOP-LEVEL key, which is the only kind that is a restriction request: at column zero, or after the
+# `{`/`,` of a flow mapping. Quoted spellings count — `"acl": [finance]` is the same declaration
+# YAML-wise, and a net that catches one and not the other is a net with a documented hole in it.
+# What it must NOT match is an INDENTED `acl:`, nested under some other key: `^\s*` allowed that,
+# and turned `meta:\n  acl: [x]` into a page visible to nobody.
+_DECLARES_ACL_RE = re.compile(r"""(?m)(?:^|[,{][ \t]*)['"]?acl['"]?[ \t]*:""")
+
+
+def _asked_for_an_audience(after_opener: str) -> bool:
+    """Whether the unreadable region below an unclosed `---` declares an audience.
+
+    Reading it, not grepping the file. `re.search` over the WHOLE text was the first attempt and it
+    was wrong in both directions at once. Too generous: a page starting with a thematic break
+    (`---` at byte zero, never closed) plus one line-initial `acl:` ANYWHERE below — inside a
+    fenced ```yaml example, in prose explaining how restriction works, or nested two levels under
+    another key where it was never a top-level request — indexed `acl=[]`, invisible to every
+    client. Too narrow: `"acl": [finance]` and the flow form `{title: Q3, acl: [finance]}` are the
+    same declaration and matched nothing.
+
+    So the region is bounded the way YAML bounds it — a frontmatter block is contiguous, and the
+    first blank line ends it — and then PARSED. A top-level `acl` key in what parses is the
+    request; anything nested under another key is not. The regex survives only for the region that
+    will not parse at all, which is the shape the original defect had
+    (`title: Q3\\nacl: [finance]\\nbody with no closing fence`: a mapping and a bare scalar, which
+    YAML refuses outright).
+    """
+    block = after_opener.replace("\r\n", "\n").partition("\n\n")[0]
+    try:
+        parsed = yaml.safe_load(block)
+    except yaml.YAMLError:
+        return bool(_DECLARES_ACL_RE.search(block))
+    return isinstance(parsed, dict) and "acl" in parsed
 
 
 def split_frontmatter_checked(text: str) -> tuple[dict, str, bool]:
     """(frontmatter dict, body, malformed).
 
-    `malformed` is True when the page HAS a frontmatter block that does not yield a mapping —
-    a YAML syntax error, or a block that parses to a scalar or a list. It is the signal
-    `page_row` needs to tell "this page carries no frontmatter" apart from "this page's
+    `malformed` is True when the page MEANT to carry frontmatter and this could not read it. It is
+    the signal `page_row` needs to tell "this page carries no frontmatter" apart from "this page's
     frontmatter could not be read", which the dict alone cannot express: both arrive as `{}`.
+
+    **A YAML syntax error is not the only unreadable shape.** That distinction was drawn too
+    narrowly once already: this was reached only when the block regex MATCHED and `yaml.safe_load`
+    then raised, so a page whose block was never CLOSED still indexed `acl: [finance]` as open to
+    everyone. A BOM had the same effect for a different reason — the block was well-formed and the
+    regex simply refused to see it — and that one is fixed by reading it, not by failing it closed:
+    an editor that writes a BOM has not authored a malformed page.
+
+    What `malformed` must NOT become is "the regex did not match", which is where the second
+    attempt at this landed. See `_OPENS_FRONTMATTER_RE` for the two pages that cost.
     """
-    if text.startswith("---"):
-        m = _FRONTMATTER_RE.match(text)
-        if m:
-            try:
-                fm = yaml.safe_load(m.group(1))
-            except yaml.YAMLError:
-                return {}, text, True
-            if fm is None:
-                return {}, m.group(2), False      # an EMPTY block is well-formed, just empty
-            if not isinstance(fm, dict):
-                return {}, m.group(2), True
-            return fm, m.group(2), False
-    return {}, text, False
+    m = _FRONTMATTER_RE.match(text)
+    if m:
+        try:
+            fm = yaml.safe_load(m.group(1))
+        except yaml.YAMLError:
+            return {}, text, True
+        if fm is None:
+            return {}, m.group(2), False      # an EMPTY block is well-formed, just empty
+        if not isinstance(fm, dict):
+            return {}, m.group(2), True
+        return fm, m.group(2), False
+    # No block extracted. A page that opened one and declared an audience inside it asked for
+    # restriction in text nothing here can read: that, and only that, is unreadable rather than
+    # absent.
+    opener = _OPENS_FRONTMATTER_RE.match(text)
+    unreadable = bool(opener) and _asked_for_an_audience(text[opener.end():])
+    return {}, text, unreadable
 
 
 def split_frontmatter(text: str) -> tuple[dict, str]:
@@ -245,6 +312,16 @@ def page_row(rel_path: str, zone: str, text: str) -> PageRow:
     rebuild. A genuinely NEW page (no existing row to conflict with) still lands at 0 here, which
     is the correct answer for a page nothing has ever resolved the graph for yet."""
     fm, body, malformed = split_frontmatter_checked(text)
+    if malformed:
+        # THE operator signal, and the sentence below depends on it: "a loud retrieval gap beats a
+        # silent leak" is only true if the gap is loud. Nothing else says this anywhere — not the
+        # rebuild's stats, not a gardener check — so without this line a page flipping from
+        # visible-to-everyone to visible-to-NOBODY produced no output at all, and the fix for one
+        # silent failure was another. Per page, at WARNING, naming the path, because the fix is a
+        # one-line edit to that file and the reader needs to know which.
+        log.warning("%s: frontmatter could not be read and the page declares an audience — "
+                    "indexing it visible to nobody rather than to everyone; fix the block and "
+                    "the next rebuild restores it", rel_path)
     stem = Path(rel_path).stem
     tags = fm.get("tags")
     page_type = str(fm.get("type", "") or "")
@@ -338,6 +415,25 @@ def resolve_links(own_path: str, stems: list[str], by_stem: dict[str, list[str]]
     return sorted(resolved)
 
 
+def is_indexable_page(rel_path: str) -> bool:
+    """Whether a repo-relative path inside a zone becomes a `pages_index` row.
+
+    THE predicate, in one place, because the two callers had already drifted: `load_pages` walks
+    the checkout and `server.webhook.in_zone_changes` walks a push's changed-file list, and every
+    path one admits and the other does not is a row that exists between rebuilds and vanishes at
+    the next one — or, worse, one the rebuild keeps and a deletion never reaches. Both are stated
+    as the same population; asserting that in a test is not enough while each spells it out
+    separately.
+
+    Note what is NOT excluded: a `.md` page inside a DOT-DIRECTORY. `rglob("*.md")` descends into
+    one, and only the file's own name is checked — so `wiki/.obsidian/note.md` is a page and
+    `wiki/.hidden.md` is not. That asymmetry looks like an oversight and is left alone deliberately:
+    changing it would silently drop rows the corpus has, which is a retrieval question, not the
+    access-control one being fixed here. What matters is that both walkers answer it identically.
+    """
+    return rel_path.endswith(".md") and not rel_path.rsplit("/", 1)[-1].startswith(".")
+
+
 def load_pages(repo_dir: str) -> list[PageRow]:
     """Every page of the included zones, inlinks/links resolved, sorted by path (determinism)."""
     root = Path(repo_dir)
@@ -347,9 +443,9 @@ def load_pages(repo_dir: str) -> list[PageRow]:
         if not zone_dir.is_dir():
             continue
         for path in sorted(zone_dir.rglob("*.md")):
-            if path.name.startswith("."):
-                continue
             rel = str(path.relative_to(root))
+            if not is_indexable_page(rel):
+                continue
             rows.append(page_row(rel, zone, path.read_text(encoding="utf-8", errors="replace")))
     rows.sort(key=lambda r: r.path)
 

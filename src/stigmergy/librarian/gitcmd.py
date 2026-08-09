@@ -684,7 +684,23 @@ def push(worktree: str, *, branch: str, remote_url: str = "", config_env: dict |
                 f"push to {branch} lost the race {attempts} times in a row and gave up — the branch "
                 f"kept moving under it, and nothing about the page conflicted: {stderr[:STDERR_LIMIT]}")
         log.warning("push rejected (attempt %d/%d), rebasing and retrying", attempt, attempts)
-        run("fetch", target, branch, cwd=worktree, check=False, env=env)
+        # The fetch's own failure is a DIFFERENT fault, and it used to be discarded. A rejected
+        # push was assumed to be a lost race; if the remote was simply unreachable — a revoked or
+        # expired installation token, DNS, branch protection — the fetch failed too, `FETCH_HEAD`
+        # was stale or (in the ephemeral linked worktree the deployed worker pushes from) absent
+        # entirely, the rebase failed on that, and the submitter was told "the page conflicts with
+        # a change made on the branch". They then went looking for an overlap that does not exist,
+        # while the real cause — the remote — was never written down anywhere.
+        #
+        # This is the same misreport the comment below already records happening once, for the
+        # missing-identity cause. That one was fixed by passing an identity; the general shape,
+        # "any non-race failure wearing the conflict sentence", was not.
+        fetched = run("fetch", target, branch, cwd=worktree, check=False, env=env)
+        if fetched.returncode != 0:
+            raise GitError(
+                f"could not reach the remote to rebase onto {branch} after a rejected push — this "
+                f"is not a conflict with anyone's change; the push and the fetch both failed: "
+                f"{_scrub(fetched.stderr or stderr)[:STDERR_LIMIT]}")
         # The SAME per-invocation identity `commit()` uses, and for the same reason: a rebase
         # REWRITES commits, so it needs a committer and git will take one from wherever it can find
         # it. With no identity passed here, a rebase on an operator's laptop silently stamps the

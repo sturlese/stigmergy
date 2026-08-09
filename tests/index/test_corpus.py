@@ -1,6 +1,8 @@
 """Corpus loading: zone walk, frontmatter -> columns, wikilink inlinks, content hashing."""
 from pathlib import Path
 
+import pytest
+
 from stigmergy.index import corpus
 
 FIXTURE = str(Path(__file__).parent / "fixtures" / "repo")
@@ -483,3 +485,138 @@ def test_an_explicit_md_suffix_in_a_link_is_still_accepted():
     by_stem = corpus.by_stem_index(["wiki/entities/Booking.com.md"])
     assert corpus.resolve_links("wiki/n.md", corpus.link_targets("[[Booking.com.md]]"), by_stem) \
         == ["wiki/entities/Booking.com.md"]
+
+
+# ── the fail-closed ACL, and the two ways a wider parser made it worse ────────────────────────
+def test_an_unterminated_block_that_asked_for_an_acl_fails_closed():
+    """OLD BEHAVIOUR: it indexed OPEN TO EVERYONE.
+
+    `malformed` was raised only when the block regex MATCHED and `yaml.safe_load` then raised — so
+    a page carrying `acl: [finance]` whose block was merely never CLOSED did not reach the check
+    at all, and `_acl_labels({})` answered `None`, the open value at `server.acl.visible()`.
+
+    The rule the module states is about intent, not about which parser step failed: "a page that
+    ASKED for restriction must never index as open because its author mistyped the YAML"."""
+    text = "---\ntitle: Q3\nacl: [finance]\nbody with no closing fence\n"
+    assert corpus.page_row("wiki/x.md", "wiki", text).acl == []
+
+
+def test_a_bom_before_the_frontmatter_is_read_rather_than_refused():
+    """OLD BEHAVIOUR: `acl` came out `None` — open — because the block was well-formed and the
+    regex simply would not see it past the BOM.
+
+    The better answer here is to READ it, not to fail it closed: an editor that writes a BOM has
+    not authored a malformed page, and failing it closed would swap a silent leak for a silent
+    retrieval gap. `kernel.frontmatter` learned the same byte in the same commit — that file's own
+    comment states the twin rule, and it is why a BOM'd entity page used to index with its title
+    while `stigmergy-entities regenerate` said it named no entity."""
+    text = "\ufeff---\ntitle: Q3\nacl: [finance]\n---\nsecret\n"
+    row = corpus.page_row("wiki/x.md", "wiki", text)
+    assert row.acl == ["finance"]
+    assert row.title == "Q3"
+
+    from stigmergy.kernel import frontmatter as kernel_frontmatter
+    fm, body = kernel_frontmatter.split_frontmatter(text)
+    assert fm["acl"] == ["finance"] and fm["title"] == "Q3", "the twins must learn together"
+    assert body == "secret\n"
+
+
+def test_a_yaml_document_terminator_inside_the_block_does_not_open_the_page():
+    """A REGRESSION GUARD, not a reproducer — it passes on `main` too, for a different reason
+    (`yaml.safe_load` refuses the two-document stream this produces once the block is matched).
+
+    A `...` line is YAML's document-end marker, and accepting it as a frontmatter closer was
+    tried here and reverted. It fails in the exact direction this whole rule exists to prevent: the
+    lazy group stops at the FIRST one, so everything below it — `acl:` included — becomes body, and
+    the page indexes OPEN with a title it appears to have parsed correctly. A block this parser
+    cannot close is unreadable, and a page that asked for an audience inside it fails closed."""
+    text = "---\ntitle: Q3\n...\nacl: [finance]\n---\nsecret\n"
+    assert corpus.page_row("wiki/x.md", "wiki", text).acl == []
+
+
+# ── what "unreadable" must not swallow ─────────────────────────────────────────────────────────
+@pytest.mark.parametrize("label, text, expect_body_contains", [
+    ("no frontmatter at all", "just a body, nothing else\n", "just a body"),
+    ("a well-formed block with no acl", "---\ntitle: Q3\n---\nbody\n", "body"),
+    ("an explicit null acl", "---\ntitle: Q3\nacl: null\n---\nbody\n", "body"),
+    # The two below are why `malformed` is not "the regex did not match". Widening the opener to
+    # `\s*---` claimed a leading thematic break as an unterminated block: the page indexed
+    # `acl=[]` — visible to NOBODY — and, with a second `---` further down, everything above it
+    # vanished from the body, the content hash and the embedding.
+    ("a leading thematic break", "\n---\n\n# Notes\n\nSection A prose\n", "Section A prose"),
+    ("thematic breaks as separators",
+     "\n---\n\nSection A\n\n---\n\nSection B\n", "Section A"),
+    # And an unterminated block that asks for nothing is not a restriction request.
+    ("an unterminated block declaring no audience", "---\ntitle: Q3\nno closer here\n", "Q3"),
+])
+def test_a_page_that_asked_for_nothing_stays_open_with_its_body_intact(
+        label, text, expect_body_contains):
+    """The benign twins, and they bound the fix in the direction it actually went wrong. `acl=[]`
+    is not a safe default to reach for: it means visible to nobody, so a page reaching it by
+    accident is as much a defect as one indexing open by accident — just a quieter one."""
+    row = corpus.page_row("wiki/x.md", "wiki", text)
+    assert row.acl is None, label
+    assert expect_body_contains in row.body, label
+
+
+# ── the audience probe: what it must catch, and what it must not ───────────────────────────────
+@pytest.mark.parametrize("label, text", [
+    ("an unterminated block", "---\ntitle: Q3\nacl: [finance]\nbody with no closing fence\n"),
+    ("a QUOTED key", '---\ntitle: Q3\n"acl": [finance]\nbody with no closing fence\n'),
+    ("the flow form", "---\n{title: Q3, acl: [finance]}\nbody with no closing fence\n"),
+])
+def test_an_unreadable_block_that_asked_for_an_audience_fails_closed(label, text):
+    """The probe's RECALL. `"acl": [finance]` and `{title: Q3, acl: [finance]}` are the same
+    declaration YAML-wise, and a first version of this matched neither — a net with a documented
+    hole is not a net. The region is now parsed rather than grepped, and the regex survives only
+    for a region that will not parse at all, which is the shape the original defect had (a mapping
+    followed by a bare scalar, which YAML refuses outright)."""
+    assert corpus.page_row("wiki/x.md", "wiki", text).acl == [], label
+
+
+@pytest.mark.parametrize("label, text", [
+    ("a fenced YAML example below a thematic break",
+     "---\n\n# ACL rules\n\n```yaml\nacl: [finance]\n```\n"),
+    ("prose that mentions the key", "---\n\n# Notes\n\nacl: is how you restrict a page.\n"),
+    ("a NESTED acl that was never a top-level request",
+     "---\nmeta:\n  acl: [x]\ntitle: Q3\nno closer here\n"),
+])
+def test_the_probe_does_not_claim_a_page_that_never_asked(label, text):
+    """The probe's PRECISION, and it is the half that regressed first. `re.search` over the WHOLE
+    file meant any page beginning with `---` at byte zero and never closing it — a thematic break —
+    plus one line-initial `acl:` ANYWHERE below became invisible to every client. `acl=[]` is not a
+    safe default: it means visible to nobody. The region is bounded the way YAML bounds a
+    frontmatter block (contiguous, ended by the first blank line) and a key nested under another
+    one is not a top-level request."""
+    assert corpus.page_row("wiki/x.md", "wiki", text).acl is None, label
+
+
+def test_a_trailing_space_on_the_fence_does_not_cost_a_page_its_acl():
+    """A well-formed, CLOSED block whose opener carries one invisible trailing space. It is the
+    identical failure class as the BOM — "the block was well-formed and the regex simply refused to
+    see it" — one character over, and the whole frontmatter (`acl:` included) was indexed as
+    searchable BODY served to everyone."""
+    text = "--- \ntitle: Q3\nacl: [finance]\n--- \nbody\n"
+    row = corpus.page_row("wiki/x.md", "wiki", text)
+    assert row.acl == ["finance"]
+    assert row.title == "Q3"
+
+
+def test_indexing_a_page_visible_to_nobody_is_logged(caplog):
+    """"A loud retrieval gap beats a silent leak" is the sentence `page_row` justifies itself with,
+    and it was FALSE: `acl=[]` was set with no log, no counter and no stat anywhere — not in the
+    rebuild, not in a gardener check. A page flipping from visible-to-everyone to
+    visible-to-NOBODY produced no operator signal at all, so the fix for one silent failure was
+    another one. The path is named because the repair is a one-line edit to that file."""
+    import logging
+    with caplog.at_level(logging.WARNING, logger="stigmergy.index.corpus"):
+        row = corpus.page_row("wiki/q3.md", "wiki",
+                              "---\ntitle: Q3\nacl: [finance]\nno closer\n")
+    assert row.acl == []
+    assert "wiki/q3.md" in caplog.text
+
+    # The benign twin: an ordinary page logs nothing.
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="stigmergy.index.corpus"):
+        corpus.page_row("wiki/ok.md", "wiki", "---\ntitle: Q3\n---\nbody\n")
+    assert caplog.text == ""

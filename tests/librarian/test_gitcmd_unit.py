@@ -620,3 +620,68 @@ def test_run_a_generous_timeout_does_not_interrupt_a_fast_command(tmp_path):
     _init_repo(repo)
     result = gitcmd.run("rev-parse", "HEAD", cwd=repo, timeout=30)
     assert len(result.stdout.strip()) == 40
+
+
+def test_push_does_not_report_an_unreachable_remote_as_a_conflict(tmp_path):
+    """OLD BEHAVIOUR: the submitter was told their page conflicted with somebody else's change.
+
+    The retry loop treated EVERY non-zero push as a lost race: it fetched with `check=False` and
+    threw the result away, then rebased onto `FETCH_HEAD`. When the remote is simply unreachable —
+    a revoked or expired installation token, DNS, a branch-protection reject — the fetch failed
+    too, so `FETCH_HEAD` was stale or (in the ephemeral linked worktree the deployed worker pushes
+    from) absent entirely, the rebase failed on that, and this function raised the CONFLICT
+    sentence. The push's stderr, the fetch's stderr and the rebase's stderr were all discarded on
+    that path, so the real cause was written down nowhere: not in the submitter's report, not in
+    the worker log.
+
+    The comment beside the rebase already records this exact misreport happening once before, for
+    the missing-identity cause. That instance was fixed; the shape — any non-race failure wearing
+    the conflict sentence — was not.
+    """
+    seed = tmp_path / "seed"
+    _init_repo(str(seed))
+    worker_clone = tmp_path / "worker"
+    _clone(str(seed), str(worker_clone))
+    with open(os.path.join(worker_clone, "page.md"), "w", encoding="utf-8") as f:
+        f.write("filed by the librarian\n")
+    gitcmd.commit(str(worker_clone), message="feat: page", author_name="lib",
+                  author_email="lib@example.com")
+
+    # No network needed to be unreachable: a remote path that does not exist fails the same way.
+    with pytest.raises(GitError) as caught:
+        gitcmd.push(str(worker_clone), branch="main",
+                    remote_url=str(tmp_path / "this-remote-does-not-exist.git"),
+                    author_name="lib", author_email="lib@example.com")
+
+    message = str(caught.value)
+    assert "conflicts with a change made on the branch" not in message, message
+    assert "could not reach the remote" in message, message
+
+
+def test_a_genuine_conflict_still_says_conflict(tmp_path):
+    """The benign twin: naming the unreachable-remote case must not cost the real one its own
+    sentence — `test_push_a_genuine_conflict_fails_the_item_rather_than_being_resolved` above is
+    that assertion, and it still passes; this one states the pairing so the two are read together.
+    """
+    bare = tmp_path / "origin.git"
+    gitcmd.run("init", "--bare", "--quiet", "-b", "main", str(bare))
+    seed = tmp_path / "seed"
+    _init_repo(str(seed))
+    gitcmd.run("remote", "add", "origin", str(bare), cwd=str(seed))
+    gitcmd.run("push", "--quiet", "-u", "origin", "main", cwd=str(seed))
+    worker_clone = tmp_path / "worker"
+    _clone(str(bare), str(worker_clone))
+    with open(os.path.join(worker_clone, "page.md"), "w", encoding="utf-8") as f:
+        f.write("the LIBRARIAN's version\nline two\n")
+    gitcmd.commit(str(worker_clone), message="feat: librarian edit", author_name="t",
+                  author_email="t@example.com")
+    with open(os.path.join(seed, "page.md"), "w", encoding="utf-8") as f:
+        f.write("the STEWARD's conflicting version\nline two\n")
+    gitcmd.run("add", "-A", cwd=str(seed))
+    gitcmd.run("commit", "--quiet", "-m", "conflicting", cwd=str(seed),
+               env={"GIT_AUTHOR_NAME": "s", "GIT_AUTHOR_EMAIL": "s@e",
+                    "GIT_COMMITTER_NAME": "s", "GIT_COMMITTER_EMAIL": "s@e"})
+    gitcmd.run("push", "--quiet", "origin", "main", cwd=str(seed))
+
+    with pytest.raises(GitError, match="does not resolve conflicts"):
+        gitcmd.push(str(worker_clone), branch="main")

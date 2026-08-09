@@ -14,12 +14,19 @@ import yaml
 # `entities.generator` reads entity pages through here, so it refused them with "declares no
 # `title`, so it names no entity", blocking `stigmergy-entities regenerate` and the governed mint
 # door behind it. The two parsers are twins; when one learns something the other has to.
-_FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---\r?\n?(.*)$", re.S)
+#
+# The BOM is the second thing learned that way, and it is the same failure a few bytes earlier: an
+# editor that writes one before `---` produced a page `index.corpus` read perfectly and this one
+# refused, so a BOM'd entity page indexed with its title and its acl while
+# `stigmergy-entities regenerate` still said it named no entity. The twin rule is what this comment
+# exists for, so the fix is written in the shape the other parser uses.
+_FRONTMATTER_RE = re.compile("^﻿?---\r?\n(.*?)\r?\n---\r?\n?(.*)$", re.S)
+_OPENS_FRONTMATTER_RE = re.compile("^﻿?---")
 
 
 def split_frontmatter(text: str):
     """(frontmatter dict, body). If it doesn't parse, frontmatter = {} and body = full text."""
-    if text.startswith("---"):
+    if _OPENS_FRONTMATTER_RE.match(text):
         m = _FRONTMATTER_RE.match(text)
         if m:
             try:

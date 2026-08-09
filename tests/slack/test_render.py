@@ -459,6 +459,34 @@ def test_a_plain_excerpt_is_not_truncated_by_the_ceiling():
 def test_clamp_leaves_a_short_string_byte_identical():
     assert render.clamp_section_text("already short") == "already short"
 
+def test_every_section_this_module_builds_is_clamped_not_just_the_excerpt_one():
+    """OLD BEHAVIOUR: the clamp was called by `render_show_it_here_success` and by nothing else, so
+    the ANSWER body — the largest section this module builds, straight from unbounded model output
+    — still went out at over 14000 characters against the 3000 ceiling.
+
+    Slack answers `invalid_blocks` for the whole message, and the caller's fallback is the
+    text-only degrade, which costs the citation links and the `context`-block verdict line this
+    module calls trust chrome "a prompt-injected body cannot imitate". So the fix moved INTO
+    `_section` — the one builder every section already goes through — rather than being copied to a
+    second caller, because the next caller is the one that forgets.
+
+    Asserted over every section of every block this module can emit for an answer, so a section
+    added later inherits the property instead of needing its own test."""
+    def answer(markdown):
+        return {"refused": False, "answer_markdown": markdown, "citations": [],
+                "confidence": "high", "verdict": {"verdict": "verified"}, "built_at": "2026-01-01"}
+
+    blocks = render.render_answer(answer("Initech & Acme " * 1200), lambda path: "")
+    sections = [b for b in blocks if b.get("type") == "section"]
+    assert sections, "sanity: this really did build section blocks"
+    for block in sections:
+        assert len(block["text"]["text"]) <= render.SECTION_TEXT_MAX
+
+    # The benign twin: a short answer is not truncated and keeps its own text.
+    short = render.render_answer(answer("Revenue was 1.3M."), lambda path: "")
+    assert any("Revenue was 1.3M." in b.get("text", {}).get("text", "")
+               for b in short if b.get("type") == "section")
+
 
 def test_the_double_enforces_block_kit_rules_on_an_ephemeral_too():
     """OLD BEHAVIOUR: the double accepted an ephemeral payload real Slack rejects.
@@ -489,3 +517,42 @@ def test_an_ordinary_ephemeral_still_posts():
     asyncio.run(gw.chat_post_ephemeral("C1", "U1", text="nope",
                                        blocks=render.render_server_error()))
     assert len(gw.ephemeral) == 1
+
+
+def test_a_clamped_section_says_it_was_cut():
+    """OLD BEHAVIOUR: the cut was silent, which is the wrong trade on both ends.
+
+    Before the clamp existed, an over-long body hit `invalid_blocks` and `mention._edit_or_fallback`
+    posted the text-only fallback — which carries the answer body COMPLETE. So the old path lost
+    the chrome and kept every word; a silent clamp keeps the chrome and drops the tail, exactly
+    where a model puts its caveats. A reader cannot tell a clamped answer from a short one, and the
+    missing sentence is the one that changes what they do."""
+    body = "A" * 2990 + " TAIL: these figures are unaudited."
+    out = render.clamp_section_text(body)
+    assert len(out) <= render.SECTION_TEXT_MAX
+    assert out.endswith(render.TRUNCATION_MARKER)
+    # The benign twin: a string that fits is byte-identical, marker and all.
+    assert render.clamp_section_text("short") == "short"
+
+
+def test_the_sources_context_block_is_clamped_too():
+    """OLD BEHAVIOUR: `invalid_blocks` for the whole payload — the exact failure the section clamp
+    exists to prevent, one block type over.
+
+    The clamp landed in `_section` on the argument that it is "the ONE builder every section
+    already goes through". True, and it left `_context` open: `_citation_blocks` builds the Sources
+    block from citation QUOTES, which are verbatim page text at up to `Citation.quote`'s 200
+    characters each and up to `MAX_CITATIONS` of them. Measured at 21459 characters against a 3000
+    ceiling with 20 citations, and already over at three. Page-author-controlled, which is the
+    threat model `_section`'s own docstring names."""
+    citations = [{"path": f"wiki/p{i}.md", "quote": "R&D " * 50} for i in range(20)]
+    answer = {"refused": False, "answer_markdown": "Short answer.", "citations": citations,
+              "confidence": "high", "verdict": {"verdict": "verified"}, "built_at": "2026-01-01"}
+
+    blocks = render.render_answer(answer, lambda path: "")
+
+    contexts = [b for b in blocks if b.get("type") == "context"]
+    assert contexts, "sanity: this really did build context blocks"
+    for block in contexts:
+        for element in block["elements"]:
+            assert len(element["text"]) <= render.SECTION_TEXT_MAX, len(element["text"])
