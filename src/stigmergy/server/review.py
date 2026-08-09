@@ -327,6 +327,18 @@ def review_queue(service, *, limit: int = 50) -> dict:
     """
     identity = service.identity
     unrestricted = service.audiences is None
+    # A SCOPED caller with no identity would pass `submitted_by=""`/`None` — which
+    # `query_submissions` reads as the MANAGEMENT scope, every identity's rows — and this function
+    # would then label them `scope: "own"`. `capture_queue.list_own_submissions` makes exactly
+    # that mistake impossible for the fast-lane queue ("an empty or None identity would silently
+    # widen the query to everybody's rows, so this is where that mistake is made impossible"), and
+    # the docstring above claims this applies "the same ownership scope … rather than invented a
+    # second way for them". The second way has to fail closed where the first does. Nothing shipped
+    # constructs a service that way today — every transport resolves an identity first — so this is
+    # the belt to that braces, placed where the widening decision is actually made.
+    if not unrestricted and not identity:
+        raise ValueError("a scoped review queue needs a resolved identity — refusing to widen to "
+                         "every identity's items")
     items = _collect_open_items(service.conn, submitted_by=None if unrestricted else identity,
                                 limit=limit)
     return {"identity": identity, "scope": "all" if unrestricted else "own",
@@ -577,9 +589,10 @@ def _decide_entity_proposal(service, item_id: str, verdict: str, notes: str, act
             raise ReviewError("reject requires a reason")
         dispositions.reject(service.conn, submission_id, actor=actor, reason=notes)
         message = f"recorded: reject on {KIND_ENTITY_PROPOSAL} #{submission_id} by {actor}."
-        record_decision(service.conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=item_id,
+        record_decision(service.conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(submission_id),
                         verdict=verdict, actor=actor, notes=notes)
-        return {"recorded": verdict, "item_kind": KIND_ENTITY_PROPOSAL, "item_id": item_id,
+        return {"recorded": verdict, "item_kind": KIND_ENTITY_PROPOSAL,
+               "item_id": str(submission_id),
                "actor": actor, "message": message}
 
     clean_name = " ".join(str(name or "").split())
@@ -606,7 +619,7 @@ def _decide_entity_proposal(service, item_id: str, verdict: str, notes: str, act
         service, submission_id=submission_id, entity_id=resolved_id, name=clean_name,
         entity_type=clean_type, aliases=alias_list, role=role or "", approved_by=actor)
 
-    record_decision(service.conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=item_id,
+    record_decision(service.conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(submission_id),
                     verdict=verdict, actor=actor, notes=notes,
                     extra={"entity_id": mint_result["entity_id"], "commit": mint_result["commit"]})
 
@@ -620,7 +633,8 @@ def _decide_entity_proposal(service, item_id: str, verdict: str, notes: str, act
             note=f"entity {mint_result['entity_id']} approved and pushed "
                  f"({mint_result['commit'][:12]})")
 
-    return {"recorded": verdict, "item_kind": KIND_ENTITY_PROPOSAL, "item_id": item_id,
+    return {"recorded": verdict, "item_kind": KIND_ENTITY_PROPOSAL,
+               "item_id": str(submission_id),
            "actor": actor, "minted": True, "entity_id": mint_result["entity_id"],
            "name": mint_result["name"], "commit": mint_result["commit"],
            "requeued": bool(requeued)}

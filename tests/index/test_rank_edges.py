@@ -100,3 +100,27 @@ def test_symmetric_pool_edge_tie_breaks_on_path_and_is_insertion_order_free():
     b = next(h for h in hits_fwd if h["path"] == "b-tie.md")
     assert a["score"] == b["score"]
     assert [h["path"] for h in hits_fwd].index("a-tie.md") < [h["path"] for h in hits_fwd].index("b-tie.md")
+
+
+def test_period_end_rejects_year_zero_instead_of_crashing():
+    """OLD BEHAVIOUR: `ValueError: year must be in 1..9999, not 0`, escaping the ranker entirely.
+
+    Only the full-date branch was guarded; `\\d{4}`, `YYYY-MM` and `YYYY-Qn` all called `date()`
+    unprotected, and `\\d{4}` matches `0000`. `contract_factors` is called for every candidate with
+    `today` always set, so ONE page dated that way broke every search whose pool touched it — and
+    `search_brain` echoed the message verbatim. This test's own sibling is named
+    `test_period_end_rejects_invalid_values_instead_of_crashing`; a year of zero is just another
+    invalid value.
+    """
+    for bad in ("0000", "0000-01", "0000-Q1", "0000-01-01"):
+        assert rank._period_end(bad) is None, bad
+
+
+def test_a_page_dated_year_zero_does_not_break_the_whole_search():
+    """The reason the above matters: it is not one page that fails, it is the query."""
+    page = {"path": "wiki/a.md", "page_id": "a", "title": "A", "body": "body", "type": "note",
+            "status": "", "entity": [], "owner": "", "tier": 0, "as_of": "0000", "updated": "",
+            "superseded_by": "", "supersedes": "", "acl": None, "inlinks": 0,
+            "content_hash": "sha256:x"}
+    hits = rank.rank({"wiki/a.md": page}, ["wiki/a.md"], [], "anything", today=TODAY)
+    assert [h["path"] for h in hits] == ["wiki/a.md"]
