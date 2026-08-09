@@ -102,6 +102,17 @@ def _service(conn, fx, identity_name: str, *, entity_registry_path=None) -> Brai
 
 
 # ── list_entities ──────────────────────────────────────────────────────────────────────────────
+
+def _service_with_registry(fixture, conn, registry_path: str):
+    """A `BrainService` for the unrestricted identity, pointed at a specific entity registry —
+    `make_service` wires no registry, and these two cases are ABOUT the registry."""
+    from stigmergy.index.backends.embedder import build_embedder
+    from stigmergy.server.service import BrainService
+    from stigmergy.server.settings import Settings
+    settings = Settings(identity=fixture.STEWARD, identities_path=fixture.identities_path,
+                        entity_registry_path=registry_path)
+    return BrainService(settings, conn, build_embedder("fake"), None, identity=fixture.STEWARD)
+
 def test_list_entities_serves_exactly_the_scoped_entities_id_set_enriched(entity_docs_indexed):
     conn, fx = entity_docs_indexed
     svc = _service(conn, fx, fx.STEWARD)
@@ -369,3 +380,49 @@ def test_describe_entity_page_ref_is_deterministic_across_repeated_calls_when_mu
     results = [svc.describe_entity(_DUP_ID)["entity"]["page"]["path"] for _ in range(5)]
     assert results == [_DUP_PAGE_A] * 5
 
+
+
+def test_a_scoped_raw_id_still_resolves_when_the_registry_folds_it_out_of_scope(indexed,
+                                                                                tmp_path):
+    """OLD BEHAVIOUR: `describe_entity` refused an id `list_entities` was advertising.
+
+    The resolution was `resolve_exact(...) or (entity if entity in scoped else None)`, and `or`
+    short-circuits on ANY truthy registry hit — so when the registry folded the caller's input to
+    a canonical id that is NOT in scope, the scoped-set fallback was never tried, even though the
+    caller's raw input WAS a scoped id.
+
+    That is exactly the drift the fallback exists for (ADR 022 D5, restated in `server/index.md`
+    and `docs/reference/server.md`): pages anchored to a display name while the registry uses a
+    slug. The two tools then disagreed about which ids exist — `list_entities` served it, this one
+    called it unknown.
+    """
+    conn, fixture = indexed
+    registry = tmp_path / "entity-registry.json"
+    # `globex` IS anchored in the fixture corpus and therefore scoped; the registry knows it only
+    # as an ALIAS of a differently-named canonical id, which is not anchored anywhere.
+    registry.write_text(json.dumps({"entities": {
+        "globex-robotics": {"name": "Globex Robotics", "type": "organization",
+                            "aliases": ["Globex"]},
+    }}), encoding="utf-8")
+
+    service = _service_with_registry(fixture, conn, str(registry))
+
+    assert "globex" in service.scoped_entities()
+    assert "error" not in service.describe_entity("globex"), \
+        "list_entities advertises this id; describe_entity must not call it unknown"
+
+
+def test_a_registry_id_that_IS_in_scope_still_wins(indexed, tmp_path):
+    """The benign twin: the registry hit must keep winning whenever it is in scope, so an alias
+    still resolves to its canonical page rather than being read as a raw id."""
+    conn, fixture = indexed
+    registry = tmp_path / "entity-registry.json"
+    registry.write_text(json.dumps({"entities": {
+        "globex": {"name": "Globex", "type": "organization", "aliases": ["Globex Inc"]},
+    }}), encoding="utf-8")
+
+    service = _service_with_registry(fixture, conn, str(registry))
+
+    described = service.describe_entity("Globex Inc")
+    assert "error" not in described
+    assert described["entity"]["id"] == "globex"

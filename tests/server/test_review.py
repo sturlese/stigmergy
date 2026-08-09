@@ -609,3 +609,69 @@ def test_the_repo_wins_where_a_checkout_exists(env, conn, tmp_path):
     with pytest.raises(review.ReviewError, match=review.NOT_YOURS_TO_DECIDE):
         # the baked map must not grant authority the committed one withholds
         svc.review_decide(item_kind="entity-proposal", item_id=str(item_id), verdict="approve")
+
+
+# ── the kinds are disjoint on the DECIDE path too, not only in the listing ─────────────────────
+def test_an_entity_proposal_cannot_be_decided_as_a_parked_capture(env, conn):
+    """OLD BEHAVIOUR: the caller's `item_kind` chose which authorization rule applied.
+
+    `_decide_entity_proposal` validates the row's kind and is guarded by the steward-only
+    `_guard_governance_decision` — entity minting is a governance act with no "the submitter may
+    act on their own capture" carve-out. `_decide_parked_capture` never checked the converse, and
+    its guard returns as soon as the caller's identity equals `submitted_by`. So the submitter of
+    an entity proposal could decide their own by passing `item_kind="parked-capture"`: the
+    disposition landed, and the append-only ledger recorded the WRONG kind.
+
+    `review.py`'s "Kinds are disjoint BY CONSTRUCTION" holds for `_collect_open_items`, which
+    classifies with `situations.classify` first — the listing. This is the mutator.
+    """
+    evidence = MemoryEvidenceStore()
+    proposal = _park_capture(conn, evidence, submitted_by=ALICE,
+                             situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    alice = make_service(env, conn, identity_name=ALICE, audiences=None, evidence=evidence)
+
+    with pytest.raises(review.ReviewError, match=review.NOT_YOURS_TO_DECIDE):
+        review.review_decide(alice, item_kind=review.KIND_PARKED_CAPTURE, item_id=str(proposal),
+                             verdict="reject", notes="mine, I say")
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT status FROM capture_queue WHERE id = %s", (proposal,))
+        assert cur.fetchone()[0] == capture_schema.TRIAGE, "the row must be untouched"
+        cur.execute("SELECT count(*) FROM review_decisions WHERE item_id = %s", (str(proposal),))
+        assert cur.fetchone()[0] == 0, "and nothing may reach the append-only ledger"
+
+
+def test_a_genuine_parked_capture_is_still_decidable_by_its_submitter(env, conn):
+    """The benign twin. `parked-capture`'s looser rule is deliberate — a submitter disposing of
+    their OWN capture is the ordinary case, not a governance bypass — and the fix must not cost
+    it."""
+    evidence = MemoryEvidenceStore()
+    parked = _park_capture(conn, evidence, submitted_by=ALICE)   # no situation: a real parked row
+    alice = make_service(env, conn, identity_name=ALICE, audiences=None, evidence=evidence)
+
+    result = review.review_decide(alice, item_kind=review.KIND_PARKED_CAPTURE,
+                                  item_id=str(parked), verdict="reject", notes="not worth filing")
+
+    assert result["recorded"] == "reject"
+
+
+def test_the_ledger_records_the_canonical_id_not_the_callers_spelling(env, conn):
+    """OLD BEHAVIOUR: the disposition hit row 204 while `review_decisions` stored `" 204 "`.
+
+    `_parse_id` accepts anything `int()` does, and the raw string went into the append-only
+    ledger. `_latest_decisions` keys on `(item_kind, item_id)` against items built as
+    `str(row["id"])`, so that decision could never join back to the item `review_queue` renders —
+    a record that cannot be found is not a record.
+    """
+    evidence = MemoryEvidenceStore()
+    parked = _park_capture(conn, evidence, submitted_by=ALICE)
+    alice = make_service(env, conn, identity_name=ALICE, audiences=None, evidence=evidence)
+
+    result = review.review_decide(alice, item_kind=review.KIND_PARKED_CAPTURE,
+                                  item_id=f" {parked} ", verdict="reject", notes="nope")
+
+    assert result["item_id"] == str(parked)
+    assert f"#{parked} " in result["message"], result["message"]
+    with conn.cursor() as cur:
+        cur.execute("SELECT item_id FROM review_decisions WHERE verdict = 'reject'")
+        assert [r[0] for r in cur.fetchall()] == [str(parked)]

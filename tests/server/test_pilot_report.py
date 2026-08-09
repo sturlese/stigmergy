@@ -207,3 +207,25 @@ def test_main_succeeds_with_no_ddl_when_the_schema_already_exists(clean_pilot_re
 
     rc = pilot_report.main(["--json"])
     assert rc == 0
+
+
+# ── the console posture: a clean line and an exit code, never a traceback ──────────────────────
+def test_a_bad_since_is_a_clean_refusal_not_a_traceback(capsys):
+    """OLD BEHAVIOUR: a bare `ValueError` out of `strptime` reached the operator as a Python
+    traceback. `server/errors.py` states the rule for every console entry point in this package:
+    "the console entry point maps them to a clean stderr line and a non-zero exit code — no
+    traceback ever reaches an operator's terminal". Every sibling CLI honours it; this one did
+    not, and it refuses before any I/O so there is nothing to clean up either."""
+    assert pilot_report.main(["--since", "not-a-date", "--dsn", "postgresql://unused"]) == 2
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "YYYY-MM-DD" in err
+
+
+def test_a_valid_since_is_accepted(capsys):
+    """The benign twin: the guard must not reject a real date. Stops at the connection, which is
+    the next step and not this test's subject."""
+    code = pilot_report.main(["--since", "2026-01-01", "--dsn",
+                              "postgresql://nobody@127.0.0.1:1/nothing"])
+    assert code == 1                                   # a connection refusal, not an arg refusal
+    assert "YYYY-MM-DD" not in capsys.readouterr().err
