@@ -459,6 +459,34 @@ def test_a_plain_excerpt_is_not_truncated_by_the_ceiling():
 def test_clamp_leaves_a_short_string_byte_identical():
     assert render.clamp_section_text("already short") == "already short"
 
+def test_every_section_this_module_builds_is_clamped_not_just_the_excerpt_one():
+    """OLD BEHAVIOUR: the clamp was called by `render_show_it_here_success` and by nothing else, so
+    the ANSWER body — the largest section this module builds, straight from unbounded model output
+    — still went out at over 14000 characters against the 3000 ceiling.
+
+    Slack answers `invalid_blocks` for the whole message, and the caller's fallback is the
+    text-only degrade, which costs the citation links and the `context`-block verdict line this
+    module calls trust chrome "a prompt-injected body cannot imitate". So the fix moved INTO
+    `_section` — the one builder every section already goes through — rather than being copied to a
+    second caller, because the next caller is the one that forgets.
+
+    Asserted over every section of every block this module can emit for an answer, so a section
+    added later inherits the property instead of needing its own test."""
+    def answer(markdown):
+        return {"refused": False, "answer_markdown": markdown, "citations": [],
+                "confidence": "high", "verdict": {"verdict": "verified"}, "built_at": "2026-01-01"}
+
+    blocks = render.render_answer(answer("Initech & Acme " * 1200), lambda path: "")
+    sections = [b for b in blocks if b.get("type") == "section"]
+    assert sections, "sanity: this really did build section blocks"
+    for block in sections:
+        assert len(block["text"]["text"]) <= render.SECTION_TEXT_MAX
+
+    # The benign twin: a short answer is not truncated and keeps its own text.
+    short = render.render_answer(answer("Revenue was 1.3M."), lambda path: "")
+    assert any("Revenue was 1.3M." in b.get("text", {}).get("text", "")
+               for b in short if b.get("type") == "section")
+
 
 def test_the_double_enforces_block_kit_rules_on_an_ephemeral_too():
     """OLD BEHAVIOUR: the double accepted an ephemeral payload real Slack rejects.

@@ -700,7 +700,7 @@ def push(worktree: str, *, branch: str, remote_url: str = "", config_env: dict |
             raise GitError(
                 f"could not reach the remote to rebase onto {branch} after a rejected push — this "
                 f"is not a conflict with anyone's change; the push and the fetch both failed: "
-                f"{(fetched.stderr or stderr)[:STDERR_LIMIT]}")
+                f"{_scrub(fetched.stderr or stderr)[:STDERR_LIMIT]}")
         # The SAME per-invocation identity `commit()` uses, and for the same reason: a rebase
         # REWRITES commits, so it needs a committer and git will take one from wherever it can find
         # it. With no identity passed here, a rebase on an operator's laptop silently stamps the

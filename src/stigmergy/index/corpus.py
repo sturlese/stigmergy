@@ -86,11 +86,25 @@ class PageRow:
 # A BOM and leading blank lines are TOLERATED, and `...` is accepted as the closer YAML itself
 # allows: an editor that writes a BOM, or an author who left a blank first line, wrote a page whose
 # frontmatter is perfectly readable, and refusing to see it is how `acl:` went missing.
-_FRONTMATTER_RE = re.compile(r"^﻿?\s*---\r?\n(.*?)\r?\n(?:---|\.\.\.)\r?\n?(.*)$", re.S)
+_FRONTMATTER_RE = re.compile(r"^﻿?---\r?\n(.*?)\r?\n---\r?\n?(.*)$", re.S)
 
-# "This page MEANT to carry frontmatter" — the question `malformed` really turns on. Anchoring it
-# on `text.startswith("---")` alone was too narrow in one direction and too generous in the other.
-_INTENDED_FRONTMATTER_RE = re.compile(r"^﻿?\s*---\r?\n")
+# The frontmatter block a page contract declares starts at byte zero — after a BOM an editor may
+# have written, and nothing else. Widening this to `\s*---` or to a `...` closer was tried and is
+# the reason both are spelled out here: both LOST pages that had been indexing correctly.
+# `\s*` claimed a leading thematic break (`\n---\n\n# Notes`) as an unterminated block, so an
+# ordinary page indexed `acl=[]` — visible to NOBODY — and, when a second `---` appeared further
+# down, everything above it vanished from the body, the content hash and the embedding. A `...`
+# closer is worse still, because it fails in the direction this whole rule exists to prevent: the
+# lazy group stops at the FIRST `...`, so `---\ntitle: Q3\n...\nacl: [finance]\n---` parsed as a
+# title, dropped `acl:` into the body and indexed the page OPEN.
+#
+# `malformed` is not "the regex did not match" for the same reason. It is the narrower, actual
+# question — did this page ASK for restriction in a block that cannot be read — so it is decided by
+# looking for the declaration itself in the unreadable text. A page that opens `---` and closes
+# nothing but declares no audience is not restricted; failing it closed would trade a silent leak
+# for a silent retrieval gap, which is not an improvement.
+_OPENS_FRONTMATTER_RE = re.compile(r"^﻿?---\r?\n")
+_DECLARES_ACL_RE = re.compile(r"^\s*acl\s*:", re.M)
 
 
 def split_frontmatter_checked(text: str) -> tuple[dict, str, bool]:
@@ -100,12 +114,15 @@ def split_frontmatter_checked(text: str) -> tuple[dict, str, bool]:
     the signal `page_row` needs to tell "this page carries no frontmatter" apart from "this page's
     frontmatter could not be read", which the dict alone cannot express: both arrive as `{}`.
 
-    **Every unreadable shape sets it, not just a YAML syntax error.** That distinction was drawn too
-    narrowly once already: the fail-closed ACL was reached only when the block regex MATCHED and
-    `yaml.safe_load` then raised, so four other shapes still indexed a page carrying
-    `acl: [finance]` as open to everyone — an unterminated block, a block closed with `...`, a
-    leading blank line, and a BOM. The first two are genuinely unreadable and now fail closed; the
-    last two are readable and now simply parse, which is the better answer for both.
+    **A YAML syntax error is not the only unreadable shape.** That distinction was drawn too
+    narrowly once already: this was reached only when the block regex MATCHED and `yaml.safe_load`
+    then raised, so a page whose block was never CLOSED still indexed `acl: [finance]` as open to
+    everyone. A BOM had the same effect for a different reason — the block was well-formed and the
+    regex simply refused to see it — and that one is fixed by reading it, not by failing it closed:
+    an editor that writes a BOM has not authored a malformed page.
+
+    What `malformed` must NOT become is "the regex did not match", which is where the second
+    attempt at this landed. See `_OPENS_FRONTMATTER_RE` for the two pages that cost.
     """
     m = _FRONTMATTER_RE.match(text)
     if m:
@@ -118,8 +135,11 @@ def split_frontmatter_checked(text: str) -> tuple[dict, str, bool]:
         if not isinstance(fm, dict):
             return {}, m.group(2), True
         return fm, m.group(2), False
-    # No block extracted. If the page opened one anyway, it is unreadable — not absent.
-    return {}, text, bool(_INTENDED_FRONTMATTER_RE.match(text))
+    # No block extracted. A page that opened one and declared an audience inside it asked for
+    # restriction in text nothing here can read: that, and only that, is unreadable rather than
+    # absent.
+    unreadable = bool(_OPENS_FRONTMATTER_RE.match(text)) and bool(_DECLARES_ACL_RE.search(text))
+    return {}, text, unreadable
 
 
 def split_frontmatter(text: str) -> tuple[dict, str]:
@@ -351,6 +371,25 @@ def resolve_links(own_path: str, stems: list[str], by_stem: dict[str, list[str]]
     return sorted(resolved)
 
 
+def is_indexable_page(rel_path: str) -> bool:
+    """Whether a repo-relative path inside a zone becomes a `pages_index` row.
+
+    THE predicate, in one place, because the two callers had already drifted: `load_pages` walks
+    the checkout and `server.webhook.in_zone_changes` walks a push's changed-file list, and every
+    path one admits and the other does not is a row that exists between rebuilds and vanishes at
+    the next one — or, worse, one the rebuild keeps and a deletion never reaches. Both are stated
+    as the same population; asserting that in a test is not enough while each spells it out
+    separately.
+
+    Note what is NOT excluded: a `.md` page inside a DOT-DIRECTORY. `rglob("*.md")` descends into
+    one, and only the file's own name is checked — so `wiki/.obsidian/note.md` is a page and
+    `wiki/.hidden.md` is not. That asymmetry looks like an oversight and is left alone deliberately:
+    changing it would silently drop rows the corpus has, which is a retrieval question, not the
+    access-control one being fixed here. What matters is that both walkers answer it identically.
+    """
+    return rel_path.endswith(".md") and not rel_path.rsplit("/", 1)[-1].startswith(".")
+
+
 def load_pages(repo_dir: str) -> list[PageRow]:
     """Every page of the included zones, inlinks/links resolved, sorted by path (determinism)."""
     root = Path(repo_dir)
@@ -360,9 +399,9 @@ def load_pages(repo_dir: str) -> list[PageRow]:
         if not zone_dir.is_dir():
             continue
         for path in sorted(zone_dir.rglob("*.md")):
-            if path.name.startswith("."):
-                continue
             rel = str(path.relative_to(root))
+            if not is_indexable_page(rel):
+                continue
             rows.append(page_row(rel, zone, path.read_text(encoding="utf-8", errors="replace")))
     rows.sort(key=lambda r: r.path)
 

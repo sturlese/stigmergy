@@ -163,11 +163,18 @@ def in_zone_changes(changes: dict[str, str]) -> dict[str, str]:
     dropped the row again, which also makes the state transient and hard to catch.
 
     An Obsidian-facing knowledge repo is exactly the case: `.obsidian/` lives inside the vault.
+
+    The extension-and-dot-name test is `corpus.is_indexable_page`, not a second spelling of it
+    here. Writing it out again is how this diverged the other way on the first attempt at the fix:
+    excluding every dot-PATH-COMPONENT rather than the file's own name dropped `wiki/.obsidian/
+    note.md`, which `rglob` does descend into — so the rebuild kept indexing that page while its
+    edits, and its DELETIONS, stopped arriving. A restricted page removed from the repo would have
+    stayed readable until the next nightly rebuild. Two walkers over one population is the thing
+    to avoid; asserting they agree in a test does not make them one.
     """
     prefixes = tuple(f"{zone}/" for zone in corpus.ZONES)
     return {path: status for path, status in changes.items()
-            if path.startswith(prefixes) and path.endswith(".md")
-            and not any(part.startswith(".") for part in path.split("/"))}
+            if path.startswith(prefixes) and corpus.is_indexable_page(path)}
 
 
 def fetch_file_content(repo_slug: str, path: str, sha: str, token: str, *, opener=None) -> str:

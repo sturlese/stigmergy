@@ -992,12 +992,21 @@ def test_the_webhook_indexes_exactly_the_population_the_full_rebuild_does(tmp_pa
     (tmp_path / "wiki" / "data.csv").write_text("salary,amount\nceo,900000\n", encoding="utf-8")
     (tmp_path / "wiki" / ".hidden.md").write_text("---\ntitle: H\n---\nx\n", encoding="utf-8")
     (tmp_path / "wiki" / ".obsidian" / "workspace.json").write_text("{}", encoding="utf-8")
+    # A `.md` page inside a DOT-DIRECTORY, which is the case the first attempt at this fix got
+    # wrong in the other direction: `rglob("*.md")` DESCENDS into a dot-directory and only the
+    # file's own name is checked, so the rebuild indexes this page. Excluding every dot-path
+    # component here would have left the rebuild indexing it while its edits — and its DELETIONS —
+    # stopped arriving, so a restricted page removed from the repo stays readable until the next
+    # nightly rebuild. Divergence in either direction is the same defect.
+    (tmp_path / "wiki" / ".obsidian" / "note.md").write_text(
+        "---\ntitle: N\n---\nx\n", encoding="utf-8")
 
-    pushed = ["wiki/a.md", "wiki/data.csv", "wiki/.hidden.md", "wiki/.obsidian/workspace.json"]
+    pushed = ["wiki/a.md", "wiki/data.csv", "wiki/.hidden.md",
+              "wiki/.obsidian/workspace.json", "wiki/.obsidian/note.md"]
     indexed_by_webhook = set(webhook.in_zone_changes({p: "added" for p in pushed}))
     indexed_by_rebuild = {r.path for r in corpus.load_pages(str(tmp_path))}
 
-    assert indexed_by_webhook == indexed_by_rebuild == {"wiki/a.md"}
+    assert indexed_by_webhook == indexed_by_rebuild == {"wiki/a.md", "wiki/.obsidian/note.md"}
 
 
 def test_an_ordinary_markdown_push_is_still_in_zone():
