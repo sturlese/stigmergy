@@ -2,11 +2,13 @@
 no network: every test drives it with a hand-built `answer` dict, the same shape
 `AnswerService.ask()` returns.
 """
+import asyncio
 import json
 
 import pytest
 
 from stigmergy.slack import copy, render
+from stigmergy.slack.gateway import FakeSlackGateway, SlackApiError
 
 
 def _text(blocks: list[dict]) -> str:
@@ -456,3 +458,34 @@ def test_a_plain_excerpt_is_not_truncated_by_the_ceiling():
 
 def test_clamp_leaves_a_short_string_byte_identical():
     assert render.clamp_section_text("already short") == "already short"
+
+
+def test_the_double_enforces_block_kit_rules_on_an_ephemeral_too():
+    """OLD BEHAVIOUR: the double accepted an ephemeral payload real Slack rejects.
+
+    `chat_post_message` and `chat_update` both call `_raise_if_invalid_blocks`, whose own docstring
+    says it is "enforced UNCONDITIONALLY, on every call"; `chat_post_ephemeral` did not. Slack's
+    real `chat.postEphemeral` applies the identical Block Kit rules, and this class exists so that
+    "a payload that would fail against the real Slack Web API fails against this double too".
+
+    It matters most on this method: the ephemeral leg carries the refusals and the "Show it here"
+    excerpt — the surface whose Block Kit ceiling was a recorded production failure — and
+    `post_or_log`/`decline` swallow the resulting error, so the live symptom is total silence.
+    """
+    gw = FakeSlackGateway()
+    colliding = [{"type": "actions", "block_id": "dup", "elements": []},
+                 {"type": "actions", "block_id": "dup", "elements": []}]
+
+    with pytest.raises(SlackApiError):
+        asyncio.run(gw.chat_post_message("C1", blocks=colliding))
+    with pytest.raises(SlackApiError):
+        asyncio.run(gw.chat_post_ephemeral("C1", "U1", blocks=colliding))
+
+
+def test_an_ordinary_ephemeral_still_posts():
+    """The benign twin: the ephemeral leg is how every refusal reaches a person, so the new check
+    must not bounce a well-formed payload."""
+    gw = FakeSlackGateway()
+    asyncio.run(gw.chat_post_ephemeral("C1", "U1", text="nope",
+                                       blocks=render.render_server_error()))
+    assert len(gw.ephemeral) == 1

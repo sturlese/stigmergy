@@ -335,3 +335,39 @@ def test_view_relpath_refuses_a_malformed_entity_id():
     with pytest.raises(ViewError):
         regenerate.view_relpath("Acme Corp")
     assert regenerate.view_relpath("acme-corp") == "views/acme-corp.md"
+
+
+def test_a_view_never_lists_itself_among_its_own_backlinks(tmp_path):
+    """OLD BEHAVIOUR: from the SECOND regeneration onward, the rollup cited itself.
+
+    `backlinks_of` scans every indexed zone including `views/` — correctly, because another
+    entity's view may legitimately wikilink this entity's page. But it excluded only the entity
+    page itself. A view's Timeline renders one bullet per member and the `type: entity` page is
+    always a member, so the view always links the entity page; and its `acl` equals `view_acl` by
+    construction, so it always passed the visibility filter.
+
+    The result was a rollup asserting itself as evidence that something points at the entity, with
+    the "N page(s) link to X's own entity page" count one too high.
+    """
+    _remote, clone = build_repo(str(tmp_path / "git"))
+    registry = registry_of()
+
+    asyncio.run(regenerate.regenerate_entity(clone, "acme-corp", registry=registry))
+    asyncio.run(regenerate.regenerate_entity(clone, "acme-corp", registry=registry, force=True))
+
+    view = (pathlib.Path(clone) / "views" / "acme-corp.md").read_text(encoding="utf-8")
+    backlinks = view.split("## Backlinks")[1]
+    assert "views/acme-corp.md" not in backlinks, backlinks
+    assert "[[acme-corp]]" not in backlinks, backlinks
+
+
+def test_a_real_backlink_is_still_listed(tmp_path):
+    """The benign twin: excluding the view itself must not empty the section. A genuine page
+    linking the entity page still appears — that is what the feed is for."""
+    _remote, clone = build_repo(str(tmp_path / "git"))
+
+    asyncio.run(regenerate.regenerate_entity(clone, "acme-corp", registry=registry_of()))
+
+    view = (pathlib.Path(clone) / "views" / "acme-corp.md").read_text(encoding="utf-8")
+    backlinks = view.split("## Backlinks")[1]
+    assert "decision" in backlinks, backlinks

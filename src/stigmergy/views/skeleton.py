@@ -89,9 +89,19 @@ def member_hash(members: list[Member]) -> str:
     synthesis prompt marks superseded members as such. Strengthening the hash costs nothing and
     closes a real false negative; it does not change what "unchanged" means for a page whose
     title/body did not move.
+
+    `as_of` and `type` are hashed for the SAME reason, and were the same false negative left open.
+    `as_of` is the most visible frontmatter-only field there is: `timeline_order` sorts the whole
+    Timeline by it, `render_timeline` prints it as the bold lead of every bullet, and
+    `write_synthesis` puts it in the agent's prompt. `type` decides which member is the entity's
+    own page and what the view is titled. A page moving either changed the rendered view while
+    leaving this hash identical — so `list_stale_entities` returned nothing, `check_stale_views`
+    reported nothing, `--stale` skipped it and `--entity` answered "unchanged". Only `--force`
+    recovered it: silently stale forever, which is exactly what this hash exists to prevent.
     """
     key = "|".join(
-        f"{m.path}:{m.content_hash}:{m.superseded_by}:{','.join(m.acl) if m.acl else ''}"
+        f"{m.path}:{m.content_hash}:{m.type}:{m.as_of}:{m.superseded_by}:"
+        f"{','.join(m.acl) if m.acl else ''}"
         for m in members)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
@@ -135,7 +145,8 @@ def render_timeline(members: list[Member], *, cap: int = TIMELINE_CAP) -> str:
 
 
 def backlinks_of(repo: str, entity_page: Member | None, *,
-                 view_acl: list[str] | None = None) -> list[corpus.PageRow]:
+                 view_acl: list[str] | None = None,
+                 exclude_path: str = "") -> list[corpus.PageRow]:
     """Pages whose wikilinks resolve to the entity's OWN page (not to any member), computed at
     generation time from a fresh repo parse rather than read back out of the index.
 
@@ -155,11 +166,20 @@ def backlinks_of(repo: str, entity_page: Member | None, *,
 
     The match is `entity_page.path in r.links` — `corpus.load_pages` stores each row's outbound
     wikilinks as RESOLVED repo-relative paths, so this is exact even on an ambiguous stem (one
-    resolving to several pages stores every match), where a bare stem comparison would not be."""
+    resolving to several pages stores every match), where a bare stem comparison would not be.
+
+    `exclude_path` is the view being generated. Scanning `views/` is right — another entity's view
+    may legitimately link here — but a view is not evidence that something points at its own
+    entity: its Timeline renders one bullet per member and the `type: entity` page is always a
+    member, so the view always links the entity page, and its `acl` equals `view_acl` by
+    construction, so it always passed the filter. From the SECOND regeneration onward the rollup
+    cited itself, and the "N page(s) link to X's own entity page" count was one too high.
+    """
     if entity_page is None:
         return []
     rows = corpus.load_pages(repo)
-    return sorted((r for r in rows if entity_page.path in r.links and r.path != entity_page.path
+    excluded = {entity_page.path, exclude_path} - {""}
+    return sorted((r for r in rows if entity_page.path in r.links and r.path not in excluded
                   and visible_to_view(r.acl, view_acl)),
                  key=lambda r: r.path)
 

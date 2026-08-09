@@ -316,6 +316,13 @@ class FakeSlackGateway:
         if self.fail_ephemeral_count > 0:
             self.fail_ephemeral_count -= 1
             raise SlackApiError("chat.postEphemeral failed")
+        # `chat.postEphemeral` is subject to the SAME Block Kit rules as `chat.postMessage`, and
+        # `_raise_if_invalid_blocks` says it is "enforced UNCONDITIONALLY, on every call" — this
+        # method was the one that did not. A double that lets through a payload real Slack rejects
+        # is the failure this class's own docstring exists to prevent, and it matters here more
+        # than elsewhere: the ephemeral leg carries the refusals and the "Show it here" excerpt,
+        # and `post_or_log`/`decline` swallow the resulting error, so the live symptom is silence.
+        _raise_if_invalid_blocks(blocks, fail_any_blocks=self.fail_any_blocks)
         self.ephemeral.append(_Ephemeral(channel_id, user_id, text, blocks, thread_ts))
         return {"ok": True}
 

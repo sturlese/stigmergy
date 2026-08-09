@@ -130,7 +130,8 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
     # deterministic computation costs nothing and keeps `render`'s own tested contract (it
     # computes `acl` internally) intact.
     view_audience = view_acl([m.acl for m in members])
-    backlink_rows = skeleton.backlinks_of(repo, entity_page, view_acl=view_audience)
+    backlink_rows = skeleton.backlinks_of(repo, entity_page, view_acl=view_audience,
+                                          exclude_path=view_relpath(entity_id))
     backlinks_md = skeleton.render_backlinks(backlink_rows, entity_title=title)
 
     agent = synthesis.build_view_agent()
