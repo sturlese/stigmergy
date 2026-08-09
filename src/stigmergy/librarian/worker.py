@@ -541,8 +541,18 @@ class Worker:
         if swept:
             self.on_output(swept)
         with ops.job_run(self.conn, JOB_NAME) as stats:
-            while not self.releasing:
-                outcome = process_next(self.conn, self.deps) if not self.releasing else None
+            # `stopping` guards the CLAIM, not just the exit. The loop used to test only
+            # `releasing`, so after a first Ctrl-C — which sets `stopping` alone — `_sleep`
+            # returned immediately, control went back to the top, and `process_next` claimed,
+            # filed, committed and PUSHED one more item before the `break` below was ever
+            # reached. The handler prints "finishing the item in flight, then stopping — no
+            # further items will be claimed" one instruction earlier, and
+            # `docs/reference/librarian.md` states the same contract: the flags affect only
+            # whether the NEXT item is claimed. The break after the claim cannot deliver that on
+            # its own; only the guard before it can.
+            while not self.releasing and not self.stopping:
+                outcome = (process_next(self.conn, self.deps)
+                           if not (self.releasing or self.stopping) else None)
                 if outcome is not None:
                     processed += 1
                     item, result = outcome

@@ -946,7 +946,13 @@ def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
                       report.rejected_secret(line=line, rule_id=rule,
                                              where="the drafted page"),
                       diagnostics_path=diagnostics_path)
-    pii = next((f for f in veto if f.code == "pii"), None)
+    # Gate AND code, for the reason the secrets selector above records — and this one is
+    # worse if it is wrong: `reason_code=pii` is in `schema.WITHHELD_REASONS`, so
+    # `worker._finish` calls `purge_secret_capture_immediately` and the submitter's
+    # payload and hints are DESTROYED. A knowledge-repo linter check named `pii` would
+    # have reached this branch through `gate_contract`, which builds its code verbatim
+    # from that repo's JSON, and thrown away someone's material over a lint finding.
+    pii = next((f for f in veto if f.gate == "pii" and f.code == "pii"), None)
     if pii:
         label = pii.message.split("what looks like ", 1)[-1].split(" near line")[0]
         return Result(schema.REJECTED, "",
@@ -954,7 +960,14 @@ def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
                                           pattern_label=label, where="the drafted page"),
                       diagnostics_path=diagnostics_path)
 
-    zone = next((f for f in veto if f.gate == "zone"), None)
+    # `f.repairable`, exactly as `_refuse_meeting` already does it. `gate_body_rewrite`'s
+    # findings (`body-rewrite`, `unparseable`, `unreadable-edit`) are all
+    # `repairable=False`, and its own docstring says why: on the fast lane a modified
+    # page came from `edits.apply_declared` or from nothing, so the agent "did not do
+    # and cannot reach" that work. Routed as steering, they told the SUBMITTER their
+    # material had tried to write outside the lane — naming a colleague's page — for
+    # a fault this module's own docstring classifies as a system fault.
+    zone = next((f for f in veto if f.gate == "zone" and f.repairable), None)
     categories = _injection_categories(outcome)
     if zone and categories:
         # The veto fired AND the material carries a traceable steering attempt: content-
@@ -2540,7 +2553,13 @@ def _refuse_meeting(item, findings, outcome, *, agent_attempts: int = 0,
                       report.rejected_secret(line=line, rule_id=rule,
                                              where="the drafted page"),
                       diagnostics_path=diagnostics_path)
-    pii = next((f for f in veto if f.code == "pii"), None)
+    # Gate AND code, for the reason the secrets selector above records — and this one is
+    # worse if it is wrong: `reason_code=pii` is in `schema.WITHHELD_REASONS`, so
+    # `worker._finish` calls `purge_secret_capture_immediately` and the submitter's
+    # payload and hints are DESTROYED. A knowledge-repo linter check named `pii` would
+    # have reached this branch through `gate_contract`, which builds its code verbatim
+    # from that repo's JSON, and thrown away someone's material over a lint finding.
+    pii = next((f for f in veto if f.gate == "pii" and f.code == "pii"), None)
     if pii:
         label = pii.message.split("what looks like ", 1)[-1].split(" near line")[0]
         return Result(schema.REJECTED, "",

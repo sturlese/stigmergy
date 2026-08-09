@@ -8,6 +8,7 @@ is where the refusal and the flagging are actually decided; the adversarial cat.
 module in more depth and is the permanent home of the forged-frontmatter case.
 """
 import hashlib
+import json
 
 import pytest
 
@@ -522,3 +523,28 @@ def test_prepare_reply_message_never_echoes_another_identity_or_a_path():
 def test_reply_invocation_is_exactly_the_callable_string():
     assert schema.reply_invocation(42) == 'brain_reply(submission_id=42, answer="<your answer>")'
     assert schema.REPLY_TOOL in schema.reply_invocation(42)
+
+
+def test_a_lone_surrogate_is_a_clean_refusal_not_an_encoding_crash():
+    """OLD BEHAVIOUR: `UnicodeEncodeError` — a `ValueError`, not a `CaptureError`.
+
+    `prepare_submission` promises it "Raises `SubmissionRejected` — always BEFORE any blob or row
+    is written". `material_digest`'s `.encode("utf-8")` broke that promise for the one input class
+    `str` admits and UTF-8 does not: an unpaired surrogate. `json.loads('"\\ud800"')` produces one
+    happily, so it survives any JSON-RPC transport and reaches this seam.
+
+    The damage was in the reporting, not the crash: every door catches `CaptureError`, so this
+    escaped to the generic handler that prints "cannot reach the queue database or evidence store"
+    — a rejected INPUT reported to the operator as the infrastructure being down.
+    """
+    material = json.loads('"lone \\ud800 surrogate"')
+
+    with pytest.raises(SubmissionRejected, match="surrogate"):
+        schema.prepare_submission("raw", material, None)
+
+
+def test_ordinary_unicode_material_is_still_accepted():
+    """The benign twin: this refuses an UNPAIRABLE surrogate, not non-ASCII text. Accents, CJK and
+    astral-plane emoji are ordinary capture material."""
+    for material in ["café con leche", "会議のメモ", "shipped it 🚀", "naïve façade"]:
+        assert schema.prepare_submission("raw", material, None).material == material
