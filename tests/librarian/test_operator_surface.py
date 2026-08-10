@@ -264,10 +264,16 @@ def test_every_relative_link_in_every_live_doc_resolves():
 def test_no_librarian_document_links_out_of_this_repo():
     """This repo owns everything it documents. A link to another project is a link that can be
     archived or made private, taking the explanation with it."""
+    # "Leaves the repo" is decided by where a link RESOLVES, never by how it is spelled. A
+    # `../../` prefix used to stand in for the real test, and it was a proxy that had to break the
+    # moment a document under `docs/reference/` wanted to point at the code it describes: two
+    # levels up from there is the repository ROOT, not the outside. The resolution check below is
+    # the honest form, and it is strictly stronger — a genuine escape (`../../../other-project`)
+    # fails it whether or not the sibling checkout happens to exist on this machine.
     for path in (ADR, REFERENCE):
         for target in re.findall(r"\]\(([^)]+)\)", path.read_text(encoding="utf-8")):
             assert not target.startswith(("http://", "https://")), f"{path.name} -> {target}"
-            assert not target.startswith("../../"), f"{path.name} -> {target} leaves the repo"
             resolved = (path.parent / target.split("#")[0]).resolve()
             assert resolved.exists(), f"{path.name} -> {target} does not resolve"
-            assert ROOT in resolved.parents or resolved == ROOT, f"{path.name} -> {target}"
+            assert ROOT in resolved.parents or resolved == ROOT, (
+                f"{path.name} -> {target} leaves the repo")

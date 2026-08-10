@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 496" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 532" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
   <defs>
     <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M 0 1 L 9 5 L 0 9 z" fill="#8b949e"/>
@@ -22,7 +22,7 @@
     </style>
   </defs>
 
-  <rect x="1" y="1" width="1058" height="494" rx="18" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
+  <rect x="1" y="1" width="1058" height="530" rx="18" fill="#0d1117" stroke="#30363d" stroke-width="1.5"/>
   <text x="26" y="46" class="sect">THE READ PATH</text>
 
   <!-- ── in ────────────────────────────────────────────────────────────────── -->
@@ -81,4 +81,16 @@
   <text x="745" y="416" class="tag">naming what was missing</text>
 
   <text x="530" y="462" class="elab" text-anchor="middle">a model gathers, code decides what ships — a system that never refuses is the failure, not the success</text>
+
+  <!-- ── legend ───────────────────────────────────────────────────────────── -->
+  <!-- The same key the other two diagrams carry, minus green: nothing on the read
+       path touches git — it reads the index, which is derived and rebuildable. -->
+  <g transform="translate(26,498)">
+    <rect x="0" y="-9" width="12" height="12" rx="3" fill="#1c1332" stroke="#8957e5" stroke-width="1.2"/>
+    <text x="20" y="1" class="elab">a model — drafts, never decides</text>
+    <rect x="250" y="-9" width="12" height="12" rx="3" fill="#161b22" stroke="#30363d" stroke-width="1.2"/>
+    <text x="270" y="1" class="elab">code — decides</text>
+    <rect x="410" y="-9" width="12" height="12" rx="6" fill="#201a02" stroke="#bb8009" stroke-width="1.2"/>
+    <text x="430" y="1" class="elab">a human</text>
+  </g>
 </svg>

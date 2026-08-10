@@ -102,6 +102,7 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    | `STIGMERGY_CRONS_ENABLED` (`true`) | all three — **and it is the on/off switch** |
    | `STIGMERGY_PLATFORM_REF` (a release tag; default `main`) | all three — which platform version `pip` installs |
    | `STIGMERGY_DIGEST_CHANNEL_ID`, `STIGMERGY_GARDENER_MODEL` | `gardener` (a channel id and a model name are not credentials) |
+   | `STIGMERGY_PLATFORM_REPO` (default `sturlese/stigmergy`) | all three — **set it if you forked.** Leave it unset on a fork and every cron silently `pip install`s the UPSTREAM CLI, so your crons run somebody else's code against your knowledge |
 
    **No cross-repo PAT is involved.** The knowledge repo is the workflow's own repository, so the
    job's read-only `GITHUB_TOKEN` covers the checkout; the CLI arrives by
@@ -220,8 +221,16 @@ fly scale count worker=0 -a $FLY_APP    # ...or take the group down entirely
 fly scale count worker=1 -a $FLY_APP    # only if a deploy did not create it
 ```
 
-Three standing rules:
+Four standing rules:
 
+- **`STIGMERGY_LIBRARIAN_BACKEND` must say `sdk`, and its default does not.** The worker's default
+  backend is `double` — the offline test double, whose whole job is to be adversarial: on demand it
+  hallucinates figures, copies seeded secrets onto pages and declares itself canonical, and on
+  ordinary material it fabricates a plausible page with no model involved at all. That is exactly
+  what the suite needs and exactly what a deployment must never run. `fly.toml` sets `sdk`
+  explicitly for this reason; a deployment assembled any other way inherits `double` and looks
+  perfectly healthy while committing invented knowledge. It is the one configuration mistake here
+  whose symptom is *pages that read fine*.
 - **Never scale `slack` past 1.** No leader election; a second machine double-handles every
   event. The deploy script pins it, and the advisory lock
   (`stigmergy.slack.app.acquire_singleton_lock`) refuses a second process at startup. The lock is
@@ -277,7 +286,7 @@ configured ([admin-console.md](./admin-console.md)).
 `retention-purge` and `gardener` each write a `job_runs` row; `index-rebuild` writes none and its
 truth is `index_meta.built_at` instead. A scheduled job that silently stops is the failure mode
 being defended against, and the Actions tab cannot answer it (a job skipped for an unset
-`vars.STIGMERGY_KNOWLEDGE_REPO` is *green*). The database can:
+`vars.STIGMERGY_CRONS_ENABLED` is *green*). The database can:
 
 ```sql
 SELECT job, status, finished_at, stats FROM job_runs
@@ -421,7 +430,10 @@ anchored-or-asked-or-parked like every capture.
 **The format policy**: pdf · txt/md/json · xlsx/xls/csv/tsv · docx
 · any native Google file. An office binary (pptx/ppt/doc/odt/odp/ods/rtf) is refused NAMING its
 wake condition — the Gotenberg container ships when the first real pptx matters, and the
-`office` conversion path already works wherever `GOTENBERG_URL` points at one (compose dev).
+`office` conversion path already works wherever `GOTENBERG_URL` points at one. **Nothing here runs
+one**: `docker-compose.yml` ships postgres, minio and a bare git remote, and the code's default
+(`http://gotenberg:3000`) resolves to nothing in that composition — so an `office` document fails
+conversion until you stand one up and point the variable at it.
 Files over 25 MB are refused at the door.
 
 **Reading the result**: `stigmergy-queue show <id>` — a `failed` row naming the `conversion`
@@ -771,7 +783,9 @@ moved.
 
 Proves the durable tables survive a round trip: the four `capture.schema` names it (`capture_queue`,
 `audit_log`, `job_runs`, `ingest_errors`) plus every other table nothing can rebuild —
-`review_decisions`, `slack_submissions`, `gardener_findings`, `admin_actions` — and incidentally
+`review_decisions`, `slack_submissions`, `gardener_findings`, `admin_actions`, and
+`steward_notifications`, which holds one row per (item, steward) already DMed and whose loss
+re-rings the doorbell at every steward for every open item — and incidentally
 `pages_index`, which is the one table a restore does not need to save. Against the docker compose
 Postgres (`make db-up` first):
 
@@ -780,8 +794,11 @@ Postgres (`make db-up` first):
 psql "postgresql://stigmergy:stigmergy@localhost:54321/stigmergy" \
   -c "SELECT count(*) FROM capture_queue" -c "SELECT count(*) FROM audit_log"
 
-# dump (custom format; run inside the container so client/server versions always match)
-docker compose exec postgres pg_dump -U stigmergy -Fc stigmergy > out/stigmergy-backup.dump
+# dump (custom format; run inside the container so client/server versions always match).
+# `-T` is not optional: an allocated TTY mangles a binary -Fc stream on its way to the file, and
+# `out/` is gitignored, so on a clean checkout it does not exist until you make it.
+mkdir -p out
+docker compose exec -T postgres pg_dump -U stigmergy -Fc stigmergy > out/stigmergy-backup.dump
 
 # restore over the same database
 docker compose exec -T postgres pg_restore -U stigmergy -d stigmergy --clean --if-exists \
@@ -934,7 +951,16 @@ material its recipient could not `read_page`. **Inert while every steward is unr
 revisit before a scoped steward ever exists.
 
 **The doorbell rings for nothing / decisions fail closed.** Two shapes, and `job_runs` tells them
-apart — the pass records `doorbell-configuration` once per process lifetime in both:
+apart — the pass records the miss once per process lifetime in both, under `job =
+'steward-doorbell'` with the reason in the stats blob, so this is the query (`doorbell-configuration`
+is a `stats->>'event'` value, never a `job` name — filtering on it as one returns zero rows):
+
+```sql
+SELECT started_at, stats FROM job_runs
+ WHERE job = 'steward-doorbell' AND stats->>'event' = 'doorbell-configuration'
+ ORDER BY started_at DESC LIMIT 20;
+```
+
 
 - the map is missing or resolves to EMPTY. Commit and push it (`{"*": ["steward@example.com"]}` is
   the one in use); the worker picks it up on its next item, the `app`/`slack` groups at the next
@@ -1022,7 +1048,8 @@ reinstall the app to fix the missing feedback itself.
 
 ```sql
 SELECT job, status, finished_at, stats FROM job_runs
-WHERE job IN ('gardener', 'digest', 'digest-dry-run', 'capture-purge', 'webhook-index-upsert')
+WHERE job IN ('gardener', 'digest', 'digest-dry-run', 'capture-purge', 'capture-purge-dry-run',
+              'webhook-index-upsert')
 ORDER BY started_at DESC LIMIT 10;
 ```
 

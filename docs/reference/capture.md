@@ -6,6 +6,7 @@ and retention. Design record: [ADR 014](../decisions/014-capture-queue-and-attri
 three MCP tools that reach it are served by [server.md](./server.md), which owns identity, rate
 limiting and audit; operating it day to day is
 [operator-runbook.md → Draining parked rows](./operator-runbook.md#draining-parked-rows).
+Code map: [`src/stigmergy/capture/index.md`](../../src/stigmergy/capture/index.md).
 
 **This package drains nothing** — it is only the front half. Filing a capture into a page
 (the librarian, the git commit, dedup, wikilink resolution, entity anchoring, template validation
@@ -569,8 +570,8 @@ row keeps its payload, and therefore keeps both.
 - **Never generalize the index rebuild's `DROP`.** `store.init_schema` drops `pages_index` by
   name. The four tables in `schema.DURABLE_TABLES` share that database and cannot be rebuilt from
   git, and `review_decisions` sits on the same side of the line — the index's side of that boundary
-  is [index.md → Sharing the database with the durable
-  half](./index.md#sharing-the-database-with-the-durable-half).
+  is [hybrid-index.md → Sharing the database with the durable
+  half](./hybrid-index.md#sharing-the-database-with-the-durable-half).
 - **Never echo captured material unfenced.** It is untrusted data like any page body;
   `brain_submissions` fences excerpts and neutralizes every other free-text field it returns.
 - **Never echo captured material a refusal already declared unsafe.** Fencing answers "could this

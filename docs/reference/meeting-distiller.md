@@ -14,9 +14,15 @@ The front half — [`capture.md`](./capture.md) and
 [ADR 014](../decisions/014-capture-queue-and-attribution.md) — and
 the back half's ordinary path — [`librarian.md`](./librarian.md) and
 [ADR 015](../decisions/015-librarian.md) — are unchanged and are not repeated here.
+The flow spans two packages, so it spans two code maps: the drop CLI is
+[`src/stigmergy/capture/index.md`](../../src/stigmergy/capture/index.md), the meeting flow itself
+[`src/stigmergy/librarian/index.md`](../../src/stigmergy/librarian/index.md).
 
 ```
-stigmergy-meeting drop <transcript> --title <t> --date <YYYY-MM-DD> [--attendees a,b]
+stigmergy-meeting drop <transcript> --title <t> --date <YYYY-MM-DD>
+                       --submitted-by <email>            (or $STIGMERGY_MEETING_OPERATOR_EMAIL;
+                       [--attendees a,b]                  refused by name without one — attribution
+                                                          is never guessed)
   │  validates locally -> uploads to the SAME evidence store every capture uses
   │  -> queue.submit, exactly ONE capture_queue row, kind="meeting"
   │  (no MCP door: schema.MCP_SUBMIT_KINDS = ("raw", "page") only)

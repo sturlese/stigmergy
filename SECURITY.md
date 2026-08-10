@@ -25,8 +25,10 @@ than fenced, so they cannot break a fence either, but they do reach the model ou
 to make captured material act as an instruction is a vulnerability; so is a page-derived string
 that reaches a model neither fenced nor neutralized.
 
-*Known gap, stated rather than implied: `views/synthesis.py` puts member titles into its prompt
-with neither treatment.*
+*Known gap, stated rather than implied: `views/synthesis.py` builds its member list out of each
+member's path, title and `as_of` and puts all three into the prompt with neither treatment. The
+title is the one an attacker steers most easily, but `as_of` is frontmatter-derived too, so the
+gap is the whole line rather than one field of it.*
 
 **2. `server.acl.visible()` is the one place read access is decided — and now the only
 implementation of it.** A second, fail-open `visible()` used to live in `stigmergy.kernel`, the

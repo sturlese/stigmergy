@@ -575,7 +575,7 @@ rather than about a second, untested implementation of the same rule.
   `.mcp.json` servers and hung the run forever (`agent.py`'s module docstring has the full account).
 - **This file's structure matches [`evals/index.md`](../../../evals/index.md)** — the closest
   existing precedent to the per-directory code-map format
-  (`docs/reference/index.md` is narrative/schema-first instead, for a different audience).
+  (`docs/reference/hybrid-index.md` is narrative/schema-first instead, for a different audience).
 - **The meeting flow's design record is [ADR 020](../../../docs/decisions/020-meeting-distiller.md).**
   It records the decisions this package's comments could only show one at a time: a second flow
   rather than a branch, multi-page atomic filing, per-page anchoring, the provenance stamp the fast

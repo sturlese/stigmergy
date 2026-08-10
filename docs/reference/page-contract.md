@@ -161,7 +161,7 @@ fires the boost on **membership of that hint** in the page's list, and the facto
 hint (`entity:borealis-dynamics`), never the whole list. No hint means no entity factor at all:
 resolution belongs to the layer that owns the registry and the identity, and ranking only applies
 what it is told. The filter side is
-[index.md → Queryable filters vs stored columns](./index.md#queryable-filters-vs-stored-columns).
+[hybrid-index.md → Queryable filters vs stored columns](./hybrid-index.md#queryable-filters-vs-stored-columns).
 
 ## Worked example
 

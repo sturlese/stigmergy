@@ -65,7 +65,7 @@ def build_processor(output_type, instructions: str, *, fake: Callable[[bool], An
 
     `model_name` is additive: a caller that omits it keeps reading
     CLEAN_MODEL exactly as before): lets a caller OUTSIDE this package's own CLEAN_MODEL
-    convention name its own model setting (the gardener notice's `STIGMERGY_NOTICE_MODEL`,
+    convention name its own model setting (today the gardener sweep's `STIGMERGY_GARDENER_MODEL`,
     the model policy — model is configuration, never hardcoded — for a
     DIFFERENT subsystem than the one CLEAN_MODEL governs). Threaded straight to `build_model`,
     which already accepts an explicit name and only falls back to CLEAN_MODEL when none is given.

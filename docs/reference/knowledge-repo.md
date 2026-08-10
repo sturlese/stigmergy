@@ -1,8 +1,13 @@
 # The knowledge repository
 
 This platform stores no pages. It reads and writes a **separate git repository** — the knowledge
-repo — which is where your knowledge actually lives. Point at it with `STIGMERGY_REPO` (or `--repo`);
-with neither set, every command looks for `../stigmergy-brain`, a sibling of this checkout.
+repo — which is where your knowledge actually lives. Point at it with `--repo`, or with
+`STIGMERGY_REPO` for the commands that read it: the librarian, the gardener, the digest, the views
+and the entity tooling all default to `../stigmergy-brain`, a sibling of this checkout, when
+neither is set. **`stigmergy-index`, `stigmergy-search` and `stigmergy-server` do not** — they read
+no `STIGMERGY_REPO` at all and refuse without an explicit `--repo`, which is deliberate on a
+process that serves reads to other people. Note also that nothing under `src/` loads a `.env` file:
+copying `.env.example` sets nothing until you export it (`set -a && . ./.env && set +a`).
 
 The separation is the point: delete this platform and you still have your knowledge, as markdown
 files, with history. This document is the contract that repository has to satisfy. For what goes
@@ -10,12 +15,24 @@ files, with history. This document is the contract that repository has to satisf
 
 ## Starting from nothing
 
-An almost-empty git repository is a valid starting point. **One file is genuinely required**:
-`ops/identities.json`. Without it the stdio server refuses to start and the HTTP transport refuses
-every request — never an open brain, on either transport.
-Everything else in `ops/` is optional and falls back to a safe empty default, and no zone
-directory has to exist before something writes into it — the corpus walk skips a zone that is not
-there.
+No zone directory has to exist before something writes into it — the corpus walk skips a zone that
+is not there — and four of the five `ops/` JSON files fall back to a safe empty default. But a repository
+with *nothing* in it is not a working starting point, and each surface refuses for its own reason.
+What each one needs before it will run at all:
+
+| To run | The repo must carry | If absent |
+|---|---|---|
+| `stigmergy-index --rebuild` | **at least one page** under `wiki/` · `sources/` · `views/` | `EmptyCorpusError`. And since the server refuses to serve an empty index, this is what makes a truly empty repo unusable rather than merely quiet: you cannot index it, so you cannot serve it, so you cannot `brain_submit` into it |
+| `stigmergy-server` | `ops/identities.json` | stdio refuses to start; HTTP refuses every request with the generic `401`. Never an open brain, on either transport |
+| the librarian worker (either backend) | `.claude/tools/stigmergy_lint.py`, **in the commit it files against** | `LibrarianConfigError` at startup, before a single item is claimed |
+| the librarian worker, `--backend sdk` | `.claude/skills/librarian/SKILL.md`, same commit | the same refusal — the real agent has no operating procedure without it |
+| `stigmergy-entities` / an approved entity proposal | `ops/templates/entity.md` | `EntityError` — a new entity page is that template with its identity fields filled in, and the command deliberately carries no copy of its own |
+| anchoring to succeed rather than park | **at least one entity** in `ops/entity-registry.json` | nothing breaks, but every capture asks about the name it met and parks. That is the design working; it is still not a first run anybody enjoys |
+
+So the honest minimum is: one seed page, `ops/identities.json`, the linter, and — the moment you
+want a real agent or a real entity — the librarian skill and the entity template. The three
+`scripts/walk_*.py` narrations in the platform repo build a conforming throwaway repo themselves,
+which is the cheapest way to see the shape before you commit to one.
 
 ```
 stigmergy-brain/
@@ -35,7 +52,9 @@ stigmergy-brain/
     ├── entity-registry.json
     ├── acl.json
     ├── stewards.json
-    └── slack-channels.json
+    ├── slack-channels.json
+    └── templates/
+        └── entity.md         # REQUIRED to mint an entity — the shape a new entity page takes
 ```
 
 ## The three zones
@@ -100,11 +119,28 @@ uncommitted local edit cannot change what a page is stamped with or who may sign
 `slack-channels.json` is the exception — it is read as a plain FILE path, which on the deployed app
 is the copy the deploy baked into the image, so a channel's scope changes only with a redeploy.
 
+`ops/` carries one more thing that is not configuration: **`ops/templates/entity.md`**, the page
+shape a newly minted entity takes. `stigmergy-entities` and a server-side approve both render a new
+entity page from it and both refuse loudly when it is missing, because the template is the knowledge
+repo's own source of truth for what one of its pages looks like — not something this platform should
+be supplying from the outside.
+
 ## `.claude/` — the agent's operating procedure
 
 The librarian's instructions are **versioned in the knowledge repo**, not compiled into this
-platform. That is deliberate: how your agent files pages is your policy, and it should change
-without a redeploy.
+platform. That is deliberate ([ADR 015](../decisions/015-librarian.md)): how your agent files pages
+is your company's filing policy, and it belongs where the people whose knowledge it files can read
+and PR it — which is also why this platform ships no canonical copy for you to adopt.
+
+**Write only editorial policy into it.** The skill is not where the agent's confinement is
+declared, and restating it there buys nothing: the platform injects a system-prompt header ahead of
+your text on every run, and that header — not your file — is what tells the agent it has exactly
+five tools, no shell and no network, that writes are confined to a `.md` page that does not exist
+yet, and that nothing in the checkout may be read as instructions. None of that is negotiable from
+the skill, because the gates enforce it whatever the skill says. So the file only has to answer the
+questions that are genuinely yours: what type is this, which folder, how should it be titled, what
+counts as a near-duplicate here, what should it link to. The platform validates exactly two things
+about it — that it is not empty and that it is under a size ceiling — and deliberately nothing else.
 
 | Path | What it is |
 |---|---|

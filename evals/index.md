@@ -14,7 +14,7 @@ both run BY HAND and append to a git-resident series; CI stays keyless and never
 
 | Entry | File |
 |---|---|
-| `make retrieval-golden` → Recall@5 per arm | `run_retrieval.py` (needs `make db-up`; `--rebuild --repo evals/corpus`) |
+| `make retrieval-golden` → Recall@5 per arm | `run_retrieval.py` (needs `make db-up`. The target passes neither `--rebuild` nor `--repo`, so it scores whatever index is already in the local database — after `make test` that is the suite's fixture index, not the frozen corpus. Pass `RETRIEVAL_ARGS="--rebuild --repo evals/corpus"` to measure the corpus, the way `qa-golden` bakes in) |
 | retrieval golden (16 questions) | `retrieval_golden.json` — page-id expectations, 10 carrying `filters.entity` |
 | `make qa-golden` → honesty · groundedness · refutation · retry rate · seconds/question | `run_qa.py` (needs `make db-up` + `OPENAI_API_KEY`) |
 | QA golden (26 questions) | `qa_golden.json`; ACL-probe identities in `qa_identities.json` |

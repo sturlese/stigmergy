@@ -1,7 +1,7 @@
 # ADR 018 — pilot readiness: freshness, the read site, honest refusals, the instrument
 
 Status: accepted. Narrative: [`docs/reference/operator-runbook.md`](../reference/operator-runbook.md),
-[`docs/reference/index.md`](../reference/index.md), [`docs/reference/server.md`](../reference/server.md),
+[`docs/reference/hybrid-index.md`](../reference/hybrid-index.md), [`docs/reference/server.md`](../reference/server.md),
 [`docs/reference/capture.md`](../reference/capture.md).
 
 ## Context

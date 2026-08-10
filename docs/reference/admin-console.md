@@ -137,9 +137,13 @@ not. That row is attribution, not authorization: the actor name is recorded and 
 exactly like `--by` on the steward CLIs. If the bookkeeping write itself fails it is logged
 loudly and the work still lands; bookkeeping must never fail the work it records.
 
-**Entities Approve is the one mutation that writes a SECOND row.** Alongside its `admin_actions`
-row it also records into `review_decisions` — the same append-only governance ledger MCP's
-`review_decide` and Slack's mint modal write into — so "who approved this identity" answers from
+**The two Entities verdicts are the mutations that write a SECOND row.** Approve does, and so does
+Reject — the Entities tab routes its Reject through the ordinary queue rejection rather than
+growing a button of its own, and that path checks whether the row is an entity situation and
+records the decision when it is. Without that, "who decided this identity" answered from one table
+for approve and a different one for reject, on the one door that has both. Alongside their
+`admin_actions` row both record into `review_decisions` — the same append-only governance ledger
+MCP's `review_decide` and Slack's mint modal write into — so "who approved this identity" answers from
 one table regardless of which door it came through (ADR 030). The `review_decisions` write and
 the git push it follows happen inside the SAME `_mutate`-wrapped attempt as the `admin_actions`
 row, not before it: a refusal anywhere in the mint leaves neither ledger touched.

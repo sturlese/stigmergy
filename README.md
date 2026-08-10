@@ -68,7 +68,8 @@ boundary instead; `SECURITY.md` states exactly which, and where that is not yet 
 Three pictures, under one convention that is the argument of the system rather than decoration:
 **colour is who decides.** Purple is a model — it drafts, gathers and proposes, and is never the last
 word on anything. Grey is code, which decides. Amber is a human, for the cases code should not decide
-alone. Green is git, the one thing here that is not rebuildable. Each diagram carries that key.
+alone. Green is git, the one thing here that is not rebuildable. Each diagram carries the key for
+the colours it uses — the read path has no green, because it touches no git.
 
 ### The shape
 
@@ -170,10 +171,15 @@ by name with its reason, and pruning tests that fail when a declared exception s
 
 - **Python 3.12+**
 - **Docker** (the local stack: Postgres + pgvector, MinIO, a bare git remote)
+- **`gitleaks` on `PATH`** (`brew install gitleaks`) — the secrets gate shells out to the real
+  scanner, so the librarian worker *refuses to start* without it rather than filing unscanned.
 - A **git repository for your knowledge** — see
-  [the knowledge-repo contract](./docs/reference/knowledge-repo.md) for its layout. An empty repo is
-  a valid starting point.
-- API keys only when you want real models. The test suite is keyless by construction.
+  [the knowledge-repo contract](./docs/reference/knowledge-repo.md) for its layout and for the
+  short list of files it has to carry before anything will index or file.
+- API keys only when you want real models, and they are not interchangeable: `OPENAI_API_KEY` is
+  the embedder and the `ask` model; the librarian's own agent is Claude, and wants an Anthropic
+  credential plus the `claude` CLI on `PATH`. The test suite is keyless by construction, and so is
+  the walkthrough below.
 
 ## Quick start
 
@@ -185,14 +191,36 @@ make test        # the whole suite (coverage gate 75%)
 make lint        # ruff over src/ tests/ evals/ scripts/
 ```
 
-Then point it at a knowledge repo and ask it something:
+### See it work before you own a knowledge repo
+
+Three narrated walks drive the real stack — real Postgres, real git, real gates — with the offline
+double standing in for the agent. **No API key, no knowledge repo, nothing to configure**: they
+build their own throwaway one and tell you what each step proved.
 
 ```bash
-cp .env.example .env                       # set STIGMERGY_REPO and, for real answers, OPENAI_API_KEY
-.venv/bin/stigmergy-index --rebuild --repo "$STIGMERGY_REPO"
+make db-up
+.venv/bin/python scripts/walk_meeting_distiller.py   # a transcript becomes a page SET, and a second one PARKS
+.venv/bin/python scripts/walk_views.py               # the filing regenerates the entity's view, then the honest no-op
+.venv/bin/python scripts/walk_navigation.py          # links/backlinks, and the existence rule shown live on two identities
+```
+
+Run the meeting-distiller one first: its second transcript names an entity the registry does not
+know, so it asks once and parks — the loop through orange in the write-path diagram above,
+happening for real, with the `brain_reply` a steward would answer printed at the end.
+
+### Point it at your own knowledge repo
+
+```bash
+cp .env.example .env && set -a && . ./.env && set +a   # the CLIs read the ENVIRONMENT, never the file
+.venv/bin/stigmergy-index --rebuild --repo "$STIGMERGY_REPO"           # add --embedder fake to stay keyless
 .venv/bin/stigmergy-search "what did we decide about pricing?"
 .venv/bin/stigmergy-server --identity you@example.com --repo "$STIGMERGY_REPO"   # MCP over stdio
 ```
+
+Nothing in `src/` loads a dotenv file — `make` does, for its own targets, and that is the whole of
+it. Copying `.env.example` without sourcing it leaves `$STIGMERGY_REPO` empty and the first command
+refuses. To point a Claude Code or Desktop session at the server, the `.mcp.json` block is in
+[`docs/reference/server.md`](./docs/reference/server.md#connect-claude-code--desktop-stdio).
 
 `make help` lists every target. Four end-to-end proofs run the real thing in Docker — each **wipes
 the local queue** and says so:
@@ -212,7 +240,8 @@ real models or real cloud resources are opt-in, need the env file, and are docum
 
 ## What is here
 
-One package, its tests beside it. Every row has a code map (`index.md`) beside it in the source.
+One package, its tests under `tests/`. Every **package** row below has a code map (`index.md`)
+beside it in the source; the two bare modules at the top are small enough to be their own map.
 
 #### `src/stigmergy/`
 
@@ -240,8 +269,11 @@ One package, its tests beside it. Every row has a code map (`index.md`) beside i
 | `tests/` | the behavioural invariant + the architecture tests that make the seams rules |
 | `evals/` | two real instruments — golden retrieval and golden QA — over a frozen reference corpus, plus the git-resident score series |
 | `docs/` | `decisions/` (why) · `reference/` (what) |
-| `scripts/` | the end-to-end harnesses |
-| `docker-compose.yml` | the local test stack: postgres+pgvector, minio, a bare git remote |
+| `scripts/` | the end-to-end harnesses, plus the three keyless `walk_*.py` narrations the quick start runs |
+| `deploy/` | **tracked, not gitignored**: the empty `ops/` defaults a deploy bakes your real ones over, and in `workflows/` the three cron templates you copy into your *knowledge* repo — never into this one, because Actions logs on a public repo are world-readable and these jobs narrate the corpus out loud |
+| `docker-compose.yml` · `Dockerfile` · `fly.toml` | the local test stack (postgres+pgvector, minio, a bare git remote), the one image all three process groups run, and the staging deployment that splits them |
+| `.github/` | this repository's OWN CI only — one workflow, plus the issue and PR templates |
+| `.claude/` | this repository's own agent skills: how to land a change here, and how to validate a deployment. Not to be confused with the knowledge repo's `.claude/`, which is where the librarian's operating procedure lives |
 
 ## What is deliberately not here
 
@@ -268,7 +300,9 @@ Scope discipline, not a roadmap. These are ruled out rather than pending:
 | How do I operate it from a browser? | [`docs/reference/admin-console.md`](./docs/reference/admin-console.md) |
 | What does my knowledge repo need to look like? | [`docs/reference/knowledge-repo.md`](./docs/reference/knowledge-repo.md) |
 | What does a page look like? | [`docs/reference/page-contract.md`](./docs/reference/page-contract.md) |
-| How do I report a vulnerability? | [`SECURITY.md`](./SECURITY.md) |
+| What changed, and what may still move? | [`CHANGELOG.md`](./CHANGELOG.md) — below `1.0.0` the contracts in `docs/reference/` may move between minor releases; *behaviour* does not move without a decision record |
+| How do I report a vulnerability? | [`SECURITY.md`](./SECURITY.md) — which also states the threat model this is actually built against |
+| What is expected of people here? | [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) |
 
 ## License
 
