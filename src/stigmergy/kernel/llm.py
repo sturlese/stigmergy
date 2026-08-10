@@ -20,7 +20,7 @@ from pydantic_ai import Agent
 
 from stigmergy.kernel.settings import resolve_backend
 
-DEFAULT_MODEL = "gpt-5.4"
+DEFAULT_MODEL = "gpt-5.6-terra"
 DEFAULT_REASONING_EFFORT = "medium"
 _VALID_EFFORTS = ("minimal", "low", "medium", "high")
 
@@ -30,7 +30,7 @@ def build_model(model_name: str | None = None):
     at call time — never at import (the config ground rule; this is the single place that reads it).
 
     Two forms of CLEAN_MODEL:
-    - bare name ("gpt-5.4"): OpenAI Responses API with an EXPLICIT reasoning effort
+    - bare name ("gpt-5.6-terra"): OpenAI Responses API with an EXPLICIT reasoning effort
       (never the API's implicit default). Requires OPENAI_API_KEY.
     - provider-prefixed pydantic-ai string ("anthropic:claude-sonnet-4-5",
       "google-gla:gemini-2.5-pro", ...): resolved by pydantic-ai; the provider reads its own

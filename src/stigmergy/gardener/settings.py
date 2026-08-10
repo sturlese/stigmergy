@@ -62,11 +62,12 @@ DIGEST_CHANNEL_ID_ENV = "STIGMERGY_DIGEST_CHANNEL_ID"
 
 # ── the model sweep's own configuration ───────────────────────────────────────────────────────
 MODEL_ENV = "STIGMERGY_GARDENER_MODEL"
-# A cheap-class default: same family as `stigmergy.kernel.llm.DEFAULT_MODEL` ("gpt-5.4"), one
-# reasoning tier down. The sweep is a bounded editorial pass over a batch of pages, not a
-# synthesis task, so the cheaper tier is the honest starting point rather than a claim that no
-# heavier model would ever be worth it — `$STIGMERGY_GARDENER_MODEL` is how an operator disagrees.
-DEFAULT_GARDENER_MODEL = "gpt-5.4-mini"
+# A cheap-class default: the budget tier of the same generation as
+# `stigmergy.kernel.llm.DEFAULT_MODEL` ("gpt-5.6-terra"). The sweep is a bounded editorial pass
+# over a batch of pages, not a synthesis task, so the cheaper tier is the honest starting point
+# rather than a claim that no heavier model would ever be worth it — `$STIGMERGY_GARDENER_MODEL`
+# is how an operator disagrees.
+DEFAULT_GARDENER_MODEL = "gpt-5.6-luna"
 
 SWEEP_SAMPLE_ENV = "STIGMERGY_GARDENER_SWEEP_SAMPLE"
 DEFAULT_SWEEP_SAMPLE = 10

@@ -164,10 +164,15 @@ out, a failed `fly deploy` included. `tests/test_deploy_defaults.py` holds both 
 find real data under `deploy/`, restore the empty defaults before committing — the next deploy
 rewrites them anyway.
 
-Then it runs `fly deploy` (one image, all three process groups) and pins `fly scale count slack=1 --yes`
-— Socket Mode has no leader election, `fly deploy` creates two machines by default for a NEW
-process group, and the app-startup advisory lock refusing a second bot is the backstop, not the
-plan. The knowledge repo's `ops/` stays the single source of truth; the script takes a deploy-time
+Then it runs `fly deploy` (one image, all three process groups) and pins both singleton groups:
+`fly scale count slack=1 --yes` — Socket Mode has no leader election, `fly deploy` creates two
+machines by default for a NEW process group, and the app-startup advisory lock refusing a second
+bot is the backstop, not the plan — and `fly scale count worker=1 --yes`, for the sibling reason:
+the worker's default second machine is a standby (stopped, claiming nothing — see the scaling
+note below), but a standby is one `fly machine start` away from a second paid poller that nothing
+refuses, so the pin destroys it. The trade is deliberate: with no standby, a worker host failure
+stalls queue draining until an operator redeploys or starts a machine, instead of failing over.
+The knowledge repo's `ops/` stays the single source of truth; the script takes a deploy-time
 snapshot, which is exactly why a scope change needs a redeploy (see Revocation).
 
 **A deploy is not complete without two verifications** (a staging incident paid for both):
@@ -230,7 +235,9 @@ Three standing rules:
 - **`fly scale count worker=2` does NOT give you two workers.** Fly creates a *standby* for a
   group with no service — `fly status` marks it `†`, it sits `stopped` and claims nothing, but
   the count includes it. Two workers actually draining is `worker=3`. Read the STATE column,
-  never the count.
+  never the count. On a pinned deployment the standby does not exist at all: the deploy script
+  pins `worker=1` (see The deploy above), trading the standby's failover for the guarantee that
+  a second paid poller can never appear by accident.
 - **The kill window is shorter than one item.** Fly caps `kill_timeout` at 300s; one item's
   worst case on the deployed worker is 1320s (two agent attempts at the deployed
   `STIGMERGY_LIBRARIAN_TIMEOUT_S=600`, plus 120s for the gates, the commit and the push). A deploy
@@ -305,7 +312,14 @@ push touching more files than the cap is left to the nightly rebuild), plus one 
 - **Events**: "Just the push event"
 
 Until the secret is set, the endpoint is inert — every request fails the signature check with
-the same generic `401`. Verify it lands:
+the same generic `401`.
+
+One residual now that the `app` machine auto-stops when idle (`fly.toml`'s `[http_service]`):
+GitHub's webhook sender waits ~10 seconds and does not retry on its own, so a delivery that lands
+exactly during a cold start can be dropped. The damage is bounded — the nightly `index-rebuild`
+workflow reconciles the index regardless — and a dropped delivery is visible both in GitHub's
+Recent Deliveries panel (redeliverable by hand) and as a gap in `webhook-index-upsert` job runs.
+Verify it lands:
 
 ```sql
 SELECT stats, finished_at FROM job_runs WHERE job = 'webhook-index-upsert'

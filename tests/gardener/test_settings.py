@@ -47,7 +47,7 @@ def test_all_defaults_with_nothing_set():
     assert s.company_window == settings.DEFAULT_COMPANY_WINDOW == 20
     assert s.company_share == settings.DEFAULT_COMPANY_SHARE == 0.3
     assert s.digest_channel_id == ""
-    assert s.model == settings.DEFAULT_GARDENER_MODEL == "gpt-5.4-mini"
+    assert s.model == settings.DEFAULT_GARDENER_MODEL == "gpt-5.6-luna"
     assert s.sweep_sample == settings.DEFAULT_SWEEP_SAMPLE == 10
 
 

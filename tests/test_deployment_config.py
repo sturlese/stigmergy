@@ -192,3 +192,29 @@ def test_every_file_pyproject_names_is_copied_into_the_image():
         f"pyproject.toml names {missing} but no COPY before `pip install` puts them in the build "
         f"context — the image build will fail while every local test stays green. Add them to the "
         f"`COPY pyproject.toml ...` line.")
+
+
+def test_the_app_group_sleeps_when_idle():
+    """The server auto-stops between requests: every caller of the `app` group can wait out a
+    cold start (an MCP client's first request, a webhook delivery, an operator opening /admin),
+    and Slack Q&A never routes through it — the `slack` process answers in-process against
+    Postgres, not over HTTP. A regression to `min_machines_running = 1` (or auto-stop off)
+    silently reinstates 24/7 machine-hours nobody decided to buy back."""
+    config = _fly_config()
+    svc = config["http_service"]
+    assert svc["auto_stop_machines"] is True
+    assert svc["auto_start_machines"] is True
+    assert svc["min_machines_running"] == 0
+
+
+def test_the_deploy_script_pins_both_singleton_groups():
+    """`fly deploy`'s default second machine for a service-less group is a Fly STANDBY — created
+    stopped, claiming nothing (the runbook's scaling note). The script pins `slack=1` (Socket
+    Mode has no leader election — a STARTED second machine double-handles every event) and
+    `worker=1` (a started standby is a second PAID poller: the queue's leases keep it correct,
+    and only the model bill notices — a spend invariant rather than a correctness one, which is
+    exactly why nothing else would catch it). `fly.toml`'s header states both pins; this keeps
+    the statement executable."""
+    script = (ROOT / "scripts" / "deploy_staging.sh").read_text(encoding="utf-8")
+    assert "fly scale count slack=1 --yes" in script
+    assert "fly scale count worker=1 --yes" in script

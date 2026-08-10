@@ -155,7 +155,7 @@ reuse.
 - **`GardenerSettings`** — `aging_seed_days` (30), `concentration_window` (30),
   `concentration_share` (0.6), `company_window` (20), `company_share` (0.3), `digest_channel_id`
   (empty is honest — most runs never touch Slack), `model` (`STIGMERGY_GARDENER_MODEL`, default
-  `gpt-5.4-mini` — a concrete cheap-class default rather than deferring to the shared `CLEAN_MODEL`,
+  `gpt-5.6-luna` — a concrete cheap-class default rather than deferring to the shared `CLEAN_MODEL`,
   so the sweep never silently rides whatever that happens to be), `sweep_sample` (10).
 - **`job_runs.status`** — `'ok'`, `'partial'` (the sweep failed, the deterministic findings did not)
   or `'error'` (the run aborted). `stats` carries `pages_checked`, `entities_checked`,

@@ -5,10 +5,18 @@
 #   slack   the Slack transport (stigmergy-slack), Socket Mode, no HTTP service of its own
 #
 # One `fly.toml`, one image, one deploy, one secrets set, one place to read logs. The ceiling is
-# THREE ALWAYS-ON PROCESS GROUPS (server · worker · Slack bot), and it counts process groups, not
+# THREE PROCESS GROUPS (server · worker · Slack bot) — the worker and the bot always on, the
+# server auto-stopping when idle (see `[http_service]`) — and it counts process groups, not
 # machines: everything scheduled runs in GitHub Actions and never as a machine, and a FOURTH
 # permanent process GROUP is a deliberate decision, not a default. Scaling an EXISTING group to
-# more than one machine is ordinary — except this group, see the `slack` VM block below for why.
+# more than one machine is ordinary — except the `slack` group (see its VM block below for why),
+# and the `worker` group is deliberately PINNED to one machine by the deploy script. Fly's
+# default second machine for a service-less group is a STANDBY — created stopped, claiming
+# nothing (the runbook's scaling note) — so the pin is not about a phantom second bill: it
+# removes the machine an operator could `fly machine start` into a second PAID poller without
+# noticing. Nothing refuses that start — the queue's leases keep two workers CORRECT, and only
+# the invoice notices — and the price of the pin is the standby's host-failure failover, which
+# the runbook records.
 #
 # `app` and `primary_region` are yours to set at first `fly launch` — see the operator runbook
 # (docs/reference/operator-runbook.md). Put `primary_region` nearest to your Postgres, not
@@ -108,9 +116,18 @@ kill_timeout = "300s"
   processes = ["app"]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = false
+  # The server SLEEPS when idle, deliberately: MCP clients and an operator opening /admin wait
+  # out the cold start, and Slack Q&A never touches this group at all — the `slack` process
+  # answers in-process against Postgres, not over HTTP. The ONE caller that will not wait is
+  # GitHub's webhook sender (~10s delivery timeout, no automatic retry): a push landing exactly
+  # in a cold start can be dropped — bounded by the nightly index-rebuild, visible in GitHub's
+  # Recent Deliveries and in the `webhook-index-upsert` job runs (runbook: the webhook section).
+  # The trade is seconds of latency on the first request after an idle gap, bought for the
+  # machine's idle hours; the two groups that cannot tolerate a stop (the worker mid-filing,
+  # the bot's socket) have no `[http_service]` and are untouched by this.
+  auto_stop_machines = true
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
   # No explicit [[http_service.checks]] on purpose: EVERY HTTP path on this app goes through the
   # per-user bearer-auth middleware (fail-closed by design — spec acceptance 3), so an
   # unauthenticated HTTP health probe would always get 401 and Fly would flap the machine.
