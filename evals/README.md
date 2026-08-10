@@ -133,10 +133,25 @@ filing everything as a note must not be able to hide that behind a rising anchor
 | `type` | the `type:` of the page that ACTUALLY landed, read back out of git | 9 |
 | `folder` | where it landed | 9 |
 | `anchor` | the page's server-stamped `entity:` — resolved registry ids, or company-wide | 7 |
-| `edits` | which OTHER pages the commit changed, from the agent's declaration | 2 |
+| `edits` | which OTHER pages the commit changed, from the agent's declaration | 1 |
 | `park_question` | for a park: the unresolved name the question actually captured | 2 |
 | `decisions` | for a meeting: one decision page per decision, each with its OWN anchor | 2 |
 | `reuse` | a park did not cost the capture a decision | 1 |
+
+**`edits` is scored by CONTAINMENT and its denominator is 1.** Every path the expectation names has
+to have been edited; an edit beyond them does not fail the facet. That is not leniency — a declared
+edit is confined by `edits.validate` to additive `related:` growth or a callout on a page that
+already exists in one of the fast lane's folders, and `gate_zone` and `gate_body_rewrite` judge the
+resulting diff, so an extra edit is harmless by construction and refusing it would score the
+yardstick's imagination rather than the filing. It also has to be containment because the throwaway
+repo **grows during the run**, exactly as production does: the captures file one after another, so a
+later one may legitimately backlink a page an earlier one created — a path no expectation written
+against the frozen fixture could ever name. What the facet asserts is the other direction, the one
+nothing else can see: the reciprocal link an existing page was *owed* actually happened. One capture
+owes such a link (F03); the base case names no `edits` key at all, because under containment an
+empty list would be true for every backend while still filling the denominator — and because the
+first Sonnet-5 baseline showed the empty list was an assumption about one backend, not a
+requirement (`expected/expectations.json`'s F01 `why`).
 
 **`attempts`, `bounces` and cost carry no bar and gate nothing** — the same posture the QA
 instrument takes with retry rate and seconds/question. A backend reaching the same page in two

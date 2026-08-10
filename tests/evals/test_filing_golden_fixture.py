@@ -186,7 +186,7 @@ def test_the_consistency_check_refuses_a_set_whose_denominators_moved(expectatio
     dropped["expect"].pop("edits")
     with pytest.raises(SystemExit) as ex:
         run_filing._check_set(manifest, mutated)
-    assert "edits: pinned 2, file has 1" in str(ex.value)
+    assert "edits: pinned 1, file has 0" in str(ex.value)
 
 
 def test_every_capture_material_exists_and_the_duplicate_case_reuses_F01s_bytes(manifest):
@@ -325,6 +325,26 @@ def test_a_company_wide_expectation_names_no_entity(entries):
 def _anchors_of(block: dict) -> list:
     anchors = [block["anchor"]] if "anchor" in block else []
     return anchors + [d["anchor"] for d in block.get("decisions") or [] if "anchor" in d]
+
+
+def test_no_expectation_names_an_empty_edits_list(entries):
+    """`edits: []` is the one spelling this facet must never carry again.
+
+    It is scored by containment (`_edits_match`: expected ⊆ observed), so an empty list is
+    vacuously TRUE for every backend — and still fills the denominator. That is a cell which reads
+    as measured, prints a score, and can never fail: the permanently-green instrument this suite
+    exists to prevent, one facet wide. "This capture owes no edit" is said by naming NO `edits`
+    key, because silence is not scored.
+
+    F01 carried the empty list until the first Sonnet-5 baseline scored it a miss for correct
+    filing. The fix removed the key; this is what stops the next editor from putting it back —
+    the runner has no refusal for it yet.
+    """
+    for entry in entries:
+        for block in _expect_blocks(entry):
+            assert block.get("edits") != [], (
+                f"{entry['id']} names an empty `edits` list: under containment that is true for "
+                f"every backend. Say 'owes no edit' by naming no `edits` key at all.")
 
 
 def test_every_expected_edit_path_is_a_page_that_already_exists_in_the_fixture_repo(entries):

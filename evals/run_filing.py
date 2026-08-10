@@ -25,7 +25,8 @@ rising anchor score. The facets:
                   spelling of a name, and `[]` (which the contract calls company-wide) is a real
                   answer this scorer distinguishes from a wrong entity
   - edits         which OTHER pages the commit changed — what `edits.apply_declared` performed
-                  from the agent's declaration
+                  from the agent's declaration, scored by CONTAINMENT: the edit an existing page
+                  was OWED has to be there, and a further one does not fail it (`_edits_match`)
   - park_question for a park: the unresolved name the question actually captured
   - decisions     for a meeting: one decision page per decision, each with its OWN anchor
   - reuse         for a meeting re-filed after a park: did the capture LOSE a decision on the way
@@ -129,8 +130,12 @@ FACETS = QUALITY_FACETS + COST_FACETS
 # The two cost facets sit at 8 rather than 12 because the two parking captures name no
 # attempts/bounces expectation, while `agent_passes` in the report still sums the passes of all
 # twelve phases. Those are different questions and deliberately different denominators.
+#
+# `edits` sits at 1 because exactly one capture is OWED an edit it can be held to (F03). The base
+# case used to pin `edits: []` as well, which scored an assumption about how one backend would
+# file rather than anything the brief requires — see `_edits_match` and F01's `why`.
 EXPECTED_DENOMINATORS = {"status": 12, "reason": 1, "type": 9, "folder": 9, "anchor": 7,
-                         "edits": 2, "park_question": 2, "decisions": 2, "reuse": 1,
+                         "edits": 1, "park_question": 2, "decisions": 2, "reuse": 1,
                          "attempts": 8, "bounces": 8}
 
 # Words carried by nearly every title in this domain; matching on them would let any two titles
@@ -195,6 +200,35 @@ def _anchor_matches(expected: dict, observed: dict) -> bool:
             and sorted(expected.get("ids") or []) == sorted(observed.get("ids") or []))
 
 
+def _edits_match(expected: list, observed: list) -> bool:
+    """Every edit the expectation names was performed. Observed EXTRAS do not fail the facet.
+
+    **Containment, not equality**, and the asymmetry is the whole design of this facet.
+
+    *An extra edit cannot damage a page, by construction.* `edits.validate` confines a declared edit
+    to a page that already exists, sits in one of the fast lane's folders and was not created by
+    this capture; what is then written is a `related:` link or a callout — additive by construction
+    (`page.with_related_link`, `page.with_callout`) — and `gate_zone` and `gate_body_rewrite` judge
+    the resulting diff exactly as they judge the new page. A backend that cross-links more generously
+    than the yardstick anticipated has therefore done something already proved harmless, and marking
+    it down would score the yardstick's imagination. What this facet asserts is the other direction:
+    the edit the material OWED an existing page actually happened.
+
+    *The corpus grows while the run happens.* The captures are filed one after another into ONE
+    throwaway repo, the way a real knowledge repo evolves, so a later capture may legitimately
+    backlink a page an earlier capture in the same run created — a path no expectation written
+    against the frozen fixture could name. Under equality that reads as a miss, and the facet would
+    be scoring run order. Both directions were measured on the first Sonnet-5 baseline, before any
+    number was recorded; F01's and F03's `why` notes in `expected/expectations.json` record it.
+
+    One consequence to hold on to when writing an expectation: under containment `edits: []` is
+    vacuously TRUE for every backend and still fills the denominator, which is a facet that reads as
+    measured and measures nothing. "This capture owes no edit" is said by NAMING NO `edits` KEY —
+    silence is not scored, which is the rule `score_phase` keeps for every facet.
+    """
+    return set(expected) <= set(observed)
+
+
 def _decisions_match(expected: list, observed: list) -> bool:
     """One decision page per expected decision, each matched loosely by title and exactly by
     anchor, with no page left over on either side.
@@ -255,7 +289,7 @@ def score_phase(expect: dict, observed: dict) -> dict:
     if "anchor" in expect:
         out["anchor"] = _anchor_matches(expect["anchor"], observed.get("anchor") or {})
     if "edits" in expect:
-        out["edits"] = sorted(expect["edits"]) == sorted(observed.get("edits") or [])
+        out["edits"] = _edits_match(expect["edits"], observed.get("edits") or [])
     if "park_question" in expect:
         out["park_question"] = _park_question_matches(expect["park_question"],
                                                       observed.get("park_question") or [])

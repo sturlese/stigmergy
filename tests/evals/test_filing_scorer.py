@@ -40,7 +40,16 @@ EVALS_INDEX = ROOT / "evals" / "index.md"
 # copy was counted by hand off the expectations file, so the two pins are INDEPENDENT and the test
 # below is a genuine agreement between them. Importing the runner's number would make every
 # assertion in this file a tautology the day somebody edits it to match a broken set.
-DENOMINATORS = {"status": 12, "reason": 1, "type": 9, "folder": 9, "anchor": 7, "edits": 2,
+#
+# `edits` sits at 1 rather than 2 because F01 stopped naming the facet, and that is a CONTRACT
+# CHANGE with evidence behind it rather than a pin relaxed to make something pass: the first
+# Sonnet-5 baseline — run before any number was recorded — declared a reciprocal link on the page
+# F01's material openly continues, which is correct filing, and the `edits: []` it was scored
+# against asserted an assumption about how one backend would file. Under the containment rule that
+# replaced list equality, an empty list is true for every backend anyway, so the honest spelling of
+# "this capture owes no edit" is silence. `expected/expectations.json`'s F01 `why` note is the
+# source of truth; `test_no_expectation_names_an_empty_edits_list` keeps the trap from returning.
+DENOMINATORS = {"status": 12, "reason": 1, "type": 9, "folder": 9, "anchor": 7, "edits": 1,
                 "park_question": 2, "decisions": 2, "reuse": 1, "attempts": 8, "bounces": 8}
 CAPTURES, PHASES = 10, 12
 
@@ -198,9 +207,10 @@ MUTATIONS = {
     # The set's sharpest probe, mutated the way a real backend gets it wrong: a plausible
     # neighbour from the same registry, not a nonsense id.
     "anchor": lambda o: dict(o, anchor={"kind": "entity", "ids": ["quillon-labs"]}),
-    # An edit the capture was never owed: the direction that changes SOMEBODY ELSE's page, and
-    # the one that flips whether the expectation names no edits (F01) or one (F03).
-    "edits": lambda o: dict(o, edits=[*o["edits"], "wiki/notes/Northwind Freight Onboarding.md"]),
+    # The owed page untouched and a DIFFERENT one edited instead. Adding a path beside the owed
+    # one is forgiven by design now (containment — `_edits_match`), so the mutation that proves
+    # this facet still discriminates has to remove the one edit the material actually owed.
+    "edits": lambda o: dict(o, edits=["wiki/decisions/Warehouse Slotting Policy.md"]),
     "park_question": lambda o: dict(o, park_question=["Northwind Freight"]),
     "decisions": lambda o: dict(o, decisions=[*o["decisions"],
                                               {"path": "wiki/decisions/A third decision.md",
@@ -210,6 +220,14 @@ MUTATIONS = {
     "attempts": lambda o: dict(o, attempts=o["attempts"] + 1),
     "bounces": lambda o: dict(o, bounces=o["bounces"] + 1),
 }
+
+
+# A mutation is only meaningful against the block it was written for. `edits` is the case that
+# needs saying: the mutation above names a page that is NOT the one F03's material owes, and a
+# capture added later that also names `edits` would silently become `_block_naming`'s first hit —
+# mutated with a path its own expectation might legitimately contain, and the test would pass
+# while proving nothing.
+SENSITIVITY_TARGETS = {"edits": "F03-declared-edit-related-growth"}
 
 
 @pytest.mark.parametrize("facet", sorted(MUTATIONS))
@@ -223,9 +241,17 @@ def test_every_facet_reports_a_deliberate_error_as_its_own_miss(facet, entries):
     evidence that the thing was measured. A permanently-green instrument is worse than no
     instrument, because nobody goes looking for the measurement it already appears to have.
 
+    It earned its keep on `edits`: when that facet moved from list equality to containment, the
+    old mutation (add a path) stopped failing and this test said so, instead of the facet quietly
+    becoming unfalsifiable.
+
     The benign twin is the test below: the same fixtures, unmutated, score every facet True.
     """
     capture_id, block = _block_naming(entries, facet)
+    if facet in SENSITIVITY_TARGETS:
+        assert capture_id == SENSITIVITY_TARGETS[facet], (
+            f"the {facet} mutation was written against {SENSITIVITY_TARGETS[facet]} and is now "
+            f"being applied to {capture_id} — check it still proves anything there")
     scored = run_filing.score_phase(block, MUTATIONS[facet](_perfect(block)))
     assert scored[facet] is False, f"{capture_id}: mutating {facet} did not fail it"
     assert [name for name, ok in scored.items() if not ok] == [facet], (
@@ -254,6 +280,35 @@ def test_a_reciprocal_link_the_backend_never_declared_is_a_miss(entries):
     for capture_id, block in owed:
         assert run_filing.score_phase(block, dict(_perfect(block), edits=[]))["edits"] is False, \
             capture_id
+
+
+def test_an_edit_the_expectation_never_named_does_not_fail_the_facet():
+    """The containment rule itself, and the reason it is not a relaxation of standards.
+
+    An extra declared edit is an additive `related:` link or a callout on an existing in-lane page
+    (`edits.validate` refuses anything else: a path outside the fast lane's folders, a page this
+    capture created, a symlink, a dead link), judged by `gate_zone` and `gate_body_rewrite` like
+    any other diff. So a backend that cross-links more generously than the yardstick anticipated
+    has done something already proved harmless, and list equality was scoring the yardstick's
+    imagination — which is exactly what the first Sonnet-5 baseline caught, twice.
+    """
+    assert run_filing.score_phase({"edits": ["a.md"]}, {"edits": ["a.md", "b.md"]})["edits"] is True
+
+
+def test_an_owed_edit_missing_from_a_pile_of_others_is_still_a_miss():
+    """Containment forgives extras, never a substitution. A backend that edited two OTHER pages and
+    left the one its material owed untouched has not been generous — it missed the debt, and a
+    facet that counted edits rather than checking for the named one would call that a pass."""
+    assert run_filing.score_phase({"edits": ["a.md"]},
+                                  {"edits": ["b.md", "c.md"]})["edits"] is False
+
+
+def test_the_same_page_edited_twice_still_satisfies_the_expectation_once():
+    """`report["pages_edited"]` is a list, not a set: two declared edits to one page (a `related:`
+    link and an overlap callout) arrive as two entries. The facet asks whether the page was
+    touched, so a duplicate must not read as a different page — and must not fail."""
+    assert run_filing.score_phase({"edits": ["a.md"]},
+                                  {"edits": ["a.md", "a.md"]})["edits"] is True
 
 
 def test_a_backend_that_never_parked_scores_the_after_reply_phase_as_a_miss(entries):

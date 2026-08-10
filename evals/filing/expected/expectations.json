@@ -6,7 +6,7 @@
     "type": "the `type:` frontmatter of the page that actually landed, read back out of git",
     "folder": "the directory the page landed in",
     "anchor": "{kind: entity|company, ids: [registry id, ...]} — read from the filed page's server-stamped `entity:` frontmatter, so it is the resolved REGISTRY ID and never the agent's spelling. `company` means the page filed with an empty `entity:` list, which is what a company-wide anchoring outcome stamps.",
-    "edits": "paths of pages OTHER than the filed one that this commit changed — what edits.apply_declared actually performed from the agent's declaration",
+    "edits": "paths of pages OTHER than the filed one that this commit changed — what edits.apply_declared actually performed from the agent's declaration. Scored by CONTAINMENT (run_filing._edits_match): every path named here has to be among them, and a further edit does not fail the facet — the gates confine a declared edit to additive growth on an existing in-lane page, so an extra one is harmless by construction, while the throwaway repo grows during the run and a later capture may legitimately backlink a page an earlier one created. A capture that owes no edit therefore names NO `edits` key: an empty list would be true for every backend and still fill the denominator.",
     "attempts": "how many times the agent was called for this capture (counted at the Deps.agent seam, not read from any report)",
     "bounces": "corrective retries = max(0, attempts - 1); one bounce means the first pass was vetoed and the agent got its single corrective pass",
     "park_question": "for a park: the unresolved name(s) the question captured, matched loosely",
@@ -19,13 +19,12 @@
   "expectations": [
     {
       "id": "F01-plain-note-known-entity",
-      "why": "The base case: ordinary prose about a registered entity, filed as a note. If this one moves, nothing else in the set is interpretable.",
+      "why": "The base case: ordinary prose about a registered entity, filed as a note. If this one moves, nothing else in the set is interpretable. It names NO `edits` expectation, and that silence is a correction the first Sonnet-5 baseline earned before a single number was recorded: this entry used to pin `edits: []`, and the run declared a reciprocal `related:` link on `wiki/notes/Northwind Freight Onboarding.md` — which is correct filing, because this material CONTINUES that page's account (it is the depot rollout status, and it names the two depots that went first). The empty list asserted an assumption about how one backend would file, not anything the brief requires, so scoring it would have marked correct cross-linking down: the `globex-meeting-budget` lesson, caught this time while the fixture could still be edited. Where a declared edit IS a requirement is F03.",
       "expect": {
         "status": "filed",
         "type": "note",
         "folder": "wiki/notes",
         "anchor": {"kind": "entity", "ids": ["northwind-freight"]},
-        "edits": [],
         "attempts": 1,
         "bounces": 0
       }
@@ -47,7 +46,7 @@
     },
     {
       "id": "F03-declared-edit-related-growth",
-      "why": "The material answers the weekend-cover question `wiki/notes/Northwind Freight Onboarding.md` left open, so that page is owed a reciprocal link. The agent may not write it — it declares the edit and edits.apply_declared performs it — so this facet scores whether the backend RECOGNISED the debt, which is judgment, not mechanism. Two properties of the target page are load-bearing and neither is stated on it: it existed before this capture arrived (an additive edit to an EXISTING page is only a real claim against a page nobody created in the same commit), and it records the open question without answering it, so the continuation is genuine rather than arbitrary. The same material also substantially covers ground that page already covers — a backend that files a second page and says nothing about the first has quietly duplicated the corpus.",
+      "why": "The material answers the weekend-cover question `wiki/notes/Northwind Freight Onboarding.md` left open, so that page is owed a reciprocal link. The agent may not write it — it declares the edit and edits.apply_declared performs it — so this facet scores whether the backend RECOGNISED the debt, which is judgment, not mechanism. Two properties of the target page are load-bearing and neither is stated on it: it existed before this capture arrived (an additive edit to an EXISTING page is only a real claim against a page nobody created in the same commit), and it records the open question without answering it, so the continuation is genuine rather than arbitrary. The same material also substantially covers ground that page already covers — a backend that files a second page and says nothing about the first has quietly duplicated the corpus. The list stays at one path under containment scoring: it is the edit that is OWED, and the first Sonnet-5 baseline declared two more beside it — a policy page, and the page F01 had filed minutes earlier in the same throwaway repo — neither of which a yardstick written against the frozen fixture could have named, and both of which the gates had already confined to additive growth.",
       "expect": {
         "status": "filed",
         "type": "note",
