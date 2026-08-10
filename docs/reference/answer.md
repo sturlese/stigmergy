@@ -5,6 +5,7 @@ and **pure code verifies it before it leaves the server**. The LLM writes; code 
 record: [ADR 007](../decisions/007-answer-layer.md). The read tools it stands on are the server
 ([server.md](./server.md)); the index underneath is
 [ADR 012](../decisions/012-hybrid-index.md).
+Code map: [`src/stigmergy/answer/index.md`](../../src/stigmergy/answer/index.md).
 
 ```
 question ─▶ answering agent ─▶ deterministic ANSWER verifier ─▶ strict gate ─▶ answer + verdict

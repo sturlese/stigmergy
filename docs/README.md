@@ -19,7 +19,7 @@ option that was already rejected.
 | Doc | Covers |
 |---|---|
 | [`reference/knowledge-repo.md`](./reference/knowledge-repo.md) | the repository this platform reads and writes: the three zones, the fast lane's three creatable types, the optional `ops/` files, and what the platform will never do to it. **Start here if you are setting one up** |
-| [`reference/index.md`](./reference/index.md) | `stigmergy.index` — the hybrid derived index, the ranking batch, and the `stigmergy-index --check` substrate lint |
+| [`reference/hybrid-index.md`](./reference/hybrid-index.md) | `stigmergy.index` — the hybrid derived index, the ranking batch, and the `stigmergy-index --check` substrate lint |
 | [`reference/server.md`](./reference/server.md) | `stigmergy.server` — the single MCP server and its **ten** tools: stdio + streamable HTTP, auth, audit, rate limiting |
 | [`reference/answer.md`](./reference/answer.md) | `stigmergy.answer` — the answering agent + strict verifier; three agent tools |
 | [`reference/capture.md`](./reference/capture.md) | `stigmergy.capture` — the durable capture queue, attribution, the evidence plane, retention, the human loop |

@@ -2,6 +2,7 @@
 
 What this package is and how to drive it. The **why** lives in
 [ADR 012](../decisions/012-hybrid-index.md); this is the what and the where.
+Code map: [`src/stigmergy/index/index.md`](../../src/stigmergy/index/index.md).
 
 A derived, disposable search layer over a checkout of the knowledge repo: Postgres +
 pgvector, a lexical arm and a semantic arm fused with RRF, then the explainable contract

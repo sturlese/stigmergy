@@ -7,6 +7,7 @@ A third transport, a sibling of stdio (`server/mcp_server.py`) and HTTP
 [ADR 017](../decisions/017-slack-transport.md); operating it day to day — the `slack` process
 group, the singleton rule, token rotation, the double-handling symptom — is
 [operator-runbook.md](./operator-runbook.md).
+Code map: [`src/stigmergy/slack/index.md`](../../src/stigmergy/slack/index.md).
 
 **Two flows, one push channel and a review surface**: `@brain <question>` (ask, rendered for
 humans, with the channel/DM ACL split), the 🧠 gesture (capture a thread, verbatim, public

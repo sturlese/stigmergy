@@ -7,7 +7,9 @@ document only shows the results of.
 The review inbox is covered in [`server.md`](./server.md#the-review-tools)
 and its Slack surface in [`slack.md`](./slack.md#the-steward-doorbell-and-the-review-surface);
 view staleness is covered in [`views.md`](./views.md). This document describes what these two
-commands add on top of them.
+commands add on top of them. Code maps, one per command:
+[`src/stigmergy/gardener/index.md`](../../src/stigmergy/gardener/index.md) and
+[`src/stigmergy/digest/index.md`](../../src/stigmergy/digest/index.md).
 
 ```
 stigmergy-gardener                                  stigmergy-digest

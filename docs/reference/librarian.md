@@ -6,6 +6,7 @@ split) and [ADR 016](../decisions/016-human-loop-and-entity-governance.md) (read
 repo-sourced inputs at the base commit; governed entity birth). The front half — submit, attribution,
 the evidence plane — is [`capture.md`](./capture.md) and
 [ADR 014](../decisions/014-capture-queue-and-attribution.md).
+Code map: [`src/stigmergy/librarian/index.md`](../../src/stigmergy/librarian/index.md).
 
 ```
 capture_queue row (claimed, fenced by `attempts`)

@@ -3,7 +3,9 @@
 How the graph is served and how to use it. The **why** lives in
 [ADR 022](../decisions/022-entity-navigation.md); this is the what and the where. The pattern
 underneath: *search finds the door; the agent walks the house* — it reads full pages and follows
-wikilinks one hop.
+wikilinks one hop. The code is the server's, so the code map is
+[`src/stigmergy/server/index.md`](../../src/stigmergy/server/index.md), shared with
+[`server.md`](./server.md).
 
 Making that literally true took five things, and they are what this document covers: the graph
 becomes a stored, ACL-scoped column; `read_page` serves it; two tools (`list_entities`,

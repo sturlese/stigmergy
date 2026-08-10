@@ -1,7 +1,7 @@
 # index — the hybrid derived index
 
-Narrative doc: [`docs/reference/index.md`](../../../docs/reference/index.md) — the what and the
-where for an operator. Design record:
+Narrative doc: [`docs/reference/hybrid-index.md`](../../../docs/reference/hybrid-index.md) — the
+what and the where for an operator. Design record:
 [ADR 012](../../../docs/decisions/012-hybrid-index.md), plus
 [ADR 026](../../../docs/decisions/026-the-purge.md) (which removed the package this one used to be
 policed against) and [ADR 022](../../../docs/decisions/022-entity-navigation.md) (the registry

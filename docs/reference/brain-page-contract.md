@@ -2,7 +2,7 @@
 
 The frontmatter dialect the `sources/` corpus is written in: Markdown with YAML frontmatter. This
 is the interface consumed by the brain server and by MCP clients — treat it as an API. The hybrid
-derived index ([`index.md`](index.md)) is a consumer too, with its own tolerant parser (the packages
+derived index ([`hybrid-index.md`](hybrid-index.md)) is a consumer too, with its own tolerant parser (the packages
 share no code); it reads a **subset** of what follows into the queryable columns of `pages_index` —
 `type`, `title`, `id`, `status`, `entity`, `owner`, `tier`, `as_of`, `acl`, `tags`, `mentions`,
 `supersedes`, `superseded_by`, `generated_at`, and `extracted_at` as a fallback for `updated`
