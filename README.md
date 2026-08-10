@@ -267,7 +267,7 @@ beside it in the source; the two bare modules at the top are small enough to be 
 | Path | What it is |
 |---|---|
 | `tests/` | the behavioural invariant + the architecture tests that make the seams rules |
-| `evals/` | two real instruments — golden retrieval and golden QA — over a frozen reference corpus, plus the git-resident score series |
+| `evals/` | three real instruments, one per model surface — golden retrieval, golden QA and golden filing (the only one that WRITES) — each over a frozen fixture, plus the git-resident score series |
 | `docs/` | `decisions/` (why) · `reference/` (what) |
 | `scripts/` | the end-to-end harnesses, plus the three keyless `walk_*.py` narrations the quick start runs |
 | `deploy/` | **tracked, not gitignored**: the empty `ops/` defaults a deploy bakes your real ones over, and in `workflows/` the three cron templates you copy into your *knowledge* repo — never into this one, because Actions logs on a public repo are world-readable and these jobs narrate the corpus out loud |

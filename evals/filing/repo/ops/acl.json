@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "description": "Ordered audience rules for the filing golden's mini knowledge repo: first matching path wins, an absent acl means open. Written in the ON-DISK dialect a real knowledge repo uses (path/acl/default), not the reader dialect librarian/acl_rules.py adapts it to — so an eval run exercises that adapter exactly as a production run does.",
+  "WARNING-empty-list-dialect": "An empty `acl` list HERE means OPEN, and it means NOBODY almost everywhere else: librarian/acl_rules.resolve collapses an empty resolved list to None (the page contract's 'absent acl' = open to everyone), while server/acl.visible, kernel/acl and the view renderer all read an empty list as an audience set with no members. A rule meant to RESTRICT must name its audiences explicitly.",
+  "why-everything-is-open-here": "Deliberate, and part of the yardstick. This fixture measures FILING quality, so every page it produces must be equally readable — a scoped rule would make some captures land with an `acl:` line and others without, adding a dimension the golden set does not score and cannot hold constant across backends. ACL enforcement has its own instrument: tests/server's ACL suites and qa_golden.json's three ACL-probe questions.",
+  "default": [],
+  "rules": [
+    { "path": "wiki/**", "acl": [] },
+    { "path": "sources/**", "acl": [] },
+    { "path": "views/**", "acl": [] }
+  ]
+}

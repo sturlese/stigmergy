@@ -14,9 +14,22 @@ known-first-party = ["stigmergy"]
 
 [lint.per-file-ignores]
 "**/tests/*" = ["SIM115"]   # quick open().read()/.write() is fine in tests
-# A frozen, byte-for-byte copy of the real `stigmergy` repo's `.claude/tools/stigmergy_lint.py`
-# (tests/librarian/support.py explains why: the librarian test fixtures need a real contract
-# linter and must not depend on a local checkout of that repo existing). Left un-linted on
-# purpose so a future resync stays a trivial diff against the source instead of silently drifting
-# to satisfy this repo's own lint config.
+# TWO frozen, byte-for-byte copies of the real `stigmergy` repo's `.claude/tools/stigmergy_lint.py`.
+# They are still linted — ONE rule is ignored, because it is the only rule the current bytes trip.
+# The rest of this config applies to them exactly as it does to everything else.
+#
+# **When a future rule reds a frozen copy, the fix goes HERE, never in the copy.** Editing the
+# bytes to satisfy this repo's lint config would end the property both copies exist for: that they
+# are exactly what the knowledge repo runs. Each is listed by name rather than covered by a glob,
+# so a third copy is a deliberate act with a `FROZEN.md` behind it and not something a pattern
+# absorbs in silence.
+#
+#   tests/  — the librarian fixtures need a real contract linter and must not depend on a local
+#             checkout of the knowledge repo existing (tests/librarian/support.py). RESYNCED when
+#             the real linter moves; `test_frozen_linter.py` is what notices when it has not been.
+#   evals/  — the filing golden files into a mini knowledge repo that has to carry one, or
+#             `gate_contract` is silently inert for the whole measurement. NOT resynced, ever: it
+#             is a yardstick, and re-grading it would invalidate every score already recorded
+#             (evals/filing/repo/.claude/tools/FROZEN.md).
 "tests/librarian/fixtures/repo/.claude/tools/stigmergy_lint.py" = ["B007"]
+"evals/filing/repo/.claude/tools/stigmergy_lint.py" = ["B007"]

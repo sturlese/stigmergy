@@ -62,15 +62,23 @@ def gitleaks_available() -> bool:
     return shutil.which("gitleaks") is not None
 
 
-def build_repo(root: str) -> RepoEnv:
+def build_repo(root: str, *, source: "str | pathlib.Path" = FIXTURE_REPO) -> RepoEnv:
     """One bare remote + one clone, seeded with the fixture skeleton and pushed once. Every test
     that calls this gets its OWN pair under `root` (a pytest `tmp_path`), so nothing here is
-    shared, reused or capable of leaking a commit from one test into another's diff."""
+    shared, reused or capable of leaking a commit from one test into another's diff.
+
+    `source` is the knowledge-repo skeleton to seed from, and it defaults to this package's own
+    `fixtures/repo/` — every test in the suite takes the default and is unaffected. It exists for
+    `evals/run_filing.py`, which drives this same real filing path against its OWN frozen mini
+    knowledge repo (`evals/filing/repo/`): that fixture is a yardstick with its own freeze cadence
+    and its own synthetic organizations, so it cannot be this one, and a second copy of the
+    bare-remote-plus-clone dance is exactly the duplication this module exists to prevent.
+    """
     bare = os.path.join(root, "origin.git")
     repo = os.path.join(root, "checkout")
     gitcmd.run("init", "--bare", "--quiet", "-b", "main", bare)
     gitcmd.run("init", "--quiet", "-b", "main", repo)
-    shutil.copytree(FIXTURE_REPO, repo, dirs_exist_ok=True)
+    shutil.copytree(source, repo, dirs_exist_ok=True)
     gitcmd.run("add", "-A", cwd=repo)
     gitcmd.run("commit", "--quiet", "--no-verify", "-m", "chore: seed the fixture knowledge repo",
               cwd=repo, env=_COMMIT_ENV)

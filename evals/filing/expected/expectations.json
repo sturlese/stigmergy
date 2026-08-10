@@ -1,0 +1,153 @@
+{
+  "_comment": "The yardstick. One entry per capture in ../captures/manifest.json, and every facet a capture is scored on is named EXPLICITLY here — there is no aggregate number and no facet a reader has to infer. A facet a capture's entry does not name is not scored for that capture and does not enter that facet's denominator.",
+  "_facets": {
+    "status": "the terminal queue status: filed | needs_input | triage | rejected | failed",
+    "reason": "for a `rejected` status, the report's own reason_code (capture.schema.REJECTION_REASONS)",
+    "type": "the `type:` frontmatter of the page that actually landed, read back out of git",
+    "folder": "the directory the page landed in",
+    "anchor": "{kind: entity|company, ids: [registry id, ...]} — read from the filed page's server-stamped `entity:` frontmatter, so it is the resolved REGISTRY ID and never the agent's spelling. `company` means the page filed with an empty `entity:` list, which is what a company-wide anchoring outcome stamps.",
+    "edits": "paths of pages OTHER than the filed one that this commit changed — what edits.apply_declared actually performed from the agent's declaration. Scored by CONTAINMENT (run_filing._edits_match): every path named here has to be among them, and a further edit does not fail the facet — the gates confine a declared edit to additive growth on an existing in-lane page, so an extra one is harmless by construction, while the throwaway repo grows during the run and a later capture may legitimately backlink a page an earlier one created. A capture that owes no edit therefore names NO `edits` key: an empty list would be true for every backend and still fill the denominator.",
+    "attempts": "how many times the agent was called for this capture (counted at the Deps.agent seam, not read from any report)",
+    "bounces": "corrective retries = max(0, attempts - 1); one bounce means the first pass was vetoed and the agent got its single corrective pass",
+    "park_question": "for a park: the unresolved name(s) the question captured, matched loosely",
+    "decisions": "for a meeting: each decision page's title (matched loosely — see the runner) and its own anchor",
+    "reuse": "for a meeting re-filed after a park: whether the decisions the parked pass distilled survived the re-file"
+  },
+  "_looseness": "Titles are matched on normalized words, never literally: an expected title matches a page when every significant word of the expectation appears in the page's own path. evals/README.md records what a literal-word expectation cost the QA golden (`globex-meeting-budget`); this set does not repeat it. Everything else — status, ids, folders, counts — is exact, because those are facts with one spelling.",
+  "_morphology": "An expected title is written in UNINFLECTED content words — a proper noun plus a stable noun — and never in the verb form one run happened to produce. run_filing._words does no stemming and deliberately will not grow any (a stem table is a second yardstick nobody reviews), so `tracked` and `tracking` are two different words and an expectation that names one of them scores the model's grammar. Where two expected decisions could both match one page, the MORE SPECIFIC one is written first: matching is greedy and one-to-one, so the narrow expectation has to claim its page before the broad one takes it.",
+  "_fixture_narration": "These expectations, and PROVENANCE.json beside the mini repo, are where the reasoning about the MEASUREMENT lives — never in the fixture pages themselves. The agent under measurement reads those pages while it files, so a page explaining which facet it exists to probe is a page telling the model the answer, and a score measured that way is not a score. The pages read as ordinary knowledge a colleague wrote; every `why` below says what that page is doing for the instrument.",
+  "expectations": [
+    {
+      "id": "F01-plain-note-known-entity",
+      "why": "The base case: ordinary prose about a registered entity, filed as a note. If this one moves, nothing else in the set is interpretable. It names NO `edits` expectation, and that silence is a correction the first Sonnet-5 baseline earned before a single number was recorded: this entry used to pin `edits: []`, and the run declared a reciprocal `related:` link on `wiki/notes/Northwind Freight Onboarding.md` — which is correct filing, because this material CONTINUES that page's account (it is the depot rollout status, and it names the two depots that went first). The empty list asserted an assumption about how one backend would file, not anything the brief requires, so scoring it would have marked correct cross-linking down: the `globex-meeting-budget` lesson, caught this time while the fixture could still be edited. Where a declared edit IS a requirement is F03.",
+      "expect": {
+        "status": "filed",
+        "type": "note",
+        "folder": "wiki/notes",
+        "anchor": {"kind": "entity", "ids": ["northwind-freight"]},
+        "attempts": 1,
+        "bounces": 0
+      }
+    },
+    {
+      "id": "F02-unknown-entity-parks",
+      "why": "A capture about an organization the registry does not know MUST park and ask, not guess and not fall back to company-wide scope. Then the ask-back loop: a reply that resolves must file the capture anchored to the registry's own entity.",
+      "expect": {
+        "status": "needs_input",
+        "park_question": ["Halcyon Grid"]
+      },
+      "reply": "Halcyon Grid is our internal working name for the Northwind Freight pilot — file it under Northwind Freight.",
+      "after_reply": {
+        "status": "filed",
+        "type": "note",
+        "folder": "wiki/notes",
+        "anchor": {"kind": "entity", "ids": ["northwind-freight"]}
+      }
+    },
+    {
+      "id": "F03-declared-edit-related-growth",
+      "why": "The material answers the weekend-cover question `wiki/notes/Northwind Freight Onboarding.md` left open, so that page is owed a reciprocal link. The agent may not write it — it declares the edit and edits.apply_declared performs it — so this facet scores whether the backend RECOGNISED the debt, which is judgment, not mechanism. Two properties of the target page are load-bearing and neither is stated on it: it existed before this capture arrived (an additive edit to an EXISTING page is only a real claim against a page nobody created in the same commit), and it records the open question without answering it, so the continuation is genuine rather than arbitrary. The same material also substantially covers ground that page already covers — a backend that files a second page and says nothing about the first has quietly duplicated the corpus. The list stays at one path under containment scoring: it is the edit that is OWED, and the first Sonnet-5 baseline declared two more beside it — a policy page, and the page F01 had filed minutes earlier in the same throwaway repo — neither of which a yardstick written against the frozen fixture could have named, and both of which the gates had already confined to additive growth.",
+      "expect": {
+        "status": "filed",
+        "type": "note",
+        "folder": "wiki/notes",
+        "anchor": {"kind": "entity", "ids": ["northwind-freight"]},
+        "edits": ["wiki/notes/Northwind Freight Onboarding.md"],
+        "attempts": 1,
+        "bounces": 0
+      }
+    },
+    {
+      "id": "F04-duplicate-rejection",
+      "why": "Byte-identical material to F01 from a different person: already in the graph, so it is refused with a pointer rather than filed a second time. Deterministic and pre-agent — this facet is the one that must NOT move between backends, and a change here means the dedup levels moved, not the model.",
+      "expect": {
+        "status": "rejected",
+        "reason": "duplicate",
+        "attempts": 0,
+        "bounces": 0
+      }
+    },
+    {
+      "id": "F05-company-wide-decision",
+      "why": "A decision that genuinely belongs to no entity. The failure this watches for is the tempting one: anchoring it to whichever organization the corpus talks about most, because an anchored page files and a company-wide one needs a written reason.",
+      "expect": {
+        "status": "filed",
+        "type": "decision",
+        "folder": "wiki/decisions",
+        "anchor": {"kind": "company", "ids": []},
+        "attempts": 1,
+        "bounces": 0
+      }
+    },
+    {
+      "id": "F06-concept-page",
+      "why": "Material whose subject is a term rather than an event — the third creatable type, and the one a backend under pressure downgrades to a note.",
+      "expect": {
+        "status": "filed",
+        "type": "concept",
+        "folder": "wiki/concepts",
+        "anchor": {"kind": "entity", "ids": ["quillon-labs"]},
+        "attempts": 1,
+        "bounces": 0
+      }
+    },
+    {
+      "id": "F07-figure-dense",
+      "why": "Sixteen figures in one capture, one of them explicitly provisional. No gate re-checks figures at filing time (ADR 026 D2), so what this scores is the surrounding judgment — right entity, right type, filed in one pass rather than bounced. It anchors to the entity every other capture ignores, which keeps its anchoring judgment independent of the one the corpus talks about most; and no page in the mini repo carries a figure of its own, so a number that appears on the filed page can only have come from this capture.",
+      "expect": {
+        "status": "filed",
+        "type": "note",
+        "folder": "wiki/notes",
+        "anchor": {"kind": "entity", "ids": ["marlowe-publishing"]},
+        "attempts": 1,
+        "bounces": 0
+      }
+    },
+    {
+      "id": "F08-meeting-two-decisions",
+      "why": "The meeting flow's own shape: a source page, a meeting page and one decision page per decision — with each decision anchoring INDEPENDENTLY. One of these two belongs to an entity and the other to nobody, which is the property a single-anchor implementation cannot express and a single-decision transcript cannot reveal. The second title is the single word `review` on purpose: the transcript decides 'one shared list of what every review has to cover', so `checklist` (the thing being REPLACED, named once in passing), `shared`, `scope` and `standardise` are each one plausible paraphrase away from absent, and an expectation naming one of them would score the distiller's wording. The anchors carry the discrimination here — this decision is the company-wide one and its sibling is not.",
+      "expect": {
+        "status": "filed",
+        "type": "meeting",
+        "folder": "wiki/meetings",
+        "decisions": [
+          {"title": "Northwind second wave", "anchor": {"kind": "entity", "ids": ["northwind-freight"]}},
+          {"title": "review", "anchor": {"kind": "company", "ids": []}}
+        ],
+        "attempts": 1,
+        "bounces": 0
+      }
+    },
+    {
+      "id": "F09-meeting-parks",
+      "why": "A transcript whose subject is not in the registry parks the WHOLE capture in one ask naming every unresolved name — a partial page set is worse than an honest park. Then the reply resolves it and the set files. The `reuse` facet asks the question that matters after a park: did the capture LOSE a decision on the way back? Both decision titles are anchored on the proper noun the transcript repeats and carry no verb: the decisions are 'Wren gets tracked formally' and 'Wren's summary joins the shared one', and `tracked`/`joins` are exactly the words a paraphrase rewrites (`tracking`, `is tracked`, `goes to`). The summary decision is listed FIRST because it is the narrower of the two and matching is greedy and one-to-one — the broad `Wren` expectation would otherwise be free to claim it.",
+      "expect": {
+        "status": "needs_input",
+        "park_question": ["Project Wren"]
+      },
+      "reply": "Project Wren is the internal codename for the Quillon Labs collaboration — file it under Quillon Labs.",
+      "after_reply": {
+        "status": "filed",
+        "type": "meeting",
+        "folder": "wiki/meetings",
+        "decisions": [
+          {"title": "Wren summary"},
+          {"title": "Wren"}
+        ],
+        "reuse": {"decisions_preserved": true}
+      }
+    },
+    {
+      "id": "F10-anchoring-choice",
+      "why": "The sharpest anchoring probe in the set. The material names two registered entities and is plainly about only one of them; the other appears in a single sentence that says so explicitly. A backend that anchors on mention frequency, on first mention, or on whichever entity the corpus knows best gets this wrong — and gets everything else in this set right, which is exactly the gradual degradation the instrument exists to catch.",
+      "expect": {
+        "status": "filed",
+        "type": "note",
+        "folder": "wiki/notes",
+        "anchor": {"kind": "entity", "ids": ["quillon-labs"]},
+        "attempts": 1,
+        "bounces": 0
+      }
+    }
+  ]
+}
