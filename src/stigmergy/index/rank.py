@@ -58,11 +58,12 @@ _RECENCY_RE = re.compile(
 
 
 # A split page's continuation parts carry a trailing part marker on their id. TWO conventions
-# exist: the historical `<id>#p2`, and the live meeting/document flow's `<stem>-p2`
-# (`librarian.processing._build_source_parts` names the FILE `<stem>-p<n>.md` and writes no
-# frontmatter id, so the page_id IS the suffixed stem). Recognizing only `#p` leaves both the
-# build-time `superseded_by` propagation and the rank-time chain collapse below INERT over every
-# part the live system actually produces — silently.
+# exist and both must be recognized: `<id>#p2`, which the live producer DECLARES
+# (`librarian.processing._build_source_parts` names the FILE `<stem>-p<n>.md` and stamps
+# `id: "<stem>#p<n>"`, and a declared id wins over the stem), and the bare `<stem>-p2` stem, which
+# is what parts filed before that stamping landed still resolve to. Recognizing only one leaves
+# both the build-time `superseded_by` propagation and the rank-time chain collapse below INERT
+# over a whole generation of parts — silently.
 #
 # When a document is superseded, versions.py stamps `superseded_by` on the PRIMARY page only —
 # never on the continuation parts. So a bare per-page check demotes part 1 while parts 2..n rank
@@ -80,9 +81,9 @@ _RECENCY_RE = re.compile(
 # ends in `-p<n>` merges into a base it never belonged to only when that base id also exists in
 # the SAME directory (the collapse key below carries the directory). The substrate lint flags
 # the ORPHAN complement (a part-shaped id with no base beside it) — the same-directory pair with
-# a real base present is INDISTINGUISHABLE by id shape alone and is an accepted residual: chain
-# identity is inferred from filenames because the splitter writes no frontmatter `id:` on parts.
-# The real fix is explicit chain identity at the PRODUCER (`_build_source_parts` stamping ids).
+# a real base present is INDISTINGUISHABLE by id shape alone and is an accepted residual. The
+# producer-side fix has shipped for everything filed since (a declared `#p<n>` id is unambiguous);
+# this residual is what the bare-stem fallback still costs on the pages that predate it.
 _PART_MARKER_RE = re.compile(r"(?:#p|-p)\d+$")
 
 

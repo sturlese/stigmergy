@@ -119,8 +119,10 @@ def ensure_checkout(repo: str, *, url: str, branch: str, env: dict | None = None
     through to `verify_checkout_at_base`, which refuses it by name.
 
     **And the clone it updates has to be a clone of the RIGHT repo.** The update path fetches the
-    EXISTING checkout's `origin` and never asked whether that is the remote `$STIGMERGY_LIBRARIAN_
-    REPO_URL` names, so a checkout of something else would be fast-forwarded, verified against its
+    EXISTING checkout's `origin` and never asked whether that is the remote
+    `$STIGMERGY_LIBRARIAN_REPO_URL` names (do not re-wrap that name: a variable split across a line
+    break is one nobody can grep for, and one this repo's config-coverage check cannot read
+    either), so a checkout of something else would be fast-forwarded, verified against its
     own remote, and filed into — every check downstream passing, all of them about the wrong
     repository. That is harmless exactly as long as Fly hands the container a fresh rootfs and this
     branch never runs; the check is here so the day somebody mounts a volume, or reuses a machine,

@@ -9,6 +9,35 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
+## [Unreleased]
+
+Sixteen bug-sweep fixes and one documentation correction since `0.1.0`, none of them behaviour
+changes in the ADR sense — each closes a gap between what the code promised and what it did. Grouped
+by what they protect:
+
+### Fixed
+
+- **Pages that indexed open.** A page whose frontmatter could not be parsed, and two further routes
+  to the same end, no longer land in the index with no `acl` label — the failure mode where an
+  unreadable page becomes a readable one.
+- **Access and identity.** A scoped queue read that failed open; an entity proposal accepted as a
+  parked capture on a caller's say-so; an entity registry that could leak its own path or mint a
+  phantom alias; a raw byte in a signature header answered `500` instead of `401`; a signed
+  non-object webhook body ignored rather than acted on.
+- **Refusals that blamed the wrong party.** Two librarian refusals named the wrong cause, a secret
+  split across a line break reported a line number that was not one, and `Ctrl-C` stopped claiming
+  work on its way out.
+- **The surfaces people actually see.** Four Slack defects; a view that never went stale and one
+  that cited itself; a hand-written page under `views/` that killed the gardener run; a recency word
+  that was matched as a substring; a snippet that was not reproducible.
+- **Prose that the code did not keep.** Six documented promises reconciled with the code, and four
+  faults that nothing told anybody about.
+
+### Changed
+
+- The HTTP tier's tests skip without Docker instead of failing, and the librarian code map names
+  both halves of the refusal-routing suite.
+
 ## [0.1.0] - 2026-08-07
 
 First public release. The system it describes has been running against a real corpus before being

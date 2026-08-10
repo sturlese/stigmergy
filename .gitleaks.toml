@@ -1,6 +1,7 @@
 # gitleaks configuration for this repository.
 #
-# The default rule set, plus ONE allowlisted string. The scan CI runs (`gitleaks detect --source .`)
+# The default rule set, plus the allowlisted strings below — each one a dead fixture, each with its
+# own written reason. The scan CI runs (`gitleaks detect --source .`)
 # reads the whole git history, not the working tree, so a credential-shaped fixture that ever existed
 # in a commit keeps being found long after the file stops containing it — and rewriting published
 # history to erase a dead fixture would be a far larger act than the thing it fixes.

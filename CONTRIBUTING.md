@@ -12,14 +12,26 @@ make test        # the whole suite (coverage gate 75%)
 make lint        # ruff over src/ tests/ evals/ scripts/
 ```
 
-You need Python 3.12+ and Docker. You do **not** need an API key: `make test` is keyless by
-construction — an autouse fixture forces the fake model backend repo-wide, even if your `.env` has
-real keys in it. A test that silently reached a real model would be a test nobody could trust.
+You need Python 3.12+, Docker, and `gitleaks` on `PATH` (`brew install gitleaks`) — the secrets gate
+shells out to the real scanner, so anything exercising the librarian worker refuses to start without
+it. You do **not** need an API key: `make test` is keyless by construction — an autouse fixture
+forces the fake model backend repo-wide, even if your `.env` has real keys in it. A test that
+silently reached a real model would be a test nobody could trust.
 
 `make help` lists every target. The ones that cost money or touch a real deployment say so.
 
+To watch the real thing work without a key or a knowledge repo, run the three narrated walks the
+README's quick start lists (`scripts/walk_*.py`) — real Postgres, real git, real gates, the offline
+double in the agent's place.
+
 Copy `.env.example` to `.env` when you want to run something against a real model or a real
-knowledge repository. `.env` is gitignored and never enters a Docker build context.
+knowledge repository, and **export it** (`set -a && . ./.env && set +a`) — `make` reads the file for
+its own targets, but nothing under `src/` does, so a binary you invoke directly sees only what is in
+the environment. `.env` is gitignored and never enters a Docker build context.
+
+What that knowledge repository has to contain before anything will index or file is
+[`docs/reference/knowledge-repo.md`](./docs/reference/knowledge-repo.md) — read it before you go
+looking for why an empty one does nothing.
 
 ## What this repo is, in one paragraph
 
@@ -51,7 +63,7 @@ rule. The pruning tests will delete it for you when it stops being used.
 
 ## Testing doctrine
 
-Four rules, and they are the reason the suite is worth its size:
+Five rules, and they are the reason the suite is worth its size:
 
 - **A benign twin for every defense.** A test that only proves a gate fires measures its sensitivity
   and never its specificity — and every gate here can bounce someone's real work. Prove it refuses
@@ -59,6 +71,9 @@ Four rules, and they are the reason the suite is worth its size:
 - **Reproduce before you fix.** A bug gets a failing test that demonstrates it *before* production
   code is touched, and the test's own comment says what the old behaviour was. Several of this
   repo's worst defects were invisible to 3,000 green tests and visible in one deliberate mutation.
+- **A message containing a command is an executable promise.** If a refusal tells a human to run
+  something, a test runs it. A refusal that names a dead flag or a renamed variable costs the
+  person reading it a debugging session, at the exact moment they are already stuck.
 - **Never fake what you are claiming to prove.** Real git, real Postgres, real gates. A faked git
   proves nothing about a property that is about git.
 - **A check that stops running must be impossible to miss.** Skipped and retired dimensions are

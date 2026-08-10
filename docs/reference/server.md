@@ -36,7 +36,7 @@ below.
 `answer.service.audit_summary` — `first_verdict` is the FIRST draft's verdict, the only field that
 says what a corrective retry was for) — never a question or an answer, by construction |
 | `mcp_server.py` | the FastMCP tool closures (shared by BOTH transports) + the `stigmergy-server` console entry point (`--transport stdio\|http`) |
-| `errors.py` | the domain exceptions, all under `StigmergyServerError`: `IdentityError`, `StartupError`, `RateLimitError` and `CapabilityUnavailableError` — library code never raises `SystemExit`; `mcp_server.main` maps these to a clean stderr line + exit code (stdio) or the transport's own error body (HTTP) |
+| `errors.py` | the domain exceptions, all under `StigmergyServerError`: `IdentityError`, `StartupError`, `RateLimitError`, `CapabilityUnavailableError` and `RegistryError` — library code never raises `SystemExit`; `mcp_server.main` maps these to a clean stderr line + exit code (stdio) or the transport's own error body (HTTP). `RegistryError` is load-bearing rather than incidental: the registry loader's own `ValueError` carries the path it failed on, and `search_brain` echoes a `ValueError` verbatim, so the conversion is what keeps a server filesystem path out of a tool result |
 | `transport_http.py` | the streamable-HTTP transport — the bearer-auth ASGI middleware, per-request identity resolution, and the one shared FastMCP app (`stateless_http=True`, mandatory — see "HTTP transport" below) every identity serves through. It mounts `webhook.py`'s route via FastMCP's `custom_route` and exempts its EXACT path from the bearer middleware, and it composes the admin console ([admin-console.md](./admin-console.md)) in FRONT as an ASGI branch — `/admin*` never reaches the bearer middleware at all, which is what keeps the webhook exemption meaning exactly one path |
 | `issue_token.py` | `stigmergy-issue-token <email>` — the operator token-issuance CLI |
 | `webhook.py` | `POST /webhook/github` — HMAC-verified incremental index upsert on merge; the one declared, narrow exception to "the server never imports the librarian" (`githubapp`'s App-credential primitives, reused rather than reimplemented). It reuses `corpus.page_row` and `store.upsert_pages`/`delete_pages` rather than growing a second writer, and re-resolves outbound `links` against the index's own existing paths. `_propagate_split_chain_supersession` knows both part-id conventions the codebase has written (`-p<n>` and the historical `#p<n>`) and only ever propagates from a chain PRIMARY to parts sitting in that primary's own directory, so an id-less `-p2`-stemmed twin in another folder never inherits. Failure here never breaks the write path: the page is already committed to git, and the nightly rebuild reconciles regardless |
@@ -114,7 +114,7 @@ evidence key scheme: [capture.md](./capture.md), decided in
 | Tool | What it does |
 |---|---|
 | `review_queue(limit?)` | the unified, ACL-scoped inbox over two item kinds: `entity-proposal` (a capture that wants an entity minted) and `parked-capture` (a capture waiting on a human answer). An unrestricted (steward) identity sees every item; a scoped identity sees only its own |
-| `review_decide(item_kind, item_id, verdict, notes?, name?, entity_id?, entity_type?, aliases?, role?, requeue?)` | record a verdict, attributed to the caller's resolved identity, into the append-only `review_decisions` record. Authorization is per kind: an `entity-proposal` decision requires the caller to be a STEWARD for the item's scope (`ops/stewards.json`) and refuses self-approval — the proposer of an entity may never be its own approver; `parked-capture` accepts the row's own submitter or a steward. `reject` and every `parked-capture` verdict never write to git — Postgres only, categorically. Approving an `entity-proposal` is the one path that does ([ADR 030](../decisions/030-server-side-entity-minting.md)): it mints through the governed door, exactly ONE commit, authored as the librarian App with an `Approved-by: <caller>` trailer. That verdict needs `name` (the page title) and `entity_type` (one of `entities.generator.ENTITY_TYPES`) — omitting either is refused, loud and actionable, naming what is missing, and mints nothing; `entity_id` defaults to `name`'s slug, `aliases`/`role` are optional, and `requeue=true` sends the originating capture back to the librarian once the push lands. The verdict vocabulary is per kind: `entity-proposal` takes `approve`/`reject` (there is nothing to request changes to — either the name resolves to an identity worth minting or it does not), `parked-capture` takes `capture.dispositions`' own three verbs (`requeue`/`resolve`/`reject`), not a generic `approve`/`reject`/`request_changes` |
+| `review_decide(item_kind, item_id, verdict, notes?, name?, entity_id?, entity_type?, aliases?, role?, requeue?)` | record a verdict, attributed to the caller's resolved identity, into the append-only `review_decisions` record. Authorization is per kind: an `entity-proposal` decision requires the caller to be a STEWARD (`ops/stewards.json`) and refuses self-approval — the proposer of an entity may never be its own approver; `parked-capture` accepts the row's own submitter or a steward. `reject` and every `parked-capture` verdict never write to git — Postgres only, categorically. Approving an `entity-proposal` is the one path that does ([ADR 030](../decisions/030-server-side-entity-minting.md)): it mints through the governed door, exactly ONE commit, authored as the librarian App with an `Approved-by: <caller>` trailer. That verdict needs `name` (the page title) and `entity_type` (one of `entities.generator.ENTITY_TYPES`) — omitting either is refused, loud and actionable, naming what is missing, and mints nothing; `entity_id` defaults to `name`'s slug, `aliases`/`role` are optional, and `requeue=true` sends the originating capture back to the librarian once the push lands. The verdict vocabulary is per kind: `entity-proposal` takes `approve`/`reject` (there is nothing to request changes to — either the name resolves to an identity worth minting or it does not), `parked-capture` takes `capture.dispositions`' own three verbs (`requeue`/`resolve`/`reject`), not a generic `approve`/`reject`/`request_changes` |
 
 Both ride the same `BrainService._call` wrapper as every other tool. Every unauthorized refusal and
 every nonexistent-id refusal is the same byte-identical sentence (no existence leak); a caller
@@ -224,9 +224,26 @@ STIGMERGY_TOKEN_STORE='{"<sha256hex>":"steward@example.com"}' \
 `<repo>/ops/entity-registry.json` (the registry entity-first search, `list_entities` and
 `describe_entity` all resolve through), and it is also the fallback for the knowledge-repo checkout
 `review_decide`'s steward resolution reads `ops/stewards.json` from — that one can be set on its
-own with `$STIGMERGY_KNOWLEDGE_REPO`, since there is no flag for it. All of them need an explicit
-value in production, where no `--repo` is passed at all. The DSN comes from `--dsn` or
-`$STIGMERGY_INDEX_DSN` (default `postgresql://stigmergy:stigmergy@localhost:54321/stigmergy`).
+own with `$STIGMERGY_KNOWLEDGE_REPO`, since there is no flag for the checkout itself. All of them
+need an explicit value in production, where no `--repo` is passed at all. The DSN comes from
+`--dsn` or `$STIGMERGY_INDEX_DSN`
+(default `postgresql://stigmergy:stigmergy@localhost:54321/stigmergy`).
+
+**`--stewards` / `$STIGMERGY_STEWARDS_PATH` is the one an operator forgets, and it fails quietly.**
+It points at a baked `stewards.json` for a process that has NO knowledge-repo checkout — which is
+exactly the deployed `app` and `slack` groups, started with baked `--identities`/`--entity-registry`
+and no `--repo` at all. Where a checkout exists, the copy read at the base commit wins and this is
+never consulted. Where one does not and this is unset, the steward map resolves EMPTY: the doorbell
+rings for nobody and every entity-proposal decision fails closed — on a server whose
+`ops/stewards.json` is perfectly correct in git.
+
+**Both review kinds resolve stewards at the UNIVERSAL scope, and only there.** `stewards.json`
+keys may be zone path prefixes, but neither kind has a page path to match one against — an entity
+proposal has no page yet and a parked capture never got one — so both resolve with an empty scope,
+which by construction can only match `"*"`. A map with careful zone-prefix entries and no `"*"`
+therefore authorizes nobody for anything decidable here, and the refusal it produces is
+byte-identical to the one a genuine outsider gets. Zone prefixes earn their keep on the doorbell's
+routing, not on authorization.
 
 The query embedder defaults to whatever model the index was built with (`index_meta`).
 **A missing `OPENAI_API_KEY` is a DEGRADED start, not a refusal to start**: the process comes up

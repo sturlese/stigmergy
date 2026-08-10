@@ -74,17 +74,41 @@ def test_the_index_lists_exactly_the_documents_that_exist(directory, pattern):
 
 # ── every path a document points at is really there ───────────────────────────────────────────
 
-def test_every_relative_link_in_the_docs_resolves():
-    """A renamed file leaves a link that looks live and is not. Anchors are not checked — a
-    heading is prose and moves for good reasons; a PATH is a fact."""
+def _broken_links(docs) -> list[str]:
     broken = []
-    for doc in ALL_DOCS:
+    for doc in docs:
         for target in re.findall(r"\]\(([^)#\s]+)(?:#[^)]*)?\)", _text(doc)):
             if target.startswith(("http://", "https://", "mailto:")):
                 continue
             if not (doc.parent / target).exists():
                 broken.append(f"{_rel(doc)} -> {target}")
+    return broken
+
+
+def test_every_relative_link_in_the_docs_resolves():
+    """A renamed file leaves a link that looks live and is not. Anchors are not checked — a
+    heading is prose and moves for good reasons; a PATH is a fact."""
+    broken = _broken_links(ALL_DOCS)
     assert not broken, "links in docs/ that point at nothing:\n  " + "\n  ".join(broken)
+
+
+# The same check, over the markdown that does NOT live in `docs/`. It was scoped to `docs/` for no
+# better reason than that being where this file started, which left the two most-read pages in the
+# repository — the front page and the contributing guide — plus ~3,500 lines of package code map
+# with no link check at all. A code map's links are the ones most likely to rot, because they are
+# relative paths climbing out of `src/` and every one of them breaks the moment a package moves.
+ROOT_DOCS = sorted(p for p in ROOT.glob("*.md"))
+CODE_MAPS = sorted((ROOT / "src" / "stigmergy").glob("*/index.md")) + [ROOT / "evals" / "index.md"]
+
+
+@pytest.mark.parametrize("label, docs", [
+    ("the root documents", ROOT_DOCS),
+    ("the package code maps", CODE_MAPS),
+], ids=lambda v: v if isinstance(v, str) else "")
+def test_every_relative_link_outside_docs_resolves(label, docs):
+    assert docs, f"{label}: found none — this check has lost its source of truth"
+    broken = _broken_links(docs)
+    assert not broken, f"links in {label} that point at nothing:\n  " + "\n  ".join(broken)
 
 
 # ── what the reference docs tell an operator to run, and to set ───────────────────────────────
@@ -138,6 +162,63 @@ def test_every_environment_variable_the_reference_docs_name_is_read_somewhere():
                      for name in re.findall(r"\bSTIGMERGY_[A-Z0-9_]+\b", _text(doc))
                      if name not in read})
     assert not ghosts, ("the reference docs name variables nothing reads:\n  " + "\n  ".join(ghosts))
+
+
+# ── the OTHER direction: a setting the code reads that nothing offers an operator ──────────────
+# Everything above this line asks "does the code have what the docs claim?". This asks the reverse,
+# and it is the question that actually bites: a variable the code reads and no document mentions is
+# invisible until someone's deployment misbehaves in a way they cannot explain. The class is not
+# hypothetical — `STIGMERGY_LIBRARIAN_BACKEND` defaults to the offline TEST DOUBLE, so a deployment
+# that never sets it files fabricated pages and looks healthy doing it, and `.env.example` did not
+# mention it.
+#
+# `.env.example` is the surface being checked because it is the one an operator copies. Naming a
+# variable in a COMMENT counts: that is how the file already handles everything with a working
+# default, and a commented line is still a line someone reads.
+
+CONFIG_EXAMPLE = ROOT / ".env.example"
+
+# Each entry needs a reason, and the pruning test below deletes it for you when it stops being
+# needed — the same bargain `tests/test_architecture.py` strikes with its exception lists.
+CONFIG_EXCEPTIONS = {
+    "STIGMERGY_LIBRARIAN_REQUIRE_REMOTE_BASE":
+        "process-injected by `bootstrap.worker_env` for the deployed worker and documented as "
+        "never-by-hand. Offering it in the file an operator edits would invite exactly the misuse "
+        "`docs/reference/librarian.md` spends a section forbidding.",
+}
+
+
+def _configured_names() -> set[str]:
+    return set(re.findall(r"\bSTIGMERGY_[A-Z0-9_]+\b", _text(CONFIG_EXAMPLE)))
+
+
+def _names_read_by_the_code() -> set[str]:
+    """Every `STIGMERGY_*` literal in `src/`. Literal-scanned rather than parsed, exactly like the
+    docs check next door — which is also why a variable name must never be wrapped across a line
+    break: this cannot see one, and neither can a human grepping for it."""
+    return {name for path in (ROOT / "src").rglob("*.py")
+            for name in re.findall(r"\bSTIGMERGY_[A-Z0-9_]+\b",
+                                   path.read_text(encoding="utf-8", errors="ignore"))}
+
+
+def test_every_setting_the_code_reads_is_offered_to_an_operator():
+    read = _names_read_by_the_code()
+    assert read, "no STIGMERGY_* name found in src/ — this check has lost its source of truth"
+    undocumented = sorted(read - _configured_names() - set(CONFIG_EXCEPTIONS))
+    assert not undocumented, (
+        ".env.example never mentions these, and the code reads them:\n  "
+        + "\n  ".join(undocumented)
+        + "\nAdd a line (commented is fine, and is the convention for anything with a default), "
+          "or add it to CONFIG_EXCEPTIONS with the reason it must not be offered.")
+
+
+def test_no_config_exception_outlives_its_reason():
+    """A permission slip nobody prunes stops being a decision and becomes furniture."""
+    read = _names_read_by_the_code()
+    stale = sorted(name for name in CONFIG_EXCEPTIONS
+                   if name in read and name in _configured_names())
+    assert not stale, (f"these are in .env.example now, so their exception is dead weight — "
+                       f"delete the entry: {stale}")
 
 
 # ── the counts ────────────────────────────────────────────────────────────────────────────────

@@ -1,9 +1,10 @@
 # stigmergy — working notes for an AI agent
 
-This repository holds the **code**: the durable capture queue, the librarian service that drains it,
-the hybrid index builder, the single MCP server (the only API), the governed entity-birth tooling
-(`stigmergy-entities`), the Slack transport, the meeting distiller, the view layer, the gardener, the
-admin console, `docker-compose` for the local test stack, and the evals.
+This repository holds the **code**: the durable capture queue and its two drop CLIs (the meeting
+one and the Drive door), the librarian service that drains it, the hybrid index builder, the single
+MCP server (the only API) and the answering half behind its `ask`, the governed entity-birth tooling
+(`stigmergy-entities`), the Slack transport, the meeting distiller, the view layer, the gardener,
+the weekly digest, the admin console, `docker-compose` for the local test stack, and the evals.
 
 **This repo never stores pages.** Knowledge content lives in a separate git repository — the
 knowledge repo — that you point at with `STIGMERGY_REPO`. Its page format is
@@ -18,6 +19,18 @@ Read [`README.md`](./README.md) first for the annotated tree, then the `index.md
 whichever package you are about to touch — each one lists what its modules are for, what to reuse
 and what to avoid. [`docs/reference/`](./docs/reference) is what each subsystem does;
 [`docs/decisions/`](./docs/decisions) is why it is built that way.
+
+**Two skills live in `.claude/skills/` here and are worth loading before you start.**
+`land-a-change` picks the delivery pipeline a change belongs in, says when the auditor stops being
+optional, and names which changes also have to land in the knowledge repo. `validate-deployment`
+walks a deployed stack through MCP, Slack and the admin console with evidence at each step. Do not
+confuse this `.claude/` with the knowledge repo's, which is where the librarian's own operating
+procedure and the contract linter live — that one is described in
+[`docs/reference/knowledge-repo.md`](./docs/reference/knowledge-repo.md).
+
+**Nothing under `src/` loads a `.env` file.** `make` loads it for its own targets; a binary invoked
+directly sees only the environment you exported. A "why is `$STIGMERGY_REPO` empty" debugging
+session starts here.
 
 ## The invariants a change has to respect
 

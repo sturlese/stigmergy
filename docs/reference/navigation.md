@@ -39,10 +39,12 @@ snapshots agree on the same corpus, so this stays a fact about the code, not an 
 
 **Split chains are propagated at BUILD time.** A split document's continuation parts carry an
 EMPTY `superseded_by` in their own frontmatter — only the primary page gets the field stamped. Two
-part-id conventions exist and both are matched: the live `<stem>-p<n>` the meeting flow's splitter
-writes (it names the FILE that way and stamps no frontmatter `id`, so the `page_id` IS the
-suffixed stem) and the historical `<id>#p<n>`. Recognizing only `#p` left this propagation inert
-over every part the live system actually produces, silently.
+part-id conventions exist and both are matched. The live one is **`<id>#p<n>`**, declared: the
+splitter names the FILE `<stem>-p<n>` but stamps `id: "<stem>#p<n>"` into the part's own
+frontmatter, and the declared id wins over the filename stem when the corpus is read. The other is
+the bare `<stem>-p<n>` stem, which is now the fallback for parts filed before the producer stamped
+an id at all. Matching only one of the two left this propagation inert over a whole generation of
+parts, silently — which is why both stay matched even though the live producer only writes one.
 
 Compensating at RANK time instead meant reconstructing chain membership from whichever candidates
 happened to be in a given search's pool — which silently failed to demote a continuation part
