@@ -192,12 +192,34 @@ lose". Reported, never scored — like `reused` and `redistilled` beside it.
 
 ### How the bars were fixed
 
-**They have not been yet.** Every filing bar in [`bars.py`](bars.py) is `None`, which the runner
-prints as *"no bar — baseline not yet fixed"* and never as a pass. The numbers are fixed from the
-**first Sonnet-5 baseline run**, recorded here beside its `history.ndjson` row, and a bar invented
-before its baseline exists is a number nobody can defend the day it fails.
+From the **first Sonnet-5 baseline** (2026-08-10, platform sha `2b6964f`, fixture
+`stigmergy_sha` `0a988bd1`): backend `sdk`, model `claude-sonnet-5`, and its noise twin run
+immediately after — **facet-identical scores across the pair** (costs $2.11 and $1.92, walls
+716 s and 661 s), which is the determinism the instrument promises on outcome-shaped facets.
+Both rows are in [`history.ndjson`](history.ndjson).
 
-<!-- BASELINE: the first `suite: "filing"` row and the bars derived from it go here. -->
+| facet | baseline | bar | | facet | baseline | bar |
+|---|---|---|---|---|---|---|
+| status | 12/12 | 1.00 | | edits | 1/1 | 1.00 |
+| reason | 1/1 | 1.00 | | park_question | 2/2 | 1.00 |
+| type | 8/9 | **0.88** | | decisions | 2/2 | 1.00 |
+| folder | 8/9 | **0.88** | | reuse | 1/1 | 1.00 |
+| anchor | 7/7 | 1.00 | | *(attempts / bounces: cost axes, no bar)* | 8/8 · 8/8 | — |
+
+A bar is the baseline's own score, with the fractional pair floored a point: 8/9 = 0.888…
+must satisfy its own bar, and a two-decimal 0.89 would refuse the very run that set it. **The
+one miss, identical in both runs**: F03 filed as a `decision` in `wiki/decisions` where the
+expectation says `note` — a defensible reading of material that records a settled practice
+("what the team settled on…"), kept as the recorded disagreement rather than flipped into the
+expectation, which would over-fit the yardstick to Sonnet and fail a future backend for the
+equally defensible answer. The 0.88 pair therefore tolerates exactly one type/folder
+disagreement; the per-capture misses list, not the bar, is where a reader learns *which* cell
+moved.
+
+The first run of the instrument (same day, one commit earlier) scored `edits` 0/2 and both
+misses were the yardstick's own — that run taught the containment semantics recorded above,
+its row was discarded with the defect it measured, and no `suite: "filing"` row predates the
+semantics the shipped scorer implements.
 
 ### Running it
 
@@ -233,8 +255,9 @@ adversarial suite, and returns one verdict and one exit code. The thresholds liv
 place, [`bars.py`](bars.py), so a report and the gate cannot drift apart about what PASS means.
 
 The filing golden is deliberately **not** armed here. It writes, it needs a real worktree and a
-real agent pass per capture, and its bars are not yet calibrated — wiring an uncalibrated,
-expensive instrument into the release gate would make the gate slower and no more informative.
+real agent pass per capture, and even with its bars now calibrated ("How the bars were fixed", above),
+wiring an instrument this much more expensive into the release gate would make it slower without
+making a release decision any more informative.
 
 Because a real model over a real corpus is not deterministic, a failing bar is re-run **once** —
 but only when every failing bar sits within one question's weight of passing. A bar missed by more

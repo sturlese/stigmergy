@@ -80,7 +80,10 @@ phase, or with no agent pass anywhere, prints why and appends **no** row to the 
 **`run_gates.py`** — runs the first TWO instruments plus the adversarial suite and judges them
 against `bars.py`. Re-runs a failing bar once, and only when it sits within one question's weight
 of passing; a larger miss is a regression and fails immediately. The filing golden is not armed
-here: it writes, it needs a real worktree per capture, and its bars are uncalibrated (`None`).
+here: it writes, it needs a real worktree per capture, and — even with its bars now calibrated
+(`bars.py`'s `FILING_BARS`, fixed from the first Sonnet-5 baseline, `README.md`'s baseline section)
+— wiring an instrument this much more expensive into every gate run is a cost decision, not a
+calibration one.
 
 All three golden runners self-pin their own checkout's `src/` on `sys.path`; `run_filing.py` pins
 the checkout root as well, because it imports `tests.librarian.support`. That is a known trap when
@@ -108,5 +111,8 @@ different PYTHONPATH.
   measured under?" — is enforced keylessly by `tests/evals/test_filing_golden_fixture.py`, which is
   where a byte pin belongs. Each copy's `FROZEN.md` records the sha it is frozen at, and
   `filing/repo/PROVENANCE.json` carries the same one for the whole tree.
-- **The filing golden's bars are all `None`, which means REPORT, DO NOT JUDGE** — never "pass".
-  They are fixed from the first Sonnet-5 baseline run and recorded in `README.md` beside its row.
+- **The filing golden's bars are calibrated, but the instrument itself is advisory.** Each quality
+  facet carries a real bar (`bars.py`'s `FILING_BARS`), fixed from the first Sonnet-5 baseline and
+  recorded in `README.md` beside its row, and a run's own table marks each one PASS/FAIL against it.
+  `run_gates.py` never reads `FILING_BARS`, though — nothing but a human reading the printed table
+  acts on a miss.

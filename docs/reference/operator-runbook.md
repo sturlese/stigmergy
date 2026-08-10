@@ -795,11 +795,10 @@ which bar moved.
 
 There is a **third instrument the gate does not arm**: `make filing-golden`, which measures the
 write path — ten golden captures through the real librarian, its gates and a real `git worktree`,
-scored per facet. It is deliberately outside the release gate (it writes, it costs an agent pass
-per capture, and its bars are not yet calibrated), and it is the one to run when a change touches
-the librarian's agent, its brief or its gates. It needs `gitleaks` on PATH and a Claude
-credential; `make filing-golden BACKEND=double` is the keyless plumbing check. Full account:
-`evals/README.md`.
+scored per facet. It is deliberately outside the release gate (it writes and it costs a real agent
+pass per capture), and it is the one to run when a change touches the librarian's agent, its brief
+or its gates. It needs `gitleaks` on PATH and a Claude credential; `make filing-golden
+BACKEND=double` is the keyless plumbing check. Full account: `evals/README.md`.
 
 ### Drill 1 — Postgres backup / restore of the durable schema
 

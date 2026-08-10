@@ -185,16 +185,28 @@ def test_the_report_carries_no_single_quality_number(entries):
 
 
 def test_one_facet_collapsing_leaves_every_other_facet_untouched(entries):
-    """Two phases, one of them filed as the wrong type: `type` drops to 0.50 and `anchor` stays
-    at 1.00. Independent denominators are only worth having if the arithmetic is independent
-    too."""
+    """Two phases, one of them filed as the wrong type: `type` drops to 0.50 and fails ITS OWN
+    bar, while every other row — score and verdict alike — is byte-identical to the healthy run.
+
+    Now that the bars are real numbers, this is the property that matters most about them: a
+    backend that starts filing everything as a note must fail `type` and nothing else. Asserted as
+    a diff against the healthy aggregate rather than facet by facet, so a future change that let
+    one facet's collapse bleed into another's verdict cannot pass by being missed in the list.
+    """
     _, block = _block_naming(entries, "anchor")
     good = run_filing._phase("A", "only", block, _perfect(block))
     bad = run_filing._phase("B", "only", block, dict(_perfect(block), type="concept"))
-    facets = run_filing.aggregate([good, bad], backend="double", model="m",
-                                  wall_s=1.0)["facets"]
-    assert facets["type"] == {"hits": 1, "of": 2, "score": 0.5, "bar": None, "pass": None}
-    assert facets["anchor"]["score"] == 1.0
+
+    healthy = run_filing.aggregate([good, good], backend="double", model="m",
+                                   wall_s=1.0)["facets"]
+    collapsed = run_filing.aggregate([good, bad], backend="double", model="m",
+                                     wall_s=1.0)["facets"]
+
+    assert healthy["type"]["pass"] is True
+    assert collapsed["type"] == {"hits": 1, "of": 2, "score": 0.5,
+                                 "bar": bars.FILING_BARS["type"], "pass": False}
+    assert {name: row for name, row in collapsed.items() if name != "type"} == \
+           {name: row for name, row in healthy.items() if name != "type"}
 
 
 # ── AC7: sensitivity, and the benign twin that keeps it honest ─────────────────────────────────
@@ -490,16 +502,24 @@ def test_a_re_file_that_reported_no_reuse_block_at_all_is_a_miss_when_preservati
 
 
 # ── the bars: None means REPORT, DO NOT JUDGE ─────────────────────────────────────────────────
+# The shipped bars are now the Sonnet-5 baseline's own scores, so `None` is no longer the state
+# the table ships in — but it is still the state every NEW facet is born in: `aggregate` looks a
+# facet up with `FILING_BARS.get(name)`, and a facet added before its baseline exists gets `None`
+# from that lookup, exactly as all nine did before 2026-08-10. That is what these two tests drive
+# now, by injection rather than by shipping uncalibrated.
 
-def test_an_uncalibrated_facet_reports_a_verdict_that_is_None_and_never_truthy(entries):
-    """Every filing bar starts at `None` because the numbers are fixed from the first Sonnet-5
-    baseline. An instrument that answered "fine" before it was ever calibrated would be worse than
-    one that says nothing — so `pass` must be None, not True, not 'not False'."""
+def test_an_uncalibrated_facet_reports_a_verdict_that_is_None_and_never_truthy(entries,
+                                                                              monkeypatch):
+    """A bar of `None` means REPORT, DO NOT JUDGE. An instrument that answered "fine" about a
+    facet whose baseline nobody has measured would be worse than one that says nothing — so `pass`
+    must be None, not True, and not merely 'not False'."""
+    for facet in run_filing.QUALITY_FACETS:
+        monkeypatch.setitem(bars.FILING_BARS, facet, None)
     report = run_filing.aggregate(_phases(entries), backend="double", model="m", wall_s=1.0)
+    assert report["facets"], "the aggregate scored nothing — this check lost its subject"
     for name, row in report["facets"].items():
-        if bars.FILING_BARS.get(name) is None:
-            assert row["bar"] is None and row["pass"] is None, name
-            assert row["pass"] is not True and not bool(row["pass"]), name
+        assert row["bar"] is None and row["pass"] is None, name
+        assert row["pass"] is not True and not bool(row["pass"]), name
 
 
 def test_the_two_cost_facets_carry_no_bar_even_once_the_quality_bars_are_calibrated(
@@ -543,11 +563,49 @@ def test_the_table_prints_every_scored_facet_with_its_own_denominator(entries):
         assert f"[{of}/{of}]" in rows[name], rows[name]
 
 
-def test_an_uncalibrated_table_claims_neither_PASS_nor_FAIL(entries):
+def test_an_uncalibrated_table_claims_neither_PASS_nor_FAIL(entries, monkeypatch):
+    """The render side of REPORT, DO NOT JUDGE: a facet with no bar prints its score, its
+    denominator and no verdict — never a blank that reads as a pass."""
+    for facet in run_filing.QUALITY_FACETS:
+        monkeypatch.setitem(bars.FILING_BARS, facet, None)
     rendered = run_filing.render(run_filing.aggregate(_phases(entries), backend="double",
                                                       model="m", wall_s=3.0))
     assert "PASS" not in rendered and "FAIL" not in rendered
     assert "no bar — baseline not yet fixed" in rendered
+
+
+def test_the_calibrated_table_prints_PASS_at_the_baseline_and_FAIL_below_it():
+    """The twin of the test above, and now the SHIPPED state: with the real `FILING_BARS` the
+    table judges, and it judges at exactly the numbers the Sonnet-5 baseline set.
+
+    `type`/`folder` sit at 0.88 because the baseline scored 8/9 and 8/9 must satisfy its own bar —
+    a two-decimal 0.89 would refuse the very run that fixed it, which is why the pair is floored.
+    That is asserted here rather than left to the comment in `bars.py`: the day somebody tidies
+    0.88 up to 0.89, this is what says the baseline no longer passes.
+
+    The other seven bars are 1.00, so a single miss fails them. That is the tightness a future red
+    run will be read against, and it should be visible in a test rather than discovered in anger.
+    """
+    def _typed(hits, of):
+        return [run_filing._phase(f"T{i}", "only", {"type": "note"},
+                                  {"type": "note" if i < hits else "concept"})
+                for i in range(of)]
+
+    assert 8 / 9 >= bars.FILING_BARS["type"] == bars.FILING_BARS["folder"] == 0.88, (
+        "the baseline's own 8/9 must satisfy the bar it set")
+
+    at_the_baseline = run_filing.render(run_filing.aggregate(_typed(8, 9), backend="sdk",
+                                                             model="m", wall_s=1.0))
+    below_it = run_filing.render(run_filing.aggregate(_typed(7, 9), backend="sdk", model="m",
+                                                      wall_s=1.0))
+    assert "(PASS vs 0.88 bar)" in at_the_baseline and "FAIL" not in at_the_baseline
+    assert "(FAIL vs 0.88 bar)" in below_it and "PASS" not in below_it
+
+    one_miss = [run_filing._phase(f"S{i}", "only", {"status": "filed"},
+                                 {"status": "filed" if i else "triage"}) for i in range(12)]
+    assert bars.FILING_BARS["status"] == 1.00
+    assert "(FAIL vs 1.00 bar)" in run_filing.render(
+        run_filing.aggregate(one_miss, backend="sdk", model="m", wall_s=1.0))
 
 
 def test_every_miss_is_named_with_the_capture_and_facet_that_produced_it(entries):
