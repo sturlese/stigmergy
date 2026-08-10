@@ -441,7 +441,13 @@ Everything else is reached FROM `processing.py`; read it first when tracing one 
   overlaps) — there is no `verification` key; it left this shape with everything that computed it —
   `agent_rationale` (the agent's own `Outcome.summary` — the one field
   that says WHY rather than what, and the only account of its judgment anything downstream has),
-  `findings`; plus per-state extras (`retry_of`, `open_question`,
+  `findings`, and `cost_usd` — the passes' real dollar spend summed from the SDK's per-run figure
+  (`processing._stamp_cost`, with the fault road carrying the same sum on the exception via
+  `at_agent_attempt`). The rule, not an enumeration: present (possibly `0.0` — a park re-file, a
+  fault before the first pass) on every outcome that passed through an agent loop or the failure
+  road; absent only on `_pre_agent`'s own terminals — a duplicate, a `filed_retry`, a
+  material-level secrets/PII rejection;
+  plus per-state extras (`retry_of`, `open_question`,
   `stage` / `deliveries` / `agent_attempts`, `reply_invocation` / `unresolved_name` on
   `needs_input`, `asked` on `triage_entity`, `resolved_by` / `rejected_by` / `steward_note` on a
   steward's disposition).
@@ -457,8 +463,9 @@ Everything else is reached FROM `processing.py`; read it first when tracing one 
   softening into one `failed` row, because the fault applies identically to every row behind this one),
   `WorktreeError`, `GitError`, `LeaseLostError`, `AgentError`, and `OutcomeShapeError` (an `AgentError`
   subclass carrying `gates.Finding`s — the outcome file parsed and does not describe something the
-  worker can act on). All carry `agent_attempts` via `.at_agent_attempt(n)`, set on the way out of
-  `processing.py` so a `failed` report can say how many agent passes ran.
+  worker can act on). All carry `agent_attempts` and `agent_cost_usd` via
+  `.at_agent_attempt(n, cost_usd=…)`, set on the way out of `processing.py` so a `failed` report
+  can say how many agent passes ran and what they cost.
 - **The outcome's two bounds.** `agent.MAX_IDENTIFIER_LEN` (400, **refused** over it) for fields that
   NAME something the worker resolves; `agent.MAX_PROSE_LEN` (2000, **truncated**, never refused) for
   `summary` / `anchoring.reason` / a `note`. One bound for both refused a whole capture over the 401st

@@ -925,7 +925,7 @@ class BrainService:
             "hints": {k: neutralize_fence(v) for k, v in (row["hints"] or {}).items()},
             "flagged_hints": row["flagged_hints"],
             "excerpt": fence(excerpt) if excerpt else "",
-            "report": _neutralize_report(row["report"]),
+            "report": _without_operator_telemetry(_neutralize_report(row["report"])),
         }
 
     # ── the review lane ────────────────────────────────────────────────────────
@@ -1066,6 +1066,17 @@ def _neutralize_report(report, depth: int = 0):
         return {str(k): _neutralize_report(v, depth + 1) for k, v in report.items()}
     if isinstance(report, list):
         return [_neutralize_report(v, depth + 1) for v in report]
+    return report
+
+
+def _without_operator_telemetry(report):
+    """`cost_usd` stays on the STORED report for operators (`stigmergy-queue show`, the admin
+    console) and leaves the client wire here — the same decision, made the same way, as `ask`'s
+    `usage` pop in `mcp_server.py`: per-item dollar spend is operator telemetry, and neither MCP
+    surface grows a spend disclosure for submitters or stewards (ADR 031 D2). One seam per
+    surface today; if a third client surface ever needs the same strip, fold them into one."""
+    if isinstance(report, dict):
+        report.pop("cost_usd", None)
     return report
 
 

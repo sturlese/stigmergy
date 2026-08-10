@@ -137,8 +137,24 @@ class AgentPasses:
     `process_item` stamps it onto any `LibrarianError` on its way out (`at_agent_attempt`). Without
     it the report named the queue delivery and nothing else, and "queue delivery 1" while the agent
     had had two tries is precisely the ambiguity `report.failed_system` was fixed to remove.
+
+    `cost_usd` accumulates beside the count for the same structural reason: the SDK prices every
+    pass (`AgentRun.cost_usd`) and this loop is the only scope that sees every run of one item,
+    so the sum lives here — stamped onto every Result by `_stamp_cost`, and onto the exception by
+    `at_agent_attempt` for the failure path.
     """
     count: int = 0
+    cost_usd: float = 0.0
+
+
+def _stamp_cost(result: "Result", passes: "AgentPasses") -> "Result":
+    """Every Result leaving an agent loop says what its passes cost. The SDK reports the real
+    dollar figure per run and, until this stamp existed, the number died with the run object —
+    so the first question an operator asks of a report ("what did filing this cost?") was
+    unanswerable from the one row that exists to answer questions about the item. `0.0` is a real
+    answer too: a park re-file or a pre-agent refusal spent nothing, and says so."""
+    result.report["cost_usd"] = round(passes.cost_usd, 6)
+    return result
 
 
 @dataclass
@@ -446,7 +462,7 @@ def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None)
             # Annotate, then re-raise unchanged: the worker owns the decision to turn this into a
             # `failed` Result, and it needs to know how many agent passes were spent to say so
             # honestly. A bare `raise` keeps the original traceback.
-            ex.at_agent_attempt(passes.count)
+            ex.at_agent_attempt(passes.count, cost_usd=passes.cost_usd)
             raise
 
 
@@ -467,7 +483,7 @@ def _run_in_worktree(conn, item: dict, deps: Deps, material: str, worktree: str,
         passes.count = attempt
         try:
             result, findings, outcome = _one_pass(conn, item, deps, material, worktree, corrective,
-                                                  linter_path=linter_path)
+                                                  passes=passes, linter_path=linter_path)
         except OutcomeShapeError as ex:
             # Unlike every other `AgentError`, SAYING SO can fix this one. The file itself is
             # already gone (`read_outcome` deletes before it parses), but a backend that parses its
@@ -475,7 +491,7 @@ def _run_in_worktree(conn, item: dict, deps: Deps, material: str, worktree: str,
             result, findings, outcome = None, list(ex.findings), None
             agent_module.discard_outcome_file(worktree)
         if result is not None:
-            return result
+            return _stamp_cost(result, passes)
 
         # A veto naming no repair the agent can perform does not spend the retry (`gates.
         # unrepairable`). The second pass could not clear it, so it would
@@ -503,8 +519,8 @@ def _run_in_worktree(conn, item: dict, deps: Deps, material: str, worktree: str,
     # `passes.count`, not `MAX_AGENT_ATTEMPTS`: the loop can now end after one pass, and a report
     # claiming two agent attempts when one ran is the ambiguity `report.failed_system` was fixed to
     # remove — reintroduced from the other side.
-    return _refuse(item, findings, outcome, agent_attempts=passes.count,
-                   diagnostics_path=diagnostics)
+    return _stamp_cost(_refuse(item, findings, outcome, agent_attempts=passes.count,
+                               diagnostics_path=diagnostics), passes)
 
 
 def _reset_for_retry(worktree: str) -> None:
@@ -518,7 +534,8 @@ def _reset_for_retry(worktree: str) -> None:
 
 
 def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
-              corrective: str, *, linter_path: str = "") -> tuple:
+              corrective: str, *, passes: "AgentPasses | None" = None,
+              linter_path: str = "") -> tuple:
     """ONE agent pass: run it, apply its declared edits, stamp, and run every gate.
 
     Returns `(result, findings, outcome)`. A non-`None` `result` is TERMINAL — the caller returns it
@@ -548,10 +565,21 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         f"job is the SYNTHESIS: file exactly one note/decision/concept page distilling what this "
         f"document establishes, anchored through the registry as always; the system will make "
         f"your page cite the attached source.")
-    run = deps.agent.run(worktree=worktree, material=material,
-                         hints=(item.get("hints") or {}).get("client", {}),
-                         submitted_by=item["submitted_by"], corrective=corrective,
-                         reply=item.get("reply") or "", flow_note=flow_note)
+    try:
+        run = deps.agent.run(worktree=worktree, material=material,
+                             hints=(item.get("hints") or {}).get("client", {}),
+                             submitted_by=item["submitted_by"], corrective=corrective,
+                             reply=item.get("reply") or "", flow_note=flow_note)
+    except AgentError as ex:
+        # A pass that died mid-run still spent real money — `agent._priced` attached the SDK's
+        # figure to the fault (0.0 for a timeout, honestly: no ResultMessage ever arrived).
+        if passes is not None:
+            passes.cost_usd += getattr(ex, "run_cost_usd", 0.0)
+        raise
+    # The returning road's bank — the except arm above is the same bank for the fault road, so
+    # the spend is recorded whatever shape this pass ends in.
+    if passes is not None:
+        passes.cost_usd += run.cost_usd
     outcome = run.outcome
     # The outcome file is the agent's channel, not part of its work: consume it before the
     # diff is taken so it can never reach a commit or trip the zone gate.
@@ -1204,17 +1232,20 @@ def _frontmatter_only(veto) -> bool:
     return bool(veto) and all(f.gate == "frontmatter" for f in veto)
 
 
-def failure_result(item: dict, stage: str, reason: str, *, agent_attempts: int = 0) -> Result:
+def failure_result(item: dict, stage: str, reason: str, *, agent_attempts: int = 0,
+                   cost_usd: float = 0.0) -> Result:
     """The worker's own wrapper for an unexpected error — a dead worktree, a git failure, an
     agent that never produced an outcome. Always a system fault, never the submitter's.
 
     `agent_attempts` defaults to 0 because these faults are raised from anywhere in the path,
     including before the agent ever ran; the report then omits the agent counter rather than
-    guessing at it, and still names the queue delivery.
+    guessing at it, and still names the queue delivery. `cost_usd` rides the same road from the
+    same exception (`LibrarianError.agent_cost_usd`): a failed item is still a paid item.
     """
     return Result(schema.FAILED, "",
                   report.failed_system(attempts=item.get("attempts", 1), stage=stage,
-                                       reason=reason, agent_attempts=agent_attempts))
+                                       reason=reason, agent_attempts=agent_attempts,
+                                       cost_usd=cost_usd))
 
 
 # The failures that are KNOWN ways processing can fail, so the report can name the stage
@@ -1551,7 +1582,7 @@ def process_meeting_item(conn, item: dict, deps: Deps) -> Result:
             return _run_meeting_in_worktree(conn, item, deps, material, meeting_meta, worktree,
                                             passes, linter_path=linter_path)
         except LibrarianError as ex:
-            ex.at_agent_attempt(passes.count)
+            ex.at_agent_attempt(passes.count, cost_usd=passes.cost_usd)
             raise
 
 
@@ -1808,7 +1839,8 @@ def _run_meeting_in_worktree(conn, item, deps, material, meeting_meta, worktree,
             linter_path=linter_path, reused=prior,
             reuse=dataclasses.replace(reuse, reused=True))
         if result is not None:
-            return _with_park_outcome(result, outcome, material=material, item=item)
+            return _with_park_outcome(_stamp_cost(result, passes), outcome,
+                                      material=material, item=item)
         # The stored outcome still does not pass the gates. Fall through to a real agent pass —
         # a genuine re-distillation, which the report will diff against `reuse.prior_titles`.
         log.warning("meeting item %s: the parked distillation did not pass the gates (%s); "
@@ -1821,12 +1853,13 @@ def _run_meeting_in_worktree(conn, item, deps, material, meeting_meta, worktree,
         try:
             result, findings, outcome = _one_meeting_pass(
                 conn, item, deps, material, meeting_meta, worktree, corrective,
-                linter_path=linter_path, reuse=reuse)
+                passes=passes, linter_path=linter_path, reuse=reuse)
         except OutcomeShapeError as ex:
             result, findings, outcome = None, list(ex.findings), None
             agent_module.discard_outcome_file(worktree)
         if result is not None:
-            return _with_park_outcome(result, outcome, material=material, item=item)
+            return _with_park_outcome(_stamp_cost(result, passes), outcome,
+                                      material=material, item=item)
 
         blocked = gates.unrepairable(findings)
         if attempt < MAX_AGENT_ATTEMPTS:
@@ -1843,8 +1876,8 @@ def _run_meeting_in_worktree(conn, item, deps, material, meeting_meta, worktree,
         break
 
     return _with_park_outcome(
-        _refuse_meeting(item, findings, outcome, agent_attempts=passes.count,
-                        diagnostics_path=diagnostics),
+        _stamp_cost(_refuse_meeting(item, findings, outcome, agent_attempts=passes.count,
+                                    diagnostics_path=diagnostics), passes),
         outcome, material=material, item=item)
 
 
@@ -2131,6 +2164,7 @@ def _write_meeting_pages(worktree: str, outcome, meeting_meta: dict, material: s
 
 
 def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, corrective, *,
+                      passes: "AgentPasses | None" = None,
                       linter_path: str = "", reused=None, reuse=None) -> tuple:
     """One meeting pass: call the (now structured, tool-less) meeting agent, have CODE write every
     page of the set, stamp, and run every gate over the whole diff. Returns `(result, findings,
@@ -2156,10 +2190,21 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
         # the whole mechanism: the steward's newly minted entity is what changed, not the content.
         outcome = reused
     else:
-        run = deps.agent.run_meeting(worktree=worktree, material=material,
-                                     meeting_meta=meeting_meta, registry=deps.registry,
-                                     source_page_path=source_page_path, corrective=corrective,
-                                     reply=item.get("reply") or "")
+        try:
+            run = deps.agent.run_meeting(worktree=worktree, material=material,
+                                         meeting_meta=meeting_meta, registry=deps.registry,
+                                         source_page_path=source_page_path,
+                                         corrective=corrective,
+                                         reply=item.get("reply") or "")
+        except AgentError as ex:
+            # Same fault-road bank as `_one_pass` — the SDK priced the run before most faults.
+            if passes is not None:
+                passes.cost_usd += getattr(ex, "run_cost_usd", 0.0)
+            raise
+        # Same banking as `_one_pass`: the spend is real whatever the outcome turns out to be.
+        # The `reused` branch above deliberately never reaches this line — a re-file costs $0.
+        if passes is not None:
+            passes.cost_usd += run.cost_usd
         outcome = run.outcome
         agent_module.discard_outcome_file(worktree)
         if outcome is None:

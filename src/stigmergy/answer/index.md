@@ -46,7 +46,7 @@ adapter — all three pinned as separate tests.
 | `verify_answer.py` | `verify()` (figures + citations → `verified`/`partial`/`failed`), `check_citations()`, `feedback()` (the one corrective-retry prompt); `_derender_page`/`_derender_pairs`/`_fold`/`_normalize_page`/`_normalize_quote`, the containment check's own reading of a page AND, separately, of a model-authored quote — deliberately NOT the same reading. The strict gate is deliberately kept outside it. **The PAGE side consumes every MATCHED pair** — emphasis/strong, inline code, both link forms, `_` and a lone `*` at word boundaries, so a snake_case identifier, a footnote asterisk and a glob survive — and drops a struck span up to `_SPAN` (200) characters WHOLE, because `~~12%~~ 14%` is the page retracting a value; a retraction LONGER than `_SPAN` is a known, bounded residual — not dropped, and its text stays quotable as current. **The QUOTE side consumes only the payload-free pairs** (emphasis/strong, inline code): a link or a struck span in the MODEL's own quote carries a destination or a retraction that consuming would delete from the claim before it is checked, so those two forms must match the page character for character. `_fold` then applies a SYMMETRIC typographic fold (Unicode NFC, curly quotes/ellipsis) to both sides, AFTER the derender step so the length it adds never pushes a struck span past `_SPAN` — dashes stay excluded and NFKC stays unused, both for stated security reasons. Every pattern is bounded and newline-free: a body is attacker-influenced in size and this runs synchronously inside `async def ask` |
 | `brain.py` | `AnswerBrain` — the evidence ledger: turns `BrainService`'s structured (JSON) results into the exact TEXT the agent and verifier see. **Three renderers**: `search_text`, `page_text` and `entity_text`, plus `get_page` (the verifier's verbatim-quote base) and `known_entities` (the scoped discovery primitive). Every renderer lays the service's results out VERBATIM — the service already decided ACL scoping and neutralized titles, so nothing here re-derives or re-fences (`_render_nav` is the stated pattern) |
 | `synthesize.py` | the pydantic_ai agent, `AnswerOutput` schema (no `reason` field — see Notes), usage limits (≤6 requests, ≤8 tool calls), `FakeSynthesizer` (offline double). `pydantic_ai` is imported lazily inside the `openai` branch only |
-| `service.py` | `AnswerService.ask()` — the loop + the **strict gate**; `run_facts_reason` — the one composer for every refusal's shipped `reason`; shapes the transport-agnostic response |
+| `service.py` | `AnswerService.ask()` — the loop + the **strict gate** (`strict_gate_findings`, the ONE copy of the gate's scan, shared by `_shape` and the retry trigger); the corrective retry is spent ONLY when the gate would suppress the draft — an untraced figure or a `failed` verdict, never a lone citation problem, which ships `partial` either way (ADR 031); `run_facts_reason` — the one composer for every refusal's shipped `reason`; shapes the transport-agnostic response, `usage` token counts included |
 
 ## Use these
 
@@ -66,7 +66,8 @@ adapter — all three pinned as separate tests.
   and `slack.mention._run_ask`), so the two transports cannot describe the same outcome
   differently. COUNTS only — never a verdict's problem strings, never a citation quote. Carries
   BOTH the shipped `verdict` and the first draft's `first_verdict`, because only the second says
-  what a corrective retry was for; `tests/server/test_audit.py` pins the key set CLOSED, so a
+  what a corrective retry was for, plus the ask's `usage` token counts (both runs summed — the
+  column had duration and no dollars); `tests/server/test_audit.py` pins the key set CLOSED, so a
   field reaches this column by being named there on purpose.
 - `synthesize.build_synthesizer(settings)` — the ANSWER_LLM dispatch (`openai` / `fake`). An
   unknown value fails fast; do not add a silent fallback to the fake path.
@@ -179,7 +180,7 @@ cat. 1 and the golden QA set are the measured, not assumed, half — see
 | Add a new agent tool | `synthesize.build_synthesizer`'s `@agent.tool` closures, calling a new (or existing) `AnswerBrain` renderer that records into `ctx` via `deps.record`/`note_page`/`note_query` |
 | Add a new evidence renderer | `brain.py` — text view only, ACL-scoped through the wrapped `BrainService`; fence with `service.fence`/`neutralize_fence` exactly as `search_text`/`page_text` do |
 | Change what a refusal says | `service.run_facts_reason` (the composer) — never `synthesize.AnswerOutput` (no `reason` field to reintroduce) |
-| Change the strict gate's threshold | `service._reverdict`/`AnswerService._shape` — keep `verify_answer.verify`'s ported thresholds untouched |
+| Change the strict gate's threshold | `service._reverdict`/`service.strict_gate_findings`/`AnswerService._shape` — keep `verify_answer.verify`'s ported thresholds untouched; the retry trigger reads the same `strict_gate_findings`, so a threshold change moves both together by construction |
 | Change what `audit_log.result` records for `ask` | `service._verdict_shape`/`audit_summary` — counts/paths only |
 | Change entity-first resolution's matching rule | `stigmergy.server.entity_aliases.resolve_entity` (registry aliases only); `BrainService._search`, in `stigmergy.server`, is the caller — NOT this package |
 

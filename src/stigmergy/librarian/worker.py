@@ -395,7 +395,7 @@ def process_next(conn, deps: processing.Deps):
             item, "config",
             "a librarian configuration fault (the operator's log names the file); nothing about "
             "your capture caused it",
-            agent_attempts=_agent_attempts(ex))
+            agent_attempts=_agent_attempts(ex), cost_usd=_agent_cost_usd(ex))
     except processing.PROCESSING_ERRORS as ex:
         # **NO `exc_info`.** This is the branch for the KNOWN family — classes this code catches,
         # names a stage for, and reports honestly in the carefully-worded sentence composed directly
@@ -409,11 +409,13 @@ def process_next(conn, deps: processing.Deps):
         # traceback IS the diagnosis.
         log.error("item %s failed at %s: %s", item["id"], ex.__class__.__name__, ex)
         result = processing.failure_result(item, ex.__class__.__name__, str(ex),
-                                           agent_attempts=_agent_attempts(ex))
+                                           agent_attempts=_agent_attempts(ex),
+                                           cost_usd=_agent_cost_usd(ex))
     except Exception as ex:  # noqa: BLE001 — an unexpected fault is still this item's outcome
         log.error("item %s failed unexpectedly", item["id"], exc_info=True)
         result = processing.failure_result(item, "unexpected", ex.__class__.__name__,
-                                           agent_attempts=_agent_attempts(ex))
+                                           agent_attempts=_agent_attempts(ex),
+                                           cost_usd=_agent_cost_usd(ex))
 
     _finish(conn, item, result)
     return item, result
@@ -428,6 +430,13 @@ def _agent_attempts(ex: BaseException) -> int:
     `report.failed_system` omits the agent counter rather than guessing at one.
     """
     return int(getattr(ex, "agent_attempts", 0) or 0)
+
+
+def _agent_cost_usd(ex: BaseException) -> float:
+    """`_agent_attempts`' twin for the spend the passes had banked when the fault was raised —
+    same `getattr` posture, for the same `CaptureError` reason, and zero is the same honest
+    answer for a fault that pre-dates the agent."""
+    return float(getattr(ex, "agent_cost_usd", 0.0) or 0.0)
 
 
 def _finish(conn, item: dict, result) -> None:

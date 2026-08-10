@@ -33,14 +33,21 @@ class LibrarianError(RuntimeError):
     so nobody reading a `failed` row could tell whether the corrective retry had run, which is the
     first thing you want to know about a librarian that gave up. `report.failed_system` already
     accepted the number and had no way to be told it.
+
+    `agent_cost_usd` rides along for the same reason: the SDK reports what each pass actually
+    cost, the number is known only inside the loop, and a failed item is still a paid item —
+    a failure report that omits the spend hides exactly the runs an operator most wants priced.
     """
 
     agent_attempts: int = 0
+    agent_cost_usd: float = 0.0
 
-    def at_agent_attempt(self, attempt: int) -> "LibrarianError":
-        """Record which agent pass this fault happened on and return self, so a raise site reads
-        `raise AgentError(...).at_agent_attempt(n)` in one expression."""
+    def at_agent_attempt(self, attempt: int, cost_usd: float = 0.0) -> "LibrarianError":
+        """Record which agent pass this fault happened on (and what the passes had cost) and
+        return self, so a raise site reads `raise AgentError(...).at_agent_attempt(n)` in one
+        expression."""
         self.agent_attempts = int(attempt)
+        self.agent_cost_usd = float(cost_usd)
         return self
 
 

@@ -824,7 +824,8 @@ def triage_type(*, judged_type: str, agent_rationale: str = "", findings: list =
 
 
 # ── failed ────────────────────────────────────────────────────────────────────────────────────
-def failed_system(*, attempts: int, stage: str, reason: str, agent_attempts: int = 0) -> dict:
+def failed_system(*, attempts: int, stage: str, reason: str, agent_attempts: int = 0,
+                  cost_usd: float = 0.0) -> dict:
     """The librarian could not comply. Deliberately a different sentence SHAPE from every
     `rejected` above: there is nothing for the submitter to fix.
 
@@ -849,7 +850,8 @@ def failed_system(*, attempts: int, stage: str, reason: str, agent_attempts: int
                f"fault. Resubmitting may work, since the librarian is not deterministic, but it "
                f"will not fix the fault.")
     return base_report(status=schema.FAILED, summary=summary,
-                       stage=stage, deliveries=attempts, agent_attempts=agent_attempts)
+                       stage=stage, deliveries=attempts, agent_attempts=agent_attempts,
+                       cost_usd=round(cost_usd, 6))
 
 
 # ── findings ──────────────────────────────────────────────────────────────────────────────────

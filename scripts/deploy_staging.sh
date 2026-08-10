@@ -95,3 +95,13 @@ fly deploy
 # exactly the two-machine slack group this line exists to prevent, and an error message that points
 # at scaling rather than at the pin. Found on the first non-interactive deploy of this group.
 fly scale count slack=1 --yes
+
+# The worker gets the same pin for a DIFFERENT reason. Two Slack machines would double-handle
+# events (see above). The worker's default second machine is a Fly STANDBY — created stopped,
+# claiming nothing (this app's first deploy left exactly one, noticed days later) — but a
+# standby is one `fly machine start` away from a second PAID poller, and nothing refuses that
+# start: the queue's visibility leases keep two workers correct, and only the Anthropic invoice
+# notices. The pin destroys the standby so a second runner can never appear by accident, and the
+# trade — no automatic host-failure failover for the librarian — is recorded in the runbook.
+# A no-op (exits 0) if the group is already at 1.
+fly scale count worker=1 --yes
