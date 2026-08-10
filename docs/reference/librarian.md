@@ -378,6 +378,18 @@ every page OTHER than the filed one that this commit touched. It is a distinct f
 `overlaps_flagged`: that one is the agent's JUDGMENT about what overlaps; `pages_edited` is what code
 actually wrote.
 
+Reports also carry `cost_usd` — the real dollar spend of the item's agent passes, summed from the
+figure the SDK reports per run, a pass that died mid-run included (the fault carries its own
+figure on the exception, exactly like `agent_attempts`; a timeout is the honest `0.0`, since no
+priced result ever arrived). The rule: present, possibly `0.0`, on every outcome that passed
+through an agent loop or the failure road — filed, refused, parked and `failed` alike — and
+absent only on the terminal states decided before the loop: a duplicate, a `filed_retry`, a
+material-level secrets/PII rejection. Operators read it from the stored row (`stigmergy-queue
+show`, the admin console); the client-facing `brain_submissions` shape deliberately strips it,
+the same operator-telemetry line `ask`'s `usage` draws (ADR 031). It exists because the number
+used to die with the run object, leaving the one row that answers questions about an item unable
+to answer the operator's first one: what did this cost?
+
 `anchoring.kind` is `entity` (with `entities`, each resolving through `ops/entity-registry.json`) or
 `company` (with a written `reason`). There is no third value: silence is not an anchoring outcome.
 

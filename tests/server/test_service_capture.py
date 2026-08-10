@@ -474,6 +474,29 @@ def test_submissions_report_is_present_and_its_fence_token_neutralized(indexed):
     assert "pretend this is unfenced" in row["report"]["summary"]
 
 
+def test_submissions_report_strips_the_operator_cost_telemetry(indexed):
+    """`_without_operator_telemetry` — OLD BEHAVIOUR: `report.cost_usd` (the item's real model
+    spend, stamped by the librarian since ADR 031) rode `brain_submissions` to every submitter
+    and steward, while `ask`'s own `usage` counts were deliberately popped from the MCP wire —
+    the same operator telemetry, opposite treatments, and no recorded decision behind the
+    asymmetry. Both wires now draw the same line: the STORED row keeps the figure for operators
+    (`stigmergy-queue show`, the admin console); the client shape does not."""
+    from psycopg.types.json import Jsonb
+
+    conn, fx = indexed
+    svc = make_service(fx, conn, fx.STEWARD, evidence=MemoryEvidenceStore())
+    ack = svc.submit("raw", "a capture whose report will carry the librarian's cost stamp")
+    with conn.cursor() as cur:
+        cur.execute("UPDATE capture_queue SET status = 'filed', report = %s WHERE id = %s",
+                    (Jsonb({"status": "filed", "summary": "filed — wiki/x.md@abc",
+                            "cost_usd": 0.42}), ack["id"]))
+
+    out = svc.submissions()
+    row = next(r for r in out["submissions"] if r["id"] == ack["id"])
+    assert row["report"]["status"] == "filed"          # the report itself still ships…
+    assert "cost_usd" not in row["report"]             # …without the operator telemetry
+
+
 # ── a refusal must not re-serve what it refused ────────────────────────────────────────────────
 def _finish_by_hand(conn, submission_id: int, status: str, report: dict) -> None:
     """Put a row into a terminal state with the report a librarian would have written.

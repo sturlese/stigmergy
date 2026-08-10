@@ -650,6 +650,16 @@ class AgentRun:
     stop_reason: str = ""
 
 
+def _priced(run: AgentRun, ex: "AgentError") -> "AgentError":
+    """Attach the run's known spend to a fault raised mid-run, so the caller can bank what the
+    pass cost even though no `AgentRun` ever returned (`processing` reads `run_cost_usd` off the
+    exception — most agent faults fire AFTER the SDK's ResultMessage has already priced the run:
+    a non-`success` stop, the tool-call budget, an unreadable outcome file). A timeout prices at
+    0.0 honestly — no ResultMessage ever arrived to price it."""
+    ex.run_cost_usd = run.cost_usd
+    return ex
+
+
 def read_outcome(worktree: str, *, delete: bool = True) -> Outcome:
     """Read (and by default remove) the agent's outcome file, validated into an `Outcome`.
 
@@ -1385,16 +1395,23 @@ class SdkAgent:
                                 f"the agent run ended as {message.subtype!r} after "
                                 f"{run.turns} turn(s)")
         except TimeoutError as ex:
-            raise AgentError(f"the agent exceeded its {self.settings.timeout_s}s budget") from ex
-        except AgentError:
+            raise _priced(run, AgentError(
+                f"the agent exceeded its {self.settings.timeout_s}s budget")) from ex
+        except AgentError as ex:
+            _priced(run, ex)
             raise
         except Exception as ex:  # noqa: BLE001 — class name only: SDK errors can carry prompt text
-            raise AgentError(f"the agent run failed ({ex.__class__.__name__})") from ex
+            raise _priced(run, AgentError(
+                f"the agent run failed ({ex.__class__.__name__})")) from ex
 
         if run.tool_calls > self.settings.max_tool_calls:
-            raise AgentError(f"the agent exceeded its {self.settings.max_tool_calls} tool-call "
-                             f"budget")
-        run.outcome = read_outcome(worktree)
+            raise _priced(run, AgentError(
+                f"the agent exceeded its {self.settings.max_tool_calls} tool-call budget"))
+        try:
+            run.outcome = read_outcome(worktree)
+        except AgentError as ex:   # a missing/oversized/malformed outcome file: the run is priced
+            _priced(run, ex)
+            raise
         return run
 
     def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
@@ -1491,16 +1508,23 @@ class SdkAgent:
                                 f"the agent run ended as {message.subtype!r} after "
                                 f"{run.turns} turn(s)")
         except TimeoutError as ex:
-            raise AgentError(f"the agent exceeded its {self.settings.timeout_s}s budget") from ex
-        except AgentError:
+            raise _priced(run, AgentError(
+                f"the agent exceeded its {self.settings.timeout_s}s budget")) from ex
+        except AgentError as ex:
+            _priced(run, ex)
             raise
         except Exception as ex:  # noqa: BLE001
-            raise AgentError(f"the agent run failed ({ex.__class__.__name__})") from ex
+            raise _priced(run, AgentError(
+                f"the agent run failed ({ex.__class__.__name__})")) from ex
 
         if run.tool_calls > self.settings.max_tool_calls:
-            raise AgentError(f"the agent exceeded its {self.settings.max_tool_calls} tool-call "
-                             f"budget")
-        run.outcome = read_meeting_outcome(worktree)
+            raise _priced(run, AgentError(
+                f"the agent exceeded its {self.settings.max_tool_calls} tool-call budget"))
+        try:
+            run.outcome = read_meeting_outcome(worktree)
+        except AgentError as ex:   # same pricing road as `_run`'s own outcome read
+            _priced(run, ex)
+            raise
         return run
 
 
