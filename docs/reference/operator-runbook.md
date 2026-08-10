@@ -789,9 +789,17 @@ intermittent regression this rule exists to catch.
 
 Reports land in `evals/out/gates/` (`retrieval.json`, `qa.json`); the long score series is
 `evals/history.ndjson`. This is the operator's release gate — it never runs in CI (both golden
-halves are REAL measurements: real embedder, real model, real spend). The two instruments are
-also runnable alone (`make retrieval-golden`, `make qa-golden`) when diagnosing which bar
-moved.
+halves are REAL measurements: real embedder, real model, real spend). The two instruments the
+gate arms are also runnable alone (`make retrieval-golden`, `make qa-golden`) when diagnosing
+which bar moved.
+
+There is a **third instrument the gate does not arm**: `make filing-golden`, which measures the
+write path — ten golden captures through the real librarian, its gates and a real `git worktree`,
+scored per facet. It is deliberately outside the release gate (it writes, it costs an agent pass
+per capture, and its bars are not yet calibrated), and it is the one to run when a change touches
+the librarian's agent, its brief or its gates. It needs `gitleaks` on PATH and a Claude
+credential; `make filing-golden BACKEND=double` is the keyless plumbing check. Full account:
+`evals/README.md`.
 
 ### Drill 1 — Postgres backup / restore of the durable schema
 

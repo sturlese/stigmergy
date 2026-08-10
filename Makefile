@@ -141,6 +141,20 @@ qa-golden: venv ## Golden QA with the REAL embedder + model (needs the env file)
 	$(PY) evals/run_qa.py --embedder $(or $(EMBEDDER),openai) --llm $(or $(LLM),openai) \
 	  --repo $(or $(QA_REPO),evals/corpus) $(QA_ARGS)
 
+# The third instrument, and the only one that WRITES: it drives the golden captures through the
+# real filing path — real Postgres, a real bare remote, a real worktree, the eight gates, the
+# knowledge repo's own contract linter — into the frozen mini repo at `evals/filing/repo/`.
+#
+# Two things it needs that the other two do not. `gitleaks` on PATH, because the secrets gate
+# shells out to the real scanner and a filing eval that skipped it would measure a shorter
+# pipeline than production runs. And a Claude credential, which is why this takes the env file:
+# `BACKEND=double` is the keyless plumbing self-check and appends nothing to the series.
+#
+# `make db-up` first, like the other two — and mind `evals/index.md`'s standing warning: no other
+# instrument may be using the stack while this one runs.
+filing-golden: venv ## Golden filing over evals/filing with the REAL agent + gates (needs the env file; BACKEND=double for the keyless self-check)
+	$(PY) evals/run_filing.py --backend $(or $(BACKEND),sdk) $(FILING_ARGS)
+
 adversarial: venv ## The armed adversarial categories (1 injection · 2 ACL/existence · 7 forged frontmatter)
 	$(PY) -m pytest -q -k "adversarial_cat1 or adversarial_cat2 or adversarial_cat7" -p no:cacheprovider --no-cov
 
@@ -173,4 +187,4 @@ rebuild-staging: venv ## Rebuild the STAGING index (needs STAGING_DSN + OPENAI_A
 r2-smoke: venv ## R2 smoke check: put+get+delete one object (needs R2_ENDPOINT_URL/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET)
 	$(PY) scripts/r2_smoke.py
 
-.PHONY: help venv test lint db-up db-down e2e e2e-write e2e-librarian e2e-librarian-container librarian-walk librarian-status slack-run slack-secrets retrieval-golden index-rebuild index-check qa-golden adversarial gates deploy-staging rebuild-staging r2-smoke
+.PHONY: help venv test lint db-up db-down e2e e2e-write e2e-librarian e2e-librarian-container librarian-walk librarian-status slack-run slack-secrets retrieval-golden index-rebuild index-check qa-golden filing-golden adversarial gates deploy-staging rebuild-staging r2-smoke

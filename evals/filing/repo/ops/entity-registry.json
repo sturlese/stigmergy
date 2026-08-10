@@ -1,0 +1,25 @@
+{
+  "entities": {
+    "northwind-freight": {
+      "name": "Northwind Freight",
+      "type": "organization",
+      "aliases": [
+        "Northwind"
+      ]
+    },
+    "quillon-labs": {
+      "name": "Quillon Labs",
+      "type": "organization",
+      "aliases": [
+        "Quillon"
+      ]
+    },
+    "marlowe-publishing": {
+      "name": "Marlowe Publishing",
+      "type": "organization",
+      "aliases": [
+        "Marlowe"
+      ]
+    }
+  }
+}
