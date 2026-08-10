@@ -105,6 +105,27 @@ Two things to avoid, both learned the hard way:
   a `docs/reference/` page or a package `index.md` false, correct it in the same commit. A stale
   README is a false premise for everyone who reads it next.
 
+## Writing a decision record
+
+Five rules, which `docs/README.md` records as history and are easier to follow stated as rules:
+
+- **Take the next free number, and never renumber anything.** The sequence has gaps and keeps them.
+  A reference to "ADR 015" in a commit message or a code comment has to still resolve years later,
+  which is worth more than a tidy run of integers.
+- **Open with a `**Status:**` line carrying the date**, and update it in place when a later record
+  changes the decision — including a forward pointer to the record that did. An ADR whose reader
+  cannot tell it was overturned is worse than no ADR.
+- **Amend rather than rewrite.** An ADR is dated evidence of a decision, not a description of the
+  present, which is why `tests/test_docs_claims.py` deliberately exempts `docs/decisions/` from the
+  checks that hold `docs/reference/` to what the code has today. A record naming a module that was
+  since deleted is doing its job, as long as it says so.
+- **When a subject is removed from the system whole, delete its record rather than superseding it**
+  — and name the deletion in `docs/README.md`'s numbering note, so the gap reads as a decision
+  instead of an accident. The exception is a design worth rebuilding from: keep it, and mark it
+  historical in its own opening lines, the way ADR 023 does.
+- **Add the row to `docs/README.md`'s table in the same commit.** A test fails if the index and the
+  directory disagree, in either direction.
+
 ## Security
 
 Do not open a public issue for a vulnerability — see [`SECURITY.md`](./SECURITY.md), which also

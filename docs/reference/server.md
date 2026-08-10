@@ -157,12 +157,19 @@ The response is structured JSON:
   "citations": [{"path": "wiki/entities/initech/kpi.md", "quote": "…"}],
   "confidence": "high",
   "verdict": {"verdict": "verified", "unverified_figures": [], "citation_problems": []},
+  "first_verdict": {"verdict": "partial", "unverified_figures": ["512001"], "citation_problems": []},
   "reason": "",
   "retried": false,
   "suppressed": false,
   "built_at": "2026-07-20T…"
 }
 ```
+
+`first_verdict` rides **every** response, answer and refusal alike, and the example above omitted
+it for longer than it should have. It is the FIRST draft's verdict: `verdict` says what shipped,
+this says what the corrective retry was for, and with no retry the two are identical. It is `null`
+on exactly one path — the budget refusal, where no draft was ever produced to judge, and where a
+synthesized `verified` would read as "the first attempt was clean" for a run that never made one.
 
 - `verdict.verdict` is `verified` (no problems) · `partial` (exactly one problem) · `failed` (2+).
   A `partial` **ships labeled** only when its single problem is citation-only; a single untraced

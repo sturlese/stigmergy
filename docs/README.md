@@ -78,6 +78,9 @@ sequence: a reference to "ADR 015" in a commit message or a code comment should 
 later. [ADR 026](./decisions/026-the-purge.md) and
 [ADR 027](./decisions/027-the-contraction.md) record the two removals that account for most of them.
 
+Writing one is [`CONTRIBUTING.md`](../CONTRIBUTING.md#writing-a-decision-record), which states the
+above as rules to follow rather than as the history that produced them.
+
 | ADR | Decides |
 |---|---|
 | [006](./decisions/006-time-semantics.md) | provable `as_of`, near-duplicate lineage, supersedes chains |

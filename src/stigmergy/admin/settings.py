@@ -26,9 +26,12 @@ CHANNELS_PATH_ENV = "STIGMERGY_ADMIN_CHANNELS_PATH"
 # the operator has not set a name of their own (`stigmergy-queue`'s own doctrine for `--by`).
 DEFAULT_ACTOR = "admin-console"
 
-# The workflows the crons tab drives live in the PLATFORM repo, not the knowledge one
-# (`$STIGMERGY_GITHUB_REPO` names the knowledge repo for the index webhook; different fact, different
-# variable, deliberately not reused).
+# The workflows the crons tab drives live wherever the operator installed them, and that is the
+# KNOWLEDGE repo: `deploy/workflows/` here holds templates you copy there, and `.github/workflows/`
+# here holds this repository's own CI and nothing else (pinned by `tests/test_workflows_config.py`).
+# Still its own variable rather than a reuse of `$STIGMERGY_GITHUB_REPO` — that one names the repo
+# the index webhook listens to; same repository in practice, different fact, and collapsing them
+# would silently couple a read-side subscription to a write-side credential's scope.
 #
 # No default: a deployment's own `<owner>/<repo>` is not something this code can guess, and
 # guessing wrong would point an operator's cron buttons at somebody else's repository. Unset means

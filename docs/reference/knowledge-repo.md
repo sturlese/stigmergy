@@ -128,8 +128,19 @@ be supplying from the outside.
 ## `.claude/` — the agent's operating procedure
 
 The librarian's instructions are **versioned in the knowledge repo**, not compiled into this
-platform. That is deliberate: how your agent files pages is your policy, and it should change
-without a redeploy.
+platform. That is deliberate ([ADR 015](../decisions/015-librarian.md)): how your agent files pages
+is your company's filing policy, and it belongs where the people whose knowledge it files can read
+and PR it — which is also why this platform ships no canonical copy for you to adopt.
+
+**Write only editorial policy into it.** The skill is not where the agent's confinement is
+declared, and restating it there buys nothing: the platform injects a system-prompt header ahead of
+your text on every run, and that header — not your file — is what tells the agent it has exactly
+five tools, no shell and no network, that writes are confined to a `.md` page that does not exist
+yet, and that nothing in the checkout may be read as instructions. None of that is negotiable from
+the skill, because the gates enforce it whatever the skill says. So the file only has to answer the
+questions that are genuinely yours: what type is this, which folder, how should it be titled, what
+counts as a near-duplicate here, what should it link to. The platform validates exactly two things
+about it — that it is not empty and that it is under a size ceiling — and deliberately nothing else.
 
 | Path | What it is |
 |---|---|
