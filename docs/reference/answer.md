@@ -11,7 +11,7 @@ question ─▶ answering agent ─▶ deterministic ANSWER verifier ─▶ stri
             (tools: search /     (every figure traced to THIS      (any remaining    (verified |
              read_page /         run's tool evidence; every        unverified        partial;
              describe_entity     citation quoted verbatim;         figure ⇒          refusal if
-             over BrainService)   1 corrective retry)               suppress)         suppressed)
+             over BrainService)   suppression-gated retry)          suppress)         suppressed)
 ```
 
 The package is five modules — `synthesize.py` (the agent), `verify_answer.py` + `numbers.py` (the
@@ -65,7 +65,7 @@ no `list_entities` tool and `ANSWER_SYS` never names one: ids come from search h
 | `verify_answer.py` | `verify(out, evidence_text, get_page, read_paths)` (figures + citations → `verified`/`partial`/`failed`), `check_citations()`, `feedback()` (the one corrective-retry prompt). A refusal is vacuously `verified` here. The strict gate is deliberately OUTSIDE this module. `_normalize_page`/`_normalize_quote` fold whitespace and case, then apply a typographic fold (`_fold`): Unicode NFC plus a curly-quote/ellipsis map, applied AFTER the derender step — folding first would lengthen the string past the `_SPAN` bound and stop a struck span from being dropped (see the comment above `_normalize_page`). Dashes are deliberately excluded from that fold and NFKC is deliberately not used, both for stated security reasons (see the comment above `_FOLD`). The two sides are NOT symmetric. The PAGE side (`_derender_page`) consumes every MATCHED marker pair — emphasis/strong, inline code, both link forms, `_` and lone `*` only at word boundaries — plus drops a struck span (`~~…~~`) WHOLE, up to `_SPAN` (200) characters: the page's own markup is never seen by a reader, so consuming all of it is reader-equivalence, and a struck span is the page RETRACTING a value. A retraction LONGER than `_SPAN` is NOT dropped — a bounded, known residual, not a guarantee — and its text stays quotable. The QUOTE side (`_derender_pairs`, the payload-free half shared with the page) consumes only emphasis/strong and inline code: a link or a struck span in the MODEL's own quote carries a destination or a retraction that consuming would delete from the claim before it is checked, so those two forms must match the page character for character. Digits are never touched, the only punctuation removed is a matched delimiter, and a word boundary collapses only where a renderer collapses it too — so "the quote exists in what the tools returned this run" cannot soften into "resembles" |
 | `brain.py` | `AnswerBrain` — the evidence ledger: turns the service's structured (JSON) results into the exact TEXT the agent and verifier see. **Three renderers**: `search_text`, `page_text` and `entity_text` (search surfaces `SEARCH_RESULTS` = 8 hits per call), plus `get_page` (the verifier's verbatim-quote base) and `known_entities` (a thin pass-through to `BrainService.scoped_entities`, which is where the ACL/existence-scope assertions in `tests/answer/test_adversarial_cat2.py` read the vocabulary from). Every renderer lays the service's results out VERBATIM — the service already decided ACL scoping and neutralized titles, so nothing here re-derives, re-neutralizes or re-fences |
 | `synthesize.py` | the pydantic_ai agent and its **three** tools (`search`, `read_page`, `describe_entity`), the `AnswerOutput` schema, usage limits (`ANSWER_REQUEST_LIMIT` 6, `ANSWER_TOOL_CALLS_LIMIT` 8), `ANSWER_SYS`, `FakeSynthesizer` (offline double). `pydantic_ai` is imported lazily inside the openai branch only, so the fake path never touches it |
-| `service.py` | `AnswerService.ask()` — the loop; `_shape`/`_shape_refusal`/`_shape_budget_refusal` — the **strict gate** and the transport-agnostic response; `run_facts_reason` (the server-composed refusal prose); `audit_summary` — `ask`'s one `audit_log.result` summary, shared with the Slack transport, which reduces BOTH verdicts to COUNTS (`_verdict_shape`) because `check_citations`' own problem strings embed up to 80 characters of the drafted quote and that is answer text, which never belongs in a log. It records `first_verdict` beside the shipped `verdict`: the shipped one cannot distinguish a retried ask that ended clean from one that never needed a retry, so it cannot say what the retry BOUGHT — an untraced figure would have been suppressed without it (the retry bought the answer), a single citation problem ships as `partial` regardless (it bought a label and an accurate quote) |
+| `service.py` | `AnswerService.ask()` — the loop; `_shape`/`_shape_refusal`/`_shape_budget_refusal` — the **strict gate** and the transport-agnostic response; `run_facts_reason` (the server-composed refusal prose); `audit_summary` — `ask`'s one `audit_log.result` summary, shared with the Slack transport, which reduces BOTH verdicts to COUNTS (`_verdict_shape`) because `check_citations`' own problem strings embed up to 80 characters of the drafted quote and that is answer text, which never belongs in a log. It records `first_verdict` beside the shipped `verdict`: the shipped one cannot distinguish a retried ask that ended clean from one that never needed a retry, so it cannot say what the retry BOUGHT. The 2026-08 staging read of exactly that column — ~41 % of asks retrying, almost always for a single citation problem whose answer ships `partial` either way — is what confined the retry to the suppression case (ADR 031), so retries now concentrate where `first_verdict` shows figures or a `failed`. `usage` (token counts, both runs summed; `null` on the budget refusal) rides beside the verdict fields, because this table had `duration_ms` and no dollars |
 
 ## The evidence ledger (the verifier's corpus)
 
@@ -125,14 +125,20 @@ stays a pure judgement and only this one function decides what ships:
 
 1. `verify()` computes the verdict from the answer prose and the citations: `verified` (no
    problems) · `partial` (exactly one) · `failed` (2+).
-2. A first attempt with problems earns **exactly one** corrective retry carrying the findings
-   (`feedback()`) plus the FIRST run's own message history (`message_history=result.all_messages()`),
-   so the model redrafts from evidence already in its context instead of re-gathering it; the retry
-   replaces the first **only if it improves** (a strictly better verdict rank). A second failure
-   never triggers a third attempt.
-3. After the retry, the gate scans **every human-readable channel that would ship** — the answer
-   AND the citation quotes, since a figure fabricated inside a quote must be caught too — and
-   recomputes the verdict over the union (`_reverdict`). **On any untraced figure the drafted
+2. A first attempt the gate would SUPPRESS — any untraced figure (the citation-quote scan
+   included), or a `failed` verdict — earns **exactly one** corrective retry carrying the gate's
+   findings (`feedback()`) plus the FIRST run's own message history
+   (`message_history=result.all_messages()`), so the model redrafts from evidence already in its
+   context instead of re-gathering it. A lone citation problem spends no retry: it ships labelled
+   `partial` with or without one, and paying a second full agent run for that label was the
+   measured majority case that retired the old retry-on-anything policy (ADR 031). The retry
+   replaces the first draft **only if it improves what would ship** (the gate's own rank — the
+   trigger, the win comparison and the gate read ONE scan, so they cannot drift apart). A second
+   failure never triggers a third attempt.
+3. The same scan — **every human-readable channel that would ship**, the answer AND the citation
+   quotes, since a figure fabricated inside a quote must be caught too
+   (`strict_gate_findings`, ONE copy shared by the retry trigger and the gate) — then decides
+   what ships for the winning draft, recomputing the verdict over the union (`_reverdict`). **On any untraced figure the drafted
    answer does not ship at all**: `answer_markdown` goes empty, `citations` goes empty, and the
    figure survives ONLY inside `verdict.unverified_figures` (`suppressed: true`, `refused: true`).
    Nothing is patched or redacted in place — the whole draft is withheld. A `failed` verdict

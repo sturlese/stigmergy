@@ -79,6 +79,36 @@ def test_no_surface_when_genuinely_no_tool_call_ran_at_all(ask_service, monkeypa
     assert res["reason"] == "nothing came back this run — no tool call found anything to work with."
 
 
+def test_a_refused_first_draft_never_spends_the_retry_even_if_the_verifier_fails_it(
+        ask_service, monkeypatch):
+    """The refusal guard on the retry trigger is STRUCTURAL (`not out.refused`), not a side
+    effect of the verifier's data. Today a refusal is vacuously `verified`, so a data-only
+    trigger would happen to skip it — but that is a property of `verify()`, not a guarantee of
+    the policy, and this module's history includes refusal-reason scanning that could change it.
+    Force the verifier to call a refusal `failed`: the retry must still not fire — a refusal is
+    an ANSWER, not a defect to repair, and a second paid run could otherwise replace an honest
+    refusal with a drafted answer."""
+    class Scripted:
+        def __init__(self):
+            self.calls = 0
+
+        async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
+            self.calls += 1
+            deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
+            out = AnswerOutput(refused=True, confidence="low")
+            usage = types.SimpleNamespace(input_tokens=0, output_tokens=0, cache_read_tokens=0, details={})
+            return types.SimpleNamespace(output=out, usage=usage, all_messages=lambda: [])
+
+    monkeypatch.setattr(service_mod, "verify",
+                        lambda *a, **kw: {"verdict": "failed", "unverified_figures": [],
+                                          "citation_problems": ["forced-a", "forced-b"]})
+    scripted = Scripted()
+    monkeypatch.setattr(service_mod, "build_synthesizer", lambda settings: scripted)
+    res = _ask(ask_service, "anything about globex")
+    assert scripted.calls == 1 and res["retried"] is False
+    assert res["refused"] is True
+
+
 def test_ask_retry_fires_and_improves(ask_service, monkeypatch):
     """A first answer with an invented figure and a bogus citation fails the verifier; the
     corrective retry (with findings in the prompt) wins only because it improves."""
@@ -169,22 +199,24 @@ def test_fake_synthesizer_completes_a_retry_with_empty_history(ask_service, monk
     backend, `llm=\"fake\"`) rather than a scripted double, so this proves the actual offline code
     path — not a stand-in for it — survives being handed `message_history=[]` on its second call.
 
-    `verify` is monkeypatched to force exactly one `partial` verdict, because the fake synthesizer's
-    own draft (built verbatim from a page it just read) verifies cleanly on the first try against
-    every page in this fixture's corpus — there is no fixture page whose fake-drafted answer
-    naturally fails verification, so forcing the branch is the only way to exercise a REAL second
-    `FakeSynthesizer.run()` call without reshaping the shared corpus (which every other test in this
-    module-scoped fixture also depends on). `verify`'s own behavior is exhaustively covered
-    elsewhere (`tests/answer/test_verify.py`); this test asserts nothing about it beyond forcing the
-    branch once."""
+    `verify` is monkeypatched to force one suppression-shaped verdict (`failed`, two citation
+    problems — the shape that spends the retry under ADR 031's suppression-only policy), because
+    the fake synthesizer's own draft (built verbatim from a page it just read) verifies cleanly on
+    the first try against every page in this fixture's corpus — there is no fixture page whose
+    fake-drafted answer naturally fails verification, so forcing the branch is the only way to
+    exercise a REAL second `FakeSynthesizer.run()` call without reshaping the shared corpus (which
+    every other test in this module-scoped fixture also depends on). `verify`'s own behavior is
+    exhaustively covered elsewhere (`tests/answer/test_verify.py`); this test asserts nothing
+    about it beyond forcing the branch once."""
     real_verify = service_mod.verify
     calls = {"n": 0}
 
     def flaky_verify(*a, **kw):
         calls["n"] += 1
         if calls["n"] == 1:
-            return {"verdict": "partial", "unverified_figures": [],
-                    "citation_problems": ["forced by the test to exercise the retry branch"]}
+            return {"verdict": "failed", "unverified_figures": [],
+                    "citation_problems": ["forced by the test to exercise the retry branch",
+                                          "a second forced problem so the gate would suppress"]}
         return real_verify(*a, **kw)
 
     monkeypatch.setattr(service_mod, "verify", flaky_verify)
@@ -195,12 +227,19 @@ def test_fake_synthesizer_completes_a_retry_with_empty_history(ask_service, monk
     assert "verdict" in res and res["verdict"]["verdict"] in ("verified", "partial", "failed")
 
 
-def test_retry_that_makes_things_worse_does_not_win(ask_service, monkeypatch):
-    """The `_RANK` comparison ("the retry wins only if it improves") gets exercised elsewhere for a
-    TIE (`test_strict_gate_suppresses_when_retry_also_leaves_an_unverified_figure`: failed -> failed,
-    first draft's findings survive). This is the other half: a retry that makes things STRICTLY
-    WORSE (partial -> failed) must not overwrite a shippable first draft either — `_RANK[v2] <
-    _RANK[verdict]` is false in both directions, not only when they are equal."""
+def test_partial_first_attempt_ships_without_spending_the_retry(ask_service, monkeypatch):
+    """OLD BEHAVIOUR: ANY non-`verified` first draft spent the corrective retry — a second full
+    agent run — including this one, a single-citation-problem draft that ships labelled `partial`
+    with or without it, so the second run bought a label (measured on staging 2026-08 as the
+    dominant case: ~41 % of asks retrying, not one answer ever suppressed). ADR 031 confines the
+    retry to drafts the strict gate would SUPPRESS; this is the confinement's benign twin — the
+    shippable `partial` draft goes out on ONE run, unretried, still labelled honestly.
+
+    (It replaces the old strictly-worse-retry test at this spot: with the trigger reading the
+    gate's own rank, a retry only ever fires FROM the suppression tier, so there is no worse tier
+    left for a regressed retry to reach — the guard that test pinned became structural. The tie —
+    a retry that also suppresses — is still pinned by
+    `test_strict_gate_suppresses_when_retry_also_leaves_an_unverified_figure`.)"""
     class Scripted:
         def __init__(self):
             self.calls = 0
@@ -208,15 +247,8 @@ def test_retry_that_makes_things_worse_does_not_win(ask_service, monkeypatch):
         async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
             self.calls += 1
             deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
-            if self.calls == 1:
-                # no figures, zero citations -> exactly one problem -> partial
-                out = AnswerOutput(answer_markdown="Globex had a strong quarter.", citations=[])
-            else:
-                # two citation-only problems -> failed, strictly WORSE than the first draft's partial
-                out = AnswerOutput(
-                    answer_markdown="Globex had a strong quarter.",
-                    citations=[Citation(path="wiki/entities/nowhere-a.md", quote="ghost a"),
-                              Citation(path="wiki/entities/nowhere-b.md", quote="ghost b")])
+            # no figures (nothing to mistrace) but zero citations -> exactly one problem -> partial
+            out = AnswerOutput(answer_markdown="Globex had a strong quarter.", citations=[])
             usage = types.SimpleNamespace(input_tokens=0, output_tokens=0, cache_read_tokens=0, details={})
             return types.SimpleNamespace(output=out, usage=usage, all_messages=lambda: [])
 
@@ -224,8 +256,7 @@ def test_retry_that_makes_things_worse_does_not_win(ask_service, monkeypatch):
     monkeypatch.setattr(service_mod, "build_synthesizer", lambda settings: scripted)
     res = _ask(ask_service, "how did globex do?")
 
-    assert scripted.calls == 2 and res["retried"] is True
-    # the FIRST (partial) draft ships — the regressed (failed, would-be-suppressed) retry loses
+    assert scripted.calls == 1 and res["retried"] is False   # the retry was NOT spent
     assert res["refused"] is False and res["suppressed"] is False
     assert res["verdict"]["verdict"] == "partial"
     assert res["answer_markdown"] == "Globex had a strong quarter."
@@ -258,12 +289,13 @@ def test_strict_gate_suppresses_when_retry_also_leaves_an_unverified_figure(ask_
     assert "111" not in res["reason"]                       # … and NEVER in the shipped prose
 
 
-def test_partial_first_attempt_retries_and_improves_to_verified(ask_service, monkeypatch):
-    """The retry is not only for `failed` first attempts — a `partial`
-    verdict (a citation-only problem, no unverified figures) ALSO earns the single corrective
-    retry, and when the retry supplies a proper citation the improved result (`verified`) wins
-    over the first `partial` one (the service's `_RANK` comparison). Distinct from the two
-    `failed`-first-attempt retry tests above, which never exercise the partial branch."""
+def test_quote_figure_suppression_earns_the_retry_and_the_gates_findings_reach_it(ask_service, monkeypatch):
+    """The suppression-gated trigger reads the GATE's scan, not the raw verifier verdict — and so
+    does the corrective brief. A first draft whose body is figure-free but whose citation QUOTE
+    carries an invented figure is raw-`partial` (one citation problem; the raw verdict cannot see
+    quote figures) yet gate-suppressed — so the retry fires, and the fabricated figure reaches
+    the retry prompt BY NAME, which the old brief (built from the raw findings) never carried.
+    When the retry supplies a real quote, it wins on the gate's own rank and ships `verified`."""
     class Scripted:
         def __init__(self):
             self.calls = 0
@@ -272,13 +304,15 @@ def test_partial_first_attempt_retries_and_improves_to_verified(ask_service, mon
             self.calls += 1
             deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
             if self.calls == 1:
-                # no figures (nothing to mistrace) but zero citations -> exactly one problem -> partial
-                out = AnswerOutput(answer_markdown="Globex had a strong quarter.", citations=[])
+                out = AnswerOutput(
+                    answer_markdown="Globex performed well this quarter.",
+                    citations=[Citation(path="wiki/entities/globex/q1-report-final.md",
+                                        quote="secret revenue was 7777777")])   # not in the page
             else:
                 assert "DETERMINISTIC VERIFIER" in prompt
-                assert "citation" in prompt.lower()   # the citation-only finding reached the retry
+                assert "7777777" in prompt   # the GATE's finding — a quote figure — reached the retry
                 out = AnswerOutput(
-                    answer_markdown="Globex had a strong quarter.",
+                    answer_markdown="Globex performed well this quarter.",
                     citations=[Citation(path="wiki/entities/globex/q1-report-final.md",
                                         quote="Quarterly business review for Globex")])
             usage = types.SimpleNamespace(input_tokens=0, output_tokens=0, cache_read_tokens=0, details={})
@@ -291,6 +325,38 @@ def test_partial_first_attempt_retries_and_improves_to_verified(ask_service, mon
     assert res["refused"] is False and res["suppressed"] is False
     assert res["verdict"]["verdict"] == "verified"
     assert res["citations"] and res["citations"][0]["path"] == "wiki/entities/globex/q1-report-final.md"
+
+
+def test_ask_result_and_audit_carry_token_usage_counts(ask_service, monkeypatch):
+    """`ask` returns `usage` — token COUNTS, both runs summed when the retry fires — and
+    `audit_summary` copies them into the audit row's closed key set. Counts, not the SDK's whole
+    usage object: this feeds the one column whose contract is that it carries no transcript.
+    The scripted first draft carries an untraced figure so the retry (and the summing) runs."""
+    class Scripted:
+        def __init__(self):
+            self.calls = 0
+
+        async def run(self, prompt, *, deps=None, usage_limits=None, message_history=None):
+            self.calls += 1
+            deps.record(deps.service.page_text("wiki/entities/globex/q1-report-final.md", deps))
+            if self.calls == 1:
+                out = AnswerOutput(answer_markdown="Invented 999% growth.", citations=[])
+            else:
+                out = AnswerOutput(
+                    answer_markdown="Globex performed well this quarter.",
+                    citations=[Citation(path="wiki/entities/globex/q1-report-final.md",
+                                        quote="Quarterly business review for Globex")])
+            usage = types.SimpleNamespace(requests=2, input_tokens=100, output_tokens=10,
+                                          cache_read_tokens=40, details={})
+            return types.SimpleNamespace(output=out, usage=usage, all_messages=lambda: [])
+
+    scripted = Scripted()
+    monkeypatch.setattr(service_mod, "build_synthesizer", lambda settings: scripted)
+    res = _ask(ask_service, "how was globex?")
+    assert scripted.calls == 2 and res["retried"] is True
+    assert res["usage"] == {"requests": 4, "input_tokens": 200,
+                            "cache_read_tokens": 80, "output_tokens": 20}   # both runs, summed
+    assert service_mod.audit_summary(res)["usage"] == res["usage"]
 
 
 def test_strict_gate_ships_citation_only_problem_as_partial(ask_service, monkeypatch):
@@ -469,6 +535,7 @@ def test_budget_exceeded_on_first_run_refuses_honestly_without_spending_the_retr
     assert res["surfaced"] == ["Acme payroll summary"]
     assert res["reason"] == ('searched "total-compensation acme", surfaced Acme payroll summary — '
                              "the answer could not be completed within the tool budget.")
+    assert res["usage"] is None    # the run died mid-flight; there is no usage object to read
 
 
 def test_budget_exceeded_on_corrective_retry_keeps_the_first_runs_outcome(ask_service, monkeypatch):

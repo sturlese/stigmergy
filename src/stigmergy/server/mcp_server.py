@@ -295,7 +295,8 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
     async def ask(question: str) -> str:
         """Answer a question from the brain. An evidence-gathering agent writes a cited answer;
         a deterministic verifier then traces every figure to the evidence the tools returned this
-        run and every citation to its page (verbatim). Exactly one corrective retry — and any
+        run and every citation to its page (verbatim). At most one corrective retry, spent only
+        when the answer would otherwise be suppressed — and any
         remaining unverified figure suppresses the answer, so you get an honest refusal instead:
         no untraced number ever leaves the server. Scoped to this server's identity; refuses when
         the brain (as this identity sees it) does not contain the answer. The `verdict` object
@@ -321,6 +322,10 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             # one thing for `ask` regardless of which transport called it.
             result = await service.call_async("ask", {"question": question}, run,
                                               summarize=audit_summary)
+            # `usage` is operator telemetry: `audit_summary` (inside `call_async`, above) has
+            # already recorded the counts, and the tool's documented response shape does not grow
+            # a field for them — the wire contract stays exactly what the docstring promises.
+            result.pop("usage", None)
             return json.dumps(result, **_DUMP)
         except (RateLimitError, CapabilityUnavailableError) as ex:
             return json.dumps({"error": str(ex)}, **_DUMP)

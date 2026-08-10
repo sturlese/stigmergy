@@ -57,6 +57,51 @@ def _reverdict(figs: list[str], citation_problems: list[str]) -> dict:
     return {"verdict": label, "unverified_figures": figs, "citation_problems": citation_problems}
 
 
+def strict_gate_findings(out, verdict: dict, evidence: str) -> tuple[list, dict]:
+    """The strict gate's arithmetic, in ONE place for its two readers: `_shape`, which uses it to
+    decide what ships, and `ask`, which uses it to decide whether a corrective retry is worth a
+    second full agent run. Two readers with two private copies of this scan is how the retry
+    decision and the shipping decision drift apart — the quote scan below is exactly the term the
+    retry trigger was missing when it read the raw verdict alone.
+
+    Scans every human-readable channel that would ship (the citation quotes too — a figure
+    fabricated inside a quote must be caught), folds those figures into the verifier's own, and
+    re-verdicts over the full set."""
+    quote_figs = unverified_figures(" ".join(c.quote for c in out.citations), evidence)
+    figs = _dedup(verdict["unverified_figures"] + quote_figs)
+    return figs, _reverdict(figs, verdict["citation_problems"])
+
+
+_SUPPRESSES = 2   # `_ship_rank`'s refusal tier — the only tier the corrective retry is spent on
+
+
+def _ship_rank(figs: list, gated: dict) -> int:
+    """What the strict gate would DO with a draft, as an order: 0 ships clean (`verified`), 1
+    ships labeled `partial`, 2 (`_SUPPRESSES`) refuses — any untraced figure, or a `failed`
+    verdict. The retry trigger and the retry-wins comparison both read THIS rather than the raw
+    verifier verdicts, so they can never disagree with `_shape` about what would actually ship."""
+    if figs or gated["verdict"] == "failed":
+        return _SUPPRESSES
+    return _RANK[gated["verdict"]]
+
+
+def _usage_facts(u) -> dict:
+    """Token COUNTS only, defensively read: the audit column this feeds (`audit_summary`) carries
+    no transcript by contract, and counts are the one shape of usage fact that cannot smuggle
+    model-written text. `getattr` because the offline double's usage is a plain namespace and the
+    SDK's own object has grown fields before."""
+    return {"requests": int(getattr(u, "requests", 0) or 0),
+            "input_tokens": int(getattr(u, "input_tokens", 0) or 0),
+            "cache_read_tokens": int(getattr(u, "cache_read_tokens", 0) or 0),
+            "output_tokens": int(getattr(u, "output_tokens", 0) or 0)}
+
+
+def _add_usage(facts: dict, u) -> dict:
+    """The retry's spend folded into the first run's — spent whether or not the retry wins."""
+    more = _usage_facts(u)
+    return {k: facts[k] + more[k] for k in facts}
+
+
 # ── the refusal's shipped prose — composed from server-recorded facts, never the model ─────────
 # Cap at 3 named items, "and N more" past that — the same shape `report.needs_input()` already uses
 # for a long candidate list, not a second convention.
@@ -257,23 +302,39 @@ class AnswerService:
             # No `AnswerOutput` ever existed to verify — a genuine refusal, never the corrective
             # retry (a second full run would double the very budget spend the limit exists to
             # bound; the retry exists for verifier feedback on a drafted answer, and there is none).
-            return self._shape_budget_refusal(question, ctx)
+            shaped = self._shape_budget_refusal(question, ctx)
+            shaped["usage"] = None   # the run died mid-flight; there is no usage object to read
+            return shaped
         out = result.output
+        usage = _usage_facts(result.usage)
         verdict = verify(out, ctx.evidence_text(), self.brain.get_page, ctx.read_paths)
-        # The FIRST draft's verdict, kept whatever happens next — nothing else records it. `verdict`
-        # is rebound the moment the retry improves on it, and what ships is re-derived a third time
-        # by the strict gate, so production could see THAT a question paid a second full agent run
-        # (`retried`) and never what it paid for. That distinction is the entire economics of the
-        # retry, because the two cases are worth opposite amounts: a first draft carrying an
-        # untraced FIGURE would be SUPPRESSED without the retry, so the retry buys the answer
-        # itself; one carrying a single citation problem ships as `partial` either way, so the
-        # retry buys a label and an accurate quote. Measured on staging 2026-08: ~41 % of asks
-        # retry, each costing ~6.8 s against a comparable answered ask — and not one ask has ever
-        # been suppressed, which is a hint about which case dominates and no more than a hint.
+        # The FIRST draft's verdict, kept whatever happens next — nothing else records it.
+        # `verdict` is rebound the moment the retry improves on it, and what ships is re-derived
+        # by the strict gate, so production could otherwise see THAT a question paid a second full
+        # agent run (`retried`) and never what it paid for.
         first_verdict = verdict
 
+        # The corrective retry runs ONLY when the strict gate would suppress the draft as it
+        # stands — an untraced figure (the citation-quote scan included), or a `failed` verdict.
+        # That is the one case where a second full agent run buys the answer itself. It used to
+        # run on ANY non-`verified` verdict, and the measurement that retired that policy
+        # (staging 2026-08: ~41 % of asks retried, ~6.8 s each, and not one answer had ever been
+        # suppressed) showed the dominant case was a single citation problem — which ships as
+        # `partial` with or without the retry, so the second run bought a label and a prettier
+        # quote at the price of a full run. That case now ships as what it is (`partial`,
+        # `retried: false`). Reading the GATE's scan here, not the raw verdict, also means the
+        # trigger and the gate cannot drift apart about what "would suppress" means — and the
+        # corrective brief below now carries the gate's findings, so a figure fabricated inside a
+        # citation quote reaches the retry prompt BY NAME, where the raw verdict's findings left
+        # it out. ADR 031 records the decision; `first_verdict` still shows what a retry was for.
         retried = False
-        if verdict["verdict"] != "verified" and not out.refused:
+        figs, gated = ((), verdict) if out.refused else \
+            strict_gate_findings(out, verdict, ctx.evidence_text())
+        # `not out.refused` is STRUCTURAL, not redundant: a refusal is an answer, never a defect
+        # to repair — and today it would skip the retry anyway only because `verify()` is
+        # vacuously `verified` for refusals, which is a data property of the verifier, not a
+        # guarantee of this policy. The guard holds even if a future verifier learns to fail one.
+        if not out.refused and _ship_rank(figs, gated) == _SUPPRESSES:
             retried = True
             try:
                 # The retry carries the first run's MESSAGE HISTORY, so the model redrafts from
@@ -281,23 +342,39 @@ class AnswerService:
                 # corrective prompt held only the question, the previous draft and the verifier's
                 # findings — the retry re-searched and re-read the very pages it had just read, and
                 # a corrective pass cost about as much as a first one (measured on staging: 7.1 s
-                # median when the first draft verified, 17.3 s when it did not, on ~47% of asks).
+                # median when the first draft verified, 17.3 s when it did not).
                 # `deps=ctx` stays the SAME object on purpose: evidence and surfaced paths
                 # accumulate across both runs, so the verifier judges the retry against everything
                 # the question gathered, not only what the second run happened to touch.
-                result2 = await agent.run(feedback(question, out, verdict), deps=ctx,
+                # `gated`, not the raw verdict: the findings the retry must repair are the GATE's —
+                # a quote-fabricated figure is invisible to the raw one.
+                result2 = await agent.run(feedback(question, out, gated), deps=ctx,
                                           usage_limits=limits,
                                           message_history=result.all_messages())
             except UsageLimitExceeded:
-                pass   # keep the first run's shipped outcome — same as "the retry did not improve"
+                # Keep the first run's shipped outcome — same as "the retry did not improve".
+                # The killed retry's real spend is unrecoverable (the SDK's exception carries no
+                # usage object), so `usage` honestly undercounts exactly this one case.
+                pass
             else:
+                usage = _add_usage(usage, result2.usage)   # spent whether or not the retry wins
                 out2 = result2.output
                 v2 = verify(out2, ctx.evidence_text(), self.brain.get_page, ctx.read_paths)
-                if _RANK[v2["verdict"]] < _RANK[verdict["verdict"]]:  # the retry wins only if it improves
+                figs2, gated2 = ((), v2) if out2.refused else \
+                    strict_gate_findings(out2, v2, ctx.evidence_text())
+                # The retry wins only if it improves WHAT WOULD SHIP — the gate's rank, never the
+                # raw verdicts': the trigger, this comparison and `_shape` all read the same scan,
+                # so no draft can win here and then lose at the gate. (The kept FIRST draft is
+                # then re-gated in `_shape` against the evidence BOTH runs accumulated; more
+                # evidence can only trace more figures, so that skew loosens — a draft may ship
+                # despite losing here, never suppress despite winning.)
+                if _ship_rank(figs2, gated2) < _ship_rank(figs, gated):
                     out, verdict = out2, v2
 
-        return self._shape(question, out, verdict, retried, ctx.evidence_text(), ctx,
-                           first_verdict=first_verdict)
+        shaped = self._shape(question, out, verdict, retried, ctx.evidence_text(), ctx,
+                             first_verdict=first_verdict)
+        shaped["usage"] = usage
+        return shaped
 
     # ── response shaping + the strict gate ──────────────────────────────────
     def _shape(self, question: str, out, verdict: dict, retried: bool, evidence: str,
@@ -306,11 +383,9 @@ class AnswerService:
             return self._shape_refusal(question, out, verdict, retried, ctx,
                                        first_verdict=first_verdict)
 
-        # Every human-readable channel that would ship is scanned, not just answer_markdown: a
-        # figure fabricated inside a citation quote must be caught too.
-        quote_figs = unverified_figures(" ".join(c.quote for c in out.citations), evidence)
-        figs = _dedup(verdict["unverified_figures"] + quote_figs)
-        v = _reverdict(figs, verdict["citation_problems"])
+        # Every human-readable channel that would ship is scanned, not just answer_markdown —
+        # `strict_gate_findings` is the ONE copy of that scan, shared with `ask`'s retry trigger.
+        figs, v = strict_gate_findings(out, verdict, evidence)
         # suppress on ANY untraced figure, or on a `failed` verdict (2+ problems — a citation-only
         # `failed` refuses too; only exactly-one citation-only problem ships, labeled `partial`).
         if figs or v["verdict"] == "failed":
@@ -491,12 +566,19 @@ def audit_summary(result: dict) -> dict:
 
     `first_verdict` is the same rendering of the FIRST draft's verdict, and it is the only column
     that can say what a retry was FOR. `verdict` alone cannot: it is the shipped one, so a retried
-    ask that ended clean and one that never needed a retry are indistinguishable in it. The two
-    first-draft cases are worth opposite amounts — an untraced figure means the strict gate would
-    have suppressed the answer entirely (the retry bought the answer), while a single citation
-    problem ships as `partial` regardless (the retry bought a label and an accurate quote) — and at
-    ~41 % of asks and ~6.8 s each, which one dominates decides whether the retry path deserves more
-    work or less. `None` when no draft existed (the budget refusal).
+    ask that ended clean and one that never needed a retry are indistinguishable in it. The 2026-08
+    staging measurement of exactly this column (~41 % of asks retrying, almost always for a single
+    citation problem that ships as `partial` either way) is what retired the retry-on-anything
+    policy: the retry now runs only when the strict gate would suppress the draft (ADR 031), so
+    retries concentrate where `first_verdict` shows figures or a `failed` — this column is how
+    that policy is watched. (The residual: a figure fabricated inside a citation QUOTE suppresses
+    and retries, yet the raw first verdict cannot show it — the gate's scan is wider than the
+    verifier's.) `None` when no draft existed (the budget refusal).
+
+    `usage` is the ask's token counts — requests / input / cache-read / output, both runs summed
+    (`None` for the budget refusal, whose run died mid-flight). Counts are the one shape of usage
+    fact the no-transcript contract admits, and they are what prices an ask: `duration_ms` was the
+    only cost signal this table had, and seconds do not convert to dollars.
     """
     first = result["first_verdict"]
     return {
@@ -506,4 +588,5 @@ def audit_summary(result: dict) -> dict:
         "first_verdict": _verdict_shape(first) if first else None,
         "citations": len(result.get("citations") or []),
         "retried": result["retried"],
+        "usage": result.get("usage"),
     }

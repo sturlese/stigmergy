@@ -30,6 +30,10 @@ def test_ask_is_served_over_stdio_with_a_verdict(indexed, monkeypatch):
     assert res["verdict"]["verdict"] == "verified"
     assert set(res["verdict"]) == {"verdict", "unverified_figures", "citation_problems"}
     assert res["built_at"]                       # index metadata rides along, as in search_brain
+    # Operator telemetry never reaches the wire: `audit_summary` records the token counts inside
+    # `call_async`, and the ask closure pops them before serializing (`mcp_server.py`) — this
+    # asserts the pop a green suite would otherwise never miss.
+    assert "usage" not in res
 
 
 def test_ask_refuses_the_unanswerable_over_stdio(indexed, monkeypatch):

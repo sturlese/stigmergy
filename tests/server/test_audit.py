@@ -325,8 +325,8 @@ def test_truncate_for_audit_depth_marker_keeps_jsonb_serialization_bounded(clean
 def test_ask_audit_row_carries_the_outcome_summary_never_the_question_or_answer(clean_audit_log):
     """The negative half, asserted end to end: write a row from an `ask` call whose question is a
     DISTINCTIVE string, then grep the stored `result` column for it and require zero matches —
-    `result` may carry `{refused, suppressed, verdict, citations, retried}`, never the question
-    text and never the answer's own prose.
+    `result` may carry `{refused, suppressed, verdict, first_verdict, citations, retried, usage}`,
+    never the question text and never the answer's own prose.
 
     Reuses the module's own `indexed`/`fx` fixture (module-scoped, shared with every other test in
     this file) rather than rebuilding the index against a different corpus — `index.build.rebuild`
@@ -362,9 +362,13 @@ def test_ask_audit_row_carries_the_outcome_summary_never_the_question_or_answer(
     # A CLOSED key set, deliberately: this column's whole contract is that it carries an outcome
     # shape and nothing else, so a field added to `ask`'s response reaches the log only by being
     # named here on purpose. `first_verdict` was added that way — the first draft's verdict is the
-    # only record of what a corrective retry was FOR.
+    # only record of what a corrective retry was FOR — and so was `usage`: token COUNTS (the one
+    # usage shape that cannot smuggle model text), because this table had duration and no dollars.
     assert set(stored_result) == {"refused", "suppressed", "verdict", "first_verdict",
-                                  "citations", "retried"}
+                                  "citations", "retried", "usage"}
+    assert set(stored_result["usage"]) == {"requests", "input_tokens", "cache_read_tokens",
+                                           "output_tokens"}
+    assert all(isinstance(v, int) for v in stored_result["usage"].values())
     # …and it is subject to the same reduction as `verdict`: COUNTS, never the problem strings,
     # which embed up to 80 characters of the drafted citation quote.
     assert all(isinstance(v, int) for k, v in stored_result["first_verdict"].items()
