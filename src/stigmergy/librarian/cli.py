@@ -56,6 +56,7 @@ from stigmergy.capture.cli import (  # imported, never retyped — see `_report_
     format_ms,
 )
 from stigmergy.index import store
+from stigmergy.librarian import agent as agent_module
 from stigmergy.librarian import config, report, worker
 from stigmergy.librarian.errors import LibrarianConfigError, LibrarianError
 
@@ -302,9 +303,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"the knowledge repo to file into (default: ${config.REPO_ENV} or "
                          f"{config.REPO_DEFAULT})")
     ap.add_argument("--branch", default=None, help="branch to commit to (default: main)")
-    ap.add_argument("--backend", default=None, choices=("sdk", "double"),
+    # `choices` is the BACKENDS tuple itself, never a retyped list: a backend argparse rejects at
+    # parse time gets "invalid choice", where `startup_checks` would have explained what the value
+    # actually does — which is the whole point of the `pydantic` refusal (it is a real backend, and
+    # a worker may not run it; that sentence has to reach the operator).
+    ap.add_argument("--backend", default=None, choices=agent_module.BACKENDS,
                     help="'sdk' runs the real agent (needs a key); 'double' runs the offline "
-                         "double (default: double)")
+                         "double (default: double); 'pydantic' serves the meeting flow only and is "
+                         "refused for a worker (see ADR 032)")
     sub = ap.add_subparsers(dest="command", required=True)
 
     p_once = sub.add_parser(

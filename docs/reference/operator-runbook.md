@@ -1008,7 +1008,13 @@ registry are all read at that commit. Push, or `git pull --rebase` if your `main
 its job — each refusal names its fix: a missing Claude credential (run through `make`, which
 loads `.env`; an interactive Claude Code login also counts and is named in the log), an
 unpushed skill or linter, a half-configured GitHub App (all three variables or none), missing
-`gitleaks` (`brew install gitleaks`), or a lease shorter than one item's worst case.
+`gitleaks` (`brew install gitleaks`), a lease shorter than one item's worst case, or
+`STIGMERGY_LIBRARIAN_BACKEND=pydantic` — which is a real backend and not a worker's: it serves the
+meeting flow only in this milestone, and a worker's queue carries ordinary captures too, so the
+refusal names the two backends that serve every flow and the meeting-only measurement rig that
+does use it (ADR 032). A model id spelled for the wrong backend is refused the same way, in both
+directions: a bare name (`claude-sonnet-5`) is the `sdk` backend's, a provider-prefixed one
+(`openai:gpt-5.6-terra`) is the `pydantic` backend's, and each is refused by the other.
 
 **The Postgres suites suddenly skip, or refuse with `WrongDatabase`.** See "The two databases"
 under Wipe & re-seed — recreate the composition (`make db-down && make db-up`, destroys the

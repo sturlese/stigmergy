@@ -474,6 +474,85 @@ def test_librarian_never_imports_the_agent_sdk_at_module_level(path):
         "backend):\n  " + "\n  ".join(offenders))
 
 
+def _module_level_pydantic_ai(path: pathlib.Path) -> list[str]:
+    """Module-scope `pydantic_ai` imports in one file, as `name:line -> module` strings.
+
+    `pydantic` on its own is NOT one of them and must never be counted: `pydantic_backend.py`
+    imports `BaseModel`/`Field` at module scope on purpose (its output schema is plain data, and a
+    test that builds one by hand must not have to reach through a backend to do it). The rule is
+    about the agent FRAMEWORK, so the match is the exact module or a `pydantic_ai.` prefix —
+    never a `startswith("pydantic")` that would swallow the schema library and the `pydantic_core`
+    it sits on.
+    """
+    return [f"{path.name}:{line} -> {mod}"
+            for mod, line in _module_level_all(path)
+            if mod == "pydantic_ai" or mod.startswith("pydantic_ai.")]
+
+
+@pytest.mark.parametrize("path", LIBRARIAN_SOURCES, ids=lambda p: p.name)
+def test_librarian_never_imports_pydantic_ai_at_module_level(path):
+    """The SAME keyless rule as the one above, for the second agent framework this package now
+    drives. `pydantic_ai` is imported INSIDE `PydanticMeetingAgent._run_meeting`, so a run on the
+    double or the SDK loads neither framework and the import graph does not claim the librarian
+    depends on this one unconditionally.
+
+    It is a rule about the framework, not about one file: the posture existed only for
+    `claude_agent_sdk` while a third backend was being added, which is precisely when a
+    module-scope import is easiest to add and hardest to notice — `answer` has carried the same
+    rule for its own pydantic_ai edge since ADR 007, and the librarian had no equivalent.
+    """
+    assert not _module_level_pydantic_ai(path), (
+        "stigmergy.librarian imports pydantic_ai at module level (move it inside the 'pydantic' "
+        "backend's own method):\n  " + "\n  ".join(_module_level_pydantic_ai(path)))
+
+
+def test_the_pydantic_ai_rule_bites_and_leaves_plain_pydantic_alone(tmp_path):
+    """The sabotage twin, because a rule nothing has tried to break is not a rule anybody knows
+    about — and its specificity half, which is the one that could quietly break a real file.
+
+    A green parametrized ban proves nothing about whether the predicate can SEE an offender: a
+    typo'd module name, a `startswith` against the wrong string, or a walk over the wrong node set
+    all pass identically. So a real file carrying a hoisted `from pydantic_ai import Agent` is
+    parsed by the real predicate here, and the same file's plain-`pydantic` and lazily-imported
+    lines must NOT be flagged — a ban that also refused `from pydantic import BaseModel` would
+    bounce `pydantic_backend.py`'s own output schema, which is deliberately module-scope.
+
+    Written to a scratch file rather than mutating a source under `src/`: the suite must not
+    depend on an edit somebody could forget to revert.
+    """
+    offender = tmp_path / "hoisted_backend.py"
+    offender.write_text(
+        "import os\n"
+        "from pydantic import BaseModel, Field\n"      # legal, and must stay legal
+        "import pydantic_core\n"                       # ...and so must its neighbour
+        "from pydantic_ai import Agent\n"              # the hoist this rule exists to catch
+        "import pydantic_ai.usage\n"                   # ...in its second spelling
+        "\n"
+        "def run():\n"
+        "    from pydantic_ai import Agent as Lazy\n"   # the legal, deferred edge
+        "    return Agent, Lazy, BaseModel, Field, os, pydantic_core\n",
+        encoding="utf-8")
+
+    flagged = _module_level_pydantic_ai(offender)
+
+    assert [entry.rsplit(" -> ", 1)[1] for entry in flagged] == ["pydantic_ai", "pydantic_ai.usage"]
+    assert all(":4 ->" in entry or ":5 ->" in entry for entry in flagged), (
+        f"the hoisted imports are on lines 4 and 5; the predicate reported {flagged}")
+
+
+def test_the_librarian_really_does_drive_pydantic_ai_somewhere(tmp_path):
+    """The pruning half: a ban over a framework nothing imports at all is a rule that cannot fail,
+    and it would keep reading as coverage after the backend it guards was deleted. This asserts the
+    lazy edge EXISTS — inside a function body, where the rule above allows it.
+    """
+    lazy = {f"{path.name}:{line}" for path in LIBRARIAN_SOURCES
+            for mod, line in _all_module_imports(path)
+            if (mod == "pydantic_ai" or mod.startswith("pydantic_ai."))
+            and f"{path.name}:{line}" not in {e.split(" -> ")[0]
+                                              for e in _module_level_pydantic_ai(path)}}
+    assert lazy, ("no stigmergy.librarian module imports pydantic_ai at all — the ban above has "
+                  "nothing left to guard and must be retired with the backend it was written for")
+
 
 # The ONE declared exception to the rule below. `webhook.py` reaches `librarian.githubapp` (the
 # App-credential primitives: JWT signing, installation-token minting, `configured()`) and

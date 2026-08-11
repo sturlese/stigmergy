@@ -4,6 +4,11 @@ Small, dependency-free primitives every other package needs and none of them sho
 
 - `llm` · `result` — the PydanticAI dispatch (`build_processor`) + the offline result envelope.
   Consumed by `views.synthesis`, `gardener.sweep`.
+- `usage_repair` — a shim for one pinned-pydantic-ai defect: token counts silently extracted as
+  ZERO for any OpenAI model carrying reasoning details. Installed at agent-construction time by
+  `llm.build_model`, `answer.synthesize.build_synthesizer` and
+  `librarian.pydantic_backend`, because all four agents in this process share the one classmethod
+  it repairs. Defers to the framework and retires itself the day the framework is fixed.
 - `settings` — `resolve_backend()`, the CLEAN_LLM fake/real switch. Consumed by `llm`.
 - `page` — the page-as-chunk cap + the frontmatter scalar emitter. Consumed by
   `librarian.processing`, `views.render`.

@@ -704,7 +704,7 @@ def test_the_row_records_what_the_phases_actually_ended_as(entries):
 # break BOTH the code and the sentence somebody reads instead of the code — the doc-claim posture
 # this file already applies to the facet table. `facets`, `counts` and `agent_passes` are described
 # in prose there rather than backticked, so they are pinned by the equality test below instead.
-DOCUMENTED_ROW_FIELDS = ("backend", "model", "statuses", "total_cost_usd", "wall_s")
+DOCUMENTED_ROW_FIELDS = ("backend", "model", "kinds", "statuses", "total_cost_usd", "wall_s")
 
 
 def test_the_history_row_is_exactly_the_fields_the_series_promises():
@@ -729,6 +729,11 @@ def test_the_history_row_is_exactly_the_fields_the_series_promises():
     assert metrics == {
         "backend": "sdk",
         "model": "claude-sonnet-5",
+        # Which capture kinds the run measured (ADR 032's `--kinds`). Empty here because this
+        # `aggregate` call names none, exactly as every pre-`--kinds` caller does — the key is
+        # always present so a subset row can never be read as a full-set one, and this equality is
+        # what made adding it a decision rather than a quiet growth.
+        "kinds": [],
         "facets": {"status": 1.0, "reason": 1.0},
         # F04's block names `reason` and not `status`, so `status` has a denominator of one here —
         # the per-facet rule the row inherits unchanged from `aggregate`.

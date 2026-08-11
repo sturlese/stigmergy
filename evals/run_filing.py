@@ -49,6 +49,18 @@ a literal-word expectation cost the QA golden; this set does not repeat it.
   python evals/run_filing.py --backend sdk --model claude-sonnet-5 \
       --report evals/out/filing-sonnet-5.json
 
+  # one KIND of capture only — the meeting flow's own two, on the pydantic-ai backend (ADR 032)
+  python evals/run_filing.py --backend pydantic --kinds meeting \
+      --model openai:gpt-5.6-terra --report evals/out/filing-terra-meetings.json
+
+**A subset is a different measurement, and says so.** `--kinds` scores only the captures of the
+named kinds, and everything downstream is recomputed from that subset rather than from the shipped
+set: `_check_set` derives the per-facet denominators instead of holding them against
+`EXPECTED_DENOMINATORS` (which pins the WHOLE set and only the whole set), and the history row
+records `kinds` so a subset score can never be read later as a full-set one. `--backend pydantic`
+REQUIRES a meeting-only subset, because that backend serves the meeting flow only in this milestone
+and would refuse every ordinary capture — a table of refusals is not a measurement.
+
 Both need the local Postgres (`make db-up`) and `gitleaks` on PATH — the secrets gate shells out
 to the real scanner, and a filing eval that skipped it would be measuring a shorter pipeline than
 the one that runs in production. Both are asked for BEFORE the first capture is claimed: `_run`
@@ -308,12 +320,19 @@ def score_phase(expect: dict, observed: dict) -> dict:
     return out
 
 
-def aggregate(phases: list, *, backend: str, model: str, wall_s: float) -> dict:
+def aggregate(phases: list, *, backend: str, model: str, wall_s: float,
+              kinds: list | None = None) -> dict:
     """Per-facet hits and denominators over every scored phase, plus the cost axes.
 
     `phases` is `[{id, phase, expect, observed, facets}, ...]` — one entry per scored moment, so a
     parking capture contributes TWO (the park, and the re-file after the reply) and its facets are
     counted where they actually happened.
+
+    `kinds` is which capture kinds this run actually measured. It rides in the report — and from
+    there into the history row — because a per-facet score is only comparable against another score
+    over the SAME set: a `--kinds meeting` run scores three phases where the shipped set scores
+    twelve, and two rows that look alike and measured different sets is the one failure a series
+    read years later cannot recover from.
     """
     facets: dict = {}
     for entry in phases:
@@ -335,6 +354,7 @@ def aggregate(phases: list, *, backend: str, model: str, wall_s: float) -> dict:
     return {
         "backend": backend,
         "model": model,
+        "kinds": sorted(kinds or []),
         "facets": facets,
         "total_cost_usd": round(sum(costs), 6),
         "agent_passes": sum(attempts),
@@ -353,7 +373,12 @@ def render(report: dict) -> str:
     # setting it was (the double appends no row at all); only the human-facing line changes.
     identity = (f"backend `{report['backend']}` (no model)" if report["backend"] == "double" else
                 f"backend `{report['backend']}` · model `{report['model']}`")
-    lines = [f"# golden filing — {identity}", ""]
+    # Which kinds were measured, IN THE CAPTION, for the same reason the history row carries them:
+    # this table is the thing somebody screenshots, and a per-facet score over three phases must
+    # never be quotable as the shipped set's.
+    kinds = report.get("kinds") or []
+    measured = f" · kinds `{', '.join(kinds)}`" if kinds else ""
+    lines = [f"# golden filing — {identity}{measured}", ""]
     width = max((len(name) for name in report["facets"]), default=6)
     for name in FACETS:
         row = report["facets"].get(name)
@@ -398,6 +423,10 @@ def _history_metrics(report: dict, phases: list, provenance: dict) -> dict:
     standard library.
     """
     return {"backend": report["backend"], "model": report["model"],
+            # Which capture kinds this row measured. Present on every row from now on, so an older
+            # row without it is visibly older rather than ambiguously a subset — and so a
+            # `--kinds meeting` score can never be read as the shipped set's.
+            "kinds": report.get("kinds") or [],
             "facets": {name: row["score"] for name, row in report["facets"].items()},
             "counts": {name: {"hits": row["hits"], "of": row["of"]}
                        for name, row in report["facets"].items()},
@@ -514,24 +543,113 @@ class CountingAgent:
         return self.inner.run_meeting(**kwargs)
 
 
-def main() -> int:
+# The backend that serves the MEETING flow only (ADR 032). Named here rather than imported so
+# `--help` costs nothing but the standard library, like everything else at this module's scope;
+# `_require_measurable_subset` below resolves the KIND through `capture.schema`, which is the value
+# that would actually be expensive to get wrong.
+MEETING_ONLY_BACKEND = "pydantic"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The command line, as a value — `librarian/cli.build_parser`'s own shape, and for its reason:
+    a parser that can only be reached by running `main()` can only be asserted by driving a whole
+    measurement, so the flags an operator is promised (by a refusal, by a doc, by this file's own
+    docstring) had no seam anybody could check them through."""
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--repo", default=str(FIXTURE / "repo"),
                     help="the frozen mini knowledge repo to file into (default: evals/filing/repo)")
     ap.add_argument("--manifest", default=str(FIXTURE / "captures" / "manifest.json"))
     ap.add_argument("--expectations", default=str(FIXTURE / "expected" / "expectations.json"))
-    ap.add_argument("--backend", choices=["sdk", "double"], default="sdk",
+    ap.add_argument("--backend", choices=["sdk", "double", MEETING_ONLY_BACKEND], default="sdk",
                     help="the agent backend (default: sdk — the real measurement)")
     ap.add_argument("--model", default=None,
-                    help="the librarian model (default: librarian Settings' own default)")
+                    help="the librarian model (default: librarian Settings' own default). The "
+                         f"{MEETING_ONLY_BACKEND!r} backend needs a provider-prefixed id, e.g. "
+                         "openai:gpt-5.6-terra")
+    ap.add_argument("--kinds", default="",
+                    help="comma-separated capture kinds to measure (default: all of them). A "
+                         "subset recomputes its own denominators and records the kinds in the "
+                         "history row, so its score is never mistaken for the whole set's")
     ap.add_argument("--report", default=None, help="write the full JSON report here")
-    args = ap.parse_args()
+    return ap
+
+
+def main() -> int:
+    args = build_parser().parse_args()
 
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     expectations = json.loads(Path(args.expectations).read_text(encoding="utf-8"))
-    _check_set(manifest, expectations)
-    return _run(args, manifest, expectations)
+    selected = _select_kinds(manifest, args.kinds)
+    meeting_only = _require_measurable_subset(args.backend, selected)
+    # **A `--kinds` that names every kind the set carries is the WHOLE set**, and it still owes the
+    # pinned denominators. Reading the flag's presence instead of what it selected would let
+    # `--kinds meeting,raw` skip the drift check on the full golden set — the one check that makes
+    # two full-set scores comparable — by spelling out what it was already going to run.
+    whole = selected is None or set(selected) == set(_manifest_kinds(manifest))
+    if selected is not None:
+        manifest, expectations = _subset(manifest, expectations, selected)
+    _check_set(manifest, expectations, whole_set=whole)
+    return _run(args, manifest, expectations, kinds=_manifest_kinds(manifest),
+                meeting_only=meeting_only)
+
+
+def _manifest_kinds(manifest: dict) -> list[str]:
+    """Every capture kind the manifest carries, sorted — what a run over it MEASURES."""
+    return sorted({str(capture.get("kind", "")) for capture in manifest["captures"]})
+
+
+def _select_kinds(manifest: dict, raw: str) -> list[str] | None:
+    """`--kinds`, resolved against the set on disk. `None` means the whole set.
+
+    An unknown kind is refused by name rather than silently scoring nothing: a typo that produced
+    an empty run would print a table of zero denominators, which reads exactly like a backend that
+    files nothing.
+    """
+    if not (raw or "").strip():
+        return None
+    wanted = sorted({kind.strip() for kind in raw.split(",") if kind.strip()})
+    available = _manifest_kinds(manifest)
+    unknown = [kind for kind in wanted if kind not in available]
+    if unknown:
+        sys.exit(f"--kinds names {unknown}, which the golden set does not contain. It carries: "
+                 f"{available}")
+    return wanted
+
+
+def _require_measurable_subset(backend: str, kinds: list | None) -> bool:
+    """Refuse a backend/subset pairing that could not measure anything — and answer whether the
+    run is meeting-only, which is what the librarian's own pre-flight has to be told.
+
+    The `pydantic` backend serves the meeting flow only in this milestone, so a run that also
+    submits ordinary captures scores a column of refusals and calls it a backend result. Refused
+    here, before the queue is touched, with the flag that fixes it.
+    """
+    from stigmergy.capture import schema
+
+    if backend != MEETING_ONLY_BACKEND:
+        return False
+    if kinds != [schema.MEETING]:
+        sys.exit(f"--backend {MEETING_ONLY_BACKEND} serves the {schema.MEETING!r} flow only in "
+                 f"this milestone (ADR 032), so it must be given that subset and nothing else: "
+                 f"add --kinds {schema.MEETING}. An ordinary capture would be refused by the "
+                 f"backend and scored as a filing failure, which measures nothing about it.")
+    return True
+
+
+def _subset(manifest: dict, expectations: dict, kinds: list) -> tuple:
+    """The manifest and the expectations narrowed to `kinds`, keeping every other key of both.
+
+    The expectations are narrowed by the manifest's own ids rather than by a kind of their own —
+    the yardstick file records no kind, and inventing one there would be a second place for the two
+    halves to disagree about what a capture is (`_check_set`'s first refusal exists because they
+    can).
+    """
+    captures = [capture for capture in manifest["captures"] if capture.get("kind") in kinds]
+    ids = {capture["id"] for capture in captures}
+    return ({**manifest, "captures": captures},
+            {**expectations, "expectations": [entry for entry in expectations["expectations"]
+                                              if entry["id"] in ids]})
 
 
 def _expect_blocks(entry: dict) -> list:
@@ -549,7 +667,7 @@ def _denominators(expectations: dict) -> dict:
     return dict(counts)
 
 
-def _check_set(manifest: dict, expectations: dict) -> None:
+def _check_set(manifest: dict, expectations: dict, *, whole_set: bool = True) -> None:
     """Four refusals, all BEFORE a single model call is spent.
 
     A golden set that has drifted does not fail; it silently scores a smaller or a different set
@@ -567,6 +685,15 @@ def _check_set(manifest: dict, expectations: dict) -> None:
        and stops, or names an `after_reply` phase the runner will never reach.
     4. **The denominators are the pinned ones** (`EXPECTED_DENOMINATORS`), which is what makes the
        three checks above add up to the set this instrument's series was calibrated on.
+
+    **`whole_set=False` is a PROPER subset, and only the FOURTH check changes.** The pin describes
+    the shipped set and nothing else, so holding a proper subset against it would fail every subset
+    by construction — but a `--kinds` that names every kind the set carries is not a subset at all
+    and still owes the pin (`main` decides which it is from what was SELECTED, never from whether
+    the flag was typed). What a proper subset owes instead is that it scores SOMETHING — a filter
+    whose captures name no facet at all produces a table of empty denominators, which reads like a
+    backend that files nothing. The first three checks are properties of a set of any size and
+    still run.
     """
     captures = collections.Counter(c["id"] for c in manifest["captures"])
     expected = collections.Counter(e["id"] for e in expectations["expectations"])
@@ -593,6 +720,11 @@ def _check_set(manifest: dict, expectations: dict) -> None:
                  f"way round — an ask-back case is only measured when both are present: {half}")
 
     denominators = _denominators(expectations)
+    if not whole_set:
+        if not denominators:
+            sys.exit("this subset scores no facet at all — every capture in it names none, so the "
+                     "run would print a table of empty denominators rather than measure anything")
+        return
     if denominators != EXPECTED_DENOMINATORS:
         names = sorted(set(denominators) | set(EXPECTED_DENOMINATORS))
         diff = [f"{name}: pinned {EXPECTED_DENOMINATORS.get(name, 0)}, "
@@ -604,7 +736,15 @@ def _check_set(manifest: dict, expectations: dict) -> None:
                  "EXPECTED_DENOMINATORS in the same commit, on purpose:\n  " + "\n  ".join(diff))
 
 
-def _run(args, manifest: dict, expectations: dict) -> int:
+def _run(args, manifest: dict, expectations: dict, *, kinds: list | None = None,
+         meeting_only: bool = False) -> int:
+    """One measurement, end to end.
+
+    `kinds` and `meeting_only` are `main`'s to pass, and only `main`'s: it is where the subset was
+    resolved and refused, so it is the only caller that can honestly tell the librarian's own
+    pre-flight "this rig hands the agent meeting rows and nothing else". Both default to the
+    unfiltered, every-flow run a direct caller means.
+    """
     # Deferred on purpose — see the pure-scoring banner above. Nothing heavier than the standard
     # library is imported until a run actually happens, so the scorer stays importable keylessly.
     import pytest
@@ -679,7 +819,11 @@ def _run(args, manifest: dict, expectations: dict) -> int:
             # both skills are committed at `base`, and `_check_push_identity` returns early because
             # this run's origin is a local bare path rather than github.com.
             try:
-                worker.startup_checks(settings)
+                # `meeting_only` is what lets the pre-flight run at all for the meeting-only
+                # backend: it refuses that backend for a WORKER (whose queue carries every kind)
+                # and validates the rest of its configuration — the provider-prefixed model, a
+                # configured price, the provider's key — for this rig.
+                worker.startup_checks(settings, meeting_only=meeting_only)
             except LibrarianConfigError as ex:
                 sys.exit(f"the filing golden cannot run against this configuration: {ex}")
             counting = CountingAgent(build_agent(settings))
@@ -699,7 +843,7 @@ def _run(args, manifest: dict, expectations: dict) -> int:
                 print("", file=sys.stderr)
 
     report = aggregate(phases, backend=args.backend, model=model,
-                       wall_s=time.perf_counter() - started)
+                       wall_s=time.perf_counter() - started, kinds=kinds)
     print(render(report))
     if args.report:
         Path(args.report).parent.mkdir(parents=True, exist_ok=True)

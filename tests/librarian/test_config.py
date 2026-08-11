@@ -60,6 +60,45 @@ def test_backend_is_lowercased_regardless_of_source(monkeypatch):
     assert settings.backend == "double"
 
 
+@pytest.mark.parametrize("raw", ["openai:gpt-5.6-terra ", " openai:gpt-5.6-terra",
+                                 "openai:gpt-5.6-terra\n", "\topenai:gpt-5.6-terra\t"])
+def test_the_model_is_stripped_at_the_one_place_the_environment_is_read(monkeypatch, raw):
+    """**A trailing space out of an env file, or a newline out of a shell export, used to pass every
+    pre-flight and fail inside the provider client.**
+
+    The id is compared, prefix-parsed and priced by three different checks that each strip on their
+    own — so `provider_of`, `require_priced` and the backend-spelling mirror all said yes — and then
+    the unstripped string was handed to a framework that does not strip. Normalizing HERE, at the
+    single place this package reads the environment, is what makes the pre-flights and the run agree
+    about the same string.
+    """
+    monkeypatch.setenv("STIGMERGY_LIBRARIAN_MODEL", raw)
+    assert config.Settings.from_args(_args()).model == "openai:gpt-5.6-terra"
+
+
+def test_a_stripped_model_is_the_one_the_pricing_and_prefix_checks_then_agree_about(monkeypatch):
+    """The consequence, spelled out rather than left to inference: after the strip, the SAME string
+    satisfies the provider-prefix rule and the price table. That agreement is the whole point of
+    normalizing at one place instead of at three."""
+    from stigmergy.librarian import pricing, pydantic_backend
+
+    monkeypatch.setenv("STIGMERGY_LIBRARIAN_MODEL", " openai:gpt-5.6-terra\n")
+    monkeypatch.delenv(pricing.PRICING_ENV, raising=False)
+
+    model = config.Settings.from_args(_args()).model
+
+    assert pydantic_backend.provider_of(model) == "openai"
+    assert pricing.require_priced(model)
+    assert model in pricing.priced_models()
+
+
+def test_an_unset_model_is_still_the_class_default_after_the_strip(monkeypatch):
+    """The benign twin: normalizing must not turn "nothing configured" into something else. The
+    default has no whitespace to lose and comes back unchanged."""
+    monkeypatch.delenv("STIGMERGY_LIBRARIAN_MODEL", raising=False)
+    assert config.Settings.from_args(_args()).model == config.DEFAULT_MODEL
+
+
 def test_numeric_env_vars_are_coerced_to_their_declared_types(monkeypatch):
     monkeypatch.setenv("STIGMERGY_LIBRARIAN_MAX_TURNS", "7")
     monkeypatch.setenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", "42")

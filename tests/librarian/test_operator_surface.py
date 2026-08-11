@@ -140,6 +140,93 @@ def test_every_phony_target_named_in_the_makefile_is_declared_phony():
     assert declared <= phony, f"not declared .PHONY: {sorted(declared - phony)}"
 
 
+# ── the COMMAND the meeting-only backend's refusal names ──────────────────────────────────────────
+# The third refusal in this package that points an operator somewhere, and the only one that points
+# at a full command line rather than at a make target or a document. It is also the one an operator
+# is most likely to paste verbatim, because it carries flags AND a model id — so the promise it
+# makes is bigger, and the ways it can rot are more numerous: the script can move, a flag can be
+# renamed, the backend/subset pairing can stop being accepted, and the derived `--model` example can
+# name an id that the very next refusal down would bounce.
+#
+# `run_filing.build_parser()` exists so this can be checked without driving a measurement — the
+# parser is a value now, exactly like `librarian/cli.build_parser`'s.
+def _meeting_only_refusal(model: str) -> str:
+    """The real refusal, from the real check, for a worker configured with `model`."""
+    from stigmergy.librarian import config
+
+    settings = config.Settings(repo=str(ROOT), backend=agent_module.PYDANTIC_BACKEND, model=model)
+    with pytest.raises(LibrarianConfigError) as exc_info:
+        worker._check_pydantic_backend(settings, meeting_only=False)
+    return str(exc_info.value)
+
+
+def _printed_command(message: str) -> list[str]:
+    """The `python evals/run_filing.py …` line the refusal printed, as argv.
+
+    Terminated on `. See ` rather than on the first full stop: a model id carries dots of its own
+    (`gpt-5.6-terra`), and a pattern that stopped at the first one would silently truncate the
+    argument this whole test is about.
+    """
+    printed = re.search(r"python (evals/run_filing\.py .+?)\. See ", message)
+    assert printed, f"the refusal printed no runnable command:\n{message}"
+    return printed.group(1).split()
+
+
+def test_the_script_the_meeting_only_refusal_names_is_in_this_repo():
+    argv = _printed_command(_meeting_only_refusal("openai:gpt-5.6-terra"))
+    assert (ROOT / argv[0]).is_file(), f"the refusal names {argv[0]}, which is not in this repo"
+
+
+def test_the_command_the_meeting_only_refusal_names_is_one_its_own_parser_accepts():
+    """**The executable promise, through the seam rather than around it.** Every flag and value the
+    refusal printed is handed to `run_filing.build_parser()` — the same parser `main` uses — and the
+    parsed result has to be the run the sentence describes. No argv monkeypatching, no stubbed
+    measurement, no Postgres: the parser is a value, so the promise is checkable as one."""
+    from evals import run_filing
+
+    argv = _printed_command(_meeting_only_refusal("openai:gpt-5.6-terra"))
+
+    args = run_filing.build_parser().parse_args(argv[1:])      # argv[0] is the script path
+
+    assert args.backend == agent_module.PYDANTIC_BACKEND
+    assert args.kinds == "meeting"
+    assert args.model
+    # ...and the pairing the runner refuses at is the one this command satisfies
+    assert run_filing._require_measurable_subset(args.backend, [args.kinds]) is True
+
+
+def test_the_model_the_refusal_offers_survives_the_next_two_refusals():
+    """A printed example has to clear BOTH checks below the one that printed it — the
+    provider-prefix rule and the price table — or the paste walks the operator straight into the
+    next refusal, which is worse than offering nothing.
+
+    Three operator configurations, including the one that used to slip through: an id that is
+    already provider-prefixed but that NOTHING PRICES. Echoing that one back would have been a
+    refusal recommending a value it was about to reject."""
+    from stigmergy.librarian import pricing, pydantic_backend
+
+    for configured in ("claude-sonnet-5",                     # the sdk backend's bare default
+                       "openai:gpt-5.6-terra",                 # already prefixed AND priced
+                       "openai:gpt-9"):                        # prefixed, and nothing prices it
+        argv = _printed_command(_meeting_only_refusal(configured))
+        offered = argv[argv.index("--model") + 1]
+
+        assert pydantic_backend.provider_of(offered), (
+            f"with $STIGMERGY_LIBRARIAN_MODEL={configured!r} the refusal offered {offered!r}, "
+            f"which names no provider — the very next refusal down bounces it")
+        assert pricing.require_priced(offered), (
+            f"with $STIGMERGY_LIBRARIAN_MODEL={configured!r} the refusal offered {offered!r}, "
+            f"which nothing prices — the refusal after that one bounces it")
+
+
+def test_the_refusal_echoes_the_operators_own_id_when_it_is_usable():
+    """The benign twin of the substitution: an operator whose model is already correct must see
+    THEIR id in the command, not a different one. A guard that always substituted would quietly
+    redirect a working configuration to the table's first entry."""
+    argv = _printed_command(_meeting_only_refusal("openai:gpt-5.6-terra"))
+    assert argv[argv.index("--model") + 1] == "openai:gpt-5.6-terra"
+
+
 # ── the document the App refusal names ────────────────────────────────────────────────────────────
 def test_the_runbook_the_push_identity_refusal_names_exists_and_covers_the_app():
     """The refusal says the setup procedure is in the runbook. So it has to be — and it has to name

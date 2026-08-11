@@ -37,7 +37,7 @@ Verified against the installed distributions' own metadata.
 | `mcp` | MIT | the MCP server — the only API over the brain |
 | `openpyxl` | MIT | spreadsheet conversion |
 | `pydantic` | MIT | schema validation across every boundary |
-| `pydantic-ai` | MIT | the answering agent |
+| `pydantic-ai` | MIT | the answering agent, and the librarian's meeting backend |
 | `pyjwt` | MIT | the librarian GitHub App's RS256 assertion |
 | `python-docx` | MIT | document conversion |
 | `pyyaml` | MIT | page frontmatter |

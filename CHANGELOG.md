@@ -11,6 +11,23 @@ treats its test suite as the contract.
 
 ## [Unreleased]
 
+### Added
+
+- **The filing golden** — a third eval instrument, on the one surface that writes: `make
+  filing-golden` drives ten frozen captures through the real filing path (agent, eight gates, real
+  git, real Postgres) against a frozen mini knowledge repo and scores functional facets
+  deterministically, each with its own denominator and its own bar, fixed from the first Sonnet-5
+  baseline pair. The fixture pins the brief version every score was measured under.
+- **The `FilingAgent` port and the pricing seam** (ADR 032) — the filing backend contract is an
+  explicit, typed Protocol with three conforming implementations, and token usage becomes
+  `report.cost_usd` through one pricing module (declared-inclusive token convention, a rate table
+  with an env override that refuses non-finite, negative and zero-output rates — an unpriced model
+  is a loud startup refusal, never a silent `$0.00`).
+- **A pydantic-ai meeting backend** (`STIGMERGY_LIBRARIAN_BACKEND=pydantic`) — the meeting flow
+  runs as one structured, tool-less call on any provider-prefixed pydantic-ai model string. Meeting
+  flow only in this milestone: a worker configured with it refuses at startup by name, and only the
+  eval rig's meeting-only runs may use it. The ordinary flow stays on the Claude Agent SDK.
+
 Sixteen bug-sweep fixes and one documentation correction since `0.1.0`, none of them behaviour
 changes in the ADR sense — each closes a gap between what the code promised and what it did. Grouped
 by what they protect:

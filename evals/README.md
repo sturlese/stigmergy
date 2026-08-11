@@ -229,7 +229,22 @@ make filing-golden BACKEND=double
 
 # the real measurement (needs a Claude credential and gitleaks on PATH)
 make filing-golden FILING_ARGS="--report evals/out/filing-sonnet-5.json"
+
+# one KIND of capture only — here the two meeting captures on the pydantic-ai backend (ADR 032)
+make filing-golden BACKEND=pydantic \
+    FILING_ARGS="--kinds meeting --model openai:gpt-5.6-terra"
 ```
+
+**`--kinds` is a different measurement and the instrument says so.** It scores only the captures of
+the named kinds, and everything downstream is recomputed from that subset: the per-facet
+denominators are derived rather than held against `EXPECTED_DENOMINATORS` (which pins the whole
+shipped set and only it), the table's caption names the kinds, and so does the history row — so a
+three-phase meeting-only score can never be read later as the twelve-phase set's. A filter that
+selects captures scoring no facet at all is refused rather than printed as a table of zeros.
+`--backend pydantic` REQUIRES `--kinds meeting`: that backend serves the meeting flow only in this
+milestone and would refuse every ordinary capture, and a column of refusals is not a measurement.
+It is a real backend on a real model, so its row is appended to the series like any other; only
+`--backend double` never appends.
 
 `make` exports the operator's gitignored env file into every target, so the runner **deletes the
 librarian GitHub App's five variables from its own environment and pins the LLM backend to the
@@ -272,10 +287,11 @@ it was measured on. This is the only durable score record: git is the store, app
 runs, never by CI.
 
 The `suite` field says which instrument wrote a row: `retrieval`, `qa` or `filing`. A filing row
-additionally carries `backend`, `model`, per-facet scores with their hit/denominator counts, the
-count of what each phase ENDED as (`statuses`), `total_cost_usd` and `wall_s` — so the instrument
-prices itself, and a model-policy argument starts from recorded dollars rather than from an
-estimate.
+additionally carries `backend`, `model`, `kinds` (which capture kinds it measured), per-facet scores
+with their hit/denominator counts, the count of what each phase ENDED as (`statuses`),
+`total_cost_usd` and `wall_s` — so the instrument prices itself, and a model-policy argument starts
+from recorded dollars rather than from an estimate. A row written before `kinds` existed simply has
+no such key, which is visibly older rather than ambiguously a subset.
 
 **A filing run that did not measure appends nothing**, loudly: a phase that ended `failed` is the
 instrument breaking rather than a backend filing badly, and a run where the agent was never called

@@ -181,6 +181,15 @@ def build_synthesizer(settings):
     from pydantic_ai import Agent, RunContext
     from pydantic_ai.models.openai import OpenAIResponsesModel, OpenAIResponsesModelSettings
     from pydantic_ai.providers.openai import OpenAIProvider
+
+    from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
+
+    # This builder does NOT go through `kernel.llm.build_model` (it owns its own tool wiring), so
+    # the usage-extraction repair is installed here too. Without it the pinned pydantic-ai reports
+    # zero tokens for any OpenAI model carrying reasoning details, and `audit_log.result.usage` —
+    # the counters ADR 031 D2 put there so a model-policy decision starts from recorded numbers —
+    # records zeros for every ask. Idempotent; see `kernel.usage_repair` for the defect.
+    ensure_usage_extraction_repaired()
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         raise RuntimeError("OPENAI_API_KEY is required for ANSWER_LLM=openai")
