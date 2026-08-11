@@ -895,6 +895,18 @@ def _zone_findings_for_stem(tmp_path, name: str, stem: str) -> list:
     every filing worktree is in when the gates run, where the base commit is the knowledge repo's
     own tip.
     """
+    # **The FILESYSTEM's own ceiling, checked here rather than requested in a comment.** `NAME_MAX`
+    # is 255 BYTES per path component on ext4 (what CI runs) and applies to the whole name,
+    # `.md` included. A stem past it cannot be written at all, so the fixture dies at `open` and
+    # the gate is never asked — which is precisely how the CJK case below passed on APFS (which
+    # counts CHARACTERS) and was impossible on CI. Asking a comment not to raise it is what failed
+    # the first time; this fails the caller instead, on every machine.
+    component = len(f"{stem}.md".encode())
+    assert component <= 255, (
+        f"this fixture would write a {component}-byte filename, past NAME_MAX (255) on ext4: it "
+        f"cannot be created on CI at all, so the gate under test would never run. Drive a figure "
+        f"this large through `page.unnameable_reason` directly instead — it is a pure function and "
+        f"needs no filesystem.")
     repo = str(tmp_path / name)
     os.makedirs(repo)
     gitcmd.run("init", "--quiet", "-b", "main", repo)
@@ -945,21 +957,59 @@ def test_gate_zone_vetoes_the_first_stem_past_the_byte_ceiling(tmp_path):
         "refused again has been told the wrong thing")
 
 
+# The CJK fixture's own arithmetic, and it is pinned rather than eyeballed because the last version
+# of it was green on APFS and impossible on ext4.
+#
+# **The name this test WRITES has to satisfy two ceilings at once**, and they are not the same
+# ceiling:
+#
+#   * `MAX_PAGE_STEM_BYTES` (200) is the bound under test — the stem must exceed it, or the gate has
+#     nothing to veto;
+#   * `NAME_MAX` (255 BYTES on ext4, which is what CI runs) is the FILESYSTEM's, and it applies to
+#     the whole component INCLUDING `.md`. A stem over it cannot be written at all, so the fixture
+#     fails at `open` before the gate is ever asked — which is exactly what happened: 105 CJK
+#     characters is 315 bytes, and APFS counts CHARACTERS so it fit locally and only locally.
+#
+# 80 characters x 3 bytes = 240, plus `.md` = 243. Twelve bytes of headroom under 255, forty over
+# the bound being tested. **Do not raise this**: `* 4` of the phrase below is 252 + 3 = exactly 255,
+# which is the limit itself with no margin at all.
+_CJK_PHRASE = "再生可能エネルギー導入計画の四半期レビュー"          # 21 chars, 63 bytes
+_CJK_OVER = (_CJK_PHRASE * 4)[:80]                                # 80 chars, 240 bytes
+# The far-over figure the fixture used to write, kept as a PURE assertion below: the magnitude the
+# rule is really about (a title no filesystem will take) stays pinned without a filesystem in it.
+_CJK_FAR_OVER = _CJK_PHRASE * 5                                   # 105 chars, 315 bytes
+
+
 def test_a_CJK_stem_is_bounded_by_its_BYTES_and_not_by_its_character_count(tmp_path):
-    """The reason the unit is bytes at all, over a real diff: ~85 CJK characters is well under any
-    plausible character bound and over 250 BYTES, which is a name the filesystem refuses. A
-    character-counting bound would have written it and met `ENAMETOOLONG` at `open`.
+    """The reason the unit is bytes at all, over a real diff: 80 CJK characters is well under any
+    plausible character bound and 240 BYTES, comfortably over `MAX_PAGE_STEM_BYTES`. A
+    character-counting bound would have written it and met `ENAMETOOLONG` at `open` later, on a
+    longer title.
 
     Its twin sits beside it — the same script, short enough to fit — so this is a boundary rule and
     not a rule that refuses non-Latin titles.
     """
-    over = "再生可能エネルギー導入計画の四半期レビュー" * 5      # 100 chars, 300 bytes
-    fits = "再生可能エネルギー導入計画の四半期レビュー"          # 20 chars, 60 bytes
-    assert len(over) < page_policy.MAX_PAGE_STEM_BYTES < len(over.encode("utf-8"))
+    assert len(_CJK_OVER) < page_policy.MAX_PAGE_STEM_BYTES < len(_CJK_OVER.encode("utf-8"))
 
-    assert [f.code for f in _zone_findings_for_stem(tmp_path, "cjk-over", over)] == [
+    assert [f.code for f in _zone_findings_for_stem(tmp_path, "cjk-over", _CJK_OVER)] == [
         "unnameable-page"]
-    assert [f.code for f in _zone_findings_for_stem(tmp_path, "cjk-fits", fits)] == []
+    assert [f.code for f in _zone_findings_for_stem(tmp_path, "cjk-fits", _CJK_PHRASE)] == []
+
+
+def test_the_far_over_CJK_title_the_filesystem_itself_refuses_is_bounded_too():
+    """The magnitude the real-diff case can no longer carry, pinned WITHOUT a filesystem.
+
+    315 bytes is past `NAME_MAX` on ext4, so a fixture that wrote it fails at `open` before any
+    gate is asked — the portability defect this pair was split to fix. `unnameable_reason` is a
+    pure function of a string, so the figure stays pinned here at no cost, and the assertion says
+    what a filesystem would do with it rather than asking one to prove it.
+    """
+    assert len(_CJK_FAR_OVER.encode("utf-8")) > 255 > len(_CJK_FAR_OVER)
+
+    reason = page_policy.unnameable_reason(_CJK_FAR_OVER)
+
+    assert reason
+    assert "not a character count" in reason
 
 
 def _body_rewrite_findings(repo, page, after_text: str, **over):

@@ -150,9 +150,17 @@ def test_the_port_really_does_carry_the_declaration_isinstance_now_depends_on():
     that never declared its shape would sail through the port claiming conformance it does not
     have.
     """
-    import typing
+    try:
+        # 3.13+ only. CI pins 3.12 ("the interpreter the imported suites were green on",
+        # `.github/workflows/ci.yml`) and `requires-python` is `>=3.12`, so the stdlib spelling
+        # alone made this test a local-only check that could not run where it matters most.
+        # `typing_extensions` is guaranteed present — pydantic requires it — and its
+        # implementation is the one the stdlib adopted, returning the same member set.
+        from typing import get_protocol_members
+    except ImportError:                              # pragma: no cover — taken on 3.12, not here
+        from typing_extensions import get_protocol_members
 
-    members = typing.get_protocol_members(FilingAgent)
+    members = get_protocol_members(FilingAgent)
     assert set(PORT_METHODS) | set(PORT_DECLARATIONS) == members
 
 
