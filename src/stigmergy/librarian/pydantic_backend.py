@@ -246,6 +246,15 @@ class PydanticMeetingAgent:
         from pydantic_ai.exceptions import UnexpectedModelBehavior
         from pydantic_ai.usage import RunUsage, UsageLimits
 
+        from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
+
+        # The framework's own usage extraction silently reports ZERO tokens for any OpenAI model
+        # that carries reasoning details — which is every response from a reasoning model, and the
+        # first paid run of this backend priced at $0.0000 because of it. This whole module exists
+        # to turn tokens into dollars, so a shim that gets the tokens back is load-bearing rather
+        # than defensive. Idempotent; deferring to the framework the day it is fixed.
+        ensure_usage_extraction_repaired()
+
         # `turns` and `tool_calls` stay at the envelope's own zero and are never assigned: there is
         # no conversational loop here and no tool to call, so a `1` would be a number invented to
         # look like the SDK backend's. The port documents zero as a legitimate answer, and nothing

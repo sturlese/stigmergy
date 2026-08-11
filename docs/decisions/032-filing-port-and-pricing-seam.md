@@ -92,6 +92,22 @@ validated rather than trusted: a non-finite figure (JSON admits `NaN` and `Infin
 and a `NaN` cost cannot even be stored in the row's `jsonb` column), a negative one, or a zero
 OUTPUT rate is refused naming the model and the position.
 
+**The first paid run priced at `$0.0000`, and the cause was under the seam rather than in it.**
+`pydantic-ai==2.13.0` extracts token counts through genai-prices and then constructs its own
+`RequestUsage` from every field that came back — and for any OpenAI model reporting
+`output_tokens_details.reasoning_tokens` (a reasoning model does on every response, including when
+the count is `0`) that construction raises `TypeError: unexpected keyword argument
+'output_reasoning_tokens'` inside the method's own `except Exception: pass`, for all three provider
+candidates, and returns zeros. Silently: no warning, no log line. The raw counts are unrecoverable
+afterwards, so the repair has to sit at the extraction seam — `kernel.usage_repair`, in the kernel
+because all four pydantic-ai agents in this process share the one classmethod, and the ask path's
+`audit_log.result.usage` counters (ADR 031 D2) were being zeroed by the same defect. The shim
+DEFERS to the framework — it calls the original first and keeps its answer whenever any count came
+back — so it is inert on a version that works and retires itself with a pin bump rather than with a
+decision. It is the pricing seam's own promise, honoured one layer down: a table that refuses an
+unpriced model at startup and then multiplies zero tokens is the `$0.00`-reads-as-free failure
+arrived at from below.
+
 **The token counts are INCLUSIVE, and that is the framework's contract rather than this repo's
 convention.** `pydantic_ai.usage.UsageBase` documents its buckets as an inclusive parent with
 children, and pydantic-ai normalizes the providers that do not report that way — its

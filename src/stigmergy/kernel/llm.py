@@ -39,6 +39,14 @@ def build_model(model_name: str | None = None):
     from pydantic_ai.models.openai import OpenAIResponsesModel, OpenAIResponsesModelSettings
     from pydantic_ai.providers.openai import OpenAIProvider
 
+    from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
+
+    # Before any real model is built: the pinned pydantic-ai silently extracts ZERO tokens for any
+    # OpenAI model reporting reasoning details, and a zero that reads as free is the one direction
+    # this system's cost figures must never lie in. Idempotent, and a no-op the day the framework
+    # constructs its own usage correctly — see `usage_repair`'s docstring for the defect.
+    ensure_usage_extraction_repaired()
+
     model_name = model_name or os.environ.get("CLEAN_MODEL", DEFAULT_MODEL)
     if ":" in model_name:
         return model_name, None
