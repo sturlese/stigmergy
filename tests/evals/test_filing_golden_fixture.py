@@ -206,6 +206,113 @@ def test_the_consistency_check_refuses_half_an_ask_back_case(drop, expectations,
     assert parking["id"] in str(ex.value)
 
 
+# ── the fifth refusal: what a DECISION entry has to assert, and in what order ──────────────────
+# Both halves guard one mechanism from opposite ends, and both are SET defects that would otherwise
+# read as a backend result — which is the expensive direction: a red cell on a paid run, caused by
+# two lines of JSON, pointing at nothing.
+#
+# **Both refusals are PRE-EMPTIVE today, and that is recorded rather than glossed.** The title-less
+# capability is live in `_decisions_match`, but no shipped expectation uses it — every decision
+# entry in the set names a `title` (F09's `after_reply[0]` is `{"title": "summary"}`: a title with
+# no anchor, which is the older "scores the title alone" shape and a different thing). So the
+# shipped set is a benign twin in the sense that matters — it PASSES the refusal — and not in the
+# sense of exercising the shape. `test_whether_the_shipped_set_uses_the_title_less_shape_at_all`
+# below is what keeps that distinction honest, and it will say so the day it changes.
+#
+# Guards written WITH the capability rather than after it bit something are the cheap direction,
+# so this is a note about scope, not an objection.
+def _mutated_decisions(expectations, entry_id: str, block: str) -> tuple:
+    """The mutable copy and the decisions list this refusal is about, for one shipped entry."""
+    mutated = json.loads(json.dumps(expectations))
+    entry = next(e for e in mutated["expectations"] if e["id"] == entry_id)
+    return mutated, entry[block]["decisions"]
+
+
+def test_the_consistency_check_refuses_a_decision_asserting_neither_title_nor_anchor(expectations,
+                                                                                     manifest):
+    """An entry that names neither matches whatever page is left on the table — a facet that reads
+    as measured and measures nothing. Exactly the defect `edits: []` has, recorded in
+    `_edits_match`, arrived at from the other side.
+
+    Staged on F09's `after_reply[0]`, which ships a title and no anchor: stripping its title is the
+    edit somebody would really make (a title that turned out to be the distiller's prose), and it
+    lands on the one entry in the set for which that leaves nothing behind.
+    """
+    mutated, decisions = _mutated_decisions(expectations, "F09-meeting-parks", "after_reply")
+    assert "anchor" not in decisions[0], (
+        "F09's first after_reply decision now carries an anchor — dropping its title no longer "
+        "produces the assert-nothing shape, so this mutation must move to an entry that has none")
+    decisions[0].pop("title")
+
+    with pytest.raises(SystemExit) as ex:
+        run_filing._check_set(manifest, mutated)
+
+    assert "F09-meeting-parks" in str(ex.value)
+    assert "neither a `title` nor an `anchor`" in str(ex.value)
+
+
+def test_the_consistency_check_refuses_a_title_less_decision_written_before_a_titled_one(
+        expectations, manifest):
+    """The ordering half. An anchor-only entry is the WEAKEST matcher and greedy pairing walks the
+    file's own order, so one written first can take the page a titled sibling needed and score a
+    correct page set a miss — which
+    `test_filing_scorer.test_a_title_less_entry_written_FIRST_starves_its_titled_sibling…`
+    demonstrates against the scorer directly.
+
+    Staged by giving F09's first entry an anchor and dropping its title, so the set carries an
+    anchor-only entry BEFORE a titled one — the shape the refusal exists for. The message has to
+    name the repair ("write the titled entries first"), because nothing about a red decisions cell
+    would point at line order.
+    """
+    mutated, decisions = _mutated_decisions(expectations, "F09-meeting-parks", "after_reply")
+    decisions[0].pop("title")
+    decisions[0]["anchor"] = {"kind": "company", "ids": []}
+    assert "title" in decisions[1], "the mutation needs a TITLED entry after the title-less one"
+
+    with pytest.raises(SystemExit) as ex:
+        run_filing._check_set(manifest, mutated)
+
+    assert "F09-meeting-parks" in str(ex.value)
+    assert "Write the titled entries first" in str(ex.value)
+
+
+def test_the_same_two_entries_in_the_SAFE_order_are_accepted(expectations, manifest):
+    """The ordering refusal's own benign twin, and the one that decides whether it is safe to have:
+    a guard that refused the title-less shape outright would make the whole capability unusable.
+    Same mutation, anchor-only entry written LAST — accepted."""
+    mutated, decisions = _mutated_decisions(expectations, "F09-meeting-parks", "after_reply")
+    decisions[0].pop("title")
+    decisions[0]["anchor"] = {"kind": "company", "ids": []}
+    decisions.reverse()
+
+    run_filing._check_set(manifest, mutated)              # must not raise
+
+
+def test_whether_the_shipped_set_uses_the_title_less_shape_at_all(entries):
+    """**The scope note for both refusals above, asserted rather than assumed.**
+
+    `_decisions_match` lets an entry omit `title` and pair on its anchor alone, and `_check_set`
+    bounds where such an entry may sit. Today NO shipped expectation uses it — every decision entry
+    names a title — so both refusals are pre-emptive and their shipped-set twin proves only that
+    the set passes them, never that the shape is exercised.
+
+    Pinned in the direction that is true now, so the day an expectation drops a title this test
+    reports it: at that point the refusals acquire a live instance, and the mutation-driven tests
+    above should be re-pointed at it rather than constructing the shape by hand.
+    """
+    titleless = [f"{e['id']}.{name}"
+                 for e in entries
+                 for name, block in (("expect", e.get("expect")),
+                                     ("after_reply", e.get("after_reply")))
+                 if block
+                 for d in block.get("decisions") or []
+                 if "title" not in d]
+
+    assert titleless == [], (
+        f"the shipped set now omits a decision title in {titleless} — the `_check_set` refusals "
+        f"above are no longer pre-emptive, and this test's own docstring is the thing to update")
+
+
 def test_the_consistency_check_refuses_a_set_whose_denominators_moved(expectations, manifest):
     """The check that makes the other three add up to the set the series was calibrated on. A
     capture that quietly stops naming a facet does not fail anything — it raises that facet's
@@ -438,10 +545,24 @@ def test_no_expected_decision_title_can_swallow_a_later_ones_page(entries):
     miss for a page set that was exactly right. The shipped order puts the more specific title
     first; this keeps it that way, and is checked here rather than left to whoever edits the file
     next, because nothing about the failure would point at the ordering.
+
+    **This test is about TITLES and is structurally blind to the title-LESS case — deliberately,
+    and the case is owned elsewhere.** An entry that omits `title` is the broadest matcher there
+    is, and it can starve a titled sibling exactly the way a subset title can. It cannot be seen
+    from here: `d.get("title", "")` renders an absent title as `""`, and `title_matches("")` is
+    False by design, so every comparison against it is vacuously satisfied. Widening this loop to
+    cover it would mean re-implementing the ordering rule in a second place that could drift from
+    the first.
+
+    So it is skipped explicitly rather than silently, and the owner is named:
+    `_check_set`'s title-less-before-titled refusal, exercised by
+    `test_the_consistency_check_refuses_a_title_less_decision_written_before_a_titled_one` above,
+    with the scorer-level hazard it protects against demonstrated in
+    `test_filing_scorer.test_a_title_less_entry_written_FIRST_starves_its_titled_sibling…`.
     """
     for entry in entries:
         for block in _expect_blocks(entry):
-            titles = [d.get("title", "") for d in block.get("decisions") or []]
+            titles = [d["title"] for d in block.get("decisions") or [] if "title" in d]
             for i, earlier in enumerate(titles):
                 for later in titles[i + 1:]:
                     assert not run_filing.title_matches(earlier, later), (
