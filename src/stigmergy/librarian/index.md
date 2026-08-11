@@ -29,7 +29,8 @@ a new gate.
 
 Layering (`tests/test_architecture.py` enforces it): `librarian` may import `capture` (the queue
 primitives, the evidence plane) and `stigmergy.kernel` (the page contract's constants, the frontmatter
-parser, the ACL resolver, the entity registry — a dependency-free library, never a layer). It must
+parser, the ACL resolver, the entity registry, the document converters the Drive door's own
+kernel-hands conversion runs on — a dependency-free library, never a layer). It must
 **never** import `server` or `answer` — this is a worker beside the API, not a layer above or below
 it. The two talk only through the durable queue row, so a slow agent run can never happen inside an
 HTTP request.
@@ -256,7 +257,7 @@ reported about one (see Data & contracts, below).
 | `cli.py` | `stigmergy-librarian` — `once` / `run` / `status`; the operator's front door |
 | `filing_port.py` | `FilingAgent` — the agent seam as a `Protocol` instead of a convention: the two calls, the `AgentRun` envelope, `priced()` and the fault contract, and the per-flow side-effect rules. Imports `errors` and nothing else, so every backend can depend on it |
 | `pricing.py` | model id → $/MTok (`PRICES` + `$STIGMERGY_LIBRARIAN_PRICING`, `AS_OF`), `compute_cost_usd`, `require_priced` — for the backends that report TOKENS rather than dollars |
-| `pydantic_backend.py` | `PydanticFilingAgent` — the third backend: one structured pydantic-ai call per flow, no tools, no outcome file, BOTH flows ([ADR 032](../../../docs/decisions/032-filing-port-and-pricing-seam.md) for the meeting half, [ADR 033](../../../docs/decisions/033-structured-filing-flow.md) for the ordinary one). `PydanticMeetingAgent` survives as a deprecated alias until its callers migrate |
+| `pydantic_backend.py` | `PydanticFilingAgent` — the real backend, one of the two behind the port: one structured pydantic-ai call per flow, no tools, no outcome file, BOTH flows ([ADR 032](../../../docs/decisions/032-filing-port-and-pricing-seam.md) for the meeting half, [ADR 033](../../../docs/decisions/033-structured-filing-flow.md) for the ordinary one). `PydanticMeetingAgent` survives as a deprecated alias until its callers migrate |
 | `gather.py` | the deterministic gatherer — a pure function of `(worktree, registry, material)` producing what the STRUCTURED ordinary shape is handed instead of exploring. Reads the CHECKOUT, never `pages_index`, and `_confined` is what makes "the same data the agent read" true rather than intended ([ADR 033](../../../docs/decisions/033-structured-filing-flow.md)) |
 | `worker.py` | the loop, `startup_checks` (every fail-closed startup refusal), `sweep`, `Worker` (signal handling) |
 | `processing.py` | `process_item` — one capture end to end; `Result`, `Deps`, the refused-diff digest; `process_meeting_item` — its sibling for a `kind="meeting"` row, filing a page SET instead of one page; and `process_drive_item` ([ADR 028](../../../docs/decisions/028-drive-door.md)) — the thin drive sibling: kernel-hands conversion (`_drive_material`, `_with_vision_fallback`) then `process_item` itself over the extracted text, with the source attachment ON via `_source_attachment`'s kind-keyed drive branch |
@@ -620,6 +621,8 @@ Everything else is reached FROM `processing.py`; read it first when tracing one 
 | `test_worker_signals.py` | real SIGINT/SIGTERM/SIGKILL against a real worker subprocess |
 | `test_cli_once.py` / `test_cli_run.py` / `test_cli_status.py` | the three subcommands, including `status`'s three-verdict lease logic |
 | `test_startup_preflight.py` | every `startup_checks` refusal, WITH its benign twin |
+| `test_backend_retirement.py` | the retired-backend refusal (`agent.RETIRED_BACKENDS`), worded once and read by both `ensure_known_backend` and `worker.startup_checks` — plus its benign twin, a `pydantic` worker booting clean |
+| `test_skill_reading.py` | `agent.read_skill` / `read_meeting_brief`'s refusals and `worker._check_skill_at`'s base-commit read — the coverage `test_agent_sdk_options.py` carried before the retired backend took it with it |
 | `test_processing_pg.py` | the acceptance criteria, over real Postgres + real git |
 | `test_structured_processing_pg.py` | the STRUCTURED ordinary shape end to end (ADR 033), over real Postgres + real git + a real pydantic-ai `Agent` on an offline model: confinement by construction (six hostile cases, nothing written), code deciding the filename, real dollars |
 | `test_adversarial.py` | permanent cat. 1 / cat. 5 / cat. 7 cases, against the double |
@@ -717,11 +720,13 @@ rather than about a second, untested implementation of the same rule.
   own settings mechanism — loading it as `project` settings once booted the knowledge repo's
   `.mcp.json` servers and hung the run forever (`agent.py`'s module docstring has the full account).
   **It is backend-NEUTRAL since ADR 033**: it describes a worker that hands the agent its context and
-  writes the page from one structured account, and the tool mechanics live in the per-backend
-  ENVIRONMENT preamble composed by `agent.build_filing_header` — with a tool-holding backend carrying a NAMED
-  override note saying that its run departs from the brief. The direction of that note is the
-  inversion worth noticing: in ADR 032 the brief was the tool-holding text and the structured
-  backend carried the correction.
+  writes the page from one structured account. Tool mechanics, for a backend that has any, would live
+  in the per-backend ENVIRONMENT preamble composed by `agent.build_filing_header` — the retired SDK
+  backend carried a NAMED override note there, saying its run departed from the brief; no backend
+  needs one for the ordinary flow today, since the brief itself now describes the structured shape.
+  The direction that note took was the inversion worth noticing while it ran: in ADR 032 the brief
+  was the tool-holding text and the structured backend carried the correction; then the brief became
+  the structured text and the SDK carried the correction, until it retired.
 - **This file's structure matches [`evals/index.md`](../../../evals/index.md)** — the closest
   existing precedent to the per-directory code-map format
   (`docs/reference/hybrid-index.md` is narrative/schema-first instead, for a different audience).
