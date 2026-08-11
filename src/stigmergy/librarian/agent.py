@@ -163,8 +163,12 @@ DECISIONS = ("file", "triage")
 TRIAGE_UNRESOLVED_ENTITY = "unresolved-entity"
 TRIAGE_UNSUPPORTED_TYPE = "unsupported-type"
 TRIAGE_KINDS = (TRIAGE_UNRESOLVED_ENTITY, TRIAGE_UNSUPPORTED_TYPE)
-_TRIAGE_REQUIRED_FIELD = {TRIAGE_UNRESOLVED_ENTITY: "name",
-                          TRIAGE_UNSUPPORTED_TYPE: "judged_type"}
+# PUBLIC because it has a second reader now: `pydantic_backend.FilingAccount`'s completeness
+# validator demands the same field of the same kind, so the FRAMEWORK can repair a half-parked
+# account before this boundary has to refuse one. Two enforcement points, one table — the
+# alternative was the structured schema restating this mapping and drifting from it.
+TRIAGE_REQUIRED_FIELD = {TRIAGE_UNRESOLVED_ENTITY: "name",
+                         TRIAGE_UNSUPPORTED_TYPE: "judged_type"}
 
 MAX_OUTCOME_BYTES = 256 * 1024      # generous for an account of one page; not a memory budget
 MAX_OUTCOME_DEPTH = 8               # deeper than any legitimate shape below
@@ -573,7 +577,7 @@ def parse_outcome(raw) -> Outcome:
                       f"parks the capture without a usable `triage.kind` (expected one of "
                       f"{', '.join(TRIAGE_KINDS)})")
         else:
-            required = _TRIAGE_REQUIRED_FIELD[triage["kind"]]
+            required = TRIAGE_REQUIRED_FIELD[triage["kind"]]
             if not _declared(triage_raw.get(required)):
                 shape.add("missing-field",
                           f"parks the capture as {triage['kind']!r} with no `triage.{required}`, "

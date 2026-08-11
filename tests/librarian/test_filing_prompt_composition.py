@@ -39,12 +39,24 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 BRIEF = (pathlib.Path(__file__).parent / "fixtures" / "repo" / ".claude" / "skills" / "librarian"
          / "SKILL.md")
 
-# The module the milestone changed, and the ref that predates it. `HEAD` rather than a pinned sha:
-# this file is checked out with the working tree that carries the M2 diff, so `HEAD` IS "before
-# this change" for as long as the change is unlanded — and once it lands, the assertion has to be
-# re-anchored deliberately rather than silently comparing a commit with itself.
+# The module the milestone changed, and the ref that predates it.
+#
+# **RE-ANCHORED, exactly as this comment said it would have to be.** It was `HEAD`, which was
+# "before this change" only for as long as the change was unlanded — and the moment ADR 033's
+# commit landed, every assertion below started comparing the milestone against ITSELF and passed
+# for the emptiest possible reason. It did not pass: `SYSTEM_PROMPT_HEADER` is a `build_filing_
+# header(...)` CALL at that commit rather than a string literal, so `_string_constant` raised and
+# the whole file went red at once. That loudness is the only reason this was caught rather than
+# silently becoming a tautology, and it is why the extraction reads a LITERAL rather than
+# evaluating whatever the constant happens to be.
+#
+# A PINNED sha now, and it is the one thing here that must never be "whatever is current":
+# `a11e66f` is ADR 033's parent (`git rev-parse fa55010^`), the last commit at which the ordinary
+# flow was the exploring one. The claim is "the extraction was byte-preserving", and a claim about
+# a specific change needs the specific commit it changed FROM. Re-pointing this to a newer ref
+# would not update the test — it would delete it.
 _AGENT_RELPATH = "src/stigmergy/librarian/agent.py"
-_BEFORE_REF = "HEAD"
+_BEFORE_REF = "a11e66f74d9ee60f221ced6b66efbf310ac014f1"
 
 
 def _source_before() -> str:

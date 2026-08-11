@@ -40,6 +40,8 @@ import os
 import shutil
 
 import pytest
+from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
 
 from stigmergy.capture import dispositions, queue, schema
@@ -50,6 +52,7 @@ from stigmergy.librarian.pydantic_backend import (
     FilingAccount,
     OrdinaryAnchoring,
     OrdinaryEdit,
+    OrdinaryFinding,
     OrdinaryPage,
     OrdinaryTriage,
     PydanticFilingAgent,
@@ -578,6 +581,75 @@ def test_an_accented_re_spelling_of_an_existing_page_is_also_one_page(tmp_path, 
 
     assert result.status != schema.FILED
     _nothing_landed(env, before)
+
+
+# ── the seam for accounts the SCHEMA now refuses before the worker ever sees them ──────────────
+# `FilingAccount.decision` is `Literal[*agent.DECISIONS]` with a completeness validator, so an
+# INCOMPLETE account cannot be built through the schema at all — the framework re-asks the model
+# instead, which is the whole point of the schema round and is covered on its own terms in
+# `test_structured_schema_unit.py`.
+#
+# That leaves the DOWNSTREAM checks — `_require_page_content`, `_injection_categories`,
+# `_write_ordinary_page`'s refusals — with no route through the pydantic backend for the shapes
+# they are about. They are still reachable and still load-bearing: `processing` reads the PORT, not
+# a class, so a conforming stand-in that declares `structured_ordinary = True` takes exactly the
+# same branch. It hands back an `agent.Outcome` built through the REAL trust boundary
+# (`agent.parse_outcome`), so nothing here fakes the parse — only the provider.
+#
+# Which is also the honest statement of what the schema bought: an incomplete account no longer
+# arrives from the framework, and every one of these checks still has to hold for a FOURTH backend
+# whose schema is its own business.
+class _ScriptedAgent:
+    """A conforming structured backend that returns one prepared outcome per pass.
+
+    `raws` are RAW outcome dicts, parsed here by `agent.parse_outcome` — the same boundary the file
+    channel and the pydantic backend both go through — so an account this stub returns is exactly
+    as validated as one a provider returned, minus the provider.
+    """
+
+    structured_ordinary = True
+
+    def __init__(self, *raws):
+        from stigmergy.librarian import agent as agent_module
+
+        self.outcomes = [agent_module.parse_outcome(raw) for raw in raws]
+        self.calls = 0
+        self.gathered_seen = []
+
+    def run(self, *, worktree, material, hints, submitted_by, corrective="", reply="",
+            flow_note="", gathered=""):
+        self.gathered_seen.append(gathered)
+        self.calls += 1
+        return AgentRun(outcome=self.outcomes[min(self.calls, len(self.outcomes)) - 1],
+                        cost_usd=0.01)
+
+    def run_meeting(self, *, worktree, material, meeting_meta, registry, source_page_path,
+                    corrective="", reply=""):                 # pragma: no cover — never called
+        raise AssertionError("the ordinary flow must not reach the meeting call")
+
+
+def _raw_account(*, title: str = "Acme Corp Renewal Window", page_type: str = "note",
+                 body: str | None = None, findings=(), decision: str = "file",
+                 triage: dict | None = None) -> dict:
+    """One raw ordinary account, in the shape `agent.parse_outcome` reads off either channel."""
+    return {
+        "decision": decision,
+        "page": {"title": title, "page_type": page_type,
+                 "body": _body() if body is None else body},
+        "anchoring": {"kind": "entity", "entities": [REGISTERED]},
+        "links_created": [REGISTERED],
+        "summary": "filed the renewal note",
+        "findings": [{"category": category} for category in findings],
+        "triage": triage or {},
+    }
+
+
+def _scripted_rig(tmp_path, *raws):
+    """A real repo + `Deps` whose agent is the scripted stand-in above."""
+    env = support.build_repo(str(tmp_path / "git"))
+    settings = support.build_settings(env, worktree_root=str(tmp_path / "worktrees"))
+    agent = _ScriptedAgent(*raws)
+    return env, support.build_deps(env, settings, agent=agent), agent
 
 
 class _PathClaimingAgent:
@@ -1263,18 +1335,20 @@ def test_an_injection_category_the_structured_account_declares_reaches_the_repor
         "an invented finding category was echoed into the submitter's report")
 
 
-def _steering_account_with_no_body():
+def _steering_raw_with_no_body() -> dict:
     """The shape M2 is about: a steering attempt REPORTED, and an account too broken to file.
 
     The two arrive together far more often than either arrives alone — material that talks a model
     into declaring a page canonical is material that also derails the rest of its answer — which is
     why the finding has to outlive the refusal rather than only riding the filed road.
-    """
-    from stigmergy.librarian.pydantic_backend import OrdinaryFinding
 
-    account = _account(body="")
-    account.findings = [OrdinaryFinding(category="declare-canonical")]
-    return account
+    **A raw account through `_ScriptedAgent`, not the pydantic schema.** That schema refuses a
+    bodiless filing at construction now, so this shape can no longer arrive from the framework —
+    and `_refuse`'s obligation to carry the note is unchanged for any structured backend whose
+    schema is its own business. The property is the WORKER's, so it is exercised at the worker's
+    own seam.
+    """
+    return _raw_account(body="", findings=("declare-canonical",))
 
 
 def test_a_steering_attempt_survives_a_refusal_that_destroys_the_rest_of_the_account(
@@ -1298,7 +1372,7 @@ def test_a_steering_attempt_survives_a_refusal_that_destroys_the_rest_of_the_acc
     it is not recorded. The two together are the property — the captures most worth knowing about
     are exactly the ones where the steering worked well enough to break the account.
     """
-    env, deps, _ = _rig(tmp_path, lambda: _model(_steering_account_with_no_body()))
+    env, deps, _ = _scripted_rig(tmp_path, _steering_raw_with_no_body())
     before = support.all_commit_shas(env.bare)
 
     item, result = _file(clean_queue, deps,
@@ -1331,7 +1405,7 @@ def test_the_steering_note_reaches_the_persisted_report_on_the_PARK_road_too(tmp
     the right way round.
     """
     account = _self_parked()
-    account.findings = _steering_account_with_no_body().findings
+    account.findings = [OrdinaryFinding(category="declare-canonical")]
     _, deps, _ = _rig(tmp_path, lambda: _model(account))
 
     _, result = _file(clean_queue, deps,
@@ -1346,8 +1420,12 @@ def test_a_capture_that_never_tried_to_steer_reports_no_injection_finding_at_all
     """The specificity half of the whole injection surface, and the one that decides whether the
     category is worth anything: a note on every failed row is a note nobody reads. An account that
     reported no steering and a capture that attempted none must produce an empty list on the same
-    terminal road the test above asserts a note on."""
-    _, deps, _ = _rig(tmp_path, lambda: _model(_account(body="")))
+    terminal road the test above asserts a note on.
+
+    The same stand-in and the same bodiless account as its twin, minus the reported category — so
+    the ONLY difference between the two runs is the thing being measured.
+    """
+    _, deps, _ = _scripted_rig(tmp_path, _raw_account(body=""))
 
     _, result = _file(clean_queue, deps)
 
@@ -1445,6 +1523,87 @@ def test_a_title_at_exactly_the_byte_ceiling_files_all_the_way_through(tmp_path,
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
+# The TOLERANCE direction: a model that answers INCOMPLETELY, through the whole worker
+#
+# **ADR 033's own meta-finding, as a standing discipline.** Every other structured test in this
+# file hands the flow a complete, hand-built account — which measures what the worker does with a
+# GOOD answer and nothing about what it does with a bad one. That is exactly the blind spot the
+# first paid golden fell into: five ordinary captures died on a shape no offline test had ever
+# emitted, because no offline test emitted anything but correct accounts.
+#
+# So at least one test on this path drives a real model that answers incompletely, end to end
+# through `worker.process_next`. The schema's own refusals are unit-tested next door
+# (`test_structured_schema_unit.py`); this is the one that proves the SAVING at the layer the
+# money is spent in.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+def test_an_incomplete_first_answer_is_repaired_without_spending_a_worker_pass(
+        tmp_path, clean_queue, require_gitleaks):
+    """**The golden's own failure shape, and the fix measured where it cost money.**
+
+    The model's first answer carries `decision` and nothing a filing obliges — the exact shape five
+    captures died on. Before the schema round that account satisfied the framework's output
+    validation, reached `agent.parse_outcome`, and burned the WORKER's one corrective retry: two
+    full agent passes for one capture, and a `failed` row if the second answer was no better.
+
+    Now the framework re-asks inside the same worker pass. Three assertions carry it, and the third
+    is the one an operator would feel: the model was called twice (the repair happened), the worker
+    ran ONE pass (`agent_attempts` never grew), and the capture FILED.
+
+    Driven through a real `FunctionModel` rather than a stub agent, because the property is about
+    what the FRAMEWORK does with a schema — which a stand-in cannot have.
+    """
+    calls = {"n": 0}
+
+    def _incomplete_then_good():
+        def _answer(messages, info):
+            calls["n"] += 1
+            name = info.output_tools[0].name
+            if calls["n"] == 1:
+                return ModelResponse(parts=[ToolCallPart(name, {"decision": "file"})])
+            return ModelResponse(parts=[ToolCallPart(name, _account().model_dump())])
+        return FunctionModel(_answer)
+
+    env, deps, _ = _rig(tmp_path, _incomplete_then_good)
+
+    _, result = _file(clean_queue, deps)
+
+    assert calls["n"] == 2, "the framework did not re-ask — the incomplete account was accepted"
+    assert result.status == schema.FILED, result.report.get("summary")
+    assert result.report.get("agent_attempts", 0) in (0, 1), (
+        f"the worker spent a corrective pass on a shape the framework repairs for free: "
+        f"{result.report}")
+    _, changed = _committed(env, result)
+    assert changed == ["wiki/notes/Acme Corp Renewal Window.md"]
+
+
+def test_a_model_that_stays_incomplete_still_lands_a_terminal_row_and_writes_nothing(
+        tmp_path, clean_queue, require_gitleaks):
+    """The other end of the tolerance direction: a model that never completes its account exhausts
+    the framework's budget on BOTH worker passes and the item lands terminal rather than looping or
+    filing something half-built.
+
+    The fault travels as an `OutcomeShapeError` — findings, not a class name — so the worker's own
+    corrective retry still gets its turn; it simply cannot help, which is the honest outcome for a
+    model that cannot answer the schema.
+    """
+    def _always_empty():
+        def _empty(messages, info):
+            return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {})])
+        return FunctionModel(_empty)
+
+    env, deps, _ = _rig(tmp_path, _always_empty)
+    before = support.all_commit_shas(env.bare)
+
+    _, result = _file(clean_queue, deps)
+
+    assert result.status == schema.FAILED, result.report.get("summary")
+    assert result.report["stage"] != "unexpected", (
+        f"a schema exhaustion surfaced as an unnamed crash: {result.report.get('summary')}")
+    _nothing_landed(env, before)
+    assert result.report["cost_usd"] > 0, "the re-asks were real requests and the row says free"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
 # The declared edits, which the structured account still owns
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 def test_a_declared_edit_is_performed_by_code_and_lands_in_the_same_commit(
@@ -1498,13 +1657,20 @@ def test_a_structured_backend_that_returns_no_page_body_is_told_so_and_repairs_i
 
     This is the one refusal that exists ONLY on this shape, so nothing else in the suite reaches
     it through a real run.
+
+    **Driven through a stand-in rather than the pydantic schema, and that is the point.**
+    `FilingAccount`'s completeness validator now refuses a bodiless filing before it can be built,
+    so the framework repairs it a road earlier — for free, and with the field named. Which does not
+    retire this check: `_require_page_content` is `processing`'s question of ANY backend declaring
+    `structured_ordinary = True`, and a fourth one's schema is its own business. So the account
+    arrives the way a fourth backend's would — through `agent.parse_outcome`, past the schema that
+    is not this worker's to rely on.
     """
-    factory = _ThenGood(_account(body="   "), _account())
-    env, deps, _ = _rig(tmp_path, factory)
+    env, deps, agent = _scripted_rig(tmp_path, _raw_account(body="   "), _raw_account())
 
     _, result = _file(clean_queue, deps)
 
-    assert factory.calls == 2, "the missing page body did not spend the corrective retry"
+    assert agent.calls == 2, "the missing page body did not spend the corrective retry"
     assert result.status == schema.FILED, result.report.get("summary")
     _, changed = _committed(env, result)
     assert changed == ["wiki/notes/Acme Corp Renewal Window.md"]
@@ -1513,13 +1679,25 @@ def test_a_structured_backend_that_returns_no_page_body_is_told_so_and_repairs_i
 def test_an_account_with_no_page_body_at_all_fails_honestly_when_the_retry_cannot_fix_it(
         tmp_path, clean_queue, require_gitleaks):
     """Both passes return the same empty body — the shape a genuinely broken backend produces. The
-    item lands terminal rather than looping, and it says which stage it died at."""
-    env, deps, _ = _rig(tmp_path, lambda: _model(_account(body="")))
+    item lands terminal rather than looping, and it says which stage it died at.
+
+    **This was passing for the wrong reason and the schema round is what exposed it.** It built the
+    bodiless account through `FilingAccount` inside the model FACTORY, which is lazy — so once the
+    completeness validator landed, the `ValidationError` fired inside the backend's model
+    resolution and the item failed with "could not resolve the configured model". Terminal, so the
+    status assertion still held; about nothing this test names. A stand-in account through
+    `agent.parse_outcome` is the seam that actually reaches `_require_page_content` twice, and the
+    stage assertion below is what would have caught the substitution.
+    """
+    env, deps, agent = _scripted_rig(tmp_path, _raw_account(body=""), _raw_account(body=""))
     before = support.all_commit_shas(env.bare)
 
     _, result = _file(clean_queue, deps)
 
+    assert agent.calls == 2, "the bodiless account did not reach both passes"
     assert result.status in (schema.FAILED, schema.TRIAGE), result.report.get("summary")
+    assert result.report["stage"] == "outcome", (
+        f"the item died somewhere other than the outcome boundary: {result.report.get('summary')}")
     _nothing_landed(env, before)
 
 

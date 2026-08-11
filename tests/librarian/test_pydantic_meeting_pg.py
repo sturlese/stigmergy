@@ -86,7 +86,8 @@ def _notes() -> str:
 
 
 def _account(*, anchor_to: str = _REGISTERED, link_entity: str | None = None,
-             decisions: int = 1, decision: str = "file") -> MeetingAccount:
+             decisions: int = 1, decision: str = "file",
+             meeting_title: str = "Q3 sync") -> MeetingAccount:
     """A complete meeting account, in the schema the backend declares as its output type.
 
     `anchor_to` is what each decision DECLARES its aboutness to be, and `link_entity` what its body
@@ -101,7 +102,7 @@ def _account(*, anchor_to: str = _REGISTERED, link_entity: str | None = None,
     linked = link_entity or anchor_to
     return MeetingAccount(
         decision=decision,
-        meeting_title="Q3 sync",
+        meeting_title=meeting_title,
         attendees=["Alice", "Bob"],
         meeting_notes=_notes(),
         decisions=[
@@ -398,12 +399,32 @@ def test_the_poison_really_is_poison_a_re_file_that_cannot_reuse_does_reach_the_
 
 
 # ── AC5: the one corrective retry, on the new backend ─────────────────────────────────────────
+# The account shape the BOUNDARY refuses and the SCHEMA accepts — which is a narrower set than it
+# used to be, and deliberately so.
+#
+# It was `decision="publish"`: a plain string field took it, the framework's own output validation
+# passed, and `parse_meeting_outcome` refused it downstream. `decision` is
+# `Literal[*agent.DECISIONS]` now, so that account cannot be BUILT — the framework re-asks the
+# model instead, one road earlier and for free, which is the whole point of the schema round.
+#
+# What is left to the boundary is exactly what the schema declines to restate: the BOUNDS.
+# `parse_meeting_outcome` refuses an identifier over `MAX_IDENTIFIER_LEN` and the schema says
+# nothing about length, so an over-long `meeting_title` is a complete, schema-valid account that
+# the trust boundary still refuses — which is the same road a real provider's plausible-but-
+# over-long answer arrives by, and the one these two tests are named for.
+_OVER_LONG_TITLE = "Q" * (agent_module.MAX_IDENTIFIER_LEN + 1)
+
+
 class _ShapeThenGood:
     """A stateful model factory: a refused shape on the first pass, a good account on the second.
 
     This is the corrective retry's whole premise — the agent is TOLD what was wrong and gets
     exactly one more try — and it cannot be exercised by a stateless double, because the second
     pass has to differ from the first for a reason the first pass caused.
+
+    **The refused shape is a BOUNDS violation, not a requiredness one** (see `_OVER_LONG_TITLE`):
+    the schema now catches the second class itself, and a factory that tried to stage one would be
+    testing pydantic's constructor rather than the worker's retry.
     """
 
     def __init__(self):
@@ -412,11 +433,7 @@ class _ShapeThenGood:
     def __call__(self):
         self.calls += 1
         if self.calls == 1:
-            # A shape `agent.parse_meeting_outcome` refuses and a corrective brief can fix: an
-            # unknown `decision`. It passes the output SCHEMA (the field is a plain string) and is
-            # refused at the trust boundary, which is exactly where a real provider's plausible
-            # nonsense arrives.
-            return _test_model(_account(decision="publish"))
+            return _test_model(_account(meeting_title=_OVER_LONG_TITLE))
         return _test_model(_account())
 
 
@@ -486,8 +503,17 @@ def test_a_refused_shape_reaches_the_retry_as_an_outcome_shape_error_carrying_it
     is the assertion that it was not reintroduced one backend over.
 
     And it is still PRICED: the run was paid for whether or not its account parses.
+
+    **This test is about the BOUNDARY road**, and after the schema round that is a narrower road
+    with a sharper edge. Requiredness is now caught by the schema — the framework re-asks the model
+    itself, which is `test_the_framework_repairs_an_incomplete_account_inside_one_worker_pass`'s
+    subject one file over. What still reaches `parse_meeting_outcome` is everything the schema
+    deliberately declines to restate, which is the BOUNDS: an over-long identifier is a complete,
+    schema-valid account the trust boundary refuses. That division is the design, so the two tests
+    together are what keeps either half from quietly absorbing the other.
     """
-    env, deps, agent = _rig(tmp_path, lambda: _test_model(_account(decision="publish")))
+    env, deps, agent = _rig(tmp_path,
+                            lambda: _test_model(_account(meeting_title=_OVER_LONG_TITLE)))
 
     with pytest.raises(OutcomeShapeError) as exc_info:
         agent.run_meeting(worktree=env.repo, material=_TRANSCRIPT,

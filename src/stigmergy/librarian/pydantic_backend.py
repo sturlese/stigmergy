@@ -40,8 +40,9 @@ plain data, and a test that builds one by hand must not have to reach through a 
 import json
 import logging
 import os
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from stigmergy.librarian import agent as agent_module
 from stigmergy.librarian import gates, pricing
@@ -92,17 +93,46 @@ def provider_of(model: str) -> str:
     return name.split(":", 1)[0] if ":" in name else ""
 
 
-# ── the account, as a schema instead of a file ────────────────────────────────────────────────
-# A field-for-field mirror of the JSON `agent.parse_meeting_outcome` already reads, so the two
-# channels carry the SAME shape and the boundary parse is shared rather than forked. Every field
-# has a default: a provider that omits an optional list must produce an outcome the boundary can
-# judge (and refuse on its own terms), not a validation error inside the framework that never
-# reaches the corrective retry.
+# ── the accounts, as schemas instead of a file ────────────────────────────────────────────────
+# Field-for-field mirrors of the JSON `agent.parse_outcome` / `parse_meeting_outcome` already read,
+# so the two channels carry the SAME shape and the boundary parse is shared rather than forked.
 #
-# Bounds are deliberately NOT restated here. `parse_meeting_outcome` owns them — identifiers are
-# refused over `MAX_IDENTIFIER_LEN`, prose and page bodies are truncated, lists are capped — and a
-# second set of limits in a schema would be a second answer to the same question, drifting from the
-# one the file channel is judged by.
+# **BOUNDS are deliberately not restated here; REQUIREDNESS is, and the distinction was paid for.**
+# `parse_*_outcome` owns the bounds — identifiers refused over `MAX_IDENTIFIER_LEN`, prose
+# truncated, a page body refused, lists capped — and a second set of limits in a schema would be a
+# second answer to one question, drifting from the one the file channel is judged by.
+#
+# Requiredness is the opposite case, and the first PAID run of the structured ordinary flow is what
+# established it. Every field carried a default, including `decision`, on the reasoning that a
+# provider omitting something should produce an account the boundary can judge and refuse on its
+# own terms rather than a validation error inside the framework. That reasoning had the mechanism
+# backwards. A default does not make an omission visible — it makes it INVISIBLE: the framework's
+# output validation passed a half-empty account, so its own `OUTPUT_RETRIES` never fired, and
+# `parse_outcome` then refused downstream with `unknown-decision` or a missing `title`. Five of the
+# golden's ordinary captures died that way, two passes each: the WORKER's one corrective retry was
+# spent re-asking a model to repair a shape a brief cannot reliably teach, when the framework
+# would have re-asked for free and with the exact field named.
+#
+# So the schema demands what the boundary demands, and the two enforcement points are declared
+# duplication rather than an accident:
+#
+#   * the SCHEMA (here) is the cheap, early road — the framework re-asks the model with the
+#     validator's own message, before a single byte reaches this package;
+#   * the BOUNDARY (`agent.parse_*_outcome`) keeps every check regardless, because it also judges
+#     the FILE channel and because a typed provider response is not a trusted one.
+#
+# Nothing is hardcoded twice: `decision` derives its enum from `agent.DECISIONS`, and the parked
+# kinds and their required fields from `agent.TRIAGE_KINDS` / `agent.TRIAGE_REQUIRED_FIELD`.
+
+
+def _needed(field: str, instead: str) -> str:
+    """One completeness refusal, addressed to the MODEL rather than to an operator.
+
+    These strings are not diagnostics: pydantic-ai hands a validator's `ValueError` back to the
+    model as its retry prompt, so this is the only text that gets a chance to repair the account.
+    Same shape as `gates.Finding.brief` for that reason — name the field, then name the repair.
+    """
+    return f"`{field}` is required and came back empty. {instead}"
 class MeetingAnchoring(BaseModel):
     """One decision's own anchor. `kind` is `entity` (with `entities`) or `company` (with a written
     `reason`); the registry, not this schema, decides whether a name resolves."""
@@ -138,8 +168,18 @@ class MeetingTriage(BaseModel):
 
 class MeetingAccount(BaseModel):
     """The whole account of one meeting: `decision` is `file` or `triage`, and the rest is the page
-    set's CONTENT — never a page path, because code decides every path in this flow."""
-    decision: str = ""
+    set's CONTENT — never a page path, because code decides every path in this flow.
+
+    **Given the SAME treatment as `FilingAccount`, on a flow where the defect had not fired yet.**
+    The mechanism is identical — a defaulted `decision` means the framework's output validation
+    accepts a half-empty account, its own retries never run, and `parse_meeting_outcome` refuses
+    downstream having spent the worker's one corrective pass. The meeting flow has real passing
+    runs (the terra trial, the golden's two meeting captures), so this is not a fix for an observed
+    failure; it is closing a known mechanism on two samples' worth of evidence, which this
+    repository's own rule about untested rules asks for. It costs a passing run nothing: a complete
+    account satisfies both, and an incomplete one is repaired one road earlier.
+    """
+    decision: Literal[*agent_module.DECISIONS]
     meeting_title: str = ""
     attendees: list[str] = Field(default_factory=list)
     meeting_notes: str = ""
@@ -148,6 +188,41 @@ class MeetingAccount(BaseModel):
     summary: str = ""
     findings: list[MeetingFinding] = Field(default_factory=list)
     triage: MeetingTriage = Field(default_factory=MeetingTriage)
+
+    @model_validator(mode="after")
+    def _complete_for_its_decision(self):
+        """`FilingAccount._complete_for_its_decision`'s twin, over what a MEETING decision obliges
+        — mirroring `agent.parse_meeting_outcome`'s own required-field rules and no others."""
+        if self.decision == "file":
+            if not (self.meeting_title or "").strip():
+                raise ValueError(_needed(
+                    "meeting_title",
+                    "It names the meeting page the worker is about to write, and the drop's own "
+                    "title hint is not a substitute for what the transcript turned out to be."))
+            for n, decided in enumerate(self.decisions, start=1):
+                if not (decided.title or "").strip():
+                    raise ValueError(_needed(
+                        f"decisions[{n - 1}].title",
+                        "Every decision you describe becomes its own page, and the title is that "
+                        "page's name — decision number "
+                        f"{n} has none."))
+            return self
+
+        kind = (self.triage.kind or "").strip()
+        if kind not in agent_module.TRIAGE_KINDS:
+            raise ValueError(_needed(
+                "triage.kind",
+                f"Parking says WHY: one of {', '.join(agent_module.TRIAGE_KINDS)}."))
+        # The plural field, and the ONE place this flow's rule differs from the ordinary one: a
+        # meeting can fail to anchor on several names at once, so `parse_meeting_outcome` asks for
+        # `names` where `parse_outcome` asks for `name`.
+        if kind == agent_module.TRIAGE_UNRESOLVED_ENTITY and not [
+                n for n in self.triage.names if (n or "").strip()]:
+            raise ValueError(_needed(
+                "triage.names",
+                "They are the names a steward has to register, and the whole of what the "
+                "submitter is told about this park."))
+        return self
 
 
 # ── the ORDINARY account, as a schema instead of a file (ADR 033) ─────────────────────────────
@@ -207,8 +282,12 @@ class OrdinaryTriage(BaseModel):
 
 class FilingAccount(BaseModel):
     """The whole account of one ordinary capture: `decision` is `file` or `triage`, and the rest is
-    judgment plus the page's own CONTENT."""
-    decision: str = ""
+    judgment plus the page's own CONTENT.
+
+    `decision` is REQUIRED and enum-constrained, and the two halves it obliges are checked below —
+    see the section comment above for the paid run that established why.
+    """
+    decision: Literal[*agent_module.DECISIONS]
     page: OrdinaryPage = Field(default_factory=OrdinaryPage)
     anchoring: OrdinaryAnchoring = Field(default_factory=OrdinaryAnchoring)
     links_created: list[str] = Field(default_factory=list)
@@ -217,6 +296,47 @@ class FilingAccount(BaseModel):
     summary: str = ""
     findings: list[OrdinaryFinding] = Field(default_factory=list)
     triage: OrdinaryTriage = Field(default_factory=OrdinaryTriage)
+
+    @model_validator(mode="after")
+    def _complete_for_its_decision(self):
+        """What THIS decision obliges — the conditional half a field-by-field schema cannot say.
+
+        `OrdinaryPage`'s own fields stay optional on purpose: a `triage` account legitimately
+        carries no page at all, so requiring them individually would refuse the correct outcome for
+        a capture this brain cannot place. The obligation is on the PAIRING, which is exactly what a
+        model validator is for.
+        """
+        if self.decision == "file":
+            if not (self.page.title or "").strip():
+                raise ValueError(_needed(
+                    "page.title",
+                    "It is the page's name, its filename and the commit subject a human reads in "
+                    "`git log`, and there is nothing else to derive it from."))
+            if not (self.page.page_type or "").strip():
+                raise ValueError(_needed(
+                    "page.page_type",
+                    "Name the TYPE (note, decision or concept) — never a folder or a path; the "
+                    "worker puts the page where a page of that type goes."))
+            if not (self.page.body or "").strip():
+                raise ValueError(_needed(
+                    "page.body",
+                    "The worker writes the page from this account, so the page's own text has to "
+                    "be in it: return the whole page below its H1, with no frontmatter block. If "
+                    "this capture should not be filed at all, park it with `decision`: \"triage\" "
+                    "instead."))
+            return self
+
+        kind = (self.triage.kind or "").strip()
+        if kind not in agent_module.TRIAGE_KINDS:
+            raise ValueError(_needed(
+                "triage.kind",
+                f"Parking says WHY: one of {', '.join(agent_module.TRIAGE_KINDS)}."))
+        required = agent_module.TRIAGE_REQUIRED_FIELD[kind]
+        if not (getattr(self.triage, required, "") or "").strip():
+            raise ValueError(_needed(
+                f"triage.{required}",
+                f"It is the one thing the submitter is told about a {kind!r} park."))
+        return self
 
 
 # This backend's own ordinary environment — the ONE part of the preamble that differs per backend.

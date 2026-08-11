@@ -88,12 +88,35 @@ sites.
 `page_type` through `page.FOLDER_BY_TYPE` — the one placement table every other placement question
 reads — so a structured account cannot name a location at all.
 
-Which half is REQUIRED is not the schema's question, because the schema cannot know which backend
-ran. A backend DECLARES it: `filing_port.FilingAgent.structured_ordinary`, a class attribute, read
-by `processing._one_pass`. A type test (`isinstance(agent, PydanticFilingAgent)`) was refused for
-the reason this repo refuses every inferred fact — a fourth backend, or a double standing in for
-one, would then take the wrong branch by being the wrong class rather than by declaring the wrong
-thing.
+Which half is REQUIRED is not the shared BOUNDARY's question, because `parse_outcome` judges both
+channels and cannot know which backend ran. A backend DECLARES it:
+`filing_port.FilingAgent.structured_ordinary`, a class attribute, read by
+`processing._one_pass`. A type test (`isinstance(agent, PydanticFilingAgent)`) was refused for the
+reason this repo refuses every inferred fact — a fourth backend, or a double standing in for one,
+would then take the wrong branch by being the wrong class rather than by declaring the wrong thing.
+
+**A backend's OWN output schema is the one place that does know, and the first paid run proved it
+has to say so.** `pydantic_backend.FilingAccount` shipped with a default on every field, `decision`
+included, reasoning that an omission should reach the boundary and be refused on its own terms
+rather than raise inside the framework. That had the mechanism backwards: a default does not make
+an omission visible, it makes it invisible. The framework's output validation accepted a half-empty
+account, so its own `OUTPUT_RETRIES` never fired, and `parse_outcome` refused downstream —
+`unknown-decision` four times and a missing `title` once, five of the golden's ordinary captures
+dead in two passes each, with the WORKER's single corrective retry spent re-asking a model to
+repair a shape a brief cannot reliably teach. The schema now requires what the boundary requires
+(`decision` enum-derived from `agent.DECISIONS`; a `model_validator` demanding the fields THIS
+decision obliges, with the repair instruction as the error message the framework hands back), so
+the cheap road runs first and the expensive one is kept for real problems. The boundary keeps every
+check regardless: it judges the file channel too, and a typed provider response is not a trusted
+one. Two enforcement points, declared. The meeting schema got the same treatment on the same
+mechanism before it fired there.
+
+**Nothing about this was visible offline, and that is the finding underneath the finding.** Every
+structured test drove `TestModel(custom_output_args=…)` with a hand-built COMPLETE account, so the
+suite could only ever exercise the shape a model was assumed to return. The golden caught it on the
+first paid run, which is the instrument doing exactly its job — and the durable lesson is that an
+injected offline model proves the pipeline, never the schema's tolerance for what a real one
+actually emits.
 
 **One bound in the new half does not behave like its neighbours, deliberately.** `page.body` is
 REFUSED over `MAX_PAGE_BODY_LEN`, never truncated. Prose truncates because nothing downstream
