@@ -198,7 +198,9 @@ class Settings:
     require_remote_base: bool = False
 
     # the agent
-    backend: str = "double"             # 'sdk' | 'double' — CI and the suite stay on the double
+    # 'sdk' | 'double' | 'pydantic' — CI and the suite stay on the double; `pydantic` serves the
+    # meeting flow only and `worker.startup_checks` refuses it for a worker (ADR 032).
+    backend: str = "double"
     model: str = DEFAULT_MODEL
     max_turns: int = DEFAULT_MAX_TURNS
     max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS
@@ -263,7 +265,13 @@ class Settings:
             in _TRUTHY,
             backend=str(flag("backend",
                              os.environ.get("STIGMERGY_LIBRARIAN_BACKEND", cls.backend))).lower(),
-            model=os.environ.get("STIGMERGY_LIBRARIAN_MODEL", cls.model),
+            # STRIPPED, once, here. A model id is compared, prefix-parsed and priced by three
+            # different checks that each strip on their own, and then handed to a framework that
+            # does not: `STIGMERGY_LIBRARIAN_MODEL=openai:gpt-5.6-terra ` (a trailing space out of
+            # an env file, or a newline out of a shell export) passes every pre-flight and fails
+            # inside the provider client. Normalizing at the ONE place this package reads the
+            # environment is what makes the pre-flights and the run agree about the same string.
+            model=os.environ.get("STIGMERGY_LIBRARIAN_MODEL", cls.model).strip(),
             max_turns=int(os.environ.get("STIGMERGY_LIBRARIAN_MAX_TURNS", cls.max_turns)),
             max_tool_calls=int(os.environ.get("STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS",
                                               cls.max_tool_calls)),

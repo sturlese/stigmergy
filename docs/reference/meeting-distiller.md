@@ -366,6 +366,30 @@ reads perfectly plausibly on its own.
   own source attachment without a conditional inside any individual gate. `edits_allowed=False` is
   the one this flow alone sets; the other six are also widened, differently, by an attached
   fast-lane capture ([librarian.md](./librarian.md#the-source-attachment-a-parameter-never-a-third-flow)).
+- `librarian.pydantic_backend.PydanticMeetingAgent` — the flow's SECOND real backend, and the only
+  flow that has one ([ADR 032](../decisions/032-filing-port-and-pricing-seam.md)). It exists because
+  everything above made this flow portable without anybody planning it: the agent holds no
+  page-writing tool, explores nothing, and answers with one structured account — so it needs a model
+  that can return a typed object, not an agent harness. One pydantic-ai call with the meeting
+  outcome's own shape as its output schema, the SAME brief read at the SAME base commit
+  (`read_meeting_brief`), the SAME per-item prompt (`build_meeting_prompt`) and the SAME boundary
+  parse (`parse_meeting_outcome` — a typed provider response is not a trusted one). It writes no
+  outcome file, because the envelope carries the account; `turns` and `tool_calls` are `0`, which
+  the port documents as a legitimate answer rather than a missing count; and its cost is computed
+  from tokens through `librarian/pricing.py` instead of arriving pre-priced. **THREE things differ
+  in the prompt, and the third is an admitted contradiction.** Two are caller-declared parameters on
+  the SAME builders the SDK backend uses — the environment paragraph (which tools the agent holds)
+  and the outcome-channel sentence (how its account travels home) — and the preamble around them is
+  composed from shared pieces, so the SDK's own prompt is byte-identical to what it always was. The
+  third is that the BRIEF still tells its reader, in its own voice, that it holds a `Write` tool and
+  writes `.librarian-outcome.json`: true for the SDK backend, false for this one, and the brief is
+  the knowledge repo's text that neither backend may reword unilaterally. So this backend's preamble
+  carries an explicit OVERRIDE paragraph immediately before the brief — the tool and the file
+  describe the SHAPE of the account, every other word of the skill applies unchanged — rather than
+  leaving a model to guess which half of a contradiction is operative.
+  `STIGMERGY_LIBRARIAN_BACKEND=pydantic` is refused for a worker at startup, since a worker's queue
+  carries ordinary captures too; the meeting-only measurement rig is
+  `evals/run_filing.py --backend pydantic --kinds meeting`.
 - `librarian.double.DoubleAgent.run_meeting` — the offline double's meeting-specific directives,
   planted in the transcript itself: `DOUBLE:decisions=<n>`, the four
   `DOUBLE:meeting-hallucinate*` variants (first decision, first pass only, LAST decision, the

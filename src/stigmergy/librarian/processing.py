@@ -80,7 +80,17 @@ from stigmergy.capture.errors import CaptureError
 from stigmergy.kernel import converters
 from stigmergy.kernel.normalize import slugify
 from stigmergy.kernel.page import MAX_BODY_LINES, SPLIT_CHUNK_LINES
-from stigmergy.librarian import acl_rules, base_inputs, config, dedup, edits, gates, gitcmd, report
+from stigmergy.librarian import (
+    acl_rules,
+    base_inputs,
+    config,
+    dedup,
+    edits,
+    filing_port,
+    gates,
+    gitcmd,
+    report,
+)
 from stigmergy.librarian import agent as agent_module
 from stigmergy.librarian import page as page_policy
 from stigmergy.librarian.errors import (
@@ -161,10 +171,15 @@ def _stamp_cost(result: "Result", passes: "AgentPasses") -> "Result":
 class Deps:
     """Everything `process_item` needs that it does not own. Injected rather than constructed so
     a test can drive the whole path with a memory evidence store, a double agent and a scratch
-    repo — no monkeypatching, matching the repo's settings/seam discipline."""
+    repo — no monkeypatching, matching the repo's settings/seam discipline.
+
+    `agent` is the PORT (`filing_port.FilingAgent`) rather than a particular backend, and naming it
+    here is what makes the annotation load-bearing: this module is the port's only consumer, so the
+    two calls it makes on this field ARE the contract every backend owes.
+    """
     settings: object
     evidence: object
-    agent: object
+    agent: filing_port.FilingAgent
     registry: object
     acl_config: object = None
     repo: str = ""

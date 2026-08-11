@@ -96,8 +96,16 @@ def visibility_timeout_clause(visibility_timeout_s) -> str:
             f"incremented")
 
 
-def startup_checks(settings) -> dict:
+def startup_checks(settings, *, meeting_only: bool = False) -> dict:
     """Validate EVERYTHING the worker needs, once, before a single item is claimed.
+
+    **`meeting_only` is not a worker option.** It is passed by ONE caller — `evals/run_filing.py`,
+    when it drives a meeting-only subset through the `pydantic` backend — and it means "this rig
+    will only ever hand the agent `kind="meeting"` rows". `worker.run` and `cli` never pass it, so
+    a real worker still gets the refusal below. It exists because the pre-flight is worth running
+    for that rig too (the whole point of a fail-closed pre-flight is that a misconfiguration is one
+    loud line rather than a table of `failed` rows), and the ONE check that does not apply to it is
+    the one about a queue carrying ordinary captures.
 
     Every check here is fail-closed and loud. Per-item validation was the alternative and is
     strictly worse: a malformed `ops/acl.json` would produce N identical `failed` rows and bury
@@ -133,7 +141,11 @@ def startup_checks(settings) -> dict:
     if settings.backend not in agent_module.BACKENDS:
         raise LibrarianConfigError(
             f"invalid librarian backend {settings.backend!r} "
-            f"(use {' or '.join(agent_module.BACKENDS)})")
+            f"(use one of: {', '.join(agent_module.BACKENDS)})")
+    if settings.backend == agent_module.PYDANTIC_BACKEND:
+        _check_pydantic_backend(settings, meeting_only=meeting_only)
+    else:
+        _check_model_spelling_for(settings)
 
     # The lease must outlive the item, or the queue redelivers a row this worker is still working
     # on — and since the commit and the push happen before `finish`, both workers file it. The
@@ -225,6 +237,121 @@ def _check_skill_at(repo: str, base: gitcmd.BaseRef) -> None:
         raise LibrarianConfigError(
             f"the librarian skill at {where} could not be read ({ex})") from ex
     agent_module.validate_skill(text, where=where)
+
+
+def _usable_example(model: str) -> bool:
+    """Would pasting this id into the printed command survive the next two refusals — the
+    provider-prefix rule and the price check? A refusal whose own example fails the refusal below it
+    is worse than one with no example."""
+    from stigmergy.librarian import pricing, pydantic_backend
+
+    if not pydantic_backend.provider_of(model):
+        return False
+    try:
+        pricing.require_priced(model)
+    except LibrarianConfigError:
+        return False
+    return True
+
+
+def _check_model_spelling_for(settings) -> None:
+    """The MIRROR of the pydantic backend's provider-prefix rule, and it exists because the
+    asymmetry was the defect.
+
+    One backend refusing a bare id while the other silently accepted a prefixed one meant exactly
+    half the configuration mistake was caught: `STIGMERGY_LIBRARIAN_MODEL=openai:gpt-5.6-terra` with
+    `backend=sdk` reaches the Claude Agent SDK, which has never heard of a provider prefix, and the
+    operator learns it from a failed run rather than from a startup line. A spelling belongs to a
+    backend; both spellings are now refused by the backend they do not belong to.
+
+    Silent for the `double`, which reads no model at all — a refusal about a value nothing consumes
+    would be a guard inventing work for an operator.
+    """
+    from stigmergy.librarian import pydantic_backend
+
+    if settings.backend != "sdk":
+        return
+    provider = pydantic_backend.provider_of(settings.model)
+    if not provider:
+        return
+    raise LibrarianConfigError(
+        f"$STIGMERGY_LIBRARIAN_MODEL is {settings.model!r}, and a provider-prefixed id is the "
+        f"{agent_module.PYDANTIC_BACKEND!r} backend's spelling: pydantic-ai resolves "
+        f"{provider!r} from it. The 'sdk' backend hands the id to the Claude Agent SDK, which "
+        f"takes the BARE name — use {settings.model.split(':', 1)[1]!r} for this backend, or "
+        f"switch to the backend that spelling belongs to")
+
+
+def _check_pydantic_backend(settings, *, meeting_only: bool, environ: dict | None = None) -> None:
+    """Everything the `pydantic` backend needs, refused before the first claim — starting with the
+    flow it cannot serve.
+
+    The three checks below are the meeting-only rig's; the refusal above them is the worker's, and
+    it is the whole reason this backend is not simply "available". Config that half-works is the
+    failure this repo refuses on principle: a worker that claims every `kind` and can file only one
+    of them would drain ordinary captures into `failed`, one delivery at a time, while looking
+    configured.
+
+    `environ` is injectable for the same reason `agent.credential_status`'s is: the key preflight is
+    a pure function of a mapping and a model string, and it must be assertable without a process
+    whose environment has been mutated around it.
+    """
+    from stigmergy.librarian import pricing, pydantic_backend
+
+    if not meeting_only:
+        # An id the operator can paste, and it has to satisfy BOTH of the next two refusals or the
+        # paste walks them straight into one: provider-prefixed AND priced. Their own when it
+        # already is, otherwise one this environment can actually price. Derived rather than
+        # hardcoded — a model id in a message is configuration like every other one.
+        example = (settings.model if _usable_example(settings.model)
+                   else (pricing.priced_models() or [""])[0])
+        raise LibrarianConfigError(
+            f"the {agent_module.PYDANTIC_BACKEND!r} librarian backend serves the MEETING flow only "
+            f"in this milestone, and a worker's queue carries ordinary captures too — the first "
+            f"`raw` or `drive` row it claimed would be refused and would burn its deliveries one "
+            f"at a time. A worker must run one of the two backends that serve every flow: "
+            f"STIGMERGY_LIBRARIAN_BACKEND=sdk (the real agent) or "
+            f"STIGMERGY_LIBRARIAN_BACKEND=double (the offline double, which fabricates pages and "
+            f"is for tests only). To MEASURE this backend on the meeting golden, use the "
+            f"meeting-only rig instead of a worker: "
+            f"python evals/run_filing.py --backend {agent_module.PYDANTIC_BACKEND} "
+            f"--kinds meeting --model {example}. "
+            f"See {pydantic_backend.ADR}")
+
+    provider = pydantic_backend.provider_of(settings.model)
+    if not provider:
+        raise LibrarianConfigError(
+            f"$STIGMERGY_LIBRARIAN_MODEL is {settings.model!r}, which names no provider, and the "
+            f"{agent_module.PYDANTIC_BACKEND!r} backend resolves a model string through pydantic-ai "
+            f"— where a BARE name means the OpenAI Responses API, so this run would file meetings "
+            f"through a provider nobody chose. Give it a provider prefix "
+            f"(<provider>:<model>); priced today: {', '.join(pricing.priced_models())}. The bare "
+            f"spelling belongs to the 'sdk' backend, which resolves it through the Claude Agent SDK "
+            f"itself")
+
+    # An unpriced model would report $0.00 for work that costs money — refused here rather than
+    # discovered in a column of zeros. `require_priced` names the id, the override and the table's
+    # own AS_OF date.
+    pricing.require_priced(settings.model)
+
+    key_env = pydantic_backend.PROVIDER_KEY_ENV.get(provider)
+    if key_env is None:
+        # Not a refusal: pydantic-ai supports providers this table has not heard of, and a
+        # preflight that refused every unlisted one would make the adapter provider-specific. A
+        # WARNING rather than an INFO for the reason `_check_agent_credential`'s advisory is one —
+        # nothing here configures logging, so INFO is dropped on the floor and an advisory nobody
+        # sees is not an advisory.
+        log.warning("no API-key preflight exists for the provider prefix %r — proceeding. If the "
+                    "run then fails unauthenticated, this line is the reason, and the fix is "
+                    "whatever key that provider reads", f"{provider}:")
+        return
+    if not (os.environ if environ is None else environ).get(key_env):
+        raise LibrarianConfigError(
+            f"$STIGMERGY_LIBRARIAN_MODEL is {settings.model!r} and ${key_env} is not set — the "
+            f"{agent_module.PYDANTIC_BACKEND!r} backend authenticates with the provider's own key "
+            f"and has nothing else to try. Export {key_env}: it normally lives in the gitignored "
+            f"root env file, which `make` includes and exports, and a directly-invoked script "
+            f"inherits nothing from it")
 
 
 def _check_agent_credential(environ: dict | None = None) -> None:

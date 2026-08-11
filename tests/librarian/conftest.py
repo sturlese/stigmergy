@@ -13,7 +13,7 @@ import pytest
 from stigmergy.capture import evidence as evidence_plane
 from stigmergy.capture import schema
 from stigmergy.librarian import agent as agent_module
-from stigmergy.librarian import githubapp
+from stigmergy.librarian import githubapp, pricing
 from tests import testdb
 from tests.librarian import support
 
@@ -86,6 +86,23 @@ def no_ambient_agent_credential(monkeypatch, tmp_path):
     # ever reach the real Gemini API. Tests that want the fallback set a fake key explicitly.
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setenv(agent_module.CONFIG_DIR_ENV, str(tmp_path / "no-claude-config-dir"))
+
+
+@pytest.fixture(autouse=True)
+def no_ambient_pricing_override(monkeypatch):
+    """The third variable the same doctrine applies to: `$STIGMERGY_LIBRARIAN_PRICING`.
+
+    `pricing._override()` reads it at CALL time and merges it over the seeded table per id, so an
+    operator who has priced a model in their gitignored `.env` — which `make` exports into `make
+    test` — changes what `priced_models()` answers, what the unpriced refusal LISTS, and, if they
+    happened to price the id a test picked as unpriced, whether that refusal fires at all. That is
+    the same laptop-versus-CI asymmetry `no_ambient_agent_credential` exists to close, one variable
+    over: the positive cases would pass on the developer's machine and the negative cases in CI,
+    and neither machine would run both.
+
+    Cleared unconditionally; the tests that need an override set one explicitly with `monkeypatch`.
+    """
+    monkeypatch.delenv(pricing.PRICING_ENV, raising=False)
 
 
 def connect_or_skip():

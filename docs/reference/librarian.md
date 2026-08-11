@@ -45,8 +45,11 @@ asserted by `tests/test_architecture.py`.
 | `config.py` | every tunable, resolved once (`Settings.from_args`); the derived lease |
 | `processing.py` | one item, end to end: dedup → worktree → agent → edits → stamp → gates → commit. `process_item` is the ordinary flow; `process_meeting_item` is a genuine second flow (a page SET); `process_drive_item` converts the fetched bytes to text and then delegates to `process_item` itself |
 | `base_inputs.py` | the three repo-sourced inputs, read at the item's own base commit |
+| `filing_port.py` | the PORT — the two calls `processing.py` makes, the `AgentRun` envelope, the fault contract, the per-flow side-effect rules |
 | `agent.py` | the SDK backend, the options it is confined by, the outcome contract |
 | `double.py` | the offline double: misbehaves on demand, behaves on ordinary material |
+| `pydantic_backend.py` | the pydantic-ai backend: one structured call, no tools, MEETING flow only ([ADR 032](../decisions/032-filing-port-and-pricing-seam.md)) |
+| `pricing.py` | model id → $/MTok, for the backends that report tokens instead of dollars |
 | `gates.py` | the deterministic vetoes over the diff |
 | `edits.py` | code's own additive edits, from the agent's declaration |
 | `page.py` | the page vocabulary — SEVEN known types, of which the fast lane may CREATE three — their folders, the server-owned frontmatter stamp, path identity (case/Unicode-fold) |
@@ -216,8 +219,9 @@ landmine.
 |---|---|---|
 | `STIGMERGY_REPO` (`--repo`) | `../stigmergy-brain` | the knowledge-repo checkout the worktrees branch from |
 | `STIGMERGY_LIBRARIAN_BRANCH` (`--branch`) | `main` | the branch the fast lane commits to |
-| `STIGMERGY_LIBRARIAN_BACKEND` (`--backend`) | `double` | `sdk` runs the real agent; `double` is offline |
-| `STIGMERGY_LIBRARIAN_MODEL` | `claude-sonnet-5` | a Sonnet-class model is right for routine filing |
+| `STIGMERGY_LIBRARIAN_BACKEND` (`--backend`) | `double` | `sdk` runs the real agent; `double` is offline; `pydantic` serves the MEETING flow only and is refused for a worker (see below) |
+| `STIGMERGY_LIBRARIAN_MODEL` | `claude-sonnet-5` | a Sonnet-class model is right for routine filing. `sdk` takes the bare name; `pydantic` requires a provider-prefixed one (`openai:gpt-5.6-terra`) |
+| `STIGMERGY_LIBRARIAN_PRICING` | — | `{"<model>": [input, cached input, output]}`, dollars per MILLION tokens, merged per id over `librarian/pricing.py`'s own table. Only the backends that report tokens rather than dollars read it |
 | `STIGMERGY_LIBRARIAN_MAX_TURNS` | 30 | per-item agent bound |
 | `STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS` | 120 | per-item agent bound (enforced by us, not the SDK) |
 | `STIGMERGY_LIBRARIAN_TIMEOUT_S` | 300 | per-item wall clock (enforced by us) |
@@ -258,6 +262,46 @@ arithmetic, instead of being silently replaced by 900 and then quoted back at th
 for something else. A flag a human typed must take effect or be refused; being ignored is the one
 outcome that teaches them the tool lies. `--poll-interval 0` and `--max-attempts 0` are refused for
 the same reason and with their own sentences (a tight claim loop; every delivery starting exhausted).
+
+### Three backends behind one port
+
+The agent step is a named, typed port — `librarian.filing_port.FilingAgent`, two keyword-only calls
+(`run` for an ordinary capture, `run_meeting` for a transcript), one `AgentRun` envelope back, one
+fault contract. Three implementations answer it, and `STIGMERGY_LIBRARIAN_BACKEND` picks one:
+
+| Backend | Flows | Model string | Cost |
+|---|---|---|---|
+| `sdk` | every flow | bare (`claude-sonnet-5`) — the Claude Agent SDK resolves it | the SDK prices each run and the figure is passed through |
+| `double` | every flow | none — no model runs | `0.0`, and it says so |
+| `pydantic` | the **meeting flow only** | provider-prefixed (`openai:gpt-5.6-terra`) — pydantic-ai resolves it | computed from tokens through `librarian/pricing.py` |
+
+**`pydantic` is refused for a worker, on purpose.** A worker's queue carries ordinary captures too,
+so a backend that can file only one `kind` would burn deliveries one row at a time while looking
+configured — `worker.startup_checks` refuses it before the first claim and names the two backends
+that serve every flow. What it does serve is the meeting-only measurement rig
+(`evals/run_filing.py --backend pydantic --kinds meeting`), which is the only caller that may pass
+`startup_checks(..., meeting_only=True)`. That path validates what the backend actually needs and
+refuses each one out loud: a model string with no provider prefix (pydantic-ai reads a bare name as
+an OpenAI model, so inheriting it silently would file meetings through a provider nobody chose), a
+model with no configured price, and a missing provider key (`openai:`→`OPENAI_API_KEY`,
+`anthropic:`→`ANTHROPIC_API_KEY`, `google-gla:`→`GEMINI_API_KEY`; an unrecognized prefix is a
+warning, not a refusal — the adapter stays provider-agnostic). Design record and the plan for
+lifting the limitation: [ADR 032](../decisions/032-filing-port-and-pricing-seam.md).
+
+**A spelling belongs to a backend, and BOTH mistakes are refused.** The mirror of the rule above is
+enforced too: `backend=sdk` with a provider-prefixed id (`openai:gpt-5.6-terra`) is refused at
+startup, because the Claude Agent SDK has never heard of a provider prefix and the operator would
+otherwise learn it from a failed run. Refusing one direction and silently accepting the other
+caught exactly half of the same configuration mistake. The `double` reads no model at all and is
+silent about both.
+
+**Why an unpriced model is a refusal rather than a zero.** `report.cost_usd` is the row an operator
+asks "what did this cost?", and a backend that reports only token counts can answer it only through
+a price table. A missing entry that resolved to `$0.00` would read as free — so `pricing.py` refuses
+at startup instead, naming the id, the `STIGMERGY_LIBRARIAN_PRICING` line that fixes it, and the
+date the table was last set by a human (`AS_OF`). The table is configuration for the same reason
+model ids are: prices move, and an introductory rate expires on a date nobody wants to learn from a
+bill.
 
 ### `STIGMERGY_LIBRARIAN_REFUSED_DIFF_DIR` — the refused diff, preserved
 
@@ -379,10 +423,13 @@ every page OTHER than the filed one that this commit touched. It is a distinct f
 `overlaps_flagged`: that one is the agent's JUDGMENT about what overlaps; `pages_edited` is what code
 actually wrote.
 
-Reports also carry `cost_usd` — the real dollar spend of the item's agent passes, summed from the
-figure the SDK reports per run, a pass that died mid-run included (the fault carries its own
-figure on the exception, exactly like `agent_attempts`; a timeout is the honest `0.0`, since no
-priced result ever arrived). The rule: present, possibly `0.0`, on every outcome that passed
+Reports also carry `cost_usd` — the real dollar spend of the item's agent passes, a pass that died
+mid-run included (the fault carries its own figure on the exception, exactly like `agent_attempts`;
+a timeout is the honest `0.0`, since nothing ever arrived to price). Where the per-run figure comes
+from is the backend's business and the report's shape does not change with it: the `sdk` backend is
+priced by its own SDK and passes that number through, while a backend that reports only TOKENS has
+them multiplied by `librarian/pricing.py`'s configured $/MTok table. The rule: present, possibly
+`0.0`, on every outcome that passed
 through an agent loop or the failure road — filed, refused, parked and `failed` alike — and
 absent only on the terminal states decided before the loop: a duplicate, a `filed_retry`, a
 material-level secrets/PII rejection. Operators read it from the stored row (`stigmergy-queue

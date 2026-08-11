@@ -69,12 +69,12 @@ from stigmergy.kernel import registry as registry_module
 from stigmergy.librarian import gitcmd
 from stigmergy.librarian.agent import (
     OUTCOME_FILENAME,
-    AgentRun,
     confined_write,
     parse_meeting_outcome,
     parse_outcome,
 )
-from stigmergy.librarian.errors import WorktreeError
+from stigmergy.librarian.errors import AgentError, WorktreeError
+from stigmergy.librarian.filing_port import AgentRun, priced
 
 DIRECTIVE_RE = re.compile(r"^DOUBLE:([a-z-]+)(?:=(.*))?$", re.M)
 
@@ -116,7 +116,14 @@ def _findings(material: str) -> list[str]:
 
 
 class DoubleAgent:
-    """Same surface as `SdkAgent`, no network, no key, no framework import."""
+    """Same surface as `SdkAgent`, no network, no key, no framework import.
+
+    "Same surface" is `filing_port.FilingAgent` now, and satisfying it structurally is what makes
+    the offline suite prove something about the production path: `processing.py` is written against
+    the port, so a double that answers it is exercising the same contract a live backend does. Its
+    `cost_usd` stays `0.0` on every run — an offline pass spends nothing, and `0.0` is a real
+    answer rather than a missing one.
+    """
 
     def __init__(self, settings):
         self.settings = settings
@@ -431,7 +438,7 @@ class DoubleAgent:
         (now tool-less) agent's one legal write is. No `allowed_re` needed: `confined_write`'s
         own unconditional outcome-file exception is what permits this write, for both flows."""
         self._write(worktree, OUTCOME_FILENAME, json.dumps(outcome, indent=2) + "\n")
-        run.outcome = parse_meeting_outcome(outcome)
+        run.outcome = self._priced_parse(run, parse_meeting_outcome, outcome)
         return run
 
     @staticmethod
@@ -507,8 +514,29 @@ class DoubleAgent:
         `parse_outcome` the real backend goes through, so the double cannot accidentally produce a
         shape the SDK path would have refused."""
         self._write(worktree, OUTCOME_FILENAME, json.dumps(outcome, indent=2) + "\n")
-        run.outcome = parse_outcome(outcome)
+        run.outcome = self._priced_parse(run, parse_outcome, outcome)
         return run
+
+    @staticmethod
+    def _priced_parse(run, parse, outcome):
+        """The parse, on `SdkAgent`'s own outcome-read road: a refusal leaves the pass PRICED.
+
+        Both backends read their account through a parser that can refuse it, and both owe the port
+        the same thing on the way out — `filing_port.priced` attaching `run_cost_usd`, because
+        `processing` banks a fault's spend off the exception and cannot tell "nothing was spent"
+        from "nobody attached it". `DOUBLE:bad-shape` is the directive that drives exactly this
+        road, so a double that skipped the attach would be exercising a SHORTER contract than the
+        backend it stands in for — which is the one thing this whole file exists not to do.
+
+        The figure is `0.0` and that is the honest one: an offline pass spends nothing. What
+        matters is that the FIELD is there, so the shape-retry road looks identical from
+        `processing`'s side whichever backend produced it.
+        """
+        try:
+            return parse(outcome)
+        except AgentError as ex:
+            priced(run, ex)
+            raise
 
     def _write(self, worktree: str, rel: str, text: str, *, allowed_re=None) -> None:
         """A write the REAL agent would be permitted — **through the very rule that permits it**.

@@ -79,6 +79,30 @@ is closed too (`stigmergy.views` must never import `stigmergy.entities`, keeping
 worker's dependency graph one-way — see
 [`views/index.md`](../views/index.md)'s own "Avoid" section).
 
+**The agent seam is a PORT now, and there are THREE backends behind it.** `filing_port.FilingAgent`
+is what `processing.py` is written against — `run` / `run_meeting`, the `AgentRun` envelope, the
+fault contract (`AgentError` carrying `run_cost_usd`), and the side-effect rules, which differ per
+flow and must not be averaged (ordinary: a NEW page inside the worktree; meeting: the outcome and
+nothing else). `SdkAgent`, `DoubleAgent` and `PydanticMeetingAgent` satisfy it STRUCTURALLY — no
+base class, no registration: a backend is a class that answers the two calls. `build_agent` returns
+the port and is where the three are declared to satisfy it.
+
+**The third backend is meeting-only, and that is enforced at STARTUP rather than per item.**
+`worker.startup_checks` refuses `backend="pydantic"` for a worker outright, because a worker's queue
+carries ordinary captures too and a backend that serves one `kind` would burn deliveries one row at
+a time while looking configured. The one caller that may opt out is the meeting-only measurement rig
+(`evals/run_filing.py --backend pydantic --kinds meeting`), through
+`startup_checks(settings, meeting_only=True)` — never `worker.run`, never `cli`. That path then
+validates what this backend actually needs: a provider-prefixed model string, a configured price,
+and the provider's own key. `PydanticMeetingAgent.run` (the ordinary flow) raises rather than
+filing, and is unreachable through a worker by construction.
+
+**`cost_usd` has two roads now, and the report's shape has neither in it.** The SDK backend is
+priced by its own SDK and passes the figure through; a backend that reports only TOKENS multiplies
+them by `pricing.py`'s configured table. A model with no configured price is REFUSED at startup —
+never silently `$0.00`, which would read as free. [ADR 032](../../../docs/decisions/032-filing-port-and-pricing-seam.md)
+records both halves and the expand–contract plan.
+
 **A THIRD external input `agent.py` briefly grew is also gone.** `SdkAgent._run` once read a fleet
 supervisor's approved playbook (`ops/playbook.md`, out of the worktree) and appended it to the
 system prompt as advisory context, alongside the skill. The supervisor went with the purge
@@ -127,7 +151,7 @@ capture.queue.claim_next            — FOR UPDATE SKIP LOCKED, hands back the `
   │
   └─ gitcmd.ephemeral_worktree(repo, base.sha, worktree_root)  — a fresh `git worktree --detach`,
        │                                                          reaped by `gitcmd.reap` on crash
-       ├─ agent.build_agent(settings).run(...)     — SdkAgent or DoubleAgent; writes ONE new page
+       ├─ agent.build_agent(settings).run(...)     — a filing_port.FilingAgent; writes ONE new page
        │     plus the outcome file; confined by agent.confined_write / page.is_inside
        ├─ agent.read_outcome → parse_outcome        — untrusted input, bounded and frozen (Outcome)
        ├─ agent.discard_outcome_file                — consumed before the diff is ever taken
@@ -187,7 +211,10 @@ reported about one (see Data & contracts, below).
 | Module | Owns |
 |---|---|
 | `cli.py` | `stigmergy-librarian` — `once` / `run` / `status`; the operator's front door |
-| `worker.py` | the loop, `startup_checks` (every fail-closed startup refusal), `sweep`, `Worker` (signal handling) |
+| `filing_port.py` | `FilingAgent` — the agent seam as a `Protocol` instead of a convention: the two calls, the `AgentRun` envelope, `priced()` and the fault contract, and the per-flow side-effect rules. Imports `errors` and nothing else, so every backend can depend on it |
+| `pricing.py` | model id → $/MTok (`PRICES` + `$STIGMERGY_LIBRARIAN_PRICING`, `AS_OF`), `compute_cost_usd`, `require_priced` — for the backends that report TOKENS rather than dollars |
+| `pydantic_backend.py` | `PydanticMeetingAgent` — the third backend: one structured pydantic-ai call, no tools, no outcome file, MEETING flow only ([ADR 032](../../../docs/decisions/032-filing-port-and-pricing-seam.md)) |
+| `worker.py` | the loop, `startup_checks` (every fail-closed startup refusal, including the one that keeps `backend="pydantic"` off a worker), `sweep`, `Worker` (signal handling) |
 | `processing.py` | `process_item` — one capture end to end; `Result`, `Deps`, the refused-diff digest; `process_meeting_item` — its sibling for a `kind="meeting"` row, filing a page SET instead of one page; and `process_drive_item` ([ADR 028](../../../docs/decisions/028-drive-door.md)) — the thin drive sibling: kernel-hands conversion (`_drive_material`, `_with_vision_fallback`) then `process_item` itself over the extracted text, with the source attachment ON via `_source_attachment`'s kind-keyed drive branch |
 | `config.py` | `Settings` — every tunable, resolved once (`from_args`); the derived visibility timeout |
 | `base_inputs.py` | the three repo-sourced inputs — ACL, entity registry, contract linter — read **at `base.sha`**, never off the working tree; also the doorbell's `ops/stewards.json` reader, shared with `stigmergy.server.review` |
@@ -225,6 +252,11 @@ Everything else is reached FROM `processing.py`; read it first when tracing one 
   `report._clean` and `capture.cli._clean` now go through. The truncation was written twice and the
   copies differed; the hard-slicing one cut a `brain_reply(...)` invocation mid-call on the surface
   that tells a steward to run it.
+- `filing_port.FilingAgent` / `AgentRun` / `priced` — the agent seam, and the ONE place its contract
+  is written down. A new backend is declared against it; a change to what `processing` may assume of
+  a backend is a change HERE first, not a convention three modules discover separately.
+- `pricing.compute_cost_usd` / `require_priced` — the ONE tokens-to-dollars answer. A second
+  multiplication at a call site is a second price table that drifts from the configured one.
 - `gates.Finding` / `GateContext` / `run_gates` — the one veto surface. A new check is a new
   `(ctx) -> list[Finding]` function added to `gates.ALL_GATES`, not a special case inside
   `processing.py`.
@@ -300,7 +332,23 @@ Everything else is reached FROM `processing.py`; read it first when tracing one 
   instead of importing `config` for a default.
 - **Do not import `claude_agent_sdk` at module scope.** It is imported inside `SdkAgent._run` only —
   `tests/test_architecture.py` asserts the offline double never touches it, which is what keeps CI
-  keyless and the whole suite running against `--backend double`.
+  keyless and the whole suite running against `--backend double`. **The same rule applies to
+  `pydantic_ai`**, imported inside `PydanticMeetingAgent._run_meeting` only, for the identical
+  reason: a keyless run must load no agent framework at all, and the import graph must not claim
+  this package depends on one unconditionally. (`pydantic` itself is module-scope in
+  `pydantic_backend.py` — the output schema is plain data, and a test that builds one by hand must
+  not have to reach through a backend to do it.)
+- **Do not reuse `kernel.llm.build_processor` for a librarian backend.** It is this repo's fake/real
+  dispatch for every OTHER agent and it is the wrong seam here: the librarian's offline path is
+  `double.DoubleAgent` — a whole adversarial backend the suite is built on — so routing a librarian
+  backend through `resolve_backend` would create a SECOND offline path, with different semantics,
+  answering to a different variable (`$CLEAN_LLM` rather than `$STIGMERGY_LIBRARIAN_BACKEND`). What
+  `pydantic_backend.py` reuses instead is everything the FLOW already owns: `read_meeting_brief`,
+  `build_meeting_prompt`, `build_meeting_system_prompt` and `parse_meeting_outcome`.
+- **Do not let a backend report `0.0` for a run that cost money.** A backend that is not priced by
+  its own provider goes through `pricing.compute_cost_usd`, and a model with no configured price is
+  refused at STARTUP (`pricing.require_priced`). A silent zero in `report.cost_usd` reads as free,
+  which is the one direction nobody audits.
 - **Do not import `stigmergy.server` or `stigmergy.answer`** from anywhere in this package (or the
   reverse) — `tests/test_architecture.py` asserts both edges. There is no second caller into
   `gates.py` from `stigmergy.server` either (the canon lane that was one is gone); `gates.py` has
@@ -535,6 +583,8 @@ rather than about a second, untested implementation of the same rule.
 | Change WHEN the submitter is asked vs when the steward is | `processing._triage` / `_ask_or_park` — the routing is code's, from the agent's declared outcome, and the agent's schema does not change. The one-ask budget is `capture_queue.asked_at`, never a counter in this process |
 | Add a new refusal | a builder in `report.py` going through `_rejected`, with a code in `capture.schema.REJECTION_REASONS`. Decide whether the capture's own material may still be read back: if not, the code joins `schema.WITHHELD_REASONS` and `capture.queue` does the rest |
 | Add a fail-closed startup check | `worker.startup_checks`, raise `LibrarianConfigError`; add its row to the runbook's refusal table |
+| Add an agent backend | a class satisfying `filing_port.FilingAgent` in its own module, a value in `agent.BACKENDS`, a branch in `build_agent` (lazy import, so the other backends' frameworks stay unloaded), and — if it reports tokens rather than dollars — a row in `pricing.PRICES`. If it cannot serve every flow, refuse it in `worker.startup_checks` rather than letting a worker discover that one capture at a time |
+| Change what a model costs | `pricing.PRICES` **and** `pricing.AS_OF` in the same edit, or `$STIGMERGY_LIBRARIAN_PRICING` for one deployment. Never a literal at a call site — the same "model ids are configuration" rule, applied to their prices |
 | Read another file out of the knowledge repo | `base_inputs` — a wrapper over `read_at`, never `open(settings.<x>_path)`. Decide what ABSENT means for it and say so in the wrapper's docstring |
 | Change what the deployed worker needs | `bootstrap.py` (the checkout, the verification, the env it execs with) **and** `fly.toml`'s `worker` process group **and** `docker-compose.yml`'s `librarian` service — the composition exists so the artifact is exercised before staging is |
 | Change worktree / diff mechanics | `gitcmd.py` — `--text` and `core.quotePath=false` are load-bearing on every diff invocation, not cosmetic |
