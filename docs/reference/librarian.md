@@ -517,6 +517,14 @@ The table is mirrored by the knowledge repo's own contract linter (`stigmergy_li
 `VALID_TYPES`), and the two must agree: a type this table knows and the linter does not is a page
 the linter refuses at the gate that judges the diff.
 
+**A missing frontmatter block gets a repair brief that says whose job the fix is.** The linter's
+own `missing required field: type` names the first field it iterates, not the actual defect — the
+block itself was absent. `gate_contract` appends a fixed, shape-neutral fact to that finding's
+repair brief on every retry: the worker stamps `status`/`as_of`/`submitted_by`/`entity`/`acl` after
+the draft, and every other required field must already be in the page's own frontmatter block,
+exactly as `ops/templates/<type>.md` declares. It travels beside the librarian brief's own
+"Writing the page" guidance, never instead of it — see [ADR 035](../decisions/035-filing-reliability-brief-and-fault-visibility.md).
+
 ## The outcome contract, and the shape of a declared edit
 
 The agent's only channel back is one JSON file it writes in the worktree, consumed and discarded
@@ -628,6 +636,16 @@ Refusals from the boundary split by whether telling the agent could plausibly fi
 
 If the corrective pass does not fix a shape problem the item still lands `failed` with stage
 `outcome`, naming what was wrong and how many agent passes ran.
+
+**A framework-level fault reaches the same shape road, with its own message intact.** When
+pydantic-ai itself cannot make the model produce something usable — `UnexpectedModelBehavior` — the
+`pydantic` backend turns it into the same `gates.Finding`/`OutcomeShapeError` shape a malformed
+outcome takes, but now carries the framework's own diagnosis, bounded and fence-neutralized, instead
+of only its exception class name: the corrective retry and, if it does not clear, the `failed`
+report both name the actual fault ([ADR 035](../decisions/035-filing-reliability-brief-and-fault-visibility.md)).
+A worker log line carries the same fault with a wider bound, for an operator. Any OTHER exception
+from the run stays reported by class name only, since that broader net can catch a raw provider
+error carrying prompt text.
 
 ### A veto that names no repair does not spend the retry
 

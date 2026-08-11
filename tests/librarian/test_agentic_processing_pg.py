@@ -35,11 +35,17 @@ import dataclasses
 import json
 import pathlib
 
+import pytest
+from pydantic_ai.exceptions import UnexpectedModelBehavior
+from pydantic_ai.models.function import FunctionModel
+
 from stigmergy.capture import schema
 from stigmergy.librarian import agent as agent_module
+from stigmergy.librarian import gates as gates_module
 from stigmergy.librarian import gitcmd, processing, worker
 from stigmergy.librarian.double import DoubleAgent
-from stigmergy.librarian.pydantic_backend import PydanticFilingAgent
+from stigmergy.librarian.errors import OutcomeShapeError
+from stigmergy.librarian.pydantic_backend import MAX_FAULT_MESSAGE_LEN, PydanticFilingAgent
 from tests.librarian import support
 
 PRICED_MODEL = "openai:gpt-5.6-terra"
@@ -656,3 +662,88 @@ def test_the_worktree_the_tools_wrote_in_is_gone_afterwards(tmp_path, clean_queu
     assert result.status == schema.FILED, result.report.get("summary")
     listed = gitcmd.run("worktree", "list", cwd=env.repo).stdout
     assert gitcmd.WORKTREE_PREFIX not in listed, listed
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# `UnexpectedModelBehavior` reaches the corrective retry NAMED, not as a bare class — the fault a
+# staging measurement traced to real UMB faults reporting as indistinguishable "UnexpectedModel-
+# Behavior" everywhere they surfaced (log, Finding, submitter report). Driven straight against
+# `PydanticFilingAgent.run` — no queue, no `worker.process_next` — because `report.failed_system`
+# re-clamps `reason` to its OWN 200-character ceiling on the way to a submitter, and testing this
+# through the full worker pipeline would leave it ambiguous which clamp (the backend's, named by
+# `MAX_FAULT_MESSAGE_LEN`, or the report layer's) produced a given cut. This is the same posture
+# `test_pydantic_meeting_pg.py`'s keyless UMB/provider-fault tests already take one flow over.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+class _RaisingScript:
+    """A `model_factory` stand-in that raises `UnexpectedModelBehavior(text)` on its very first
+    call, in place of `Script`'s own scripted tool-call conversation — the property under test is
+    what `PydanticFilingAgent._run` does with the exception, not what a well-formed script
+    produces, so nothing here ever returns a `ModelResponse` at all."""
+
+    def __init__(self, text: str):
+        self.text = text
+
+    def factory(self):
+        def _explode(messages, info):
+            raise UnexpectedModelBehavior(self.text)
+        return FunctionModel(_explode)
+
+
+# A control byte (BEL) planted just past a recognizable head, and 280 characters of padding after
+# it — long enough that `MAX_FAULT_MESSAGE_LEN` (200) must cut it, not merely leave it alone.
+_CONTROL_BYTE = "\x07"
+_FAULT_HEAD = "invalid tool call: expected `write_page`, got write_oops"
+_KNOWN_FAULT = _FAULT_HEAD + _CONTROL_BYTE + " " + ("filler " * 40)
+
+
+def test_a_raised_unexpected_model_behavior_reaches_the_finding_sanitized_and_clamped(tmp_path):
+    """OLD behaviour, before this change: the UMB arm wrapped every fault as
+    `"the filing run ended badly (UnexpectedModelBehavior): call the tools..."` — `str(ex)` reached
+    only the `log.warning` line the operator's own log carries, and the Finding a corrective retry
+    reads (and a failed report echoes) named the CLASS and nothing else. A real UMB fault measured
+    in staging was therefore indistinguishable from every other one at the one place a human or a
+    retrying model could read what actually went wrong.
+
+    Now `textutil.sanitize` + `textutil.clamp(..., MAX_FAULT_MESSAGE_LEN)` puts a bounded copy of
+    `str(ex)` INSIDE the message: the control byte is gone (sanitize), the recognizable head
+    survives (it sits well inside the 200-character budget), and the padded tail does not (clamp)
+    — proven by the whole planted fault text being ABSENT while its head is present, with an
+    ellipsis marking the cut rather than a message that merely happens to be short.
+    """
+    env, deps = _rig(tmp_path, _RaisingScript(_KNOWN_FAULT))
+
+    with pytest.raises(OutcomeShapeError) as exc_info:
+        deps.agent.run(worktree=env.repo, material=MATERIAL, hints={},
+                       submitted_by="capture@example.test")
+
+    findings = exc_info.value.findings
+    assert findings and findings[0].gate == agent_module._OUTCOME_GATE
+    message = findings[0].message
+    assert _CONTROL_BYTE not in message, "the control byte survived sanitize"
+    assert _FAULT_HEAD in message, "the recognizable head of the fault text did not survive clamp"
+    assert _KNOWN_FAULT.replace(_CONTROL_BYTE, "") not in message, (
+        "the whole padded fault text reached the message unclamped")
+    assert "…" in message, "no ellipsis — the fault does not read as truncated"
+    # `Finding.brief` is unset on this arm, so the corrective retry still sees the fault text —
+    # through the fallback `corrective_brief` documents, not a second copy.
+    assert findings[0].brief == ""
+    assert _FAULT_HEAD in gates_module.corrective_brief(findings)
+
+
+def test_benign_twin_a_normal_successful_run_carries_no_fault_machinery(tmp_path):
+    """The specificity half: `MAX_FAULT_MESSAGE_LEN`'s sanitize/clamp seam belongs to the two
+    exception arms above and nowhere else. An ordinary `summary` field — deliberately LONGER than
+    `MAX_FAULT_MESSAGE_LEN` but well under `agent_module.MAX_PROSE_LEN` — must reach
+    `run.outcome.summary` byte for byte; a regression that ran every outcome field through the
+    fault seam would silently clip a real summary at 200 characters, and this is what would notice.
+    """
+    long_summary = "filed the renewal note, " + ("padding word " * 20)
+    assert len(long_summary) > MAX_FAULT_MESSAGE_LEN, "the fixture is not exercising the ceiling"
+    script = Script([_write_page_step(), _write_account_step(_account(summary=long_summary))])
+    env, deps = _rig(tmp_path, script)
+
+    run = deps.agent.run(worktree=env.repo, material=MATERIAL, hints={},
+                         submitted_by="capture@example.test")
+
+    assert run.outcome.summary == long_summary
+    assert "UnexpectedModelBehavior" not in run.outcome.summary

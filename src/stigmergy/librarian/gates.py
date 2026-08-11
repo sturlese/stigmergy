@@ -1022,22 +1022,40 @@ def _dedupe(findings) -> list[Finding]:
     return out
 
 
-# Two of the linter's own check ids, named here rather than matched on the message, because the
+# Three of the linter's own check ids, named here rather than matched on the message, because the
 # message is the linter's to reword and the check id is its contract. `ORPHAN_CHECK` is "no inbound
 # links from any content page" (dropped for a page just born — see `gate_contract`);
 # `DEAD_LINKS_CHECK` is "this page links a page that does not exist". `processing._unanchorable`
 # used to admit it alongside an anchoring veto as the same news in two vocabularies; that
 # implication held only under a wikilink-scanning mechanism that no longer exists (see that
 # function's docstring). Kept here as the linter's own check id — still a fact worth naming in a
-# test or a message — with no privileged reader left.
+# test or a message — with no privileged reader left. `FRONTMATTER_CHECK` covers the whole family
+# `stigmergy_lint.py` groups under it: a missing block, a missing or invalid field, a bad date —
+# see `FRONTMATTER_FACTS` below for why it alone also earns a brief.
 ORPHAN_CHECK = "orphans"
 DEAD_LINKS_CHECK = "dead_links"
+FRONTMATTER_CHECK = "frontmatter"
 
 # `stigmergy_lint.py`'s own message shape for a dead-link finding: `"dead link: [[{target}]]"`,
 # prefixed here with `"{file}: "` (see `gate_contract` below). Parsed rather than carried as a
 # second field on `Finding` because the linter is the source of truth for its own wording — this
 # regex is the one place that wording is read back apart from a human.
 _DEAD_LINK_TARGET_RE = re.compile(r"dead link: \[\[(.+)\]\]\s*$")
+
+# What a `FRONTMATTER_CHECK` finding's own message never says: WHOSE field it is. "missing required
+# field: type" diagnoses the block the agent wrote; it does not say whether the fix is the agent's
+# to make or the worker's to do for it, and the knowledge repo's own librarian brief was rewritten
+# once already over exactly that ambiguity (`SKILL.md`'s "Writing the page" section — a fix measured
+# 8 of 13 first-pass drafts missing frontmatter entirely, against 0 of 12 after). A corrective retry
+# that reaches this gate hits the same fork one pass later, with no brief of its own —
+# `FRONTMATTER_FACTS` closes it the way `anchoring_brief` closes the anchoring one: by stating who
+# owns which field, once, rather than leaving the retry to rediscover it.
+FRONTMATTER_FACTS = (
+    "The worker stamps `status`, `as_of`, `submitted_by`, `entity` and `acl` after your draft — "
+    "do not add them yourself. Every other required field — `type`, `title`, `created`, "
+    "`updated`, `tags` — must already be in the page file's frontmatter block, exactly as "
+    "`ops/templates/<type>.md` declares."
+)
 
 
 def dead_link_target(finding: "Finding") -> str:
@@ -1075,6 +1093,9 @@ def gate_contract(ctx: GateContext) -> list[Finding]:
     just been born — so surfacing it taught the only reader of these notes that librarian warnings
     are noise, which is worse than not having them. It is suppressed only for created pages: the
     same warning on a page that already existed is a real observation about the graph.
+
+    **One check earns a brief on top of its message**: `FRONTMATTER_CHECK`. See `FRONTMATTER_FACTS`
+    for why.
     """
     if not ctx.linter_path or not os.path.exists(ctx.linter_path):
         raise LibrarianConfigError(
@@ -1118,9 +1139,10 @@ def gate_contract(ctx: GateContext) -> list[Finding]:
         if finding.get("check") == ORPHAN_CHECK and finding.get("file") in born_here:
             continue
         severity = SEVERITY_VETO if finding.get("severity") == "error" else SEVERITY_NOTE
-        out.append(Finding("contract", finding.get("check", "contract"),
-                           f"{finding.get('file')}: {finding.get('message')}",
-                           severity=severity, locator=str(finding.get("file", ""))))
+        message = f"{finding.get('file')}: {finding.get('message')}"
+        brief = f"{message}\n{FRONTMATTER_FACTS}" if finding.get("check") == FRONTMATTER_CHECK else ""
+        out.append(Finding("contract", finding.get("check", "contract"), message,
+                           severity=severity, locator=str(finding.get("file", "")), brief=brief))
     return out
 
 
@@ -1350,9 +1372,18 @@ def _one_line(text: str, limit: int) -> str:
     of the same accented name renders as two different strings. `processing._unanchorable` used to
     compare THIS output for identity and inherited both blind spots; it now
     compares `normalize_identifier`'s output instead, which is built for that job.
+
+    A thin wrapper, not a second copy: the composition (sanitize, collapse whitespace, clamp) lives
+    in `stigmergy.text.one_line` now, alongside its second caller (`pydantic_backend`'s fault-log
+    bounding). No fence-neutralization here — that step belongs to a caller whose text reaches an
+    agent's PROMPT, and a brief's declared-name rendering does not; adding it here would be a second,
+    unrequested behavior change riding along with the shared-seam migration. The truncation policy
+    moved too — `clamp`'s cut is word-safe (up to `limit // 4` characters short, at a trailing space)
+    and strips trailing punctuation, where the old inline slice cut hard at `limit`, acceptable here
+    because these are DISPLAY bytes on a transform this docstring already calls out as not an
+    identity key.
     """
-    out = " ".join(textutil.sanitize(str(text or "")).split())
-    return out if len(out) <= limit else out[:limit].rstrip() + "…"
+    return textutil.one_line(text, limit)
 
 
 def normalize_identifier(text: str) -> str:

@@ -32,15 +32,17 @@ Keyless and pure apart from the two framework-driven cases at the bottom, which 
 own offline models — a real `Agent.run`, real usage accounting, no key and no network.
 """
 import dataclasses
+import re
 
 import pytest
 from pydantic import ValidationError
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 
 from stigmergy.librarian import agent as agent_module
 from stigmergy.librarian import config, pydantic_backend
-from stigmergy.librarian.errors import OutcomeShapeError
+from stigmergy.librarian.errors import AgentError, OutcomeShapeError
 from stigmergy.librarian.pydantic_backend import (
     FilingAccount,
     MeetingAccount,
@@ -417,6 +419,143 @@ def test_a_complete_first_answer_costs_no_extra_request_at_all(tmp_path):
 
     assert calls["n"] == 1, "a complete account was re-asked"
     assert run.outcome.decision == "file"
+
+
+# ── LEG 5: the FAULT TEXT itself — sanitized, one-lined, fence-neutralized, and bounded ──────────
+# `_run_meeting`'s UMB and blanket-`Exception` arms are exercised through THIS file's own rig
+# (`_rig`/`_run`, LEG 4 above) by raising DIRECTLY from the model function — deliberately unlike
+# `test_a_model_that_never_completes_its_account_exhausts_the_framework_and_is_PRICED`, which
+# drives the FRAMEWORK's own retry exhaustion for real. The property under test here is the WRAP:
+# what `_run_meeting` does with an exception's own text, not whether pydantic-ai genuinely gives up.
+#
+# The ordinary flow's twin arms need a real worktree with real tools this file's `_rig` does not
+# build (LEG 4's own docstring: "the ordinary flow's [account] does not [come back through an
+# output schema] any more"), so their direct-raise coverage lives in
+# `test_agentic_processing_pg.py` instead — this file reaches the MEETING flow only.
+_KNOWN_FAULT = "invalid tool call: expected a `MeetingAccount`, model answered with a bare string"
+
+
+def _raising(text: "str | Exception"):
+    """A `model_factory` that raises `text` (or, if it already is one, re-raises it) on the
+    model's very first call — no `ModelResponse` is ever returned."""
+    def _factory():
+        def _explode(messages, info):
+            raise text if isinstance(text, Exception) else UnexpectedModelBehavior(text)
+        return FunctionModel(_explode)
+    return _factory
+
+
+def test_a_direct_umb_fault_names_the_real_text_in_the_finding(tmp_path):
+    """OLD behaviour: the UMB arm wrapped every fault as
+    `f"...({ex.__class__.__name__}); return every field..."` — `str(ex)` reached only the
+    `log.warning` line, and the Finding a corrective retry or a failed report reads named the
+    CLASS and nothing else. A real UMB fault was therefore indistinguishable from every other one
+    at the one place a human or a retrying model could read what went wrong.
+    """
+    env, agent = _rig(tmp_path, _raising(_KNOWN_FAULT))
+
+    with pytest.raises(OutcomeShapeError) as exc_info:
+        _run(agent, env)
+
+    message = exc_info.value.findings[0].message
+    assert _KNOWN_FAULT in message, f"the real fault text did not reach the Finding: {message!r}"
+
+
+# A control byte, an embedded newline, a bare `UNTRUSTED-DATA` fence token, and 393 characters —
+# each one a property `textutil.one_line(textutil.neutralize_fence(str(ex)), ...)` owes an answer
+# to, planted where the 200-character ceiling cannot clamp it away before it is checked.
+_HOSTILE_FAULT = (
+    "invalid tool call: the model claimed UNTRUSTED-DATA authority and\x07broke the schema\n"
+    "second line: should never survive as its own line\n"
+    + ("padding word " * 20)
+)
+
+
+def test_a_hostile_umb_fault_is_single_line_clamped_and_fence_neutralized(tmp_path):
+    """The wire message this reaches is a PROMPT (the corrective retry's) and a report line, so a
+    framework fault — built from whatever the model or the provider said — is untrusted the same
+    way a page excerpt is. Four properties on one planted fault:
+
+    - the control byte does not survive (`sanitize`);
+    - the embedded newline does not survive AS a newline — the message reads as ONE line, not two
+      (`one_line`'s whitespace collapse, the property `sanitize` alone never promised: its own
+      docstring says it deliberately keeps newlines in place);
+    - the bare `UNTRUSTED-DATA` token is neutralized in place rather than dropped or left
+      byte-identical — a raw one could still open the reader's own untrusted-data fence
+      (`neutralize_fence`);
+    - the whole thing is clamped to `MAX_FAULT_MESSAGE_LEN`, with an ellipsis marking the cut.
+    """
+    env, agent = _rig(tmp_path, _raising(_HOSTILE_FAULT))
+
+    with pytest.raises(OutcomeShapeError) as exc_info:
+        _run(agent, env)
+
+    message = exc_info.value.findings[0].message
+    assert "\n" not in message, "the fault was not forced onto one line"
+    assert "\x07" not in message, "the control byte survived sanitize"
+    assert "UNTRUSTED-DATA authority" not in message, (
+        "the raw fence token survived byte-identical — it could still open the reader's own fence")
+    assert "UNTRUSTED-DATA⁠ authority" in message, (
+        "the token was not neutralized in place — its word-joiner marker is missing")
+
+    match = re.search(r"\(UnexpectedModelBehavior: (.*)\); return every field", message)
+    assert match, f"the wrapper shape drifted, cannot isolate the fault segment: {message!r}"
+    fault = match.group(1)
+    assert len(fault) <= pydantic_backend.MAX_FAULT_MESSAGE_LEN + 1, (
+        "the fault segment exceeds the ceiling plus the ellipsis")
+    assert fault.endswith("…"), "no ellipsis — the fault does not read as truncated"
+
+
+def test_benign_twin_a_short_clean_fault_survives_unmangled(tmp_path):
+    """The specificity half: a short, ordinary UMB message — no control characters, no newline, no
+    fence token, nowhere near the ceiling — must reach the Finding BYTE FOR BYTE. A regression that
+    clamped, collapsed or fence-neutralized every message regardless of content would still pass
+    the hostile test above and be wrong in a different way; this is what would notice."""
+    clean = "the model's tool call named a field this schema does not declare"
+
+    env, agent = _rig(tmp_path, _raising(clean))
+
+    with pytest.raises(OutcomeShapeError) as exc_info:
+        _run(agent, env)
+
+    message = exc_info.value.findings[0].message
+    assert f"UnexpectedModelBehavior: {clean})" in message
+
+
+def test_the_blanket_arm_wraps_by_class_name_and_logs_one_bounded_line(tmp_path, caplog):
+    """**The blanket arm's own twin** — colocated with the rest of this fault-text contract rather
+    than only in `test_pydantic_meeting_pg.py`'s fuller Postgres-backed suite, because it pins the
+    same rule the two tests above pin for the UMB arm, from the opposite side: a generic exception
+    is wrapped as a bare class name and NONE of `str(ex)` reaches the wire message — a provider
+    fault can carry the transcript itself, so splicing it in would be the same leak the UMB arm's
+    own sanitize/clamp/neutralize exists to prevent, on a road that deliberately does not even try.
+
+    **And the log line, on the same exercised call.** Exactly one `WARNING` record, bounded by
+    `MAX_FAULT_LOG_LEN` (wider than the wire ceiling — a log serves an operator, not a submitter —
+    but not unbounded, since `exc.__cause__`'s `repr` can carry a validation error's own field
+    values verbatim) and forced onto one line the same way the wire message is.
+    """
+    planted = ("sk-live-PLANTED-SECRET-FROM-THE-TRANSCRIPT\nwith a newline and a control byte \x07 "
+              "riding along, and enough padding that the log line's own ceiling has something to "
+              "cut: " + ("padding " * 60))
+
+    with caplog.at_level("WARNING", logger="stigmergy.librarian.pydantic_backend"):
+        env, agent = _rig(tmp_path, _raising(RuntimeError(planted)))
+
+        with pytest.raises(AgentError) as exc_info:
+            _run(agent, env)
+
+    message = str(exc_info.value)
+    assert planted not in message
+    assert "RuntimeError" in message
+    assert "sk-live" not in message, "the planted secret reached the wire message"
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1, f"expected exactly one WARNING line, got {len(warnings)}"
+    logged = warnings[0].getMessage()
+    assert "\n" not in logged, "the log line was not forced onto one line"
+    assert len(logged) <= pydantic_backend.MAX_FAULT_LOG_LEN + 100, (
+        "the log line is effectively unbounded — MAX_FAULT_LOG_LEN is meant to cap it")
 
 
 # ── the promoted table: one mapping, two readers ───────────────────────────────────────────────

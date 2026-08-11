@@ -480,6 +480,12 @@ Everything else is reached FROM `processing.py`; read it first when tracing one 
   the message already reads as an instruction, a standing debt where it does not (*a gate's message
   is not a brief*; `gates.corrective_brief` carries the measurement that forced
   the split, and `gates.anchoring_brief` is the worked example the next gate should copy).
+  **`gate_contract`'s `frontmatter` finding is a second worked example**: `FRONTMATTER_FACTS`
+  states, once, the field split a corrective retry cannot otherwise rediscover from the linter's own
+  message — the worker stamps `status`/`as_of`/`submitted_by`/`entity`/`acl` after the draft, every
+  other required field must already be in the page's frontmatter block as
+  `ops/templates/<type>.md` declares — appended to every `FRONTMATTER_CHECK` finding's `brief`
+  regardless of which brief bytes drafted the page ([ADR 035](../../../docs/decisions/035-filing-reliability-brief-and-fault-visibility.md)).
   `values` (default `()`) carries the VERBATIM identifier(s) the finding is ABOUT, for a reader that
   compares identity rather than displays it: `locator` is a presentation transform (sanitized,
   whitespace-collapsed, clamped to `MAX_BRIEF_NAME_LEN` with an ellipsis), and comparing THAT for
@@ -612,6 +618,18 @@ Everything else is reached FROM `processing.py`; read it first when tracing one 
   worker can act on). All carry `agent_attempts` and `agent_cost_usd` via
   `.at_agent_attempt(n, cost_usd=…)`, set on the way out of `processing.py` so a `failed` report
   can say how many agent passes ran and what they cost.
+- **A framework fault now persists its own message, bounded, on both roads it reaches.**
+  `pydantic_backend.py`'s `UnexpectedModelBehavior` arm — in both `run()` and `run_meeting()` — logs
+  one bounded line (`MAX_FAULT_LOG_LEN`) naming the exception class, its own text and
+  `repr(ex.__cause__)` (usually the provider or validation fault pydantic-ai wrapped underneath),
+  and carries a shorter, fence-neutralized excerpt (`MAX_FAULT_MESSAGE_LEN`) on the
+  `OutcomeShapeError`'s own `Finding.message` — so the corrective retry's prompt and a `failed`
+  report read the actual fault instead of the bare class name
+  ([ADR 035](../../../docs/decisions/035-filing-reliability-brief-and-fault-visibility.md)). The
+  blanket `except Exception` arm gets the same bounded log line, but its WIRE message stays
+  class-only on purpose: that arm can catch a raw provider error, and a provider error can carry
+  prompt text. Both bounds go through `stigmergy.text.one_line` — sanitize, whitespace-collapse,
+  then clamp, in that order — the same seam `gates._one_line` is now a thin wrapper over.
 - **The outcome's THREE bounds, and the third one does not behave like the other two.**
   `agent.MAX_IDENTIFIER_LEN` (400, **refused** over it) for fields that NAME something the worker
   resolves; `agent.MAX_PROSE_LEN` (2000, **truncated**, never refused) for `summary` /

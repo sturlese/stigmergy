@@ -146,10 +146,13 @@ base commit, and a page written for one outcome rarely converts into another wit
 
 ## Writing the page
 
-You write the page's **text**: the prose that goes below its H1. The worker owns the server-side of
-the container — the server-owned frontmatter fields, the commit, the declared edits — and the
-preamble above says whether it also builds the file itself or you write it. The parts that bite
-most often:
+**Your preamble decides who writes the file, and the two ways are not alike.** A run that writes
+the file itself authors the WHOLE file: the frontmatter block first — exactly the fields the
+template declares, with `created`/`updated` set to today, minus the server-owned fields below —
+then the H1, then the body. A run that returns the page's text for the worker to write returns
+ONLY what goes below the H1, with no frontmatter block at all — the worker builds the container.
+Either way the worker owns the commit, the declared edits and every server-owned field. The
+parts that bite most often:
 
 - **Title**: the title IS the filename, and a wikilink resolves by bare page name, so it has to be
   globally unique across the whole repo. Check it against `link_names` before you choose it: a
@@ -173,10 +176,6 @@ most often:
   `owner`, `submitted_by`, `verification`, `acl`, `status`, `as_of`, `content_hash`, `id`, `entity`.
   The worker writes every one of them from your account and from facts only it holds, and a page
   that declares one is refused.
-  - **When your run returns the page's text for the worker to write, write no frontmatter block at
-    all** — no `---` block, no `type:`, no `title:`, no `tags:`, no `related:`, no `sources:`: a
-    frontmatter block in your body would be filed as page TEXT. Start at your first heading or your
-    first paragraph.
 - **Figures**: every number on the page must trace to the captured material, quoted exactly or
   omitted. No gate re-checks this for you — the submitter's verbatim material, one click away in
   the evidence record, is the reader's check, and a figure it does not support is a wrong page
@@ -185,6 +184,9 @@ most often:
 - **Wikilinks**: `[[a link]]` resolves against the **real graph**, and `link_names` is that graph.
   Link only names that appear in it; anything else is a dead link, the contract linter calls it an
   error, and it refuses the whole capture.
+  - **A wikilink stays on one line.** Never wrap `[[…]]` across a line break, however long the
+    name: a link split across lines names nothing, the contract linter counts it dead, and it
+    refuses the whole capture.
   - **A wikilink is a claim that a page exists, not emphasis.** Writing about technical material
     makes `[[gate]]`, `[[diff]]`, `[[retry]]`, `[[LLM]]` feel like the idiom of the format. Every
     one of them is a dead link unless a page of exactly that name is in `link_names`. A concept

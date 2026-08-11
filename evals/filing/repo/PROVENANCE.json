@@ -1,10 +1,10 @@
 {
   "_comment": "Read by evals/run_filing.py through eval_history.corpus_provenance, so every `suite: \"filing\"` row in evals/history.ndjson says which fixture produced it. Lives at the mini repo's ROOT on purpose, exactly like evals/corpus/PROVENANCE.json: the content zones are wiki/, sources/ and views/, so nothing here is ever indexed as a page, linted as one, or visible to a capture.",
-  "frozen_at": "2026-08-11",
+  "frozen_at": "2026-08-12",
   "why": "The filing golden measures the ONE writer of the knowledge repo. Its score is only comparable across runs if every run filed into the same repo, under the same brief, judged by the same contract linter — so the whole mini repo is committed and frozen rather than assembled on demand. Same argument evals/corpus/PROVENANCE.json makes for the retrieval and QA corpus, applied to a fixture that is also an INPUT to the thing being measured rather than only a target for it.",
   "pages": 5,
   "entities": 3,
-  "stigmergy_sha": "0bf3c5462d50e72f5435ce61d61ba5f023e60388",
+  "stigmergy_sha": "03aab8799f9778087ab78cc23fbbf9a809d52d5b",
   "stigmergy_sha_note": "The ONE knowledge-repo commit every frozen copy in this tree matches byte for byte — the linter, both skills and the four templates. Recording it here is what lets a future reader answer 'which version of the librarian's brief scored this?', the question the series exists to answer and the one a fixture assembled at run time cannot. It is not the commit each copy was physically taken at: the librarian brief's bytes exist only at this commit, while the others are identical at this one and at its predecessor, so this is the single sha that describes the whole tree truthfully. Each FROZEN.md records the same one.",
   "frozen_copies": [
     ".claude/tools/stigmergy_lint.py",
