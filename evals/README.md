@@ -191,6 +191,25 @@ predicate could in principle re-bind a title to a different page; that is exactl
 `test_no_expected_decision_title_can_swallow_a_later_ones_page` guards, and because it calls the
 same matcher, widening the match widened its net in the same commit.
 
+**A `decisions` entry may assert a title, an anchor, or both — and which one it asserts is an
+empirical question, not a style.** The facet pairs one expectation to one decision page, greedily
+and one-to-one; an entry that omits `title` pairs on its anchor alone, and an entry that omits
+`anchor` pairs on its title alone. What must never happen is an entry asserting neither (it matches
+whatever page is left and measures nothing) or a title-less entry written before a titled one (it
+is the weakest matcher, so greedy order lets it eat the titled entry's page). `_check_set` refuses
+both, before a model call is spent.
+
+The reason this is empirical: three distinct brittleness shapes were measured on this one facet,
+and each moved the assertion somewhere different. Grammatical number moved it to `_same_word`.
+Cross-title word distribution — F09's after_reply, where the model put "summary" on the sibling
+decision the yardstick had assumed owned it — moved it off that word pair entirely. And when the
+seven recorded runs of that phase were re-scored to decide what to assert instead, the answer
+**inverted the obvious assumption**: the tracking decision was stable in both its anchor (7/7) and
+its words (7/7), while the summary decision was stable only in its TITLE (`shared summary weekly`,
+7/7) and *not* in its anchor (`quillon-labs` six times, company-wide once). So an expectation is
+written against whatever held across runs, and a yardstick edited from the newest run alone would
+have scored six correct runs a miss.
+
 ### One expectation that is deliberately weaker than it looks
 
 The `reuse` facet scores whether a meeting re-filed after a park **kept the decisions it had
@@ -373,15 +392,25 @@ second.
 Two further footnotes belong to the filing series and are recorded here for the same reason —
 a reader comparing rows needs to know what changed under them:
 
-- **The `decisions` facet stopped measuring grammatical number (2026-08-11).** Three independent
-  runs of the same code on the same model titled F08's review decision as `…-for-review-…` twice
-  (scored PASS) and `…-reviews-…` once (scored FAIL), with the anchors right in all three. The
-  matcher now folds a trailing `s` (`run_filing._same_word`); see the loose-matching note above for
-  the rule and its one-directional property. Unlike the two defects above, this one is FIXED rather
-  than recorded-and-kept, and the reason is the direction: the fold is strictly weaker, so no row
-  already in the series would have scored lower under it. Every recorded `decisions` score remains
-  exactly as valid as it was; only a future run can benefit. A change that could have lowered a
-  past score would have had to be recorded and left alone, like the two above.
+- **The `decisions` facet stopped measuring the distiller's prose (2026-08-11), in two steps.**
+  First, grammatical number: three independent runs of the same code on the same model titled F08's
+  review decision as `…-for-review-…` twice (scored PASS) and `…-reviews-…` once (scored FAIL),
+  with the anchors right in all three; the matcher now folds a trailing `s`
+  (`run_filing._same_word`). Then, on the very next run, a third shape: F09's after_reply produced
+  `project-wren-tracked-formally-under-quillon-labs` + `weekly-summaries-consolidated-into-the-`
+  `shared-summary`, putting "summary" on the OTHER decision than the expectation `Wren summary` +
+  `Wren` assumed. `_decisions_match` now lets an entry assert a title, an anchor, or both, and
+  F09's entries were rewritten against what held across all seven recorded runs of that phase —
+  see the loose-matching note above, including the part where the seven-run re-score inverted the
+  assumption about which half is the stable one.
+  Unlike the two defects above, both steps are FIXED rather than recorded-and-kept, and the reason
+  is the direction: each was verified by RE-SCORING every recorded run's own observed set against
+  the edited yardstick, and neither turned a single recorded PASS into a FAIL (0 of 7 runs, 3 gained
+  a PASS). Every score already in the series remains exactly as valid as it was; only a future run
+  can benefit. A change that could have lowered a past score would have had to be recorded and left
+  alone, like the two above — and the re-score is what makes that a checked fact rather than a
+  claim. `evals/out/*.json` carry the per-capture observations that make it checkable, which is the
+  reason to keep writing `--report`.
 - **Two M2-era rows name superseded shas.** The rows whose `git_sha` is in the `fa55010`/`2be308f`
   era point at commits that no longer exist on any branch: the M2 work was replayed before merge,
   and the replayed trees are byte-identical to `56c0566`/`1466d28`. The replay was not cosmetic —

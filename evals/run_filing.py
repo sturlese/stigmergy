@@ -301,6 +301,29 @@ def _decisions_match(expected: list, observed: list) -> bool:
     separately, which is the granularity failure the meeting brief spends a whole section on.
     Matching is greedy and one-to-one, so two expected titles cannot both be satisfied by the same
     page.
+
+    **An entry MAY omit `title`, and then it pairs on its ANCHOR alone.** Three separate runs
+    taught the same lesson in three shapes, and this is the third: F08's review decision flipped on
+    grammatical number (closed by `_same_word`), and F09's after_reply put the word "summary" on the
+    OTHER decision's title than the expectation assumed — "Project Wren tracked formally under
+    Quillon Labs" plus "weekly summaries consolidated into the shared summary", where the yardstick
+    had written "Wren summary" and "Wren". Both splits are defensible readings of the same
+    transcript; which noun lands on which page is the distiller's prose, not its judgment.
+
+    **Across all five measured runs of all three shapes, the ANCHORS were right every time.** That
+    is the real finding: a decision's aboutness is a fact with one spelling (a resolved registry id,
+    or the company-wide empty list), and its title is a sentence somebody wrote. So the anchor is
+    the load-bearing pair-er and a title is written only where a proper noun or a stable term held
+    across runs. Omitting one is not weakening the facet — it is moving the assertion off the
+    dimension that was measuring the model's vocabulary and onto the one that was right five times
+    out of five. The count, the one-to-one pairing and the per-decision anchor are untouched.
+
+    **A title-less entry is the WEAKEST matcher, so it has to be written LAST** — greedy pairing
+    walks the expectations in the order the file lists them, so an anchor-only entry placed first
+    would take the first page whose anchor matches and starve a titled sibling that needed it. That
+    is the same trap the "more specific first" rule already covers for titles, and it is enforced
+    rather than hoped for: `_check_set` refuses a set that orders them the other way, before a
+    single model call is spent.
     """
     if len(expected) != len(observed):
         return False
@@ -308,7 +331,12 @@ def _decisions_match(expected: list, observed: list) -> bool:
     for want in expected:
         hit = None
         for candidate in remaining:
-            if not title_matches(want.get("title", ""), candidate.get("path", "")):
+            # `want.get("title")` absent — not merely empty — is what makes this anchor-only. An
+            # entry that named a title and got it wrong still has to match it: `title_matches("")`
+            # is False by design (an empty expectation matches nothing rather than everything), so
+            # the two states cannot be confused.
+            if "title" in want and not title_matches(want["title"],
+                                                     candidate.get("path", "")):
                 continue
             if "anchor" in want and not _anchor_matches(want["anchor"],
                                                         candidate.get("anchor") or {}):
@@ -776,6 +804,43 @@ def _check_set(manifest: dict, expectations: dict, *, whole_set: bool = True) ->
     if half:
         sys.exit(f"these expectations carry a `reply` without an `after_reply` block or the other "
                  f"way round — an ask-back case is only measured when both are present: {half}")
+
+    # ── the fifth refusal: what a DECISION entry has to assert, and in what order ──────────────
+    # Both halves guard the same mechanism from opposite ends, and both are set defects that would
+    # otherwise read as a backend result.
+    #
+    #  * an entry asserting NEITHER a title nor an anchor matches the first page left on the table,
+    #    which is a facet that reads as measured and measures nothing — the same defect `edits: []`
+    #    has, recorded in `_edits_match`;
+    #  * an anchor-only entry is the WEAKEST matcher (`_decisions_match`), and greedy pairing walks
+    #    the file's own order, so one written before a titled sibling can take the page that
+    #    sibling needed and score a miss for a page set that was exactly right. The titled-first
+    #    rule is the same one the `_morphology` note already states for specific-before-broad; a
+    #    title-less entry is simply the broadest case of it. Enforced here rather than left to
+    #    whoever edits the file next, because nothing about the failure would point at the ordering
+    #    — and `test_no_expected_decision_title_can_swallow_a_later_ones_page` cannot see it (an
+    #    absent title matches nothing, so its subset test is vacuously satisfied).
+    empty, misordered = [], []
+    for entry in expectations["expectations"]:
+        for block in _expect_blocks(entry):
+            decisions = block.get("decisions") or []
+            if any("title" not in d and "anchor" not in d for d in decisions):
+                empty.append(entry["id"])
+            seen_titleless = False
+            for decided in decisions:
+                if "title" not in decided:
+                    seen_titleless = True
+                elif seen_titleless:
+                    misordered.append(entry["id"])
+                    break
+    if empty:
+        sys.exit(f"these expectations name a decision with neither a `title` nor an `anchor`, so it "
+                 f"matches whatever page is left and measures nothing: {sorted(set(empty))}")
+    if misordered:
+        sys.exit(f"these expectations put a title-less decision BEFORE a titled one; matching is "
+                 f"greedy in file order and an anchor-only entry is the weakest matcher, so it "
+                 f"would take the titled entry's page and score a correct page set a miss. Write "
+                 f"the titled entries first: {sorted(set(misordered))}")
 
     denominators = _denominators(expectations)
     if not whole_set:
