@@ -601,23 +601,29 @@ class CountingAgent:
     all, so a re-file that reused a parked distillation is the one that arrives here with
     `calls == 0`.
 
-    **A wrapper of a PORT owes every declared member of it, not only the methods** (ADR 033). This
-    class stands where `processing` expects a `filing_port.FilingAgent`, and that port declares
-    `structured_ordinary` — the attribute that decides whether the gatherer runs, which half of the
-    outcome envelope is owed, and whether CODE writes the page. Swallowing it made every backend
-    look EXPLORING from behind this wrapper: the paid golden on `--backend pydantic` would have run
-    the structured backend down the exploring branch, refused every ordinary capture for carrying
-    no `page_path`, and reported that as a filing-quality score. An instrument that changes the
-    thing it measures is worse than no instrument.
+    **A wrapper of a PORT owes every declared member of it, not only the methods** (ADR 033, and
+    one more member in ADR 034). This class stands where `processing` expects a
+    `filing_port.FilingAgent`, and that port declares two things a run's shape depends on:
+    `structured_ordinary` (which half of the outcome envelope is owed, and whether CODE writes the
+    page) and `wants_gathered` (whether the deterministic gatherer runs at all).
 
-    Copied by plain attribute access with NO default, so a backend that forgot to declare it fails
-    loudly HERE, at construction, before a single capture is submitted — rather than one delivery
-    at a time inside a measurement.
+    Swallowing either one silently changes what is being measured. The first made every backend
+    look EXPLORING from behind this wrapper: the paid golden on `--backend pydantic` would have run
+    the structured backend down the exploring branch and scored a column of refusals as filing
+    quality. The second is subtler and therefore worse — a swallowed `wants_gathered` would run the
+    real backend with an EMPTY seed, produce a real filing score, and attribute to iteration a
+    number that measured a model working blind. An instrument that changes the thing it measures is
+    worse than no instrument.
+
+    Copied by plain attribute access with NO default, so a backend that forgot to declare either
+    fails loudly HERE, at construction, before a single capture is submitted — rather than one
+    delivery at a time inside a measurement.
     """
 
     def __init__(self, inner):
         self.inner = inner
         self.structured_ordinary = inner.structured_ordinary
+        self.wants_gathered = inner.wants_gathered
         self.calls = 0
 
     def reset(self) -> None:
@@ -632,16 +638,20 @@ class CountingAgent:
         return self.inner.run_meeting(**kwargs)
 
 
-# The structured backend (ADR 033: every flow, no tools, code writes the page). Named here rather
+# The backend that actually calls a model — the one a paid measurement is about. Named here rather
 # than imported so `--help` costs nothing but the standard library, like everything else at this
 # module's scope.
 #
-# **It used to be `MEETING_ONLY_BACKEND`, guarded by `_require_measurable_subset`**, which refused
-# any `--kinds` but `meeting` for it because M1's backend would have scored a column of refusals on
-# the ordinary captures. Both the constant's name and that guard are gone with the restriction they
-# described; the `--kinds` flag itself stays, because an ablation somebody chooses is a different
-# thing from a limitation they work around.
-STRUCTURED_BACKEND = "pydantic"
+# **The NAME has been wrong twice and each rename records a milestone rather than a preference.** It
+# was `MEETING_ONLY_BACKEND`, guarded by `_require_measurable_subset`, while M1's backend served one
+# `kind`; then `STRUCTURED_BACKEND`, while ADR 033's ordinary run was one tool-less call. Neither is
+# true now: ADR 034 made that run an iterating one with five tools, and the meeting flow is the
+# structured half. What has been stable across all three is the only thing worth naming a constant
+# after — this is the REAL backend, and `double` is the keyless plumbing self-check.
+#
+# The VALUE has never changed, which is what keeps the history series comparable across the renames:
+# rows are keyed by backend id, and the id is `pydantic` in every era.
+REAL_BACKEND = "pydantic"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -655,13 +665,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the frozen mini knowledge repo to file into (default: evals/filing/repo)")
     ap.add_argument("--manifest", default=str(FIXTURE / "captures" / "manifest.json"))
     ap.add_argument("--expectations", default=str(FIXTURE / "expected" / "expectations.json"))
-    ap.add_argument("--backend", choices=[STRUCTURED_BACKEND, "double"],
-                    default=STRUCTURED_BACKEND,
-                    help=f"the agent backend (default: {STRUCTURED_BACKEND} — the real "
+    ap.add_argument("--backend", choices=[REAL_BACKEND, "double"],
+                    default=REAL_BACKEND,
+                    help=f"the agent backend (default: {REAL_BACKEND} — the real "
                          f"measurement; 'double' is the keyless plumbing self-check)")
     ap.add_argument("--model", default=None,
                     help="the librarian model (default: librarian Settings' own default). The "
-                         f"{STRUCTURED_BACKEND!r} backend needs a provider-prefixed id, e.g. "
+                         f"{REAL_BACKEND!r} backend needs a provider-prefixed id, e.g. "
                          "anthropic:claude-sonnet-5")
     ap.add_argument("--kinds", default="",
                     help="comma-separated capture kinds to measure (default: all of them). A "

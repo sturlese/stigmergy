@@ -41,6 +41,13 @@ librarian is the system's only writer.
 
 ## Decisions
 
+> **Superseded in part by [ADR 034](./034-agentic-pydantic-harness.md).** The GATHERER below is
+> unchanged and still runs before every ordinary call — but it is now the SEED of a run that holds
+> tools rather than the whole of what that run can see. Two sentences of the rendered block became
+> caller-declared for exactly that reason. Everything this decision says about WHAT is gathered,
+> why it reads the checkout rather than `pages_index`, and why `_confined` is load-bearing, still
+> holds and is still the reason the tool that searches shares this module's scorer.
+
 **D1 — a deterministic GATHERER builds the context, and it reads the CHECKOUT rather than the
 index.** `librarian/gather.py` is a pure function of `(worktree, registry, material)` plus two
 bounds: the entities the material names (resolved through the registry's own alias map, never a
@@ -127,6 +134,14 @@ would commit a page that stops mid-sentence, pass every gate (a truncated page i
 well-formed), and stay that way in the repo forever, with the only evidence in a log line. The
 refusal is correctable and the agent gets its one corrective pass.
 
+> **Superseded for the ORDINARY flow by [ADR 034](./034-agentic-pydantic-harness.md)**, which gave
+> that flow a confined `write_page` tool and put the agent back in the author's chair. The road
+> below is NOT retired — `_write_ordinary_page`, `_require_page_content` and `FilingAccount` are
+> still what a `structured_ordinary = True` backend declares into, and the meeting flow is still
+> exactly this shape — but no shipped backend takes it on an ordinary capture. The confinement
+> argument's second half is what survived the change: the allow-list did not weaken, it moved from
+> a permission hook into the tool itself, where it is a function anybody can call without a model.
+
 **D3 — CODE writes the page, and confinement gets STRONGER rather than weaker.**
 `processing._write_ordinary_page` builds and writes the one page, on `_write_meeting_pages`'
 discipline: the filename from the title (validated by `page.unnameable_reason`, collision-checked
@@ -144,6 +159,12 @@ name a location. A hostile account can ask for a governed page TYPE, and that is
 anything is written and parked with the steward; it can ask for an unnameable title, and that is
 refused; it can claim a `page_path` it did not write, and `_cross_check_outcome` refuses that too.
 Every one of those is an existing mechanism, and the claim is exercised rather than asserted.
+
+> **Extended by [ADR 034](./034-agentic-pydantic-harness.md).** The neutrality decided here is what
+> made the next milestone cheap: the brief needed a touch rather than a rewrite when the ordinary
+> run regained its tools, and each backend's ENVIRONMENT paragraph carried the difference exactly
+> as this decision designed. The startup check that enforced the landing ORDER retired there —
+> keyed on `structured_ordinary`, it would have gone inert rather than wrong, which is worse.
 
 **D4 — the brief becomes backend-NEUTRAL, and the SDK carries the override.** The knowledge repo's
 `.claude/skills/librarian/SKILL.md` is rewritten with no tool mechanics in it: it describes a worker
@@ -236,9 +257,9 @@ so a reader years from now can judge the decision rather than take it on trust:
 - the container e2e running on CI for every push, on the deployed image, against the double;
 - and then a human saying so. Nothing here fired because the second shape merely existed.
 
-**No ADR 034, and the reason is the point.** A second record is owed when the thing that happened
-diverged from the thing that was planned. Nothing diverged: D6 named the gate, the gate was met on
-its own terms, and contracting is the step D6 said would follow. The one thing this milestone added
+**No separate ADR for this retirement, and the reason is the point.** A second record is owed when
+the thing that happened diverged from the thing that was planned. Nothing diverged: D6 named the
+gate, the gate was met on its own terms, and contracting is the step D6 said would follow. The one thing this milestone added
 that D6 did not spell out — a NAMED startup refusal for the retired value — is what "contract"
 means when the configuration outlives the code, not a different decision. Amending the record that
 made the promise keeps the promise and its discharge in one place; a new ADR would split them.

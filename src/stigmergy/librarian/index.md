@@ -93,11 +93,11 @@ worker's dependency graph one-way — see
 **The agent seam is a PORT, there are TWO backends behind it, and both serve BOTH flows.**
 `filing_port.FilingAgent` is what `processing.py` is written against — `run` / `run_meeting`, the
 `AgentRun` envelope, the fault contract (`AgentError` carrying `run_cost_usd`), the side-effect
-rules (which differ per flow AND per ordinary SHAPE, and must not be averaged), and one declared
-capability, `structured_ordinary`. `PydanticFilingAgent` and `DoubleAgent` satisfy it
-STRUCTURALLY — no base class, no registration: a backend is a class that answers the two calls and
-declares that one attribute. `build_agent` returns the port and is where both are declared to
-satisfy it.
+rules (which differ per flow AND per ordinary SHAPE, and must not be averaged), and TWO declared
+capabilities, `structured_ordinary` and `wants_gathered`. `PydanticFilingAgent` and `DoubleAgent`
+satisfy it STRUCTURALLY — no base class, no registration: a backend is a class that answers the two
+calls and declares those two attributes. `build_agent` returns the port and is where both are
+declared to satisfy it.
 
 **The port has already outlived one implementation, which is the argument for it in one
 sentence.** `SdkAgent` — the Claude-Code-harness backend — was retired without `processing.py`
@@ -107,19 +107,30 @@ A worker still CONFIGURED for it (`STIGMERGY_LIBRARIAN_BACKEND=sdk` in a stale `
 `agent.ensure_known_backend` is the ONE place either that refusal or the unknown-value one is
 worded.
 
-**The ORDINARY flow has TWO shapes behind one entry point, and a backend DECLARES which one it
-answers** ([ADR 033](../../../docs/decisions/033-structured-filing-flow.md)). `structured_ordinary`
-is `False` for `DoubleAgent` — the EXPLORING shape: the agent goes looking through
-the checkout itself, writes the page inside `agent.confined_write`'s allow-list,
-and declares the path it wrote in `Outcome.page_path`. That was the retired backend's shape too,
-and the double is what keeps the branch exercised: both roads through `processing._one_pass` run
-offline on every `make test`. It is `True` for `PydanticFilingAgent` — the
-STRUCTURED shape: `processing._one_pass` runs the deterministic gatherer (`gather.py`) first and
-hands the result over as rendered prompt text, the agent holds no tool and writes nothing, its
-account CARRIES the page's own body in `Outcome.page`, and `processing._write_ordinary_page` builds
-and writes the file. **`processing` reads the declared attribute and never `isinstance`**: a third
-backend, or a double standing in for one, must take the right branch by declaring the right thing
-rather than by being the right class. Everything from the stamp down — all eight gates,
+**The ORDINARY flow has TWO shapes behind one entry point, and a backend DECLARES what it answers**
+([ADR 033](../../../docs/decisions/033-structured-filing-flow.md),
+[ADR 034](../../../docs/decisions/034-agentic-pydantic-harness.md)). `structured_ordinary` is
+`False` for BOTH shipped backends — the EXPLORING shape: the agent goes looking through the checkout
+itself, writes the page inside `agent.confined_write`'s allow-list, and declares the path it wrote
+in `Outcome.page_path`, with its account arriving through the outcome FILE. `PydanticFilingAgent`
+does that by ITERATING with five confined tools from a gathered seed; `DoubleAgent` does it by
+following a `DOUBLE:` directive with no model at all, which is what keeps the branch exercised
+offline on every `make test`. `True` — the STRUCTURED shape, where the agent holds no tool, its
+account CARRIES the page's own body in `Outcome.page` and `processing._write_ordinary_page` builds
+the file — is what the MEETING flow does per page and what a fourth backend would declare into; no
+shipped backend takes it on an ordinary capture, and a conforming stand-in in
+`tests/librarian/test_structured_processing_pg.py` is what keeps that road from rotting.
+
+**`wants_gathered` is a SECOND declaration and not the inverse of the first.** It says whether
+`processing._one_pass` builds this item's gathered context at all: `True` for the pydantic backend
+(the block is the SEED its tools go further from), `False` for the double (directive-driven, so the
+corpus walk would buy a string nothing reads). Inferring one from the other would make "it explores"
+mean "it starts from nothing", which is the design M2 shipped and M4 corrected.
+
+**`processing` reads the declared attributes and never `isinstance`**: a third backend, or a double
+standing in for one, must take the right branch by declaring the right thing rather than by being
+the right class — and an ABSENT declaration is refused loudly on the branch that needs it, because
+the likeliest thing to swallow one is a wrapper. Everything from the stamp down — all eight gates,
 `_cross_check_outcome`'s "exactly one new page", the commit — is shared byte for byte, which is what
 keeps two shapes from becoming two flows.
 
@@ -188,15 +199,24 @@ capture.queue.claim_next            — FOR UPDATE SKIP LOCKED, hands back the `
   │
   └─ gitcmd.ephemeral_worktree(repo, base.sha, worktree_root)  — a fresh `git worktree --detach`,
        │                                                          reaped by `gitcmd.reap` on crash
-       ├─ gather.gather(...)                       — STRUCTURED shape only: the context code builds
-       │     from the checkout (entities, top-K candidates + excerpts, the link neighbourhood, the
-       │     wikilink vocabulary), rendered by agent.render_gathered and fenced like any material
-       ├─ agent.build_agent(settings).run(...)     — a filing_port.FilingAgent. EXPLORING shape:
-       │     writes ONE new page plus the outcome file, confined by agent.confined_write /
-       │     page.is_inside. STRUCTURED shape: writes NOTHING and returns the page's text
-       ├─ agent.read_outcome → parse_outcome        — untrusted input, bounded and frozen (Outcome)
-       ├─ agent.discard_outcome_file                — consumed before the diff is ever taken
-       ├─ processing._write_ordinary_page           — STRUCTURED shape only: CODE writes the page.
+       ├─ gather.gather(...)                       — for a backend declaring `wants_gathered`: the
+       │     context code builds from the checkout (entities, top-K candidates + excerpts, the link
+       │     neighbourhood, the wikilink vocabulary), rendered by agent.render_gathered and fenced
+       │     like any material — a SEED for a run that can also search, the whole context for one
+       │     that cannot
+       ├─ agent.build_agent(settings).run(...)     — a filing_port.FilingAgent. EXPLORING shape
+       │     (both shipped backends): writes ONE new page plus the outcome file, confined by
+       │     agent.confined_write; the pydantic one gets there through five tools whose reads are
+       │     confined by gather.confined_page (the content zones, plus the per-type templates a
+       │     run that writes its own container reads it from). STRUCTURED shape: writes NOTHING
+       │     and returns the page's text
+       ├─ agent.read_outcome → parse_outcome        — untrusted input, bounded and frozen (Outcome).
+       │     Called by the BACKEND that owns the file channel (both shipped ones do), so the
+       │     envelope `processing` receives already carries a parsed account
+       ├─ agent.discard_outcome_file                — consumed before the diff is ever taken; a
+       │     harmless no-op when `read_outcome` already deleted the file it parsed
+       ├─ processing._write_ordinary_page           — STRUCTURED shape only (no shipped backend;
+       │     the meeting flow's discipline, one page over): CODE writes the page.
        │     Filename from the title (page.unnameable_reason, collision-checked by page.path_key),
        │     folder from page.FOLDER_BY_TYPE, frontmatter and H1 from the account
        │
@@ -257,8 +277,8 @@ reported about one (see Data & contracts, below).
 | `cli.py` | `stigmergy-librarian` — `once` / `run` / `status`; the operator's front door |
 | `filing_port.py` | `FilingAgent` — the agent seam as a `Protocol` instead of a convention: the two calls, the `AgentRun` envelope, `priced()` and the fault contract, and the per-flow side-effect rules. Imports `errors` and nothing else, so every backend can depend on it |
 | `pricing.py` | model id → $/MTok (`PRICES` + `$STIGMERGY_LIBRARIAN_PRICING`, `AS_OF`), `compute_cost_usd`, `require_priced` — for the backends that report TOKENS rather than dollars |
-| `pydantic_backend.py` | `PydanticFilingAgent` — the real backend, one of the two behind the port: one structured pydantic-ai call per flow, no tools, no outcome file, BOTH flows ([ADR 032](../../../docs/decisions/032-filing-port-and-pricing-seam.md) for the meeting half, [ADR 033](../../../docs/decisions/033-structured-filing-flow.md) for the ordinary one). `PydanticMeetingAgent` survives as a deprecated alias until its callers migrate |
-| `gather.py` | the deterministic gatherer — a pure function of `(worktree, registry, material)` producing what the STRUCTURED ordinary shape is handed instead of exploring. Reads the CHECKOUT, never `pages_index`, and `_confined` is what makes "the same data the agent read" true rather than intended ([ADR 033](../../../docs/decisions/033-structured-filing-flow.md)) |
+| `pydantic_backend.py` | `PydanticFilingAgent` — the real backend, one of the two behind the port, serving BOTH flows: an ITERATING ordinary run (five tools, an outcome file, it writes its own page — [ADR 034](../../../docs/decisions/034-agentic-pydantic-harness.md)) and one structured meeting call ([ADR 032](../../../docs/decisions/032-filing-port-and-pricing-seam.md)). `FilingToolbox` holds the five tools' bodies so every confinement rule is reachable with no model; `_register_tools` writes the model-facing docstrings, which ARE the tool schema. `PydanticMeetingAgent` survives as a deprecated alias until its callers migrate |
+| `gather.py` | the deterministic gatherer — a pure function of `(worktree, registry, material)` producing what the ordinary agent is handed BEFORE it searches for itself, and the bodies its search/read tools are built from (`load_corpus`, `search_candidates`, `confined_page`). Reads the CHECKOUT, never `pages_index`, and `_confined` is what makes "the same data the agent read" true rather than intended ([ADR 033](../../../docs/decisions/033-structured-filing-flow.md), [ADR 034](../../../docs/decisions/034-agentic-pydantic-harness.md)) |
 | `worker.py` | the loop, `startup_checks` (every fail-closed startup refusal), `sweep`, `Worker` (signal handling) |
 | `processing.py` | `process_item` — one capture end to end; `Result`, `Deps`, the refused-diff digest; `process_meeting_item` — its sibling for a `kind="meeting"` row, filing a page SET instead of one page; and `process_drive_item` ([ADR 028](../../../docs/decisions/028-drive-door.md)) — the thin drive sibling: kernel-hands conversion (`_drive_material`, `_with_vision_fallback`) then `process_item` itself over the extracted text, with the source attachment ON via `_source_attachment`'s kind-keyed drive branch |
 | `config.py` | `Settings` — every tunable, resolved once (`from_args`); the derived visibility timeout |
@@ -359,10 +379,13 @@ Everything else is reached FROM `processing.py`; read it first when tracing one 
   `.md` page in one of the three fast-lane folders, that does not already exist". An edit to a page that
   already exists is DECLARED in the agent's outcome and PERFORMED by `edits.py` — the agent's own
   write lane admits no modification at all ([ADR 015](../../../docs/decisions/015-librarian.md) §3).
-  **The rule holds on the STRUCTURED shape by construction rather than by an allow-list**: there is
-  no tool and no field an account could name a path with. Do not add one — `processing.
-  _write_ordinary_page` derives the folder from `page.FOLDER_BY_TYPE` and the filename from the
-  title, and a `page.path` field would hand back exactly the capability ADR 033 removed.
+  **The allow-list is load-bearing again on the shipped ordinary flow** (ADR 034): the `write_page`
+  tool asks `agent.confined_write` on every call, with the tracked-path set read ONCE before the
+  model runs, so a page that already exists is refused however its name is spelled. On the STRUCTURED
+  shape the rule holds by construction instead — there is no tool and no field an account could name
+  a path with — and that half must stay true: `processing._write_ordinary_page` derives the folder
+  from `page.FOLDER_BY_TYPE` and the filename from the title, and a `page.path` field would hand
+  back exactly the capability ADR 033 removed.
 - **Do not compare paths with `==`.** Two real defects came from exactly that: an exact byte
   comparison against `git`'s tracked-path spelling let a re-spelled existing page (a different case,
   or an accented title in its NFD form) pass as "does not exist yet" on macOS/APFS, regaining the
@@ -663,20 +686,21 @@ rather than about a second, untested implementation of the same rule.
 |---|---|
 | Add a new gate | a `(ctx: GateContext) -> list[Finding]` function in `gates.py`, added to `ALL_GATES`. Decide its finding's `brief` (what a repair looks like) — or `repairable=False` if there is none, so it does not spend the retry |
 | Add a new declared-edit kind | `page.CALLOUT_STYLES` / `EDIT_KINDS`, `edits.validate` + `apply`, and `double.py`'s directives so the offline suite can stage it |
-| Change the outcome JSON shape | `agent.parse_outcome` (bounds + coercion), `pydantic_backend.FilingAccount` (the structured mirror — mirror its REQUIREDNESS in the `model_validator` too, or the framework's own retries never fire and the worker's one corrective pass pays for a shape the framework would have repaired free) AND `double.py` (must keep emitting a shape `parse_outcome` accepts — the double is not exempt from the boundary). Decide which BOUND the field takes — identifier → refused, prose → truncated, a page BODY → refused (`_page_body`, because a clipped page body is the product mutilated) — and whether a missing one is a `missing-field` finding. A field only ONE ordinary shape declares is additive: `parse_outcome` accepts both and `processing._require_page_content` decides which half is owed, from the backend's declaration |
+| Change the outcome JSON shape | `agent.parse_outcome` (bounds + coercion — the boundary BOTH shipped backends' accounts arrive through, since both write the outcome file), `pydantic_backend.MeetingAccount` (the meeting flow's structured mirror — mirror its REQUIREDNESS in the `model_validator` too, or the framework's own retries never fire and the worker's one corrective pass pays for a shape the framework would have repaired free; `FilingAccount` is the same mirror for a structured ordinary backend, which nothing ships today) AND `double.py` (must keep emitting a shape `parse_outcome` accepts — the double is not exempt from the boundary). Decide which BOUND the field takes — identifier → refused, prose → truncated, a page BODY → refused (`_page_body`, because a clipped page body is the product mutilated) — and whether a missing one is a `missing-field` finding. A field only ONE ordinary shape declares is additive: `parse_outcome` accepts both and `processing._require_page_content` decides which half is owed, from the backend's declaration |
 | Add a fourth creatable fast-lane type | `page.PAGE_TYPES` (give it a `folder` + a `label`) — the zone gate, the write-confinement regex, `LANE_FOLDERS` and the triage sentence all derive from it. Adding a NON-creatable type means a `reason` and no folder |
 | Tune a bound (turns, tool calls, timeout, poll interval…) | `config.py` (field + `from_args` resolution); document the var in `docs/reference/librarian.md`'s configuration table |
 | Change what a person reads about a refusal | `report.py` ONLY — the CLI and `brain_submissions` share it; never compose wording at either call site. A sentence a STEWARD authors (`resolved`, a human `rejected`) belongs in `capture.dispositions` instead, for the layering reason above |
 | Change WHEN the submitter is asked vs when the steward is | `processing._triage` / `_ask_or_park` — the routing is code's, from the agent's declared outcome, and the agent's schema does not change. The one-ask budget is `capture_queue.asked_at`, never a counter in this process |
 | Add a new refusal | a builder in `report.py` going through `_rejected`, with a code in `capture.schema.REJECTION_REASONS`. Decide whether the capture's own material may still be read back: if not, the code joins `schema.WITHHELD_REASONS` and `capture.queue` does the rest |
 | Add a fail-closed startup check | `worker.startup_checks`, raise `LibrarianConfigError`; add its row to the runbook's refusal table |
-| Add an agent backend | a class satisfying `filing_port.FilingAgent` in its own module — including the `structured_ordinary` declaration, which decides whether `processing` gathers for it and which half of the outcome envelope it owes — a value in `agent.BACKENDS`, a branch in `build_agent` (lazy import, so the other backends' frameworks stay unloaded), a place in `agent.SKILL_READING_BACKENDS` if it injects the brief, and — if it reports tokens rather than dollars — a row in `pricing.PRICES`. If it cannot serve every flow, refuse it in `worker.startup_checks` rather than letting a worker discover that one capture at a time |
-| Change what the STRUCTURED shape is handed | `gather.py` only — it is a pure function, so a change is unit-testable without a model. Tune the two dials in `config.Settings` (`gather_top_k`, `gather_excerpt_lines`) rather than in the gatherer; render it through `agent.render_gathered`, never with a fence built somewhere new. A new FIELD read off the filesystem goes through `_confined` like every other, and a new field that scales with page CONTENT owes `agent.MAX_GATHERED_CHARS` a way to trim it — the per-field bounds multiply, and two of the factors are an operator's to set |
+| Add an agent backend | a class satisfying `filing_port.FilingAgent` in its own module — including BOTH declarations (`structured_ordinary`, which decides which half of the outcome envelope it owes and who writes the page; `wants_gathered`, which decides whether `processing` builds its context) — a value in `agent.BACKENDS`, a branch in `build_agent` (lazy import, so the other backends' frameworks stay unloaded), a place in `agent.SKILL_READING_BACKENDS` if it injects the brief, its own ENVIRONMENT paragraph composed through `agent.build_filing_header`, and — if it reports tokens rather than dollars — a row in `pricing.PRICES`. If it cannot serve every flow, refuse it in `worker.startup_checks` rather than letting a worker discover that one capture at a time |
+| Change what the agent is handed, or what a tool answers | `gather.py` only — it is a pure function, so a change is unit-testable without a model, and the seed and the `search_pages`/`read_page` tools share its machinery on purpose (`load_corpus`, `search_candidates`, `confined_page`). Tune the two dials in `config.Settings` (`gather_top_k`, `gather_excerpt_lines`) rather than in the gatherer; render the block through `agent.render_gathered`, never with a fence built somewhere new. A new FIELD read off the filesystem goes through `_confined` like every other, and a new field that scales with page CONTENT owes `agent.MAX_GATHERED_CHARS` a way to trim it — the per-field bounds multiply, and two of the factors are an operator's to set |
+| Add or change a TOOL the ordinary agent holds | `pydantic_backend.FilingToolbox` for the body (it must be reachable without a model — that is what makes a confinement rule testable) and `_register_tools` for the docstring, which IS the schema the model reads. Reuse the rule that already exists (`agent.confined_write` for writes, `gather.confined_page` for reads) rather than writing a second one; name the tool in `ORDINARY_AGENTIC_ENVIRONMENT` or the model learns it exists by guessing; return data through `_tool_payload`, never a hand-built fence |
 | Change what a model costs | `pricing.PRICES` **and** `pricing.AS_OF` in the same edit, or `$STIGMERGY_LIBRARIAN_PRICING` for one deployment. Never a literal at a call site — the same "model ids are configuration" rule, applied to their prices |
 | Read another file out of the knowledge repo | `base_inputs` — a wrapper over `read_at`, never `open(settings.<x>_path)`. Decide what ABSENT means for it and say so in the wrapper's docstring |
 | Change what the deployed worker needs | `bootstrap.py` (the checkout, the verification, the env it execs with) **and** `fly.toml`'s `worker` process group **and** `docker-compose.yml`'s `librarian` service — the composition exists so the artifact is exercised before staging is |
 | Change worktree / diff mechanics | `gitcmd.py` — `--text` and `core.quotePath=false` are load-bearing on every diff invocation, not cosmetic |
-| Change the ORDINARY brief | the knowledge repo's `.claude/skills/librarian/SKILL.md` — never a copy here. Grep it against `tests/librarian/test_librarian_brief_contract.py`'s rule table in BOTH directions before shipping either side alone, and resync BOTH frozen copies: `tests/librarian/fixtures/repo/` (the drift guard, resynced always) and `evals/filing/repo/` (the yardstick, re-frozen deliberately, with `FROZEN_SHA256`, `PROVENANCE.json` and a fresh baseline row in the same landing). The brief is backend-NEUTRAL: a backend that departs from it says so in its own ENVIRONMENT paragraph, on this side (`pydantic_backend.ORDINARY_ENVIRONMENT`, composed through `agent.build_filing_header`) |
+| Change the ORDINARY brief | the knowledge repo's `.claude/skills/librarian/SKILL.md` — never a copy here. Grep it against `tests/librarian/test_librarian_brief_contract.py`'s rule table in BOTH directions before shipping either side alone, and resync BOTH frozen copies: `tests/librarian/fixtures/repo/` (the drift guard, resynced always) and `evals/filing/repo/` (the yardstick, re-frozen deliberately, with `FROZEN_SHA256`, `PROVENANCE.json` and a fresh baseline row in the same landing). The brief is backend-NEUTRAL and every sentence has to stay true for BOTH ordinary shapes: a backend states its own mechanics in its ENVIRONMENT paragraph, on this side (`pydantic_backend.ORDINARY_AGENTIC_ENVIRONMENT`, composed through `agent.build_filing_header`) |
 | Change the meeting flow | `processing.process_meeting_item` and its private helpers (`_one_meeting_pass`, `_stamp_meeting`, `_cross_check_meeting_outcome`, `_file_meeting`, `_refuse_meeting`); `agent.build_meeting_prompt` and `agent.read_meeting_outcome` for the item's prompt and its account, and `pydantic_backend.MEETING_ENVIRONMENT` for what the agent is told about its own environment (the tool allow-lists went with the backend that held tools); the brief lives in the knowledge repo (`.claude/skills/meeting-distiller/SKILL.md`) — grep it against `tests/librarian/test_meeting_brief_contract.py`'s rule table in BOTH directions before shipping either side alone, because a two-sided contract shipped one side at a time is how the two silently disagree |
 | Change the view-regeneration trigger after a meeting files | `processing._file_meeting`'s `views_regenerate` block ONLY — keep it best-effort (never let a view fault taint the meeting's own `Result`) and keep the import pinned to `stigmergy.views.regenerate` (`test_librarian_may_only_import_views_regenerate`); the trigger's own logic (which entities, staleness, the commit) lives in `stigmergy.views.regenerate` — see [`views/index.md`](../views/index.md)'s Common tasks row for that half |
 
@@ -719,14 +743,16 @@ rather than about a second, untested implementation of the same rule.
   (`worker._check_skill_at`), and injected into the system prompt rather than loaded through any harness's
   own settings mechanism — loading it as `project` settings once booted the knowledge repo's
   `.mcp.json` servers and hung the run forever (`agent.py`'s module docstring has the full account).
-  **It is backend-NEUTRAL since ADR 033**: it describes a worker that hands the agent its context and
-  writes the page from one structured account. Tool mechanics, for a backend that has any, would live
-  in the per-backend ENVIRONMENT preamble composed by `agent.build_filing_header` — the retired SDK
-  backend carried a NAMED override note there, saying its run departed from the brief; no backend
-  needs one for the ordinary flow today, since the brief itself now describes the structured shape.
-  The direction that note took was the inversion worth noticing while it ran: in ADR 032 the brief
-  was the tool-holding text and the structured backend carried the correction; then the brief became
-  the structured text and the SDK carried the correction, until it retired.
+  **It is backend-NEUTRAL since ADR 033, and ADR 034 is what that neutrality bought**: when the
+  ordinary run regained its tools the brief needed a touch rather than a rewrite, because the
+  mechanics live in the per-backend ENVIRONMENT preamble composed by `agent.build_filing_header`
+  (`pydantic_backend.ORDINARY_AGENTIC_ENVIRONMENT` names the five tools; the meeting half carries a
+  NAMED override note where it contradicts the brief). Every sentence of the brief has to stay true
+  for BOTH shapes — a handed-context tool-less run and a tools run — which is what
+  `tests/librarian/test_librarian_brief_contract.py`'s rule table is checked against. The direction
+  of an override note is worth noticing when one exists: in ADR 032 the brief was the tool-holding
+  text and the structured backend carried the correction; then the brief became the structured text
+  and the SDK carried it, until it retired.
 - **This file's structure matches [`evals/index.md`](../../../evals/index.md)** — the closest
   existing precedent to the per-directory code-map format
   (`docs/reference/hybrid-index.md` is narrative/schema-first instead, for a different audience).

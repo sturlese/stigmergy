@@ -1,4 +1,4 @@
-"""BOTH flows on pydantic-ai — one structured model call each, no tools, no outcome file.
+"""BOTH flows on pydantic-ai: an ITERATING ordinary run with five tools, one structured meeting call.
 
 The third `FilingAgent` implementation, and the first one that is not Claude's. It started with the
 meeting flow because that flow was ALREADY portable and nothing had noticed: the agent holds no
@@ -8,18 +8,21 @@ structured account. A flow shaped like that does not need an agent harness at al
 model that can return a typed object. ADR 032 records that half; ADR 020 is why the meeting flow
 had the shape in the first place.
 
-**ADR 033 gave the ORDINARY flow the same shape, and this backend now serves both.** M1's `run`
-was a refusal, and `worker.startup_checks` refused this backend for any worker outright — because
-a worker's queue carries ordinary captures too and a backend that half-serves a queue is the
-configuration this repo refuses on principle. What lifted it is not a flag: the ordinary flow got
-the meeting flow's division of labour. A deterministic gatherer (`librarian/gather.py`) reads the
-checkout at the base commit and `processing` hands the result over as rendered prompt text, the
-agent returns a structured account CARRYING the page's own body, and `processing._write_ordinary_page`
-writes it. There is nothing left for this backend to explore and nothing left for it to write.
+**ADR 033 gave the ORDINARY flow the same shape; ADR 034 gave it back its ability to look.** The
+gatherer stays and the one-shot call went: `processing` still reads the checkout deterministically
+and hands the result over as rendered prompt text, but that block is now the SEED of a run that
+holds `search_pages`, `read_page`, `list_page_names`, `resolve_entities` and `write_page` over the
+same checkout, writes its own page inside `agent.confined_write`'s allow-list, and returns its
+account as `.librarian-outcome.json`. The reason is portability rather than nostalgia: the goal of
+moving off the Claude harness was that a provider swap should be a configuration change, never that
+the model should stop being able to search — deterministic code may SEED context and IMPLEMENT
+tools, and must not replace the judgment that decides when the context is not enough.
 
 **The gatherer is deliberately NOT in here.** `processing` gathers and renders; this backend
-receives a string. Two structured backends must share one context builder and one fence
-discipline, and a gatherer living inside a backend is a gatherer the second one reimplements.
+receives a string. Two backends must share one context builder and one fence discipline, and a
+gatherer living inside a backend is a gatherer the second one reimplements. What IS in here is the
+TOOLBOX (`FilingToolbox`) — the tools' bodies, which are `gather.py`'s own pure functions with the
+confinement rules asked inside each call rather than in a permission hook.
 
 **What is NOT reused, deliberately.** `kernel.llm.build_processor` is this repo's fake/real
 dispatch for every OTHER agent, and it is the wrong seam here: the librarian's offline path is
@@ -27,7 +30,7 @@ dispatch for every OTHER agent, and it is the wrong seam here: the librarian's o
 through `resolve_backend` would create a SECOND offline path with different semantics answering to
 a different variable (`$CLEAN_LLM` rather than `$STIGMERGY_LIBRARIAN_BACKEND`). What IS reused is
 everything each flow already owns: `agent.read_skill`/`read_meeting_brief` (the base-commit reads),
-`agent.build_structured_prompt`/`build_meeting_prompt` (the per-item message),
+`agent.build_prompt`/`build_meeting_prompt` (the per-item message),
 `agent.build_system_prompt`/`build_meeting_system_prompt` (the brief's body as instructions) and
 `agent.parse_outcome`/`parse_meeting_outcome` (the SAME trust boundary the file channel goes
 through — a structured provider is not a trusted one).
@@ -40,12 +43,16 @@ plain data, and a test that builds one by hand must not have to reach through a 
 import json
 import logging
 import os
+import threading
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from stigmergy import text as textutil
+from stigmergy.kernel import registry as registry_module
 from stigmergy.librarian import agent as agent_module
-from stigmergy.librarian import gates, pricing
+from stigmergy.librarian import config, edits, gates, gather, gitcmd, pricing
+from stigmergy.librarian import page as page_policy
 from stigmergy.librarian.errors import AgentError, LibrarianConfigError, OutcomeShapeError
 from stigmergy.librarian.filing_port import AgentRun, priced
 
@@ -53,27 +60,30 @@ log = logging.getLogger(__name__)
 
 BACKEND_NAME = "pydantic"
 
-# The decision record a REFUSAL points an operator at. Read by
-# `worker._check_brief_matches_backend`, which is the one message that has to tell somebody where
-# the landing-order rule it enforces is written down.
+# RETIRED with the refusals that quoted them: `ADR` (ADR 032, cited by M1's meeting-only refusal)
+# and now `ORDINARY_ADR` (ADR 033, cited by `worker._check_brief_matches_backend`, retired in ADR
+# 034 — see that function's tombstone in `worker.py` for why the check went).
 #
-# `ADR = "…/032-…"` used to sit beside this and is gone: it was cited by exactly one message — the
-# meeting-only refusal ADR 033 removed — and a module constant naming a document nothing quotes is
-# the shape this repo prunes on sight. ADR 032 is still this module's other design record and is
-# cited in the prose above, which is where a reference with no runtime reader belongs.
-ORDINARY_ADR = "docs/decisions/033-structured-filing-flow.md"
+# Both are the same pruning rule applied twice: **a module constant naming a document nothing
+# quotes is a reference with no reader**, and this repo prunes those on sight. ADR 032, 033 and 034
+# are all still this module's design records and are cited in the prose above, which is where a
+# document reference with no runtime reader belongs.
 
-# How many times the FRAMEWORK may re-ask the model when its answer does not satisfy the output
-# schema. One constant, read twice on purpose: it is both the retry budget handed to the `Agent`
-# and the request ceiling handed to `UsageLimits`, and those two numbers must agree or the ceiling
-# either strangles a legitimate re-validation or stops bounding anything. One request, plus one
-# re-ask: past that the answer is not a shape problem the framework can fix by asking again, and it
-# belongs on the WORKER's own corrective retry, where the brief says what was wrong.
+# How many times the FRAMEWORK may re-ask the model when its answer does not satisfy what it was
+# asked for. On the MEETING flow that is the output schema, and this constant is read twice on
+# purpose there: it is both the `Agent`'s retry budget and the request ceiling handed to
+# `UsageLimits`, and those two numbers must agree or the ceiling either strangles a legitimate
+# re-validation or stops bounding anything. One request, plus one re-ask: past that the answer is
+# not a shape problem the framework can fix by asking again, and it belongs on the WORKER's own
+# corrective retry, where the brief says what was wrong.
+#
+# On the ORDINARY flow it bounds TOOL-call validation instead (a call with arguments the tool's
+# signature refuses) and nothing else — that flow's request ceiling is `settings.max_turns`, since
+# a loop's budget cannot be a re-ask budget.
 #
 # **These re-asks are invisible to `AgentPasses.count`**, which counts the worker's passes. See
-# ADR 032's envelope semantics: `turns`/`tool_calls` are `0` and `attempts` means our passes, so a
-# framework re-validation costs money that IS banked (the usage accumulator sees it) under an
-# attempt count that does not move.
+# ADR 032's envelope semantics: `attempts` means our passes, so a framework re-validation costs
+# money that IS banked (the usage accumulator sees it) under an attempt count that does not move.
 OUTPUT_RETRIES = 1
 
 # The provider prefixes this milestone names, and the environment variable each family
@@ -339,31 +349,70 @@ class FilingAccount(BaseModel):
         return self
 
 
+# ── RETIRED with the one-shot ordinary run (ADR 034) ──────────────────────────────────────────
+# `ORDINARY_ENVIRONMENT` ("You have NO tools…"), `ORDINARY_SYSTEM_PROMPT_HEADER` and
+# `ORDINARY_OUTCOME_CHANNEL` ("You write no file and you have no tool that could") lived here.
+# Nothing composes them: this backend's ordinary run holds five tools and writes its own page and
+# outcome file, so every one of those three sentences is now false OF THE ONLY RUN THAT WOULD READ
+# THEM — the exact defect `agent.build_filing_header`'s split exists to prevent, which is why they
+# are removed rather than left as plausible-looking defaults for the next backend to inherit.
+#
+# **The SHAPE they described is not retired**, and that is the distinction worth keeping: a backend
+# declaring `structured_ordinary = True` still takes `processing._one_pass`'s content-carrying
+# branch, `FilingAccount` above is still its account's schema, and the meeting flow below still
+# runs exactly that way. What went is one backend's PREAMBLE, not the road.
+
 # This backend's own ordinary environment — the ONE part of the preamble that differs per backend.
-# TWO numbered points, because the exploring environment this replaced was two
-# and the shared point after it is numbered `3.`; the opening, that shared point and the separator
-# come from `agent.build_filing_header`, where they are written once.
-ORDINARY_ENVIRONMENT = (
-    "1. You have NO tools. You cannot read, search or write anything, and you do not write your "
-    "account to a file: you RETURN it, as the structured object this run's output schema "
-    "declares. Everything you need is in the worker's own message below: the captured material, "
-    "the entities it names resolved through the registry, the candidate pages this brain already "
-    "holds (with excerpts), the link neighbourhood around them, and the repo's own page names. "
-    "The page contract and this type's template are summarised in the procedure below; you do not "
-    "read them from the checkout because you cannot.\n"
-    "2. The worker writes the page from what you return — the filename from your title, the "
-    "folder from your page type, the server-owned frontmatter, the declared edits, the commit. "
-    "Your job is judgment and DRAFTING: where it belongs, what it anchors to, what it overlaps, "
-    "and the page's own text.\n")
+# TWO numbered points, because the shared point after it is numbered `3.`; the opening, that shared
+# point and the separator come from `agent.build_filing_header`, where they are written once.
+#
+# **Every capability sentence here is a promise the tool list has to keep.** The five names below
+# are the five tools `_register_tools` registers and nothing else — a preamble that named a sixth
+# would have the model spend a request discovering it does not exist, and one that omitted a real
+# tool would leave a capability the run paid for unused. Written as what each one is FOR rather than
+# as a signature list: the signatures are in the tool docstrings, which the framework sends as the
+# schema, and repeating them here is how the two come to disagree.
+ORDINARY_AGENTIC_ENVIRONMENT = (
+    "1. You hold five tools over this repo checkout, and nothing else — no shell, no network, no "
+    "subagents:\n"
+    "   - `search_pages(query)` — the worker's own ranking of which existing pages a text overlaps "
+    "with, over the whole checkout. This is how you look further than the context below.\n"
+    "   - `read_page(path)` — one page in full (its frontmatter and its body), by repo-relative "
+    "path. It also reads the per-type page templates at `ops/templates/<type>.md`. Nothing else in "
+    "this checkout is readable.\n"
+    "   - `list_page_names()` — every page name in the repo, which is the whole wikilink "
+    "vocabulary. A `[[name]]` resolves only if it is in that list.\n"
+    "   - `resolve_entities(names)` — the entity registry's own answer for a list of names: the "
+    "canonical id, the aliases and the entity's page when one exists. A name it does not resolve "
+    "is not registered, whatever the material calls it.\n"
+    "   - `write_page(path, content)` — the ONLY way you write anything, and the only writes it "
+    "permits are ONE new `.md` page in this repo's fast-lane knowledge folders and your own "
+    "outcome file. A page that already exists is not writable, however its name is spelled.\n"
+    "2. The context in the worker's message below is a STARTING POINT, not a boundary: it is what "
+    "the worker gathered before this call, and the tools reach the same checkout it read. Use them "
+    "when it is not enough — search for the vocabulary the material actually uses, read a candidate "
+    "before judging it a duplicate, confirm a page exists before you link it. You write the page "
+    "yourself, frontmatter included, and then your account: both go through `write_page`. **Read "
+    "`ops/templates/<type>.md` before you write a page of that type.** It is the structural source "
+    "of truth for that type's frontmatter and sections; your frontmatter is exactly what the "
+    "template declares, with `created`/`updated` set to today, minus the fields the skill below "
+    "says the server owns — the worker stamps those from its own facts. An existing page of the "
+    "same type is a useful second look at the house style, never the substitute for the template. "
+    "Your budgets are finite (a request ceiling and a wall clock), so look with purpose rather "
+    "than exhaustively.\n")
 
-ORDINARY_SYSTEM_PROMPT_HEADER = agent_module.build_filing_header(ORDINARY_ENVIRONMENT)
+ORDINARY_AGENTIC_SYSTEM_PROMPT_HEADER = agent_module.build_filing_header(
+    ORDINARY_AGENTIC_ENVIRONMENT)
 
-# The one line of the per-item prompt that differs between the two channels — see
-# `agent.build_prompt`, whose default is the file channel's own sentence.
-ORDINARY_OUTCOME_CHANNEL = (
-    "\nReturn your account as the structured object this run's output schema declares, in the "
-    "shape the skill documents — the page's own text included, in `page.body`. You write no file "
-    "and you have no tool that could.")
+# The one line of the per-item prompt that says how the account travels home. `agent`'s own default
+# (`OUTCOME_CHANNEL_FILE`) says the file but not the TOOL, which is the one thing a run holding
+# exactly one write tool needs told: "write your account to X" with no route named is how a model
+# reaches for a `Write` it does not have and reports having filed nothing.
+ORDINARY_AGENTIC_OUTCOME_CHANNEL = (
+    f"\nWhen you are done, write your account to `{agent_module.OUTCOME_FILENAME}` at the repo "
+    f"root — with `write_page`, the same tool you wrote the page with — in the shape the skill "
+    f"documents, naming the path you wrote in `page_path`. Your final message is not read: the "
+    f"outcome file is the whole of what the worker receives from you.")
 
 
 # This backend's own MEETING environment paragraph.
@@ -409,6 +458,310 @@ OUTCOME_CHANNEL = (
     "shape the skill documents. You write no file and you have no tool that could.")
 
 
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# THE TOOLS (ADR 034) — bodies here, registration in `_register_tools`, confinement inside each one
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# What one tool call may carry in and out. The bounds that matter are REUSED rather than invented,
+# and that is the point: a tool that bounded page text differently from the boundary, or offered
+# more page names than the seeded block does, would be a second answer to a question this package
+# has already answered once.
+#
+#   * a read is bounded by `agent.MAX_PAGE_BODY_LEN` — the repo's own "how long may a whole page
+#     body be" constant, the same one `parse_outcome` refuses a drafted body over. A page too long
+#     to hand back is a page too long to have been filed;
+#   * one LINE is clamped by `gather.MAX_EXCERPT_LINE`, because a page is line-bounded by the
+#     contract linter and not character-bounded, so one pathological line can carry a whole body;
+#   * the name list is bounded by `gather.MAX_LINK_NAMES` and reports its own total, for the reason
+#     that constant records: a truncated vocabulary read as complete makes "not in the list" look
+#     like proof a page does not exist;
+#   * a WRITE is bounded by `agent.MAX_OUTCOME_BYTES` — the most bytes this agent may hand the
+#     worker in one blob on any channel, page or account. This is a RESOURCE bound (a runaway write
+#     into a prompt or a commit), deliberately generous at 256 KiB and NOT the same question as
+#     "how long may a filed page be": the structured shape's own 20k-character body ceiling
+#     (`agent.MAX_PAGE_BODY_LEN`) and the contract linter's 150-line cap are the EFFECTIVE bounds on
+#     what actually lands in the repo, checked over the diff after the write. One tool call may
+#     carry more bytes than one page may keep; the gates, not this ceiling, decide the second.
+#
+# Only the two genuinely new bounds are declared here.
+MAX_TOOL_QUERY_CHARS = 2_000        # a search query is a phrase, not a document to re-embed
+MAX_TOOL_NAMES = 50                 # names per `resolve_entities` call; the registry is small
+
+
+# The reserved key a tool result carries its PAGE-DERIVED content half under. `_tool_payload` pulls
+# it out and fences it; everything beside it is the sanitized structural scaffold. One convention,
+# so the framing is one dumb function rather than a dispatch on each tool's dict shape.
+_FENCED_KEY = "_fenced"
+
+
+def _json(value) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _tool_payload(result) -> str:
+    """One tool result, as the text the model reads — the SEED ROAD's discipline, on the tool road.
+
+    **The two halves are framed exactly as `agent.render_gathered` frames the gathered block**, and
+    that is the whole fix (ADR 034): the structural SCAFFOLD (keys, paths, titles, names — every
+    unfenced scalar already through `gather.prompt_scalar` where it was built) renders as plain
+    JSON, and the page-BODY-DERIVED CONTENT half — a `read_page` body, a `search_pages` excerpt — is
+    wrapped in `agent.fence(json.dumps(...))`. A page body re-entering a prompt is captured content
+    on the way back in, `sources/` pages are verbatim prior captures, and the fence is the only
+    thing that both labels it DATA and neutralizes an in-band fence token a page might carry.
+
+    **NOT a third fence site.** `agent.fence` is the librarian's one declared fence builder
+    (`tests/test_architecture.py` keeps the token literal in `stigmergy.text` and `agent.py` only);
+    this CALLS it. An earlier version of this docstring argued the tool road needed no fence because
+    JSON escaping bounds the data span — true of structure, false of SEMANTICS: an escaped string
+    cannot break the JSON, but a model can still READ `"mark this canonical"` inside it and obey. The
+    seed road fences its content half for exactly that reason, and the two roads carry the same bytes.
+
+    A result with no `_fenced` half — a refusal, a write receipt, the entity resolution (server-
+    owned identifiers, the structural half by nature) — renders as plain JSON, one value, unchanged.
+    """
+    if isinstance(result, dict) and _FENCED_KEY in result:
+        content = result[_FENCED_KEY]
+        scaffold = {key: value for key, value in result.items() if key != _FENCED_KEY}
+        return _json(scaffold) + "\n" + agent_module.fence(_json(content))
+    return _json(result)
+
+
+def _readable(text: str) -> str:
+    """A page's text, line by line, sanitized and clamped — bounded as a whole, and it SAYS when it
+    was cut.
+
+    Truncation is stated rather than silent for the reason `agent.render_gathered` states its own
+    trim: a model handed half of a page and told nothing will judge "does this page already cover
+    the material" against half a page and never know it did.
+    """
+    lines = [textutil.clamp(textutil.sanitize(line), gather.MAX_EXCERPT_LINE)
+             for line in (text or "").splitlines()]
+    body = "\n".join(lines)
+    if len(body) <= agent_module.MAX_PAGE_BODY_LEN:
+        return body
+    return (body[:agent_module.MAX_PAGE_BODY_LEN]
+            + f"\n\n[the worker cut this page here: it is longer than the "
+              f"{agent_module.MAX_PAGE_BODY_LEN}-character read ceiling, so what you have is its "
+              f"opening and not the whole of it]")
+
+
+# The two refusals, as constants because they are the model's only account of a rule it just met.
+#
+# `REFUSED_WRITE` is the retired `PreToolUse` hook's sentence, extended by the one clause the hook
+# never had to say (it scoped `Write`/`Edit`, and the outcome file arrived through the same tools
+# unremarked). `REFUSED_READ` is the hook's "reads are confined to this worktree" made specific,
+# because containment is no longer the whole rule: `gather.confined_page` admits the content zones
+# and nothing else, so a message saying only "this worktree" would send a model round the same
+# refusal for `.claude/`, `ops/` and every dotfile in turn.
+#
+# Neither one echoes the path that was refused. A refusal is prompt text, and a path the material
+# chose is attacker-reachable text — this is the same rule `report.py` follows about a rejected
+# capture's payload, applied to the one surface a model reads mid-run.
+REFUSED_WRITE = (
+    "writes are confined to a NEW .md page in one of this repo's fast-lane knowledge folders; an "
+    "edit to a page that already exists is declared in the outcome's `edits` and performed by the "
+    "worker. Your own outcome file at the repo root is the one other write this tool allows.")
+
+REFUSED_READ = (
+    "reads are confined to the knowledge pages of this checkout: a repo-relative path to an "
+    "existing .md page under one of the content zones, or a per-type page template at "
+    f"`{gather.TEMPLATE_DIR}/<type>.md`. Use `search_pages` or `list_page_names` to find a page; "
+    "nothing else in the checkout is readable.")
+
+
+class FilingToolbox:
+    """What the five tools DO, with no agent framework anywhere near it.
+
+    A plain object rather than five closures inside `_run`, for exactly the reason
+    `agent.confined_write` is a module-level function rather than a hook body: the first version of
+    that rule lived inside the run where nothing could reach it, and it was wrong in three ways at
+    once — including one that denied every legitimate write on macOS. Every refusal below is
+    reachable with a temporary directory and no model, and `tests/librarian/test_filing_toolbox_unit
+    .py` is where each one fires against a real checkout — a rule nobody can call directly is a rule
+    nobody has tried to break.
+
+    **The tools run in THREADS.** pydantic-ai drives a sync tool through `run_in_executor`, so two
+    `search_pages` calls the model batched in one turn can enter `corpus()` at once. `_corpus` and
+    `_registry` cache the checkout's parse for the life of ONE run — `search_pages` is the tool a
+    model calls most, and re-walking the whole knowledge repo per call would make the model's
+    curiosity quadratic in the size of the corpus, on the one per-item cost that already scales with
+    it (`config.GATE_BUDGET_S`). `_lock` is what makes "parsed at most once" true under that
+    concurrency rather than "once if the calls happen to be serial": without it, two threads that
+    both see `None` both walk the corpus, and the whole point of the cache is lost on exactly the
+    turn a model searches hardest.
+    """
+
+    def __init__(self, worktree: str, *, top_k: int, excerpt_lines: int):
+        self.worktree = os.path.realpath(worktree)
+        self.top_k = max(int(top_k), 1)
+        self.excerpt_lines = max(int(excerpt_lines), 0)
+        # Read ONCE, before the model runs: the paths that already exist at the base commit. The
+        # retired write hook read them at the same moment and said why — recomputing per call would
+        # let a page the agent itself just wrote start counting as "existing", so its second write
+        # of its own draft would be denied as an edit to somebody else's page.
+        self.existing = gitcmd.tracked_paths(self.worktree)
+        self._corpus = None
+        self._registry = None
+        self._lock = threading.Lock()
+
+    # ── the parses, once per run — guarded because the tools run in threads ───────────────────
+    # Double-checked: the fast path reads the cached value with no lock, and only a miss takes it,
+    # re-checking inside so the loser of a race returns the winner's parse rather than a second one.
+    def corpus(self) -> gather.Corpus:
+        if self._corpus is None:
+            with self._lock:
+                if self._corpus is None:
+                    self._corpus = gather.load_corpus(self.worktree)
+        return self._corpus
+
+    def registry(self):
+        """The entity registry AT THIS ITEM'S BASE COMMIT, and it needs no new port parameter to be
+        that: the worktree IS the checkout at that commit, so the file inside it is the base-commit
+        file — the same reasoning `agent.read_skill` makes about the brief. Read through
+        `config.REGISTRY_RELPATH`, this package's one spelling of where the registry lives."""
+        if self._registry is None:
+            with self._lock:
+                if self._registry is None:
+                    self._registry = registry_module.load_registry(
+                        os.path.join(self.worktree, *config.REGISTRY_RELPATH.split("/")))
+        return self._registry
+
+    # ── the five bodies ───────────────────────────────────────────────────────────────────────
+    # Every UNFENCED scalar that re-enters the prompt goes through `gather.prompt_scalar` — the SAME
+    # sanitizer the seed road's structural half uses (`gather.structural_payload`), never a second
+    # one. The page-BODY-derived free text (a read body, a search excerpt) is the CONTENT half and
+    # is FENCED instead, by `_tool_payload`, exactly as `render_gathered` fences the gathered block.
+    def search_pages(self, query: str) -> dict:
+        """Rank the checkout's pages against `query`, through the gatherer's own scorer."""
+        text = (query or "").strip()[:MAX_TOOL_QUERY_CHARS]
+        if not text:
+            return {"query": "", "matches": [],
+                    "note": "an empty query matches nothing; search for the words the material "
+                            "actually uses"}
+        ps = gather.prompt_scalar
+        found = gather.candidates_payload(gather.search_candidates(
+            self.corpus(), text, top_k=self.top_k, excerpt_lines=self.excerpt_lines))
+        # The identifiers (path/title/type/links_to) sanitized into the scaffold; the page-derived
+        # EXCERPT fenced, keyed by the same sanitized path so the model can correlate the two.
+        matches = [{"path": ps(c["path"]), "title": ps(c["title"]), "type": ps(c["type"]),
+                    "links_to": [ps(name) for name in c["links_to"]]} for c in found]
+        excerpts = [{"path": ps(c["path"]), "excerpt": c["excerpt"]} for c in found]
+        return {"query": text, "matches": matches, "corpus_pages": len(self.corpus().rows),
+                _FENCED_KEY: {"excerpts": excerpts}}
+
+    def read_page(self, path: str) -> dict:
+        """One page in full — refused unless `gather.confined_page` allows it.
+
+        **That rule admits the content zones AND `ops/templates/*.md`, on evidence rather than
+        symmetry.** This run writes the page's own container, and the template is what says what a
+        container of that type owes: the knowledge repo's contract linter names those files as the
+        per-type schema reference, the retired tool-holding harness read them before drafting (its
+        brief said so in as many words), and the alternative — copy the shape from an existing page
+        of the same type — has no source in a young brain, nor in the golden fixture, which carries
+        no `wiki/concepts` page at all. Everything else outside the zones stays refused, `ops/`'s
+        own `acl.json` and `entity-registry.json` first among them.
+
+        The refusal names what IS readable rather than what went wrong with this path: a model that
+        asked for `../../ops/acl.json` needs to know the shape of the permission, and a message
+        echoing the path it asked for would put an attacker-chosen string back in the prompt for
+        nothing.
+        """
+        resolved_rel = gather.confined_page(self.worktree, path or "")
+        if not resolved_rel:
+            return {"refused": REFUSED_READ}
+        # `confined_page` returns the CANONICAL resolved relpath it judged; open and echo THAT, not
+        # the asked string, so the file read is the file the rule approved (no symlink re-follow, no
+        # NFD spelling that names another page).
+        full = os.path.join(self.worktree, *resolved_rel.split("/"))
+        try:
+            with open(full, encoding="utf-8") as f:
+                text = f.read()
+        except (OSError, UnicodeDecodeError) as ex:
+            # The class name only, never the message: an OS error carries a filesystem path.
+            return {"refused": f"that page could not be read ({ex.__class__.__name__})"}
+        # The path is a sanitized scaffold scalar; the BODY is the content half and is fenced.
+        return {"path": gather.prompt_scalar(resolved_rel),
+                _FENCED_KEY: {"content": _readable(text)}}
+
+    def list_page_names(self) -> dict:
+        """The wikilink vocabulary, through `edits.page_names` — the SAME reading `edits.validate`
+        answers "does this link resolve" with, so a name offered here cannot be one the edit
+        validator then refuses."""
+        ps = gather.prompt_scalar
+        names = sorted(edits.page_names(self.worktree, confined=True))
+        return {"names": [ps(name) for name in names[:gather.MAX_LINK_NAMES]], "total": len(names)}
+
+    def resolve_entities(self, names) -> dict:
+        """The registry's own answer for each name: resolved or not, and its page when it has one.
+
+        `resolved: false` is a REAL answer and the brief's third anchoring outcome depends on it —
+        a name the registry does not know is a park, never an invention — so an unresolved name is
+        returned as itself rather than dropped from the list.
+        """
+        ps = gather.prompt_scalar
+        registry = self.registry()
+        asked = [str(n).strip() for n in (names or []) if str(n).strip()][:MAX_TOOL_NAMES]
+        rows = self.corpus().rows
+        out = []
+        for name in asked:
+            cid = registry.canonical_id(name)
+            if not cid:
+                out.append({"asked": ps(name), "resolved": False})
+                continue
+            entity = registry.entities.get(cid) or {}
+            out.append({
+                "asked": ps(name),
+                "resolved": True,
+                "id": ps(cid),
+                "name": ps(str(entity.get("name") or "")),
+                "aliases": [ps(str(a)) for a in (entity.get("aliases") or [])],
+                "page": ps(gather.entity_page(rows, cid, registry.canonical_id)) or None,
+            })
+        return {"entities": out}
+
+    def write_page(self, path: str, content: str) -> dict:
+        """The ONE write, gated by `agent.confined_write_target` — the same allow-list the offline
+        double writes through and the retired harness's hook called.
+
+        **It writes through `page.open_for_new` / `open_for_rewrite`, never a bare `open`** — the
+        rule `page.py` wrote for this exact call site: `confined_write` allow-lists paths that do
+        NOT exist yet, and the hardened opener (`O_EXCL` + `O_NOFOLLOW`) is what makes that
+        invariant hold at the moment of writing rather than a moment before it. A bare `open(p, "w")`
+        truncates through a symlink and past any race. The one path that legitimately EXISTS when
+        written is the draft the run is iterating on (write, then fix a heading) — untracked, so
+        `confined_write` still allows it — and that takes `open_for_rewrite`.
+
+        `full` is built from the RESOLVED relpath `confined_write_target` judged, not the asked
+        string, so `wiki/notes/sub/../x.md` writes `wiki/notes/x.md` rather than making a stray
+        `sub/` directory the rule never approved.
+
+        The refusal is the SDK hook's own sentence, kept deliberately: it is the wording two live
+        runs of a tool-holding agent were corrected by, and a rule whose message changes with its
+        enforcement mechanism teaches the next reader that the rule changed too.
+        """
+        target = (path or "").strip()
+        rel = agent_module.confined_write_target(self.worktree, target, existing=self.existing)
+        if rel is None:
+            return {"refused": REFUSED_WRITE}
+        blob = content or ""
+        size = len(blob.encode("utf-8"))
+        if size > agent_module.MAX_OUTCOME_BYTES:
+            return {"refused": f"that write is {size} bytes, over the "
+                               f"{agent_module.MAX_OUTCOME_BYTES}-byte ceiling for one write"}
+        full = os.path.join(self.worktree, *rel.split("/"))
+        try:
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            opener = page_policy.open_for_rewrite if os.path.exists(full) else page_policy.open_for_new
+            with opener(full) as f:
+                f.write(blob)
+        except OSError as ex:
+            # Same posture as the read: the class name, never the path in the message.
+            return {"refused": f"that page could not be written ({ex.__class__.__name__})"}
+        # The RESOLVED relpath, which is the file actually written — for a clean lane path it equals
+        # the asked target, and for `sub/../x.md` it is the page the rule approved.
+        log.info("the filing agent wrote %s (%d bytes)", rel, size)
+        return {"written": rel, "bytes": size}
+
+
 class PydanticFilingAgent:
     """The pydantic-ai backend, for BOTH flows. Conforms to `filing_port.FilingAgent` structurally —
     never by inheritance, so a backend is a class that answers the two calls and nothing more.
@@ -425,12 +778,23 @@ class PydanticFilingAgent:
     injected double can never make a run look free.
     """
 
-    # The STRUCTURED shape of the ordinary flow, declared rather than inferred (see
+    # The EXPLORING shape of the ordinary flow, declared rather than inferred (see
     # `filing_port.FilingAgent.structured_ordinary`). `processing` reads THIS, never
     # `isinstance(agent, PydanticFilingAgent)`: a fourth backend, or a test double standing in for
-    # one, must be able to take the structured branch by declaring it rather than by being the
-    # right class.
-    structured_ordinary = True
+    # one, must be able to take the other branch by declaring it rather than by being the right
+    # class.
+    #
+    # **It flipped `True` -> `False` in ADR 034**, and the flip is the whole milestone at the seam:
+    # this backend holds a confined `write_page` tool again, writes its own page, and returns its
+    # account through the outcome FILE — so `processing._one_pass` takes the legacy branch, the one
+    # the double has kept exercised offline since the Claude-Code harness retired.
+    structured_ordinary = False
+
+    # ...and it still wants the gathered context, which is why that is a SECOND declaration rather
+    # than the inverse of the first (see `filing_port.FilingAgent.wants_gathered`). The gather is
+    # this run's SEED: the tools go further than it, they do not replace it. A run that started
+    # from nothing would spend its first requests rediscovering what code can hand it for free.
+    wants_gathered = True
 
     def __init__(self, settings, *, model_factory=None):
         self.settings = settings
@@ -446,17 +810,117 @@ class PydanticFilingAgent:
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
             corrective: str = "", reply: str = "", flow_note: str = "",
             gathered: str = "") -> AgentRun:
-        """The ordinary flow: file ONE capture, in one structured call, writing nothing.
+        """The ordinary flow: file ONE capture, ITERATING over the checkout (ADR 034).
 
-        Structurally parallel to `run_meeting` below, on purpose —
-        a backend swap should be a provider change, not a mechanism one. `gathered` is the
-        deterministic gatherer's context, already rendered to prompt text by `processing`; this
-        backend never builds one (see the module docstring).
+        Deliberately NOT structurally parallel to `run_meeting` below any more, and the asymmetry
+        is the decision rather than drift: a meeting transcript is handed everything it could
+        possibly need (the whole registry, the metadata, the source path) and has nothing to go
+        looking for, while an ordinary capture is one paragraph about a brain of unknown shape —
+        "what does this already say about X" is a question no gatherer answers completely, because
+        the words the material uses need not be the words the pages use. So this flow gets tools
+        and that one keeps its single call.
+
+        `gathered` is the deterministic gatherer's context, already rendered by `processing` — the
+        SEED, not the boundary.
         """
         import asyncio
         return asyncio.run(self._run(
             worktree=worktree, material=material, hints=hints, submitted_by=submitted_by,
             corrective=corrective, reply=reply, flow_note=flow_note, gathered=gathered))
+
+    def _register_tools(self, filer, toolbox: "FilingToolbox") -> None:
+        """Register the five tools on one `Agent`, binding each to `toolbox`'s own body.
+
+        **These docstrings are prompt text.** pydantic-ai sends a tool's docstring and signature to
+        the model as the tool's schema, so they are the model's usage guide and not developer
+        notes: each says what the tool ANSWERS, what it refuses, and what to do with the answer.
+        The engineering rationale for each rule lives on `FilingToolbox`'s own methods, where the
+        next developer will look for it — two audiences, two texts, one behaviour.
+
+        Every wrapper is thin on purpose: the body is `toolbox`'s, so the confinement rules are
+        testable with no framework, and this function's only job is the framing.
+        """
+        @filer.tool_plain
+        def search_pages(query: str) -> str:
+            """Find existing pages whose text overlaps a query, ranked, with an excerpt of each.
+
+            This is how you look further than the context the worker gathered for you. Search for
+            the words this brain would use, not only the words the capture uses: a capture about
+            "the renewal window" may be about a page called "Contract terms". Several narrow
+            searches beat one broad one — each returns the top matches only.
+
+            The ranking is lexical (shared terms, weighted by where they appear), so a match is a
+            suggestion and never a verdict: read a page before you call it a duplicate of the
+            material. Returns JSON: `matches` (path, title, type, links_to, excerpt) and
+            `corpus_pages`, the size of the whole checkout.
+            """
+            return _tool_payload(toolbox.search_pages(query))
+
+        @filer.tool_plain
+        def read_page(path: str) -> str:
+            """Read one existing page in full — its frontmatter and its body.
+
+            Use it before judging overlap versus duplicate, before linking a page you have only
+            seen the title of, and to follow the neighbourhood one hop further. `path` is
+            repo-relative, exactly as `search_pages` returns it (for example
+            `wiki/notes/Some Page.md`).
+
+            **It also reads the page TEMPLATES, at `ops/templates/<type>.md`** — one per page type,
+            and each one is the structural source of truth for what a page of that type owes: the
+            frontmatter fields it declares and the sections it carries. Read the template for the
+            type you are filing before you write the page.
+
+            Everything else is refused — a path outside the repo, a settings file, the entity
+            registry, a dotfile — and the refusal says what IS readable. A very long page comes
+            back cut, and says so where it was cut.
+            """
+            return _tool_payload(toolbox.read_page(path))
+
+        @filer.tool_plain
+        def list_page_names() -> str:
+            """Every page name in this repo: the whole wikilink vocabulary.
+
+            A `[[name]]` you write resolves only if it is in this list, and a link that resolves to
+            nothing is refused by the contract linter and costs the whole capture. Use it to check
+            a name before you link it, and to check your own title is not already taken — a title
+            that collides with an existing page is refused rather than written over it.
+
+            The list is bounded and reports its `total`: when `total` is larger than the list, a
+            name's absence proves nothing, so search for it instead of concluding it is missing.
+            """
+            return _tool_payload(toolbox.list_page_names())
+
+        @filer.tool_plain
+        def resolve_entities(names: list[str]) -> str:
+            """Ask the entity registry what it knows about a list of names.
+
+            The registry is the ONLY thing that decides whether a name is an entity: for each name
+            you get `resolved` true or false, and when true, the canonical id, the registry's own
+            spelling, its aliases, and its page when this brain has one (`page` is null when the
+            entity is registered but has no page yet — a real state, and a different one from "not
+            registered").
+
+            Use it before declaring an anchor. A name it does not resolve is not registered, however
+            the material spells it: park the capture as `unresolved-entity` rather than inventing an
+            entity or falling back to company-wide scope to get it filed.
+            """
+            return _tool_payload(toolbox.resolve_entities(names))
+
+        @filer.tool_plain
+        def write_page(path: str, content: str) -> str:
+            """Write a file. This is the only way you write anything, including your own account.
+
+            Two writes are permitted and no others: ONE new `.md` page in this repo's fast-lane
+            knowledge folders — the whole file, its frontmatter block included — and your outcome
+            file at the repo root. A page that already exists is not writable however its name is
+            spelled (case and accents are folded before the comparison), because an edit to an
+            existing page is DECLARED in your account's `edits` and performed by the worker.
+
+            A refused write returns a refusal and changes nothing; it is not an error to recover
+            from by trying a different path out of the lane. `content` is written verbatim, so
+            write the page you mean to file.
+            """
+            return _tool_payload(toolbox.write_page(path, content))
 
     async def _run(self, *, worktree, material, hints, submitted_by, corrective, reply="",
                    flow_note="", gathered="") -> AgentRun:
@@ -464,14 +928,18 @@ class PydanticFilingAgent:
 
         # Imported HERE, never at module scope — see the module docstring.
         from pydantic_ai import Agent
-        from pydantic_ai.exceptions import UnexpectedModelBehavior
+        from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
         from pydantic_ai.usage import RunUsage, UsageLimits
 
         from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
 
+        # The framework's own usage extraction silently reports ZERO tokens for any OpenAI model
+        # that carries reasoning details, and this backend exists to turn tokens into dollars. It
+        # matters MORE on an iterating run than on a single call: an unrepaired extraction under-
+        # prices every request in the loop, not one. Idempotent; deferring to the framework the day
+        # it is fixed.
         ensure_usage_extraction_repaired()
 
-        # `turns`/`tool_calls` stay at the envelope's own zero — one call, no tools, no loop.
         run = AgentRun()
         worktree_root = os.path.realpath(worktree)
 
@@ -479,31 +947,88 @@ class PydanticFilingAgent:
         # `agent.read_skill`, deliberately not a second reader of the same file. A missing skill
         # raises `LibrarianConfigError` here, before any model call is spent.
         instructions = agent_module.build_system_prompt(
-            agent_module.read_skill(worktree_root), header=ORDINARY_SYSTEM_PROMPT_HEADER)
-        prompt = agent_module.build_structured_prompt(
+            agent_module.read_skill(worktree_root),
+            header=ORDINARY_AGENTIC_SYSTEM_PROMPT_HEADER)
+        prompt = agent_module.build_prompt(
             material=material, hints=hints, submitted_by=submitted_by, gathered_block=gathered,
-            outcome_channel=ORDINARY_OUTCOME_CHANNEL, corrective=corrective, reply=reply,
+            outcome_channel=ORDINARY_AGENTIC_OUTCOME_CHANNEL, corrective=corrective, reply=reply,
             flow_note=flow_note)
 
         # Model resolution gets its OWN narrow try, for the reason `_run_meeting` records: the
         # blanket handler below would report a configuration fault as "the run failed".
+        #
+        # **No `output_type`.** The account does not come home in the envelope on this flow — it
+        # comes home as `.librarian-outcome.json`, written through `write_page` and read back
+        # below. A structured output_type here would ask the model for the account TWICE, in two
+        # shapes, and leave `_cross_check_outcome` two claims to reconcile.
         try:
             model = self.model_factory() if self.model_factory else self.settings.model
-            filer = Agent(model, output_type=FilingAccount, instructions=instructions,
-                          retries=OUTPUT_RETRIES)
+            filer = Agent(model, instructions=instructions, retries=OUTPUT_RETRIES)
         except Exception as ex:  # noqa: BLE001 — class name only, like every other wrap here
             raise priced(run, AgentError(
                 f"could not resolve the configured model ({ex.__class__.__name__}); "
                 f"$STIGMERGY_LIBRARIAN_MODEL is {self.settings.model!r}")) from ex
+
+        # The tools are built and registered OUTSIDE that try, and after it, deliberately.
+        #
+        # AFTER, because model resolution is the cheap, common configuration fault and it should
+        # still be the first thing a misconfigured worker meets. OUTSIDE, because these two lines
+        # have failure modes that are not the operator's model: `FilingToolbox` reads the checkout
+        # (`git ls-files`), whose fault is a `GitError` that `processing.PROCESSING_ERRORS` already
+        # names as its own stage, and a tool whose signature the framework cannot turn into a
+        # schema is OUR defect, whose honest destination is the traceback `worker.process_next`
+        # prints for an unexpected exception. Wrapping either as "could not resolve the configured
+        # model" is the exact mislabelling the narrow try above exists to prevent, one fault over.
+        toolbox = FilingToolbox(worktree_root, top_k=self.settings.gather_top_k,
+                                excerpt_lines=self.settings.gather_excerpt_lines)
+        self._register_tools(filer, toolbox)
+        # OUR usage accumulator, handed in rather than read off the result: pydantic-ai fills this
+        # object as the run proceeds, so a run that dies mid-flight still leaves its real counts
+        # here — which on a LOOP is the difference between pricing eleven requests and pricing none.
         usage = RunUsage()
-        limits = UsageLimits(request_limit=1 + OUTPUT_RETRIES)
+        # The iteration budget. `settings.max_turns` is the retired backend's conversational bound
+        # under a new mechanism and the SAME semantic — how many times this agent may go round —
+        # so it is un-deprecated rather than replaced by a second number an operator would have to
+        # learn (see `config.DEFAULT_MAX_TURNS`). `max_tool_calls` stays deprecated: the framework
+        # already accumulates `RunUsage.tool_calls`, the request ceiling bounds the loop that makes
+        # them, and a second hand-counted ceiling needs a defect behind it rather than a symmetry.
+        #
+        # Passed straight through — NOT `max(..., 1)`. A tool run needs at least two requests (one to
+        # call a tool, one to write its account), so a `max_turns` below 2 fails every capture at
+        # full cost; silently clamping it to 1 would rewrite an operator's number, which this
+        # package refuses on principle. `worker.startup_checks` refuses `< 2` BY NAME before the
+        # first claim, so a run that reaches here has a usable ceiling.
+        limits = UsageLimits(request_limit=int(self.settings.max_turns))
         try:
+            # The wall clock is a bound WE own — pydantic-ai has none — and the worker's visibility
+            # lease is derived from it (`config.minimum_visibility_timeout_s`). It bounds ONE agent
+            # pass; the lease covers `MAX_AGENT_ATTEMPTS` passes plus the gate/commit/push budget, so
+            # a single pass that runs its full `timeout_s` still fits inside the lease. The guarantee
+            # is that no ONE pass runs unbounded, not an absolute promise no capture is ever
+            # redelivered — a sync tool that itself hangs past the timeout is interrupted between
+            # awaits, and the headroom (`VISIBILITY_HEADROOM_S`) is what the estimate leans on.
             async with asyncio.timeout(self.settings.timeout_s):
                 result = await filer.run(prompt, usage=usage, usage_limits=limits)
+        # **The fault arms do NOT record `turns`/`tool_calls`.** They fire by raising, so the local
+        # `run` never returns — `priced()` attaches `run_cost_usd` to the exception (which
+        # `report.failed_system` reads) and nothing else off `run` is consumed. Counting the loop
+        # onto an envelope that is discarded is a dead assignment; the numbers live on the RETURNING
+        # road, where the envelope self-describes (see `_counted` below).
         except TimeoutError as ex:
             run.cost_usd = self._fault_cost(usage, flow="filing")
             raise priced(run, AgentError(
                 f"the filing agent exceeded its {self.settings.timeout_s}s budget")) from ex
+        except UsageLimitExceeded as ex:
+            # CAUGHT BY NAME, above the blanket arm below, because this fault has an operator's
+            # answer in it and the blanket one would report it as "the run failed
+            # (UsageLimitExceeded)" — a class name, at somebody who can fix this in one variable.
+            # A capture whose filing genuinely needs more looking than the ceiling allows is a
+            # legitimate reason to raise it; a model looping is a reason not to.
+            run.cost_usd = self._fault_cost(usage, flow="filing")
+            raise priced(run, AgentError(
+                f"the filing agent used all "
+                f"{self.settings.max_turns} of its model requests for one capture without "
+                f"finishing (the iteration budget, $STIGMERGY_LIBRARIAN_MAX_TURNS)")) from ex
         except UnexpectedModelBehavior as ex:
             # A SHAPE problem — the class the worker's corrective retry exists for. Travels as an
             # `OutcomeShapeError` carrying a finding, exactly as a refused account from the file
@@ -511,42 +1036,64 @@ class PydanticFilingAgent:
             run.cost_usd = self._fault_cost(usage, flow="filing")
             raise priced(run, OutcomeShapeError([gates.Finding(
                 agent_module._OUTCOME_GATE, "framework-rejected",
-                f"the account did not satisfy this run's output schema after "
-                f"{OUTPUT_RETRIES} re-validation attempt(s) ({ex.__class__.__name__}); return "
-                f"every field the schema declares, in the shape the skill documents")])) from ex
+                f"the filing run ended badly ({ex.__class__.__name__}): call the tools this run "
+                f"declares, with the arguments they declare, and write your account to "
+                f"{agent_module.OUTCOME_FILENAME} with `write_page`")])) from ex
         except Exception as ex:  # noqa: BLE001 — class name only: provider errors carry prompt text
             run.cost_usd = self._fault_cost(usage, flow="filing")
             raise priced(run, AgentError(
                 f"the filing agent run failed ({ex.__class__.__name__})")) from ex
 
         run.cost_usd = self._cost(usage, flow="filing")
+        self._counted(run, usage)
         run.stop_reason = str(getattr(result.response, "finish_reason", "") or "")
-        # The SAME boundary the file channel goes through. A typed provider response is not a
-        # trusted one: it was written by a model that has just read untrusted material.
-        # Deliberately OUTSIDE the try above, so an `OutcomeShapeError` reaches the corrective
-        # retry carrying its findings instead of being flattened into a bare `AgentError`.
-        raw = result.output.model_dump()
-        # The SAME ceiling the file channel applies to `.librarian-outcome.json`, on the channel
-        # that has no file to stat — and it matters MORE here than in the meeting flow, because
-        # `page.body` is an unbounded string a model can fill with the whole material. One
-        # constant, two channels. Dumped ONCE: `parse_outcome` reads the dict, not these bytes.
-        size = len(json.dumps(raw, ensure_ascii=False, default=str).encode("utf-8"))
-        if size > agent_module.MAX_OUTCOME_BYTES:
-            raise priced(run, AgentError(
-                f"the filing agent's account is {size} bytes, over the "
-                f"{agent_module.MAX_OUTCOME_BYTES}-byte ceiling"))
+        # The account is the FILE, not the final message. `result.output` is plain text on this
+        # flow and is deliberately ignored: a model that says "I filed it" in prose and wrote no
+        # outcome file has filed nothing, and reading the prose would invent an account.
+        #
+        # Read HERE rather than in `processing`, mirroring the double: the backend that owns the
+        # channel is the backend that drains it. `read_outcome` deletes the file as it parses, so
+        # `processing`'s own `discard_outcome_file` a moment later is a harmless no-op — and the
+        # ceiling, the JSON parse and every bound in `parse_outcome` are the SAME ones the double's
+        # account goes through, because a model that has just read untrusted material is not a
+        # trusted writer whichever framework carried it.
         try:
-            run.outcome = agent_module.parse_outcome(raw)
+            run.outcome = agent_module.read_outcome(worktree_root)
         except AgentError as ex:
             priced(run, ex)
             raise
         return run
 
+    @staticmethod
+    def _counted(run: AgentRun, usage) -> None:
+        """Put the framework's own loop counters on the envelope — on the RETURNING road only.
+
+        `RunUsage` accumulates `requests` and `tool_calls` as the run proceeds and pydantic-ai
+        mutates it in place, so the returned envelope self-describes: a run reports the real number
+        of requests it made and tools it called. Counting them a second time in the tool wrappers
+        was the alternative and is exactly the second answer to one question this package refuses.
+
+        **Not called on the fault road.** A fault raises rather than returns, so its envelope is
+        discarded — the spend travels on the exception (`priced` → `run_cost_usd`, which
+        `report.failed_system` reads), and putting loop counters on an object nobody holds is a dead
+        assignment. Nothing downstream reads `turns`/`tool_calls` off a fault anyway.
+
+        Read defensively (`getattr`), for the reason `_cost` is: the framework's usage object has
+        grown fields before, and an injected offline model may hand back a simpler one.
+        """
+        run.turns = int(getattr(usage, "requests", 0) or 0)
+        run.tool_calls = int(getattr(usage, "tool_calls", 0) or 0)
+
     def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
                     source_page_path: str, corrective: str = "", reply: str = "") -> AgentRun:
         """One structured call: the brief as instructions, the item as the prompt, a typed account
-        back. Structurally parallel to `run` above on purpose — a backend swap
-        should be a provider change, not a mechanism one."""
+        back — and UNCHANGED by ADR 034, deliberately.
+
+        Giving this flow tools is a separate decision with its own evidence, and there is nothing
+        here for a tool to fetch: the transcript, the whole entity registry, the drop's metadata
+        and the source page's path are all in the prompt, and code writes every page in the set. A
+        `read_page` here would be a capability with no question to answer.
+        """
         import asyncio
         return asyncio.run(self._run_meeting(
             worktree=worktree, material=material, meeting_meta=meeting_meta, registry=registry,

@@ -62,7 +62,7 @@ def test_the_header_is_REQUIRED_and_no_backends_preamble_can_be_inherited_by_def
         agent_module.build_system_prompt(brief_text)
 
     assert agent_module.build_system_prompt(
-        brief_text, header=pydantic_backend.ORDINARY_SYSTEM_PROMPT_HEADER)
+        brief_text, header=pydantic_backend.ORDINARY_AGENTIC_SYSTEM_PROMPT_HEADER)
 
 
 def test_the_brief_arrives_with_its_frontmatter_stripped_and_its_body_whole(brief_text):
@@ -75,7 +75,7 @@ def test_the_brief_arrives_with_its_frontmatter_stripped_and_its_body_whole(brie
     would remove the top of the brief, which is where its own framing lives.
     """
     composed = agent_module.build_system_prompt(
-        brief_text, header=pydantic_backend.ORDINARY_SYSTEM_PROMPT_HEADER)
+        brief_text, header=pydantic_backend.ORDINARY_AGENTIC_SYSTEM_PROMPT_HEADER)
 
     front, body = brief_text.split("---", 2)[1], brief_text.split("---", 2)[2]
     assert "name:" in front, "the fixture brief carries no frontmatter; this test proves nothing"
@@ -104,38 +104,49 @@ def test_the_gathered_block_sits_above_the_material_it_is_context_for():
     """A reader meets its context before the thing the context is for — the same position
     `build_meeting_prompt` gives the registry and the source page's path. Below the material it
     would read as commentary on a document already read, and a model that had already decided
-    placement would have nothing left to use it for."""
-    prompt = agent_module.build_structured_prompt(
+    placement would have nothing left to use it for.
+
+    Driven through `build_prompt` itself now: the ordinary run composes its per-item message there
+    directly (ADR 034), where it used to go through `build_structured_prompt`'s thin wrapper.
+    """
+    prompt = agent_module.build_prompt(
         material="A renewal note.", hints={}, submitted_by="a@b.test",
         gathered_block="\nGATHERED CONTEXT BLOCK",
-        outcome_channel=pydantic_backend.ORDINARY_OUTCOME_CHANNEL)
+        outcome_channel=pydantic_backend.ORDINARY_AGENTIC_OUTCOME_CHANNEL)
 
     assert prompt.index("GATHERED CONTEXT BLOCK") < prompt.index("The captured material follows")
 
 
-def test_the_reply_still_sits_below_the_material_on_the_structured_path():
+def test_the_reply_still_sits_below_the_material_on_the_ordinary_path():
     """The one ordering rule in this prompt that is a security property rather than a readability
     one: the submitter's reply is the newest attacker-reachable text in the system, and placing it
     beside the corrective brief — the one genuinely instruction-shaped thing here, written by code
-    — would let it borrow that authority. It is a property of the ITEM, so it holds on both
-    shapes."""
-    prompt = agent_module.build_structured_prompt(
+    — would let it borrow that authority. It is a property of the ITEM, so it holds on every
+    shape."""
+    prompt = agent_module.build_prompt(
         material="A renewal note.", hints={}, submitted_by="a@b.test",
         gathered_block="\nGATHERED CONTEXT BLOCK", corrective="Repair this.",
         reply="It is about Acme Corp.",
-        outcome_channel=pydantic_backend.ORDINARY_OUTCOME_CHANNEL)
+        outcome_channel=pydantic_backend.ORDINARY_AGENTIC_OUTCOME_CHANNEL)
 
     assert prompt.index("The captured material follows") < prompt.index("submitter's reply")
     assert prompt.index("submitter's reply") < prompt.index("Repair this.")
 
 
-def test_the_structured_outcome_channel_tells_the_agent_it_holds_no_file_tool():
-    """The channel sentence is the one line of the per-item prompt that differs between the two,
-    and it has to be positively true of the run it goes into: this backend returns a typed object
-    and has no tool that could write a file. A channel sentence that merely omitted the file would
-    leave the brief's own mention of it uncorrected in the per-item message too."""
-    channel = pydantic_backend.ORDINARY_OUTCOME_CHANNEL
+def test_the_outcome_channel_names_the_tool_the_account_is_written_with():
+    """The channel sentence is the one line of the per-item prompt that varies per backend, and it
+    has to be positively true of the run it goes into.
 
-    assert "page.body" in channel
-    assert "no tool" in channel
-    assert agent_module.OUTCOME_FILENAME not in channel
+    **It changed direction in ADR 034 and that is exactly why it is pinned.** It used to say "you
+    write no file and you have no tool that could"; this run writes its account as a file, with one
+    specific tool, and a sentence naming the file but not the ROUTE is how a model reaches for a
+    `Write` it does not have and reports having filed nothing. So: the file, the tool, and the
+    field a run that writes its own page owes (`page_path`) — and NOT `page.body`, which belongs to
+    the shape where code writes the page.
+    """
+    channel = pydantic_backend.ORDINARY_AGENTIC_OUTCOME_CHANNEL
+
+    assert agent_module.OUTCOME_FILENAME in channel
+    assert "write_page" in channel
+    assert "page_path" in channel
+    assert "page.body" not in channel

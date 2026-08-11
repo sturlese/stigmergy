@@ -24,11 +24,14 @@ unaffected.
   (`agent.parse_outcome` for the ordinary flow, `agent.parse_meeting_outcome` for the meeting
   one). Never a raw `dict`: the worker's own cross-checks and the submitter's report are built
   from it, so the coercion happens once, at the boundary, whatever channel carried it.
-- `turns` / `tool_calls` — telemetry, and **zero is a legitimate answer**. They count a
-  conversational, tool-using loop; a STRUCTURED backend that makes one model call and reads its
-  typed output has neither, and reports `0` rather than inventing a `1`. Nothing downstream
-  branches on either — `report.filed` carries no turn counter at all, and the eval runner counts
-  passes at its own seam (`CountingAgent`) precisely because no report does.
+- `turns` / `tool_calls` — telemetry, and **zero is a legitimate answer while a real number is
+  the other one**. They count a conversational, tool-using loop: the ordinary pydantic-ai run has
+  one again (ADR 034) and reports the framework's own accumulated counts, while a run that makes
+  ONE structured call and reads its typed output — every `run_meeting`, and any backend declaring
+  `structured_ordinary = True` — has neither and reports `0` rather than inventing a `1`. So a
+  zero here means "this shape has no loop", never "nobody counted". Nothing downstream branches on
+  either — `report.filed` carries no turn counter at all, and the eval runner counts passes at its
+  own seam (`CountingAgent`) precisely because no report does.
 - `cost_usd` — what THIS attempt cost, in dollars. A backend that is priced by its own provider
   (a harness reporting `total_cost_usd` per run) passes that figure through; one that
   reports only TOKENS computes it through `pricing.compute_cost_usd`. `processing.AgentPasses`
@@ -57,7 +60,9 @@ They are NOT the same rule, and a backend must not average them:
 - **`run` (the ordinary flow), `structured_ordinary = False`** — the agent may write inside the
   worktree, bounded by `agent.confined_write`: ONE new `.md` page in one of the creatable fast-lane
   folders, plus its own outcome file. It may never touch a page that already exists; an edit to one
-  is DECLARED in the outcome and PERFORMED by `edits.py`.
+  is DECLARED in the outcome and PERFORMED by `edits.py`. Whether that write arrives from a model
+  holding a confined `write_page` tool (the pydantic-ai backend) or from code with no model behind
+  it at all (the double) is the BACKEND's business; the allow-list is the same one either way.
 - **`run` (the ordinary flow), `structured_ordinary = True`** — the agent writes NO page, exactly
   like `run_meeting` below: code is the sole author (`processing._write_ordinary_page`) and the
   account carries the page's own text in `Outcome.page`. Its only legal write is its own outcome
@@ -110,7 +115,7 @@ def priced(run: AgentRun, ex: AgentError) -> AgentError:
 
 @runtime_checkable
 class FilingAgent(Protocol):
-    """The two calls `processing.py` makes, and the only two it may make — plus the one thing it
+    """The two calls `processing.py` makes, and the only two it may make — plus the two things it
     must be able to ASK a backend before making them.
 
     Keyword-only throughout, matching what the flows already call with: the argument lists are long
@@ -118,25 +123,41 @@ class FilingAgent(Protocol):
     swap two of them.
     """
 
-    # ── the one capability a backend DECLARES rather than one the worker sniffs ────────────────
+    # ── the capabilities a backend DECLARES rather than ones the worker sniffs ─────────────────
     # Which shape of the ordinary flow this backend answers, and it is a declaration precisely so
     # `processing` never has to ask `isinstance(agent, PydanticFilingAgent)`. A type test would put
     # the flow's own branch inside the worker's knowledge of which classes exist — so a fourth
     # backend, or a test double standing in for one, would take the wrong branch by being the
     # wrong class rather than by declaring the wrong thing.
     #
-    # `False` — the offline double — means the EXPLORING shape: the agent is
-    # handed the material, goes looking through the checkout itself, writes the page, and declares
-    # the path it wrote in `Outcome.page_path`. It is the shape the retired Claude-Code backend
-    # also answered, and the double keeps it exercised: `processing`'s two branches are both live
-    # offline, so the one the suite does not deploy cannot rot.
+    # `False` — both shipped backends — means the EXPLORING shape: the agent writes the page inside
+    # `agent.confined_write`'s allow-list and declares the path it wrote in `Outcome.page_path`,
+    # with its account arriving through the outcome FILE. It is the shape the retired Claude-Code
+    # backend answered and the shape the pydantic-ai backend answers again (ADR 034), and the
+    # double keeps it exercised offline on every `make test`.
     #
-    # `True` — the pydantic-ai backend — means the STRUCTURED shape (ADR 033): `processing` runs
-    # the deterministic gatherer first and passes the rendered context in `gathered`, the agent
-    # holds no tool and writes nothing at all, and its account CARRIES the page's own text in
-    # `Outcome.page` for code to write. Both halves of the outcome envelope are valid; this is
-    # what says which one is required of this backend.
+    # `True` — no shipped backend today, and the shape `processing` still implements (ADR 033) —
+    # means the STRUCTURED shape: the agent holds no tool and writes nothing at all, and its
+    # account CARRIES the page's own text in `Outcome.page` for code to write. Both halves of the
+    # outcome envelope are valid; this is what says which one is required of this backend.
     structured_ordinary: bool
+
+    # Whether the deterministic gatherer (`gather.gather`, rendered by `agent.render_gathered`)
+    # runs before an ORDINARY call and arrives in `gathered`. A second declaration rather than a
+    # consequence of the first, because after ADR 034 the two questions genuinely came apart: the
+    # pydantic-ai backend writes its own page (`structured_ordinary = False`) AND wants the
+    # gathered context, because that context is the SEED its tools then go further from. Inferring
+    # one from the other would have made "it explores" mean "it starts from nothing", which is the
+    # design M2 shipped and M4 corrected.
+    #
+    # `False` — the offline double — means no gather is built at all: it is directive-driven, so
+    # paying for a corpus walk per pass would buy a string nothing reads.
+    #
+    # Read on the branch that USES it (`processing._one_pass`'s legacy branch), and read as a plain
+    # attribute so a wrapper that swallowed it fails loudly rather than silently starving a run of
+    # its context — see `structured_ordinary` above and the wrapper tests in
+    # `tests/librarian/test_filing_port_conformance.py`.
+    wants_gathered: bool
 
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
             corrective: str = "", reply: str = "", flow_note: str = "",
@@ -151,9 +172,9 @@ class FilingAgent(Protocol):
         `gathered` is the deterministic gatherer's context, ALREADY RENDERED to prompt text
         (`agent.render_gathered` over `gather.gather`) — a string, not the dataclass, and that is
         the seam rather than a convenience. The gatherer belongs to the FLOW, not to a backend: two
-        structured backends must share one context builder and one fence discipline, and handing a
-        backend the object instead would invite each one to render it its own way. Empty for a
-        backend that declares `structured_ordinary = False`, which is handed nothing and explores.
+        backends must share one context builder and one fence discipline, and handing a backend the
+        object instead would invite each one to render it its own way. Empty for a backend that
+        declares `wants_gathered = False`, which is handed nothing.
         """
         ...
 

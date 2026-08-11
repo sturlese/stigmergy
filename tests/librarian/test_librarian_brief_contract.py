@@ -270,8 +270,13 @@ RULE_TABLE = [
     # matched to the gatherer field that keeps it, because a promise the gatherer stopped keeping
     # is not a thinner prompt — it is an anchor the agent cannot declare or a link it cannot make,
     # with nothing anywhere saying why.
-    ("**You do not go looking for anything.** The worker's own message already carries the "
-     "capture and", "def gather("),
+    # **Re-aimed by ADR 034**, and the re-aim is the row's own subject. The brief used to open "You
+    # do not go looking for anything", which was true of every run while one shipped shape existed
+    # and false the moment the ordinary run got its tools back. What survives — and what the
+    # gatherer still keeps — is the promise that a context is ASSEMBLED BEFORE THE CALL, whether or
+    # not the reader can go further from it.
+    ("**What every run is handed** is one capture and everything this brain already holds that is",
+     "def gather("),
     ("  registry `id`, its canonical `name`, its aliases, and the path of its own page when this "
      "brain", "structural_payload"),
     ("- **`candidates`** — the existing pages this material most overlaps with, ranked, each with "
@@ -290,8 +295,12 @@ RULE_TABLE = [
      "it: a", "existing-page-collision"),
     ("    letters belong in a title, and dropping or approximating them (\"Reuni n\", \"Reunion\") "
      "writes a", "unnameable_reason"),
-    ("- **Do not write frontmatter.** No `---` block, no `type:`, no `title:`, no `tags:`, no",
-     "def _build_ordinary_page("),
+    # Re-aimed the same way: "do not write frontmatter" is now CONDITIONAL on the shape, because a
+    # run that writes its own file writes its own container. The marker is unchanged and still the
+    # right one — `_build_ordinary_page` is the function that makes the rule true on the shape the
+    # phrase is about, where code owns the container.
+    ("**When your run returns the page's text for the worker to write, write no frontmatter block "
+     "at", "def _build_ordinary_page("),
 
     # ── RETIRED: the ordinary flow's override row ────────────────────────────────────────────
     # The pair was:
@@ -307,23 +316,34 @@ RULE_TABLE = [
     # "some runs of this skill hold tools and a checkout" — true while two backends existed, false
     # of every run once one did — and the platform reads that file but may not reword it. Commit
     # `c1e0996ed497e70a9df82661c367294b48207a16`, "chore(skills): the brief describes one run
-    # style", rewrote the environment note to describe ONE run style. The frozen mirror this file
-    # greps is resynced to those bytes:
+    # style", rewrote the environment note to describe ONE run style.
     #
-    #   git show c1e0996:.claude/skills/librarian/SKILL.md | shasum -a 256
-    #   1a05db240cbfb7207c353534b0146eff96af2a2d6ddf700e89b5cb79f4ce6635
+    # **And then ADR 034 made even THAT too specific, which is the lesson this tombstone is now
+    # worth keeping for.** The ordinary run got its tools back, so a brief describing one run style
+    # was false again — in the opposite direction, and for the same structural reason both times: a
+    # brief that names mechanics is a brief that goes stale whenever a backend changes shape. The
+    # merged answer (`0bf3c5462d50e72f5435ce61d61ba5f023e60388`) does not name them at all. It
+    # defers to the preamble and states the tools CONDITIONALLY, which is what the environment row
+    # at the end of this table now pins — one row, aimed at the deferral rather than at whichever
+    # mechanic is currently true.
     #
-    # So there is no pending half and no row to re-add: the platform constant is gone, the brief
-    # sentence it corrected is gone, and the pair retired together rather than one side outliving
-    # the other — which is the state this table's own doctrine says an override should reach.
+    # So there is still no pending half and no override row to re-add: the platform constant is
+    # gone, and where a backend genuinely departs from the brief it says so in its own ENVIRONMENT
+    # paragraph (`pydantic_backend.ORDINARY_AGENTIC_ENVIRONMENT`, and the meeting flow's
+    # `OVERRIDE_NOTE`), which is the state this table's own doctrine says an override should reach.
     #
     # The row is DELETED rather than kept pointing at something, and deliberately not re-aimed at a
     # nearby marker: `ORDINARY_SDK_OVERRIDE_NOTE` still appears in `agent.py` as the name inside its
     # own retirement comment, so a row left in place would have gone green on a tombstone — a
     # contract check passing because somebody wrote the constant's name in prose is worse than no
     # row at all.
-    ("**And you write no file.** You return ONE account — the structured object documented at the "
-     "end of", "build_filing_header"),
+    # The environment row, re-aimed and now stronger than what it replaced. The brief used to
+    # assert one mechanic in its own voice ("And you write no file"); it now DEFERS the mechanics to
+    # the preamble the platform composes, which is exactly what `build_filing_header` builds. A
+    # brief that stopped deferring — that went back to describing one run style — would be the drift
+    # this row exists to catch, and it is the drift that actually happened once, in both directions.
+    ("**Your run is described in the preamble above this skill.** It says what you hold, what you "
+     "were", "build_filing_header"),
 ]
 
 

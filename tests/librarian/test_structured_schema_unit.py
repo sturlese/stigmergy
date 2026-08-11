@@ -303,6 +303,23 @@ def test_a_complete_account_parses_through_the_BOUNDARY_unchanged():
 
 
 # ── LEG 4: through the FRAMEWORK — the two roads an incomplete account can now take ────────────
+# **These three moved from the ordinary flow to the MEETING flow in ADR 034, and the move is the
+# honest one rather than a convenience.** The mechanism under test is a schema's completeness
+# validator being handed to the FRAMEWORK, so an omission is re-asked for free instead of refused
+# downstream after the worker has paid — and it needs a flow whose account really does come back
+# through an output schema. The ordinary flow's does not any more: that run holds tools and writes
+# `.librarian-outcome.json`, so its account is judged by `agent.parse_outcome` at the file boundary
+# and there is no output validator in front of it to exercise.
+#
+# `MeetingAccount` is the same mechanism on the flow that still ships it, and it was given the same
+# treatment at the same time for the same reason (see its own docstring: a known mechanism closed on
+# two samples' worth of evidence rather than after it fired again). LEGS 1-3 above still cover BOTH
+# schemas as pure pydantic, because a schema's rules do not need a flow to be true.
+#
+# What is genuinely no longer covered anywhere is the framework re-asking an ORDINARY account. That
+# is not a gap in this file — it is a road that stopped existing, and the ordinary flow's equivalent
+# protection is `parse_outcome`'s findings reaching the worker's corrective retry
+# (`test_structured_outcome_unit.py`, and `test_filing_port_conformance.py`'s fault cases).
 def _rig(tmp_path, model_factory):
     env = support.build_repo(str(tmp_path / "git"))
     settings = support.build_settings(env, worktree_root=str(tmp_path / "worktrees"),
@@ -311,8 +328,9 @@ def _rig(tmp_path, model_factory):
 
 
 def _run(agent, env):
-    return agent.run(worktree=env.repo, material="A note about Acme Corp.", hints={},
-                     submitted_by="a@b.test")
+    return agent.run_meeting(worktree=env.repo, material="Acme Corp met about the renewal.",
+                             meeting_meta={"title": "Q3 sync", "meeting_date": "2026-07-29"},
+                             registry=None, source_page_path="sources/meetings/q3-sync.md")
 
 
 def test_a_model_that_never_completes_its_account_exhausts_the_framework_and_is_PRICED(tmp_path):
@@ -366,7 +384,8 @@ def test_the_framework_repairs_an_incomplete_account_inside_ONE_worker_pass(tmp_
             if calls["n"] == 1:
                 # decision present, and nothing a filing obliges — the golden's own shape
                 return ModelResponse(parts=[ToolCallPart(name, {"decision": "file"})])
-            return ModelResponse(parts=[ToolCallPart(name, FilingAccount(**_filing()).model_dump())])
+            return ModelResponse(parts=[ToolCallPart(name,
+                                                     MeetingAccount(**_meeting()).model_dump())])
         return FunctionModel(_answer)
 
     env, agent = _rig(tmp_path, _incomplete_then_good)
@@ -375,7 +394,7 @@ def test_the_framework_repairs_an_incomplete_account_inside_ONE_worker_pass(tmp_
 
     assert calls["n"] == 2, "the framework did not re-ask — the incomplete account was accepted"
     assert run.outcome.decision == "file"
-    assert run.outcome.title == "Acme Corp Renewal Window"
+    assert run.outcome.meeting_title == "Q3 sync"
     assert run.cost_usd > 0
 
 
@@ -389,7 +408,7 @@ def test_a_complete_first_answer_costs_no_extra_request_at_all(tmp_path):
         def _answer(messages, info):
             calls["n"] += 1
             return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name,
-                                                     FilingAccount(**_filing()).model_dump())])
+                                                     MeetingAccount(**_meeting()).model_dump())])
         return FunctionModel(_answer)
 
     env, agent = _rig(tmp_path, _good)

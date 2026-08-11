@@ -7,14 +7,18 @@ reasoning, as its sibling one directory over (`../meeting-distiller/FROZEN.md`).
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/skills/librarian/SKILL.md` |
-| **Copied at commit** | `c1e0996ed497e70a9df82661c367294b48207a16` |
+| **Copied at commit** | `0bf3c5462d50e72f5435ce61d61ba5f023e60388` |
 | **Drift guard** | `tests/librarian/test_librarian_brief_contract.py` — the rule table runs against THIS copy in CI, and a separate test asserts the copy is byte-identical to the knowledge repo's own whenever that checkout is present |
 
-> **The sha above was a placeholder, and it has landed.** ADR 033 rewrote the brief tool-neutral
-> and the `sdk` retirement closed that rewrite's last debt — the environment paragraph that still
-> described tool-holding runs. Both live in the knowledge repo's
-> `c1e0996ed497e70a9df82661c367294b48207a16`, which is what the row above now records and what
-> every other frozen copy of this tree records with it. A future resync re-reads it the same way:
+> **This copy has moved twice, and the row above always names the CURRENT bytes.** ADR 033 rewrote
+> the brief tool-neutral and the `sdk` retirement closed that rewrite's last debt (the environment
+> paragraph that still described tool-holding runs); both landed in the knowledge repo's
+> `c1e0996ed497e70a9df82661c367294b48207a16`. ADR 034 then gave the ordinary run its tools back, so
+> the brief's own preamble became environment-CONDITIONAL rather than describing one run style —
+> that touch is `0bf3c5462d50e72f5435ce61d61ba5f023e60388`, the sha the row records and the one
+> every other frozen record of this tree carries with it. Those two shas are not
+> interchangeable: the first is history, the second is what these bytes are. A future resync
+> re-reads the second the same way:
 >
 > ```sh
 > git -C "$STIGMERGY_REPO" log -1 --format=%H -- .claude/skills/librarian/SKILL.md

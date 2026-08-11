@@ -1,14 +1,22 @@
 """The STRUCTURED ordinary flow, end to end: a real Postgres queue, a real git repo + bare remote,
-the eight real gates, the real contract linter, and a real pydantic-ai `Agent` driven by an offline
-model (ADR 033).
+the eight real gates, the real contract linter, and a conforming backend that carries the page's
+text home instead of writing it (ADR 033).
+
+**No shipped backend takes this road today, and that is precisely why the file stays** (ADR 034).
+The ordinary pydantic-ai run holds tools and writes its own page again, so the content-carrying
+branch of `processing._one_pass` — `_require_page_content`, `_write_ordinary_page`, the filename
+rules, the placement table, the cross-check against a code-written diff — is production code whose
+only exerciser is a `structured_ordinary = True` stand-in. Deleting the branch was not on the table:
+it is the meeting flow's own writer discipline applied to one page, it is what a fourth structured
+backend declares into, and an unexercised branch that ships is the shape this repo refuses. So the
+provider moved out and everything else here stayed.
 
 `test_processing_pg.py` proves the ordinary flow against the offline double, which takes the
-EXPLORING shape — it writes its own page through `agent.confined_write`. Nothing there exercises
-the shape this milestone added, where the agent writes nothing at all and
-`processing._write_ordinary_page` is the author. The two shapes share every line below the branch,
-which is the property that keeps them from becoming two flows — and that shared tail is exactly
-what makes an untested branch dangerous: a defect in the structured half looks like a defect in the
-ordinary flow, on the write path, in somebody's knowledge repo.
+EXPLORING shape — it writes its own page through `agent.confined_write`, as the real backend now
+does too. The two shapes share every line below the branch, which is the property that keeps them
+from becoming two flows — and that shared tail is exactly what makes an untested branch dangerous:
+a defect in the structured half looks like a defect in the ordinary flow, on the write path, in
+somebody's knowledge repo.
 
 **What is genuinely new here, and therefore what this file is for:**
 
@@ -24,15 +32,18 @@ ordinary flow, on the write path, in somebody's knowledge repo.
   docstring records the defect it was born with: an earlier version collapsed all whitespace, so a
   NEWLINE inside a title became a space and a header-injection title became a legal filename
   instead of a refusal. That case is run.
-* **Money.** The double spends nothing and reports `0.0` honestly, so every existing ordinary test
-  is compatible with a backend that never priced anything. A real framework run is what makes
-  `cost_usd > 0` a measurement.
+* **Money, at the FLOW's level.** The double spends nothing and reports `0.0` honestly, so every
+  existing ordinary test is compatible with a backend that never priced anything. The stand-in here
+  reports a per-pass figure, which is what makes `AgentPasses` summing it onto the row a real
+  assertion. What a real framework run COSTS is not this file's claim any more — that is
+  `test_filing_port_conformance.py`'s (a real `Agent.run` loop, priced from real token counts) and
+  the golden's.
 
-**Everything an assertion touches is production's.** No librarian function is stubbed. The only
-injected seam is the backend's own `model_factory` — the same one `test_pydantic_meeting_pg.py`
-uses — and one delegating SPY on `gather.gather` (it calls through to the real gatherer and records
-what the worktree looked like at the moment it was asked), because "the context was rebuilt after
-the reset" is not observable from any return value.
+**Everything an assertion touches is production's.** No librarian function is stubbed. The injected
+seams are the backend itself — a conforming stand-in at the PORT, the seam `filing_port.py` exists
+to define — and one delegating SPY on `gather.gather` (it calls through to the real gatherer and
+records what the worktree looked like at the moment it was asked), because "the context was rebuilt
+after the reset" is not observable from any return value.
 """
 import dataclasses
 import json
@@ -40,9 +51,6 @@ import os
 import shutil
 
 import pytest
-from pydantic_ai.messages import ModelResponse, ToolCallPart
-from pydantic_ai.models.function import FunctionModel
-from pydantic_ai.models.test import TestModel
 
 from stigmergy.capture import dispositions, queue, schema
 from stigmergy.librarian import gather, gitcmd, processing, worker
@@ -126,24 +134,92 @@ def _account(*, title: str = "Acme Corp Renewal Window", page_type: str = "note"
         triage=triage or OrdinaryTriage())
 
 
-def _model(account: FilingAccount) -> TestModel:
-    """pydantic-ai's own offline model, answering with `account` — so the run under test is a real
-    `Agent.run` with real usage accounting and real pricing."""
-    return TestModel(custom_output_args=account.model_dump())
+def _model(account: FilingAccount) -> FilingAccount:
+    """The account ONE pass answers with.
+
+    **This used to build a `TestModel` and it no longer can** (ADR 034). The pydantic-ai backend's
+    ordinary run has no output schema to fill: it holds tools, writes its own page and returns its
+    account as `.librarian-outcome.json`. So the injected seam moved one layer out — from "the model
+    a real backend calls" to "the account a structured backend returns" — and every call site below
+    is unchanged, because what they were ever expressing is *this pass answers with this account*.
+
+    Kept as a named function rather than inlined for exactly that reason: the seam has a name, and
+    the day a fourth structured backend exists this is where its model goes back in.
+    """
+    return account
+
+
+class _StructuredAgent:
+    """A conforming `structured_ordinary = True` backend: it answers with prepared accounts.
+
+    **What this file measures did not change; what produces the account did.** Every test below is
+    about `processing`'s content-carrying branch — `_require_page_content`, the code-written page,
+    the filename rules, the cross-check, the stamp, the eight gates — and that branch is production
+    code with no shipped backend behind it since ADR 034 gave the ordinary flow tools. `processing`
+    reads the PORT and never a class, so a stand-in that declares the shape takes byte-identically
+    the same road a fourth structured backend would.
+
+    Two things are deliberately NOT faked. The account goes through the REAL trust boundary
+    (`agent.parse_outcome`), so a shape this stub returns is exactly as validated as a provider's;
+    and a `cost_usd` is reported per pass, so `AgentPasses` and `_stamp_cost` are exercised end to
+    end. What a REAL framework run costs is no longer this file's claim — that moved to
+    `test_filing_port_conformance.py`, where a real `Agent.run` loop is priced, and to the golden.
+    """
+
+    structured_ordinary = True
+    wants_gathered = True
+
+    # A per-pass figure a real backend could plausibly report. Not zero, because `_stamp_cost` sums
+    # these onto the row a person reads and a stub reporting nothing would make that sum vacuous.
+    COST_PER_PASS = 0.02
+
+    def __init__(self, factory):
+        self.factory = factory
+        self.calls = 0
+        self.gathered_seen = []
+
+    def run(self, *, worktree, material, hints, submitted_by, corrective="", reply="",
+            flow_note="", gathered=""):
+        from stigmergy.librarian import agent as agent_module
+        from stigmergy.librarian.errors import AgentError
+        from stigmergy.librarian.filing_port import priced
+
+        self.calls += 1
+        self.gathered_seen.append(gathered)
+        run = AgentRun(cost_usd=self.COST_PER_PASS)
+        try:
+            account = self.factory()
+        except Exception as ex:  # noqa: BLE001 — the backend's own wrap, mirrored
+            # A factory that raises stands for a backend that could not run at all (a model that
+            # cannot be built). The real backend prices that at `0.0` and attaches the field, so
+            # this does too — the fault contract is what the test using it is about.
+            run.cost_usd = 0.0
+            raise priced(run, AgentError(
+                f"the filing agent run failed ({ex.__class__.__name__})")) from ex
+        try:
+            run.outcome = agent_module.parse_outcome(account.model_dump())
+        except AgentError as ex:
+            priced(run, ex)
+            raise
+        return run
+
+    def run_meeting(self, *, worktree, material, meeting_meta, registry, source_page_path,
+                    corrective="", reply=""):                 # pragma: no cover — never called
+        raise AssertionError("the ordinary flow must not reach the meeting call")
 
 
 def _rig(tmp_path, model_factory, *, model: str = PRICED_MODEL, **setting_overrides):
-    """A `RepoEnv` + `Deps` whose agent is a REAL `PydanticFilingAgent` over an offline model.
+    """A `RepoEnv` + `Deps` whose agent is the structured stand-in above, over `model_factory`.
 
     Built through `support.build_settings`/`build_deps` — the same wiring every other librarian
     test uses — with the agent injected exactly where `agent.build_agent` would have put it.
-    `backend="pydantic"` is set on the settings too, so nothing here tests a configuration a real
-    worker could not hold.
+    `backend="pydantic"` stays on the settings: the row this flow writes records the configured
+    backend, and a test that changed it would stop measuring the configuration a worker holds.
     """
     env = support.build_repo(str(tmp_path / "git"))
     settings = support.build_settings(env, worktree_root=str(tmp_path / "worktrees"),
                                       backend="pydantic", model=model, **setting_overrides)
-    agent = PydanticFilingAgent(settings, model_factory=model_factory)
+    agent = _StructuredAgent(model_factory)
     return env, support.build_deps(env, settings, agent=agent), agent
 
 
@@ -426,6 +502,7 @@ def test_a_knowledge_folder_symlinked_out_of_the_checkout_refuses_readably_and_w
 
     class _Counting:
         structured_ordinary = True
+        wants_gathered = True
 
         def __init__(self, inner):
             self.inner = inner
@@ -608,6 +685,7 @@ class _ScriptedAgent:
     """
 
     structured_ordinary = True
+    wants_gathered = True
 
     def __init__(self, *raws):
         from stigmergy.librarian import agent as agent_module
@@ -668,6 +746,7 @@ class _PathClaimingAgent:
     """
 
     structured_ordinary = True
+    wants_gathered = True
 
     def __init__(self, outcome):
         self.outcome = outcome
@@ -913,6 +992,7 @@ def test_the_reply_reaches_the_structured_prompt_as_the_submitters_own_words(
 
     class _Recording:
         structured_ordinary = True
+        wants_gathered = True
 
         def __init__(self, inner):
             self.inner = inner
@@ -1029,6 +1109,7 @@ def test_the_corrective_pass_is_told_what_was_wrong_rather_than_asked_to_guess(
         writer are all production's."""
 
         structured_ordinary = True
+        wants_gathered = True
 
         def __init__(self, inner):
             self.inner = inner
@@ -1085,11 +1166,13 @@ def test_the_second_pass_gathers_again_over_a_worktree_that_was_put_back(
         "not put the worktree back before the context was rebuilt")
 
 
-def test_the_exploring_backend_is_never_gathered_for_at_all(tmp_path, clean_queue,
-                                                            require_gitleaks, monkeypatch):
-    """The specificity half of the branch. A backend that declares `structured_ordinary = False`
-    explores the checkout itself, so gathering for it would be a `corpus.load_pages` walk per pass
-    that nothing reads — a cost the exploring path never used to pay, added silently.
+def test_a_backend_that_wants_no_context_is_never_gathered_for_at_all(tmp_path, clean_queue,
+                                                                      require_gitleaks, monkeypatch):
+    """The specificity half of the branch, and ADR 034 sharpened what it is about. It used to read
+    "an exploring backend is never gathered for" — which stopped being true the moment the shipped
+    exploring backend asked for a SEED. The question the flow actually asks is `wants_gathered`, and
+    a backend that declares `False` must not pay for a `corpus.load_pages` walk per pass whose
+    rendered string nothing reads.
 
     The offline double is that backend, and it is what the whole suite runs on.
     """
@@ -1219,6 +1302,7 @@ def test_the_flow_note_reaches_the_structured_prompt(tmp_path, clean_queue, requ
 
     class _Recording:
         structured_ordinary = True
+        wants_gathered = True
 
         def __init__(self, inner):
             self.inner = inner
@@ -1249,6 +1333,7 @@ def test_an_ordinary_structured_capture_is_told_no_flow_note_at_all(tmp_path, cl
 
     class _Recording:
         structured_ordinary = True
+        wants_gathered = True
 
         def __init__(self, inner):
             self.inner = inner
@@ -1536,71 +1621,30 @@ def test_a_title_at_exactly_the_byte_ceiling_files_all_the_way_through(tmp_path,
 # (`test_structured_schema_unit.py`); this is the one that proves the SAVING at the layer the
 # money is spent in.
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
-def test_an_incomplete_first_answer_is_repaired_without_spending_a_worker_pass(
-        tmp_path, clean_queue, require_gitleaks):
-    """**The golden's own failure shape, and the fix measured where it cost money.**
-
-    The model's first answer carries `decision` and nothing a filing obliges — the exact shape five
-    captures died on. Before the schema round that account satisfied the framework's output
-    validation, reached `agent.parse_outcome`, and burned the WORKER's one corrective retry: two
-    full agent passes for one capture, and a `failed` row if the second answer was no better.
-
-    Now the framework re-asks inside the same worker pass. Three assertions carry it, and the third
-    is the one an operator would feel: the model was called twice (the repair happened), the worker
-    ran ONE pass (`agent_attempts` never grew), and the capture FILED.
-
-    Driven through a real `FunctionModel` rather than a stub agent, because the property is about
-    what the FRAMEWORK does with a schema — which a stand-in cannot have.
-    """
-    calls = {"n": 0}
-
-    def _incomplete_then_good():
-        def _answer(messages, info):
-            calls["n"] += 1
-            name = info.output_tools[0].name
-            if calls["n"] == 1:
-                return ModelResponse(parts=[ToolCallPart(name, {"decision": "file"})])
-            return ModelResponse(parts=[ToolCallPart(name, _account().model_dump())])
-        return FunctionModel(_answer)
-
-    env, deps, _ = _rig(tmp_path, _incomplete_then_good)
-
-    _, result = _file(clean_queue, deps)
-
-    assert calls["n"] == 2, "the framework did not re-ask — the incomplete account was accepted"
-    assert result.status == schema.FILED, result.report.get("summary")
-    assert result.report.get("agent_attempts", 0) in (0, 1), (
-        f"the worker spent a corrective pass on a shape the framework repairs for free: "
-        f"{result.report}")
-    _, changed = _committed(env, result)
-    assert changed == ["wiki/notes/Acme Corp Renewal Window.md"]
-
-
-def test_a_model_that_stays_incomplete_still_lands_a_terminal_row_and_writes_nothing(
-        tmp_path, clean_queue, require_gitleaks):
-    """The other end of the tolerance direction: a model that never completes its account exhausts
-    the framework's budget on BOTH worker passes and the item lands terminal rather than looping or
-    filing something half-built.
-
-    The fault travels as an `OutcomeShapeError` — findings, not a class name — so the worker's own
-    corrective retry still gets its turn; it simply cannot help, which is the honest outcome for a
-    model that cannot answer the schema.
-    """
-    def _always_empty():
-        def _empty(messages, info):
-            return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {})])
-        return FunctionModel(_empty)
-
-    env, deps, _ = _rig(tmp_path, _always_empty)
-    before = support.all_commit_shas(env.bare)
-
-    _, result = _file(clean_queue, deps)
-
-    assert result.status == schema.FAILED, result.report.get("summary")
-    assert result.report["stage"] != "unexpected", (
-        f"a schema exhaustion surfaced as an unnamed crash: {result.report.get('summary')}")
-    _nothing_landed(env, before)
-    assert result.report["cost_usd"] > 0, "the re-asks were real requests and the row says free"
+# **RETIRED with the ordinary flow's output schema (ADR 034).** Two tests stood here:
+#
+#   `test_an_incomplete_first_answer_is_repaired_without_spending_a_worker_pass` — a real
+#       `FunctionModel` answering `{"decision": "file"}` first and completely second, proving the
+#       framework re-asked INSIDE one worker pass and the corrective retry was never touched.
+#   `test_a_model_that_stays_incomplete_still_lands_a_terminal_row_and_writes_nothing` — the same
+#       model never completing, landing terminal, priced, with nothing written.
+#
+# Both drove `info.output_tools[0]`, and the ordinary flow has no output tool any more: that run
+# holds tools, writes its own page and returns its account as `.librarian-outcome.json`, so there is
+# no schema in front of it for a framework to re-ask against. Re-aiming them at the stub would have
+# been worse than deleting them — the property is "what the FRAMEWORK does with a schema", and a
+# stand-in cannot have one, so the test would have gone green while measuring nothing.
+#
+# The mechanism itself is NOT unprotected; it moved to the flow that still ships it. The same three
+# cases (never completes → exhausted and priced; incomplete then good → repaired in one pass;
+# complete first → asked once) run against `MeetingAccount` in
+# `test_structured_schema_unit.py`'s LEG 4, which is where the schema-through-framework road is now
+# real. LEGS 1-3 there still cover `FilingAccount` itself as pure pydantic.
+#
+# **What genuinely has no owner yet is the ordinary flow's NEW equivalent**: a model that never
+# writes an outcome file, or writes an unparseable one, landing terminal with nothing written and
+# the pass priced. That is a defense test for the road ADR 034 opened rather than a pin this change
+# moved — the tester owns it, and `agent.read_outcome`'s two refusals are its seam.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════

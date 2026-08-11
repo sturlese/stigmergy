@@ -48,24 +48,38 @@ DEFAULT_MODEL = "anthropic:claude-sonnet-5"
 
 # Per-item bounds. They cap ONE runaway run; nothing here caps a day of them.
 #
-# **`max_turns` and `max_tool_calls` are read by no shipped backend and are DEPRECATED.** They
-# configured the retired backend's conversational loop — its native turn bound, and the tool-call
-# ceiling this worker counted in a `PostToolUse` hook because that harness had none. A structured
-# call makes one model call and holds no tool, so neither has anything left to bound. They are kept
-# for one release rather than dropped in the same change that retired the backend: they are a
-# CONFIGURATION surface (`.env`, `fly.toml`, a documented table), and silently ignoring a value an
-# operator set is the failure this module's own `from_args` docstring refuses on principle. Removing
-# them is a separate change, with its own consumer inventory — see the CHANGELOG entry.
+# **`max_turns` is LIVE again (ADR 034), under a new mechanism and the same meaning.** It bounded
+# the retired harness's conversational loop; it now bounds the pydantic-ai ordinary run's, as
+# `UsageLimits(request_limit=...)` — how many times the model may go round with its tools before
+# the worker stops paying for one capture. The number is unchanged at 30 deliberately: it is the
+# bound this system already ran a tool-using filing agent under, so an operator who tuned it then
+# does not have to re-derive it now, and a milestone that both restored iteration and moved its
+# ceiling would have made the golden's two arms incomparable for two reasons at once.
 #
-# **Both are still `int()`-parsed, and a malformed one raises a bare `ValueError` out of
-# `from_args` rather than a named `LibrarianConfigError`.** That is pre-existing behaviour and it is
-# left alone deliberately: `resolved_timeout_s` below shows what a NAMED refusal for one of these
-# costs to write, and spending it on two variables whose next change is deletion would be work
-# aimed at the wrong end. It is stated here, in `.env.example` and in the reference table so nobody
-# reads "still parsed" as "refused the way the others are".
+# It is deliberately NOT reused by the meeting flow, which makes ONE call and derives its own
+# ceiling from `OUTPUT_RETRIES`: borrowing this number there would license thirty full requests for
+# a flow that must make one.
 #
-# `timeout_s` is NOT one of them: it is the per-item wall clock the surviving backend still wraps
-# its model call in, and the visibility lease below is derived from it.
+# **`max_tool_calls` stays DEPRECATED and read by nothing.** It was the tool-call ceiling this
+# worker counted in a `PostToolUse` hook because that harness had none; pydantic-ai accumulates
+# `RunUsage.tool_calls` itself and bounds the loop that makes them by REQUESTS, so a second
+# hand-maintained ceiling would be a second answer to one question — and this repo adds a bound
+# when a defect asks for one, not for symmetry. (If one ever does, `UsageLimits` takes a
+# `tool_calls_limit` and it is a one-line change rather than a counting harness.) It is kept
+# parsed rather than dropped because it is a CONFIGURATION surface — `.env`, `fly.toml`, a
+# documented table — and silently ignoring a value an operator set is the failure this module's own
+# `from_args` docstring refuses on principle. Removing it is a separate change with its own
+# consumer inventory; see the CHANGELOG entry.
+#
+# **Both are `int()`-parsed, and a malformed one raises a bare `ValueError` out of `from_args`
+# rather than a named `LibrarianConfigError`.** Pre-existing, and left alone deliberately:
+# `resolved_timeout_s` below shows what a NAMED refusal costs to write, and this is stated here, in
+# `.env.example` and in the reference table so nobody reads "parsed" as "refused the way the others
+# are".
+#
+# `timeout_s` is the per-item WALL CLOCK the backend wraps its whole run in — a different bound
+# from `max_turns` and not a substitute for it (thirty fast requests can fit inside five minutes,
+# and one hanging provider fills it with nothing). The visibility lease below is derived from it.
 DEFAULT_MAX_TURNS = 30
 DEFAULT_MAX_TOOL_CALLS = 120
 DEFAULT_TIMEOUT_S = 300
@@ -79,9 +93,14 @@ MAX_AGENT_ATTEMPTS = 2
 # whole-repo contract-linter runs, the worktree add/remove, the commit, a push that retries up to
 # `gitcmd.PUSH_ATTEMPTS` times with a rebase and a doubling backoff in between (~5s of waiting at the
 # current budget, so the push is a rounding error inside this number rather than the bulk of it) —
-# and, on the STRUCTURED ordinary shape only, up to two GATHERS (ADR 033): one per agent pass, each
-# a `corpus.load_pages` walk of the checkout plus one tokenization of every page
-# (`gather.gather`'s `terms_by_path`) and a second directory walk for the wikilink vocabulary.
+# and, for a backend that declares `wants_gathered`, up to two GATHERS (ADR 033): one per agent
+# pass, each a `corpus.load_pages` walk of the checkout plus one tokenization of every page
+# (`gather.load_corpus`) and a second directory walk for the wikilink vocabulary.
+#
+# **An ITERATING run (ADR 034) parses the corpus at most once MORE per pass**, not once per tool
+# call: `pydantic_backend.FilingToolbox` caches the parse for the life of one run, so a model that
+# searches twenty times pays one walk, and one that searches never pays none. That bound is the
+# whole reason the cache exists.
 #
 # The gather is the only term here that scales with the SIZE OF THE KNOWLEDGE REPO rather than with
 # one capture, which is what makes it worth naming separately: everything else above is bounded by
@@ -94,17 +113,19 @@ GATE_BUDGET_S = 120
 VISIBILITY_HEADROOM_S = 180
 
 # ── the gatherer's two dials (ADR 033) ────────────────────────────────────────────────────────
-# What the STRUCTURED ordinary flow hands the model instead of the exploration it no longer does
-# (`librarian/gather.py`). Both trade prompt cost against recall, which is why they are
-# configuration and not constants: the number that is right for a 40-page brain is not the number
-# that is right for a 4,000-page one, and finding out is a measurement somebody runs against a
-# deployment rather than a value this file can know.
+# What the ordinary flow hands the model BEFORE it looks for itself (`librarian/gather.py`). Both
+# trade prompt cost against recall, which is why they are configuration and not constants: the
+# number that is right for a 40-page brain is not the number that is right for a 4,000-page one,
+# and finding out is a measurement somebody runs against a deployment rather than a value this file
+# can know.
 #
 # Twelve candidates at twenty lines each is roughly a page's worth of excerpt — enough for the
 # overlap-versus-duplicate judgment the brief asks for, and small enough that the gathered context
 # stays a fraction of the captured material it sits beside. Read by `processing._one_pass` for a
-# backend that declares `structured_ordinary`; the offline double consults neither, because it
-# writes its own page.
+# backend that declares `wants_gathered`, and by the `search_pages` tool for its own result size
+# (ADR 034) — one pair of dials for both, so the pages a model finds by searching are shown to it
+# exactly as the pages it was handed are. The offline double consults neither: it writes its own
+# page from a directive.
 DEFAULT_GATHER_TOP_K = 12
 DEFAULT_GATHER_EXCERPT_LINES = 20
 
@@ -258,17 +279,18 @@ class Settings:
     require_remote_base: bool = False
 
     # the agent
-    # 'pydantic' | 'double' — CI and the suite stay on the double. Both serve BOTH flows;
-    # `pydantic` runs the ordinary flow structured (a deterministic gatherer, one tool-less call,
-    # code writes the page) where the double writes its own page through the same confinement rule.
-    # `agent.BACKENDS` is the tuple, and `agent.ensure_known_backend` is what refuses anything else.
+    # 'pydantic' | 'double' — CI and the suite stay on the double. Both serve BOTH flows and both
+    # write their own ordinary page through the same confinement rule; `pydantic` reaches that page
+    # by iterating over the checkout with five tools from a gathered seed (ADR 034), the double by
+    # following a directive with no model at all. `agent.BACKENDS` is the tuple, and
+    # `agent.ensure_known_backend` is what refuses anything else.
     backend: str = "double"
     model: str = DEFAULT_MODEL
-    max_turns: int = DEFAULT_MAX_TURNS          # DEPRECATED — no backend reads it; see above
+    max_turns: int = DEFAULT_MAX_TURNS          # the ordinary run's request ceiling; see above
     max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS  # DEPRECATED — no backend reads it; see above
     timeout_s: int = DEFAULT_TIMEOUT_S
 
-    # the gatherer (the STRUCTURED ordinary shape only — the double writes its own page instead)
+    # the gatherer (a backend that declares `wants_gathered` — and its `search_pages` tool)
     gather_top_k: int = DEFAULT_GATHER_TOP_K
     gather_excerpt_lines: int = DEFAULT_GATHER_EXCERPT_LINES
 

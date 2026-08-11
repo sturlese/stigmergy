@@ -31,6 +31,21 @@ treats its test suite as the contract.
   own text in its account and code writes it, confined by construction rather than by a permission
   hook. The pydantic-ai backend now serves both flows, so the meeting-only restriction above (and
   its eval-rig escape) is gone.
+- **The agentic pydantic harness — the ordinary filing agent explores again** (ADR 034), on this
+  project's own harness rather than a vendor's. `PydanticFilingAgent.run()` is an ITERATING
+  pydantic-ai run with five tools over the item's checkout — `search_pages`, `read_page`,
+  `list_page_names`, `resolve_entities`, `write_page` — whose bodies are the gatherer's own pure
+  functions, with confinement asked INSIDE each tool instead of in a permission hook. Reads reach
+  the content zones and the per-type page templates (`ops/templates/<type>.md`, the structural
+  source of truth for the container a self-writing run must produce) and nothing else; writes reach
+  one new page in the fast-lane folders and the outcome file, through the unchanged
+  `agent.confined_write`. ADR 033's
+  gathered block survives as the SEED those tools go further from, so the port grows a second
+  declaration (`wants_gathered`) beside `structured_ordinary`; the agent writes its own page and
+  returns its account as `.librarian-outcome.json` again. The rule behind it, which the next
+  milestone should not have to re-derive: **deterministic code may seed context and implement
+  tools, and must not replace the model's ability to decide the context is not enough.** The
+  meeting flow is untouched — one structured call, no tools.
 
 ### Changed
 
@@ -39,13 +54,24 @@ treats its test suite as the contract.
   backend resolves ids through pydantic-ai, where a bare name means an OpenAI model, so a bare
   default would have been the one value a worker could not boot on. A worker configured with a bare
   id is refused at startup, and the refusal names the prefixed spelling of the id it was given.
-- **`STIGMERGY_LIBRARIAN_MAX_TURNS` and `STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS` are DEPRECATED** and
-  read by no shipped backend: they bounded a tool-using conversational loop, and a structured call
-  makes one model call and holds no tool. Still PARSED, so a value an operator set is not silently
-  dropped — but a malformed one fails the boot with a bare `ValueError` rather than a named
-  refusal, which is pre-existing behaviour these two never had a reason to be worth fixing for.
-  Removing them is the recorded follow-up. `..._TIMEOUT_S` is unaffected and IS refused by name:
-  the wall clock is still enforced, and the visibility lease is still derived from it.
+- **`STIGMERGY_LIBRARIAN_MAX_TURNS` is LIVE again** (ADR 034), at the same default and with the
+  same meaning it always had: how many model requests one ordinary capture may spend going round
+  with its tools. It reaches pydantic-ai as `UsageLimits(request_limit=…)`, and exceeding it is a
+  refusal that names the variable rather than a silent stop. It had been deprecated for one
+  milestone, while the ordinary flow made a single call; no operator has to re-derive a number,
+  because the number did not move.
+- **`STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS` stays DEPRECATED** and read by no shipped backend: it was
+  a tool-call ceiling the worker counted itself for a harness that had none, and pydantic-ai both
+  accumulates tool calls and bounds the loop that makes them by REQUESTS — so a second
+  hand-maintained ceiling would need a defect behind it rather than a symmetry. Still PARSED, so a
+  value an operator set is not silently dropped — but a malformed one fails the boot with a bare
+  `ValueError` rather than a named refusal, which is pre-existing behaviour. Removing it is the
+  recorded follow-up. `..._TIMEOUT_S` is unaffected and IS refused by name: the wall clock is still
+  enforced around the WHOLE run, and the visibility lease is still derived from it.
+- **`AgentRun.turns` and `AgentRun.tool_calls` carry real numbers again** for the ordinary flow,
+  read from the framework's own accumulator rather than counted a second time by hand. Zero stays a
+  legitimate answer and now means one specific thing — this shape has no loop (every meeting run,
+  any structured backend) — never "nobody counted".
 
 ### Removed
 
@@ -65,10 +91,19 @@ treats its test suite as the contract.
   --image`) for getting a worker running meanwhile. The queue is durable; nothing claimed is lost
   while it is down.
 
-  What is genuinely lost, rather than replaced: the per-item tool-call ceiling (nothing holds a
-  tool to count) and the harness lockdown that hardened a subprocess which no longer exists. The
-  write-confinement RULE (`agent.confined_write`) is untouched and still runs on every offline
-  filing through the double.
+  What is genuinely lost, rather than replaced: the harness lockdown that hardened a subprocess
+  which no longer exists. The write-confinement RULE (`agent.confined_write`) is untouched, and it
+  is now asked by BOTH shipped backends — the offline double on every keyless filing, and the real
+  backend's `write_page` tool on every live one (ADR 034). The hand-counted tool-call ceiling stays
+  gone: the framework counts tool calls itself.
+
+- **`worker._check_brief_matches_backend`** (ADR 034) — the startup refusal for a structured worker
+  whose knowledge-repo brief still described a tool-holding run. Keyed on `structured_ordinary`, it
+  went inert the moment the shipped ordinary backend declared `False`, and an inert check that
+  still reads as coverage is worse than no check. The landing-order rule it enforced survives in the
+  mechanism that made it enforceable: the brief is environment-neutral, and each backend states its
+  own mechanics in the preamble it composes. `pydantic_backend.ORDINARY_ADR` retired with its only
+  reader.
 
 Sixteen bug-sweep fixes and one documentation correction since `0.1.0`, none of them behaviour
 changes in the ADR sense — each closes a gap between what the code promised and what it did. Grouped

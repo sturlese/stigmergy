@@ -35,7 +35,7 @@ import re
 import pytest
 
 from stigmergy.librarian import agent as agent_module
-from stigmergy.librarian import pricing, pydantic_backend, worker
+from stigmergy.librarian import config, pricing, pydantic_backend, worker
 from stigmergy.librarian.errors import LibrarianConfigError
 from stigmergy.librarian.pydantic_backend import PydanticMeetingAgent
 from tests.librarian import support
@@ -71,17 +71,17 @@ def _pydantic(deps, **overrides):
 # `test_operator_surface.py`, which is this package's declared home for both and which keeps the
 # credential refusal's `make librarian-walk` and the push-identity refusal's runbook honest.
 #
-# **The pruning finding this note used to carry is CLOSED, and half of it was wrong — which is why
-# the correction is written down rather than the paragraph simply deleted.** It read:
+# **The pruning finding this note used to carry is CLOSED, and half of it was wrong when written —
+# which is why the correction stays rather than the paragraph simply being deleted.** It read:
 # `pydantic_backend.ADR` and `pydantic_backend.ORDINARY_ADR` now have NO reader in production.
 #
 #   * `ADR` — correct, and actioned: it was cited by exactly one message (the refusal above), and
 #     it is gone, with its own tombstone at the top of `pydantic_backend.py`.
-#   * `ORDINARY_ADR` — **not correct.** `worker._check_brief_matches_backend` cites it by name in
-#     the refusal a structured worker meets when the knowledge repo's brief still describes a
-#     tool-holding run, and `test_a_structured_worker_is_refused_a_brief_written_for_a_run_that_
-#     holds_tools` below asserts it appears in that message. Acting on the finding as written would
-#     have deleted a constant a live refusal reads.
+#   * `ORDINARY_ADR` — **not correct AT THE TIME.** `worker._check_brief_matches_backend` cited it
+#     by name, and acting on the finding as written would have deleted a constant a live refusal
+#     read. It became true one milestone later, when ADR 034 retired that check — and the constant
+#     went WITH its reader, in the same change, which is the difference between pruning and
+#     guessing.
 #
 # The lesson is the one this file's own doctrine already states about refusals: check the call
 # sites before calling something dead. A pruning note is a fix instruction, and a wrong one costs
@@ -123,6 +123,60 @@ def test_that_worker_is_still_refused_when_its_provider_key_is_missing(rig, monk
     assert pydantic_backend.PROVIDER_KEY_ENV["openai"] in str(exc_info.value)
 
 
+# ── M3: the iteration ceiling is refused BY NAME below the usable minimum, not silently clamped ──
+@pytest.mark.parametrize("bad", [1, 0, -5], ids=["one", "zero", "negative"])
+def test_a_max_turns_below_two_is_refused_by_name_before_the_first_claim(rig, monkeypatch, bad):
+    """**M3, at the startup seam.** The ordinary run maps `max_turns` to
+    `UsageLimits(request_limit=…)`, and a tool-using pass needs at least TWO requests — one to call a
+    tool, one to write its account — so a ceiling below 2 fails every ordinary capture at full cost
+    the moment the model reaches for a tool. The backend no longer clamps it silently (that would
+    rewrite an operator's number, the failure `resolved_timeout_s` refuses on principle); instead
+    `startup_checks` refuses it here, before a single item is claimed, and the message names the
+    variable and the default so the fix is one edit.
+
+    The provider key is present so the ONLY thing wrong is `max_turns` — otherwise this would refuse
+    on the key check that runs first (`_check_pydantic_backend`), and prove nothing about the ceiling.
+    """
+    _, deps = rig
+    monkeypatch.setenv(pydantic_backend.PROVIDER_KEY_ENV["openai"], FAKE_KEY)
+
+    with pytest.raises(LibrarianConfigError) as exc_info:
+        worker.startup_checks(_pydantic(deps, max_turns=bad))
+
+    message = str(exc_info.value)
+    assert str(bad) in message and "max_turns" in message
+    assert "$STIGMERGY_LIBRARIAN_MAX_TURNS" in message
+    assert str(config.DEFAULT_MAX_TURNS) in message, "the refusal does not name the usable default"
+
+
+@pytest.mark.parametrize("ok", [2, "default"], ids=["floor", "default"])
+def test_a_usable_max_turns_boots_which_is_the_refusals_benign_twin(rig, monkeypatch, ok):
+    """**The M3 twin, at the boundary rather than far from it.** A refusal that fires at `< 2` must
+    let `2` — the exact floor — and the shipped default through, or it is a guard nobody can satisfy.
+    Both boot the whole pre-flight, which is the invocation a real worker makes.
+
+    `2` is the floor the message tells the operator to raise to, and the default is what a worker
+    that set nothing runs on; a guard that refused either would be refusing a working deployment.
+    """
+    _, deps = rig
+    monkeypatch.setenv(pydantic_backend.PROVIDER_KEY_ENV["openai"], FAKE_KEY)
+    overrides = {} if ok == "default" else {"max_turns": ok}
+
+    worker.startup_checks(_pydantic(deps, **overrides))          # must not raise
+
+    assert config.DEFAULT_MAX_TURNS >= 2, (
+        "the shipped default is below the floor the refusal enforces — the twin would be a lie")
+
+
+def test_the_double_is_never_refused_over_a_max_turns_it_does_not_read(rig):
+    """M3's specificity half, and the one that could refuse a working deployment: the meeting flow
+    and the offline double do not read `max_turns` at all (the double runs no model loop), so a
+    `max_turns` below 2 must not refuse a `double` worker. The ceiling is the ordinary pydantic run's
+    alone."""
+    _, deps = rig
+    worker.startup_checks(dataclasses.replace(deps.settings, backend="double", max_turns=1))
+
+
 def test_the_skill_is_required_of_the_backend_that_injects_it(rig,
                                                               monkeypatch):
     """ADR 033's one ADDITION to this pre-flight: a backend that injects the brief is proven to
@@ -158,95 +212,41 @@ def test_the_double_is_not_asked_for_a_skill_it_never_reads(rig):
     assert "double" not in agent_module.SKILL_READING_BACKENDS
 
 
-# ── the LANDING ORDER, which is the real rule this refusal has depth for (ADR 033 D4) ──────────
-# The brief lives in the knowledge repo and the platform lives here, so the milestone lands as two
-# PRs. If the platform half arrives first, a structured worker injects a brief telling the model —
-# in its own voice — to write its account to a file it holds no tool to write. On the MEETING flow
-# that contradiction is named out loud and scoped (`pydantic_backend.OVERRIDE_NOTE`); on the
-# ordinary flow after ADR 033 there is no override, because the brief is SUPPOSED to be the
-# structured text. So an old brief is a silent, uncorrected contradiction — and the pages it
-# produced would be scored as filing quality on the exact measurement M3's decision reads.
-def _with_old_brief(env, extra: str = "") -> None:
-    """Put a PRE-ADR-033 brief on the base commit: the same file, plus the sentence a tool-holding
-    run's brief carries. The signal the check reads is the outcome FILE's own name appearing at
-    all, and every brief that predates this milestone documents it."""
-    path = pathlib.Path(env.repo, *agent_module.SKILL_RELPATH.split("/"))
-    path.write_text(
-        f"{path.read_text(encoding='utf-8')}\n\n## What you return\n\n"
-        f"When you are done, write your account to `{agent_module.OUTCOME_FILENAME}` at the repo "
-        f"root.{extra}\n", encoding="utf-8")
-    support.commit_and_push(env.repo, "test: the pre-ADR-033 tool-holding brief")
+# ── RETIRED with `worker._check_brief_matches_backend` (ADR 034) ───────────────────────────────
+# Three tests went with that check, plus the `_with_old_brief` helper that staged its input:
+#
+#   `test_a_structured_worker_is_refused_a_brief_written_for_a_run_that_holds_tools` — the refusal
+#       itself: which file the brief still named, why a tool-less backend could not follow it, the
+#       deploy ORDER that fixed it, and the absence of a `sdk` escape hatch.
+#   `test_the_document_that_refusal_cites_exists_and_decides_the_thing_it_claims` — the ADR that
+#       refusal cited (`pydantic_backend.ORDINARY_ADR`, retired with its only reader).
+#   `test_the_check_reads_what_the_backend_DECLARES_and_not_which_backend_was_named` — that the
+#       check branched on the declaration rather than on the backend's name.
+#
+# **They go because their SUBJECT is gone, not because they became inconvenient.** The check was
+# keyed on `structured_ordinary`, and the shipped ordinary backend now declares `False` — so all
+# three would have passed forever while testing a branch no worker takes, which is the
+# permanently-green shape this repo calls worse than no test. The rule each one carried survives
+# where it is still enforced: "a refusal that cites a document is only as good as the document" and
+# "a message containing a command is an executable promise" are `test_operator_surface.py`'s, and
+# "read what the backend DECLARES, never which one was named" is pinned on the branch that still
+# reads a declaration (`test_structured_processing_pg.py`'s own
+# `test_the_declaration_is_what_selects_the_shape_and_not_the_backends_class`).
+#
+# What no longer has a home is a pre-flight against a FUTURE structured backend meeting a
+# tool-describing brief. That is a test to write WITH that backend, against the brief as it is
+# then — see the tombstone in `worker.py`.
 
 
-def test_a_structured_worker_is_refused_a_brief_written_for_a_run_that_holds_tools(rig,
-                                                                                   monkeypatch):
-    """The refusal, and the whole of what it has to say: WHICH file the brief still names, WHY that
-    is incompatible with this backend, and the DEPLOY ORDER that fixes it.
-
-    An operator meeting this has one of two jobs — push the rewritten brief, or run the backend the
-    old brief was written for — and a refusal that named the contradiction without naming the
-    ordering would leave them guessing which repo to touch.
-    """
-    env, deps = rig
-    monkeypatch.setenv(pydantic_backend.PROVIDER_KEY_ENV["openai"], FAKE_KEY)
-    _with_old_brief(env)
-
-    with pytest.raises(LibrarianConfigError) as exc_info:
-        worker.startup_checks(_pydantic(deps))
-
-    message = str(exc_info.value)
-    assert agent_module.OUTCOME_FILENAME in message              # which file
-    assert "holds" in message and "none" in message              # ...and why it cannot follow it
-    assert "land BEFORE this worker runs" in message             # ...and the ordering
-    assert pydantic_backend.ORDINARY_ADR in message              # ...and the decision behind it
-    # ...and that there is NO other way out. The refusal used to end by naming the backend the
-    # old brief was written for, which was a real second road while that backend existed. It
-    # retired; a message still offering it would send an operator mid-incident to the refusal
-    # one check up, so the absence is asserted rather than left to a reader to notice.
-    assert "STIGMERGY_LIBRARIAN_BACKEND=sdk" not in message
-
-
-def test_the_document_that_refusal_cites_exists_and_decides_the_thing_it_claims(rig):
-    """A refusal that cites a document is only as good as the document — this package's own
-    standing rule, and the one the deleted meeting-only refusal used to carry. Opened from the repo
-    root, so a renamed or unwritten ADR fails here rather than at the operator's 404."""
-    adr = ROOT / pydantic_backend.ORDINARY_ADR
-    assert adr.is_file(), f"the refusal cites {pydantic_backend.ORDINARY_ADR}, which does not exist"
-    body = adr.read_text(encoding="utf-8")
-    assert "D4" in body
-    assert agent_module.SKILL_RELPATH in body, (
-        "the ADR the refusal cites says nothing about the brief whose landing order it decides")
-
-
-def test_the_NEW_brief_boots_the_structured_backend_which_is_the_landed_state(rig, monkeypatch):
-    """**The second benign twin: the state this milestone is FOR.** Driven against the brief this
-    suite actually ships (`tests/librarian/fixtures/repo/`, the resynced drift-guard copy), so it
-    is the real text rather than one written to pass — and the day the knowledge repo's brief
-    reacquires an outcome-file mention, this goes red beside the drift test."""
+def test_the_shipped_brief_boots_the_real_backend_which_is_the_landed_state(rig, monkeypatch):
+    """**The benign twin that outlived the refusal, and it is the one worth keeping.** Driven
+    against the brief this suite actually ships (`tests/librarian/fixtures/repo/`, the resynced
+    drift-guard copy), so it is the real text rather than one written to pass: a fully configured
+    worker on the real backend walks the whole pre-flight, brief included, and claims items."""
     _, deps = rig
     monkeypatch.setenv(pydantic_backend.PROVIDER_KEY_ENV["openai"], FAKE_KEY)
 
     worker.startup_checks(_pydantic(deps))                       # must not raise
-
-
-def test_the_check_reads_what_the_backend_DECLARES_and_not_which_backend_was_named(rig,
-                                                                                   monkeypatch):
-    """`build_agent(settings).structured_ordinary`, never `settings.backend == "pydantic"` — the
-    same reason `processing._one_pass` reads the attribute. A fourth structured backend inherits
-    this check by declaring the same thing, and a check keyed on the NAME would let it inject a
-    contradictory brief on its first run.
-
-    Asserted at the source, because the fourth backend does not exist yet and a test that waited
-    for one would be a rule nobody knows about until it is too late to add cheaply.
-    """
-    import inspect
-
-    source = inspect.getsource(worker._check_brief_matches_backend)
-
-    assert "build_agent(settings).structured_ordinary" in source
-    assert 'settings.backend ==' not in source, (
-        "the brief check branches on the backend NAME — a fourth structured backend would inject "
-        "a brief written for a tool-holding run on its first item")
 
 
 # ── the three checks that were always about the BACKEND ────────────────────────────────────────
