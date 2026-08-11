@@ -81,6 +81,7 @@ class _RaisingAgent:
     exploring ordinary flow, which is what `processing._one_pass` does when nothing gathers."""
 
     structured_ordinary = False
+    wants_gathered = False
 
     def __init__(self, exc):
         self.exc = exc
@@ -219,6 +220,7 @@ class _RaisingOnAttempt:
         # Reading it here means a wrapper around a non-conforming backend fails at
         # CONSTRUCTION, in the test that built it, instead of one queue delivery at a time.
         self.structured_ordinary = inner.structured_ordinary
+        self.wants_gathered = inner.wants_gathered
         self.fail_on = fail_on
         self.exc = exc
         self.calls = 0

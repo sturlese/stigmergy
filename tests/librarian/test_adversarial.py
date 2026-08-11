@@ -288,6 +288,7 @@ class _QuotedKeyForgeAgent:
         # Reading it here means a wrapper around a non-conforming backend fails at
         # CONSTRUCTION, in the test that built it, instead of one queue delivery at a time.
         self.structured_ordinary = inner.structured_ordinary
+        self.wants_gathered = inner.wants_gathered
 
     def run(self, **kwargs):
         run = self.inner.run(**kwargs)
@@ -339,6 +340,7 @@ class _QuotedKeyEntityForgeAgent:
         # Reading it here means a wrapper around a non-conforming backend fails at
         # CONSTRUCTION, in the test that built it, instead of one queue delivery at a time.
         self.structured_ordinary = inner.structured_ordinary
+        self.wants_gathered = inner.wants_gathered
 
     def run(self, **kwargs):
         run = self.inner.run(**kwargs)

@@ -24,13 +24,18 @@ loaded by any of it: the `pydantic` backend imports its own inside the method. *
 reach the network on any machine that happens to export a provider key, which is the one way a
 keyless suite stops being keyless by accident rather than by decision.
 
-**The port grew a third member in ADR 033** and it is not a method: `structured_ordinary`, the
-declaration `processing._one_pass` branches on. A `runtime_checkable` Protocol counts an annotated
-attribute as a member, so `isinstance` now checks it too — which is why every hand-written stand-in
-below declares it. That is not bookkeeping: a stand-in that satisfied the port WITHOUT the
-declaration would be a backend the worker silently reads as `False` and hands no gathered context
-to, and the tests written around it would be measuring the exploring flow while claiming the
-structured one.
+**The port grew a third member in ADR 033 and a fourth in ADR 034**, and neither is a method:
+`structured_ordinary` (which half of the outcome envelope is owed, and who writes the page) and
+`wants_gathered` (whether the deterministic gatherer runs before the call). A `runtime_checkable`
+Protocol counts an annotated attribute as a member, so `isinstance` checks both — which is why
+every hand-written stand-in below declares them. That is not bookkeeping: a stand-in that satisfied
+the port WITHOUT a declaration would be a backend the worker reads as `False` on both counts, and
+the tests written around it would measure a shape nothing ships.
+
+**They are two declarations because the two questions came apart.** M2's ordinary backend was
+structured AND gathered-for; M4's writes its own page AND is gathered-for, because the gathered
+block is the SEED its tools go further from. Deriving either from the other would have made "it
+explores" mean "it starts from nothing" — a real backend running blind, scoring like a bad model.
 """
 import dataclasses
 import inspect
@@ -55,9 +60,10 @@ from tests.librarian import support
 # The two calls `processing.py` makes on `Deps.agent`, and the only two it may make.
 PORT_METHODS = ("run", "run_meeting")
 
-# The port's non-method member (ADR 033) — asserted as part of the protocol's own attribute set
-# below rather than assumed, because `isinstance` behaviour depends on it being one.
-PORT_DECLARATIONS = ("structured_ordinary",)
+# The port's non-method members (ADR 033, ADR 034) — asserted as part of the protocol's own
+# attribute set below rather than assumed, because `isinstance` behaviour depends on them being
+# annotations rather than comments.
+PORT_DECLARATIONS = ("structured_ordinary", "wants_gathered")
 
 # Every implementation the port claims, named by the backend id that dispatches to it. Derived from
 # `agent.BACKENDS` in the test below rather than trusted here: a third backend added to that tuple
@@ -167,20 +173,25 @@ def test_the_port_really_does_carry_the_declaration_isinstance_now_depends_on():
 
 @pytest.mark.parametrize("name", sorted(BACKEND_CLASSES))
 def test_every_backend_declares_which_shape_of_the_ordinary_flow_it_answers(name):
-    """The declaration is read off the backend by `processing._one_pass`, so a backend that omits
-    it is silently read as the EXPLORING shape: no gather, no code-written page, and an account
-    whose `page.body` nothing requires. `getattr(..., False)` is the production default and it is
-    the safe one — which is exactly why the value has to be pinned per backend here rather than
-    left to that fallback.
+    """The declarations are read off the backend by `processing._one_pass`, and each one selects a
+    road: `structured_ordinary` decides whether CODE writes the page and which half of the outcome
+    envelope is owed, `wants_gathered` decides whether the gatherer runs at all. Both are REFUSED
+    when absent rather than defaulted, which is exactly why the VALUES have to be pinned per
+    backend here.
 
-    The values themselves, not merely their presence: the offline double explores, the pydantic
-    backend is handed its context.
+    **The pair, not each one alone, is the claim worth pinning.** Both shipped backends write their
+    own page today, and they differ on the other axis: the pydantic-ai run is seeded with a
+    gathered context and then goes further with its tools (ADR 034), while the offline double is
+    directive-driven and is handed none. A test asserting only `structured_ordinary` would go green
+    on a backend that had quietly lost its seed.
     """
-    expected = {"double": False, agent_module.PYDANTIC_BACKEND: True}[name]
-    declared = BACKEND_CLASSES[name].structured_ordinary
-    assert declared is expected, (
-        f"{BACKEND_CLASSES[name].__name__}.structured_ordinary is {declared!r} — `processing` "
-        f"branches the whole ordinary flow on this one boolean")
+    expected = {"double": (False, False),
+                agent_module.PYDANTIC_BACKEND: (False, True)}[name]
+    cls = BACKEND_CLASSES[name]
+    declared = (cls.structured_ordinary, cls.wants_gathered)
+    assert declared == expected, (
+        f"{cls.__name__} declares (structured_ordinary, wants_gathered)={declared!r} — `processing` "
+        f"branches the whole ordinary flow on these two booleans")
 
 
 # ── the WRAPPERS, which is where a declared port member actually gets swallowed ────────────────
@@ -206,14 +217,19 @@ def _wrapped(name: str, inner):
 @pytest.mark.parametrize("name", _WRAPPERS)
 @pytest.mark.parametrize("declares", [True, False], ids=["structured", "exploring"])
 def test_a_shipped_wrapper_forwards_the_shape_its_inner_backend_declares(name, declares):
-    """**Forwarded, not defaulted, and asserted for BOTH values.** A wrapper that hardcoded `False`
-    would pass a test written only against the double — which is the shape almost every rig wraps —
-    and would silently take the exploring branch behind the structured backend. So each wrapper is
-    built over an inner that declares `True` and over one that declares `False`, and the value has
-    to come back out.
+    """**Forwarded, not defaulted, and asserted for BOTH values of BOTH members.** A wrapper that
+    hardcoded `False` would pass a test written only against the double — which is the shape almost
+    every rig wraps — and would silently take the wrong branch behind a real backend. So each
+    wrapper is built over an inner that declares `True` and over one that declares `False`, on each
+    member, and the values have to come back out.
+
+    The two are varied TOGETHER and inverted against each other on purpose: a wrapper that
+    forwarded one member into both attributes would pass a same-value test and is precisely the
+    copy-paste this file exists to catch.
     """
     class Inner:
         structured_ordinary = declares
+        wants_gathered = not declares
 
         def run(self, **kwargs):
             return AgentRun()
@@ -221,7 +237,9 @@ def test_a_shipped_wrapper_forwards_the_shape_its_inner_backend_declares(name, d
         def run_meeting(self, **kwargs):
             return AgentRun()
 
-    assert _wrapped(name, Inner()).structured_ordinary is declares
+    wrapped = _wrapped(name, Inner())
+    assert wrapped.structured_ordinary is declares
+    assert wrapped.wants_gathered is (not declares)
 
 
 @pytest.mark.parametrize("name", _WRAPPERS)
@@ -268,6 +286,7 @@ def test_a_class_missing_run_meeting_is_not_a_filing_agent():
     """
     class OrdinaryOnly:
         structured_ordinary = False
+        wants_gathered = False
 
         def run(self, *, worktree, material, hints, submitted_by,
                 corrective="", reply="", flow_note="", gathered=""):
@@ -299,6 +318,7 @@ def test_a_class_answering_both_calls_is_a_filing_agent_however_it_was_written()
     exercise the same contract a live backend does."""
     class HandWritten:
         structured_ordinary = False
+        wants_gathered = False
 
         def run(self, *, worktree, material, hints, submitted_by,
                 corrective="", reply="", flow_note="", gathered=""):
@@ -365,6 +385,7 @@ def test_the_signature_check_catches_a_positional_worktree_that_isinstance_waves
     """
     class PositionalWorktree:
         structured_ordinary = False
+        wants_gathered = False
 
         def run(self, worktree: str, *, material: str, hints: dict, submitted_by: str,
                 corrective: str = "", reply: str = "", flow_note: str = "",
@@ -399,6 +420,7 @@ def test_the_signature_check_catches_a_renamed_argument_too():
     """
     class Renamed:
         structured_ordinary = False
+        wants_gathered = False
 
         def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
                 corrective: str = "", reply: str = "", flow_note: str = "",
@@ -428,6 +450,7 @@ def test_the_signature_check_catches_a_backend_that_never_learned_about_the_gath
     """
     class PreGatherer:
         structured_ordinary = False
+        wants_gathered = False
 
         def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
                 corrective: str = "", reply: str = "", flow_note: str = "") -> AgentRun:
@@ -532,10 +555,15 @@ def _skill_worktree(tmp_path) -> str:
 
 
 def _filing_account() -> FilingAccount:
-    """A well-formed structured ordinary account — the shape `parse_outcome` accepts and
-    `processing._write_ordinary_page` writes a page from. Nothing here is a page on disk: this file
-    is about the ENVELOPE, and what the worker does with the account afterwards belongs to
-    `test_structured_processing_pg.py`."""
+    """A well-formed STRUCTURED ordinary account — the shape a `structured_ordinary = True` backend
+    returns in its envelope and `processing._write_ordinary_page` writes a page from.
+
+    No shipped backend composes this schema on the ordinary flow any more (ADR 034 gave that flow
+    tools and an outcome FILE), and it is kept here rather than deleted because the schema and the
+    branch that reads it both survive: `MeetingAccount` below is its twin on a flow that still works
+    exactly this way, and a `structured_ordinary = True` stub is how the content-carrying road is
+    exercised in `test_structured_processing_pg.py`.
+    """
     return FilingAccount(
         decision="file",
         page=OrdinaryPage(title="Acme Corp Renewal Window", page_type="note",
@@ -544,12 +572,63 @@ def _filing_account() -> FilingAccount:
         summary="filed the renewal note")
 
 
-def _test_model(account: FilingAccount):
+def _test_model(account):
     """pydantic-ai's own offline model, answering with `account`. Imported inside the helper for
     this file's standing rule: neither agent framework may be loaded by the signature half."""
     from pydantic_ai.models.test import TestModel
 
     return TestModel(custom_output_args=account.model_dump())
+
+
+# ── the ORDINARY flow's own offline model: one that USES ITS TOOLS (ADR 034) ───────────────────
+# The ordinary run holds five tools and returns its account by WRITING `.librarian-outcome.json`
+# with one of them, so a `TestModel` returning a typed object cannot exercise it at all — there is
+# no output schema to fill and nothing would ever be written. A `FunctionModel` scripts the two
+# steps that road really takes: call `write_page`, then stop.
+#
+# It writes the ACCOUNT only and no page, which is enough here and deliberately so: this file is
+# about the ENVELOPE (what the backend hands back, what it costs, what it counts), and what the
+# worker does with the account afterwards — the page, the diff, the gates — is
+# `test_processing_pg.py`'s and the golden's.
+_AGENTIC_ACCOUNT = {
+    "decision": "file",
+    "page_path": "wiki/notes/Acme Corp Renewal Window.md",
+    "page_type": "note",
+    "title": "Acme Corp Renewal Window",
+    "anchoring": {"kind": "entity", "entities": ["Acme Corp"], "reason": ""},
+    "links_created": [],
+    "overlaps": [],
+    "edits": [],
+    "findings": [],
+    "summary": "filed the renewal note",
+}
+
+
+def _writing_model(account: dict, *, searches: int = 0):
+    """A `FunctionModel` that optionally searches, then writes `account` and stops.
+
+    `searches` exists so a test can put REAL tool calls in the loop before the write: the envelope's
+    `turns` and `tool_calls` are only worth asserting against a run that made more than one of each,
+    and a scripted single call would let a hardcoded `1` pass.
+    """
+    import json as _json
+
+    from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    def _script(messages, info):
+        # One request per model turn: the first `searches` of them look, the next writes the
+        # account, and the last says something the backend ignores on purpose.
+        turn = len([m for m in messages if m.kind == "request"])
+        if turn <= searches:
+            return ModelResponse(parts=[ToolCallPart("search_pages", {"query": "renewal"})])
+        if turn == searches + 1:
+            return ModelResponse(parts=[ToolCallPart(
+                "write_page", {"path": agent_module.OUTCOME_FILENAME,
+                               "content": _json.dumps(account)})])
+        return ModelResponse(parts=[TextPart("filed it")])
+
+    return FunctionModel(_script)
 
 
 def _raises():
@@ -559,12 +638,14 @@ def _raises():
 # The ORDINARY flow, per backend, over every offline outcome each one actually supports.
 # What each supports is a fact about the backend, not a choice, and it is worth writing down:
 #
-#   * `pydantic` — **both roads, and it used to have neither.** M1's `run` was a refusal, priced at
-#     `0.0`; ADR 033 made it a real structured call, so the returning half is a real framework run
-#     against a `TestModel` (whose `cost_usd` is computed from real token counts and must be
-#     positive) and the faulting half is a model that cannot be built (priced at `0.0`, honestly:
-#     nothing was spent). Driven through `model_factory`, so no configured provider is ever
-#     resolved and nothing here can reach a network.
+#   * `pydantic` — **both roads, and it used to have neither.** M1's `run` was a refusal priced at
+#     `0.0`; it is now a real ITERATING run (ADR 034), so the returning half is a real framework
+#     loop against a `FunctionModel` that calls the confined `write_page` tool (its `cost_usd` is
+#     computed from real token counts and must be positive) and the faulting half is a model that
+#     cannot be built (priced at `0.0`, honestly: nothing was spent). Driven through
+#     `model_factory`, so no configured provider is ever resolved and nothing here can reach a
+#     network — and over a REAL git checkout, because a run that writes needs one: the tools read
+#     `git ls-files` to know which pages already exist.
 #   * `double` — both roads. A well-formed note FILES, which exercises the returning half (an
 #     envelope whose `cost_usd` is a real `0.0`: an offline pass spends nothing, and that is an
 #     answer rather than a gap); `DOUBLE:bad-shape` drives its account through the same
@@ -581,12 +662,12 @@ def _raises():
 def _ordinary_flow_cases(tmp_path):
     settings = _settings()
     env = support.build_repo(str(tmp_path / "git"))
+    other = support.build_repo(str(tmp_path / "git-pydantic"))
     double = DoubleAgent(dataclasses.replace(settings, repo=env.repo))
     return {
-        "pydantic-files": (PydanticMeetingAgent(settings,
-                                                model_factory=lambda: _test_model(
-                                                    _filing_account())),
-                           _skill_worktree(tmp_path / "structured"), "A note about Acme Corp."),
+        "pydantic-files": (PydanticMeetingAgent(
+            settings, model_factory=lambda: _writing_model(_AGENTIC_ACCOUNT)),
+            other.repo, "A note about Acme Corp."),
         "pydantic-fault": (PydanticMeetingAgent(settings, model_factory=_raises),
                            _skill_worktree(tmp_path / "faulting"), "A note about Acme Corp."),
         "double-files": (double, env.repo, "A note about Acme Corp."),
@@ -660,42 +741,60 @@ def test_the_doubles_shape_road_and_its_structural_road_are_both_priced():
     assert shape_info.value.run_cost_usd == 0.0
 
 
-def test_the_structured_ordinary_pass_is_priced_like_every_other_returning_pass(tmp_path):
-    """**The case that replaced M1's refusal, and it is a stronger claim than the one it replaced.**
+def test_the_iterating_ordinary_pass_is_priced_and_counted_like_the_loop_it_now_is(tmp_path):
+    """**The case that replaced M1's refusal, re-aimed at the run that replaced the one-shot.**
 
-    Until ADR 033 this backend's `run` raised — a refusal, priced at `0.0`, and the test here
-    asserted the field was present on it. There is nothing left to refuse: the ordinary flow is a
-    real structured call now, and what has to hold is the returning half of the same contract. A
-    real `Agent.run` against pydantic-ai's own `TestModel` reports real token counts,
-    `pricing.compute_cost_usd` multiplies them by the CONFIGURED model's rates, and `AgentPasses`
-    sums the figure onto the row a person reads.
+    M1's `run` raised, priced at `0.0`. ADR 033 made it one structured call. ADR 034 made it an
+    iterating one, and the envelope's claim changed WITH it: a real `Agent.run` loop against a
+    `FunctionModel` reports real token counts, `pricing.compute_cost_usd` multiplies them by the
+    CONFIGURED model's rates, and `AgentPasses` sums the figure onto the row a person reads.
 
     `> 0` is the assertion that can catch the failure worth catching: a backend that priced a real
-    pass at nothing would report every structured filing as free, and free is the one direction
-    this instrument must never be wrong in. The envelope's other two fields are the structured
-    shape's own honesty — no conversational loop, no tool, so `0` rather than an invented `1`.
-    """
-    backend = PydanticMeetingAgent(_settings(),
-                                   model_factory=lambda: _test_model(_filing_account()))
+    pass at nothing would report every filing as free, and free is the one direction this instrument
+    must never be wrong in.
 
-    run = backend.run(worktree=_skill_worktree(tmp_path), material="A note about Acme Corp.",
+    **`turns` and `tool_calls` are asserted as REAL numbers, and against a run scripted to make
+    more than one of each** — the port's own semantics note (zero means "this shape has no loop",
+    never "nobody counted"). A run with a single search would let a hardcoded `1` pass; two
+    searches plus a write cannot.
+
+    The account arrives as the outcome FILE the model wrote with its own confined tool, which is
+    the whole channel change: nothing here fills an output schema, and the model's final message is
+    ignored by design.
+    """
+    env = support.build_repo(str(tmp_path / "git"))
+    backend = PydanticMeetingAgent(
+        _settings(), model_factory=lambda: _writing_model(_AGENTIC_ACCOUNT, searches=2))
+
+    run = backend.run(worktree=env.repo, material="A note about Acme Corp.",
                       hints={}, submitted_by="a@b.test", gathered="")
 
     assert isinstance(run, AgentRun)
     assert run.outcome.decision == "file"
-    assert run.outcome.page is not None and run.outcome.page.body
-    # the resolved single field, filled from `page.title` — what `_commit_message` and `_stamp` read
+    # the LEGACY half of the envelope: the agent names the path it wrote, and carries no page text
+    assert run.outcome.page_path == "wiki/notes/Acme Corp Renewal Window.md"
+    assert run.outcome.page is None
     assert run.outcome.title == "Acme Corp Renewal Window"
     assert _finite_dollars(run.cost_usd) and run.cost_usd > 0, (
         "a real framework run priced at nothing — a silent zero reads as free")
-    assert (run.turns, run.tool_calls) == (0, 0)
+    assert run.turns >= 3 and run.tool_calls == 3, (
+        f"the loop reported turns={run.turns}, tool_calls={run.tool_calls} — this run searched "
+        f"twice and wrote once")
+    # ...and the channel is drained on the way out: `read_outcome` deletes the file it parsed, so
+    # the account can never reach the diff `processing` is about to take.
+    assert not pathlib.Path(env.repo, agent_module.OUTCOME_FILENAME).exists()
 
 
-def test_the_structured_ordinary_faults_carry_the_spend_the_same_way(tmp_path):
+def test_the_ordinary_faults_carry_the_spend_the_same_way(tmp_path):
     """The other half of the same contract, on the road that raises. A model that cannot be built
     fails before a token is spent, so `0.0` is the honest figure — and the FIELD has to be there,
     because `processing` reads `getattr(ex, "run_cost_usd", 0.0)` and cannot otherwise tell "spent
-    nothing" from "nobody attached it"."""
+    nothing" from "nobody attached it".
+
+    A bare skill directory is enough here and is the point: this fault fires at model RESOLUTION,
+    before the toolbox is built and before anything reads the checkout, so it is reachable without
+    a git repo at all.
+    """
     backend = PydanticMeetingAgent(_settings(), model_factory=_raises)
 
     with pytest.raises(AgentError) as exc_info:
@@ -715,13 +814,14 @@ def test_the_ordinary_flow_no_longer_refuses_this_backend_at_all(tmp_path):
     M1's `run` raised "serves the meeting flow only in this milestone" for every ordinary capture,
     and `worker.startup_checks` refused the backend outright so nobody met it. Both are gone with
     the limitation (ADR 033 D5). A sentence that came back — here, or in a message a `failed` row
-    carries — would mean the structured path had been reverted while the worker still dispatched to
+    carries — would mean the ordinary path had been reverted while the worker still dispatched to
     it, which is the one regression this file is placed to notice.
     """
-    backend = PydanticMeetingAgent(_settings(),
-                                   model_factory=lambda: _test_model(_filing_account()))
+    env = support.build_repo(str(tmp_path / "git"))
+    backend = PydanticMeetingAgent(
+        _settings(), model_factory=lambda: _writing_model(_AGENTIC_ACCOUNT))
 
-    run = backend.run(worktree=_skill_worktree(tmp_path), material="an ordinary note", hints={},
+    run = backend.run(worktree=env.repo, material="an ordinary note", hints={},
                       submitted_by="a@b.test")
 
     assert run.outcome is not None

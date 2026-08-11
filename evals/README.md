@@ -277,11 +277,27 @@ back-filled.
 
 What that leaves, stated rather than implied: **the bars stand exactly as fixed above**, under
 `31e49f8`, because a bar re-derived from a run nobody has made yet would be a number invented to be
-met. The next golden run is the **first row measured under `c1e0996`** and is the one that says
-whether the bars still hold under the new bytes — read it as a fresh baseline candidate, not as a
-regression against the table above. If it moves a facet, the honest reading is "the brief changed",
-and the choice is the one `PROVENANCE.json`'s editing policy already names: keep the bars and
-explain the gap, or retire the series and record a new baseline here.
+met. The two rows at `907ccc7` are the **first measured under `c1e0996`**, and they held the bars.
+Read a row under new brief bytes as a fresh baseline candidate, not as a regression against the
+table above. If it moves a facet, the honest reading is "the brief changed", and the choice is the
+one `PROVENANCE.json`'s editing policy already names: keep the bars and explain the gap, or retire
+the series and record a new baseline here.
+
+**The brief was re-frozen a SECOND time, and the direction reversed.** ADR 034 gave the ordinary
+run its tools back, so a brief describing one run style stopped being true again — the opposite way
+round from the paragraph above. Knowledge-repo commit `0bf3c546` makes the preamble
+environment-CONDITIONAL: it defers the mechanics to the platform's own preamble, states the tools
+in a paragraph that applies when the run holds them, and adds the one instruction a run that writes
+its own file needs (read `ops/templates/<type>.md` for the container's shape). **Only the librarian
+brief moved again** — `FROZEN_SHA256`'s other two numbers are unchanged, and every frozen record in
+the tree carries `0bf3c546`.
+
+The same rule applies to it as to the first re-freeze, for the same reason: nothing is re-scored,
+nothing is back-filled, and **the bars still stand un-re-derived**. The rows at `907ccc7` were
+measured under the previous bytes AND under a one-shot harness; the next row is measured under both
+new things at once, which is what the harness-era footnote below is for. Neither re-freeze
+relabelled a recorded row — a row says which brief produced it, and that is the whole point of
+recording the sha.
 
 ### Running it
 
@@ -378,8 +394,18 @@ is no sha to report and the field is empty — never a guess.
 without the exclusion one instrument's own row would make the NEXT instrument's row `-dirty` over
 nothing but bookkeeping. "Dirty" has to mean the measured CODE differs.
 
-**Some early rows predate one or both of those fixes and are mislabelled — read them with this
-footnote:**
+**Filing rows are keyed by BACKEND ID, and one id has measured three different harness shapes —
+read the series with this footnote:** `backend: "pydantic"` means "the real backend" and nothing
+more specific. Under ADR 032 it served meetings only; under ADR 033 an ordinary capture was ONE
+structured, tool-less call over a gathered context; under
+[ADR 034](../docs/decisions/034-agentic-pydantic-harness.md) it is an ITERATING run with five tools
+over the checkout, seeded by that same gathered context. Cost, latency and pass counts are
+comparable WITHIN an era and are a harness comparison across one — which is exactly what the M4 A/B
+reads them for. Nothing was relabelled: a recorded row is never rewritten, and the era a row belongs
+to is recoverable from its `git_sha` and from the brief sha in `evals/filing/repo/PROVENANCE.json`.
+
+**Some early rows predate one or both of the `git_sha` fixes and are mislabelled — read them with
+this footnote:**
 - the two `qa` entries at `8030527` (2026-08-01T10:05, T10:09) predate the marker entirely and
   measured that commit PLUS an uncommitted change — the very defect that prompted the suffix. They
   are the 0.80 and 0.867 samples that established this instrument's run-to-run noise.

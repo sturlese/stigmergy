@@ -165,6 +165,7 @@ class _UnresolvableAnchorAgent:
         # Reading it here means a wrapper around a non-conforming backend fails at
         # CONSTRUCTION, in the test that built it, instead of one queue delivery at a time.
         self.structured_ordinary = inner.structured_ordinary
+        self.wants_gathered = inner.wants_gathered
 
     def run(self, **kwargs):
         import dataclasses
@@ -422,6 +423,7 @@ class _CountingAgent:
         # Reading it here means a wrapper around a non-conforming backend fails at
         # CONSTRUCTION, in the test that built it, instead of one queue delivery at a time.
         self.structured_ordinary = inner.structured_ordinary
+        self.wants_gathered = inner.wants_gathered
         self.briefs = []            # the `corrective` text each pass was given, in order
 
     @property
@@ -633,6 +635,7 @@ class _RewritingEdits:
         # Reading it here means a wrapper around a non-conforming backend fails at
         # CONSTRUCTION, in the test that built it, instead of one queue delivery at a time.
         self.structured_ordinary = inner.structured_ordinary
+        self.wants_gathered = inner.wants_gathered
         self.edits = edits
 
     def run(self, **kwargs):
@@ -739,6 +742,7 @@ class _TwoPageAgent:
         # Reading it here means a wrapper around a non-conforming backend fails at
         # CONSTRUCTION, in the test that built it, instead of one queue delivery at a time.
         self.structured_ordinary = inner.structured_ordinary
+        self.wants_gathered = inner.wants_gathered
 
     def run(self, **kwargs):
         run = self.inner.run(**kwargs)

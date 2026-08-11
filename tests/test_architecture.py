@@ -460,6 +460,51 @@ def test_librarian_consumes_capture_and_the_kernel():
         "the librarian no longer imports stigmergy.kernel — the registry/ACL/page seams drifted")
 
 
+# `config.Settings` keeps `max_tool_calls` as a DEPRECATED field (ADR 034: the framework accumulates
+# `RunUsage.tool_calls` and bounds the loop by requests, so a second hand-counted ceiling would need
+# a defect behind it). "Deprecated" is prose until a test enforces it — `config.py`'s own docstring
+# says "read by nothing", and a comment cannot fail. This is the enforcing twin: the ONLY module that
+# may name the field as code is `config.py`, which defines and parses it; a consumer reading
+# `settings.max_tool_calls` re-animates a ceiling the milestone retired, and does so in a diff a
+# reviewer sees rather than silently. AST-based for the reason the ACL-reachability test below is:
+# three librarian modules MENTION `settings.max_tool_calls` in a comment, and `ast.parse` produces no
+# node for those, so this is immune to the marker-in-a-comment miss by construction.
+_RETIRED_SETTINGS_READS = frozenset({"max_tool_calls"})
+
+
+def _attribute_reads(path: pathlib.Path) -> set[str]:
+    """Every `x.<name>` attribute access in one module, as code — comments and docstrings are opaque
+    to `ast.parse`, so a name that only appears in prose is not reported."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+
+
+@pytest.mark.parametrize("path", LIBRARIAN_SOURCES, ids=lambda p: p.name)
+def test_no_module_but_config_reads_a_retired_settings_field(path):
+    """The pruning half of the deprecation: `max_tool_calls` is defined and parsed in `config.py` and
+    read by nothing else. A backend, the worker or `processing` reaching for it would be reviving the
+    hand-counted tool-call ceiling ADR 034 retired — this refuses it at the one module that is not
+    `config.py`, naming the field so the fix is obvious."""
+    reads = _attribute_reads(path) & _RETIRED_SETTINGS_READS
+    if path.name == "config.py":
+        return
+    assert not reads, (
+        f"{path.name} reads settings.{', settings.'.join(sorted(reads))} — a retired, deprecated "
+        f"config field (ADR 034). Nothing but config.py may name it as code; reviving it as a run "
+        f"ceiling needs a decision and a re-enabled bound, not an attribute read")
+
+
+def test_the_retired_settings_field_is_still_a_real_config_symbol():
+    """The blindness guard for the pruning test above: if `max_tool_calls` were renamed or dropped
+    from `config.py`, the per-module check would pass vacuously forever. This pins that the field is
+    still defined AND read as code in `config.py` (its `from_args` parse), so the ban is over a live
+    symbol rather than a dead string."""
+    config_py = LIBRARIAN / "config.py"
+    assert _attribute_reads(config_py) >= _RETIRED_SETTINGS_READS, (
+        "config.py no longer reads max_tool_calls as code — either it was retired for real (drop "
+        "this guard and the ban) or renamed (update both)")
+
+
 # RETIRED with the `sdk` backend: `test_librarian_never_imports_the_agent_sdk_at_module_level`.
 # It banned a module-scope `claude_agent_sdk` import across every librarian source, so a run on the
 # double never loaded the agent framework and the import graph did not claim the librarian depended

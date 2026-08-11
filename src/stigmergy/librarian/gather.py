@@ -1,11 +1,15 @@
-"""The deterministic gatherer: what the filing agent is HANDED, instead of what it went looking for.
+"""The deterministic gatherer: what the filing agent is HANDED before it goes looking itself.
 
-The ordinary flow's agent used to explore the checkout itself — `Read`, `Glob`, `Grep` — and that
-exploration is the whole reason a provider swap was a rewrite rather than a configuration change
-(ADR 033). It is also not obviously the better design at corpus scale: a model grepping for
-"what does this brain already know about Northwind" spends turns, spends tokens, and answers a
-question code can answer exactly. So code answers it, once, before the model call, and the answer
-travels in the prompt.
+A model grepping for "what does this brain already know about Northwind" spends turns, spends
+tokens, and answers a question code can answer exactly. So code answers it, once, before the model
+call, and the answer travels in the prompt (ADR 033).
+
+**It is a SEED, not a boundary, and that is ADR 034's correction.** For one milestone the gathered
+block was the whole of the ordinary agent's context — it held no tool and could not look further.
+The exploring agent came back on this project's own harness, so the block is now the starting point
+of a run that can also `search_pages` and `read_page` its way outward. The tools are implemented by
+the functions in THIS module (`load_corpus`, `search_candidates`, `confined_page`), which is what
+keeps one lexical ranking and one containment rule behind both roads instead of two.
 
 **A pure function of `(worktree, registry, material)`.** No database, no clock, no network, no
 model. That is what makes it unit-testable without a key and what makes the same capture gather
@@ -19,12 +23,16 @@ a write-path worker on the read path's ACL-governed table and would need an exce
 no business needing (`server.acl.visible()` is where read access is decided, and nothing here
 serves a reader). Recorded in ADR 033; reopening it needs a design, not a patch.
 
-**That "same data" claim is TRUE BECAUSE OF `_confined`, and false without it.** The agent's reads
-were bounded by a permission hook that resolved `realpath` first (`agent.confine_reads` ->
-`page.is_inside`); `corpus.load_pages` is the INDEX's parser and has no such notion, so every row
-it hands back is filtered here before anything else looks at one. Without that filter the
-structured shape would read strictly MORE of the filesystem than the shape it replaces, which is a
-regression wearing a refactor's clothes.
+**That "same data" claim is TRUE BECAUSE OF `_confined`, and false without it.** The retired
+harness's reads were bounded by a permission hook that resolved `realpath` first;
+`corpus.load_pages` is the INDEX's parser and has no such notion, so every row it hands back is
+filtered here before anything else looks at one. Without that filter this module would read
+strictly MORE of the filesystem than the exploring shape it replaced, which is a regression wearing
+a refactor's clothes. **Those same two halves are what `confined_page` below asks for the
+`read_page` tool**, under an allow-list of its own (the content zones, plus the per-type page
+templates a run that writes its own container needs) — confinement lives INSIDE the tool now rather
+than in a permission hook, and it is the same containment code in the same module rather than a
+second opinion about it.
 
 **One cross-package reach, declared.** `stigmergy.index.corpus` is imported for its parser —
 `load_pages`/`ZONES`, pure code over a directory, no database and no ACL surface — the same edge
@@ -156,6 +164,137 @@ class Gathered:
     corpus_pages: int = 0
 
 
+@dataclass(frozen=True)
+class Corpus:
+    """The checkout's pages, PARSED AND TOKENIZED ONCE — the input every ranking below reads.
+
+    Split out of `gather` when the `search_pages` tool arrived, because that tool asks the same
+    question the gather asks (rank these pages against this text) an unbounded number of times per
+    run. Parsing the whole checkout per tool call would make the model's own curiosity quadratic in
+    the size of the knowledge repo, on the one step whose cost already scales with it
+    (`config.GATE_BUDGET_S`'s own comment carries that argument).
+
+    `rows` is already `_confined` — nothing downstream re-filters, and nothing downstream should
+    have to know it must.
+    """
+    rows: tuple
+    by_path: dict
+    terms_by_path: dict
+
+
+def load_corpus(worktree: str) -> Corpus:
+    """Parse and tokenize the checkout once. `gather` calls it, and so does a run that holds the
+    search tool — one parse, one containment filter, one tokenization, whoever is asking."""
+    rows = _confined(worktree, corpus.load_pages(worktree))
+    # Tokenized ONCE per row and threaded through every reader. `_corpus_stopwords` and
+    # `_candidates` each used to tokenize the whole corpus themselves, and `_candidates` tokenized
+    # every body a second time inside its own loop — four full passes over every byte of the
+    # checkout, per agent pass, on a step that runs twice per capture. One pass, one dict.
+    return Corpus(rows=tuple(rows),
+                  by_path={row.path: row for row in rows},
+                  terms_by_path={row.path: _terms(f"{row.title}\n{row.body}") for row in rows})
+
+
+def search_candidates(parsed: Corpus, query: str, *, top_k: int, excerpt_lines: int,
+                      skip=()) -> list[GatheredPage]:
+    """The SAME lexical ranking `gather` builds its candidate list with, over an arbitrary query.
+
+    The `search_pages` tool's whole body. It is a public name rather than a second scorer for the
+    reason this module has one scorer at all: a tool that ranked pages differently from the seeded
+    block would hand the model two disagreeing answers to "what does this brain already hold about
+    X" inside one run, and neither could be trusted to mean what the other means.
+
+    Deterministic, like everything else here: the same `(corpus, query, bounds)` returns the same
+    list, ties broken by path.
+    """
+    return _candidates(parsed.rows, query, parsed.terms_by_path, top_k=top_k,
+                       excerpt_lines=excerpt_lines, skip=set(skip))
+
+
+# The per-type page TEMPLATES, which are readable and are the one thing outside the content zones
+# that is (see `confined_page`). Spelled here rather than imported: `stigmergy.entities` names the
+# same directory (`mint.TEMPLATE_RELPATH`) and this package may never import that one — the edge
+# runs the other way — so the duplication is DECLARED, exactly as this package's own code map says
+# to handle a fact both sides need.
+TEMPLATE_DIR = "ops/templates"
+
+
+def confined_page(worktree: str, relpath: str) -> str:
+    """The canonical repo-relative path of a page a READER may open, or `""` if it may not.
+
+    **`_confined`'s rule, asked of one path instead of a corpus** — the `read_page` tool's gate,
+    and the reason confinement lives inside the tool rather than in a permission hook: a hook is a
+    second implementation of a rule that has been wrong three times in this repo, and the shape of
+    that rule does not change just because a different harness asks it.
+
+    **The shape test judges the RESOLVED path, not the asked string** — the same order
+    `agent.confined_write` resolves in, and for the same reason. An earlier version split the asked
+    string lexically, ran the zone/template test on THAT, and then opened the resolved path: a
+    directory component symlinked to a non-zone directory INSIDE the worktree
+    (`wiki/mirror -> .claude`) passed every check — containment proved it was inside,
+    `os.path.islink` saw an ordinary file at the leaf, and the shape test saw a first segment of
+    `wiki` — and read any `.md` in the repo, the agent's own brief included. Resolving first is what
+    makes the shape test judge where the path REALLY lands.
+
+    Three questions, and all three have to be `yes`:
+
+      * the LEAF is not itself a symlink (`os.path.islink` on the asked path). A link that points
+        back INSIDE the worktree is contained and still not the bytes git tracks at that name, so
+        containment alone never catches it — and it is checked BEFORE resolving, because resolving
+        is exactly what would hide it;
+      * the RESOLVED path is contained (`realpath` then a prefix test) — so `../../ops/acl.json`,
+        an absolute path outside the worktree, and a directory component symlinked OUT are all
+        refused;
+      * the resolved repo-relative path is on the READ ALLOW-LIST below. Containment alone would
+        admit `.git/config`, every dotfile and `ops/acl.json` itself — the same argument
+        `agent.confined_write`'s allow-list makes about writes, and the reason this is an allow-list
+        rather than "is it inside".
+
+    **The allow-list is the content zones plus `ops/templates/*.md`, and the second half is not a
+    convenience.** A run that writes its own page writes the page's CONTAINER too, and the
+    per-type template is the structural source of truth for what that container owes — the
+    knowledge repo's own contract linter says so in its header, and the harness this milestone
+    restores read exactly these files before drafting. "Copy the shape from an existing page of the
+    same type" is not a substitute: a young brain has no page of that type to copy, and the fast
+    lane's own fixture has no `wiki/concepts` page at all.
+
+    It is exactly `ops/templates/<name>.md`, at that directory's top level. Not `ops/` (that is
+    where `acl.json` and the entity registry live — the two files whose reading this rule exists to
+    refuse), not a subdirectory, and not a traversal that resolves back out: the RESOLVED path is
+    matched as THREE segments, so `ops/templates/../acl.json` fails the shape test even though it
+    resolves inside the worktree.
+
+    Returns the canonical RESOLVED relpath so the caller reads (and echoes) the file it was judged
+    on rather than re-resolving the asked string and possibly getting another.
+    """
+    rel = (relpath or "").strip().lstrip("/")
+    if not rel:
+        return ""
+    root = os.path.realpath(worktree)
+    asked = os.path.join(root, *rel.split("/"))
+    if os.path.islink(asked):
+        return ""
+    try:
+        resolved = os.path.realpath(asked)
+    except (OSError, ValueError):
+        return ""
+    if resolved != root and not resolved.startswith(root + os.sep):
+        return ""
+    resolved_rel = os.path.relpath(resolved, root)
+    if os.sep != "/":
+        resolved_rel = resolved_rel.replace(os.sep, "/")
+    parts = resolved_rel.split("/")
+    if not parts[-1].endswith(".md") or parts[-1].startswith("."):
+        return ""
+    in_zone = parts[0] in corpus.ZONES
+    is_template = len(parts) == 3 and "/".join(parts[:2]) == TEMPLATE_DIR
+    if not (in_zone or is_template):
+        return ""
+    if not os.path.isfile(resolved):
+        return ""
+    return resolved_rel
+
+
 def gather(worktree: str, registry, material: str, *, top_k: int,
            excerpt_lines: int) -> Gathered:
     """The whole gather, in one pass over the checkout.
@@ -168,19 +307,15 @@ def gather(worktree: str, registry, material: str, *, top_k: int,
     breaks its ties by path, and every list is materialized in a stated order. Two calls with the
     same three arguments return equal objects.
     """
-    rows = _confined(worktree, corpus.load_pages(worktree))
-    by_path = {row.path: row for row in rows}
-    # Tokenized ONCE per row and threaded through both readers below. `_corpus_stopwords` and
-    # `_candidates` each used to tokenize the whole corpus themselves, and `_candidates` tokenized
-    # every body a second time inside its own loop — four full passes over every byte of the
-    # checkout, per agent pass, on a step that runs twice per capture. One pass, one dict.
-    terms_by_path = {row.path: _terms(f"{row.title}\n{row.body}") for row in rows}
+    parsed = load_corpus(worktree)
+    rows = parsed.rows
     entities = _entities(rows, registry, material)
     entity_paths = {e.page_path for e in entities if e.page_path}
 
-    candidates = _candidates(rows, material, terms_by_path, top_k=top_k,
-                             excerpt_lines=excerpt_lines, skip=entity_paths)
-    neighbours = _neighbours(by_path, [*(c.path for c in candidates), *sorted(entity_paths)],
+    candidates = search_candidates(parsed, material, top_k=top_k, excerpt_lines=excerpt_lines,
+                                   skip=entity_paths)
+    neighbours = _neighbours(parsed.by_path,
+                             [*(c.path for c in candidates), *sorted(entity_paths)],
                              skip=entity_paths | {c.path for c in candidates})
 
     # The wikilink vocabulary, read through the SAME function `edits.validate` answers "does this
@@ -266,7 +401,7 @@ def _entities(rows, registry, material: str) -> list[GatheredEntity]:
                 continue
             found[entity_id] = GatheredEntity(
                 entity_id=entity_id, name=str(entry.get("name", "")), aliases=aliases,
-                page_path=_entity_page(rows, entity_id, resolve))
+                page_path=entity_page(rows, entity_id, resolve))
             break
     return [found[key] for key in sorted(found)]
 
@@ -277,8 +412,12 @@ def _mentions(haystack: str, spelling: str) -> bool:
     return bool(tokens) and f" {' '.join(tokens)} " in haystack
 
 
-def _entity_page(rows, entity_id: str, resolve) -> str:
+def entity_page(rows, entity_id: str, resolve) -> str:
     """This entity's own page in the checkout, or `""`.
+
+    PUBLIC because the `resolve_entities` tool answers the same question for a name the model asks
+    about mid-run, and the docstring below is the whole argument for not letting it have its own
+    idea of where entity pages live.
 
     Asked of the page's own `entity:` frontmatter FIRST — that field is server-stamped from a
     resolved id, so it is the fact — and of the title through the registry only as the fallback,
@@ -407,7 +546,9 @@ def _neighbours(by_path: dict, sources: list, *, skip: set) -> list[GatheredLink
 
     This is the half a lexical score cannot find. A capture about a renewal may share no
     vocabulary with the decision page that governs it, and still belong one link away from it —
-    the graph knows something the words do not, and the agent has no tool to walk it any more.
+    the graph knows something the words do not. Seeding one hop is what makes the second hop worth
+    taking: a run that holds `read_page` can follow a neighbour it was named, and one that was
+    never told the neighbour exists has no reason to look for it.
 
     Bounded by `MAX_NEIGHBOURS` and ordered by path. A neighbour is NAMED, never excerpted: the
     excerpt budget belongs to the pages the material actually overlaps with, and a title plus a
@@ -458,10 +599,10 @@ def structural_payload(gathered: Gathered) -> dict:
     So: sanitized here, escaped by the caller, and NOT claimed to be trusted because of where it
     came from.
     """
-    return {"entities": [{"id": _prompt_scalar(e.entity_id),
-                          "name": _prompt_scalar(e.name),
-                          "aliases": [_prompt_scalar(a) for a in e.aliases],
-                          "page": _prompt_scalar(e.page_path) or None}
+    return {"entities": [{"id": prompt_scalar(e.entity_id),
+                          "name": prompt_scalar(e.name),
+                          "aliases": [prompt_scalar(a) for a in e.aliases],
+                          "page": prompt_scalar(e.page_path) or None}
                          for e in gathered.entities]}
 
 
@@ -472,7 +613,7 @@ def structural_payload(gathered: Gathered) -> dict:
 _LINE_SEPARATORS = str.maketrans({" ": " ", " ": " "})
 
 
-def _prompt_scalar(value: str) -> str:
+def prompt_scalar(value: str) -> str:
     """One untrusted scalar rendered into a prompt OUTSIDE the fence.
 
     `text.sanitize` strips the C0/C1 controls (the seam every echoed value in this repo goes
@@ -484,6 +625,13 @@ def _prompt_scalar(value: str) -> str:
     A REPLACEMENT rather than a whitespace-collapse: these values are paths and names, and
     `" ".join(x.split())` would silently rewrite a filename that legitimately carries two spaces
     into one that names no file.
+
+    **PUBLIC because the tool road needs the identical treatment** (ADR 034): a `read_page` path
+    echo, a `search_pages` match's path/title/type/links_to, a `list_page_names` name and a
+    `resolve_entities` field are all UNFENCED scalars re-entering the prompt, exactly like the
+    structural half above, and a second sanitizer for them would be a second answer to the one
+    question this function is. The page-BODY-derived free text (excerpts, bodies) is FENCED instead
+    — see `pydantic_backend._tool_payload`.
     """
     return textutil.sanitize(str(value or "")).translate(_LINE_SEPARATORS)
 

@@ -291,11 +291,12 @@ class DelayedAgent:
     `on_ready` is used to print a line the parent test process reads with a real timeout instead
     of guessing with a fixed sleep (mirrors `tests/capture/test_cli.py`'s `_read_until`).
 
-    **It copies `structured_ordinary` for the reason `evals/run_filing.CountingAgent` does** (ADR
-    033): this stands where `processing` expects a `filing_port.FilingAgent`, and a wrapper that
-    swallows a declared port member silently changes which branch of the ordinary flow runs behind
-    it. Plain attribute access with no default, so a backend that forgot to declare it fails at
-    construction rather than one delivery at a time.
+    **It copies `structured_ordinary` and `wants_gathered` for the reason
+    `evals/run_filing.CountingAgent` does** (ADR 033, ADR 034): this stands where `processing`
+    expects a `filing_port.FilingAgent`, and a wrapper that swallows a declared port member
+    silently changes which branch of the ordinary flow runs behind it and what context that branch
+    builds. Plain attribute access with no default, so a backend that forgot to declare either
+    fails at construction rather than one delivery at a time.
 
     **And it forwards `run_meeting`, which it did not used to.** The delay belongs to the ORDINARY
     flow this harness interrupts, so the second call was simply absent — and a wrapper standing in
@@ -309,6 +310,7 @@ class DelayedAgent:
     def __init__(self, inner, seconds: float, on_ready=lambda: None):
         self.inner = inner
         self.structured_ordinary = inner.structured_ordinary
+        self.wants_gathered = inner.wants_gathered
         self.seconds = seconds
         self.on_ready = on_ready
 

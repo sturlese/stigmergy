@@ -229,8 +229,8 @@ def test_the_backend_the_runner_names_is_the_structured_one_the_librarian_dispat
     that would surface as a run nobody can ask for, so they are compared here."""
     from stigmergy.librarian import agent as agent_module
 
-    assert run_filing.STRUCTURED_BACKEND == agent_module.PYDANTIC_BACKEND
-    assert run_filing.STRUCTURED_BACKEND in agent_module.BACKENDS
+    assert run_filing.REAL_BACKEND == agent_module.PYDANTIC_BACKEND
+    assert run_filing.REAL_BACKEND in agent_module.BACKENDS
 
 
 # ── the parser, as a value ─────────────────────────────────────────────────────────────────────
@@ -240,10 +240,10 @@ def test_the_backend_the_runner_names_is_the_structured_one_the_librarian_dispat
 # cases that are about what `main` does with those arguments afterwards.
 def test_the_parser_is_a_value_and_accepts_every_flag_the_docs_promise():
     args = run_filing.build_parser().parse_args(
-        ["--backend", run_filing.STRUCTURED_BACKEND, "--kinds", schema.MEETING,
+        ["--backend", run_filing.REAL_BACKEND, "--kinds", schema.MEETING,
          "--model", "openai:gpt-5.6-terra", "--report", "/tmp/x.json"])
 
-    assert args.backend == run_filing.STRUCTURED_BACKEND
+    assert args.backend == run_filing.REAL_BACKEND
     assert args.kinds == schema.MEETING
     assert args.model == "openai:gpt-5.6-terra"
     assert args.report == "/tmp/x.json"
@@ -259,7 +259,7 @@ def test_the_parsers_defaults_are_the_whole_shipped_set_on_the_real_backend():
     property, not which real backend it happens to be."""
     args = run_filing.build_parser().parse_args([])
 
-    assert args.backend == run_filing.STRUCTURED_BACKEND
+    assert args.backend == run_filing.REAL_BACKEND
     assert args.backend != "double", (
         "a bare `make filing-golden` would score the offline double and append it to the series")
     assert args.kinds == ""
@@ -267,7 +267,7 @@ def test_the_parsers_defaults_are_the_whole_shipped_set_on_the_real_backend():
     assert args.manifest.endswith("manifest.json")
 
 
-@pytest.mark.parametrize("name", ["double", run_filing.STRUCTURED_BACKEND])
+@pytest.mark.parametrize("name", ["double", run_filing.REAL_BACKEND])
 def test_every_backend_dispatch_knows_is_a_choice_the_parser_accepts(name):
     """The `--backend` choices and `agent.BACKENDS` must not drift: a backend argparse accepts and
     dispatch does not is a run that dies after the fixture repo is built, and one dispatch knows and
@@ -317,7 +317,7 @@ def parse(monkeypatch):
     return _parse
 
 
-@pytest.mark.parametrize("backend", ["double", run_filing.STRUCTURED_BACKEND])
+@pytest.mark.parametrize("backend", ["double", run_filing.REAL_BACKEND])
 def test_every_backend_parses_and_measures_the_whole_set_by_default(parse, backend):
     """The default invocation, and the milestone in one assertion: no `--kinds`, the whole set,
     on EVERY backend.
@@ -343,7 +343,7 @@ def test_the_structured_backend_may_still_be_given_a_subset_as_an_ablation(parse
     """`--kinds` survived the restriction that made it necessary, and it has to: a subset somebody
     CHOSE is a different thing from a limitation they worked around, and the meeting-only row
     already recorded in `history.ndjson` must stay reproducible."""
-    captured = parse("--backend", run_filing.STRUCTURED_BACKEND, "--kinds", schema.MEETING,
+    captured = parse("--backend", run_filing.REAL_BACKEND, "--kinds", schema.MEETING,
                      "--model", "openai:gpt-5.6-terra")
 
     assert captured["kinds"] == [schema.MEETING]

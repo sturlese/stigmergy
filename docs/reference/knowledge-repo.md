@@ -160,11 +160,13 @@ each has its own rule table asserted in both directions —
 `tests/librarian/test_meeting_brief_contract.py` and `test_librarian_brief_contract.py` — so an
 edit to either side alone turns the suite red rather than being discovered by a filing.
 
-**The librarian brief is backend-NEUTRAL** ([ADR 033](../decisions/033-structured-filing-flow.md)):
-it describes a worker that hands the agent its context in one message and writes the page from one
-structured account, and it names no tool. Which tools a particular run actually holds is stated in
-the platform's own preamble in front of it, so a brief in this repository never has to be rewritten
-when a backend changes.
+**The librarian brief is backend-NEUTRAL** ([ADR 033](../decisions/033-structured-filing-flow.md),
+[ADR 034](../decisions/034-agentic-pydantic-harness.md)): it describes a worker that hands the agent
+its context and asks for one structured account, and it names no tool. What differs between runs is
+stated in the platform's own preamble in front of it — which tools a run holds, whether that handed
+context is the whole of what it can see or a seed it can search past, and whether the agent writes
+its own page or code writes it from the account — so a brief in this repository never has to be
+rewritten when a backend changes.
 
 **A `.mcp.json` in this repository is content, not configuration, and the librarian treats it as
 such.** The agent runs with an explicitly empty MCP server list and strict MCP config, so the

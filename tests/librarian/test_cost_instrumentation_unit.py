@@ -83,6 +83,7 @@ def test_one_pass_banks_the_spend_before_the_outcome_is_judged(tmp_path):
         # The declared port member (ADR 033). `False` is the exploring shape, which is what this
         # test means; `_one_pass` REFUSES an agent that declares nothing rather than defaulting it.
         structured_ordinary = False
+        wants_gathered = False
 
         def run(self, **kwargs):
             return AgentRun(outcome=None, cost_usd=0.37)
@@ -112,7 +113,8 @@ def test_a_pass_that_dies_mid_run_still_banks_its_priced_spend(tmp_path):
     reported `cost_usd: 0.0` after paying a full run — exactly the rows an operator most wants
     priced. A returning fake alone proves banking only for the one fault shape that returns."""
     class DiesMidRun:
-        structured_ordinary = False          # the declared port member — see the twin above
+        structured_ordinary = False          # the declared port members — see the twin above
+        wants_gathered = False
 
         def run(self, **kwargs):
             ex = AgentError("the agent run ended as 'error_max_turns' after 30 turn(s)")

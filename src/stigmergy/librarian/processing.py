@@ -549,6 +549,52 @@ def _reset_for_retry(worktree: str) -> None:
     gitcmd.run("clean", "-fdq", cwd=worktree)
 
 
+# ── the two sentences of the gathered block that depend on WHAT ITS READER CAN DO ─────────────
+# `agent.render_gathered` defaults to the TOOL-LESS wording ("this is your context and you have no
+# tool to go looking for more"), which is what a `structured_ordinary = True` backend is owed: the
+# port says such a backend holds no tool, so the default is true of it by contract and the
+# structured branch below passes nothing, keeping its block byte-identical to ADR 033's.
+#
+# An EXPLORING backend that asked for the same block is a different reader (ADR 034): it was seeded
+# rather than bounded, and telling it otherwise would buy a measurement of iteration that never
+# iterated. These sentences deliberately do NOT name individual tools — which tools exist is the
+# BACKEND's fact and belongs in its own environment preamble (`pydantic_backend.
+# ORDINARY_AGENTIC_ENVIRONMENT` names all five), while what is true at the FLOW's level is that the
+# block was assembled before the call and the reader's own tools reach the same checkout.
+_SEEDED_GATHERED_SENTENCES = {
+    "preface": (
+        "\nWhat this brain already holds, gathered from the checkout by the worker before this "
+        "call — a STARTING POINT, not a boundary: your own tools reach the same checkout this was "
+        "read from, so look further whenever this is not enough."),
+    "all_trimmed_advice": (
+        "Search the checkout for what this material overlaps with and read what you find, rather "
+        "than judging overlap from `link_names` and `neighbourhood` alone."),
+}
+
+
+def _wants_gathered(agent) -> bool:
+    """Does this backend want the deterministic gatherer's block? DECLARED, never assumed.
+
+    Asked on the branch that uses it rather than at the top of `_one_pass`, because it is only the
+    LEGACY branch's question: a structured backend is gathered for by definition (it holds no tool
+    and could do nothing otherwise), so refusing one for a member its own road never reads would
+    refuse a conforming backend over bookkeeping.
+
+    The refusal itself is `structured_ordinary`'s, one member over, and it is a refusal for the
+    same measured reason: the likeliest producer of a missing declaration is a WRAPPER around a
+    real backend — the eval rig's `CountingAgent`, the signal suite's `DelayedAgent`, a stub in a
+    test file — and a `getattr(..., False)` default would hand the shipped backend an empty seed,
+    silently, on a road whose whole output is a filing-quality score.
+    """
+    if not hasattr(agent, "wants_gathered"):
+        raise AgentError(
+            f"the configured agent ({type(agent).__name__}) declares no `wants_gathered`, which is "
+            f"a required member of the filing port (librarian/filing_port.py): the worker cannot "
+            f"tell whether to build this item's gathered context for it. A backend declares it as "
+            f"a class attribute; a WRAPPER around one must copy it from what it wraps")
+    return bool(agent.wants_gathered)
+
+
 def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
               corrective: str, *, passes: "AgentPasses | None" = None,
               linter_path: str = "") -> tuple:
@@ -562,9 +608,10 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
     settings = deps.settings
     # **Which SHAPE of the ordinary flow this backend answers** (ADR 033) — DECLARED by the
     # backend (`filing_port.FilingAgent.structured_ordinary`), never sniffed from its class. Every
-    # branch below is behind this one boolean, and with it `False` — the offline
-    # offline double — this function does byte-for-byte what it did before the structured path
-    # existed: no gather, no code-written page, the agent's own `page_path`.
+    # branch below is behind this one boolean, and with it `False` — which is BOTH shipped backends
+    # since ADR 034 — this function does what it did before the structured path existed: the agent
+    # wrote the page, so code reads its account off the outcome file and its `page_path` off the
+    # diff. The `True` road stays live for a backend that carries the page's text home instead.
     #
     # **Absence is REFUSED, never defaulted.** This read was `getattr(…, False)`, and a default is
     # exactly the silence this package refuses everywhere else: a backend — or, far more likely, a
@@ -602,19 +649,31 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         f"job is the SYNTHESIS: file exactly one note/decision/concept page distilling what this "
         f"document establishes, anchored through the registry as always; the system will make "
         f"your page cite the attached source.")
-    # ── the deterministic gatherer, for the backend that has no tool to go looking ──────────
+    # ── the deterministic gatherer, for whichever backend declares it wants one ─────────────
     # Built HERE and handed over as rendered prompt text, never inside a backend: the gather is a
-    # property of the FLOW, and two structured backends must share one context builder and one
-    # fence discipline. Read from the WORKTREE, which is the checkout at this item's base commit —
-    # the same data the exploring agent's own Read/Glob reached, so ADR 033 moved the reader and
-    # not the origin. Re-run on the corrective pass on purpose: `_reset_for_retry` puts the
-    # worktree back, and a second pass judging a context it can no longer see would be judging
-    # something else.
+    # property of the FLOW, and two backends must share one context builder and one fence
+    # discipline. Read from the WORKTREE, which is the checkout at this item's base commit — the
+    # same data an exploring agent's own reads reach, so ADR 033 moved the reader and not the
+    # origin. Re-run on the corrective pass on purpose: `_reset_for_retry` puts the worktree back,
+    # and a second pass judging a context it can no longer see would be judging something else.
+    #
+    # **Which backends want it is a SECOND declaration, not the inverse of the first** (ADR 034).
+    # The structured shape is handed a context by definition — it holds no tool and could do
+    # nothing without one — while an EXPLORING backend may want the same block as a SEED and then
+    # go further (the pydantic-ai backend), or want none at all (the offline double, which is
+    # directive-driven and would pay for a corpus walk nothing reads).
+    #
+    # Absence is REFUSED on the branch that needs it, exactly like `structured_ordinary` above and
+    # for the same reason: the likeliest producer of a missing declaration is a WRAPPER, and a
+    # `getattr(..., False)` default would silently starve a real backend of its seeded context —
+    # a measurably worse filing run wearing a working one's clothes.
     gathered = ""
-    if structured:
-        gathered = agent_module.render_gathered(gather.gather(
-            worktree, deps.registry, material,
-            top_k=settings.gather_top_k, excerpt_lines=settings.gather_excerpt_lines))
+    if structured or _wants_gathered(deps.agent):
+        gathered = agent_module.render_gathered(
+            gather.gather(worktree, deps.registry, material,
+                          top_k=settings.gather_top_k,
+                          excerpt_lines=settings.gather_excerpt_lines),
+            **({} if structured else _SEEDED_GATHERED_SENTENCES))
     try:
         run = deps.agent.run(worktree=worktree, material=material,
                              hints=(item.get("hints") or {}).get("client", {}),
@@ -2532,10 +2591,9 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
             raise AgentError("the meeting agent produced no usable account of what it did")
 
     if outcome.decision == "triage":
-        # The agent has no tool that can write a page at all (its allow-list is `Write`, confined
-        # to the outcome file itself — `agent.confine_outcome_write`) — so a triage outcome cannot
-        # leave a stray
-        # page behind the way the ordinary flow's cooperative-agent check still guards against
+        # The meeting agent holds no tool at all — this flow is one structured call, and its
+        # account comes home in the envelope — so a triage outcome cannot leave a stray page
+        # behind the way the ordinary flow's cooperative-agent check still guards against
         # (`_one_pass`'s `stray` check). Nothing to check here that is not already structural.
         return _triage_meeting(item, deps, outcome), [], outcome
 

@@ -46,7 +46,7 @@ edits an existing page directly — that is the misbehaviour the zone gate exist
 double that could not do it would leave the gate untested.
 
 **Every write the double makes as a well-behaved agent goes through `agent.confined_write`**
-(`_write`), the rule that used to be enforced by a `PreToolUse` hook as well, and a denial raises. The
+(`_write`) — the same rule the real backend's own `write_page` tool asks — and a denial raises. The
 deliberate misbehaviours take `_write_unconfined` instead, so each bypass is visible at its call
 site. Before that split the double wrote with a bare `open(path, "w")` and never consulted the rule
 at all — which meant the whole offline suite proved nothing about it, and a byte-comparison defect
@@ -126,11 +126,18 @@ class DoubleAgent:
     """
 
     # The EXPLORING shape of the ordinary flow (see `filing_port.FilingAgent.structured_ordinary`).
-    # The double WRITES the page — through `agent.confined_write`, the rule a tool-holding agent's hook
-    # enforces — which is exactly what makes the offline suite prove something about the production
-    # write path. A second, structured double is a decision to take when the structured path needs
-    # adversarial coverage of its own, not a flag on this one.
+    # The double WRITES the page — through `agent.confined_write`, the same rule the real backend's
+    # `write_page` tool asks — which is exactly what makes the offline suite prove something about
+    # the production write path. A second, structured double is a decision to take when the
+    # structured path needs adversarial coverage of its own, not a flag on this one.
     structured_ordinary = False
+
+    # ...and it is handed no gathered context (see `filing_port.FilingAgent.wants_gathered`).
+    # Declared `False` rather than inherited: this double's behaviour is DIRECTIVE-driven, so the
+    # gather would be a corpus walk per pass whose rendered string nothing reads. It stays a real
+    # declaration so `processing`'s legacy branch is exercised offline in BOTH of its states — the
+    # gathered one the shipped backend takes and the ungathered one this takes.
+    wants_gathered = False
 
     def __init__(self, settings):
         self.settings = settings
@@ -553,7 +560,7 @@ class DoubleAgent:
         This used to be a bare `open(path, "w")`, which made `agent.confined_write` unreachable from
         the double: the rule could only ever be unit-tested against hand-written path strings, and
         the whole offline suite — every processing test, every adversarial case, the docker e2e —
-        exercised a write path the production hook does not use. That gap hid a STOP-class defect.
+        exercised a write path production does not take. That gap hid a STOP-class defect.
         `confined_write` compared paths byte-for-byte against `git ls-files`, so on macOS a page
         named `EXISTING NOTE.md`, or an accented title in its NFD spelling, was "a page that does
         not exist yet" and the write landed on the human's page. A double routed through the rule
@@ -571,8 +578,8 @@ class DoubleAgent:
         if not confined_write(worktree, rel, existing=gitcmd.tracked_paths(worktree)):
             raise WorktreeError(
                 f"the offline double tried to write {rel}, which agent.confined_write denies — the "
-                f"real agent's write hook would have refused it too. Either the fixture names a "
-                f"page that already exists (case- and normalization-insensitively) or the "
+                f"real agent's `write_page` tool would have refused it too. Either the fixture "
+                f"names a page that already exists (case- and normalization-insensitively) or the "
                 f"confinement rule changed shape")
         self._write_unconfined(worktree, rel, text)
 

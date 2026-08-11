@@ -96,16 +96,22 @@ _PENDING_ALLOWED = (REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",)
 # A deliberate re-freeze updates these three numbers IN THE SAME COMMIT as the bytes, which is the
 # review moment this pin exists to force — and, per `evals/README.md`, retires the series with it.
 #
-# The librarian brief's pin has moved TWICE, deliberately, and both moves were the same kind of
-# event: not an edit to a yardstick but a NEW yardstick, which retires the series with it per
+# The librarian brief's pin has moved THREE times, deliberately, and every move was the same kind
+# of event: not an edit to a yardstick but a NEW yardstick, which retires the series with it per
 # `evals/README.md`.
 #
 #   1. ADR 033 rewrote the brief backend-NEUTRAL (no tool mechanics in it at all).
 #   2. The `sdk` retirement closed that rewrite's last debt: the brief's environment paragraph still
 #      told its reader that "some runs of this skill hold tools and a checkout, and write the page
 #      themselves", which stopped being true of ANY run when the tool-holding backend went. That
-#      paragraph is now the tool-less statement, at knowledge-repo commit
-#      `c1e0996ed497e70a9df82661c367294b48207a16` — the sha all five provenance records carry.
+#      paragraph became the tool-less statement, at knowledge-repo commit
+#      `c1e0996ed497e70a9df82661c367294b48207a16`.
+#   3. ADR 034 gave the ordinary run its tools BACK, so a brief describing one run style stopped
+#      being true again — in the other direction. The preamble is now environment-CONDITIONAL
+#      ("your run is described in the preamble above this skill"; a short tools paragraph that
+#      applies when the run holds them), which is the only shape that stays true of both a
+#      handed-context run and a searching one. Knowledge-repo commit
+#      `0bf3c5462d50e72f5435ce61d61ba5f023e60388` — the sha all five provenance records carry.
 #
 # The other two numbers did NOT move with it, and that is the fact worth reading off this block: one
 # freeze, one commit does not mean one freeze, three edits. The linter and the meeting brief are
@@ -115,7 +121,7 @@ FROZEN_SHA256 = {
     ".claude/tools/stigmergy_lint.py":
         "5c914e43a33e05a276142b26cd6ebc3ff84479b43703c783b9959e6a28948f28",
     ".claude/skills/librarian/SKILL.md":
-        "1a05db240cbfb7207c353534b0146eff96af2a2d6ddf700e89b5cb79f4ce6635",
+        "47c60c5816622cc2f10e9e08882a8c8fc6e58db6090522cafca268edc64dafbc",
     ".claude/skills/meeting-distiller/SKILL.md":
         "b3686f91666c5fa6f9f9a2aa602230db716abbf503792c60d64f7d0e2300476a",
 }

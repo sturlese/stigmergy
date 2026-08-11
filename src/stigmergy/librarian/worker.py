@@ -148,6 +148,20 @@ def startup_checks(settings) -> dict:
     agent_module.ensure_known_backend(settings.backend)
     if settings.backend == agent_module.PYDANTIC_BACKEND:
         _check_pydantic_backend(settings)
+        # The ordinary run's iteration budget maps to `UsageLimits(request_limit=max_turns)`, and a
+        # tool-using pass needs at least TWO requests — one to call a tool, one to write its account
+        # — so a ceiling below 2 fails every ordinary capture at full cost the moment the model
+        # reaches for a tool. Refuse it BY NAME here rather than clamp it in the backend: an
+        # operator who set the number gets told it is unusable, not silently handed a different one
+        # (the same doctrine `resolved_timeout_s` follows). The meeting flow makes one call and does
+        # not read `max_turns`, so this is scoped to the backend that does.
+        if int(settings.max_turns) < 2:
+            raise LibrarianConfigError(
+                f"max_turns is {settings.max_turns}, but the ordinary filing run needs at least 2 "
+                f"model requests per pass — one to call a tool, one to write its account — so a "
+                f"ceiling below that fails every capture at full cost. Raise "
+                f"$STIGMERGY_LIBRARIAN_MAX_TURNS to 2 or more (the default is "
+                f"{config.DEFAULT_MAX_TURNS}).")
 
     # The lease must outlive the item, or the queue redelivers a row this worker is still working
     # on — and since the commit and the push happen before `finish`, both workers file it. The
@@ -195,10 +209,7 @@ def startup_checks(settings) -> dict:
         # than a `failed` row per row. The offline double reads no skill at all, and requiring one
         # of a `double` run would be a check that can only ever fail on something nothing was
         # going to use.
-        skill_text = _check_skill_at(repo, base)
-        # ...and the brief it just proved must be the one this BACKEND can follow. See below.
-        _check_brief_matches_backend(
-            settings, skill_text, base_inputs.where(base, agent_module.SKILL_RELPATH))
+        _check_skill_at(repo, base)
         # The meeting-distiller brief is deliberately NOT checked here, unlike the ordinary
         # librarian skill above. The skill is needed by every item this worker will ever claim
         # (100% of them); the meeting brief is needed only by `kind="meeting"` rows, which may be
@@ -226,8 +237,13 @@ def startup_checks(settings) -> dict:
 
 def _check_skill_at(repo: str, base: gitcmd.BaseRef) -> str:
     """The skill must be present, non-empty and under the ceiling AT `base` — not merely on disk.
-    Returns the validated text, so the backend-agreement check below reads the SAME bytes rather
-    than fetching the blob a second time and possibly a different one."""
+
+    Returns the validated text as a convenience for a caller that also needs the bytes; it has none
+    today. The brief-agreement check that used to read this return retired with the tool-neutral
+    brief (ADR 034 — `_check_brief_matches_backend`'s tombstone below), so `startup_checks` calls
+    this for its SIDE EFFECT — the fail-closed refusal — and discards the value. It stays a `-> str`
+    because the assertion it makes IS about the bytes, and a caller that grows a second use of them
+    should read one validated copy rather than fetch the blob again and possibly a different one."""
     relpath = agent_module.SKILL_RELPATH
     where = base_inputs.where(base, relpath)
     size = gitcmd.blob_size(repo, base.sha, relpath)
@@ -245,53 +261,28 @@ def _check_skill_at(repo: str, base: gitcmd.BaseRef) -> str:
     return agent_module.validate_skill(text, where=where)
 
 
-def _check_brief_matches_backend(settings, skill_text: str, where: str) -> None:
-    """Refuse a STRUCTURED backend whose brief still describes the tool-holding run (ADR 033).
-
-    **The landing order is the real rule and this is its depth.** The brief lives in the knowledge
-    repo and the platform lives here, so ADR 033's two halves land as two PRs — and if the platform
-    half arrives first, a `pydantic` worker injects a brief telling the model, in its own voice, to
-    write its account to a file it has no tool to write. `pydantic_backend.OVERRIDE_NOTE`'s comment
-    records what that costs when it happens on the MEETING flow, where the contradiction is named
-    out loud and scoped: a model that resolves it the other way describes writing a file it cannot
-    write, and the run comes back with an account about the wrong thing. On the ordinary flow after
-    ADR 033 there is no such override, because the brief is supposed to be the structured text — so
-    an old brief is a silent, uncorrected contradiction, and the pages it produces are judged on a
-    procedure the model could not follow.
-
-    **The escape hatch this refusal used to offer is gone with the backend that was it.** It ended
-    by naming `STIGMERGY_LIBRARIAN_BACKEND=sdk` — "run the backend that brief was written for" —
-    which was a real second way out while a tool-holding backend existed. There is no such backend
-    now, so the ONLY fix is to push the rewritten brief, and offering a dead value would send an
-    operator mid-incident to a refusal one check up.
-
-    The signal is the outcome FILE's own name appearing in the brief at all: a backend-neutral
-    brief names no channel, and every version that predates ADR 033 documents `.librarian-outcome.
-    json` by name. Cheap, specific, and it cannot fire on a brief written for this milestone.
-
-    Asked of what the backend DECLARES (`build_agent(settings).structured_ordinary`) rather than of
-    `settings.backend`, so a THIRD structured backend inherits the check by declaring the same
-    thing — the same reason `processing._one_pass` reads the attribute instead of a class.
-    """
-    if not agent_module.build_agent(settings).structured_ordinary:
-        return
-    if agent_module.OUTCOME_FILENAME not in skill_text:
-        return
-    # Imported HERE and not at module scope: this line is reached only by a run that has ALREADY
-    # built a structured backend, so the framework is loaded anyway — where a `double` run returns
-    # above and never touches it.
-    from stigmergy.librarian import pydantic_backend
-
-    raise LibrarianConfigError(
-        f"the librarian skill at {where} still names {agent_module.OUTCOME_FILENAME}, which is the "
-        f"outcome channel of a run that HOLDS TOOLS — and the {settings.backend!r} backend holds "
-        f"none: it returns its account as a structured object and the worker writes the page. "
-        f"Injecting that brief would tell the model to write a file it cannot write, and the pages "
-        f"it filed would be judged on a procedure it could not follow. Push the rewritten brief to "
-        f"the knowledge repo (see {pydantic_backend.ORDINARY_ADR}, D4) — it has to land BEFORE this "
-        f"worker runs, and that ordering is the ADR's, not this check's. There is no backend to "
-        f"fall back to: the one that brief was written for has been retired "
-        f"(docs/decisions/033-structured-filing-flow.md)")
+# RETIRED with the one-shot ordinary run (ADR 034): `_check_brief_matches_backend`, which refused a
+# STRUCTURED worker whose brief still described a tool-holding run. It fired on the outcome file's
+# own name appearing in the brief at all.
+#
+# **It goes because there is no longer a brief-side contradiction for it to catch, not because it
+# stopped firing.** Keyed on `structured_ordinary`, it would simply have gone inert the moment the
+# shipped ordinary backend declared `False` — and an inert check that still reads as coverage is
+# the thing this repo calls worse than no check. The rule it enforced (a landing order between two
+# repositories) survives in the mechanism that made it enforceable: the brief is
+# ENVIRONMENT-NEUTRAL, and each backend states its own mechanics in the preamble it composes
+# through `agent.build_filing_header`. A brief that names the outcome file is now correct for the
+# shipped ordinary run and corrected out loud for the meeting one
+# (`pydantic_backend.OVERRIDE_NOTE`), so the sentence this check refused a worker over is a
+# sentence no backend is contradicted by.
+#
+# What is genuinely lost is a pre-flight against a FUTURE structured backend meeting a
+# tool-describing brief. That is a check to write when such a backend exists, against the brief's
+# text as it is then — not one to keep alive against a backend nothing dispatches to, whose
+# refusal names a landing order two milestones old.
+#
+# `pydantic_backend.ORDINARY_ADR` was this refusal's only reader and retired with it, in that
+# module, under the same reasoning its own `ADR` constant did.
 
 
 # REMOVED with the meeting-only refusal (ADR 033): `_usable_example`, which answered "would
