@@ -246,7 +246,9 @@ def path_keys(paths) -> set[str]:
 
     Deliberately recomputed per call rather than cached beside the tracked-paths set: a second
     representation of "the pages that already exist" is a second thing that can go stale, and the
-    cost is a casefold per tracked path on a write the agent makes at most `max_tool_calls` times.
+    cost is a casefold per tracked path on a write that happens at most a handful of times per
+    item. (That bound used to be `settings.max_tool_calls`, back when an agent made the writes
+    through a counted tool; code makes them now, once per page in the set.)
     """
     return {path_key(p) for p in (paths or ())}
 
@@ -256,7 +258,7 @@ def is_inside(root: str, candidate: str) -> bool:
 
     Both sides go through `realpath`. That symmetry is the whole point: the root used to be
     `abspath` while the candidate was `realpath`, and on darwin the default temp root is a symlink
-    (`/var` -> `/private/var`), so NOTHING matched and every legitimate write was denied — the SDK
+    (`/var` -> `/private/var`), so NOTHING matched and every legitimate write was denied — the
     backend could not file a single page on a Mac.
 
     Resolving the candidate is also what makes this a check on a DIRECTORY component rather than on

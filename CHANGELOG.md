@@ -30,8 +30,45 @@ treats its test suite as the contract.
   link neighbourhood instead of live `Read`/`Glob`/`Grep` exploration; the agent returns the page's
   own text in its account and code writes it, confined by construction rather than by a permission
   hook. The pydantic-ai backend now serves both flows, so the meeting-only restriction above (and
-  its eval-rig escape) is gone; the Claude Agent SDK remains the staging default and the only path
-  that still explores.
+  its eval-rig escape) is gone.
+
+### Changed
+
+- **`STIGMERGY_LIBRARIAN_MODEL` now takes a PROVIDER-PREFIXED id, and the default moved with it**
+  (`claude-sonnet-5` -> `anthropic:claude-sonnet-5`). Same model, same provider: the surviving
+  backend resolves ids through pydantic-ai, where a bare name means an OpenAI model, so a bare
+  default would have been the one value a worker could not boot on. A worker configured with a bare
+  id is refused at startup, and the refusal names the prefixed spelling of the id it was given.
+- **`STIGMERGY_LIBRARIAN_MAX_TURNS` and `STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS` are DEPRECATED** and
+  read by no shipped backend: they bounded a tool-using conversational loop, and a structured call
+  makes one model call and holds no tool. Still PARSED, so a value an operator set is not silently
+  dropped — but a malformed one fails the boot with a bare `ValueError` rather than a named
+  refusal, which is pre-existing behaviour these two never had a reason to be worth fixing for.
+  Removing them is the recorded follow-up. `..._TIMEOUT_S` is unaffected and IS refused by name:
+  the wall clock is still enforced, and the visibility lease is still derived from it.
+
+### Removed
+
+- **The `sdk` filing backend — the Claude Code harness path — is retired** (ADR 033 D6's gate,
+  spent: the full M0 golden all-bars-PASS on the structured flow, a 20-capture staging shakedown
+  with zero flow failures, the container e2e green on CI per push, and then an explicit decision).
+  Gone with it: `SdkAgent` and its two run methods, the options builders, the three tool-permission
+  hooks, the tool allow/deny lists, the subprocess environment allow-list and the Claude-credential
+  startup pre-flight; the `claude-agent-sdk` dependency; and, from the image, the Node runtime and
+  the ~500MB agent CLI with their entries in `scripts/docker/tool-checksums.txt`. **The image is
+  roughly 55% smaller.** `fly.toml` moves to `backend=pydantic` with the prefixed model id.
+
+  **A deployment still configured for `sdk` is refused at startup, by name.** The value lives in a
+  `fly.toml` or a gitignored `.env` that a `git pull` does not touch, so this is configuration
+  outliving its code rather than a typo: the message says the backend was retired, names the two
+  edits the replacement takes, and gives the image rollback (`fly releases` -> `fly deploy
+  --image`) for getting a worker running meanwhile. The queue is durable; nothing claimed is lost
+  while it is down.
+
+  What is genuinely lost, rather than replaced: the per-item tool-call ceiling (nothing holds a
+  tool to count) and the harness lockdown that hardened a subprocess which no longer exists. The
+  write-confinement RULE (`agent.confined_write`) is untouched and still runs on every offline
+  filing through the double.
 
 Sixteen bug-sweep fixes and one documentation correction since `0.1.0`, none of them behaviour
 changes in the ADR sense — each closes a gap between what the code promised and what it did. Grouped

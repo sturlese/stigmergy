@@ -230,7 +230,8 @@ lose". Reported, never scored — like `reused` and `redistilled` beside it.
 ### How the bars were fixed
 
 From the **first Sonnet-5 baseline** (2026-08-10, platform sha `2b6964f`, fixture
-`stigmergy_sha` `0a988bd1`): backend `sdk`, model `claude-sonnet-5`, and its noise twin run
+`stigmergy_sha` `0a988bd1`): backend `sdk` — the exploring backend, retired since — model
+`claude-sonnet-5`, and its noise twin run
 immediately after — **facet-identical scores across the pair** (costs $2.11 and $1.92, walls
 716 s and 661 s), which is the determinism the instrument promises on outcome-shaped facets.
 Both rows are in [`history.ndjson`](history.ndjson).
@@ -258,19 +259,40 @@ misses were the yardstick's own — that run taught the containment semantics re
 its row was discarded with the defect it measured, and no `suite: "filing"` row predates the
 semantics the shipped scorer implements.
 
+**The brief was re-frozen under those bars, and the chain is worth stating exactly.** The `sdk`
+retirement closed ADR 033's last debt in the knowledge repo: the brief's environment paragraph still
+said *"some runs of this skill hold tools and a checkout, and write the page themselves"*, which
+stopped being true of any run when the tool-holding backend went. Knowledge-repo commit
+`c1e0996` (*"chore(skills): the brief describes one run style"*) replaced that paragraph with the
+one-run-style statement; `31e49f8` is the predecessor every row above was measured under. **Only
+that paragraph moved** — the linter and the meeting brief are byte-identical at both commits, which
+is why `FROZEN_SHA256`'s other two numbers did not change.
+
+**This re-freeze cannot be validated the way the decisions-facet fixes were.** Those were scorer
+corrections: the recorded observations stayed valid, so re-scoring them proved the fix changed the
+number it was supposed to and nothing else. Here the INSTRUCTIONS changed, and the observations
+above were produced under the old ones — a model briefed differently is a different measurement, and
+no arithmetic over stored rows can stand in for running it. So nothing is re-scored and nothing is
+back-filled.
+
+What that leaves, stated rather than implied: **the bars stand exactly as fixed above**, under
+`31e49f8`, because a bar re-derived from a run nobody has made yet would be a number invented to be
+met. The next golden run is the **first row measured under `c1e0996`** and is the one that says
+whether the bars still hold under the new bytes — read it as a fresh baseline candidate, not as a
+regression against the table above. If it moves a facet, the honest reading is "the brief changed",
+and the choice is the one `PROVENANCE.json`'s editing policy already names: keep the bars and
+explain the gap, or retire the series and record a new baseline here.
+
 ### Running it
 
 ```bash
 # keyless plumbing self-check (the offline double — NOT a measurement, appends no history row)
 make filing-golden BACKEND=double
 
-# the real measurement (needs a Claude credential and gitleaks on PATH)
+# the real measurement (needs the filing model's provider key and gitleaks on PATH). The default
+# backend IS the structured one, and its default model is anthropic:claude-sonnet-5 — the same
+# model the retired exploring baseline ran, which is what makes the two rows comparable.
 make filing-golden FILING_ARGS="--report evals/out/filing-sonnet-5.json"
-
-# the STRUCTURED flow over the whole set, on the pydantic-ai backend (ADR 033). Same model as the
-# sdk baseline on purpose: that is what isolates the FLOW change from a model change.
-make filing-golden BACKEND=pydantic \
-    FILING_ARGS="--model anthropic:claude-sonnet-5 --report evals/out/filing-structured.json"
 
 # one KIND of capture only — here the two meeting captures
 make filing-golden FILING_ARGS="--kinds meeting"
@@ -321,8 +343,8 @@ than one case is a regression and fails on the first attempt.
 
 ## The series
 
-All three runners append a real-instrument run (`--llm openai` / `--embedder openai` /
-`--backend sdk`, never the keyless self-check) to [`history.ndjson`](history.ndjson), each entry
+All three runners append a real-instrument run (`--llm openai` / `--embedder openai` / any
+filing backend but `double`) to [`history.ndjson`](history.ndjson), each entry
 carrying the fixture it measured and that fixture's `stigmergy_sha` — so an entry always says what
 it was measured on. This is the only durable score record: git is the store, appended by real
 runs, never by CI.

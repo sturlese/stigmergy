@@ -46,7 +46,7 @@ edits an existing page directly — that is the misbehaviour the zone gate exist
 double that could not do it would leave the gate untested.
 
 **Every write the double makes as a well-behaved agent goes through `agent.confined_write`**
-(`_write`), the same rule the SDK backend's `PreToolUse` hook enforces, and a denial raises. The
+(`_write`), the rule that used to be enforced by a `PreToolUse` hook as well, and a denial raises. The
 deliberate misbehaviours take `_write_unconfined` instead, so each bypass is visible at its call
 site. Before that split the double wrote with a bare `open(path, "w")` and never consulted the rule
 at all — which meant the whole offline suite proved nothing about it, and a byte-comparison defect
@@ -116,7 +116,7 @@ def _findings(material: str) -> list[str]:
 
 
 class DoubleAgent:
-    """Same surface as `SdkAgent`, no network, no key, no framework import.
+    """The same port surface as the real backend, with no network, no key, no framework import.
 
     "Same surface" is `filing_port.FilingAgent` now, and satisfying it structurally is what makes
     the offline suite prove something about the production path: `processing.py` is written against
@@ -126,7 +126,7 @@ class DoubleAgent:
     """
 
     # The EXPLORING shape of the ordinary flow (see `filing_port.FilingAgent.structured_ordinary`).
-    # The double WRITES the page — through `agent.confined_write`, the same rule the SDK's own hook
+    # The double WRITES the page — through `agent.confined_write`, the rule a tool-holding agent's hook
     # enforces — which is exactly what makes the offline suite prove something about the production
     # write path. A second, structured double is a decision to take when the structured path needs
     # adversarial coverage of its own, not a flag on this one.
@@ -260,7 +260,7 @@ class DoubleAgent:
         if "bad-shape" in directives or ("bad-shape-once" in directives and not corrective):
             # A shape `agent.parse_outcome` refuses and a corrective retry can fix — an unknown
             # `decision`. `_park` writes the file and then parses it through the REAL boundary, so
-            # this raises `OutcomeShapeError` at exactly the point the SDK backend would, with the
+            # this raises `OutcomeShapeError` at exactly the point a real backend would, with the
             # page already drafted in the worktree for the retry's reset to clear.
             outcome["decision"] = "publish"
         if "no-outcome" in directives:
@@ -273,8 +273,8 @@ class DoubleAgent:
     # not a page, so its own directives name what that shape needs).
     #
     # **Why there are no declared-vs-written mismatch directives here.** In the meeting flow the
-    # agent has no page-writing tool at all — its one legal write, ever, is its own outcome file
-    # (`agent._MEETING_NO_PAGE_WRITES_RE`) — and code is the sole author of every page
+    # agent has no page-writing tool at all — its one legal write, ever, is its own outcome file,
+    # permitted by `agent.confined_write`'s unconditional exception — and code is the sole author of every page
     # (`processing._write_meeting_pages`), built directly from the SAME structured account this
     # double returns. There is therefore no way for what the agent WROTE and what it DECLARED to
     # disagree, and a directive staging that disagreement would be testing a mechanism that does
@@ -444,8 +444,8 @@ class DoubleAgent:
 
     def _park_meeting(self, worktree, run, outcome):
         """`_park`'s meeting sibling — writes ONLY the outcome file, exactly what the real
-        (now tool-less) agent's one legal write is. No `allowed_re` needed: `confined_write`'s
-        own unconditional outcome-file exception is what permits this write, for both flows."""
+        tool-less agent's one legal write is: `confined_write`'s own unconditional outcome-file
+        exception is what permits it, for both flows."""
         self._write(worktree, OUTCOME_FILENAME, json.dumps(outcome, indent=2) + "\n")
         run.outcome = self._priced_parse(run, parse_meeting_outcome, outcome)
         return run
@@ -521,14 +521,14 @@ class DoubleAgent:
     def _park(self, worktree, run, outcome):
         """Write the outcome file AND hand back the parsed object — through the same
         `parse_outcome` the real backend goes through, so the double cannot accidentally produce a
-        shape the SDK path would have refused."""
+        shape a real backend would have refused."""
         self._write(worktree, OUTCOME_FILENAME, json.dumps(outcome, indent=2) + "\n")
         run.outcome = self._priced_parse(run, parse_outcome, outcome)
         return run
 
     @staticmethod
     def _priced_parse(run, parse, outcome):
-        """The parse, on `SdkAgent`'s own outcome-read road: a refusal leaves the pass PRICED.
+        """The parse, on the same outcome-read road every backend takes: a refusal leaves the pass PRICED.
 
         Both backends read their account through a parser that can refuse it, and both owe the port
         the same thing on the way out — `filing_port.priced` attaching `run_cost_usd`, because
@@ -547,7 +547,7 @@ class DoubleAgent:
             priced(run, ex)
             raise
 
-    def _write(self, worktree: str, rel: str, text: str, *, allowed_re=None) -> None:
+    def _write(self, worktree: str, rel: str, text: str) -> None:
         """A write the REAL agent would be permitted — **through the very rule that permits it**.
 
         This used to be a bare `open(path, "w")`, which made `agent.confined_write` unreachable from
@@ -562,9 +562,13 @@ class DoubleAgent:
         Loud on denial, and deliberately not a silent skip: a double that quietly wrote nothing
         would surface three gates downstream as "the agent wrote nothing", which is a different
         fault with a different fix.
+
+        There was an `allowed_re` pass-through here, for the meeting flow's narrowed lane. It went
+        with the tool-holding backend that was the only caller ever to pass one — every call from
+        this class passed `None`, so the behaviour is unchanged and the parameter was a seam with
+        nothing on the other side of it.
         """
-        if not confined_write(worktree, rel, existing=gitcmd.tracked_paths(worktree),
-                              allowed_re=allowed_re):
+        if not confined_write(worktree, rel, existing=gitcmd.tracked_paths(worktree)):
             raise WorktreeError(
                 f"the offline double tried to write {rel}, which agent.confined_write denies — the "
                 f"real agent's write hook would have refused it too. Either the fixture names a "

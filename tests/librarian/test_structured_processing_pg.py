@@ -750,7 +750,7 @@ def test_the_filename_is_the_title_and_is_never_slugified(tmp_path, clean_queue,
     """The convention, stated as a property. A wikilink resolves by bare BASENAME, so the filename
     IS the name every other page has to spell — filing `acme-corp-renewal-window.md` beside a
     corpus of Title Case pages would break every `[[Acme Corp Renewal Window]]` a human, or the
-    `sdk` backend for the same capture, writes.
+    other shape of this flow for the same capture, writes.
 
     The meeting flow slugifies because its own filenames are slugs. This flow is not that flow, and
     the difference is a decision rather than an inconsistency.

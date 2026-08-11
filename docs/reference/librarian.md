@@ -21,7 +21,7 @@ capture_queue row (claimed, fenced by `attempts`)
        │     (`filing_port.FilingAgent.structured_ordinary`; the brief is the same for both,
        │      only the ENVIRONMENT preamble in front of it differs — ADR 033)
        │
-       │  EXPLORING (`sdk`, `double`)          STRUCTURED (`pydantic`)
+       │  EXPLORING (`double`)                 STRUCTURED (`pydantic`)
        │  ────────────────────────────         ─────────────────────────────────────────────
        │                                       code gathers the context (gather.py: entities,
        │                                         candidates + excerpts, link neighbourhood,
@@ -70,7 +70,7 @@ graph over a directory, no database connection and no ACL surface — and the sa
 | `processing.py` | one item, end to end: dedup → worktree → agent → edits → stamp → gates → commit. `process_item` is the ordinary flow; `process_meeting_item` is a genuine second flow (a page SET); `process_drive_item` converts the fetched bytes to text and then delegates to `process_item` itself |
 | `base_inputs.py` | the three repo-sourced inputs, read at the item's own base commit |
 | `filing_port.py` | the PORT — the two calls `processing.py` makes, the `AgentRun` envelope, the fault contract, the per-flow side-effect rules |
-| `agent.py` | the SDK backend, the options it is confined by, the outcome contract, and the two preambles the brief is injected under |
+| `agent.py` | the shared agent seam: the outcome contract, the fence, the prompts, the write-confinement rule, the system-prompt frame the brief is injected under, and the `backend` dispatch. Drives no model itself |
 | `gather.py` | the deterministic gatherer: what the structured ordinary flow is HANDED instead of exploring — a pure function of (worktree, registry, material) ([ADR 033](../decisions/033-structured-filing-flow.md)) |
 | `double.py` | the offline double: misbehaves on demand, behaves on ordinary material |
 | `pydantic_backend.py` | the pydantic-ai backend: one structured call per flow, no tools, BOTH flows ([ADR 032](../decisions/032-filing-port-and-pricing-seam.md), [ADR 033](../decisions/033-structured-filing-flow.md)) |
@@ -244,11 +244,11 @@ landmine.
 |---|---|---|
 | `STIGMERGY_REPO` (`--repo`) | `../stigmergy-brain` | the knowledge-repo checkout the worktrees branch from |
 | `STIGMERGY_LIBRARIAN_BRANCH` (`--branch`) | `main` | the branch the fast lane commits to |
-| `STIGMERGY_LIBRARIAN_BACKEND` (`--backend`) | `double` | `sdk` runs the real Claude agent, which EXPLORES the checkout; `double` is offline; `pydantic` runs both flows STRUCTURED — no tools, a gathered context, code writes the page (see below) |
-| `STIGMERGY_LIBRARIAN_MODEL` | `claude-sonnet-5` | a Sonnet-class model is right for routine filing. `sdk` takes the bare name; `pydantic` requires a provider-prefixed one (`anthropic:claude-sonnet-5`) |
+| `STIGMERGY_LIBRARIAN_BACKEND` (`--backend`) | `double` | `pydantic` runs both flows STRUCTURED — no tools, a gathered context, code writes the page (see below); `double` is the offline double. A retired third value, `sdk`, is refused at startup by name |
+| `STIGMERGY_LIBRARIAN_MODEL` | `anthropic:claude-sonnet-5` | a Sonnet-class model is right for routine filing. PROVIDER-PREFIXED: pydantic-ai reads a bare name as an OpenAI model, so a worker without a prefix is refused at startup |
 | `STIGMERGY_LIBRARIAN_PRICING` | — | `{"<model>": [input, cached input, output]}`, dollars per MILLION tokens, merged per id over `librarian/pricing.py`'s own table. Only the backends that report tokens rather than dollars read it |
-| `STIGMERGY_LIBRARIAN_MAX_TURNS` | 30 | per-item agent bound (the EXPLORING shape only — a structured call has no loop) |
-| `STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS` | 120 | per-item agent bound (enforced by us, not the SDK; the EXPLORING shape only) |
+| `STIGMERGY_LIBRARIAN_MAX_TURNS` | 30 | **DEPRECATED — read by no shipped backend.** It bounded a tool-using conversational loop, and the backend that had one retired; a structured call makes one model call. Still parsed, so it is not silently dropped — but a malformed value fails the boot with a Python error, not a named refusal (`..._TIMEOUT_S` below is the one that is refused by name). Removal is a recorded follow-up |
+| `STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS` | 120 | **DEPRECATED — read by no shipped backend**, same reason as the row above: no agent holds a tool to count calls of |
 | `STIGMERGY_LIBRARIAN_GATHER_TOP_K` | 12 | the STRUCTURED shape only: how many existing pages the gatherer offers the model as overlap candidates |
 | `STIGMERGY_LIBRARIAN_GATHER_EXCERPT_LINES` | 20 | the STRUCTURED shape only: how many lines of each candidate it shows |
 | `STIGMERGY_LIBRARIAN_TIMEOUT_S` | 300 | per-item wall clock (enforced by us) |
@@ -290,17 +290,27 @@ for something else. A flag a human typed must take effect or be refused; being i
 outcome that teaches them the tool lies. `--poll-interval 0` and `--max-attempts 0` are refused for
 the same reason and with their own sentences (a tight claim loop; every delivery starting exhausted).
 
-### Three backends behind one port
+### Two backends behind one port
 
 The agent step is a named, typed port — `librarian.filing_port.FilingAgent`, two keyword-only calls
 (`run` for an ordinary capture, `run_meeting` for a transcript), one `AgentRun` envelope back, one
-fault contract. Three implementations answer it, and `STIGMERGY_LIBRARIAN_BACKEND` picks one:
+fault contract. Two implementations answer it, and `STIGMERGY_LIBRARIAN_BACKEND` picks one:
 
 | Backend | Flows | Ordinary shape | Model string | Cost |
 |---|---|---|---|---|
-| `sdk` | every flow | **exploring** — Read/Glob/Grep, writes the page itself | bare (`claude-sonnet-5`) — the Claude Agent SDK resolves it | the SDK prices each run and the figure is passed through |
-| `double` | every flow | **exploring** — writes the page through the same confinement rule | none — no model runs | `0.0`, and it says so |
 | `pydantic` | every flow | **structured** — no tools, a gathered context, code writes the page | provider-prefixed (`anthropic:claude-sonnet-5`) — pydantic-ai resolves it | computed from tokens through `librarian/pricing.py` |
+| `double` | every flow | **exploring** — writes the page through the same confinement rule | none — no model runs | `0.0`, and it says so |
+
+**A third backend, `sdk`, was retired** ([ADR 033](../decisions/033-structured-filing-flow.md)):
+it drove the Claude Code harness, exploring the checkout with Read/Glob/Grep and writing the page
+itself. Nothing about the port changed when it went, which is what the port is for. A deployment
+still configured for it is **refused at startup by name** — the message says the backend was
+retired rather than mistyped, names `pydantic` and the provider-prefixed model id as the two
+edits it takes, and gives the image rollback (`fly releases` → `fly deploy --image`) for getting a
+worker running again meanwhile. Nothing is lost while it is down: the queue is durable.
+
+The image lost the Node runtime and the agent CLI with it, and `claude-agent-sdk` is no longer a
+dependency of this project.
 
 **A backend DECLARES its ordinary shape; nothing infers one.** `FilingAgent.structured_ordinary` is
 a class attribute `processing._one_pass` reads, and it decides three things: whether the gatherer
@@ -309,7 +319,7 @@ to name a path it wrote (`Outcome.page_path`), and whether code writes the page.
 put the branch inside the worker's knowledge of which classes exist, so a fourth backend would take
 the wrong road by being the wrong class rather than by declaring the wrong thing.
 
-**`pydantic` serves a worker now, and the refusal that said otherwise is gone.** M1 refused it
+**`pydantic` serves a worker, and the refusal that said otherwise is gone.** M1 refused it
 outright, because a worker's queue carries ordinary captures too and a backend serving one `kind`
 would have burned deliveries one row at a time while looking configured
 ([ADR 032](../decisions/032-filing-port-and-pricing-seam.md) D3). It serves both flows since
@@ -317,17 +327,27 @@ would have burned deliveries one row at a time while looking configured
 what was always about the BACKEND, each refused out loud: a model string with no provider prefix
 (pydantic-ai reads a bare name as an OpenAI model, so inheriting it silently would file through a
 provider nobody chose), a model with no configured price, and a missing provider key
-(`openai:`→`OPENAI_API_KEY`, `anthropic:`→`ANTHROPIC_API_KEY`, `google-gla:`→`GEMINI_API_KEY`; an
-unrecognized prefix is a warning, not a refusal — the adapter stays provider-agnostic). The
-librarian skill is proven at the base commit for `sdk` and `pydantic` alike: both inject it, and
-only the ENVIRONMENT preamble in front of it differs.
+(`anthropic:`→`ANTHROPIC_API_KEY`, `google-gla:`→`GEMINI_API_KEY`, `openai:`→`OPENAI_API_KEY`; an
+unrecognized prefix is a warning, not a refusal — the adapter stays provider-agnostic).
 
-**A spelling belongs to a backend, and BOTH mistakes are refused.** The mirror of the rule above is
-enforced too: `backend=sdk` with a provider-prefixed id (`openai:gpt-5.6-terra`) is refused at
-startup, because the Claude Agent SDK has never heard of a provider prefix and the operator would
-otherwise learn it from a failed run. Refusing one direction and silently accepting the other
-caught exactly half of the same configuration mistake. The `double` reads no model at all and is
-silent about both.
+**One of those keys is a dead end on the DEPLOYED worker, by design.** `stigmergy-librarian-boot`
+strips `OPENAI_API_KEY` from the container before exec'ing the loop — it is the READ path's embedder
+key and Fly secrets are app-wide, so stripping it is the only place the write path can be kept
+independent of it. An `openai:` filing model therefore meets the missing-key refusal in the
+container whatever the operator exports, while working perfectly on a laptop. The refusal names that
+case specifically and offers only models the deployed worker can actually authenticate as; the
+intersection of the two tables is pinned by a test, so a second read-path-only key cannot silently
+make another provider family undeployable. The
+librarian skill is proven at the base commit for every backend that INJECTS it
+(`agent.SKILL_READING_BACKENDS`); the offline double reads none.
+
+**A model spelling belongs to a backend.** While two real backends existed the rule ran both ways
+— a bare id was refused on the one that wanted a prefix, and a prefixed id on the one that wanted
+a bare name — because refusing one direction and silently accepting the other caught exactly half
+of the same configuration mistake. One backend is left and the surviving half is the whole of it:
+a bare id is refused, and the message says so in the terms a deployment mid-upgrade needs, since
+changing the backend and not the model lands exactly there. The `double` reads no model at all and
+is silent about it.
 
 **Why an unpriced model is a refusal rather than a zero.** `report.cost_usd` is the row an operator
 asks "what did this cost?", and a backend that reports only token counts can answer it only through
@@ -506,8 +526,8 @@ actually wrote.
 Reports also carry `cost_usd` — the real dollar spend of the item's agent passes, a pass that died
 mid-run included (the fault carries its own figure on the exception, exactly like `agent_attempts`;
 a timeout is the honest `0.0`, since nothing ever arrived to price). Where the per-run figure comes
-from is the backend's business and the report's shape does not change with it: the `sdk` backend is
-priced by its own SDK and passes that number through, while a backend that reports only TOKENS has
+from is the backend's business and the report's shape does not change with it: a backend priced by
+its own provider passes that number through, while a backend that reports only TOKENS has
 them multiplied by `librarian/pricing.py`'s configured $/MTok table. The rule: present, possibly
 `0.0`, on every outcome that passed
 through an agent loop or the failure road — filed, refused, parked and `failed` alike — and
@@ -828,16 +848,24 @@ refusal that somehow does is withheld rather than echoed.
   section.
 - **Do not suggest `--backend double` as a workaround** for a missing credential. It files fabricated
   pages, and offering it as a fix invites committing them to the company's knowledge.
-- **Do not give a pre-flight check two outcomes when it cannot actually tell the two apart.** The
-  credential check shipped as present/absent and refused a WORKING configuration: an interactively
-  authenticated Claude Code keeps its login under the CLI's config directory, on macOS in the
-  Keychain, so there is no variable and no file to see — and no startup check can distinguish that
-  from "never authenticated" without spending a request. It would have blocked `make librarian-walk`
-  on the machine the walk was for, i.e. become the fifth of the four detours it was written to
-  prevent. The shape that works is three-way (`agent.credential_status`): proceed, proceed **while
-  naming what the run is relying on**, or refuse. When a check is about to refuse something it only
-  suspects, make it say so instead — a refusal an operator has to argue with costs more than the
-  failure it prevents.
+- **Do not give a pre-flight check two outcomes when it cannot actually tell the two apart.** This
+  was learned on a check that no longer exists, and it is written down here rather than deleted with
+  it, because the next pre-flight anybody adds will meet the same temptation. The retired backend's
+  credential check shipped as present/absent and refused a WORKING configuration: an agent CLI
+  authenticated interactively keeps its login under its own config directory — on macOS in the
+  Keychain, so there is no variable AND no file to see — and no startup check can tell that from
+  "never authenticated" without spending a request. It would have blocked `make librarian-walk` on
+  the machine the walk was for, i.e. become the fifth of the four detours it was written to prevent.
+  The shape that worked was three-way: proceed, proceed **while naming what the run is relying on**,
+  or refuse. When a check is about to refuse something it only suspects, make it say so instead — a
+  refusal an operator has to argue with costs more than the failure it prevents.
+
+  **The surviving provider-key pre-flight is honestly two-way, and that is not a regression.** A key
+  is an environment variable that is either exported or not; there is no second, unobservable channel
+  to be wrong about, so present/absent is the whole truth rather than half of it. The rule is "match
+  the check's shape to what it can actually observe", not "always use three outcomes" — and the one
+  place that pre-flight cannot observe the truth from the variable alone, the deployed worker's
+  stripped `OPENAI_API_KEY`, is exactly where it stops guessing and names the dead end instead.
 
 ## Tests
 
@@ -849,9 +877,10 @@ refusal that somehow does is withheld rather than echoed.
 | `tests/librarian/test_cli_run.py` | `run` interrupted for real; the explicit-zero refusals |
 | `tests/librarian/test_cli_status.py` | depth, the stale-lease verdict, the not-enough-data framing |
 | `tests/librarian/test_cli_once.py` | `once`, including "the command the message names really works" |
-| `tests/librarian/test_startup_preflight.py` | the credential and push-identity refusals, with their benign twins |
+| `tests/librarian/test_startup_preflight.py` | the push-identity refusal and the malformed-registry refusals, with their benign twins |
+| `tests/librarian/test_backend_retirement.py` | the retired-backend refusal and its benign twin (a `pydantic` worker boots) |
+| `tests/librarian/test_skill_reading.py` | `read_skill`'s refusals, and the skill proven at the base commit |
 | `tests/librarian/test_gitcmd_unit.py` | worktrees, the diff's blind spots, rebase-and-retry, the pushed sha |
-| `tests/librarian/test_agent_sdk_options.py` | what the SDK is actually confined by (no key, no subprocess) |
 | `scripts/e2e_librarian.py` | the whole loop against a real bare git remote, from empty volumes |
 
 **No test needs an API key.** The agent step runs against the offline double, which hallucinates a

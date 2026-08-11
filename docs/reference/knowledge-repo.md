@@ -25,7 +25,7 @@ What each one needs before it will run at all:
 | `stigmergy-index --rebuild` | **at least one page** under `wiki/` · `sources/` · `views/` | `EmptyCorpusError`. And since the server refuses to serve an empty index, this is what makes a truly empty repo unusable rather than merely quiet: you cannot index it, so you cannot serve it, so you cannot `brain_submit` into it |
 | `stigmergy-server` | `ops/identities.json` | stdio refuses to start; HTTP refuses every request with the generic `401`. Never an open brain, on either transport |
 | the librarian worker (either backend) | `.claude/tools/stigmergy_lint.py`, **in the commit it files against** | `LibrarianConfigError` at startup, before a single item is claimed |
-| the librarian worker, `--backend sdk` | `.claude/skills/librarian/SKILL.md`, same commit | the same refusal — the real agent has no operating procedure without it |
+| the librarian worker, `--backend pydantic` | `.claude/skills/librarian/SKILL.md`, same commit | the same refusal — the real agent has no operating procedure without it |
 | `stigmergy-entities` / an approved entity proposal | `ops/templates/entity.md` | `EntityError` — a new entity page is that template with its identity fields filled in, and the command deliberately carries no copy of its own |
 | anchoring to succeed rather than park | **at least one entity** in `ops/entity-registry.json` | nothing breaks, but every capture asks about the name it met and parks. That is the design working; it is still not a first run anybody enjoys |
 

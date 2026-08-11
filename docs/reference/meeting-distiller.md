@@ -58,16 +58,20 @@ capture_queue row, kind="meeting" (claimed by the SAME librarian worker, same fe
 filed: report.filed_meeting names every page path and every decision's anchor outcome
 ```
 
-**Read the diagram's second box twice: the agent does not write pages.** Its allow-list is
-`agent.MEETING_ALLOWED_TOOLS` — exactly one tool, `Write` — with a `PreToolUse` hook
-(`confine_writes`) refusing every target but its own outcome file, and it returns the decisions,
-their anchors and the drafted prose as DATA. `processing._write_meeting_pages` builds and writes
-every page of the set from that one structured object. Everything downstream — the stamp, all eight
-gates, the cross-check, the commit — is unchanged and unaware. The earlier shape, where the agent
-made Write/Edit/Read/Glob/Grep calls inside the worktree and separately DECLARED what it had
-written, carried two independent claims that could disagree; collapsing them removed the
-disagreement rather than policing it. `Read`/`Glob`/`Grep`/`Edit` are not merely unused: they are on
-`MEETING_DISALLOWED_TOOLS` beside the ordinary agent's own denials.
+**Read the diagram's second box twice: the agent does not write pages.** It holds no tool at all
+and returns the decisions, their anchors and the drafted prose as DATA;
+`processing._write_meeting_pages` builds and writes every page of the set from that one structured
+object. Everything downstream — the stamp, all eight gates, the cross-check, the commit — is
+unchanged and unaware. The earlier shape, where the agent made Write/Edit/Read/Glob/Grep calls
+inside the worktree and separately DECLARED what it had written, carried two independent claims
+that could disagree; collapsing them removed the disagreement rather than policing it.
+
+There was a middle state worth naming, because it is what "no tool at all" replaced: a tool
+allow-list of exactly one entry (`Write`), a denial list beside it, and a `PreToolUse` hook
+refusing every target but the agent's own outcome file. That machinery configured a harness this
+platform no longer drives ([ADR 033](../decisions/033-structured-filing-flow.md)), and what
+replaces it is stronger rather than thinner — there is no write to refuse, because there is no
+tool to make one with.
 
 ## Why filing is atomic
 
@@ -345,17 +349,19 @@ reads perfectly plausibly on its own.
   [`../../src/stigmergy/capture/index.md`](../../src/stigmergy/capture/index.md).
 - `librarian.processing.process_meeting_item` and its private helpers — the flow itself. See
   [`../../src/stigmergy/librarian/index.md`](../../src/stigmergy/librarian/index.md).
-- `librarian.agent.SdkAgent.run_meeting` / `build_meeting_prompt` / `read_meeting_outcome` — the
-  agent side: a different system prompt (the brief, not the librarian skill), ONE tool instead of
-  the ordinary agent's five (`ALLOWED_TOOLS`), and a different outcome parse
-  (`parse_meeting_outcome`, a page SET rather than one page). There is no page-writing lane left to
-  name: `_MEETING_NO_PAGE_WRITES_RE` is literally `re.compile(r"(?!)")`, a pattern that matches
-  nothing, and the single write the agent is permitted is allowed by `confined_write`'s
-  unconditional outcome-file exception. There is no read-confining hook either, because
-  Read/Glob/Grep are not in the allow-list for one to scope. What did NOT go: `setting_sources=[]`,
-  `mcp_servers={}`, `strict_mcp_config=True` and the environment allow-list — they guard the model
-  PROCESS regardless of which tools it holds, so removing them would be a real loss of defence in
-  depth rather than a tidy-up.
+- `librarian.agent.build_meeting_prompt` / `read_meeting_outcome` — the agent side: a different
+  system prompt (the brief, not the librarian skill), no page-writing tool at all, and a different
+  outcome parse (`parse_meeting_outcome`, a page SET rather than one page). The single write an
+  agent is permitted on this flow is allowed by `confined_write`'s unconditional outcome-file
+  exception, and code is the sole author of every page in the set. The tool allow-lists, the
+  no-page-writes pattern and the permission hooks that enforced all of this went with the
+  Claude-Code backend ([ADR 033](../decisions/033-structured-filing-flow.md)); the surviving
+  backend holds no tool, so the property is structural rather than configured. The harness settings
+  that hardened the model PROCESS itself — no repo-declared settings files, no MCP servers from any
+  source, an environment allow-list in front of the subprocess — went with the subprocess they
+  configured. They were defence in depth rather than a tidy-up, and what replaces them is that
+  there is no subprocess and no configuration surface left to harden: one in-process call to a
+  provider, with the brief injected by us.
 - `librarian.processing.MEETING_WRITE_PREFIXES` — the same three folders, the FLOW's own
   placement contract (where CODE may create a page for this capture) rather than the agent's lane.
   `gate_zone` still judges the diff against them: a defence against a bug in code's construction
@@ -380,12 +386,12 @@ reads perfectly plausibly on its own.
   the port documents as a legitimate answer rather than a missing count; and its cost is computed
   from tokens through `librarian/pricing.py` instead of arriving pre-priced. **THREE things differ
   in the prompt, and the third is an admitted contradiction.** Two are caller-declared parameters on
-  the SAME builders the SDK backend uses — the environment paragraph (which tools the agent holds)
+  the shared builders — the environment paragraph (which tools the agent holds)
   and the outcome-channel sentence (how its account travels home) — and the preamble around them is
-  composed from shared pieces, so the SDK's own prompt is byte-identical to what it always was. The
-  third is that the BRIEF still tells its reader, in its own voice, that it holds a `Write` tool and
-  writes `.librarian-outcome.json`: true for the SDK backend, false for this one, and the brief is
-  the knowledge repo's text that neither backend may reword unilaterally. So this backend's preamble
+  composed from pieces written once, which is what kept two backends from drifting while there were
+  two. The third is that the BRIEF still tells its reader, in its own voice, that it holds a `Write`
+  tool and writes `.librarian-outcome.json` — false for every backend that exists now, and the
+  brief is the knowledge repo's text that this platform may not reword unilaterally. So this backend's preamble
   carries an explicit OVERRIDE paragraph immediately before the brief — the tool and the file
   describe the SHAPE of the account, every other word of the skill applies unchanged — rather than
   leaving a model to guess which half of a contradiction is operative.

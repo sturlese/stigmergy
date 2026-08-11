@@ -96,14 +96,26 @@ _PENDING_ALLOWED = (REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",)
 # A deliberate re-freeze updates these three numbers IN THE SAME COMMIT as the bytes, which is the
 # review moment this pin exists to force — and, per `evals/README.md`, retires the series with it.
 #
-# The librarian brief's pin moved once, deliberately, in the commit that rewrote it: ADR 033 made
-# the brief backend-NEUTRAL (no tool mechanics in it at all), which is not an edit to a yardstick
-# but a new yardstick — so it retires the series with it, per `evals/README.md`.
+# The librarian brief's pin has moved TWICE, deliberately, and both moves were the same kind of
+# event: not an edit to a yardstick but a NEW yardstick, which retires the series with it per
+# `evals/README.md`.
+#
+#   1. ADR 033 rewrote the brief backend-NEUTRAL (no tool mechanics in it at all).
+#   2. The `sdk` retirement closed that rewrite's last debt: the brief's environment paragraph still
+#      told its reader that "some runs of this skill hold tools and a checkout, and write the page
+#      themselves", which stopped being true of ANY run when the tool-holding backend went. That
+#      paragraph is now the tool-less statement, at knowledge-repo commit
+#      `c1e0996ed497e70a9df82661c367294b48207a16` — the sha all five provenance records carry.
+#
+# The other two numbers did NOT move with it, and that is the fact worth reading off this block: one
+# freeze, one commit does not mean one freeze, three edits. The linter and the meeting brief are
+# byte-identical at that commit and at its predecessor, which is exactly what
+# `PROVENANCE.json`'s `stigmergy_sha_note` already claims about the tree.
 FROZEN_SHA256 = {
     ".claude/tools/stigmergy_lint.py":
         "5c914e43a33e05a276142b26cd6ebc3ff84479b43703c783b9959e6a28948f28",
     ".claude/skills/librarian/SKILL.md":
-        "37bf1faabfd7a0e88a6a9d0c8992f890db6cc0fac636331e944ec97ee28ac319",
+        "1a05db240cbfb7207c353534b0146eff96af2a2d6ddf700e89b5cb79f4ce6635",
     ".claude/skills/meeting-distiller/SKILL.md":
         "b3686f91666c5fa6f9f9a2aa602230db716abbf503792c60d64f7d0e2300476a",
 }

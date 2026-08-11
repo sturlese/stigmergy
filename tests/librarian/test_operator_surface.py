@@ -1,14 +1,20 @@
 """The librarian's OPERATOR surface, checked against the repo rather than against prose.
 
 **A message containing a command is an executable promise**: if a message names a command, a test
-runs that command and asserts it does what the message claims. Two of the librarian's
-fail-closed refusals point an operator somewhere — `worker._check_agent_credential` names
-`make librarian-walk`, `worker._check_push_identity` names `docs/reference/operator-runbook.md` — and
-a refusal that sends somebody to a target or a document that does not exist is worse than one that
-says nothing, because it burns their trust in the next message too.
+runs that command and asserts it does what the message claims. The librarian's fail-closed refusals
+point an operator somewhere — `worker._check_push_identity` names
+`docs/reference/operator-runbook.md` — and a refusal that sends somebody to a target or a document
+that does not exist is worse than one that says nothing, because it burns their trust in the next
+message too.
 
 `make` is invoked with `-n` (dry run) throughout: the point is that the target exists and does what
 the message implies, not that a real filing run happens inside a test suite.
+
+**The newest bearer of that rule is not in this file, deliberately.**
+`agent.RETIRED_BACKENDS`' refusal prints two `fly` commands, a runbook section and a model id, and
+all four are executed in `tests/librarian/test_backend_retirement.py` — beside the rest of the
+retirement's contract, because that message is only readable as a whole. This note is the index
+entry, so the doctrine's home still knows where its promises are being kept.
 """
 import pathlib
 import re
@@ -18,8 +24,7 @@ import subprocess
 import pytest
 
 from stigmergy.librarian import agent as agent_module
-from stigmergy.librarian import githubapp, worker
-from stigmergy.librarian.errors import LibrarianConfigError
+from stigmergy.librarian import githubapp, pydantic_backend
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 MAKEFILE = ROOT / "Makefile"
@@ -34,66 +39,90 @@ def _make(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["make", "-n", *args], cwd=str(ROOT), capture_output=True, text=True)
 
 
-def _credential_refusal() -> str:
-    with pytest.raises(LibrarianConfigError) as exc_info:
-        worker._check_agent_credential({})
-    return str(exc_info.value)
+# ── the COMMAND the agent-credential refusal named — GONE with the `sdk` backend ──────────────────
+# **Three tests and one helper were deleted here, and the message they pinned no longer exists.**
+#
+#   `_credential_refusal`
+#   `test_the_credential_refusal_names_both_ways_of_authenticating`
+#   `test_the_command_the_credential_refusal_names_is_a_real_command`
+#   `test_the_make_target_the_credential_refusal_names_actually_exists`
+#
+# They held `worker._check_agent_credential` to its own promise. It named TWO ways of
+# authenticating the Claude Code CLI — three environment variables, or an interactive `claude`
+# login — and one make target that exports the first; so a test asserted every variable appeared,
+# a test ran `claude --version` when the CLI was on PATH, and a test ran `make -n` on the target
+# it named. The refusal retired with the backend that needed a CLI at all.
+#
+# **The RULE they enforced outlives them** and is still enforced in this file by the push-identity
+# refusal's runbook tests below. The credential doctrine itself moved to
+# `tests/librarian/test_pydantic_preflight.py`, where the surviving pre-flight lives: a missing
+# provider key is refused at STARTUP, the message names the VARIABLE, and it never offers
+# `--backend double` as the way out.
+#
+# **Nothing replaced the `claude --version` test, and nothing should.** It was the only test in this
+# repo that shelled out to a third-party binary it did not ship, and it existed because the refusal
+# promised one — the CLI is gone, so there is no such promise left to keep.
+#
+# The RULE it came from is unretired and is being kept in three places, which is what to read
+# instead of this deletion: a make target and a document below, and the retirement refusal's two
+# `fly` commands over in `test_backend_retirement.py` (see this file's module docstring for why
+# they live there). A refusal that promises a command still owes a test that runs it.
 
 
-# ── the OTHER way of having a credential, which the refusal used not to mention ────────────────────
-# `agent.credential_status` has three answers, and one of them — an interactive CLI login, which on
-# macOS is the Keychain — is how most machines are actually authenticated. The refusal named only the
-# environment variables, so an operator whose laptop has the working configuration was told to go get
-# a key they do not need. Both routes are named now, and both halves of the message are asserted: the
-# variables come from the module's own tuple, and the command is a command, so a test runs it.
-def test_the_credential_refusal_names_both_ways_of_authenticating():
-    message = _credential_refusal()
-    for name in agent_module.CREDENTIAL_ENV:
-        assert name in message
-    assert "`claude`" in message, (
-        "the refusal no longer mentions the interactive login — `credential_status` accepts it "
-        "(CREDENTIAL_AMBIENT), so a refusal that omits it sends a correctly-configured operator "
-        "hunting for a key they do not need")
+def _backends_named(invocation: str) -> list[str]:
+    """Which shipped backends a recipe line names, off `agent.BACKENDS` rather than a literal.
 
-
-def test_the_command_the_credential_refusal_names_is_a_real_command():
-    """The executable promise, as far as it can honestly go here: authenticating cannot run in a
-    suite, but `claude` either exists as a runnable command or the message names something that
-    does not."""
-    named = re.findall(r"`(claude)`", _credential_refusal())
-    assert named, "update this test with whatever command the refusal now names"
-    found = shutil.which("claude")
-    if found is None:
-        pytest.skip("the Claude Code CLI is not on PATH on this machine (CI); nothing to run")
-    result = subprocess.run([found, "--version"], capture_output=True, text=True, timeout=60)
-    assert result.returncode == 0, f"`claude --version` exited {result.returncode}: {result.stderr}"
-
-
-# ── the target the credential refusal names ───────────────────────────────────────────────────────
-def test_the_make_target_the_credential_refusal_names_actually_exists():
-    """The message says `make librarian-walk` includes and exports the local env file. If that target
-    did not exist, an operator following the one instruction in the refusal would get
-    "No rule to make target"."""
-    named = re.findall(r"`make ([a-z0-9-]+)`", _credential_refusal())
-    assert named, "the credential refusal no longer names a make target — update this test with it"
-    for target in named:
-        result = _make(target)
-        assert "No rule to make target" not in result.stderr, f"make {target}: {result.stderr}"
+    Extracted from the test below so the guard can be aimed at a line this suite controls — a
+    derived assertion that has never been shown to fail on the thing it forbids is a derived
+    assertion nobody has checked. `test_the_walk_target_guard_bites_on_the_backend_it_forbids`
+    is that check.
+    """
+    return [b for b in agent_module.BACKENDS if f"--backend {b}" in invocation]
 
 
 def test_the_walk_target_runs_the_librarian_with_the_real_agent_backend():
     """What the message CLAIMS the target does: gives a walk the environment and the real agent. A
     target that quietly ran the offline double would file fabricated pages into the company's repo, so
-    `--backend sdk` being explicit in it is the assertion."""
+    a REAL backend being explicit in it is the assertion.
+
+    The asserted value moved with the retirement (`--backend sdk` → `--backend pydantic`) and the
+    argument did not move at all: it is about the double never being what a walk silently runs, not
+    about which real backend is named. Read off `agent.BACKENDS` rather than typed, so the day a
+    third backend arrives this asserts the target names one of them and not a stale string.
+    """
     result = _make("librarian-walk")
     # The INVOCATION line, isolated from the guard message above it (which legitimately contains the
     # word "run" in prose — matching on the whole recipe made this test read the message, not the
     # command).
     invocation = next(line for line in result.stdout.splitlines()
                       if "stigmergy-librarian" in line and "echo" not in line)
-    assert "--backend sdk" in invocation
+    named = _backends_named(invocation)
+    assert named, f"make librarian-walk names no known backend: {invocation!r}"
+    assert "double" not in named, (
+        "make librarian-walk runs the OFFLINE DOUBLE, which fabricates pages — this target files "
+        "into the operator's real knowledge repo")
     assert invocation.rstrip().endswith("once") or " once " in invocation   # one item, by hand
     assert " run" not in invocation
+
+
+@pytest.mark.parametrize("invocation, expected", [
+    ("\t$(VENV)/bin/stigmergy-librarian --backend double once", ["double"]),
+    ("\t$(VENV)/bin/stigmergy-librarian --backend pydantic once", ["pydantic"]),
+    ("\t$(VENV)/bin/stigmergy-librarian once", []),
+])
+def test_the_walk_target_guard_bites_on_the_backend_it_forbids(invocation, expected):
+    """**The benign twin AND the sabotage, for a guard that was rewritten during the retirement.**
+
+    The assertion above stopped being a literal (`--backend sdk`) and became a derived one, and a
+    derived assertion can go vacuous in a way a literal cannot — if it selected nothing, or matched
+    a substring of something else, `assert "double" not in named` would pass on a Makefile that
+    runs the double into somebody's real knowledge repo.
+
+    So the predicate is aimed here at all three lines that matter: the forbidden one (which must be
+    SEEN, or the guard cannot refuse it), the shipped one, and a line naming no backend at all
+    (which the `assert named` half is what catches).
+    """
+    assert _backends_named(invocation) == expected
 
 
 def test_the_status_target_runs_status_and_nothing_that_writes():
@@ -201,7 +230,10 @@ def test_the_runbook_documents_every_librarian_environment_variable():
                  "STIGMERGY_LIBRARIAN_MAX_TURNS", "STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS",
                  config.TIMEOUT_ENV, "STIGMERGY_LIBRARIAN_DEDUP_WINDOW_S",
                  "STIGMERGY_LIBRARIAN_WORKTREE_ROOT", "STIGMERGY_GITLEAKS_BIN",
-                 *agent_module.CREDENTIAL_ENV[:1]):
+                 # The filing agent's own credential. Derived from the live provider table — it
+                 # used to come from `agent.CREDENTIAL_ENV`, the retired CLI's tuple, and it is the
+                 # same variable either way because the shipped default is an `anthropic:` model.
+                 pydantic_backend.PROVIDER_KEY_ENV["anthropic"]):
         assert name in documented, f"{name} is documented nowhere"
 
 

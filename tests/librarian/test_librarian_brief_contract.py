@@ -3,10 +3,11 @@
 `test_meeting_brief_contract.py`'s twin, for the brief the ORDINARY flow reads — and it exists for
 the reason that file's own history gives: dropping a rule from one side while the other keeps
 promising it is invisible to 3,000 green tests. ADR 033 made the exposure worse rather than better.
-The brief is now backend-NEUTRAL — it documents a worker that hands the agent its context and
-writes the page from a structured account — while the `sdk` backend still explores and still
-writes, and the difference lives in an ENVIRONMENT preamble on the platform side. Two shapes, one
-brief, and nothing but a table like this one notices when the brief starts describing neither.
+The brief is backend-NEUTRAL — it documents a worker that hands the agent its context and
+writes the page from a structured account — and any backend that departs from it says so in an
+ENVIRONMENT preamble on the platform side. One shape answers it today; when a second one existed
+the two differed only in that preamble, and nothing but a table like this one notices when the
+brief starts describing neither.
 
 **What this test can and cannot prove.** A fully automated two-sided contract check would need to
 parse English prose into formal rules, which nothing here attempts. What it DOES check, honestly:
@@ -26,10 +27,11 @@ constant something reads, a function something calls, or a finding string someth
 **The skeleton the developer landed has been GROWN, and the two declared gaps are closed.** The
 brief's three-outcome anchoring rule now has three rows instead of one — they are three different
 decisions with three different code paths, and a single row went green while two of them were
-unenforced. The SDK override note is pinned too: it is the one place the platform tells an agent
-that part of the brief below does not describe its run, and an override that stopped matching the
-brief it corrects would be worse than no override, because a model would then be reconciling two
-texts that disagree about a third thing.
+unenforced. An OVERRIDE note was pinned here too, on the same argument the meeting flow's still is:
+it is the one place the platform tells an agent that part of the brief below does not describe its
+run, and an override that stopped matching the brief it corrects would be worse than no override.
+That row retired with the backend that carried the note — see the table's own tombstone, which also
+names the paragraph the knowledge repo still owes.
 
 What the table also covers now, in the order the flow meets it: what the worker HANDS the agent
 (each of the four gathered fields, against the gatherer that builds it), what the agent may
@@ -291,14 +293,35 @@ RULE_TABLE = [
     ("- **Do not write frontmatter.** No `---` block, no `type:`, no `title:`, no `tags:`, no",
      "def _build_ordinary_page("),
 
-    # ── the SDK override: the one place the platform says the brief does not describe this run ──
-    # The brief is written for the STRUCTURED flow (ADR 033 D4), so the `sdk` backend is the one
-    # that departs from it — and it says so in a NAMED note immediately in front of the brief.
-    # Both directions matter here in an unusual way: the brief phrase is the SENTENCE THE OVERRIDE
-    # CORRECTS, so if the brief ever stops saying it, the override is correcting a contradiction
-    # that no longer exists and should retire rather than sit there forever.
-    ("**One thing about your environment, and it is above this skill rather than in it.** Some "
-     "runs of", "ORDINARY_SDK_OVERRIDE_NOTE"),
+    # ── RETIRED: the ordinary flow's override row ────────────────────────────────────────────
+    # The pair was:
+    #
+    #   ("**One thing about your environment, and it is above this skill rather than in it.** Some "
+    #    "runs of", "ORDINARY_SDK_OVERRIDE_NOTE")
+    #
+    # It paired the brief's "some runs of this skill hold tools and a checkout, and write the page
+    # themselves" against the platform constant that told such a run exactly what changed. The
+    # constant retired with the only backend that held tools, so the CODE side of this row is gone.
+    #
+    # **The BRIEF side landed too, in the knowledge repo, where it had to.** The paragraph said
+    # "some runs of this skill hold tools and a checkout" — true while two backends existed, false
+    # of every run once one did — and the platform reads that file but may not reword it. Commit
+    # `c1e0996ed497e70a9df82661c367294b48207a16`, "chore(skills): the brief describes one run
+    # style", rewrote the environment note to describe ONE run style. The frozen mirror this file
+    # greps is resynced to those bytes:
+    #
+    #   git show c1e0996:.claude/skills/librarian/SKILL.md | shasum -a 256
+    #   1a05db240cbfb7207c353534b0146eff96af2a2d6ddf700e89b5cb79f4ce6635
+    #
+    # So there is no pending half and no row to re-add: the platform constant is gone, the brief
+    # sentence it corrected is gone, and the pair retired together rather than one side outliving
+    # the other — which is the state this table's own doctrine says an override should reach.
+    #
+    # The row is DELETED rather than kept pointing at something, and deliberately not re-aimed at a
+    # nearby marker: `ORDINARY_SDK_OVERRIDE_NOTE` still appears in `agent.py` as the name inside its
+    # own retirement comment, so a row left in place would have gone green on a tombstone — a
+    # contract check passing because somebody wrote the constant's name in prose is worse than no
+    # row at all.
     ("**And you write no file.** You return ONE account — the structured object documented at the "
      "end of", "build_filing_header"),
 ]

@@ -45,13 +45,9 @@ a literal-word expectation cost the QA golden; this set does not repeat it.
   # keyless plumbing self-check (the offline double, NOT a measurement — appends no history row)
   python evals/run_filing.py --backend double
 
-  # the real measurement (needs ANTHROPIC_API_KEY and the `claude` CLI on PATH)
-  python evals/run_filing.py --backend sdk --model claude-sonnet-5 \
-      --report evals/out/filing-sonnet-5.json
-
-  # the structured flow, every capture, on the pydantic-ai backend (ADR 033)
+  # the real measurement (needs the model's own provider key — ANTHROPIC_API_KEY here)
   python evals/run_filing.py --backend pydantic \
-      --model anthropic:claude-sonnet-5 --report evals/out/filing-structured.json
+      --model anthropic:claude-sonnet-5 --report evals/out/filing-sonnet-5.json
 
 **A subset is a different measurement, and says so.** `--kinds` scores only the captures of the
 named kinds, and everything downstream is recomputed from that subset rather than from the shipped
@@ -158,7 +154,7 @@ _STOPWORDS = frozenset({"a", "an", "the", "and", "or", "of", "for", "to", "in", 
 _WORD_SPLIT_RE = re.compile(r"[^a-z0-9]+")
 
 
-# ── pure scoring: no Postgres, no git, no SDK, no model ────────────────────────────────────────
+# ── pure scoring: no Postgres, no git, no framework, no model ──────────────────────────────────
 # Everything below this line is a function of data. `_run` builds the `observed` dicts from a real
 # run and hands them here; a keyless test builds the same dicts by hand and gets identical scores.
 # That is the whole seam, and it is why the heavy imports live inside `_run` rather than at module
@@ -492,7 +488,7 @@ def render(report: dict) -> str:
 def _history_metrics(report: dict, phases: list, provenance: dict) -> dict:
     """The `metrics` dict a real-instrument run hands `eval_history.append_run` — pulled out of
     the append site so a typo in a key name is a keyless test's problem, never something that
-    first shows up in the durable `evals/history.ndjson` artifact a paid SDK run writes to.
+    first shows up in the durable `evals/history.ndjson` artifact a paid run writes to.
 
     A pure function of what the caller already has in hand: `report` (`aggregate`'s own output,
     for `backend`/`model`/`total_cost_usd`/`agent_passes`/`wall_s`/`facets`), `phases` (for
@@ -659,8 +655,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the frozen mini knowledge repo to file into (default: evals/filing/repo)")
     ap.add_argument("--manifest", default=str(FIXTURE / "captures" / "manifest.json"))
     ap.add_argument("--expectations", default=str(FIXTURE / "expected" / "expectations.json"))
-    ap.add_argument("--backend", choices=["sdk", "double", STRUCTURED_BACKEND], default="sdk",
-                    help="the agent backend (default: sdk — the real measurement)")
+    ap.add_argument("--backend", choices=[STRUCTURED_BACKEND, "double"],
+                    default=STRUCTURED_BACKEND,
+                    help=f"the agent backend (default: {STRUCTURED_BACKEND} — the real "
+                         f"measurement; 'double' is the keyless plumbing self-check)")
     ap.add_argument("--model", default=None,
                     help="the librarian model (default: librarian Settings' own default). The "
                          f"{STRUCTURED_BACKEND!r} backend needs a provider-prefixed id, e.g. "

@@ -1,9 +1,12 @@
 """`librarian.agent`'s pure, offline-reachable surface: the UNTRUSTED-DATA fence, the prompt
-builder, the outcome-file channel, and the `backend` dispatch. `SdkAgent._run` itself is out of
-scope — it needs a real Agent SDK session and a key, and no test may need an API key;
-`test_architecture.py` already pins that it is never imported at module level.
+builder, the outcome-file channel, the write-confinement rule, and the `backend` dispatch.
+
+Everything here runs with no key and no model. A backend's own model call is out of scope by the
+same rule that keeps this suite keyless — it is exercised against an injected offline model in
+`test_filing_port_conformance.py`, and against a real provider only in the golden filing eval.
 """
 import json
+import re
 import unicodedata
 
 import pytest
@@ -176,6 +179,25 @@ class _FakeSettings:
         self.backend = backend
 
 
+def test_the_shipped_backends_are_exactly_the_two_that_survived_the_retirement():
+    """**The tuple itself, by value.** Everything else about backends in this suite is DERIVED from
+    `agent.BACKENDS` — the port conformance set, the CLI's `choices`, the eval runner's `--backend`,
+    the walk target's guard — which is the right shape and leaves exactly one thing unpinned: the
+    tuple. A derived assertion cannot notice a member being added or removed, because it moves with
+    it.
+
+    So this is where a backend arriving or leaving becomes a deliberate act with a test to update.
+    ORDER is part of it: it is what an operator reads in `invalid librarian backend 'x' (use one
+    of: ...)` and in `--help`, and the real one belongs first.
+    """
+    assert agent.BACKENDS == ("pydantic", "double")
+    assert agent.PYDANTIC_BACKEND == "pydantic"
+    assert "sdk" not in agent.BACKENDS, (
+        "the retired backend is back in the dispatch tuple — `agent.RETIRED_BACKENDS` and its "
+        "refusal (tests/librarian/test_backend_retirement.py) are written for a value that is NOT "
+        "in this tuple, and a value in both would refuse nothing")
+
+
 def test_build_agent_dispatches_double_to_the_offline_double():
     built = agent.build_agent(_FakeSettings("double"))
     assert isinstance(built, DoubleAgent)
@@ -186,12 +208,19 @@ def test_build_agent_rejects_an_unknown_backend_rather_than_falling_through():
         agent.build_agent(_FakeSettings("bogus"))
 
 
-def test_build_agent_never_imports_the_sdk_module_for_the_double_backend():
-    """Belt-and-suspenders alongside `tests/test_architecture.py`'s static check: actually
-    BUILDING a double-backend agent must not have pulled `claude_agent_sdk` into `sys.modules`."""
-    import sys
-    agent.build_agent(_FakeSettings("double"))
-    assert "claude_agent_sdk" not in sys.modules
+# RETIRED with the `sdk` backend: `test_build_agent_never_imports_the_sdk_module_for_the_double_
+# backend`. It built a double-backend agent and asserted `claude_agent_sdk` was absent from
+# `sys.modules` afterwards — the dynamic twin of the static import ban in `tests/test_architecture.
+# py`, which retired for the same reason: that package is no longer a dependency of this project, so
+# neither check could go red again whatever anybody wrote.
+#
+# **It is not re-aimed at `pydantic_ai`, and the reason is worth recording rather than rediscovering
+# by writing the test and watching it fail.** This assertion only ever worked because nothing ELSE
+# in the suite imported that package. `pydantic_ai` is loaded by other modules in any real session,
+# so an in-process `not in sys.modules` for it is red from the first import that has nothing to do
+# with `build_agent`. A meaningful version has to run OUT OF PROCESS — the shape
+# `tests/evals/test_filing_scorer.py` already uses for its own heavy-import guard — and the static
+# ban in `test_architecture.py` covers the mistake this was belt-and-suspenders for.
 
 
 # ── write confinement: a NEW page in the lane, and nothing else ─────────────────────────────────
@@ -241,6 +270,53 @@ def test_the_agent_can_still_iterate_on_the_draft_it_is_writing(tmp_path):
 def test_the_outcome_file_stays_writable_even_if_something_tracked_it(tmp_path):
     assert agent.confined_write(str(tmp_path), agent.OUTCOME_FILENAME,
                                 existing={agent.OUTCOME_FILENAME}) is True
+
+
+# ── ONE rule, both flows: what carries the meeting flow's single legal write ────────────────────
+# The meeting flow used to get a NARROWER lane — `confined_write(..., allowed_re=_MEETING_NO_PAGE_
+# WRITES_RE)`, a regex matching nothing, so "the outcome file and nothing else". Both the regex and
+# the parameter retired with the tool-holding backend, and the tombstone in `agent.py` claims the
+# property they expressed was never carried by them. The three tests below are what makes that
+# claim checkable rather than a sentence in a comment:
+#
+#   * the outcome-file exception is UNCONDITIONAL, which is the whole of what the meeting flow
+#     relies on (the developer dropped that branch mid-edit once and restored it);
+#   * a caller cannot re-narrow the rule per flow without that being a deliberate, test-breaking
+#     act, which is how the two flows came to have two lanes in the first place;
+#   * and the lane rule is unchanged for the ordinary flow, which is the twin that stops "one rule"
+#     being read as "no rule".
+def test_the_outcome_file_exception_carries_the_meeting_flows_one_legal_write(tmp_path):
+    """The meeting agent writes exactly one file, ever — its own account — and code writes every
+    page in the set (`processing._write_meeting_pages`). Nothing about that write is conditional on
+    the flow, on what is tracked, or on where the worktree came from, so nothing here parametrizes
+    it: this is the branch the whole meeting flow's single write goes through.
+    """
+    meeting_set = {"wiki/sources/Acme Sync 2026-08-11.md",
+                   "wiki/meetings/Acme Sync 2026-08-11.md",
+                   "wiki/decisions/Renew Acme at the Pilot Rate.md"}
+
+    assert agent.confined_write(str(tmp_path), agent.OUTCOME_FILENAME,
+                                existing=meeting_set) is True
+
+
+def test_no_caller_can_hand_this_rule_a_narrower_lane_of_its_own(tmp_path):
+    """**The retired seam, pinned as retired.** `allowed_re` was a per-caller narrowing, and its
+    last caller passed `None` on every path — so it enforced nothing while reading as though it
+    did. Re-introducing a per-flow lane is a legitimate decision; doing it accidentally, and
+    leaving one flow narrower than the other with nothing saying so, is the failure. This makes
+    the first case break a test and the second case impossible."""
+    with pytest.raises(TypeError):
+        agent.confined_write(str(tmp_path), agent.OUTCOME_FILENAME,
+                             allowed_re=re.compile(r"^nothing$"))
+
+
+def test_the_ordinary_lane_rule_is_untouched_by_that_removal(tmp_path):
+    """"One rule for both flows" must not quietly mean "the loosest of the two". The ordinary
+    flow's allow-list is exactly what it was: a NEW `.md` page in a creatable folder, and nothing
+    else — asserted here beside the removal so the two are read together."""
+    assert agent.confined_write(str(tmp_path), LANE_PAGE) is True
+    assert agent.confined_write(str(tmp_path), LANE_PAGE, existing={LANE_PAGE}) is False
+    assert agent.confined_write(str(tmp_path), ".claude/skills/librarian/SKILL.md") is False
 
 
 # ── "does not exist yet" is a question about the FILESYSTEM, not about bytes ─────────────────────

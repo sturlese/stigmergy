@@ -36,11 +36,36 @@ from stigmergy.librarian.errors import LibrarianConfigError
 # A Sonnet-class model is the default for routine filing: the work is structuring prose and
 # resolving links against a small graph, not deep synthesis. Overridable per deployment; never
 # read anywhere but `from_args`.
-DEFAULT_MODEL = "claude-sonnet-5"
+#
+# **PROVIDER-PREFIXED, and that is a correction the retirement forced rather than a model change.**
+# It was the bare `claude-sonnet-5` — the spelling the retired Claude-Code backend handed to its own
+# SDK. The one real backend left resolves model strings through pydantic-ai, where a bare name means
+# the OpenAI Responses API, so `worker._check_pydantic_backend` refuses one: the bare default would
+# have made the SHIPPED default unbootable for every worker that did not override it, which is the
+# one value that must never need overriding. Same model, same provider, spelled for the backend that
+# reads it — and priced under this id in `pricing.py`, which the same pre-flight requires.
+DEFAULT_MODEL = "anthropic:claude-sonnet-5"
 
-# Per-item bounds. They cap ONE runaway run; nothing here caps a day of them. `max_tool_calls`
-# and `timeout_s` are enforced by us — the Agent SDK bounds turns natively but has no native
-# tool-call cap and no wall clock (see `agent.py`).
+# Per-item bounds. They cap ONE runaway run; nothing here caps a day of them.
+#
+# **`max_turns` and `max_tool_calls` are read by no shipped backend and are DEPRECATED.** They
+# configured the retired backend's conversational loop — its native turn bound, and the tool-call
+# ceiling this worker counted in a `PostToolUse` hook because that harness had none. A structured
+# call makes one model call and holds no tool, so neither has anything left to bound. They are kept
+# for one release rather than dropped in the same change that retired the backend: they are a
+# CONFIGURATION surface (`.env`, `fly.toml`, a documented table), and silently ignoring a value an
+# operator set is the failure this module's own `from_args` docstring refuses on principle. Removing
+# them is a separate change, with its own consumer inventory — see the CHANGELOG entry.
+#
+# **Both are still `int()`-parsed, and a malformed one raises a bare `ValueError` out of
+# `from_args` rather than a named `LibrarianConfigError`.** That is pre-existing behaviour and it is
+# left alone deliberately: `resolved_timeout_s` below shows what a NAMED refusal for one of these
+# costs to write, and spending it on two variables whose next change is deletion would be work
+# aimed at the wrong end. It is stated here, in `.env.example` and in the reference table so nobody
+# reads "still parsed" as "refused the way the others are".
+#
+# `timeout_s` is NOT one of them: it is the per-item wall clock the surviving backend still wraps
+# its model call in, and the visibility lease below is derived from it.
 DEFAULT_MAX_TURNS = 30
 DEFAULT_MAX_TOOL_CALLS = 120
 DEFAULT_TIMEOUT_S = 300
@@ -77,8 +102,9 @@ VISIBILITY_HEADROOM_S = 180
 #
 # Twelve candidates at twenty lines each is roughly a page's worth of excerpt — enough for the
 # overlap-versus-duplicate judgment the brief asks for, and small enough that the gathered context
-# stays a fraction of the captured material it sits beside. Read by `processing._one_pass`; the
-# `sdk` backend consults neither, because it still explores.
+# stays a fraction of the captured material it sits beside. Read by `processing._one_pass` for a
+# backend that declares `structured_ordinary`; the offline double consults neither, because it
+# writes its own page.
 DEFAULT_GATHER_TOP_K = 12
 DEFAULT_GATHER_EXCERPT_LINES = 20
 
@@ -232,16 +258,17 @@ class Settings:
     require_remote_base: bool = False
 
     # the agent
-    # 'sdk' | 'double' | 'pydantic' — CI and the suite stay on the double. All three serve BOTH
-    # flows since ADR 033; `pydantic` runs the ordinary flow structured (a deterministic gatherer,
-    # one tool-less call, code writes the page) where `sdk` still explores the checkout.
+    # 'pydantic' | 'double' — CI and the suite stay on the double. Both serve BOTH flows;
+    # `pydantic` runs the ordinary flow structured (a deterministic gatherer, one tool-less call,
+    # code writes the page) where the double writes its own page through the same confinement rule.
+    # `agent.BACKENDS` is the tuple, and `agent.ensure_known_backend` is what refuses anything else.
     backend: str = "double"
     model: str = DEFAULT_MODEL
-    max_turns: int = DEFAULT_MAX_TURNS
-    max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS
+    max_turns: int = DEFAULT_MAX_TURNS          # DEPRECATED — no backend reads it; see above
+    max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS  # DEPRECATED — no backend reads it; see above
     timeout_s: int = DEFAULT_TIMEOUT_S
 
-    # the gatherer (structured ordinary flow only — the `sdk` backend explores instead)
+    # the gatherer (the STRUCTURED ordinary shape only — the double writes its own page instead)
     gather_top_k: int = DEFAULT_GATHER_TOP_K
     gather_excerpt_lines: int = DEFAULT_GATHER_EXCERPT_LINES
 

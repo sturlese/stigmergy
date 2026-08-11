@@ -1,9 +1,10 @@
 """Every backend really does answer `filing_port.FilingAgent`, method for method and argument for
 argument — keylessly, so the claim is checked on every run rather than on the one that has a key.
 
-The seam used to be a CONVENTION: `SdkAgent`, `DoubleAgent` and `processing.py` agreed about two
+The seam used to be a CONVENTION: the first two backends and `processing.py` agreed about two
 signatures and one envelope, and nothing stated it anywhere a THIRD implementation could read. ADR
-032 wrote it down as a port; this file is what makes the writing load-bearing.
+032 wrote it down as a port; this file is what makes the writing load-bearing — and the port has
+since outlived one of its implementations without `processing.py` changing a line.
 
 **`isinstance` is not the test, it is the cheapest third of it.** A `runtime_checkable` Protocol
 checks that the two methods are PRESENT and nothing else — not their argument names, not that they
@@ -13,12 +14,12 @@ and fails at the one call site in `processing.py`, mid-item, against a real queu
 signatures are compared to the Protocol's own — the thing the port DOCUMENTS — and the twins below
 prove each half of that comparison can actually fail.
 
-**Keyless throughout.** The signature half constructs every backend and calls none of them
-(`SdkAgent.__init__` stores settings and nothing else). The envelope-semantics half at the bottom
+**Keyless throughout.** The signature half constructs every backend and calls none of them (a
+backend's `__init__` stores settings and little else). The envelope-semantics half at the bottom
 does run the two calls — against an offline model, a scratch brief and a real scratch git repo,
-because what a backend HANDS BACK cannot be read off a signature. Neither agent framework is
-loaded by any of it: the `pydantic` backend imports its own inside the method, and no test here
-reaches the SDK branch. **Every `pydantic` run below is driven through an injected
+because what a backend HANDS BACK cannot be read off a signature. No agent framework is
+loaded by any of it: the `pydantic` backend imports its own inside the method. **Every
+`pydantic` run below is driven through an injected
 `model_factory`**, never through the configured id — a run that resolved the real model would
 reach the network on any machine that happens to export a provider key, which is the one way a
 keyless suite stops being keyless by accident rather than by decision.
@@ -59,10 +60,9 @@ PORT_METHODS = ("run", "run_meeting")
 PORT_DECLARATIONS = ("structured_ordinary",)
 
 # Every implementation the port claims, named by the backend id that dispatches to it. Derived from
-# `agent.BACKENDS` in the test below rather than trusted here: a fourth backend added to that tuple
-# and forgotten here would leave this whole file silently measuring three of four.
+# `agent.BACKENDS` in the test below rather than trusted here: a third backend added to that tuple
+# and forgotten here would leave this whole file silently measuring two of three.
 BACKEND_CLASSES = {
-    "sdk": agent_module.SdkAgent,
     "double": DoubleAgent,
     agent_module.PYDANTIC_BACKEND: PydanticMeetingAgent,
 }
@@ -81,7 +81,7 @@ def backend(request):
 # ── the port covers every backend, and every backend the port covers still exists ──────────────
 def test_the_conformance_set_is_exactly_the_backends_dispatch_knows_about():
     """The blindness guard, first: this file is a claim about EVERY implementation of the port, and
-    a fourth backend added to `agent.BACKENDS` without a line here would make that claim false while
+    a third backend added to `agent.BACKENDS` without a line here would make that claim false while
     every test below stayed green. Derived from the production tuple, never retyped."""
     assert set(BACKEND_CLASSES) == set(agent_module.BACKENDS)
 
@@ -94,8 +94,8 @@ def test_build_agent_returns_the_backend_this_file_conforms(name):
 
     The settings carry a PRICED, provider-prefixed model for every branch, not only the one that
     needs it: `PydanticMeetingAgent.__init__` prices its configured id at construction (the backstop
-    below `worker.startup_checks`), so a `Settings` carrying the SDK backend's bare default would
-    refuse here for a reason that has nothing to do with the port. The other two ignore the field.
+    below `worker.startup_checks`), so a `Settings` carrying a bare model id would
+    refuse here for a reason that has nothing to do with the port. The double ignores the field.
     """
     built = agent_module.build_agent(dataclasses.replace(_settings(), backend=name))
     assert isinstance(built, BACKEND_CLASSES[name])
@@ -114,19 +114,20 @@ def test_constructing_the_token_priced_backend_refuses_an_unpriced_model():
         PydanticMeetingAgent(dataclasses.replace(_settings(), model="openai:gpt-9"))
 
 
-@pytest.mark.parametrize("name", ["sdk", "double"])
+@pytest.mark.parametrize("name", ["double"])
 def test_the_backends_that_price_themselves_construct_whatever_the_model_says(name):
     """The specificity half: the price backstop belongs to the backend that computes cost from
-    tokens, and only to it. The SDK is priced by its own SDK and the double spends nothing, so
-    requiring a priced id of either would refuse a configuration nothing was going to use — the
-    same argument the credential check already makes for itself."""
+    tokens, and only to it. The double spends nothing, so requiring a priced id of it would refuse
+    a configuration nothing was going to use. A one-item parametrize on purpose: the retired
+    backend was priced by its own harness and was the second arm here, and the next self-pricing
+    backend joins this list rather than getting a test of its own."""
     built = agent_module.build_agent(
         dataclasses.replace(_settings(), backend=name, model="a-model-nothing-prices"))
     assert isinstance(built, BACKEND_CLASSES[name])
 
 
-def test_an_unknown_backend_fails_fast_rather_than_falling_through_to_one_of_the_three():
-    """The dispatch's own refusal, and it names the three so a typo is one line from fixed. A
+def test_an_unknown_backend_fails_fast_rather_than_falling_through_to_one_of_them():
+    """The dispatch's own refusal, and it names them all so a typo is one line from fixed. A
     fall-through would silently pick the real path or the double — the two outcomes
     `build_agent`'s docstring exists to rule out."""
     with pytest.raises(LibrarianConfigError) as exc_info:
@@ -172,10 +173,10 @@ def test_every_backend_declares_which_shape_of_the_ordinary_flow_it_answers(name
     the safe one — which is exactly why the value has to be pinned per backend here rather than
     left to that fallback.
 
-    The values themselves, not merely their presence: the SDK driver and the offline double
-    explore, the pydantic backend is handed its context.
+    The values themselves, not merely their presence: the offline double explores, the pydantic
+    backend is handed its context.
     """
-    expected = {"sdk": False, "double": False, agent_module.PYDANTIC_BACKEND: True}[name]
+    expected = {"double": False, agent_module.PYDANTIC_BACKEND: True}[name]
     declared = BACKEND_CLASSES[name].structured_ordinary
     assert declared is expected, (
         f"{BACKEND_CLASSES[name].__name__}.structured_ordinary is {declared!r} — `processing` "
@@ -567,12 +568,16 @@ def _raises():
 #   * `double` — both roads. A well-formed note FILES, which exercises the returning half (an
 #     envelope whose `cost_usd` is a real `0.0`: an offline pass spends nothing, and that is an
 #     answer rather than a gap); `DOUBLE:bad-shape` drives its account through the same
-#     `parse_outcome` the SDK path uses and is refused by it, which exercises the faulting half.
-#   * `sdk` — **scoped out, and not faked.** Past the skill read its `run` goes straight into
-#     `claude_agent_sdk`, so the only fault it can raise with no key is a `LibrarianConfigError`
-#     for a missing skill — the WORKER's config road, which the port deliberately does not price
-#     (see the boundary test below). Faking a fault by stubbing the SDK would be asserting the stub.
-#     Its envelope semantics are covered where they are real: the golden filing eval.
+#     `parse_outcome` every backend's account goes through, and is refused by it, which exercises
+#     the faulting half.
+#
+# A THIRD backend was scoped out of this table rather than faked, and the rule that kept it out
+# outlives it: past its skill read, its `run` went straight into a vendor SDK, so the only fault it
+# could raise with no key was a `LibrarianConfigError` for a missing skill — the WORKER's config
+# road, which the port deliberately does not price (see the boundary test below). Faking a fault by
+# stubbing that SDK would have been asserting the stub. **A backend whose envelope semantics can
+# only be exercised against its provider does not get a fake here; it gets covered where it is
+# real, in the golden filing eval.**
 def _ordinary_flow_cases(tmp_path):
     settings = _settings()
     env = support.build_repo(str(tmp_path / "git"))

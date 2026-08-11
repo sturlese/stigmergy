@@ -228,14 +228,21 @@ fly scale count worker=1 -a $FLY_APP    # only if a deploy did not create it
 
 Four standing rules:
 
-- **`STIGMERGY_LIBRARIAN_BACKEND` must say `sdk`, and its default does not.** The worker's default
-  backend is `double` — the offline test double, whose whole job is to be adversarial: on demand it
-  hallucinates figures, copies seeded secrets onto pages and declares itself canonical, and on
-  ordinary material it fabricates a plausible page with no model involved at all. That is exactly
-  what the suite needs and exactly what a deployment must never run. `fly.toml` sets `sdk`
-  explicitly for this reason; a deployment assembled any other way inherits `double` and looks
-  perfectly healthy while committing invented knowledge. It is the one configuration mistake here
-  whose symptom is *pages that read fine*.
+- **`STIGMERGY_LIBRARIAN_BACKEND` must say `pydantic`, and its default does not.** The worker's
+  default backend is `double` — the offline test double, whose whole job is to be adversarial: on
+  demand it hallucinates figures, copies seeded secrets onto pages and declares itself canonical,
+  and on ordinary material it fabricates a plausible page with no model involved at all. That is
+  exactly what the suite needs and exactly what a deployment must never run. `fly.toml` sets
+  `pydantic` explicitly for this reason, together with the provider-prefixed
+  `STIGMERGY_LIBRARIAN_MODEL` it requires; a deployment assembled any other way inherits `double`
+  and looks perfectly healthy while committing invented knowledge. It is the one configuration
+  mistake here whose symptom is *pages that read fine*.
+- **A deployment carrying `sdk` is refused, not silently downgraded.** That backend drove the
+  Claude Code harness and was retired ([ADR 033](../decisions/033-structured-filing-flow.md)); the
+  value survives in a `fly.toml` or a `.env` that a `git pull` does not touch. The worker refuses
+  at startup naming the retirement, the two edits it takes (this variable AND a provider-prefixed
+  model id), and the image rollback below for getting a worker running again meanwhile. The queue
+  is durable, so nothing is lost while it is down.
 - **Never scale `slack` past 1.** No leader election; a second machine double-handles every
   event. The deploy script pins it, and the advisory lock
   (`stigmergy.slack.app.acquire_singleton_lock`) refuses a second process at startup. The lock is
@@ -1005,17 +1012,15 @@ registry are all read at that commit. Push, or `git pull --rebase` if your `main
 `filing into … against origin/main@<sha>` startup line is the diagnosis.
 
 **`make librarian-walk` (or the worker) refuses at startup.** That is `startup_checks` doing
-its job — each refusal names its fix: a missing Claude credential (run through `make`, which
-loads `.env`; an interactive Claude Code login also counts and is named in the log), an
-unpushed skill or linter, a half-configured GitHub App (all three variables or none), missing
-`gitleaks` (`brew install gitleaks`), or a lease shorter than one item's worst case. With
-`STIGMERGY_LIBRARIAN_BACKEND=pydantic` — a real worker backend since
-[ADR 033](../decisions/033-structured-filing-flow.md), which used to be refused outright — three
-more refusals apply and each names its fix: a model id with no provider prefix, a model with no
-configured price (`STIGMERGY_LIBRARIAN_PRICING`), and a missing provider key. A model id spelled
-for the wrong backend is refused the same way, in both directions: a bare name
-(`claude-sonnet-5`) is the `sdk` backend's, a provider-prefixed one
-(`anthropic:claude-sonnet-5`) is the `pydantic` backend's, and each is refused by the other.
+its job — each refusal names its fix: a retired backend value, an unpushed skill or linter, a
+half-configured GitHub App (all three variables or none), missing `gitleaks`
+(`brew install gitleaks`), or a lease shorter than one item's worst case. With
+`STIGMERGY_LIBRARIAN_BACKEND=pydantic` — the real worker backend — three more refusals apply and
+each names its fix: a model id with no provider prefix, a model with no configured price
+(`STIGMERGY_LIBRARIAN_PRICING`), and a missing provider key (run through `make`, which loads
+`.env`; a directly-invoked script inherits nothing from it). The provider-prefix refusal is the
+one an upgrade meets: a bare `claude-sonnet-5` was the retired backend's spelling, and
+`anthropic:claude-sonnet-5` is the same model spelled for this one.
 
 **The Postgres suites suddenly skip, or refuse with `WrongDatabase`.** See "The two databases"
 under Wipe & re-seed — recreate the composition (`make db-down && make db-up`, destroys the

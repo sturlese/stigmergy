@@ -41,6 +41,21 @@ EXIT_CONFIG = 2         # same value `stigmergy-librarian` uses for "the tool ca
 # deployment. Stripped rather than "not set", because
 # Fly secrets are app-wide and there is nothing to set them differently per process group: the
 # only place this property can be made true is here, in the environment the worker is exec'd with.
+#
+# **This makes `openai:` filing models unusable on the DEPLOYED worker, and that is the design
+# rather than an oversight.** `OPENAI_API_KEY` is also what `pydantic_backend.PROVIDER_KEY_ENV`
+# authenticates an `openai:` model with, so a container configured for one meets
+# `worker._check_pydantic_backend`'s missing-key refusal no matter what the operator exports —
+# this strip runs after the environment is assembled and before the loop is exec'd. The refusal
+# names the dead end for exactly the variables in this tuple, because "export it" is the one fix
+# that cannot work there and an operator will otherwise try it first. On a laptop, where nothing
+# strips anything, the same configuration runs fine — which is what makes the failure worth naming
+# out loud instead of leaving to be discovered on staging.
+#
+# The intersection of this tuple with `PROVIDER_KEY_ENV` is pinned by
+# `tests/librarian/test_pydantic_preflight.py::test_the_only_provider_key_the_deployed_worker_
+# strips_is_the_read_paths_own`, so a second entry here cannot silently make another provider
+# family undeployable.
 READ_PATH_ONLY_ENV = ("OPENAI_API_KEY",)
 
 # The credential helper a cloned checkout is pointed at, so the fetch before every claim and the

@@ -7,12 +7,14 @@ reasoning, as its sibling one directory over (`../meeting-distiller/FROZEN.md`).
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/skills/librarian/SKILL.md` |
-| **Copied at commit** | `31e49f8c0ce00c0ad4fd9fcf3128b4bbe0b3b4d9` |
+| **Copied at commit** | `c1e0996ed497e70a9df82661c367294b48207a16` |
 | **Drift guard** | `tests/librarian/test_librarian_brief_contract.py` — the rule table runs against THIS copy in CI, and a separate test asserts the copy is byte-identical to the knowledge repo's own whenever that checkout is present |
 
-> **The sha above is a PLACEHOLDER.** ADR 033 rewrote the brief tool-neutral, and the platform PR
-> and the knowledge-repo PR land together — so at the moment these bytes were copied here the
-> knowledge repo's own commit did not exist yet. Whoever lands the pair replaces it:
+> **The sha above was a placeholder, and it has landed.** ADR 033 rewrote the brief tool-neutral
+> and the `sdk` retirement closed that rewrite's last debt — the environment paragraph that still
+> described tool-holding runs. Both live in the knowledge repo's
+> `c1e0996ed497e70a9df82661c367294b48207a16`, which is what the row above now records and what
+> every other frozen copy of this tree records with it. A future resync re-reads it the same way:
 >
 > ```sh
 > git -C "$STIGMERGY_REPO" log -1 --format=%H -- .claude/skills/librarian/SKILL.md
@@ -30,9 +32,9 @@ catches actually lands. Its sibling `test_meeting_brief_contract.py` already had
 
 **The structured ordinary flow reads it at run time.** `agent.read_skill` reads
 `.claude/skills/librarian/SKILL.md` out of the item's own worktree and injects it as the
-instructions, for the `sdk` backend and — since ADR 033 — for the `pydantic` one too. Any
-integration test that drives a real backend over this fixture repo needs the file present at the
-base commit, the same way the meeting tests need the distiller brief.
+instructions, for every backend named in `agent.SKILL_READING_BACKENDS` — the `pydantic` one today.
+Any integration test that drives a real backend over this fixture repo needs the file present at
+the base commit, the same way the meeting tests need the distiller brief.
 
 ## Why it is RESYNCED rather than pinned
 

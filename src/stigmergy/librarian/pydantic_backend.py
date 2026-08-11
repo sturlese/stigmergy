@@ -32,7 +32,7 @@ everything each flow already owns: `agent.read_skill`/`read_meeting_brief` (the 
 `agent.parse_outcome`/`parse_meeting_outcome` (the SAME trust boundary the file channel goes
 through — a structured provider is not a trusted one).
 
-**`pydantic_ai` is imported inside the methods**, exactly as `claude_agent_sdk` is in `agent.py`:
+**`pydantic_ai` is imported inside the methods**, never at module scope:
 a keyless run must not load an agent framework, and the import graph must not claim this package
 depends on one unconditionally. `pydantic` itself is module-scope — the output schemas below are
 plain data, and a test that builds one by hand must not have to reach through a backend to do it.
@@ -233,7 +233,7 @@ class MeetingAccount(BaseModel):
 #  * `page_path` — code decides every path here (`processing._write_ordinary_page`), from the
 #    title and from `page.FOLDER_BY_TYPE`. A field the model could fill is a path the model could
 #    steer, and `_cross_check_outcome` would then be defending against a claim nothing needed to
-#    make. `parse_outcome` still ACCEPTS one (the `sdk` backend declares it), which is the whole
+#    make. `parse_outcome` still ACCEPTS one (the offline double declares it), which is the whole
 #    of the expand–contract: one parser, two shapes, and each backend emitting only its own.
 #  * top-level `title`/`page_type` — they live in `page` for this backend, and `parse_outcome`
 #    fills the single fields every downstream reader uses from there. Declaring both would let one
@@ -340,7 +340,7 @@ class FilingAccount(BaseModel):
 
 
 # This backend's own ordinary environment — the ONE part of the preamble that differs per backend.
-# TWO numbered points, because the SDK's own environment (`agent.ORDINARY_SDK_ENVIRONMENT`) is two
+# TWO numbered points, because the exploring environment this replaced was two
 # and the shared point after it is numbered `3.`; the opening, that shared point and the separator
 # come from `agent.build_filing_header`, where they are written once.
 ORDINARY_ENVIRONMENT = (
@@ -448,7 +448,7 @@ class PydanticFilingAgent:
             gathered: str = "") -> AgentRun:
         """The ordinary flow: file ONE capture, in one structured call, writing nothing.
 
-        Structurally parallel to `run_meeting` below and to `agent.SdkAgent.run` above, on purpose —
+        Structurally parallel to `run_meeting` below, on purpose —
         a backend swap should be a provider change, not a mechanism one. `gathered` is the
         deterministic gatherer's context, already rendered to prompt text by `processing`; this
         backend never builds one (see the module docstring).
@@ -476,7 +476,7 @@ class PydanticFilingAgent:
         worktree_root = os.path.realpath(worktree)
 
         # The skill comes out of the WORKTREE, which is the checkout at this item's base commit —
-        # the same read `SdkAgent._run` makes, deliberately not a second reader. A missing skill
+        # `agent.read_skill`, deliberately not a second reader of the same file. A missing skill
         # raises `LibrarianConfigError` here, before any model call is spent.
         instructions = agent_module.build_system_prompt(
             agent_module.read_skill(worktree_root), header=ORDINARY_SYSTEM_PROMPT_HEADER)
@@ -545,7 +545,7 @@ class PydanticFilingAgent:
     def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
                     source_page_path: str, corrective: str = "", reply: str = "") -> AgentRun:
         """One structured call: the brief as instructions, the item as the prompt, a typed account
-        back. Structurally parallel to `agent.SdkAgent.run_meeting` on purpose — a backend swap
+        back. Structurally parallel to `run` above on purpose — a backend swap
         should be a provider change, not a mechanism one."""
         import asyncio
         return asyncio.run(self._run_meeting(
@@ -556,8 +556,8 @@ class PydanticFilingAgent:
                            corrective, reply="") -> AgentRun:
         import asyncio
 
-        # Imported HERE, never at module scope — the same rule `agent.SdkAgent._run` follows for
-        # `claude_agent_sdk`, and for the same reason: an offline run must not load an agent
+        # Imported HERE, never at module scope — the rule `agent.py`'s own docstring records, and
+        # `tests/test_architecture.py` enforces: an offline run must not load an agent
         # framework, and the import graph must not claim this package depends on one unconditionally.
         from pydantic_ai import Agent
         from pydantic_ai.exceptions import UnexpectedModelBehavior
@@ -574,13 +574,13 @@ class PydanticFilingAgent:
 
         # `turns` and `tool_calls` stay at the envelope's own zero and are never assigned: there is
         # no conversational loop here and no tool to call, so a `1` would be a number invented to
-        # look like the SDK backend's. The port documents zero as a legitimate answer, and nothing
+        # look like a tool-using loop's. The port documents zero as a legitimate answer, and nothing
         # downstream branches on either counter.
         run = AgentRun()
         worktree_root = os.path.realpath(worktree)
 
         # The brief comes out of the WORKTREE, which is the checkout at this item's base commit —
-        # the same read `SdkAgent._run_meeting` makes, deliberately not a second reader. A missing
+        # `agent.read_meeting_brief`, deliberately not a second reader of it. A missing
         # brief raises `LibrarianConfigError` here, before any model call is spent.
         instructions = agent_module.build_meeting_system_prompt(
             agent_module.read_meeting_brief(worktree_root),
@@ -612,11 +612,11 @@ class PydanticFilingAgent:
         # The request ceiling, from the SAME constant as the retry budget above: this flow makes one
         # model call and only output re-validation can add more, so the ceiling is exactly what the
         # framework is allowed to spend. `settings.max_turns` is deliberately NOT reused — it is the
-        # SDK backend's conversational bound (30 turns of an agent loop), and borrowing it here
+        # retired backend's conversational bound (30 turns of an agent loop), and borrowing it here
         # would license thirty full requests for a flow that must make one.
         limits = UsageLimits(request_limit=1 + OUTPUT_RETRIES)
         try:
-            # The wall clock is a bound WE own — pydantic-ai has none, exactly like the Agent SDK,
+            # The wall clock is a bound WE own — pydantic-ai has none, exactly like the harness before it,
             # and the worker's visibility lease is derived from this number
             # (`config.minimum_visibility_timeout_s`). A pass that could outlive it is a capture two
             # workers file.
@@ -657,7 +657,7 @@ class PydanticFilingAgent:
         # carrying its findings, and the blanket `except Exception` would have turned it into a
         # bare `AgentError` with a class name — the exact defect `errors.OutcomeShapeError` was
         # split out to fix, reintroduced one backend over. It is still PRICED, on the same road
-        # `SdkAgent._run_meeting`'s own outcome read takes: the run was paid for whether or not its
+        # the ordinary flow's own outcome read takes: the run was paid for whether or not its
         # account parses.
         raw = result.output.model_dump()
         # The SAME ceiling the file channel applies to `.librarian-outcome.json`, on the channel

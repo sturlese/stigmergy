@@ -177,11 +177,10 @@ by name with its reason, and pruning tests that fail when a declared exception s
   [the knowledge-repo contract](./docs/reference/knowledge-repo.md) for its layout and for the
   short list of files it has to carry before anything will index or file.
 - API keys only when you want real models, and they are not interchangeable: `OPENAI_API_KEY` is
-  the embedder and the `ask` model; the librarian's own agent defaults to the Claude Agent SDK,
-  which wants an Anthropic credential plus the `claude` CLI on `PATH` — set
-  `STIGMERGY_LIBRARIAN_BACKEND=pydantic` to file through any provider-prefixed pydantic-ai model
-  instead, authenticated with that provider's own key. The test suite is keyless by construction,
-  and so is the walkthrough below.
+  the embedder and the `ask` model; the librarian files through
+  `STIGMERGY_LIBRARIAN_BACKEND=pydantic` on any provider-prefixed pydantic-ai model
+  (`anthropic:claude-sonnet-5` by default), authenticated with that provider's own key. The test
+  suite is keyless by construction, and so is the walkthrough below.
 
 ## Quick start
 

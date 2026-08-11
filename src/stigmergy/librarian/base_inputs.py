@@ -270,7 +270,7 @@ def linter_at(repo: str, base: gitcmd.BaseRef):
 # other.
 #
 # **There is deliberately NO `load_meeting_brief` reader here**, unlike the ACL config, the
-# registry and the linter above. The brief is read by `SdkAgent._run_meeting` via
+# registry and the linter above. The brief is read by the backend's own meeting call via
 # `agent.read_meeting_brief(worktree_root)`, the SAME pattern the ordinary flow's skill uses.
 # That worktree is checked out `--detach` at `base.sha` by `gitcmd.ephemeral_worktree`, and the
 # agent can neither write `.claude/` (`agent.confined_write`) nor survive a corrective retry's

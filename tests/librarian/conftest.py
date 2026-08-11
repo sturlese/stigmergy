@@ -12,8 +12,7 @@ import pytest
 
 from stigmergy.capture import evidence as evidence_plane
 from stigmergy.capture import schema
-from stigmergy.librarian import agent as agent_module
-from stigmergy.librarian import githubapp, pricing
+from stigmergy.librarian import githubapp, pricing, pydantic_backend
 from tests import testdb
 from tests.librarian import support
 
@@ -25,9 +24,11 @@ _APP_ENV = (githubapp.APP_ID_ENV, githubapp.INSTALLATION_ID_ENV,
             githubapp.PRIVATE_KEY_ENV, githubapp.PRIVATE_KEY_FILE_ENV,
             githubapp.APP_LOGIN_ENV)
 
-# What the `sdk` backend authenticates with, plus the gateway variable whose mere presence counts
-# as "authentication is somebody else's problem" (`agent.credential_present`).
-_AGENT_CREDENTIAL_ENV = (*agent_module.CREDENTIAL_ENV, "ANTHROPIC_BASE_URL")
+# Every provider key the filing backend can authenticate with — `worker._check_pydantic_backend`'s
+# own table, never a retyped list, so a fourth provider is cleared the day it is added. The tuple
+# it replaced named the RETIRED backend's CLI credentials; the doctrine below is why it was not
+# simply deleted with them.
+_AGENT_CREDENTIAL_ENV = tuple(sorted(pydantic_backend.PROVIDER_KEY_ENV.values()))
 
 
 @pytest.fixture(autouse=True)
@@ -57,25 +58,24 @@ def no_real_github_app(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_ambient_agent_credential(monkeypatch, tmp_path):
-    """The same doctrine as `no_real_github_app`, applied to the agent's credential.
+    """The same doctrine as `no_real_github_app`, applied to the filing agent's credential.
 
-    `worker.startup_checks` refuses an `sdk` run with no Claude credential, so that a missing
-    export is caught at start-up instead of several steps into a run. That refusal is only
+    `worker.startup_checks` refuses a real-backend run whose provider key is missing, so that a
+    missing export is caught at start-up instead of several steps into a run. That refusal is only
     testable if whether a credential is present is decided by the TEST and not by the operator's
     gitignored `.env`, which the Makefile exports into `make test` — otherwise the positive cases
     pass on a developer machine and the negative cases pass in CI, and neither machine runs both.
 
     Cleared unconditionally; the tests that need a credential set one explicitly (`stub_startup`).
-    Nothing here can reach the real API: no test in this package runs the `sdk` backend, which is
-    `tests/test_architecture.py`'s own assertion.
+    Nothing here can reach a real API: no test in this package runs a real backend against a real
+    provider, and every structured run is driven through an injected offline model.
 
-    **The env variables are only half of it.** A credential the CLI authenticated interactively
-    lives under its config directory (`agent.credential_status`), and on a developer machine that
-    directory exists — so with the variables alone, "no credential" would be true in CI and false on
-    the laptop, which is the exact asymmetry the paragraph above exists to prevent, one surface over.
-    `CONFIG_DIR_ENV` is pointed at a path inside `tmp_path` that is deliberately never created, so
-    the DEFAULT state of every test in this package is "nothing to authenticate with" and the tests
-    that want ambient auth opt in by pointing it at a directory that does exist.
+    **The variables this clears changed with the backend, and the fixture did not.** It used to
+    clear the retired Claude Code CLI's three credentials plus its gateway variable, and to point
+    `$CLAUDE_CONFIG_DIR` at a path inside `tmp_path` that was deliberately never created — because
+    that CLI could also authenticate from a stored interactive login, which exists on a developer
+    machine and not in CI. There is no such second channel now: a provider key is a variable that is
+    either exported or not, so clearing the variables IS the whole of it.
     """
     for name in _AGENT_CREDENTIAL_ENV:
         monkeypatch.delenv(name, raising=False)
@@ -85,7 +85,6 @@ def no_ambient_agent_credential(monkeypatch, tmp_path):
     # TEST's decision, never the operator's ambient .env — and no test in this package may
     # ever reach the real Gemini API. Tests that want the fallback set a fake key explicitly.
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.setenv(agent_module.CONFIG_DIR_ENV, str(tmp_path / "no-claude-config-dir"))
 
 
 @pytest.fixture(autouse=True)

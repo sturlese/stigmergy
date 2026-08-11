@@ -34,7 +34,7 @@ class LibrarianError(RuntimeError):
     first thing you want to know about a librarian that gave up. `report.failed_system` already
     accepted the number and had no way to be told it.
 
-    `agent_cost_usd` rides along for the same reason: the SDK reports what each pass actually
+    `agent_cost_usd` rides along for the same reason: a backend reports what each pass actually
     cost, the number is known only inside the loop, and a failed item is still a paid item —
     a failure report that omits the spend hides exactly the runs an operator most wants priced.
     """

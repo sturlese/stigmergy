@@ -86,23 +86,25 @@ e2e-librarian: venv ## DESTROYS the local queue (down -v). Librarian e2e: compos
 e2e-librarian-container: venv ## DESTROYS the local queue (down -v). Deployed-worker e2e: build the image -> the librarian CONTAINER files to the bare remote -> SIGTERM/SIGKILL
 	bash scripts/e2e_librarian_container.sh
 
-# The librarian's credentials and the agent's API key live in the gitignored root env file, which
-# `-include .env` + `export` above hands to every target and which a directly-invoked
+# The librarian's credentials and the agent's provider key live in the gitignored root env file,
+# which `-include .env` + `export` above hands to every target and which a directly-invoked
 # `.venv/bin/stigmergy-librarian` inherits NOTHING from. That gap cost four separate detours in one day
 # in a single day — twice for the agent credential, once for the App credentials, once for
 # a lost session — and each one looked like a product defect until it was diagnosed. So the target
 # exists to make the environment the TOOL's problem instead of the operator's memory.
 #
 # Everything it can be wrong about is refused by name rather than downstream: the env file's absence
-# here, and the credential/App/skill/linter/lease preconditions in `worker.startup_checks`, which runs
-# before a single item is claimed. `--backend sdk` is explicit and not the default anywhere else: the
-# double files fabricated pages, and a walk that silently ran it would commit them to the real repo.
+# here, and the model/price/key/App/skill/linter/lease preconditions in `worker.startup_checks`,
+# which runs before a single item is claimed. `--backend pydantic` is explicit and not the default
+# anywhere else: the double files fabricated pages, and a walk that silently ran it would commit
+# them to the real repo. **That is the whole argument for naming a backend here and it is unchanged
+# by which real backend it names** — the flag was `--backend sdk` until that backend retired.
 #
 # `once`, not `run`: a walk drains by hand so a human can read each outcome before the next claim.
 # Pass extra flags through `LIBRARIAN_ARGS` (e.g. `make librarian-walk LIBRARIAN_ARGS=--json`).
 librarian-walk: venv ## One librarian filing walk with the REAL agent against $STIGMERGY_REPO (needs the env file)
-	@test -f .env || { echo "make librarian-walk: there is no .env at the repo root, and a real walk cannot run without it. It carries the Claude credential the agent authenticates with and the three librarian GitHub App variables the commit is authored with; see docs/reference/operator-runbook.md for the list and how to obtain each."; exit 2; }
-	$(VENV)/bin/stigmergy-librarian --backend sdk once $(LIBRARIAN_ARGS)
+	@test -f .env || { echo "make librarian-walk: there is no .env at the repo root, and a real walk cannot run without it. It carries the provider key the filing agent authenticates with (ANTHROPIC_API_KEY for the default anthropic: model) and the three librarian GitHub App variables the commit is authored with; see docs/reference/operator-runbook.md for the list and how to obtain each."; exit 2; }
+	$(VENV)/bin/stigmergy-librarian --backend pydantic once $(LIBRARIAN_ARGS)
 
 librarian-status: venv ## Queue depth, the item in flight (and whether its lease looks stale), and the measured capture->filed p50/p95
 	$(VENV)/bin/stigmergy-librarian status $(LIBRARIAN_ARGS)
@@ -147,13 +149,13 @@ qa-golden: venv ## Golden QA with the REAL embedder + model (needs the env file)
 #
 # Two things it needs that the other two do not. `gitleaks` on PATH, because the secrets gate
 # shells out to the real scanner and a filing eval that skipped it would measure a shorter
-# pipeline than production runs. And a Claude credential, which is why this takes the env file:
-# `BACKEND=double` is the keyless plumbing self-check and appends nothing to the series.
+# pipeline than production runs. And the filing model's provider key, which is why this takes the
+# env file: `BACKEND=double` is the keyless plumbing self-check and appends nothing to the series.
 #
 # `make db-up` first, like the other two — and mind `evals/index.md`'s standing warning: no other
 # instrument may be using the stack while this one runs.
 filing-golden: venv ## Golden filing over evals/filing with the REAL agent + gates (needs the env file; BACKEND=double for the keyless self-check)
-	$(PY) evals/run_filing.py --backend $(or $(BACKEND),sdk) $(FILING_ARGS)
+	$(PY) evals/run_filing.py --backend $(or $(BACKEND),pydantic) $(FILING_ARGS)
 
 adversarial: venv ## The armed adversarial categories (1 injection · 2 ACL/existence · 7 forged frontmatter)
 	$(PY) -m pytest -q -k "adversarial_cat1 or adversarial_cat2 or adversarial_cat7" -p no:cacheprovider --no-cov

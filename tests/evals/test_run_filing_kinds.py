@@ -251,16 +251,23 @@ def test_the_parser_is_a_value_and_accepts_every_flag_the_docs_promise():
 
 def test_the_parsers_defaults_are_the_whole_shipped_set_on_the_real_backend():
     """The invocation with no flags at all, which is what `make filing-golden` runs: the real
-    backend, the frozen fixture, no subset."""
+    backend, the frozen fixture, no subset.
+
+    The DEFAULT moved when the `sdk` backend retired, and the assertion is written against the
+    runner's own constant rather than a literal so the two cannot drift again: what this pins is
+    that a bare `make filing-golden` measures the REAL backend and never the double, which is the
+    property, not which real backend it happens to be."""
     args = run_filing.build_parser().parse_args([])
 
-    assert args.backend == "sdk"
+    assert args.backend == run_filing.STRUCTURED_BACKEND
+    assert args.backend != "double", (
+        "a bare `make filing-golden` would score the offline double and append it to the series")
     assert args.kinds == ""
     assert args.model is None
     assert args.manifest.endswith("manifest.json")
 
 
-@pytest.mark.parametrize("name", ["sdk", "double", run_filing.STRUCTURED_BACKEND])
+@pytest.mark.parametrize("name", ["double", run_filing.STRUCTURED_BACKEND])
 def test_every_backend_dispatch_knows_is_a_choice_the_parser_accepts(name):
     """The `--backend` choices and `agent.BACKENDS` must not drift: a backend argparse accepts and
     dispatch does not is a run that dies after the fixture repo is built, and one dispatch knows and
@@ -310,7 +317,7 @@ def parse(monkeypatch):
     return _parse
 
 
-@pytest.mark.parametrize("backend", ["sdk", "double", run_filing.STRUCTURED_BACKEND])
+@pytest.mark.parametrize("backend", ["double", run_filing.STRUCTURED_BACKEND])
 def test_every_backend_parses_and_measures_the_whole_set_by_default(parse, backend):
     """The default invocation, and the milestone in one assertion: no `--kinds`, the whole set,
     on EVERY backend.
@@ -318,6 +325,10 @@ def test_every_backend_parses_and_measures_the_whole_set_by_default(parse, backe
     The structured one is the row that changed. `--backend pydantic` with no subset was the exact
     invocation M1 exited on before the queue was touched; it now reaches the measurement carrying
     all ten captures, which is what "the backend serves both flows" means at the rig's seam.
+
+    The `sdk` arm went with that backend. Nothing about this test needed rewriting for it — the
+    parametrize list is one entry shorter and every assertion is untouched, which is what a rig
+    written against the port rather than against a class buys.
     """
     captured = parse("--backend", backend)
 

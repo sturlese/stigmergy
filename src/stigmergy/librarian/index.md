@@ -89,24 +89,34 @@ is closed too (`stigmergy.views` must never import `stigmergy.entities`, keeping
 worker's dependency graph one-way — see
 [`views/index.md`](../views/index.md)'s own "Avoid" section).
 
-**The agent seam is a PORT, there are THREE backends behind it, and all three serve BOTH flows.**
+**The agent seam is a PORT, there are TWO backends behind it, and both serve BOTH flows.**
 `filing_port.FilingAgent` is what `processing.py` is written against — `run` / `run_meeting`, the
 `AgentRun` envelope, the fault contract (`AgentError` carrying `run_cost_usd`), the side-effect
 rules (which differ per flow AND per ordinary SHAPE, and must not be averaged), and one declared
-capability, `structured_ordinary`. `SdkAgent`, `DoubleAgent` and `PydanticFilingAgent` satisfy it
+capability, `structured_ordinary`. `PydanticFilingAgent` and `DoubleAgent` satisfy it
 STRUCTURALLY — no base class, no registration: a backend is a class that answers the two calls and
-declares that one attribute. `build_agent` returns the port and is where the three are declared to
+declares that one attribute. `build_agent` returns the port and is where both are declared to
 satisfy it.
+
+**The port has already outlived one implementation, which is the argument for it in one
+sentence.** `SdkAgent` — the Claude-Code-harness backend — was retired without `processing.py`
+changing a line, because what the worker is written against is `filing_port.py` and not a class.
+A worker still CONFIGURED for it (`STIGMERGY_LIBRARIAN_BACKEND=sdk` in a stale `fly.toml` or
+`.env`) is refused at startup by name — `agent.RETIRED_BACKENDS` carries the message, and
+`agent.ensure_known_backend` is the ONE place either that refusal or the unknown-value one is
+worded.
 
 **The ORDINARY flow has TWO shapes behind one entry point, and a backend DECLARES which one it
 answers** ([ADR 033](../../../docs/decisions/033-structured-filing-flow.md)). `structured_ordinary`
-is `False` for `SdkAgent` and `DoubleAgent` — the EXPLORING shape: the agent goes looking through
-the checkout with Read/Glob/Grep, writes the page itself inside `agent.confined_write`'s allow-list,
-and declares the path it wrote in `Outcome.page_path`. It is `True` for `PydanticFilingAgent` — the
+is `False` for `DoubleAgent` — the EXPLORING shape: the agent goes looking through
+the checkout itself, writes the page inside `agent.confined_write`'s allow-list,
+and declares the path it wrote in `Outcome.page_path`. That was the retired backend's shape too,
+and the double is what keeps the branch exercised: both roads through `processing._one_pass` run
+offline on every `make test`. It is `True` for `PydanticFilingAgent` — the
 STRUCTURED shape: `processing._one_pass` runs the deterministic gatherer (`gather.py`) first and
 hands the result over as rendered prompt text, the agent holds no tool and writes nothing, its
 account CARRIES the page's own body in `Outcome.page`, and `processing._write_ordinary_page` builds
-and writes the file. **`processing` reads the declared attribute and never `isinstance`**: a fourth
+and writes the file. **`processing` reads the declared attribute and never `isinstance`**: a third
 backend, or a double standing in for one, must take the right branch by declaring the right thing
 rather than by being the right class. Everything from the stamp down — all eight gates,
 `_cross_check_outcome`'s "exactly one new page", the commit — is shared byte for byte, which is what
@@ -117,17 +127,19 @@ to refuse `backend="pydantic"` for a worker outright (a queue carries ordinary c
 backend serving one `kind` burns deliveries while looking configured), with one `meeting_only`
 escape for the eval rig. Both are removed. What that check still validates for this backend is what
 was always about the backend: a provider-prefixed model string, a configured price, and the
-provider's own key — plus the librarian skill at the base commit, now required of every backend in
-`agent.SKILL_READING_BACKENDS` (`sdk` and `pydantic`) rather than of `sdk` alone, because both
-inject it.
+provider's own key — plus the librarian skill at the base commit, required of every backend in
+`agent.SKILL_READING_BACKENDS` (a named set, not "the ones that are real": the question is who
+INJECTS the brief, and the offline double reads none).
 
-**`cost_usd` has two roads now, and the report's shape has neither in it.** The SDK backend is
-priced by its own SDK and passes the figure through; a backend that reports only TOKENS multiplies
-them by `pricing.py`'s configured table. A model with no configured price is REFUSED at startup —
+**`cost_usd` has two roads, and the report's shape has neither in it.** A backend priced by its own
+provider passes that figure straight through (the retired one worked that way, and the double's
+honest `0.0` is the same road); a backend that reports only TOKENS multiplies
+them by `pricing.py`'s configured table, which is every backend that costs anything today. A model
+with no configured price is REFUSED at startup —
 never silently `$0.00`, which would read as free. [ADR 032](../../../docs/decisions/032-filing-port-and-pricing-seam.md)
 records both halves and the expand–contract plan.
 
-**A THIRD external input `agent.py` briefly grew is also gone.** `SdkAgent._run` once read a fleet
+**A THIRD external input `agent.py` briefly grew is also gone.** The agent run once read a fleet
 supervisor's approved playbook (`ops/playbook.md`, out of the worktree) and appended it to the
 system prompt as advisory context, alongside the skill. The supervisor went with the purge
 ([ADR 026](../../../docs/decisions/026-the-purge.md) D3), and with it the human gate that made the
@@ -382,7 +394,8 @@ Everything else is reached FROM `processing.py`; read it first when tracing one 
 - **Do not read the environment at import time anywhere in this package.**
   `config.Settings.from_args` is the only place; every helper takes a duck-typed settings object
   instead of importing `config` for a default.
-- **Do not import `claude_agent_sdk` at module scope.** It is imported inside `SdkAgent._run` only —
+- **Do not import an agent framework at module scope.** `pydantic_ai` is imported inside the
+  backend's own methods only —
   `tests/test_architecture.py` asserts the offline double never touches it, which is what keeps CI
   keyless and the whole suite running against `--backend double`. **The same rule applies to
   `pydantic_ai`**, imported inside `PydanticFilingAgent`'s own methods only, for the identical
@@ -550,7 +563,7 @@ Everything else is reached FROM `processing.py`; read it first when tracing one 
   overlaps) — there is no `verification` key; it left this shape with everything that computed it —
   `agent_rationale` (the agent's own `Outcome.summary` — the one field
   that says WHY rather than what, and the only account of its judgment anything downstream has),
-  `findings`, and `cost_usd` — the passes' real dollar spend summed from the SDK's per-run figure
+  `findings`, and `cost_usd` — the passes' real dollar spend summed from each pass's own figure
   (`processing._stamp_cost`, with the fault road carrying the same sum on the exception via
   `at_agent_attempt`). The rule, not an enumeration: present (possibly `0.0` — a park re-file, a
   fault before the first pass) on every outcome that passed through an agent loop or the failure
@@ -599,10 +612,9 @@ Everything else is reached FROM `processing.py`; read it first when tracing one 
 | `test_acl_rules.py` | the on-disk ACL dialect adapter |
 | `test_config.py` | `Settings.from_args` resolution, the `is None` fix, `check_domains` |
 | `test_githubapp.py` | JWT / installation-token minting (stubbed), `push_config`, commit identity |
-| `test_agent_pure.py` | `parse_outcome`, the confinement helpers — no SDK, no subprocess |
+| `test_agent_pure.py` | `parse_outcome`, the confinement helpers — no model, no subprocess |
 | `test_structured_outcome_unit.py` | the outcome envelope's ADDITIVE half (ADR 033 D2): both shapes parse, `title`/`page_type` resolve from a single declaration site, `page.body` is REFUSED over `MAX_PAGE_BODY_LEN` rather than truncated |
-| `test_filing_prompt_composition.py` | the ORDINARY preamble, checked against the pre-ADR-033 strings read out of git: `build_filing_header(ORDINARY_SDK_ENVIRONMENT)` reproduces the old header byte for byte, and the override note is the only addition |
-| `test_agent_sdk_options.py` | what the SDK is actually confined by (`build_options_kwargs`), no key needed |
+| `test_filing_prompt_composition.py` | the ORDINARY preamble and the per-item prompt: the shared frame, the required `header`, and the two facts a structured caller declares |
 | `test_gitcmd_unit.py` | worktrees, `reap` / `reapable` pid-scoping, the diff's blind spots, rebase-and-retry |
 | `test_worker_unit.py` | `startup_checks`, `sweep`, the messages |
 | `test_worker_signals.py` | real SIGINT/SIGTERM/SIGKILL against a real worker subprocess |
@@ -638,7 +650,7 @@ and `DOUBLE:long-summary` is its benign twin (a summary far past the prose ceili
 and FILED, in one pass). `DOUBLE:triage-entity` is the one directive a REPLY can
 override: with an answer naming something the worktree's registry resolves it files, anchored to the
 REGISTRY's spelling; with anything else it parks again — which is what makes the whole ask-back loop
-(and its one-ask budget) exercisable offline and keyless. The double is routed through `agent.confined_write` — the same rule the SDK's
+(and its one-ask budget) exercisable offline and keyless. The double is routed through `agent.confined_write` — the same rule a tool-holding agent's
 `PreToolUse` hook enforces — so the whole offline suite proves something about the production path
 rather than about a second, untested implementation of the same rule.
 
@@ -661,8 +673,8 @@ rather than about a second, untested implementation of the same rule.
 | Read another file out of the knowledge repo | `base_inputs` — a wrapper over `read_at`, never `open(settings.<x>_path)`. Decide what ABSENT means for it and say so in the wrapper's docstring |
 | Change what the deployed worker needs | `bootstrap.py` (the checkout, the verification, the env it execs with) **and** `fly.toml`'s `worker` process group **and** `docker-compose.yml`'s `librarian` service — the composition exists so the artifact is exercised before staging is |
 | Change worktree / diff mechanics | `gitcmd.py` — `--text` and `core.quotePath=false` are load-bearing on every diff invocation, not cosmetic |
-| Change the ORDINARY brief | the knowledge repo's `.claude/skills/librarian/SKILL.md` — never a copy here. Grep it against `tests/librarian/test_librarian_brief_contract.py`'s rule table in BOTH directions before shipping either side alone, and resync BOTH frozen copies: `tests/librarian/fixtures/repo/` (the drift guard, resynced always) and `evals/filing/repo/` (the yardstick, re-frozen deliberately, with `FROZEN_SHA256`, `PROVENANCE.json` and a fresh baseline row in the same landing). The brief is backend-NEUTRAL: tool phrasing belongs in `agent.ORDINARY_SDK_ENVIRONMENT`/`ORDINARY_SDK_OVERRIDE_NOTE`, on this side |
-| Change the meeting flow | `processing.process_meeting_item` and its private helpers (`_one_meeting_pass`, `_stamp_meeting`, `_cross_check_meeting_outcome`, `_file_meeting`, `_refuse_meeting`); `agent.build_meeting_prompt`/`run_meeting`/`MEETING_ALLOWED_TOOLS` for the agent side; the brief lives in the knowledge repo (`.claude/skills/meeting-distiller/SKILL.md`) — grep it against `tests/librarian/test_meeting_brief_contract.py`'s rule table in BOTH directions before shipping either side alone, because a two-sided contract shipped one side at a time is how the two silently disagree |
+| Change the ORDINARY brief | the knowledge repo's `.claude/skills/librarian/SKILL.md` — never a copy here. Grep it against `tests/librarian/test_librarian_brief_contract.py`'s rule table in BOTH directions before shipping either side alone, and resync BOTH frozen copies: `tests/librarian/fixtures/repo/` (the drift guard, resynced always) and `evals/filing/repo/` (the yardstick, re-frozen deliberately, with `FROZEN_SHA256`, `PROVENANCE.json` and a fresh baseline row in the same landing). The brief is backend-NEUTRAL: a backend that departs from it says so in its own ENVIRONMENT paragraph, on this side (`pydantic_backend.ORDINARY_ENVIRONMENT`, composed through `agent.build_filing_header`) |
+| Change the meeting flow | `processing.process_meeting_item` and its private helpers (`_one_meeting_pass`, `_stamp_meeting`, `_cross_check_meeting_outcome`, `_file_meeting`, `_refuse_meeting`); `agent.build_meeting_prompt` and `agent.read_meeting_outcome` for the item's prompt and its account, and `pydantic_backend.MEETING_ENVIRONMENT` for what the agent is told about its own environment (the tool allow-lists went with the backend that held tools); the brief lives in the knowledge repo (`.claude/skills/meeting-distiller/SKILL.md`) — grep it against `tests/librarian/test_meeting_brief_contract.py`'s rule table in BOTH directions before shipping either side alone, because a two-sided contract shipped one side at a time is how the two silently disagree |
 | Change the view-regeneration trigger after a meeting files | `processing._file_meeting`'s `views_regenerate` block ONLY — keep it best-effort (never let a view fault taint the meeting's own `Result`) and keep the import pinned to `stigmergy.views.regenerate` (`test_librarian_may_only_import_views_regenerate`); the trigger's own logic (which entities, staleness, the commit) lives in `stigmergy.views.regenerate` — see [`views/index.md`](../views/index.md)'s Common tasks row for that half |
 
 ## Notes
@@ -682,7 +694,7 @@ rather than about a second, untested implementation of the same rule.
   tracked-path spelling let a re-spelled existing page pass as "new" on macOS/APFS — regaining, from
   a re-spelled name, the very write-to-an-existing-page capability the split above was meant to
   remove.
-- **The Claude Agent SDK is pinned exactly**, the same discipline `pydantic-ai` gets elsewhere in this
+- **The agent framework is pinned exactly**, the same discipline every framework gets elsewhere in this
   repo: the framework's API drives tool wiring, so a float would let a minor version bump change
   behaviour between CI (which never imports it — see the double) and a live run.
 - **[ADR 026](../../../docs/decisions/026-the-purge.md) removed the trust layer and the canon lane's
@@ -701,12 +713,12 @@ rather than about a second, untested implementation of the same rule.
   way. Trust the tuple, never a sentence that restates it.
 - **The skill is not in this package.** `.claude/skills/librarian/SKILL.md` lives in the knowledge
   repo, read by `agent.read_skill` out of the exact commit the worktree branches from
-  (`worker._check_skill_at`), and injected into the system prompt rather than loaded through the SDK's
+  (`worker._check_skill_at`), and injected into the system prompt rather than loaded through any harness's
   own settings mechanism — loading it as `project` settings once booted the knowledge repo's
   `.mcp.json` servers and hung the run forever (`agent.py`'s module docstring has the full account).
   **It is backend-NEUTRAL since ADR 033**: it describes a worker that hands the agent its context and
   writes the page from one structured account, and the tool mechanics live in the per-backend
-  ENVIRONMENT preamble composed by `agent.build_filing_header` — with the SDK carrying a NAMED
+  ENVIRONMENT preamble composed by `agent.build_filing_header` — with a tool-holding backend carrying a NAMED
   override note saying that its run departs from the brief. The direction of that note is the
   inversion worth noticing: in ADR 032 the brief was the tool-holding text and the structured
   backend carried the correction.

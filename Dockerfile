@@ -6,13 +6,16 @@
 #
 # One image and not three, for the reason there is one app: one build, one deploy, one place to
 # read logs, and no way for the three halves to drift onto different code. The cost is that the
-# server's container carries the worker's toolchain (git, gitleaks, Node, the Claude Code CLI) —
-# accepted for the pilot and named in the spec's risks as image bloat, with every version pinned
-# so a rebuild is reproducible. The Slack transport adds no new toolchain (`slack-bolt`/`aiohttp`
+# server's container carries the worker's toolchain (git, gitleaks, poppler) — accepted for the
+# pilot and named in the spec's risks as image bloat, with every version pinned so a rebuild is
+# reproducible. That toolchain is much smaller than it was: retiring the harness-driven filing
+# backend took the Node runtime and its ~500MB agent CLI out of this image entirely, so the bloat
+# risk is now mostly the Python wheels. The Slack transport adds no new toolchain (`slack-bolt`/`aiohttp`
 # are pure-Python wheels, installed the same way every other dependency is below).
 #
 # Secrets (OPENAI_API_KEY, STIGMERGY_INDEX_DSN, STIGMERGY_TOKEN_STORE, the R2 group, the librarian
-# GitHub App triple, ANTHROPIC_API_KEY) are Fly secrets injected at runtime — NONE of them are
+# GitHub App triple, ANTHROPIC_API_KEY — now the filing backend's PROVIDER key rather than a CLI's
+# credential, same variable) are Fly secrets injected at runtime — NONE of them are
 # baked into this image or checked into this repo. `stigmergy-librarian-boot` strips the read path's
 # key back out before exec'ing the worker (see `librarian/bootstrap.py`).
 #
@@ -28,28 +31,28 @@
 # deliberate base-image bump; do not float the tag back unpinned.
 
 # ── stage 1: the worker's third-party toolchain, pinned and checksum-verified ──────────────────
-# A separate stage so `curl`, `xz-utils` and the downloaded archives never reach the runtime image
-# — the final image gets the extracted binaries and nothing that fetched them.
+# A separate stage so `curl` and the downloaded archive never reach the runtime image — the final
+# image gets the extracted binary and nothing that fetched it.
+#
+# ONE binary now, where there were two plus an npm package: `gitleaks`. The Node runtime and the
+# agent CLI it hosted left with the backend that drove them — see
+# docs/decisions/033-structured-filing-flow.md. (`xz-utils` went with Node, whose tarball was the
+# only `.xz` this build ever fetched.)
 FROM python:3.12-slim@sha256:cab2dbf575e971934a81e4622f5aba17aa7929719bd7e31033a3a83b97fd0464 AS toolchain
 
 # The architecture is read from the BASE IMAGE, not from BuildKit's `TARGETARCH`, and that is a
 # correction rather than a preference. The digest above pins linux/amd64 (Fly's platform), so this
 # image is amd64 wherever it is built — on an arm64 Mac it simply runs under emulation. `TARGETARCH`
 # reports the BUILD HOST's platform, so on that Mac it says `arm64` and the build cheerfully
-# downloaded arm64 binaries into an amd64 container: `node` was there, and exec'ing it answered
+# downloaded arm64 binaries into an amd64 container: the binary was there, and exec'ing it answered
 # "No such file or directory". `dpkg --print-architecture` asks the image what it actually is,
-# which is the only source that cannot disagree with the digest.
+# which is the only source that cannot disagree with the digest. (The binary that failed that way
+# was the retired toolchain's; the rule is the download's, not that binary's, and `gitleaks` is
+# fetched per-architecture in exactly the same way.)
 ARG GITLEAKS_VERSION=8.30.1
-ARG NODE_VERSION=24.18.0
-# The Agent SDK drives the Claude Code CLI as a subprocess (see librarian/agent.py), so the CLI is
-# part of the runtime the `sdk` backend needs — pinned exactly, for the same reason
-# `claude-agent-sdk` is pinned exactly in pyproject.toml: a minor bump can change what the agent is
-# allowed to do between CI and staging. Its `engines` requires Node >= 22, which is why Node comes
-# from nodejs.org rather than from Debian (bookworm ships 18).
-ARG CLAUDE_CODE_VERSION=2.1.220
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
+ && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/*
 
 COPY scripts/docker/tool-checksums.txt /tmp/tool-checksums.txt
@@ -63,54 +66,11 @@ RUN set -eux; \
       *) echo "unsupported image architecture ${debarch}: add its digests to scripts/docker/tool-checksums.txt first" >&2; exit 1 ;; \
     esac; \
     gitleaks_tar="gitleaks_${GITLEAKS_VERSION}_linux_${arch}.tar.gz"; \
-    node_tar="node-v${NODE_VERSION}-linux-${arch}.tar.xz"; \
     curl -fsSL -o "${gitleaks_tar}" \
       "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${gitleaks_tar}"; \
-    curl -fsSL -o "${node_tar}" \
-      "https://nodejs.org/dist/v${NODE_VERSION}/${node_tar}"; \
     sha256sum --ignore-missing -c /tmp/tool-checksums.txt; \
     tar -xzf "${gitleaks_tar}" -C /usr/local/bin gitleaks; \
-    mkdir -p /opt/node; \
-    tar -xJf "${node_tar}" -C /opt/node --strip-components=1; \
     rm -rf /tmp/dl
-
-ENV PATH="/opt/node/bin:${PATH}"
-# Installed into the same prefix so the whole Node runtime — interpreter, npm and the CLI — copies
-# into the runtime image as one directory.
-#
-# Fetched and checksum-verified like gitleaks and Node above, rather than pulled straight from the
-# registry by name. Otherwise the asymmetry is real: the version would be pinned and the bytes
-# would not, so a rebuild would trust whatever the registry served for that version.
-#
-# `--ignore-scripts`, and then the package's own postinstall BY NAME. The flag alone would ship a
-# broken image, which is why it is not the whole fix: the `bin/claude.exe` inside the tarball is a
-# 500-byte stub whose entire body prints "Either postinstall did not run (--ignore-scripts...)", and
-# `install.cjs` is what replaces it with the native binary from the matching optional dependency. So
-# the flag buys exactly what it is for — nothing npm resolves gets to run arbitrary code during the
-# build — and the one script that must run is invoked explicitly, from the tarball verified two
-# lines above, and does no network I/O at all (it hardlinks a file that is already on disk).
-#
-# The size assertion is the proof, and it is here because a silent version of this failure is the
-# expensive one: a stub-sized `claude` means every `sdk` run fails at the agent, on staging, one
-# item at a time. `-gt 1048576` distinguishes the 500-byte stub from the ~500MB binary with room for
-# either to change by orders of magnitude.
-#
-# Residual, named rather than left to be found: the optional dependency carrying that native binary
-# is pinned by version and by npm's own registry integrity metadata, not by a digest in this repo.
-# It is a per-platform package, so pinning it means a line per architecture in tool-checksums.txt.
-RUN set -eux; \
-    mkdir -p /tmp/dl; cd /tmp/dl; \
-    tarball="claude-code-${CLAUDE_CODE_VERSION}.tgz"; \
-    curl -fsSL -o "${tarball}" \
-      "https://registry.npmjs.org/@anthropic-ai/claude-code/-/${tarball}"; \
-    sha256sum --ignore-missing -c /tmp/tool-checksums.txt; \
-    npm install -g --ignore-scripts --no-fund --no-audit "./${tarball}"; \
-    cd /; rm -rf /tmp/dl; \
-    pkg="$(npm root -g)/@anthropic-ai/claude-code"; \
-    node "${pkg}/install.cjs"; \
-    [ "$(wc -c < "${pkg}/bin/claude.exe")" -gt 1048576 ] || \
-      { echo "the claude CLI is still the postinstall stub: the native binary for this platform was not placed, so every sdk run would fail at the agent" >&2; exit 1; }; \
-    npm cache clean --force
 
 # ── stage 2: the runtime both process groups share ────────────────────────────────────────────
 FROM python:3.12-slim@sha256:cab2dbf575e971934a81e4622f5aba17aa7929719bd7e31033a3a83b97fd0464
@@ -126,8 +86,6 @@ RUN apt-get update \
 # AT THE WORKER, over the evidence blob.
 
 COPY --from=toolchain /usr/local/bin/gitleaks /usr/local/bin/gitleaks
-COPY --from=toolchain /opt/node /opt/node
-ENV PATH="/opt/node/bin:${PATH}"
 
 # `README.md` and the two licence files are here because `pyproject.toml` NAMES them (`readme`,
 # `license-files`): hatchling reads them while generating metadata, so a build context missing any
@@ -156,10 +114,11 @@ COPY deploy/entity-registry.json /app/entity-registry.json
 COPY deploy/slack-channels.json /app/slack-channels.json
 COPY deploy/stewards.json /app/stewards.json
 
-# Non-root. The SERVER never needs to write anywhere in the image; the WORKER does — it
-# keeps its knowledge-repo clone and the Claude Code CLI's own configuration directory under the
-# app user's home, which is why that home exists and is owned by it. Worktrees and the materialized
-# base inputs go to $TMPDIR, which is writable for everyone.
+# Non-root. The SERVER never needs to write anywhere in the image; the WORKER does — it keeps its
+# knowledge-repo clone under the app user's home, which is why that home exists and is owned by it.
+# (It also held the retired agent CLI's own configuration directory; the clone alone is reason
+# enough for the home.) Worktrees and the materialized base inputs go to $TMPDIR,
+# which is writable for everyone.
 RUN useradd --create-home --uid 10001 app && chown -R app /app
 USER app
 

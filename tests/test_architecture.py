@@ -460,18 +460,19 @@ def test_librarian_consumes_capture_and_the_kernel():
         "the librarian no longer imports stigmergy.kernel — the registry/ACL/page seams drifted")
 
 
-@pytest.mark.parametrize("path", LIBRARIAN_SOURCES, ids=lambda p: p.name)
-def test_librarian_never_imports_the_agent_sdk_at_module_level(path):
-    """The keyless rule, one worker over: the offline path must stay free of the agent framework.
-    `claude_agent_sdk` is imported INSIDE `SdkAgent._run`, so a run on the double never loads it,
-    CI stays keyless, and the import graph does not claim the librarian depends on it
-    unconditionally — the same shape as `answer`'s pydantic_ai rule above."""
-    offenders = [f"{path.name}:{line} -> {mod}"
-                 for mod, line in _module_level_all(path)
-                 if mod == "claude_agent_sdk" or mod.startswith("claude_agent_sdk.")]
-    assert not offenders, (
-        "stigmergy.librarian imports claude_agent_sdk at module level (move it inside the 'sdk' "
-        "backend):\n  " + "\n  ".join(offenders))
+# RETIRED with the `sdk` backend: `test_librarian_never_imports_the_agent_sdk_at_module_level`.
+# It banned a module-scope `claude_agent_sdk` import across every librarian source, so a run on the
+# double never loaded the agent framework and the import graph did not claim the librarian depended
+# on it unconditionally.
+#
+# It is deleted rather than kept because the package it named is no longer a dependency of this
+# project at all — `pyproject.toml` does not pin it and the image does not carry it — so the test
+# could never go red again whatever anybody wrote. **A permanently-green test is worse than no test,
+# because it reads as coverage**, and this one would have read as the keyless guarantee still being
+# enforced for the librarian.
+#
+# The RULE is untouched and is enforced by the test immediately below, on the framework the
+# librarian actually drives: it is a rule about agent FRAMEWORKS, not about one vendor's package.
 
 
 def _module_level_pydantic_ai(path: pathlib.Path) -> list[str]:
@@ -491,15 +492,15 @@ def _module_level_pydantic_ai(path: pathlib.Path) -> list[str]:
 
 @pytest.mark.parametrize("path", LIBRARIAN_SOURCES, ids=lambda p: p.name)
 def test_librarian_never_imports_pydantic_ai_at_module_level(path):
-    """The SAME keyless rule as the one above, for the second agent framework this package now
-    drives. `pydantic_ai` is imported INSIDE `PydanticMeetingAgent._run_meeting`, so a run on the
-    double or the SDK loads neither framework and the import graph does not claim the librarian
-    depends on this one unconditionally.
+    """The keyless rule, for the agent framework this package drives. `pydantic_ai` is imported
+    INSIDE the backend's own methods, so a run on the double loads no framework at all and the
+    import graph does not claim the librarian depends on one unconditionally.
 
-    It is a rule about the framework, not about one file: the posture existed only for
-    `claude_agent_sdk` while a third backend was being added, which is precisely when a
-    module-scope import is easiest to add and hardest to notice — `answer` has carried the same
-    rule for its own pydantic_ai edge since ADR 007, and the librarian had no equivalent.
+    It is a rule about the framework, not about one file or one vendor: it was first written for a
+    different package, while a second backend was being added, which is precisely when a
+    module-scope import is easiest to add and hardest to notice. That package is gone and this rule
+    is the one that inherited the job — `answer` has carried the same rule for its own pydantic_ai
+    edge since ADR 007.
     """
     assert not _module_level_pydantic_ai(path), (
         "stigmergy.librarian imports pydantic_ai at module level (move it inside the 'pydantic' "

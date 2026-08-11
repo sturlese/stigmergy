@@ -149,7 +149,7 @@ class AgentPasses:
     it the report named the queue delivery and nothing else, and "queue delivery 1" while the agent
     had had two tries is precisely the ambiguity `report.failed_system` was fixed to remove.
 
-    `cost_usd` accumulates beside the count for the same structural reason: the SDK prices every
+    `cost_usd` accumulates beside the count for the same structural reason: a backend prices every
     pass (`AgentRun.cost_usd`) and this loop is the only scope that sees every run of one item,
     so the sum lives here — stamped onto every Result by `_stamp_cost`, and onto the exception by
     `at_agent_attempt` for the failure path.
@@ -159,7 +159,7 @@ class AgentPasses:
 
 
 def _stamp_cost(result: "Result", passes: "AgentPasses") -> "Result":
-    """Every Result leaving an agent loop says what its passes cost. The SDK reports the real
+    """Every Result leaving an agent loop says what its passes cost. A backend reports the real
     dollar figure per run and, until this stamp existed, the number died with the run object —
     so the first question an operator asks of a report ("what did filing this cost?") was
     unanswerable from the one row that exists to answer questions about the item. `0.0` is a real
@@ -562,7 +562,7 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
     settings = deps.settings
     # **Which SHAPE of the ordinary flow this backend answers** (ADR 033) — DECLARED by the
     # backend (`filing_port.FilingAgent.structured_ordinary`), never sniffed from its class. Every
-    # branch below is behind this one boolean, and with it `False` — the `sdk` driver and the
+    # branch below is behind this one boolean, and with it `False` — the offline
     # offline double — this function does byte-for-byte what it did before the structured path
     # existed: no gather, no code-written page, the agent's own `page_path`.
     #
@@ -622,7 +622,7 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
                              reply=item.get("reply") or "", flow_note=flow_note,
                              gathered=gathered)
     except AgentError as ex:
-        # A pass that died mid-run still spent real money — `agent._priced` attached the SDK's
+        # A pass that died mid-run still spent real money — `filing_port.priced` attached the backend's
         # figure to the fault (0.0 for a timeout, honestly: no ResultMessage ever arrived).
         if passes is not None:
             passes.cost_usd += getattr(ex, "run_cost_usd", 0.0)
@@ -794,7 +794,7 @@ def _ordinary_stem(title: str) -> str:
     with spaces (`wiki/notes/Northwind Freight Onboarding.md`) and why the brief tells the agent to
     keep the characters the title has, accents included. Slugifying here would file
     `refund-policy-v2.md` beside a corpus of Title Case pages and quietly break every
-    `[[Refund Policy v2]]` a human — or the `sdk` backend, for the same capture — writes. The
+    `[[Refund Policy v2]]` a human — or the other shape of this flow, for the same capture — writes. The
     meeting flow slugifies because its own filenames are slugs; this one is not that flow.
 
     **Only the EDGES are trimmed, and the interior is left exactly as written.** The first version
@@ -2518,7 +2518,7 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
                                          corrective=corrective,
                                          reply=item.get("reply") or "")
         except AgentError as ex:
-            # Same fault-road bank as `_one_pass` — the SDK priced the run before most faults.
+            # Same fault-road bank as `_one_pass` — the backend priced the run before most faults.
             if passes is not None:
                 passes.cost_usd += getattr(ex, "run_cost_usd", 0.0)
             raise
