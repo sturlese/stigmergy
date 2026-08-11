@@ -165,9 +165,46 @@ _WORD_SPLIT_RE = re.compile(r"[^a-z0-9]+")
 # scope: `from evals import run_filing` costs nothing but the standard library.
 
 def _words(text: str) -> frozenset:
-    """The significant words of a title or a path, normalized for comparison."""
+    """The significant words of a title or a path, normalized for comparison.
+
+    A pure tokenizer: it lowercases, splits and drops stopwords, and it does NOT fold morphology.
+    The one fold this instrument makes lives in `_same_word` below, at the COMPARISON, so a token
+    is still the token the title actually carries — a `_words` that rewrote its own output would be
+    a stemmer wearing a tokenizer's name.
+    """
     return frozenset(w for w in _WORD_SPLIT_RE.split((text or "").lower())
                      if w and w not in _STOPWORDS)
+
+
+def _same_word(want: str, got: str) -> bool:
+    """One token against one token: equal, or the same word in the other grammatical NUMBER.
+
+    Exactly one fold and deliberately no more — a trailing `s`, in either direction. Not a stemmer,
+    not a table, nothing that could be extended without somebody noticing: `tracked` and `tracking`
+    are still two words here, and the yardstick's obligation to name uninflected content words is
+    unchanged for every inflection except this one.
+
+    **It is here because grammatical number turned out to be run-to-run NOISE, measured.** Three
+    independent runs of the same code on the same model titled F08's review decision three ways —
+    two singular ("…-for-review-…", scored PASS) and one plural ("…-reviews-…", scored FAIL) — with
+    the anchors right every time. A 2-denominator facet flipping on whether a model wrote "review"
+    or "reviews" is the instrument measuring the model's grammar, which is the same defect
+    `globex-meeting-budget` records one series over, arrived at from the other direction: there an
+    expectation demanded a literal word, here it demanded a literal ENDING.
+
+    **What the narrowness does and does not buy, stated exactly** — the first draft of this comment
+    overclaimed and the claim is the part that matters. It folds ONE suffix: a plural written `es`
+    is not folded (`process`/`processes` is still a miss), and neither is any other inflection. What
+    it cannot do is what a stem table does — reach `ed`, `ing`, `ies` or an irregular form, or grow
+    a new entry without somebody editing this line.
+
+    What it CAN do, and the reason this is a two-line rule rather than a one-line one: `a == b + "s"`
+    also fires when a token happens to be another token plus `s` (`bus` and `bu`). That is only a
+    false match if BOTH strings are words a title would carry, and a two-letter fragment is not —
+    every expectation here is written in proper nouns and stable nouns. It is a residual, not an
+    impossibility, and if one ever bites, the fix is the expectation rather than a longer rule.
+    """
+    return want == got or want == f"{got}s" or got == f"{want}s"
 
 
 def title_matches(expected: str, candidate: str) -> bool:
@@ -180,20 +217,34 @@ def title_matches(expected: str, candidate: str) -> bool:
     Northwind" is the same decision as one titled "Northwind second wave", and an instrument that
     scored the first a miss would be measuring the model's word order.
 
-    So an expectation matches when every significant word it names appears in the candidate. It is
-    deliberately generous in one direction only: a candidate may say MORE than the expectation, and
-    never less.
+    So an expectation matches when every significant word it names appears in the candidate, in
+    either grammatical number (`_same_word`). It is deliberately generous in one direction only: a
+    candidate may say MORE than the expectation, and never less.
 
-    **`_words` does no stemming, and will not grow any.** "tracked" and "tracking" are two words
-    here, so the obligation sits on the yardstick instead: an expectation is written in the
-    UNINFLECTED content words a paraphrase cannot drop — a proper noun plus a stable noun — and
-    never in the verb form one particular run happened to produce. A stemmer would move that
-    judgment into a table nobody reviews and would silently start matching words the expectation
-    never meant. `evals/filing/expected/expectations.json`'s `_looseness` note states the same rule
-    where the expectations are written, which is where it has to be obeyed.
+    **Beyond that one fold, `_words` does no stemming and will not grow any.** "tracked" and
+    "tracking" are two words here, so the obligation sits on the yardstick instead: an expectation
+    is written in the UNINFLECTED content words a paraphrase cannot drop — a proper noun plus a
+    stable noun — and never in the verb form one particular run happened to produce. A stemmer
+    would move that judgment into a table nobody reviews and would silently start matching words
+    the expectation never meant. `evals/filing/expected/expectations.json`'s `_looseness` note
+    states the same rule where the expectations are written, which is where it has to be obeyed.
+
+    **This loosening is ONE-DIRECTIONAL, which is what keeps the series comparable** — a recorded
+    score stays valid rather than needing a re-run to mean anything. The predicate is strictly
+    weaker than the one it replaces, so every pairing that matched before matches now: a recorded
+    PASS cannot become a FAIL, and only a FAIL can flip.
+
+    **With one caveat, stated because it is real rather than hidden**: `_decisions_match` pairs
+    expectations to pages GREEDILY and one-to-one, so a weaker predicate can in principle change
+    which page a title claims and starve a later expectation — a PASS→FAIL the loosening itself
+    cannot cause but the pairing can. That is precisely what
+    `tests/evals/test_filing_golden_fixture.py::test_no_expected_decision_title_can_swallow_a_later`
+    `_ones_page` exists to prevent, and it calls THIS function — so widening the match widened that
+    guard's net in the same commit. The property is preserved by the guard, not by the fold alone.
     """
     want = _words(expected)
-    return bool(want) and want <= _words(candidate)
+    got = _words(candidate)
+    return bool(want) and all(any(_same_word(w, g) for g in got) for w in want)
 
 
 def _anchor_matches(expected: dict, observed: dict) -> bool:

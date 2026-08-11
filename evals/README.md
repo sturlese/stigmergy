@@ -173,6 +173,24 @@ paraphrase cannot drop — a proper noun plus a stable noun — and never in the
 happened to produce. `expected/expectations.json`'s own `_morphology` note states the rule where
 the expectations are written, which is where it has to be obeyed.
 
+**With exactly one exception, and it was forced by measurement rather than chosen.** Grammatical
+NUMBER is folded at the comparison (`run_filing._same_word`): a trailing `s`, in either direction,
+so `review` and `reviews` are one word. Three independent runs of the same code on the same model
+titled F08's review decision two ways — singular twice, plural once — with the anchors right every
+time, and the 2-denominator `decisions` facet flipped on which one came out. That is the instrument
+measuring the model's grammar, which is `globex-meeting-budget`'s defect approached from the other
+side: there an expectation demanded a literal word, here it demanded a literal ending. Nothing
+wider is folded — a plural written `es` still misses (`process`/`processes`), which is the measure
+of how narrow the rule is.
+
+The loosening is **one-directional**, and that is what makes it safe to apply to a live series
+rather than a reason to restart one: the predicate is strictly weaker than the one it replaces, so
+every pairing that matched before matches now — a recorded PASS cannot become a FAIL and only a
+FAIL can flip. The single caveat is `_decisions_match`'s greedy one-to-one pairing, where a weaker
+predicate could in principle re-bind a title to a different page; that is exactly what
+`test_no_expected_decision_title_can_swallow_a_later_ones_page` guards, and because it calls the
+same matcher, widening the match widened its net in the same commit.
+
 ### One expectation that is deliberately weaker than it looks
 
 The `reuse` facet scores whether a meeting re-filed after a park **kept the decisions it had
@@ -351,6 +369,27 @@ lessons are already spent: the filing golden matches titles on normalized *words
 literally, precisely because of the first, and `run_filing._check_set` refuses to spend a single
 model call on a set whose captures and expectations have drifted apart, precisely because of the
 second.
+
+Two further footnotes belong to the filing series and are recorded here for the same reason —
+a reader comparing rows needs to know what changed under them:
+
+- **The `decisions` facet stopped measuring grammatical number (2026-08-11).** Three independent
+  runs of the same code on the same model titled F08's review decision as `…-for-review-…` twice
+  (scored PASS) and `…-reviews-…` once (scored FAIL), with the anchors right in all three. The
+  matcher now folds a trailing `s` (`run_filing._same_word`); see the loose-matching note above for
+  the rule and its one-directional property. Unlike the two defects above, this one is FIXED rather
+  than recorded-and-kept, and the reason is the direction: the fold is strictly weaker, so no row
+  already in the series would have scored lower under it. Every recorded `decisions` score remains
+  exactly as valid as it was; only a future run can benefit. A change that could have lowered a
+  past score would have had to be recorded and left alone, like the two above.
+- **Two M2-era rows name superseded shas.** The rows whose `git_sha` is in the `fa55010`/`2be308f`
+  era point at commits that no longer exist on any branch: the M2 work was replayed before merge,
+  and the replayed trees are byte-identical to `56c0566`/`1466d28`. The replay was not cosmetic —
+  CI's history scan caught a credential-SHAPED literal in a test fixture, and the honest fix for a
+  string that looks like a secret in git history is to erase it before the history is permanent
+  rather than to add a commit on top. So the sha in those two rows is stale while the code they
+  measured is fully reachable, at the identical tree, under the new sha. Nothing about the scores
+  is affected; a reader resolving those rows should use the pairing above.
 
 **Adding a filing capture is not free the way adding a question is.** Every capture costs an agent
 pass on every future run, and — because facets carry their own denominators — a new capture that
