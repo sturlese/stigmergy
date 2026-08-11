@@ -86,6 +86,25 @@ BACKEND_NAME = "pydantic"
 # money that IS banked (the usage accumulator sees it) under an attempt count that does not move.
 OUTPUT_RETRIES = 1
 
+# How much of an `UnexpectedModelBehavior`'s own message reaches the Finding a corrective retry
+# reads, as ONE bounded line — enforced by `textutil.one_line`, not `sanitize`/`clamp` separately:
+# pydantic-ai 2.13's `UnexpectedModelBehavior.__str__` is `f'{message}, body:\n{body}'`, so a
+# `sanitize`-then-`clamp` pipeline (`sanitize` deliberately keeps newlines) still let a
+# response-body newline land inside the budget, and this text reaches the corrective retry's
+# PROMPT — the same class of defect `neutralize_fence` exists for, which is why the fault text is
+# fence-neutralized before it is one-lined. 200 is the same order of magnitude as a report line
+# rather than a whole response body: enough to name the fault, not enough to smuggle a second one.
+MAX_FAULT_MESSAGE_LEN = 200
+
+# The WORKER LOG's own budget for the same exception text — wider than `MAX_FAULT_MESSAGE_LEN`
+# because a log line serves an operator diagnosing a fault, not a submitter reading a report, but
+# still bounded rather than raw: the framework's message and `exc.__cause__`'s `repr` (typically a
+# pydantic `ValidationError`, whose `repr` embeds the input values verbatim) can both carry
+# captured material or PII, unbounded, straight into the worker's own logs. No fence-neutralize
+# here — a log is not a prompt, and the property that matters is ONE bounded line, which
+# `textutil.one_line` alone already guarantees.
+MAX_FAULT_LOG_LEN = 500
+
 # The provider prefixes this milestone names, and the environment variable each family
 # authenticates with. Used by `worker.startup_checks`' preflight, which refuses a missing key
 # BEFORE the first claim; an unknown prefix is not an error (a provider pydantic-ai supports and
@@ -1033,13 +1052,38 @@ class PydanticFilingAgent:
             # A SHAPE problem — the class the worker's corrective retry exists for. Travels as an
             # `OutcomeShapeError` carrying a finding, exactly as a refused account from the file
             # channel does; see `_run_meeting`'s own arm for the full argument.
+            #
+            # **Logged AND named in the Finding, not just logged.** `str(ex)` was reaching only the
+            # log before this — every real UMB fault reported to the corrective retry and to the
+            # submitter as bare "UnexpectedModelBehavior", indistinguishable from every other one.
+            # `exc.__cause__` is logged too, because pydantic-ai wraps a provider or validation
+            # fault underneath, and that is usually the more informative of the two. No `exc_info`
+            # — this is a KNOWN, handled family, the same rule `worker.process_next`'s own
+            # known-family branch follows.
+            #
+            # **Both the log line and the Finding are bounded through `textutil.one_line`, not raw
+            # `str`/`repr`.** See `MAX_FAULT_LOG_LEN`/`MAX_FAULT_MESSAGE_LEN` above for why: the
+            # framework's own message and its cause's `repr` are unbounded and can carry captured
+            # material verbatim, on a surface (the log, then the corrective retry's prompt) that
+            # must stay one line. The Finding's copy is fence-neutralized first; the log's is not.
+            log.warning("filing agent: %s: %s (cause=%s)", ex.__class__.__name__,
+                       textutil.one_line(str(ex), MAX_FAULT_LOG_LEN),
+                       textutil.one_line(repr(ex.__cause__), MAX_FAULT_LOG_LEN))
             run.cost_usd = self._fault_cost(usage, flow="filing")
+            fault = textutil.one_line(textutil.neutralize_fence(str(ex)), MAX_FAULT_MESSAGE_LEN)
             raise priced(run, OutcomeShapeError([gates.Finding(
                 agent_module._OUTCOME_GATE, "framework-rejected",
-                f"the filing run ended badly ({ex.__class__.__name__}): call the tools this run "
-                f"declares, with the arguments they declare, and write your account to "
+                f"the filing run ended badly ({ex.__class__.__name__}: {fault}): call the tools "
+                f"this run declares, with the arguments they declare, and write your account to "
                 f"{agent_module.OUTCOME_FILENAME} with `write_page`")])) from ex
         except Exception as ex:  # noqa: BLE001 — class name only: provider errors carry prompt text
+            # Logged for the same reason the UMB arm above logs: the wire message here stays
+            # class-only on purpose (a provider fault can carry prompt text), so the real message is
+            # otherwise lost the moment this exception is wrapped. No `exc_info` — handled family.
+            # Bounded through `textutil.one_line` the same way — see the UMB arm above.
+            log.warning("filing agent: %s: %s (cause=%s)", ex.__class__.__name__,
+                       textutil.one_line(str(ex), MAX_FAULT_LOG_LEN),
+                       textutil.one_line(repr(ex.__cause__), MAX_FAULT_LOG_LEN))
             run.cost_usd = self._fault_cost(usage, flow="filing")
             raise priced(run, AgentError(
                 f"the filing agent run failed ({ex.__class__.__name__})")) from ex
@@ -1180,16 +1224,36 @@ class PydanticFilingAgent:
             # finding, exactly as a refused account from the file channel does. Wrapped as a bare
             # `AgentError` (the branch below) it would finish the item with a class name and no
             # brief, which is the defect `errors.OutcomeShapeError` was split out to fix.
+            #
+            # **Logged AND named in the Finding, not just logged** — same argument as `_run`'s own
+            # UMB arm: a bare class name is indistinguishable from every other re-validation
+            # failure, on both the log line and the brief the retry reads. `exc.__cause__` is logged
+            # too because pydantic-ai usually wraps the real validation or provider fault underneath
+            # it. No `exc_info` — a KNOWN, handled family.
+            #
+            # Bounded through `textutil.one_line` the same way `_run`'s own UMB arm is — see
+            # `MAX_FAULT_LOG_LEN`/`MAX_FAULT_MESSAGE_LEN` above.
+            log.warning("meeting agent: %s: %s (cause=%s)", ex.__class__.__name__,
+                       textutil.one_line(str(ex), MAX_FAULT_LOG_LEN),
+                       textutil.one_line(repr(ex.__cause__), MAX_FAULT_LOG_LEN))
             run.cost_usd = self._fault_cost(usage)
+            fault = textutil.one_line(textutil.neutralize_fence(str(ex)), MAX_FAULT_MESSAGE_LEN)
             raise priced(run, OutcomeShapeError([gates.Finding(
                 # The same gate name the file channel's own shape findings carry, so
                 # `corrective_brief` and `processing._refuse_meeting` cannot tell the two channels
                 # apart — one vocabulary for one class of problem.
                 agent_module._OUTCOME_GATE, "framework-rejected",
                 f"the account did not satisfy this run's output schema after "
-                f"{OUTPUT_RETRIES} re-validation attempt(s) ({ex.__class__.__name__}); return "
-                f"every field the schema declares, in the shape the skill documents")])) from ex
+                f"{OUTPUT_RETRIES} re-validation attempt(s) ({ex.__class__.__name__}: {fault}); "
+                f"return every field the schema declares, in the shape the skill documents")])) from ex
         except Exception as ex:  # noqa: BLE001 — class name only: provider errors carry prompt text
+            # Logged for the same reason the UMB arm above logs: the wire message here stays
+            # class-only on purpose (a provider fault can carry prompt text), so the real message is
+            # otherwise lost the moment this exception is wrapped. No `exc_info` — handled family.
+            # Bounded through `textutil.one_line` the same way — see the UMB arm above.
+            log.warning("meeting agent: %s: %s (cause=%s)", ex.__class__.__name__,
+                       textutil.one_line(str(ex), MAX_FAULT_LOG_LEN),
+                       textutil.one_line(repr(ex.__cause__), MAX_FAULT_LOG_LEN))
             run.cost_usd = self._fault_cost(usage)
             raise priced(run, AgentError(
                 f"the meeting agent run failed ({ex.__class__.__name__})")) from ex

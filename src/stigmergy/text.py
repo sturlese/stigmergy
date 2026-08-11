@@ -1,6 +1,6 @@
 """Text hygiene for anything untrusted that a person will read.
 
-Five functions, one seam, and they live at the ROOT of the package on purpose: every subsystem that
+Six functions, one seam, and they live at the ROOT of the package on purpose: every subsystem that
 renders text somebody else wrote needs them — `index` (search hits), `server` (page excerpts),
 `librarian` (submitter reports), `capture` (queue rows and steward notes), `entities` (the steward's
 terminal). A module below all of them can be imported by all of them without any package having to
@@ -124,3 +124,22 @@ def clamp(text: str, width: int) -> str:
     if space >= width - max(1, width // 4):
         cut = cut[:space]
     return cut.rstrip(" ,;:.") + "…"
+
+
+def one_line(text: str, width: int) -> str:
+    """`sanitize`, then every run of whitespace collapsed to a single space, then `clamp`.
+
+    `sanitize` alone is not a ONE-LINE guarantee: it deliberately leaves newlines and tabs in place
+    (its own docstring says callers collapse them), so a caller that fed `sanitize`'s output straight
+    into `clamp` could still land a newline inside the budget — on a surface built to be one line
+    (a log line, a report row, a brief item), that is an injection seam as well as a display bug. A
+    string this collapses is also always SHORTER after than before it clamps, so the two orders are
+    not equivalent — collapse first, or the truncation point is chosen against text the caller never
+    sees rendered.
+
+    Composed here, once, because it had already been hand-rolled twice: `gates._one_line` (now a
+    thin wrapper over this) for a brief's declared names, and every fault-log line in
+    `pydantic_backend` that needs a framework exception's own text bounded before it reaches a log
+    or a corrective-retry prompt.
+    """
+    return clamp(" ".join(sanitize(str(text or "")).split()), width)

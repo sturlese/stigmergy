@@ -1682,6 +1682,78 @@ def test_the_contract_linter_never_inherits_the_app_key_or_the_queue_dsn(tmp_pat
     assert "PATH" in seen
 
 
+# ── gate_contract: only FRONTMATTER_CHECK earns a brief on top of its message ───────────────────
+def _stub_linter(tmp_path, *, check: str, message: str):
+    """A stand-in for `.claude/tools/stigmergy_lint.py` that reports exactly one finding on
+    `wiki/notes/New.md`, in the linter's own JSON report shape — the same real-subprocess pattern
+    `test_the_contract_linter_never_inherits_the_app_key_or_the_queue_dsn` uses above, because
+    `gate_contract` is integrated here rather than mocked: the property under test is what THAT
+    function does with a `check` id, and a mock of `gate_contract` itself would only mirror the
+    implementation being changed.
+    """
+    linter = tmp_path / "linter.py"
+    linter.write_text(
+        "import json\n"
+        f"print(json.dumps({{'findings': [{{'file': 'wiki/notes/New.md', 'check': {check!r},\n"
+        f"  'severity': 'error', 'message': {message!r}}}]}}))\n",
+        encoding="utf-8")
+    return gates.GateContext(worktree=str(tmp_path),
+                             entries=[gitcmd.DiffEntry("A", "wiki/notes/New.md",
+                                                       new_mode="100644")],
+                             added=[], material="", outcome=None, registry=None,
+                             linter_path=str(linter))
+
+
+def test_a_frontmatter_check_finding_carries_the_facts_line_in_its_brief(tmp_path):
+    """OLD behaviour, before this change: `gate_contract` built every contract finding with
+    `brief=""` (the dataclass default) regardless of `check`, so a `frontmatter` finding read on
+    the corrective retry exactly like a `dead_links` one — a diagnosis of WHICH field is wrong,
+    never of WHOSE field it is to fix. `FRONTMATTER_CHECK` findings now get `FRONTMATTER_FACTS`
+    appended to the message in `brief`."""
+    ctx = _stub_linter(tmp_path, check=gates.FRONTMATTER_CHECK,
+                       message="missing required field: type")
+
+    findings = gates.gate_contract(ctx)
+
+    assert len(findings) == 1
+    finding = findings[0]
+    assert finding.code == gates.FRONTMATTER_CHECK
+    assert finding.message in finding.brief
+    # the facts line names all five worker-stamped fields, not a subset that happens to be handy
+    for field in ("status", "as_of", "submitted_by", "entity", "acl"):
+        assert f"`{field}`" in finding.brief
+    assert "do not add them yourself" in finding.brief
+
+
+def test_benign_twin_a_dead_links_finding_carries_no_brief(tmp_path):
+    """The other named check id gets no second text: `DEAD_LINKS_CHECK`'s own message already
+    reads as a repair instruction (a path and a wikilink target), so `gate_contract` leaves `brief`
+    at the dataclass default and `corrective_brief` falls back to `message` for it — proving the
+    branch above is on `check`, not a blanket brief for every contract finding."""
+    ctx = _stub_linter(tmp_path, check=gates.DEAD_LINKS_CHECK,
+                       message="dead link: [[Nowhere]]")
+
+    findings = gates.gate_contract(ctx)
+
+    assert len(findings) == 1
+    assert findings[0].code == gates.DEAD_LINKS_CHECK
+    assert findings[0].brief == ""
+
+
+def test_the_frontmatter_facts_reach_the_corrective_retry_through_corrective_brief(tmp_path):
+    """The facts line is only real to the agent through the channel the retry actually reads.
+    Asserting on `Finding.brief` alone (the two tests above) proves `gate_contract` sets the
+    field; this proves `gates.corrective_brief` — what `processing.py` hands the model — still
+    carries it forward rather than, say, truncating or re-deriving the text from `message`."""
+    ctx = _stub_linter(tmp_path, check=gates.FRONTMATTER_CHECK,
+                       message="missing required field: type")
+    findings = gates.gate_contract(ctx)
+
+    brief = gates.corrective_brief(findings)
+
+    assert gates.FRONTMATTER_FACTS in brief
+
+
 def test_dropping_the_related_line_entirely_still_vetoes(tmp_path):
     """The zero-length degenerate case of "the link set did not grow": removing the field outright
     is a rewrite by any reading, not an edge case the superset check should wave through."""

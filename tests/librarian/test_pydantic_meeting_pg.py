@@ -25,6 +25,7 @@ import json
 import os
 
 import pytest
+from pydantic_ai.exceptions import UnexpectedModelBehavior
 from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
@@ -637,6 +638,81 @@ def test_a_mid_run_provider_fault_is_wrapped_by_class_name_and_never_by_its_mess
         "'nobody attached it'")
     # the original is kept as the cause, so a stack trace in the worker's own log still has it
     assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+
+# A control byte (BEL) planted just past a recognizable head, and 280 characters of padding after
+# it — long enough that `pydantic_backend.MAX_FAULT_MESSAGE_LEN` (200) must cut it, not merely
+# leave it alone.
+_CONTROL_BYTE = "\x07"
+_FAULT_HEAD = "the account referenced a decision the schema does not carry"
+_KNOWN_FAULT = _FAULT_HEAD + _CONTROL_BYTE + " " + ("filler " * 40)
+
+
+def test_a_raised_unexpected_model_behavior_reaches_the_finding_sanitized_and_clamped(
+        tmp_path, require_gitleaks):
+    """OLD behaviour, before this change: `_run_meeting`'s UMB arm named only
+    `ex.__class__.__name__` in the Finding's message — `str(ex)` reached the `log.warning` line and
+    nothing else, so a real UMB fault (the framework exhausting its own output re-validations,
+    which `test_a_framework_that_exhausts_its_output_retries_also_takes_the_retry_road` above
+    drives for real) was indistinguishable from every other one at the one place a corrective
+    retry or a failed report could read what actually went wrong.
+
+    Driven by a model that raises `UnexpectedModelBehavior` DIRECTLY, deliberately unlike that
+    test: the property under test here is the WRAP, not whether the framework's own retry budget
+    genuinely exhausts. This is `test_a_mid_run_provider_fault_is_wrapped_by_class_name_and_never_
+    by_its_message`'s own twin, one exception type over — same direct-raise pattern, opposite
+    named-vs-class-only outcome.
+    """
+    def _raising():
+        def _explode(messages, info):
+            raise UnexpectedModelBehavior(_KNOWN_FAULT)
+        return FunctionModel(_explode)
+
+    env, deps, agent = _rig(tmp_path, _raising)
+
+    with pytest.raises(OutcomeShapeError) as exc_info:
+        agent.run_meeting(worktree=env.repo, material=_TRANSCRIPT,
+                          meeting_meta={"title": "Q3 sync", "meeting_date": "2026-07-29"},
+                          registry=deps.registry,
+                          source_page_path="sources/meetings/q3-sync.md")
+
+    findings = exc_info.value.findings
+    assert findings and findings[0].gate == agent_module._OUTCOME_GATE
+    message = findings[0].message
+    assert _CONTROL_BYTE not in message, "the control byte survived sanitize"
+    assert _FAULT_HEAD in message, "the recognizable head of the fault text did not survive clamp"
+    assert _KNOWN_FAULT.replace(_CONTROL_BYTE, "") not in message, (
+        "the whole padded fault text reached the message unclamped")
+    assert "…" in message, "no ellipsis — the fault does not read as truncated"
+    # `Finding.brief` is unset on this arm too, so the corrective retry still sees the fault text —
+    # through the fallback `corrective_brief` documents, not a second copy.
+    assert findings[0].brief == ""
+    assert _FAULT_HEAD in gates.corrective_brief(findings)
+
+
+def test_benign_twin_a_normal_successful_meeting_carries_no_fault_machinery(tmp_path,
+                                                                            require_gitleaks):
+    """The specificity half, mirrored from the ordinary flow's own twin
+    (`test_agentic_processing_pg.test_benign_twin_a_normal_successful_run_carries_no_fault_
+    machinery`): `MAX_FAULT_MESSAGE_LEN`'s sanitize/clamp seam belongs to the UMB and
+    provider-fault arms above and nowhere else. An ordinary `summary` — longer than
+    `MAX_FAULT_MESSAGE_LEN` but well under `agent_module.MAX_PROSE_LEN` — must reach
+    `run.outcome.summary` byte for byte; a regression that ran every outcome field through the
+    fault seam would silently clip a real summary at 200 characters and this is what would notice.
+    """
+    long_summary = "distilled the meeting, " + ("padding word " * 20)
+    assert len(long_summary) > pydantic_backend.MAX_FAULT_MESSAGE_LEN, (
+        "the fixture is not exercising the ceiling")
+    account = _account().model_copy(update={"summary": long_summary})
+    env, deps, agent = _rig(tmp_path, lambda: _test_model(account))
+
+    run = agent.run_meeting(worktree=env.repo, material=_TRANSCRIPT,
+                            meeting_meta={"title": "Q3 sync", "meeting_date": "2026-07-29"},
+                            registry=deps.registry,
+                            source_page_path="sources/meetings/q3-sync.md")
+
+    assert run.outcome.summary == long_summary
+    assert "UnexpectedModelBehavior" not in run.outcome.summary
 
 
 def test_an_account_over_the_outcome_ceiling_is_refused_on_this_channel_too(tmp_path,

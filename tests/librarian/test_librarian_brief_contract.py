@@ -295,12 +295,16 @@ RULE_TABLE = [
      "it: a", "existing-page-collision"),
     ("    letters belong in a title, and dropping or approximating them (\"Reuni n\", \"Reunion\") "
      "writes a", "unnameable_reason"),
-    # Re-aimed the same way: "do not write frontmatter" is now CONDITIONAL on the shape, because a
-    # run that writes its own file writes its own container. The marker is unchanged and still the
-    # right one — `_build_ordinary_page` is the function that makes the rule true on the shape the
-    # phrase is about, where code owns the container.
-    ("**When your run returns the page's text for the worker to write, write no frontmatter block "
-     "at", "def _build_ordinary_page("),
+    # Re-aimed again: the standalone "write no frontmatter block at all" sub-bullet this row used
+    # to pin is GONE — the section's opening no longer treats "the worker builds the container" as
+    # the default and the other shape as a footnote bullet under the server-owned-fields item. It
+    # now states both branches up front, symmetrically, in the same sentence: a run that writes its
+    # own file authors the whole container (frontmatter included); a run that returns text writes
+    # NONE of it. The marker is unchanged and still the right one — `_build_ordinary_page` is the
+    # function that makes the rule true on the shape the new sentence is about, where code owns the
+    # container.
+    ("**Your preamble decides who writes the file, and the two ways are not alike.**",
+     "def _build_ordinary_page("),
 
     # ── RETIRED: the ordinary flow's override row ────────────────────────────────────────────
     # The pair was:

@@ -96,7 +96,7 @@ _PENDING_ALLOWED = (REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",)
 # A deliberate re-freeze updates these three numbers IN THE SAME COMMIT as the bytes, which is the
 # review moment this pin exists to force — and, per `evals/README.md`, retires the series with it.
 #
-# The librarian brief's pin has moved THREE times, deliberately, and every move was the same kind
+# The librarian brief's pin has moved FOUR times, deliberately, and every move was the same kind
 # of event: not an edit to a yardstick but a NEW yardstick, which retires the series with it per
 # `evals/README.md`.
 #
@@ -112,16 +112,23 @@ _PENDING_ALLOWED = (REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",)
 #      applies when the run holds them), which is the only shape that stays true of both a
 #      handed-context run and a searching one. Knowledge-repo commit
 #      `0bf3c5462d50e72f5435ce61d61ba5f023e60388` — the sha all five provenance records carry.
+#   4. The "Writing the page" section's opening became a symmetric two-branch statement (`**Your
+#      preamble decides who writes the file, and the two ways are not alike.**`), folding in what
+#      used to be a standalone "write no frontmatter block at all" sub-bullet — a phrasing a staging
+#      measurement found 8 of 13 first-pass drafts dropped the frontmatter block over, against 0 of
+#      12 after the rewrite. The same edit added a `**A wikilink stays on one line.**` sub-bullet
+#      ahead of the existing "claim that a page exists" one. Knowledge-repo commit
+#      `03aab8799f9778087ab78cc23fbbf9a809d52d5b`.
 #
 # The other two numbers did NOT move with it, and that is the fact worth reading off this block: one
-# freeze, one commit does not mean one freeze, three edits. The linter and the meeting brief are
-# byte-identical at that commit and at its predecessor, which is exactly what
+# freeze, one commit does not mean one freeze, every copy edited. The linter and the meeting brief
+# are byte-identical at that commit and at its predecessor, which is exactly what
 # `PROVENANCE.json`'s `stigmergy_sha_note` already claims about the tree.
 FROZEN_SHA256 = {
     ".claude/tools/stigmergy_lint.py":
         "5c914e43a33e05a276142b26cd6ebc3ff84479b43703c783b9959e6a28948f28",
     ".claude/skills/librarian/SKILL.md":
-        "47c60c5816622cc2f10e9e08882a8c8fc6e58db6090522cafca268edc64dafbc",
+        "9376e8f1863ade51f89fcb239a0842cb33454baee7255a54d7f15eced3759645",
     ".claude/skills/meeting-distiller/SKILL.md":
         "b3686f91666c5fa6f9f9a2aa602230db716abbf503792c60d64f7d0e2300476a",
 }

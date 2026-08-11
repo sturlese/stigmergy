@@ -7,7 +7,7 @@ reasoning, as its sibling one directory over (`../librarian/FROZEN.md`).
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/skills/meeting-distiller/SKILL.md` |
-| **Copied at commit** | `0bf3c5462d50e72f5435ce61d61ba5f023e60388` |
+| **Copied at commit** | `03aab8799f9778087ab78cc23fbbf9a809d52d5b` |
 | **Drift guard** | none, on purpose — see `../../tools/FROZEN.md` |
 
 ## Why the filing golden needs it

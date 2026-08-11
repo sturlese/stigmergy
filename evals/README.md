@@ -290,7 +290,7 @@ environment-CONDITIONAL: it defers the mechanics to the platform's own preamble,
 in a paragraph that applies when the run holds them, and adds the one instruction a run that writes
 its own file needs (read `ops/templates/<type>.md` for the container's shape). **Only the librarian
 brief moved again** — `FROZEN_SHA256`'s other two numbers are unchanged, and every frozen record in
-the tree carries `0bf3c546`.
+the tree carried `0bf3c546` at that point.
 
 The same rule applies to it as to the first re-freeze, for the same reason: nothing is re-scored,
 nothing is back-filled, and **the bars still stand un-re-derived**. The rows at `907ccc7` were
@@ -298,6 +298,27 @@ measured under the previous bytes AND under a one-shot harness; the next row is 
 new things at once, which is what the harness-era footnote below is for. Neither re-freeze
 relabelled a recorded row — a row says which brief produced it, and that is the whole point of
 recording the sha.
+
+**The brief was re-frozen a THIRD time, and this one narrowed a phrasing rather than reversing a
+shape.** Measured across the frozen fixture and a corpus clone, the "Writing the page" section's
+old structured-leaning emphasis let the agentic (pydantic) backend stochastically draft a page with
+a body and NO frontmatter block at all — 8 of 13 first-pass drafts, every one failing the contract
+linter's `missing required field: type` (the linter names its first required field; the whole
+block was absent, not one key). Knowledge-repo commit `03aab879` rewrites the section as one
+symmetric statement instead of two paragraphs under one emphasis — a run that writes the file
+itself authors the whole file, frontmatter block first; a run that returns text for the worker
+returns only what goes below the H1 — folds the standalone "no frontmatter block" bullet into the
+branch it belongs to, and adds a wikilink-stays-on-one-line rule for a second, unrelated defect the
+same measurement pass found. Measured after: 0 of 12. **Only the librarian brief moved a third
+time** — `FROZEN_SHA256`'s other two numbers are unchanged, and every frozen record in the tree
+carries `03aab879` at this point. [ADR 035](../docs/decisions/035-filing-reliability-brief-and-fault-visibility.md)
+records the full decision, including the platform-side changes that ride beside this re-freeze.
+
+The same rule applies here too: nothing is re-scored, nothing is back-filled, and **the bars still
+stand un-re-derived** — a bar re-derived from a run nobody has made yet would be a number invented
+to be met. The first row measured under `03aab879` lands with this same landing, read as a fresh
+baseline candidate against the ADR 034-era rows at `907ccc7`, never as a regression against the
+table above.
 
 ### Running it
 
