@@ -170,7 +170,7 @@ def test_once_json_output_leads_with_a_machine_readable_event(capsys, cli_rig):
 
 
 def test_the_backend_flag_itself_rejects_an_unknown_choice_at_parse_time(capsys, cli_rig):
-    """`argparse`'s own `choices=("sdk", "double")` on `--backend` refuses this before
+    """`argparse`'s own `choices=agent_module.BACKENDS` on `--backend` refuses this before
     `config.Settings.from_args` is ever reached — the loudest, earliest place a typo can be
     caught. `argparse` reports this by raising `SystemExit(2)` directly out of `parse_args`,
     which `cli.main` does not (and must not) catch, since a malformed invocation is a shell/usage

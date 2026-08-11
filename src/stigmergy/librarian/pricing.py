@@ -1,7 +1,8 @@
 """Tokens to dollars, for the backends that do not price themselves.
 
-The Claude Agent SDK reports `total_cost_usd` per run, so `agent.SdkAgent` has never had to know
-what a token costs. Every other provider reports COUNTS, and a report that answered "what did
+A harness that reports `total_cost_usd` per run needs no price table at all, which is why the
+librarian went without one for as long as its only backend was that kind. Providers report COUNTS,
+and a report that answered "what did
 filing this cost?" with `0.0` because nobody did the multiplication would be worse than one that
 said nothing — a silent zero reads as free (ADR 031 D2 records why the figure has to reach the row
 at all; ADR 032 records this half).
@@ -19,10 +20,12 @@ is claimed rather than by reading `$0.00` off ten filed rows. A pricing table th
 know" with zero is an instrument that lies in the one direction nobody checks.
 
 **Who reads this module, and who never does.** Only a backend that reports TOKENS prices itself
-here. The `sdk` backend is priced by its own SDK, never calls `_override`, and is therefore
-untouched by a malformed `$STIGMERGY_LIBRARIAN_PRICING` — so "malformed is refused rather than
-ignored", below, is a promise to the token-priced backends and not a claim that every librarian run
-validates that variable.
+here. A backend priced by its own provider passes that figure straight through to
+`AgentRun.cost_usd` and never calls `_override`, so it is untouched by a malformed
+`$STIGMERGY_LIBRARIAN_PRICING` — the retired Claude-Code backend was the one that worked that way,
+and the offline double, which spends nothing, is the other. "Malformed is refused rather than
+ignored", below, is therefore a promise to the token-priced backends and not a claim that every
+librarian run validates that variable.
 """
 import json
 import math
@@ -52,9 +55,11 @@ AS_OF = "2026-08-11"
 # input to write a cache entry). Stated here as well as there, because this is the table somebody
 # edits when a number looks wrong.
 #
-# The bare `claude-sonnet-5` is deliberately ABSENT: that spelling is the `sdk` backend's, and that
-# backend is priced by its own SDK. An entry for it would be a second, drifting answer to a question
-# already answered upstream.
+# The bare `claude-sonnet-5` is deliberately ABSENT, and stays absent now that the backend which
+# used that spelling has retired. Adding it would make an unusable model id look configured: a bare
+# name reaches pydantic-ai as an OPENAI model, and `worker._check_pydantic_backend` refuses it
+# before this table is ever consulted. `priced_models()` is printed in that refusal as the list to
+# choose from, so every id here has to be one a run can actually use.
 PRICES = {
     # The milestone's own trial model. $2 in / $12 out is what the trial was budgeted against;
     # nothing here has been confirmed against a published price sheet, which is why this module

@@ -24,9 +24,8 @@ dependencies = [
   "starlette>=0.37",          # the streamable HTTP transport + the per-user auth ASGI middleware (already an mcp[http] transitive dep — declared explicitly since transport_http.py imports it directly)
   "uvicorn>=0.29",            # the HTTP transport's ASGI server (same rationale as starlette above)
   "boto3>=1.34",              # the evidence plane's real store (stigmergy.capture.evidence) and its smoke check (scripts/r2_smoke.py) — S3-compatible, MinIO locally and R2 in staging
-  "claude-agent-sdk==0.2.128", # the librarian agent (Claude Code headless) — pinned EXACTLY, same rationale as pydantic-ai above: the framework's API drives the options object, the permission model and the hook signatures, so a minor bump could silently change what the agent is allowed to do between CI and dev. Imported lazily inside the 'sdk' backend only; the offline double never loads it
   "pyjwt>=2.8",               # the librarian GitHub App's RS256 assertion (githubapp.py) — already present transitively, declared explicitly because this repo imports it directly (same posture as starlette above)
-  "slack-bolt==1.30.0",       # the Slack transport — pinned EXACTLY, same rationale as pydantic-ai/claude-agent-sdk above: the framework's API drives event dispatch, the socket-mode client and the ack contract, so a minor bump could silently change behaviour between CI and dev
+  "slack-bolt==1.30.0",       # the Slack transport — pinned EXACTLY, same rationale as pydantic-ai above: the framework's API drives event dispatch, the socket-mode client and the ack contract, so a minor bump could silently change behaviour between CI and dev
   "aiohttp>=3.9",             # slack-bolt's async Socket Mode handler needs it directly (already a slack-bolt[async] transitive dep — declared explicitly, same posture as starlette/pyjwt above: this repo imports the async handler directly)
 ]
 

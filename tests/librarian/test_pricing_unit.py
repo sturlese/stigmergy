@@ -90,10 +90,12 @@ def test_every_id_the_table_ships_is_priced(model):
         f"{model} carries a zero or non-numeric rate, which prices real work at nothing")
 
 
-def test_the_sdk_backends_own_bare_spelling_is_deliberately_absent():
-    """`claude-sonnet-5` (no prefix) belongs to the `sdk` backend, which is priced by its own SDK.
-    A row here would be a SECOND, drifting answer to a question already answered upstream — and the
-    drift would be invisible, because the two figures are never compared."""
+def test_a_bare_model_spelling_is_deliberately_absent_from_the_table():
+    """`claude-sonnet-5` (no prefix) is not a model id any backend can run: the one that took bare
+    names retired, and pydantic-ai reads a bare name as an OPENAI model, so
+    `worker._check_pydantic_backend` refuses one before this table is consulted. A row here would
+    make an unusable id look configured — and `priced_models()` is printed in that very refusal as
+    the list to choose from, so every id here has to be one a run can actually use."""
     assert "claude-sonnet-5" not in pricing.PRICES
     with pytest.raises(LibrarianConfigError):
         pricing.require_priced("claude-sonnet-5")
@@ -475,7 +477,7 @@ def test_the_pricing_module_loads_no_agent_framework():
     imported |= {alias.name for node in ast.walk(ast.parse(source))
                  if isinstance(node, ast.Import) for alias in node.names}
     assert not [mod for mod in imported
-                if mod.startswith(("pydantic_ai", "claude_agent_sdk", "openai", "anthropic"))]
+                if mod.startswith(("pydantic_ai", "openai", "anthropic"))]
 
 
 def test_the_logging_module_is_not_where_a_price_gets_decided(caplog):

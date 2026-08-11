@@ -102,8 +102,8 @@ def startup_checks(settings) -> dict:
     **A `meeting_only` escape used to live here and it is gone (ADR 033).** M1 refused
     `backend="pydantic"` for any worker outright — a worker's queue carries ordinary captures too,
     and a backend that served one `kind` would have burned deliveries one row at a time while
-    looking configured — with one opt-out for the meeting-only measurement rig. All three backends
-    serve both flows now, so the refusal has nothing left to refuse and the parameter that softened
+    looking configured — with one opt-out for the meeting-only measurement rig. Every backend serves
+    both flows now, so the refusal has nothing left to refuse and the parameter that softened
     it has nothing left to soften. The checks that remain for this backend are the ones that were
     always about the backend rather than about the flow: a provider-prefixed model id, a configured
     price, the provider's own key.
@@ -139,14 +139,15 @@ def startup_checks(settings) -> dict:
     every other check here.
     """
     repo = gitcmd.ensure_repo(settings.repo)
-    if settings.backend not in agent_module.BACKENDS:
-        raise LibrarianConfigError(
-            f"invalid librarian backend {settings.backend!r} "
-            f"(use one of: {', '.join(agent_module.BACKENDS)})")
+    # The first check that judges CONFIGURATION, and the one a stale deployment meets.
+    # `gitcmd.ensure_repo` above runs first but asks a different question — is there a repo here
+    # at all — and a worker with a good checkout and a retired backend must not get that far.
+    # `ensure_known_backend` refuses an unknown value as it always did and a RETIRED one by name;
+    # the sentence lives in `agent.py` beside the tuple it is about, so this check and
+    # `build_agent`'s cannot come to word it differently.
+    agent_module.ensure_known_backend(settings.backend)
     if settings.backend == agent_module.PYDANTIC_BACKEND:
         _check_pydantic_backend(settings)
-    else:
-        _check_model_spelling_for(settings)
 
     # The lease must outlive the item, or the queue redelivers a row this worker is still working
     # on — and since the commit and the push happen before `finish`, both workers file it. The
@@ -181,28 +182,19 @@ def startup_checks(settings) -> dict:
 
     base_inputs.check_linter_at(repo, base)
 
-    # The agent's operating procedure, checked AT THE REF THE RUN WILL USE. `sdk` only, and not for
-    # symmetry's sake — the offline double never reads the skill, so requiring it of a `double` run
-    # would be a check that can only ever fail on something nothing was going to use.
+    # The agent's operating procedure, checked AT THE REF THE RUN WILL USE.
     #
-    # This used to read `settings.repo` — the local checkout — while `_run` reads it out of the
-    # worktree, which is built from `base`. A skill commit that existed locally and not on the
+    # This used to read `settings.repo` — the local checkout — while the backend reads it out of
+    # the worktree, which is built from `base`. A skill commit that existed locally and not on the
     # remote therefore PASSED the check and failed the run, after burning both agent attempts. A
     # check that can pass while the thing it checks is absent is worse than no check, so it now
     # reads the same bytes the agent will.
-    if settings.backend == "sdk":
-        # The credential BEFORE the skill: it is the cheapest of the two (no git read at all) and
-        # by far the more frequent fault, so an operator with neither is told about that one
-        # rather than about a skill they may well have pushed. `sdk` only — the pydantic backend
-        # authenticates with the provider's own key, checked in `_check_pydantic_backend`.
-        _check_agent_credential()
     if settings.backend in agent_module.SKILL_READING_BACKENDS:
-        # **Every backend that READS the skill is checked for it**, which is `sdk` and `pydantic`
-        # since ADR 033 — the structured backend injects the same brief as the exploring one, so a
-        # missing skill fails it identically and must be one loud line before the first claim
-        # rather than a `failed` row per capture. The offline double reads no skill at all, and
-        # requiring one of a `double` run would be a check that can only ever fail on something
-        # nothing was going to use.
+        # **Every backend that READS the skill is checked for it** — a missing skill fails such a
+        # backend on every capture, and that must be one loud line before the first claim rather
+        # than a `failed` row per row. The offline double reads no skill at all, and requiring one
+        # of a `double` run would be a check that can only ever fail on something nothing was
+        # going to use.
         skill_text = _check_skill_at(repo, base)
         # ...and the brief it just proved must be the one this BACKEND can follow. See below.
         _check_brief_matches_backend(
@@ -264,15 +256,21 @@ def _check_brief_matches_backend(settings, skill_text: str, where: str) -> None:
     out loud and scoped: a model that resolves it the other way describes writing a file it cannot
     write, and the run comes back with an account about the wrong thing. On the ordinary flow after
     ADR 033 there is no such override, because the brief is supposed to be the structured text — so
-    an old brief is a silent, uncorrected contradiction, and the score it produces is noise on the
-    exact measurement M3's retire-or-keep decision reads.
+    an old brief is a silent, uncorrected contradiction, and the pages it produces are judged on a
+    procedure the model could not follow.
+
+    **The escape hatch this refusal used to offer is gone with the backend that was it.** It ended
+    by naming `STIGMERGY_LIBRARIAN_BACKEND=sdk` — "run the backend that brief was written for" —
+    which was a real second way out while a tool-holding backend existed. There is no such backend
+    now, so the ONLY fix is to push the rewritten brief, and offering a dead value would send an
+    operator mid-incident to a refusal one check up.
 
     The signal is the outcome FILE's own name appearing in the brief at all: a backend-neutral
     brief names no channel, and every version that predates ADR 033 documents `.librarian-outcome.
     json` by name. Cheap, specific, and it cannot fire on a brief written for this milestone.
 
     Asked of what the backend DECLARES (`build_agent(settings).structured_ordinary`) rather than of
-    `settings.backend`, so a fourth structured backend inherits the check by declaring the same
+    `settings.backend`, so a THIRD structured backend inherits the check by declaring the same
     thing — the same reason `processing._one_pass` reads the attribute instead of a class.
     """
     if not agent_module.build_agent(settings).structured_ordinary:
@@ -280,8 +278,8 @@ def _check_brief_matches_backend(settings, skill_text: str, where: str) -> None:
     if agent_module.OUTCOME_FILENAME not in skill_text:
         return
     # Imported HERE and not at module scope: this line is reached only by a run that has ALREADY
-    # built a structured backend, so the framework is loaded anyway — where an `sdk` or `double`
-    # run returns above and never touches it.
+    # built a structured backend, so the framework is loaded anyway — where a `double` run returns
+    # above and never touches it.
     from stigmergy.librarian import pydantic_backend
 
     raise LibrarianConfigError(
@@ -289,10 +287,11 @@ def _check_brief_matches_backend(settings, skill_text: str, where: str) -> None:
         f"outcome channel of a run that HOLDS TOOLS — and the {settings.backend!r} backend holds "
         f"none: it returns its account as a structured object and the worker writes the page. "
         f"Injecting that brief would tell the model to write a file it cannot write, and the pages "
-        f"it filed would be judged on a procedure it could not follow. The knowledge repo's brief "
-        f"has to land BEFORE this worker runs — that ordering is the ADR's, not this check's. "
-        f"Either push the rewritten brief (see {pydantic_backend.ORDINARY_ADR}, D4) or run "
-        f"STIGMERGY_LIBRARIAN_BACKEND=sdk, which is the backend that brief was written for")
+        f"it filed would be judged on a procedure it could not follow. Push the rewritten brief to "
+        f"the knowledge repo (see {pydantic_backend.ORDINARY_ADR}, D4) — it has to land BEFORE this "
+        f"worker runs, and that ordering is the ADR's, not this check's. There is no backend to "
+        f"fall back to: the one that brief was written for has been retired "
+        f"(docs/decisions/033-structured-filing-flow.md)")
 
 
 # REMOVED with the meeting-only refusal (ADR 033): `_usable_example`, which answered "would
@@ -305,32 +304,17 @@ def _check_brief_matches_backend(settings, skill_text: str, where: str) -> None:
 # rediscover it.
 
 
-def _check_model_spelling_for(settings) -> None:
-    """The MIRROR of the pydantic backend's provider-prefix rule, and it exists because the
-    asymmetry was the defect.
-
-    One backend refusing a bare id while the other silently accepted a prefixed one meant exactly
-    half the configuration mistake was caught: `STIGMERGY_LIBRARIAN_MODEL=openai:gpt-5.6-terra` with
-    `backend=sdk` reaches the Claude Agent SDK, which has never heard of a provider prefix, and the
-    operator learns it from a failed run rather than from a startup line. A spelling belongs to a
-    backend; both spellings are now refused by the backend they do not belong to.
-
-    Silent for the `double`, which reads no model at all — a refusal about a value nothing consumes
-    would be a guard inventing work for an operator.
-    """
-    from stigmergy.librarian import pydantic_backend
-
-    if settings.backend != "sdk":
-        return
-    provider = pydantic_backend.provider_of(settings.model)
-    if not provider:
-        return
-    raise LibrarianConfigError(
-        f"$STIGMERGY_LIBRARIAN_MODEL is {settings.model!r}, and a provider-prefixed id is the "
-        f"{agent_module.PYDANTIC_BACKEND!r} backend's spelling: pydantic-ai resolves "
-        f"{provider!r} from it. The 'sdk' backend hands the id to the Claude Agent SDK, which "
-        f"takes the BARE name — use {settings.model.split(':', 1)[1]!r} for this backend, or "
-        f"switch to the backend that spelling belongs to")
+# REMOVED with the `sdk` backend: `_check_model_spelling_for`, the MIRROR of the pydantic
+# backend's provider-prefix rule. It refused a PROVIDER-PREFIXED id on the backend that took a bare
+# name, so that exactly one configuration mistake was not caught in only one direction. Both halves
+# of it are gone for the same reason: there is one real backend left, it takes the prefixed
+# spelling, and the bare spelling is refused by `_check_pydantic_backend` below — which is the
+# surviving half of the same pair, not a weakening of it. The `double` reads no model at all and is
+# silent about both, as it always was.
+#
+# The rule it embodied outlives it and the next backend should not have to rediscover it: **a model
+# spelling belongs to a backend, and a backend must refuse the spelling that is not its own** —
+# because an operator who learns it from a failed run has already paid for the run.
 
 
 def _check_pydantic_backend(settings, *, environ: dict | None = None) -> None:
@@ -342,9 +326,14 @@ def _check_pydantic_backend(settings, *, environ: dict | None = None) -> None:
     principle. It serves both flows now, so what remains are the three checks that were always
     about the BACKEND rather than about a flow it could not run.
 
-    `environ` is injectable for the same reason `agent.credential_status`'s is: the key preflight is
-    a pure function of a mapping and a model string, and it must be assertable without a process
-    whose environment has been mutated around it.
+    **The provider-prefix refusal below is now the SECOND half of a stale-deployment upgrade**, and
+    it says so. An operator moving off the retired backend edits two values, and the model id is
+    the one that is easy to forget: `agent.RETIRED_BACKENDS` warns them in advance, and this is what
+    they meet if they change only the backend.
+
+    `environ` is injectable because the key preflight is a pure function of a mapping and a model
+    string, and it must be assertable without a process whose environment has been mutated around
+    it.
     """
     from stigmergy.librarian import pricing, pydantic_backend
 
@@ -353,11 +342,12 @@ def _check_pydantic_backend(settings, *, environ: dict | None = None) -> None:
         raise LibrarianConfigError(
             f"$STIGMERGY_LIBRARIAN_MODEL is {settings.model!r}, which names no provider, and the "
             f"{agent_module.PYDANTIC_BACKEND!r} backend resolves a model string through pydantic-ai "
-            f"— where a BARE name means the OpenAI Responses API, so this run would file meetings "
-            f"through a provider nobody chose. Give it a provider prefix "
-            f"(<provider>:<model>); priced today: {', '.join(pricing.priced_models())}. The bare "
-            f"spelling belongs to the 'sdk' backend, which resolves it through the Claude Agent SDK "
-            f"itself")
+            f"— where a BARE name means the OpenAI Responses API, so this run would file this "
+            f"brain's captures through a provider nobody chose. Give it a provider prefix "
+            f"(<provider>:<model>); priced today: {', '.join(pricing.priced_models())}. A bare id "
+            f"was the spelling of the retired backend, so a deployment that has just changed "
+            f"STIGMERGY_LIBRARIAN_BACKEND and nothing else lands exactly here: "
+            f"'anthropic:{settings.model}' is the same model, spelled for this one")
 
     # An unpriced model would report $0.00 for work that costs money — refused here rather than
     # discovered in a column of zeros. `require_priced` names the id, the override and the table's
@@ -368,7 +358,7 @@ def _check_pydantic_backend(settings, *, environ: dict | None = None) -> None:
     if key_env is None:
         # Not a refusal: pydantic-ai supports providers this table has not heard of, and a
         # preflight that refused every unlisted one would make the adapter provider-specific. A
-        # WARNING rather than an INFO for the reason `_check_agent_credential`'s advisory is one —
+        # WARNING rather than an INFO for the reason the reaped-worktree line above is one —
         # nothing here configures logging, so INFO is dropped on the floor and an advisory nobody
         # sees is not an advisory.
         log.warning("no API-key preflight exists for the provider prefix %r — proceeding. If the "
@@ -376,62 +366,55 @@ def _check_pydantic_backend(settings, *, environ: dict | None = None) -> None:
                     "whatever key that provider reads", f"{provider}:")
         return
     if not (os.environ if environ is None else environ).get(key_env):
+        # The DEPLOYED worker STRIPS some of these by design, and "export it" is then the one fix
+        # that cannot work — so the refusal says which case this is rather than sending an operator
+        # to try the fix that will not help. Imported here, beside its one use, for the reason every
+        # other local import in this module has: the boot module is the container's entry point and
+        # nothing else in this call path needs it.
+        from stigmergy.librarian import bootstrap
+
+        # The offered list is FILTERED to models the deployed worker can actually authenticate as.
+        # A refusal whose own example fails the refusal that produced it is worse than one with no
+        # example — the rule `worker._usable_example` was written for, one message over.
+        deployable = [m for m in pricing.priced_models()
+                      if pydantic_backend.PROVIDER_KEY_ENV.get(pydantic_backend.provider_of(m))
+                      not in bootstrap.READ_PATH_ONLY_ENV]
+        dead_end = (
+            f" **On the DEPLOYED worker this is a dead end rather than a missing export**: "
+            f"`stigmergy-librarian-boot` strips {key_env} from the worker's environment before "
+            f"exec'ing the loop, on purpose — it belongs to the READ path's embedder and Fly "
+            f"secrets are app-wide, so stripping it here is the only place the write path can be "
+            f"kept independent of it. Nothing you export in that container survives that strip. "
+            f"Pick a filing model whose provider key is not read-path-only — priced and deployable "
+            f"today: {', '.join(deployable)}. This configuration works on a laptop and cannot work "
+            f"there."
+            if key_env in bootstrap.READ_PATH_ONLY_ENV else "")
         raise LibrarianConfigError(
             f"$STIGMERGY_LIBRARIAN_MODEL is {settings.model!r} and ${key_env} is not set — the "
             f"{agent_module.PYDANTIC_BACKEND!r} backend authenticates with the provider's own key "
             f"and has nothing else to try. Export {key_env}: it normally lives in the gitignored "
             f"root env file, which `make` includes and exports, and a directly-invoked script "
-            f"inherits nothing from it")
+            f"inherits nothing from it." + dead_end)
 
 
-def _check_agent_credential(environ: dict | None = None) -> None:
-    """The `sdk` backend needs something the Claude Code CLI can authenticate with, checked HERE.
+# REMOVED with the `sdk` backend: `_check_agent_credential`, which proved before the first claim
+# that the Claude Code CLI had something to authenticate with. Its subject is gone — no subprocess,
+# no CLI, no ambient interactive login to reason about.
+#
+# **Its two lessons are load-bearing for the check that replaced it** (`_check_pydantic_backend`'s
+# provider-key preflight above), and are recorded here rather than rediscovered:
+#   1. A missing credential must be caught at STARTUP. Without the check the run reached the agent,
+#      failed unauthenticated, burned both attempts and landed `failed` naming a stage — a missing
+#      export wearing the costume of a product defect.
+#   2. Never offer `--backend double` as the workaround. The double files fabricated pages, so
+#      suggesting it to an operator with no key invites the double's output into the company's
+#      knowledge repo. A refusal names the missing capability and the fix, never a cheaper backend.
+#
+# The THIRD lesson does not carry over and is worth saying so: `credential_status`' three-way
+# answer (env / ambient / missing) existed because an interactively-logged-in CLI is unverifiable
+# without spending a request. A provider key is a variable that is either set or not, so the
+# surviving preflight is honestly two-way.
 
-    The credential lives in the gitignored root env file, `make` includes and exports it, and a
-    directly-invoked `.venv/bin/stigmergy-librarian` inherits nothing.
-    Without this check the run got as far as the agent, the CLI subprocess exited unauthenticated,
-    and the item burned both attempts before landing `failed` with a stage name — a missing export
-    wearing the costume of a product defect.
-
-    Named as a MISSING CAPABILITY with the fix, and never as a suggestion to switch backends:
-    `--backend double` files fixed fabricated pages, so offering it here as a workaround would
-    invite an operator to commit the double's output to the company's knowledge repo.
-
-    **Three outcomes, not two** (`agent.credential_status`, which carries the argument). The middle
-    one is the correction: with no variable set but the CLI's own config directory present, this run
-    is relying on an interactive login that no pre-flight can verify without spending a request, and
-    the check that refused it would have blocked `make librarian-walk` on the very machine the walk
-    was for — becoming the fifth detour of the four it was written to prevent.
-
-    The advisory is a WARNING and not an INFO on purpose: nothing in this package configures
-    logging, so `logging.lastResort` prints WARNING and above to stderr and drops INFO on the floor.
-    An advisory the operator cannot see is not an advisory — the same reason the reaped-worktree line
-    above is a warning.
-    """
-    status = agent_module.credential_status(environ)
-    if status == agent_module.CREDENTIAL_IN_ENV:
-        return
-    if status == agent_module.CREDENTIAL_AMBIENT:
-        log.warning(
-            "no Claude credential in the environment — proceeding on the CLI's own stored login "
-            "under %s (on macOS that is the login Keychain, so no credentials file there is "
-            "normal). If the agent then fails unauthenticated, this line is the reason, and "
-            "exporting one of %s is the fix",
-            agent_module.agent_config_dir(environ), ", ".join(agent_module.CREDENTIAL_ENV))
-        return
-    config_dir = agent_module.agent_config_dir(environ)
-    where = (f"{config_dir}, which is not there" if config_dir else
-             "the CLI's own config directory — and this run would pass the agent no $HOME at all, "
-             "so it could not reach one wherever it is")
-    raise LibrarianConfigError(
-        f"the sdk backend needs a Claude credential and neither of the TWO ways of having one is "
-        f"reachable. (1) Export one of {', '.join(agent_module.CREDENTIAL_ENV)} — it normally lives "
-        f"in the gitignored root env file, which `make librarian-walk` includes and exports, and a "
-        f"directly-invoked .venv/bin/stigmergy-librarian inherits nothing from it. (2) Or log the CLI "
-        f"in interactively — running `claude` once and authenticating counts, and is what most "
-        f"machines already have; its stored login lives under {where}. Nothing else reaches the "
-        f"agent: the librarian passes only its allow-list through to that subprocess (see "
-        f"agent.AGENT_ENV_PASSTHROUGH)")
 
 
 def _check_push_identity(repo: str) -> None:

@@ -7,12 +7,14 @@ code to write. Which half is REQUIRED is deliberately not the schema's question 
 know which backend ran — so `processing._require_page_content` asks it, keyed on the backend's own
 declaration.
 
-**Why the additive claim needs a test rather than a reading.** The `sdk` backend still produces
-`page=None` for every capture this brain files today, and the structured backend produces the other
-shape. A parser that quietly started requiring `page`, or that let `page.title` override a
-top-level one, would not fail loudly on either path: the SDK path would begin failing every item
-with a shape finding (visible, at least), and the precedence bug would file pages whose FILENAME
-and whose commit subject name two different things — silently, forever, in somebody's repo.
+**Why the additive claim needs a test rather than a reading.** Both shapes are still produced —
+the offline double declares `page_path` and writes its own page, the structured backend carries the
+page's text in `page` — and the old shape is what every page this brain filed before ADR 033 was
+filed by. A parser that quietly started requiring `page`, or that let `page.title` override a
+top-level one, would not fail loudly on either path: the exploring path would begin failing every
+item with a shape finding (visible, at least), and the precedence bug would file pages whose
+FILENAME and whose commit subject name two different things — silently, forever, in somebody's
+repo.
 
 The one bound that behaves differently from its neighbours is `page.body`: REFUSED over
 `MAX_PAGE_BODY_LEN`, never truncated. Prose truncates because nothing downstream re-reads it; a
@@ -78,8 +80,9 @@ def test_the_exploring_backends_account_parses_exactly_as_it_did_before(before=N
 
 def test_the_old_shape_needs_no_page_body_and_is_not_asked_for_one():
     """`page.body` is required by the CALLER, not by the parser, and only of a backend that
-    declared the structured shape. A parser that required it would refuse every `sdk` filing this
-    brain does — the flow that is still the default and still the one with pages in production."""
+    declared the structured shape. A parser that required it would refuse every filing made in the
+    exploring shape — which is what the offline double produces on every run of this suite, and what
+    every page filed before ADR 033 was filed by."""
     outcome = agent_module.parse_outcome(OLD_SHAPE)
 
     assert processing._require_page_content(outcome) != []

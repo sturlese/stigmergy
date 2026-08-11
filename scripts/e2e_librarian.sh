@@ -26,7 +26,7 @@ PY="${PY:-.venv/bin/python}"   # CI overrides with its own interpreter (PY=pytho
 . "$(dirname "$0")/e2e_isolate.sh"
 
 # What is specific to THIS e2e, because it is the only one that runs the librarian:
-#   * `STIGMERGY_LIBRARIAN_BACKEND=sdk` would spend real money running a real agent on fixtures;
+#   * a real `STIGMERGY_LIBRARIAN_BACKEND` would spend real money running a real agent on fixtures;
 #   * `STIGMERGY_REPO` would aim the whole thing at the operator's real `../stigmergy-brain` checkout;
 #   * `STIGMERGY_LIBRARIAN_WORKTREE_ROOT` would put this run's worktrees where another librarian's
 #     startup reap can see them.

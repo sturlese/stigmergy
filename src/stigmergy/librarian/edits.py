@@ -5,7 +5,7 @@ overlap/contradiction callout on a page that already exists, it names it in the 
 module performs the edit.
 
 **Why the split.** The agent used to make the additive edits itself, with a gate behind it
-refusing anything that was not a pure addition. On the first real `--backend sdk` run the agent
+refusing anything that was not a pure addition. On the first real live run the agent
 rewrote the body of an existing human-authored page; the gate refused the whole capture,
 correctly; and the corrective retry, handed that finding, did it again. Two for two — and the
 mechanism explains why: for a model, "insert a line into this file and change nothing else" is a

@@ -13,7 +13,7 @@ the same context twice — the property a golden run depends on, since a gathere
 own output makes two runs of one model incomparable.
 
 **It reads the CHECKOUT, never `pages_index`.** The worktree is the knowledge repo at this item's
-base commit, which is the same data the SDK agent's own `Glob`/`Read` reached — so the data ORIGIN
+base commit, which is the same data the retired exploring agent's own `Glob`/`Read` reached — so the data ORIGIN
 is unchanged and only the READER moved from the model to code. Reading the index instead would put
 a write-path worker on the read path's ACL-governed table and would need an exception entry it has
 no business needing (`server.acl.visible()` is where read access is decided, and nothing here

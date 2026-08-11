@@ -24,7 +24,7 @@ to what it measures.
 | retrieval golden (16 questions) | `retrieval_golden.json` — page-id expectations, 10 carrying `filters.entity` |
 | `make qa-golden` → honesty · groundedness · refutation · retry rate · seconds/question | `run_qa.py` (needs `make db-up` + `OPENAI_API_KEY`) |
 | QA golden (26 questions) | `qa_golden.json`; ACL-probe identities in `qa_identities.json` |
-| `make filing-golden` → nine quality facets, each with its own denominator | `run_filing.py` (needs `make db-up`, `gitleaks` on PATH, and a Claude credential for the default `sdk` backend — `--backend pydantic` authenticates with its OWN provider key instead, never a Claude one. `BACKEND=double` is the keyless plumbing self-check; `--kinds` measures one kind of capture only) |
+| `make filing-golden` → nine quality facets, each with its own denominator | `run_filing.py` (needs `make db-up`, `gitleaks` on PATH, and the filing model's own provider key — `anthropic:claude-sonnet-5` by default, so `ANTHROPIC_API_KEY`. `BACKEND=double` is the keyless plumbing self-check; `--kinds` measures one kind of capture only) |
 | filing golden (10 captures, 12 scored phases) | `filing/captures/manifest.json` (what is submitted) + `filing/expected/expectations.json` (the yardstick), kept apart on purpose |
 | `make gates` → one verdict, one exit code | `run_gates.py`; the armed thresholds live in `bars.py`. It arms the first TWO instruments only — the filing golden is far more expensive and is not wired in |
 | **the frozen reference corpus** | `corpus/` — 38 committed pages + `PROVENANCE.json` + its own `ops/entity-registry.json`; the first two runners take `--repo evals/corpus`, and for `run_qa.py` that flag is also what gives `Settings` an alias map (without it entity-first resolution is inert for the whole measurement). Guarded keylessly by `tests/evals/test_golden_corpus_fixture.py` |
@@ -79,9 +79,12 @@ flow only and would have refused every ordinary capture — a column of refusals
 [ADR 033](../docs/decisions/033-structured-filing-flow.md) gave it the ordinary flow too, so it now
 runs the whole set and the guard that enforced the pairing is gone with the limitation. What that
 run measures is a different FLOW on the same captures — a deterministic gatherer, a tool-less call,
-code writing the page — which is why it is worth running on the SAME model as the `sdk` baseline:
-that isolates the flow change from a model change. Every real measurement appends to the history
-series; only `--backend double` never does.
+code writing the page — which is why it was run on the SAME model as the exploring baseline:
+that isolates the flow change from a model change, and that comparison is the evidence the
+retirement of the exploring backend was gated on (ADR 033 D6). Every real measurement appends to
+the history series; only `--backend double` never does. **The rows already in
+`history.ndjson` that carry `"backend": "sdk"` stay exactly as they are** — they are what was
+measured, and re-labelling a recorded score is the one edit this series must never take.
 
 Three things it does before it measures anything, all in `_run` and all unconditional: it deletes
 the librarian App's five environment variables and pins `$CLEAN_LLM` to the fake backend (`make`

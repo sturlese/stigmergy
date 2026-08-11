@@ -392,6 +392,70 @@ def test_a_title_that_is_missing_a_significant_word_is_still_a_miss(expected, pa
     assert run_filing.title_matches(expected, path) is False
 
 
+# ── the number fold: exactly one suffix, and its narrowness is the property ────────────────────
+# `_same_word` exists because grammatical number was measured to be run-to-run NOISE: three runs of
+# one model on one capture titled F08's review decision two ways, and the plural scored FAIL while
+# the singular scored PASS with the anchors right every time. A 2-denominator facet flipping on
+# whether a model wrote "review" or "reviews" is the instrument measuring the model's grammar.
+#
+# The fold is one trailing `s`, in either direction, and the NARROWNESS is what makes it safe to
+# have at all — so it is pinned from both sides. A stemmer here would quietly start matching
+# `tracked`/`tracking`, and the yardstick's obligation to name uninflected content words would be
+# gone with nothing to show it.
+@pytest.mark.parametrize("want, got", [
+    ("review", "reviews"),          # the measured case, in the direction the run produced
+    ("reviews", "review"),          # ...and the other, because the fold is symmetric
+    ("review", "review"),           # plain equality still holds
+])
+def test_the_number_fold_folds_a_trailing_s_in_either_direction(want, got):
+    assert run_filing._same_word(want, got) is True
+
+
+@pytest.mark.parametrize("want, got", [
+    ("process", "processes"),       # `es` is NOT folded — the documented edge of the rule
+    ("processes", "process"),
+    ("summary", "summaries"),       # nor `ies`
+    ("track", "tracked"),           # nor any other inflection
+    ("track", "tracking"),
+    ("mouse", "mice"),              # nor an irregular
+])
+def test_the_number_fold_reaches_no_further_than_one_trailing_s(want, got):
+    """**The half that keeps this from becoming a stemmer.** Each row is an inflection a table
+    WOULD fold and this rule does not, so a future edit that reached for one has to break a test
+    with the reason written beside it. `process`/`processes` in particular is named in
+    `_same_word`'s own docstring as a miss it accepts — the first draft of that comment overclaimed,
+    and this is the assertion that keeps the corrected claim true."""
+    assert run_filing._same_word(want, got) is False
+
+
+def test_the_bus_residual_is_ACCEPTED_rather_than_fixed():
+    """**A declared residual, pinned as declared.** `a == b + "s"` also fires when one token happens
+    to be another plus `s`: `bus` and `bu` are "the same word" to this rule.
+
+    That is only a false match if BOTH strings are words a title would carry, and a two-letter
+    fragment is not — every expectation in this set is written in proper nouns and stable nouns. It
+    is a residual, not an impossibility, and `_same_word`'s docstring says the fix would be the
+    EXPECTATION rather than a longer rule.
+
+    Pinned rather than "fixed" for that reason: a length guard or a vowel check here would be the
+    first step of the stemmer the tests above exist to prevent, bought against a case nothing in
+    the set can produce. If this ever goes red because somebody added such a guard, the question to
+    ask is which real expectation needed it.
+    """
+    assert run_filing._same_word("bus", "bu") is True
+    assert run_filing._same_word("bu", "bus") is True
+
+
+def test_the_number_fold_is_reachable_through_the_matcher_that_uses_it():
+    """The fold is only worth anything if `title_matches` actually consults it — a unit-green
+    `_same_word` beside a matcher that compares tokens with `==` would be exactly the shape of a
+    fix that never shipped. Driven through the real scorer, on the real F08 shape."""
+    assert run_filing.title_matches(
+        "review", "wiki/decisions/A shared checklist of what every review covers.md") is True
+    assert run_filing.title_matches(
+        "review", "wiki/decisions/A shared checklist of what the reviews cover.md") is True
+
+
 def test_a_park_question_is_matched_against_the_whole_question_the_report_asked():
     """The report renders one sentence naming every unresolved name; scoring the list shape would
     measure `report.py`'s wording instead of whether the right thing was unresolved."""
@@ -474,6 +538,101 @@ def test_a_decision_expectation_that_names_no_anchor_scores_the_title_alone():
                       {"kind": "entity", "ids": ["quillon-labs"]})]
     assert run_filing.score_phase({"decisions": loose},
                                   {"decisions": observed})["decisions"] is True
+
+
+# ── an entry that omits `title` entirely: paired on its ANCHOR alone ───────────────────────────
+# The third shape of one lesson. F08's review decision flipped on grammatical number (closed by
+# `_same_word`); F09's after_reply put the word "summary" on the OTHER decision's title than the
+# yardstick assumed — and a SEVEN-RUN re-score settled which dimension to keep: summary-title was
+# 7/7 stable, summary-anchor 6/7 UNstable. So the entry that keeps a title keeps it, and the one
+# whose title was the model's prose drops to its anchor.
+#
+# An omitted `title` is NOT an empty one, and the two must not be confusable: `title_matches("")`
+# is False by design, so an entry that NAMED a title and got it wrong still misses. That asymmetry
+# is the first thing pinned below.
+_ANCHOR_ONLY = [{"title": "Wren", "anchor": {"kind": "entity", "ids": ["quillon-labs"]}},
+                {"anchor": {"kind": "company", "ids": []}}]
+
+
+def test_an_entry_that_omits_its_title_pairs_on_the_anchor_alone():
+    """The anchor is the load-bearing pair-er: a decision's aboutness is a fact with one spelling
+    (a resolved registry id, or the company-wide empty list), where its title is a sentence
+    somebody wrote. The second page's title here is nothing the expectation ever mentions, and the
+    set still scores."""
+    observed = [_page("Project Wren tracked formally under Quillon Labs",
+                      {"kind": "entity", "ids": ["quillon-labs"]}),
+                _page("weekly summaries consolidated into the shared summary",
+                      {"kind": "company", "ids": []})]
+    assert run_filing.score_phase({"decisions": _ANCHOR_ONLY},
+                                  {"decisions": observed})["decisions"] is True
+
+
+def test_a_title_less_entry_still_holds_its_anchor_to_account():
+    """**Omitting the title is not weakening the facet**, which is the whole claim — it moves the
+    assertion off the dimension that was measuring vocabulary and onto the one that was right in
+    every recorded run. So the anchor still has to be right: same two pages, anchors swapped."""
+    swapped = [_page("Project Wren tracked formally under Quillon Labs",
+                     {"kind": "company", "ids": []}),
+               _page("weekly summaries consolidated into the shared summary",
+                     {"kind": "entity", "ids": ["quillon-labs"]})]
+    assert run_filing.score_phase({"decisions": _ANCHOR_ONLY},
+                                  {"decisions": swapped})["decisions"] is False
+
+
+def test_an_EMPTY_title_is_not_an_absent_one_and_matches_nothing():
+    """The two states cannot be confused, and this is the direction that would be silent: an entry
+    whose `title` is `""` would, if empty meant absent, become an anchor-only matcher and quietly
+    stop asserting the title it was written to assert."""
+    empty_titled = [{"title": "", "anchor": {"kind": "entity", "ids": ["quillon-labs"]}}]
+    observed = [_page("Anything at all", {"kind": "entity", "ids": ["quillon-labs"]})]
+    assert run_filing.score_phase({"decisions": empty_titled},
+                                  {"decisions": observed})["decisions"] is False
+
+
+# The greedy interaction, staged as a clean A/B: ONE page set, two expectation ORDERS, and the
+# ordering is the only variable between the two tests below.
+#
+# The page the titled entry needs comes FIRST in the observed set, which is what makes the hazard
+# reachable at all — an anchor-only entry takes the first remaining page whose anchor matches, so
+# it starves its sibling only when that sibling's page is the one it reaches first. A fixture whose
+# page order happened to be favourable would show the safe result in BOTH orders and prove nothing;
+# that is the first shape this pair was written in, and it passed the wrong way round.
+_COMPANY = {"kind": "company", "ids": []}
+_BOTH_COMPANY_PAGES = [_page("Project Wren tracked formally", _COMPANY),
+                       _page("weekly summaries consolidated", _COMPANY)]
+
+
+def test_a_title_less_entry_written_LAST_leaves_its_titled_sibling_the_page_it_needs():
+    """**The greedy interaction in the safe order** — the order `_check_set` enforces.
+
+    Both pages anchor company-wide, so the anchor-only entry matches EITHER. Written last it takes
+    what the titled entry left, and the correct page set scores.
+    """
+    titled_first = [{"title": "Wren", "anchor": _COMPANY}, {"anchor": _COMPANY}]
+
+    assert run_filing.score_phase({"decisions": titled_first},
+                                  {"decisions": _BOTH_COMPANY_PAGES})["decisions"] is True
+
+
+def test_a_title_less_entry_written_FIRST_starves_its_titled_sibling_and_fails_a_correct_set():
+    """**The same two entries and the same two pages, in the other order — and it MISSES.**
+
+    Greedy pairing walks the expectations in the order the FILE lists them. The anchor-only entry
+    placed first takes "Project Wren tracked formally" (the first page whose anchor matches, and
+    the one its titled sibling needed); the titled entry is then left with "weekly summaries
+    consolidated", which it cannot match. A page set that was exactly right scores a MISS.
+
+    That failure points at nothing: the table shows a decisions cell gone red and the cause is the
+    order of two lines in a JSON file. Which is why the ordering is a REFUSAL in `_check_set`
+    rather than a rule in a comment — and this pair is what shows the refusal protects something
+    reachable rather than a hypothesis.
+    """
+    titleless_first = [{"anchor": _COMPANY}, {"title": "Wren", "anchor": _COMPANY}]
+
+    assert run_filing.score_phase({"decisions": titleless_first},
+                                  {"decisions": _BOTH_COMPANY_PAGES})["decisions"] is False, (
+        "the hazard `_check_set`'s ordering refusal exists for has stopped being reachable — if "
+        "greedy pairing became order-independent, that refusal can retire with this test")
 
 
 # ── reuse: what a park cost the capture, not whether the model ran ────────────────────────────

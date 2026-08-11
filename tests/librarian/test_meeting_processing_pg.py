@@ -287,8 +287,9 @@ def test_atomicity_an_existing_page_collision_commits_nothing_in_the_repos_real_
 # **The adversarial tests that used to live here are RETIRED, not merely fixed: each proved a
 # DISAGREEMENT between two independent claims — the outcome's OWN declaration (`page_path`) and
 # either the diff the agent's Write/Edit calls produced, or the meeting page's own committed body —
-# could exist at all.** The agent now has no page-writing tool whatsoever
-# (`agent.MEETING_ALLOWED_TOOLS = ("Write",)`, and its one legal write is the outcome file), and it
+# could exist at all.** The agent now has no page-writing tool whatsoever (the surviving backend
+# holds no tool at all, and the offline double's meeting path writes its outcome file and nothing
+# else), and it
 # no longer declares a `page_path` for anything — CODE is the sole author of every page, from ONE
 # structured account (`processing._write_meeting_pages`), so "declared a decision it never wrote"
 # and "wrote a decision it never declared" are not sabotage the double can still simulate; they are
@@ -388,16 +389,27 @@ def test_sabotage_proof_a_second_meeting_page_is_refused_by_the_arity_veto(
     assert _row(clean_queue, item["id"])["status"] == result.status
 
 
-# ── the write confinement narrowed to the outcome file ONLY.
+# ── the meeting agent's ONE legal write, and why a page write is unreachable rather than vetoed.
 # `test_a_knowledge_notes_write_under_the_meeting_flow_is_refused` (`DOUBLE:meeting-notes-write`)
-# is RETIRED for the same structural reason as the block above: the agent has no tool that could
-# still write into `wiki/notes/`, or anywhere else — `agent.MEETING_ALLOWED_TOOLS` is exactly
-# `("Write",)` and its only legal target is `.librarian-outcome.json`
-# (`agent._MEETING_NO_PAGE_WRITES_RE`). This is a STRONGER guarantee than the gate-level defense in
-# depth the retired test proved (a veto that fires if a write somehow lands outside the lane) —
-# there is no longer a tool-level path by which one could land there at all. What remains live and
-# still worth its own test: an injection PAYLOAD in the transcript naming this category still gets
-# recorded as a finding, even though it can no longer cause anything — see
+# is RETIRED for the same structural reason as the block above: there is no writer in this flow
+# that could put a page under `wiki/notes/`, or anywhere else.
+#
+# **The MECHANISM behind that sentence has been rewritten once and this note has to say which one
+# is load-bearing today**, because the first version named two constants that no longer exist. It
+# read: `agent.MEETING_ALLOWED_TOOLS` is exactly `("Write",)` and its only legal target is
+# `.librarian-outcome.json` (`agent._MEETING_NO_PAGE_WRITES_RE`). Both retired with the tool-holding
+# backend — the regex matched nothing and its `allowed_re` seam had no live caller, so it enforced
+# nothing while reading as though it did.
+#
+# What holds it up now, and it is strictly simpler: the surviving backend holds NO tool at all (its
+# whole answer is a structured object), and the offline double's meeting path calls `_write` exactly
+# once, with `OUTCOME_FILENAME` — permitted by `agent.confined_write`'s own unconditional
+# outcome-file exception, which is the same single rule both flows go through. That exception, and
+# the fact that no caller can narrow the rule per flow any more, are pinned in
+# `tests/librarian/test_agent_pure.py`.
+#
+# What remains live and still worth its own test: an injection PAYLOAD in the transcript naming
+# this category still gets recorded as a finding, even though it can no longer cause anything — see
 # `test_meeting_material_steering_toward_canonical_is_not_obeyed` and
 # `test_meeting_material_the_finding_names_a_category_from_the_fixed_set` for that coverage.
 
@@ -602,8 +614,8 @@ def _leak_an_additive_edit_into_the_meeting_flow(monkeypatch, path: str) -> None
 
     This is THE exploit, reproduced permanently: a status-`M` entry in the meeting's diff, produced
     by code inside the flow's own worktree, which is the only shape it can take (the meeting agent
-    holds no tool that can write to any page — `agent.MEETING_ALLOWED_TOOLS` is `("Write",)`
-    confined to its own outcome file). Wrapping `_write_meeting_pages` puts the edit exactly where a
+    holds no tool that can write to any page at all, and its one legal write — the outcome file —
+    is the single exception `agent.confined_write` makes). Wrapping `_write_meeting_pages` puts the edit exactly where a
     future edit mechanism, or a leak of `edits.apply_declared` into this flow, would put it: after
     the set is built, before `_one_meeting_pass` builds the `GateContext` and runs the gates over
     the whole diff. The real builder runs first and its return value is passed through untouched, so

@@ -70,13 +70,19 @@ _WORKTREE_NAME_RE = re.compile(
 _TOKEN_IN_URL = re.compile(r"https://[^@\s/]+:[^@\s/]+@")
 _BARE_TOKEN_IN_URL = re.compile(r"https://[^@\s/:]+@")
 
-# What ANY subprocess needs to run at all, and nothing beyond it. Here rather than in `agent.py`
-# because it is a fact about launching a child process, which is this module's own subject, and
-# because two callers need it without depending on each other: `agent.AGENT_ENV_PASSTHROUGH` builds
-# on it (adding the CLI's credentials and the proxies), and `gates.gate_contract` uses it ALONE — the
-# contract linter is a Python script out of the repo the librarian curates, and such a thing must
-# not inherit the GitHub App private key or the queue DSN just because it happens to be our gate.
-# Retyping the list in either place is how the two would drift.
+# What ANY subprocess needs to run at all, and nothing beyond it. It belongs HERE, in the module
+# whose subject is launching child processes, and it stays here now that it has only ONE consumer
+# left: `gates.gate_contract`, which runs the knowledge repo's own contract linter — a Python
+# script out of the repo the librarian CURATES, executed by the worker, which must not inherit
+# the GitHub App private key or the queue DSN just because it happens to be our gate.
+#
+# **One consumer is not a reason to inline it, and the second consumer is why.** The retired
+# filing backend built its own allow-list on top of this one (this base, plus the agent CLI's
+# credentials and the proxies), which is what made a shared base worth extracting in the first
+# place: two independent subprocess launchers must not each retype "what a process needs to
+# run", because retyping is how the two drift and how one of them quietly gains a variable. That
+# argument holds for the next subprocess this worker launches, whatever it is, so the seam stays
+# where a second caller can find it rather than folding into `gates.py`.
 SUBPROCESS_BASE_ENV = ("PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TZ", "LANG",
                        "LC_ALL", "TERM")
 

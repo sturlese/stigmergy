@@ -1083,12 +1083,14 @@ def gate_contract(ctx: GateContext) -> list[Finding]:
     proc = subprocess.run(
         ["python3", ctx.linter_path, "--repo", ctx.worktree, "--json"],
         capture_output=True, text=True,
-        # An EXPLICIT environment, for exactly the reason `agent.agent_env` has one: this is a
+        # An EXPLICIT environment, and the rule is the LAUNCH's rather than this gate's: this is a
         # Python script out of the repo the librarian CURATES, executed by the worker, and it must
         # not inherit `STIGMERGY_LIBRARIAN_PRIVATE_KEY` or the queue DSN just because it happens to be
         # our contract gate. It once ran with no `env=` at all.
-        # The list is `gitcmd.SUBPROCESS_BASE_ENV` — "what any process needs to run at all" — shared
-        # with the agent's own allow-list rather than retyped here.
+        # The list is `gitcmd.SUBPROCESS_BASE_ENV` — "what any process needs to run at all" — which
+        # is a shared base rather than this call site's own tuple. The retired filing backend was
+        # its second consumer, building its own allow-list on top; this is the one that remains,
+        # and it reads the base rather than retyping it for exactly the reason it did then.
         #
         # **What this does NOT do, stated so nobody reads it as more than it is.** The linter runs
         # as the worker's own uid in the worker's own container, so it can read

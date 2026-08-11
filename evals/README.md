@@ -173,6 +173,43 @@ paraphrase cannot drop — a proper noun plus a stable noun — and never in the
 happened to produce. `expected/expectations.json`'s own `_morphology` note states the rule where
 the expectations are written, which is where it has to be obeyed.
 
+**With exactly one exception, and it was forced by measurement rather than chosen.** Grammatical
+NUMBER is folded at the comparison (`run_filing._same_word`): a trailing `s`, in either direction,
+so `review` and `reviews` are one word. Three independent runs of the same code on the same model
+titled F08's review decision two ways — singular twice, plural once — with the anchors right every
+time, and the 2-denominator `decisions` facet flipped on which one came out. That is the instrument
+measuring the model's grammar, which is `globex-meeting-budget`'s defect approached from the other
+side: there an expectation demanded a literal word, here it demanded a literal ending. Nothing
+wider is folded — a plural written `es` still misses (`process`/`processes`), which is the measure
+of how narrow the rule is.
+
+The loosening is **one-directional**, and that is what makes it safe to apply to a live series
+rather than a reason to restart one: the predicate is strictly weaker than the one it replaces, so
+every pairing that matched before matches now — a recorded PASS cannot become a FAIL and only a
+FAIL can flip. The single caveat is `_decisions_match`'s greedy one-to-one pairing, where a weaker
+predicate could in principle re-bind a title to a different page; that is exactly what
+`test_no_expected_decision_title_can_swallow_a_later_ones_page` guards, and because it calls the
+same matcher, widening the match widened its net in the same commit.
+
+**A `decisions` entry may assert a title, an anchor, or both — and which one it asserts is an
+empirical question, not a style.** The facet pairs one expectation to one decision page, greedily
+and one-to-one; an entry that omits `title` pairs on its anchor alone, and an entry that omits
+`anchor` pairs on its title alone. What must never happen is an entry asserting neither (it matches
+whatever page is left and measures nothing) or a title-less entry written before a titled one (it
+is the weakest matcher, so greedy order lets it eat the titled entry's page). `_check_set` refuses
+both, before a model call is spent.
+
+The reason this is empirical: three distinct brittleness shapes were measured on this one facet,
+and each moved the assertion somewhere different. Grammatical number moved it to `_same_word`.
+Cross-title word distribution — F09's after_reply, where the model put "summary" on the sibling
+decision the yardstick had assumed owned it — moved it off that word pair entirely. And when the
+seven recorded runs of that phase were re-scored to decide what to assert instead, the answer
+**inverted the obvious assumption**: the tracking decision was stable in both its anchor (7/7) and
+its words (7/7), while the summary decision was stable only in its TITLE (`shared summary weekly`,
+7/7) and *not* in its anchor (`quillon-labs` six times, company-wide once). So an expectation is
+written against whatever held across runs, and a yardstick edited from the newest run alone would
+have scored six correct runs a miss.
+
 ### One expectation that is deliberately weaker than it looks
 
 The `reuse` facet scores whether a meeting re-filed after a park **kept the decisions it had
@@ -193,7 +230,8 @@ lose". Reported, never scored — like `reused` and `redistilled` beside it.
 ### How the bars were fixed
 
 From the **first Sonnet-5 baseline** (2026-08-10, platform sha `2b6964f`, fixture
-`stigmergy_sha` `0a988bd1`): backend `sdk`, model `claude-sonnet-5`, and its noise twin run
+`stigmergy_sha` `0a988bd1`): backend `sdk` — the exploring backend, retired since — model
+`claude-sonnet-5`, and its noise twin run
 immediately after — **facet-identical scores across the pair** (costs $2.11 and $1.92, walls
 716 s and 661 s), which is the determinism the instrument promises on outcome-shaped facets.
 Both rows are in [`history.ndjson`](history.ndjson).
@@ -221,19 +259,40 @@ misses were the yardstick's own — that run taught the containment semantics re
 its row was discarded with the defect it measured, and no `suite: "filing"` row predates the
 semantics the shipped scorer implements.
 
+**The brief was re-frozen under those bars, and the chain is worth stating exactly.** The `sdk`
+retirement closed ADR 033's last debt in the knowledge repo: the brief's environment paragraph still
+said *"some runs of this skill hold tools and a checkout, and write the page themselves"*, which
+stopped being true of any run when the tool-holding backend went. Knowledge-repo commit
+`c1e0996` (*"chore(skills): the brief describes one run style"*) replaced that paragraph with the
+one-run-style statement; `31e49f8` is the predecessor every row above was measured under. **Only
+that paragraph moved** — the linter and the meeting brief are byte-identical at both commits, which
+is why `FROZEN_SHA256`'s other two numbers did not change.
+
+**This re-freeze cannot be validated the way the decisions-facet fixes were.** Those were scorer
+corrections: the recorded observations stayed valid, so re-scoring them proved the fix changed the
+number it was supposed to and nothing else. Here the INSTRUCTIONS changed, and the observations
+above were produced under the old ones — a model briefed differently is a different measurement, and
+no arithmetic over stored rows can stand in for running it. So nothing is re-scored and nothing is
+back-filled.
+
+What that leaves, stated rather than implied: **the bars stand exactly as fixed above**, under
+`31e49f8`, because a bar re-derived from a run nobody has made yet would be a number invented to be
+met. The next golden run is the **first row measured under `c1e0996`** and is the one that says
+whether the bars still hold under the new bytes — read it as a fresh baseline candidate, not as a
+regression against the table above. If it moves a facet, the honest reading is "the brief changed",
+and the choice is the one `PROVENANCE.json`'s editing policy already names: keep the bars and
+explain the gap, or retire the series and record a new baseline here.
+
 ### Running it
 
 ```bash
 # keyless plumbing self-check (the offline double — NOT a measurement, appends no history row)
 make filing-golden BACKEND=double
 
-# the real measurement (needs a Claude credential and gitleaks on PATH)
+# the real measurement (needs the filing model's provider key and gitleaks on PATH). The default
+# backend IS the structured one, and its default model is anthropic:claude-sonnet-5 — the same
+# model the retired exploring baseline ran, which is what makes the two rows comparable.
 make filing-golden FILING_ARGS="--report evals/out/filing-sonnet-5.json"
-
-# the STRUCTURED flow over the whole set, on the pydantic-ai backend (ADR 033). Same model as the
-# sdk baseline on purpose: that is what isolates the FLOW change from a model change.
-make filing-golden BACKEND=pydantic \
-    FILING_ARGS="--model anthropic:claude-sonnet-5 --report evals/out/filing-structured.json"
 
 # one KIND of capture only — here the two meeting captures
 make filing-golden FILING_ARGS="--kinds meeting"
@@ -284,8 +343,8 @@ than one case is a regression and fails on the first attempt.
 
 ## The series
 
-All three runners append a real-instrument run (`--llm openai` / `--embedder openai` /
-`--backend sdk`, never the keyless self-check) to [`history.ndjson`](history.ndjson), each entry
+All three runners append a real-instrument run (`--llm openai` / `--embedder openai` / any
+filing backend but `double`) to [`history.ndjson`](history.ndjson), each entry
 carrying the fixture it measured and that fixture's `stigmergy_sha` — so an entry always says what
 it was measured on. This is the only durable score record: git is the store, appended by real
 runs, never by CI.
@@ -351,6 +410,37 @@ lessons are already spent: the filing golden matches titles on normalized *words
 literally, precisely because of the first, and `run_filing._check_set` refuses to spend a single
 model call on a set whose captures and expectations have drifted apart, precisely because of the
 second.
+
+Two further footnotes belong to the filing series and are recorded here for the same reason —
+a reader comparing rows needs to know what changed under them:
+
+- **The `decisions` facet stopped measuring the distiller's prose (2026-08-11), in two steps.**
+  First, grammatical number: three independent runs of the same code on the same model titled F08's
+  review decision as `…-for-review-…` twice (scored PASS) and `…-reviews-…` once (scored FAIL),
+  with the anchors right in all three; the matcher now folds a trailing `s`
+  (`run_filing._same_word`). Then, on the very next run, a third shape: F09's after_reply produced
+  `project-wren-tracked-formally-under-quillon-labs` + `weekly-summaries-consolidated-into-the-`
+  `shared-summary`, putting "summary" on the OTHER decision than the expectation `Wren summary` +
+  `Wren` assumed. `_decisions_match` now lets an entry assert a title, an anchor, or both, and
+  F09's entries were rewritten against what held across all seven recorded runs of that phase —
+  see the loose-matching note above, including the part where the seven-run re-score inverted the
+  assumption about which half is the stable one.
+  Unlike the two defects above, both steps are FIXED rather than recorded-and-kept, and the reason
+  is the direction: each was verified by RE-SCORING every recorded run's own observed set against
+  the edited yardstick, and neither turned a single recorded PASS into a FAIL (0 of 7 runs, 3 gained
+  a PASS). Every score already in the series remains exactly as valid as it was; only a future run
+  can benefit. A change that could have lowered a past score would have had to be recorded and left
+  alone, like the two above — and the re-score is what makes that a checked fact rather than a
+  claim. `evals/out/*.json` carry the per-capture observations that make it checkable, which is the
+  reason to keep writing `--report`.
+- **Two M2-era rows name superseded shas.** The rows whose `git_sha` is in the `fa55010`/`2be308f`
+  era point at commits that no longer exist on any branch: the M2 work was replayed before merge,
+  and the replayed trees are byte-identical to `56c0566`/`1466d28`. The replay was not cosmetic —
+  CI's history scan caught a credential-SHAPED literal in a test fixture, and the honest fix for a
+  string that looks like a secret in git history is to erase it before the history is permanent
+  rather than to add a commit on top. So the sha in those two rows is stale while the code they
+  measured is fully reachable, at the identical tree, under the new sha. Nothing about the scores
+  is affected; a reader resolving those rows should use the pairing above.
 
 **Adding a filing capture is not free the way adding a question is.** Every capture costs an agent
 pass on every future run, and — because facets carry their own denominators — a new capture that

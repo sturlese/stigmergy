@@ -1,6 +1,8 @@
 # ADR 033 — the structured filing flow: a gatherer, an account that carries the page, and code that writes it
 
-Status: accepted. Narrative:
+Status: accepted; **D6's retirement gate is SPENT and the `sdk` backend is gone** (see
+[Amendment — the gate is spent](#amendment--the-gate-is-spent-the-sdk-ordinary-path-is-retired)).
+Narrative:
 [`docs/reference/librarian.md`](../reference/librarian.md) (the two shapes of the ordinary flow and
 their configuration), [`docs/reference/capture.md`](../reference/capture.md) (what a submitter's
 capture meets on the way in). Code maps:
@@ -222,3 +224,84 @@ then a human saying so. Not "the structured one exists", and not a date.
 - The knowledge repo carries a brief that no longer describes the tools an SDK run holds. That is
   only safe because the platform says so explicitly, in a named override immediately in front of
   the brief — the same mechanism, and the same positioning argument, ADR 032 introduced.
+
+## Amendment — the gate is spent: the `sdk` ordinary path is retired
+
+**D6 said the retirement gate was evidence plus an explicit decision, in that order, and not a
+date.** Both were spent, in that order, and this amendment records what the evidence actually was
+so a reader years from now can judge the decision rather than take it on trust:
+
+- the full M0 golden scored on the STRUCTURED flow with every bar PASS;
+- a 20-capture staging shakedown on the structured flow with zero flow failures;
+- the container e2e running on CI for every push, on the deployed image, against the double;
+- and then a human saying so. Nothing here fired because the second shape merely existed.
+
+**No ADR 034, and the reason is the point.** A second record is owed when the thing that happened
+diverged from the thing that was planned. Nothing diverged: D6 named the gate, the gate was met on
+its own terms, and contracting is the step D6 said would follow. The one thing this milestone added
+that D6 did not spell out — a NAMED startup refusal for the retired value — is what "contract"
+means when the configuration outlives the code, not a different decision. Amending the record that
+made the promise keeps the promise and its discharge in one place; a new ADR would split them.
+
+### What went, and what the retirement cost
+
+`SdkAgent`, both `_run` methods, the option builders, the three `PreToolUse`/`PostToolUse` hooks,
+the tool allow/deny lists, the environment allow-list and the credential pre-flight; the
+`claude-agent-sdk` dependency; the Node runtime and the agent CLI in the image, with their entries
+in `scripts/docker/tool-checksums.txt`. The image is roughly **55% smaller**.
+
+Three things went that were NOT replaced, and pretending otherwise would be the dishonest version
+of this paragraph:
+
+- **the tool-call ceiling** (`settings.max_tool_calls`) counted tool calls in a hook. A structured
+  call holds no tool, so it bounds nothing — the variable is deprecated rather than silently
+  ignored, and removed in a later release with its own consumer inventory. `max_turns` goes the
+  same way. The WALL CLOCK survives, in the backend that still needs one.
+- **the harness lockdown** — `setting_sources=[]`, `mcp_servers={}`, `strict_mcp_config=True`, and
+  the subprocess environment allow-list — hardened a process that no longer exists. What replaces
+  it is not a thinner guard but the absence of the surface: no subprocess, no settings file, no
+  `.mcp.json` to be read. The DEFECT those settings were written for (repo content becoming
+  executable configuration) is recorded in `agent.py`'s docstring, where the next harness will
+  meet it.
+- **the write-confinement HOOK.** The rule it enforced (`agent.confined_write`) is untouched and
+  still runs on every offline filing, because the double routes its own writes through it.
+
+### The two-edit upgrade, and why the refusal names it
+
+A deployment's `STIGMERGY_LIBRARIAN_BACKEND` lives in `fly.toml` or a gitignored `.env`, and a `git
+pull` updates neither. So the first worker to boot on the new image is configured for a backend
+that is not there, and telling it "invalid backend" would name a typo nobody made.
+`agent.RETIRED_BACKENDS` refuses it by name instead: what happened, that the replacement takes TWO
+edits (the backend AND a provider-prefixed model id — changing only the first swaps this refusal
+for the model one), and the image rollback that gets a worker running meanwhile. The queue is
+durable, so nothing is lost while it is down.
+
+`config.DEFAULT_MODEL` moved from the bare `claude-sonnet-5` to `anthropic:claude-sonnet-5` for the
+same reason and it is not a model change: the surviving backend resolves ids through pydantic-ai,
+where a bare name means an OpenAI model, so the shipped default would otherwise be the one value a
+worker could not boot on without overriding.
+
+### What the knowledge repo owed, and where it landed
+
+This retirement had a half the platform could not make. The brief is the knowledge repo's text, and
+its environment note said *"Some runs of this skill hold tools and a checkout, and write the page
+themselves"* — true while two backends existed, false of every run once one did. The platform reads
+that file and may not reword it; only the knowledge repo can.
+
+**It landed.** Knowledge-repo commit `c1e0996ed497e70a9df82661c367294b48207a16` —
+*"chore(skills): the brief describes one run style"* — rewrote that paragraph so the environment
+note describes ONE run style instead of offering a variation that no longer exists. Everything else
+in the brief is untouched: every judgment rule, the anchoring outcomes, the wikilink rule, the
+injection posture, the one ask.
+
+The two frozen copies in this repo are resynced to those bytes, and the pin is the check:
+
+```
+git show c1e0996:.claude/skills/librarian/SKILL.md | shasum -a 256
+1a05db240cbfb7207c353534b0146eff96af2a2d6ddf700e89b5cb79f4ce6635
+```
+
+That sha256 is what `tests/librarian/fixtures/repo/` (the drift guard) and `evals/filing/repo/` (the
+yardstick) now carry, so a brief that drifts from the landed one fails here rather than on a
+deployment. `evals/README.md` records what the re-freeze means for the score series — the bars were
+fixed under the previous bytes and the next golden row is the first measured under these.

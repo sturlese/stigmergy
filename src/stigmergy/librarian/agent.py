@@ -1,86 +1,69 @@
-"""The librarian agent: the seam, the Claude Agent SDK driver, and the dispatch.
+"""The filing agent seam: the outcome contract, the prompts, the confinement rule, the dispatch.
 
-The agent runs on the **Claude Agent SDK** (Claude Code headless) with a repo checkout and the
-skills in `.claude/skills/` — the company's operating procedure, versioned and PR-reviewable. The
-skill lives in the KNOWLEDGE repo, so the agent reads it out of the worktree it is working in; the
-platform never carries a copy that could drift from the one under review.
+**This module drives no model.** It holds what every backend shares — the boundary that parses an
+agent's account, the fence, the per-item prompt, the system-prompt frame the brief is injected
+under, and the `settings.backend` dispatch — and each backend brings its own model call:
+`pydantic_backend.py` (the real one, both flows, structured) and `double.py` (the offline double
+the suite and CI run on). It was the Claude Agent SDK driver too until that path was retired
+(ADR 033 D6's gate, spent; see `RETIRED_BACKENDS` for what a deployment carrying the old value is
+told).
 
-**We read the skill; the CLI loads no configuration from the repo.** That distinction is the
-whole of `read_skill` + `build_system_prompt` + `build_options_kwargs`, and it is a correction.
+**The procedure lives in the KNOWLEDGE repo, and we read it rather than letting anything load it.**
+The skill is `<worktree>/.claude/skills/librarian/SKILL.md` — versioned and PR-reviewable by the
+people whose knowledge it files — and `read_skill` opens it with OUR code at the item's own base
+commit, `build_system_prompt` injecting it into the model's instructions.
 
-The first version reached the skill by handing the CLI `setting_sources=["project"]`, which makes
-it load `<worktree>/.claude/` — and the worktree is a checkout of the knowledge repo, which
-carries a `.mcp.json`. So the first real `--backend sdk` run booted the knowledge repo's two MCP
-servers (one of them under a DIFFERENT identity) and blocked forever waiting on their
-initialization: nothing was written, no outcome file, the item sat `claimed` until the operator
-interrupted it. The hang was the symptom. The defect is that **`.mcp.json` is repo content and it
-can declare any command**, so with project settings on, the agent executes processes named by the
-data it curates — data this very worker writes to, so a future capture or PR could extend that
-list. It also partly defeated `agent_env`'s allow-list, since an `.mcp.json` entry carries its own
-`env` block.
+That distinction is a correction, and the defect behind it outlived the harness that produced it.
+The first version reached the skill by letting the agent harness load `<worktree>/.claude/` as
+project settings — and the worktree is a checkout of the knowledge repo, which carries a
+`.mcp.json`. The first real live run booted the knowledge repo's two MCP servers (one under a
+DIFFERENT identity) and blocked forever on their initialization: nothing written, no outcome file,
+the item `claimed` until the operator interrupted it. The hang was the symptom. The defect is that
+**`.mcp.json` is repo content and it can declare any command**, so a run configured by the checkout
+executes processes named by the data it curates — data this very worker writes to, so a future
+capture or PR could extend that list.
 
-The fix keeps the property that matters — the procedure stays versioned in the knowledge repo,
-reviewable by the people whose knowledge it files — and changes only the loading path:
-
-- `read_skill` reads `<worktree>/.claude/skills/librarian/SKILL.md` with OUR code and
-  `build_system_prompt` injects it into the agent's system prompt;
-- `setting_sources=[]` — no user, project or local settings from any filesystem;
-- `strict_mcp_config=True` with `mcp_servers={}` — no MCP configuration from any source, so the
-  agent has exactly the five tools below and not one MCP tool.
-
-`build_options_kwargs` returns a plain dict rather than a `ClaudeAgentOptions`, and that is
-deliberate: it is the seam the SDK integration never had. Every test in this repo runs
-`backend="double"`, and `tests/test_architecture.py` asserts the double never imports the SDK — so
-the entire SDK path had zero coverage BY CONSTRUCTION, which is why a manual walk was the first
-thing to reach it. A dict of option kwargs can be asserted with no API key and no subprocess.
-
-Two consequences of `setting_sources=[]` worth naming: the repo's own `CLAUDE.md` and
-`ops/templates/` are no longer auto-injected. Neither is lost — the skill already instructs the
-agent to read both out of the checkout, and `Read` is confined to the worktree, so they arrive by
-the same reviewed path as everything else. `build_system_prompt` says so explicitly rather than
-leaving it to be inferred.
+The property that survives is the one worth keeping: a process must not be configured by the repo
+it operates on. Today no backend can be — a structured call holds no tools and reads no settings
+file — and the model is TOLD so in the shared preamble (`ORDINARY_SYSTEM_PROMPT_BODY`: "No file in
+this repo configures you"), because the model should not be the only thing that does not know it.
 
 **The seam is `filing_port.FilingAgent`** — a named, typed port since ADR 032, where it used to be
-a convention shared by whoever happened to implement it. THREE implementations answer it, and since
-ADR 033 all three serve BOTH flows: this SDK driver, the offline double (`double.py`) and the
-pydantic-ai backend (`pydantic_backend.py`). What differs is the SHAPE of the ordinary flow, and a
-backend DECLARES which one it answers (`FilingAgent.structured_ordinary`) rather than having it
-inferred: this driver explores the checkout and writes the page itself; the structured backend is
-handed a deterministic gatherer's context, holds no tool, and returns the page's own text for code
-to write. Dispatch is `settings.backend`, validated eagerly — an unknown value fails fast rather
-than falling through to any of the three, the same doctrine as
-`answer.synthesize.build_synthesizer`. CI and the whole test suite run on the double; live runs are
-on demand.
+a convention shared by whoever happened to implement it. TWO implementations answer it and both
+serve BOTH flows. What differs is the SHAPE of the ordinary flow, and a backend DECLARES which one
+it answers (`FilingAgent.structured_ordinary`) rather than having it inferred: the structured
+backend is handed a deterministic gatherer's context, holds no tool, and returns the page's own
+text for code to write; the double still writes its own page, through the same `confined_write`
+allow-list. Dispatch is `settings.backend`, validated eagerly — an unknown value fails fast rather
+than falling through to either, the same doctrine as `answer.synthesize.build_synthesizer`. CI and
+the whole test suite run on the double; live runs are on demand.
 
-**`claude_agent_sdk` is imported inside the SDK branch, never at module scope** — the same rule
-`answer` follows for `pydantic_ai`, and `tests/test_architecture.py` enforces it. An offline run
-must not load the agent framework, and the import graph must not claim the librarian depends on it
-unconditionally. The rule is the FRAMEWORK's, not this file's: `pydantic_backend.py` follows it for
-`pydantic_ai`, and `build_agent` imports each backend inside its own branch so a run on one loads
-neither of the others'.
+**No agent framework is imported at module scope**, here or in a backend — `pydantic_ai` is
+imported inside `pydantic_backend`'s own methods, and `build_agent` imports each backend inside its
+own branch so a `double` run loads neither the framework nor the other backend's module.
+`tests/test_architecture.py` enforces it. The rule is the FRAMEWORK's, not this file's: an offline
+run must not load one, and the import graph must not claim the librarian depends on one
+unconditionally.
 
-**Bounds.** The SDK bounds turns natively (`max_turns`). It has no native wall clock and no
-native tool-call cap, so both are enforced here: a wall clock around the whole run, and a
-`PostToolUse` hook that counts. A bound the SDK does not provide is a bound we own.
+**The outcome channel is a file**, `.librarian-outcome.json` at the worktree root, written by the
+agent and read (then deleted) by `processing.py` before the diff is taken — so it never reaches a
+commit. It is the channel a backend that HOLDS a write tool uses; a structured backend carries its
+account home in the envelope instead and writes nothing at all. The double writes the file, which
+is what keeps this boundary exercised offline. It is also **untrusted input**, written by a model
+that has just read untrusted material, so it is parsed and bounded into a frozen `Outcome` at the
+boundary (`parse_outcome`) rather than handed onward as a raw dict.
 
-**The outcome channel is a file**, `.librarian-outcome.json` at the worktree root, written by
-the agent and read (then deleted) by `processing.py` before the diff is taken — so it never
-reaches a commit. In-process SDK tools cannot carry `structuredContent` back, and parsing the
-final assistant message is brittle; a file the skill documents is deterministic, works
-identically for the double, and is inspectable after a failure. It is also **untrusted input**,
-written by a model that has just read untrusted material, so it is parsed and bounded into a
-frozen `Outcome` at the boundary (`parse_outcome`) rather than handed onward as a raw dict.
+**Confinement is an allow-list, and it is code, not prose.** Writes must land on a `.md` page in
+one of the creatable fast-lane folders that does not exist yet (`confined_write`); reads must
+resolve inside the worktree (`page.is_inside`). Both are module-level functions rather than
+closures precisely so they can be tested with no model at all — the first version put the rule
+inside the run where nothing could reach it, and it was wrong in three ways at once, including one
+that denied every legitimate write on macOS. They did not retire with the tool-holding backend:
+the double routes every write through `confined_write`, and `edits.validate` and
+`processing._write_new` ask `page.is_inside` the same question about code's own writes.
 
-**Confinement is an allow-list in both directions, and it is code, not prose.** Writes must land
-on a `.md` page in one of the creatable fast-lane folders (`confined_write`); reads must resolve inside
-the worktree (`page.is_inside`); the environment handed to the CLI subprocess is an allow-list
-(`agent_env`), so the GitHub App private key and the queue DSN are not in it. All three are
-module-level functions rather than closures precisely so they can be tested without an SDK — the
-first version put the rule inside `_run` where nothing could reach it, and it was wrong in three
-ways at once, including one that denied every legitimate write on macOS.
-
-**The skill, read at the base commit, is the ONE text this agent is briefed with.** Nothing else
-is injected into the system prompt — no second advisory document accumulated out of the repo. A
+**The skill, read at the base commit, is the ONE text an agent is briefed with.** Nothing else is
+injected into the system prompt — no second advisory document accumulated out of the repo. A
 second injected text is only as trustworthy as the human gate in front of it, and there is none.
 """
 import json
@@ -89,30 +72,96 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from stigmergy.librarian import gates, gitcmd
+from stigmergy.librarian import filing_port, gates
 from stigmergy.librarian import page as page_policy
 from stigmergy.librarian.errors import AgentError, LibrarianConfigError, OutcomeShapeError
-from stigmergy.librarian.filing_port import AgentRun, FilingAgent
-from stigmergy.librarian.filing_port import priced as _priced
+from stigmergy.librarian.filing_port import FilingAgent
 
 log = logging.getLogger(__name__)
 
+# ── the envelope and the fault contract: RE-EXPORTS, and deliberately explicit ─────────────────
+# Both moved to the PORT — they belong to the contract, not to the first backend that implemented
+# it — and both keep the names every existing importer already used, so nothing outside had to move
+# with them. A test pins the IDENTITY of each: a second `AgentRun` type in one process would make an
+# `isinstance` false somewhere downstream for no visible reason.
+#
+# Written as assignments rather than as `from ... import` lines because nothing in THIS module
+# consumes either one any more. The backend that returned `AgentRun`s and priced its own faults
+# retired; the surviving backends import both from `filing_port` directly, which is the right edge.
+# An unused-looking import is a thing a linter or a tidy-up deletes — an assignment says "this name
+# is part of this module's surface on purpose", and this comment says why it still is.
+AgentRun = filing_port.AgentRun
+_priced = filing_port.priced
+
 OUTCOME_FILENAME = ".librarian-outcome.json"
 
-# The three implementations of the port, and ALL THREE serve BOTH flows (ADR 033 lifted the
-# meeting-only refusal M1 shipped). `double` is the suite's and the default; `sdk` is the real
-# Claude Code agent, which still EXPLORES the checkout on the ordinary flow; `pydantic` runs both
-# flows structured — no tools, a gathered context, code writes every page.
-BACKENDS = ("sdk", "double", "pydantic")
+# The two implementations of the port, and both serve BOTH flows (ADR 033 lifted the meeting-only
+# refusal M1 shipped). `pydantic` is the real one — both flows structured, no tools, a gathered
+# context, code writes every page; `double` is the offline one, the suite's and the default.
+BACKENDS = ("pydantic", "double")
 PYDANTIC_BACKEND = "pydantic"
 
 # Which backends INJECT the knowledge repo's librarian skill as their instructions — and therefore
 # which ones `worker.startup_checks` must prove it exists for, at the base commit, before the first
-# claim. Both real ones: the structured backend briefs the model with exactly the same text the
-# exploring one does (the brief is backend-neutral since ADR 033; only the ENVIRONMENT preamble in
-# front of it differs). The offline double reads no skill at all, which is why this is a named set
-# rather than "not the double" — the question is who reads it, not who is fake.
-SKILL_READING_BACKENDS = ("sdk", PYDANTIC_BACKEND)
+# claim. The offline double reads no skill at all, which is why this stays a named SET now that it
+# holds one entry rather than collapsing into `== PYDANTIC_BACKEND`: the question is who reads the
+# brief, not who is real, and a third backend answers it by joining this tuple.
+SKILL_READING_BACKENDS = (PYDANTIC_BACKEND,)
+
+# ── the retired backend, and the refusal an upgrade meets ─────────────────────────────────────
+# `sdk` — the Claude Code harness — was this system's first filing backend and is gone: ADR 033 D6
+# made its retirement a matter of evidence plus an explicit decision, and both were spent.
+#
+# **The VALUE outlives the code, which is the whole reason this table exists.** A deployment
+# carries it in `fly.toml`'s `[env]` or in a gitignored `.env`, and neither is updated by a `git
+# pull` — so the first worker to boot on the new image is configured for a backend that is not
+# there. Telling it "invalid librarian backend 'sdk'" would name the typo it is not: the operator
+# did not mistype anything, their configuration simply aged past the code. So the message says what
+# happened, what replaces it (and that the replacement needs a differently-SPELLED model id, which
+# is the second half of the same edit and the one that is easy to miss), how to get a running
+# deployment back while that edit is made, and where the decision is written down.
+#
+# Every command in it is real and a test runs them (the executable-promise rule): `fly releases` /
+# `fly deploy --image` is the runbook's own Rollback section, verbatim.
+_SDK_BACKEND = "sdk"
+
+RETIRED_BACKENDS = {
+    _SDK_BACKEND: (
+        f"$STIGMERGY_LIBRARIAN_BACKEND is {_SDK_BACKEND!r}, and that backend has been RETIRED — it "
+        f"drove the Claude Code harness, which this build no longer carries at all (no "
+        f"claude-agent-sdk, no Node, no `claude` CLI in the image). This is configuration that "
+        f"outlived its code, not a typo: nothing is wrong with the deployment except that "
+        f"fly.toml's [env] or the gitignored .env still names it.\n"
+        f"The replacement is {PYDANTIC_BACKEND!r}, and it takes TWO edits, not one: set "
+        f"STIGMERGY_LIBRARIAN_BACKEND={PYDANTIC_BACKEND} AND give "
+        f"$STIGMERGY_LIBRARIAN_MODEL a PROVIDER-PREFIXED id — 'anthropic:claude-sonnet-5' is the "
+        f"same model the retired backend ran under its bare name. A bare id is refused by the "
+        f"check below this one, so changing only the backend swaps this refusal for that one.\n"
+        f"To get this deployment RUNNING again while you make that edit, roll the image back: "
+        f"`fly releases` to find the last good release, then `fly deploy --image <that image ref>` "
+        f"(docs/reference/operator-runbook.md, Rollback). The queue is durable — nothing claimed is "
+        f"lost while the worker is down.\n"
+        f"Why it was retired, and on what evidence: docs/decisions/033-structured-filing-flow.md"),
+}
+
+
+def ensure_known_backend(backend: str) -> None:
+    """Refuse a backend value this build cannot run — a RETIRED one by name, an unknown one as
+    before. The ONE place either refusal is worded.
+
+    Two callers ask the same question at two moments and must not answer it differently:
+    `worker.startup_checks` asks before a single item is claimed (which is where a stale deployment
+    meets it), and `build_agent` asks at the dispatch itself (which is where a caller that never ran
+    the pre-flight — the eval rig, a script — meets it). They used to carry two copies of the same
+    sentence, and a retirement is exactly the kind of change that would have updated one of them.
+    """
+    if backend in BACKENDS:
+        return
+    retired = RETIRED_BACKENDS.get(backend)
+    if retired:
+        raise LibrarianConfigError(retired)
+    raise LibrarianConfigError(
+        f"invalid librarian backend {backend!r} (use one of: {', '.join(BACKENDS)})")
 
 # The operating procedure, IN THE KNOWLEDGE REPO rather than in the platform: it must be
 # reviewable by the people whose knowledge it files. Written once, read twice —
@@ -123,14 +172,6 @@ SKILL_RELPATH = ".claude/skills/librarian/SKILL.md"
 # A ceiling on the procedure, checked before the read for the same reason `MAX_OUTCOME_BYTES` is:
 # a cap applied after reading the file is decoration. Generous — the real skill is ~8 KB.
 MAX_SKILL_BYTES = 256 * 1024
-
-# The tools the librarian may use. Read/Glob/Grep so it can see the whole graph; Write/Edit so
-# it can draft inside the worktree. No Bash, no WebFetch, no WebSearch — the agent has no
-# network and no shell, and with `permission_mode="dontAsk"` anything not listed here is denied
-# outright rather than prompted for (there is nobody to prompt). See `DISALLOWED_TOOLS` for the
-# same statement made positively, and the two `PreToolUse` hooks for where these five are SCOPED:
-# being allowed to Read is not permission to read anything, which is how it was built at first.
-ALLOWED_TOOLS = ("Read", "Glob", "Grep", "Write", "Edit")
 
 # The UNTRUSTED-DATA fence for the agent's prompt. Deliberately a SEPARATE constant from
 # `server.service`'s wire fence, hand-mirrored rather than shared: `librarian` may not import
@@ -759,12 +800,6 @@ def read_meeting_outcome(worktree: str, *, delete: bool = True) -> MeetingOutcom
     return parse_meeting_outcome(raw)
 
 
-# ── the envelope and the fault contract moved to `filing_port` ───────────────────────────────
-# `AgentRun` and `_priced` are imported at the top of this module now. They belong to the PORT
-# rather than to the first backend that implemented it, and a backend module must be able to reach
-# them without importing this driver. Both keep the names every existing caller already used, so
-# nothing outside had to move with them.
-
 
 def read_outcome(worktree: str, *, delete: bool = True) -> Outcome:
     """Read (and by default remove) the agent's outcome file, validated into an `Outcome`.
@@ -830,158 +865,23 @@ LANE_FOLDERS = tuple(sorted(page_policy.FOLDER_BY_TYPE.values()))
 _ALLOWED_WRITE_RE = re.compile(
     r"^(?:" + "|".join(re.escape(folder) for folder in LANE_FOLDERS) + r")/[^/.][^/]*\.md$")
 
-# The meeting flow's lane, narrowed to nothing. This used to name the three folders the meeting
-# agent's own Write/Edit tool calls were confined to, and this pattern and the injected prompt had
-# to agree on those three folders exactly. The agent now has no page-writing tool at all: CODE is
-# the sole author of every page in the set (`processing._write_meeting_pages`), so there is no
-# "meeting lane" left for a Write/Edit hook to bound — the agent's one legal write, ever, is its own
-# outcome file, which `confined_write`'s own unconditional exception already permits. Matching
-# that pattern against nothing else is the whole of this flow's write confinement now, so
-# `_MEETING_NO_PAGE_WRITES_RE` is exactly that: a pattern with no match, named for what it is
-# rather than reused from a folder list that no longer exists.
-_MEETING_NO_PAGE_WRITES_RE = re.compile(r"(?!)")
-
-# The tool inputs that name a filesystem location. `pattern` is in here on purpose: `Glob` and
-# `Grep` take an absolute pattern happily, and `/home/**/*.pem` is a read of the operator's
-# home directory dressed as a search.
-_PATH_INPUTS = ("file_path", "path", "pattern", "notebook_path")
-
-# Tools the librarian must never be handed, named explicitly rather than left to the absence of
-# an allow-list. `allowed_tools` plus `permission_mode="dontAsk"` should already be enough; saying
-# it twice costs nothing and means a change to how the SDK resolves permissions cannot quietly
-# hand the agent a shell. `Task` is here because a subagent would not inherit these hooks.
-DISALLOWED_TOOLS = ("Bash", "BashOutput", "KillShell", "WebFetch", "WebSearch", "NotebookEdit",
-                    "Task")
-
-# Where the Claude Code CLI keeps its own configuration — and, when a human authenticated it
-# interactively instead of with a key, the pointer to whatever that login left behind. A named
-# constant because three surfaces need the same string and must not drift: the passthrough below,
-# `agent_config_dir`, and the suite's autouse fixture that has to neutralize it.
-CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
-
-# The ONLY environment variables the agent subprocess inherits. An allow-list, because the
-# librarian's own process holds the GitHub App private key and the queue DSN, and the CLI has no
-# business seeing either: the agent reads untrusted material for a living, and a credential in its
-# environment is a credential one prompt away from a page.
-AGENT_ENV_PASSTHROUGH = (
-    # what any process needs to run at all — shared with every other subprocess we launch, so the
-    # group is defined once (`gitcmd.SUBPROCESS_BASE_ENV`) rather than retyped per call site
-    *gitcmd.SUBPROCESS_BASE_ENV,
-    # what the Claude Code CLI itself authenticates and configures with
-    "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL",
-    "CLAUDE_CODE_OAUTH_TOKEN", CONFIG_DIR_ENV,
-    # proxies, where a network is reached through one
-    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
-)
+# RETIRED with the tool-holding backend: `_MEETING_NO_PAGE_WRITES_RE`, a regex matching nothing,
+# and the `allowed_re` parameter that carried it into `confined_write`. It narrowed the meeting
+# flow's write lane to "the outcome file and nothing else" for a `PreToolUse` hook that no longer
+# exists, and by the end nothing passed it: the last caller was the offline double, which passed
+# `None` on every path. The property it expressed is not lost and never depended on it — code is
+# the sole author of every page in a meeting set (`processing._write_meeting_pages`), and the one
+# legal write is permitted by `confined_write`'s own unconditional outcome-file exception.
 
 
-def agent_env(environ: dict | None = None) -> dict:
-    """The environment for the agent subprocess: `AGENT_ENV_PASSTHROUGH` and nothing else.
-
-    Passed explicitly so the CLI does not inherit `os.environ`. `HOME` is included because that
-    is where the CLI's own credentials live and it cannot authenticate without them; the agent's
-    TOOLS still cannot read anything under it, which is what the read hook is for.
-    """
-    source = os.environ if environ is None else environ
-    return {name: source[name] for name in AGENT_ENV_PASSTHROUGH if source.get(name)}
+# RETIRED with the tool-holding backend: `is_inside = page_policy.is_inside`, an alias this module
+# re-exported for its own read-confinement hook. The RULE is untouched and has more callers than it
+# ever had — `edits.validate`, `gather._confined` and `processing._write_new` all ask
+# `page.is_inside` directly, which is where it lives so they can reach it without importing this
+# module. Only the alias went, with its last caller.
 
 
-# Which of the passthrough variables actually AUTHENTICATE the CLI. A subset, in the order an
-# operator is most likely to have one, and derived from the allow-list above rather than retyped:
-# a credential the subprocess does not inherit is a credential the check must not accept.
-CREDENTIAL_ENV = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN")
-
-# A CLI configured to talk to a gateway carries its credential in whatever that gateway wants, so
-# the presence of a base URL is itself evidence that authentication is somebody else's problem.
-_GATEWAY_ENV = "ANTHROPIC_BASE_URL"
-
-# The name the CLI's config directory has under `$HOME` when `CONFIG_DIR_ENV` does not override it.
-_DEFAULT_CONFIG_DIRNAME = ".claude"
-
-# The three answers to "can the agent subprocess authenticate?" — see `credential_status` for why
-# two were not enough. Module constants rather than bare strings at the call site, so the worker's
-# branches and the tests name the same values.
-CREDENTIAL_IN_ENV = "env"
-CREDENTIAL_AMBIENT = "ambient"
-CREDENTIAL_MISSING = "missing"
-
-
-def credential_present(environ: dict | None = None) -> bool:
-    """Does the ENVIRONMENT carry something the Claude Code CLI can authenticate with?
-
-    One of the two ways the CLI authenticates, and the only one an environment can be asked about
-    without touching a disk. It exists because of one of the four detours the mid-build walk lost a
-    day to: the credential lives in the gitignored root env file, `make` exports it and a
-    directly-invoked `.venv/bin/stigmergy-librarian` does not inherit it. Without that diagnosis the
-    run reached the agent, the CLI subprocess exited unauthenticated, and the item burned both
-    attempts and landed `failed` with a stage name — which reads as a product defect and is in fact
-    a missing export.
-
-    It is NOT the gate, though: it used to be, and answering `False` is not the same as "this run
-    cannot authenticate". `credential_status` is the question `worker.startup_checks` asks, and this
-    is one of its two inputs.
-    """
-    source = os.environ if environ is None else environ
-    return bool(source.get(_GATEWAY_ENV)) or any(source.get(name) for name in CREDENTIAL_ENV)
-
-
-def agent_config_dir(environ: dict | None = None) -> str | None:
-    """Where the agent subprocess will look for the CLI's own configuration, or `None` if nowhere.
-
-    Resolved out of `agent_env` — not out of this process's `os.environ`, and not with
-    `expanduser("~")`. The question is what the SUBPROCESS will find, and the subprocess gets the
-    allow-list and nothing else: a `HOME` the allow-list did not pass through is a CLI that cannot
-    reach its own configuration whatever is on this disk, and answering from the parent's
-    environment would be the same category of mistake as the skill check that read the local
-    checkout while the agent read the worktree.
-    """
-    env = agent_env(environ)
-    configured = env.get(CONFIG_DIR_ENV)
-    if configured:
-        return configured
-    home = env.get("HOME")
-    return os.path.join(home, _DEFAULT_CONFIG_DIRNAME) if home else None
-
-
-def credential_status(environ: dict | None = None, *, config_dir_exists=os.path.isdir) -> str:
-    """Can the agent subprocess authenticate — and when the answer is "probably", say which.
-
-    Three answers rather than two, because two was wrong on the DEFAULT configuration. The
-    variables above are one way the CLI authenticates; the other — the one anybody who uses Claude
-    Code interactively has — is the CLI's own stored login under its config directory, which on
-    macOS is the login Keychain: no variable to read AND no file to stat. `agent_env` passes `HOME`
-    and `CONFIG_DIR_ENV` through precisely so the subprocess can reach it, and that path works.
-
-    So the two-way check refused a WORKING configuration. It was written from one observed failure
-    and never run against ambient auth, and it would have made `make librarian-walk` refuse to start
-    on the machine the walk was for: a missing benign twin on a surface never
-    exercised with the default configuration (rule 3).
-
-    It cannot be repaired by making the check cleverer, either — no pre-flight can tell
-    "authenticated through the Keychain" from "not authenticated at all" without spending a request.
-    `CREDENTIAL_AMBIENT` is the honest middle: proceed, and let the caller say what the run is
-    relying on, so an operator whose run then does fail unauthenticated already has the diagnosis in
-    front of them instead of a `failed` row with a stage name.
-
-    `config_dir_exists` is injected so the composition is testable without a `HOME` full of
-    fixtures; `os.path.isdir` rather than `exists`, because a stray file named `.claude` is not a
-    configuration directory.
-    """
-    if credential_present(environ):
-        return CREDENTIAL_IN_ENV
-    config_dir = agent_config_dir(environ)
-    if config_dir and config_dir_exists(config_dir):
-        return CREDENTIAL_AMBIENT
-    return CREDENTIAL_MISSING
-
-
-# The containment half of the confinement rule, shared with `edits.validate` — see
-# `page.is_inside`, which is where it lives now so `edits` can reach it without importing this
-# module. Re-exported under the name this module's own docstring and hooks already use.
-is_inside = page_policy.is_inside
-
-
-def confined_write(worktree_root: str, target: str, *, existing=(), allowed_re=None) -> bool:
+def confined_write(worktree_root: str, target: str, *, existing=()) -> bool:
     """May the agent WRITE here? An allow-list, not a prefix test.
 
     A prefix test answers "is this inside the worktree", which is not the question. Inside the
@@ -1026,24 +926,24 @@ def confined_write(worktree_root: str, target: str, *, existing=(), allowed_re=N
         rel = rel.replace(os.sep, "/")
     # The one permitted exception: the agent's own account of what it did, at the worktree root.
     # `processing.py` consumes and deletes it before the diff is taken, so it never reaches a
-    # commit.
+    # commit. It is also what permits the MEETING flow's single legal write, where there is no page
+    # lane at all because code writes every page in the set.
     if rel == OUTCOME_FILENAME:
         return True
-    # `allowed_re`: the meeting flow passes `_MEETING_NO_PAGE_WRITES_RE` (a pattern
-    # matching nothing — its only legal write is the outcome-file exception just above); every
-    # ordinary run passes nothing and gets the unwidened `_ALLOWED_WRITE_RE` — a caller-declared
-    # fact, never inferred, the same posture the gates' `write_prefixes` field takes.
-    pattern = allowed_re or _ALLOWED_WRITE_RE
-    if not pattern.match(rel):
+    if not _ALLOWED_WRITE_RE.match(rel):
         return False
     return page_policy.path_key(rel) not in page_policy.path_keys(existing)
 
 
 # How the ordinary account travels home, as the sentence the agent reads — the one line of the
-# per-item prompt the two channels disagree about. The file channel is the default because it is
-# what the SDK backend needs; a structured backend passes its own
+# per-item prompt the two channels disagree about. It is the sentence for a backend that HOLDS a
+# write tool, and it stays the default of `build_prompt` because it is what this builder has always
+# produced unasked: a structured backend passes its own
 # (`pydantic_backend.ORDINARY_OUTCOME_CHANNEL`) rather than being handed an instruction to write a
-# file it has no tool to write. Exactly `MEETING_OUTCOME_CHANNEL_FILE`'s arrangement, one flow over.
+# file it has no tool to write. **No SHIPPED backend takes the default today** — the double writes
+# the file without being told to, and the one real backend declares its own channel — so this is
+# the builder's neutral starting point rather than any backend's configuration. Exactly
+# `MEETING_OUTCOME_CHANNEL_FILE`'s arrangement, one flow over.
 OUTCOME_CHANNEL_FILE = (
     f"\nWhen you are done, write your account to `{OUTCOME_FILENAME}` at the repo root, in "
     "the shape the skill documents.")
@@ -1167,9 +1067,10 @@ def build_prompt(*, material: str, hints: dict, submitted_by: str, corrective: s
     """The per-item prompt. The skill carries the procedure; this carries the item.
 
     `gathered_block` and `outcome_channel` are CALLER-DECLARED facts defaulting to what this
-    function always produced (no gathered context, the outcome file) — so an `sdk` call is
-    byte-identical to the pre-ADR-033 one, and the structured flow declares its two differences
-    rather than getting a second builder that could drift from this one's fence discipline.
+    function always produced (no gathered context, the outcome file), and the structured flow
+    declares its two differences rather than getting a second builder that could drift from this
+    one's fence discipline. The defaults are the BUILDER's history rather than any shipped
+    backend's configuration — see `OUTCOME_CHANNEL_FILE`.
 
     `flow_note` (ADR 028): a SERVER-composed fact about the flow this item rides — today,
     the source attachment's half of the work ("the verbatim source page is code's; yours is the
@@ -1283,8 +1184,8 @@ def validate_skill(text: str, *, where: str) -> str:
 def read_skill(repo: str) -> str:
     """The `librarian` skill's text, read out of `repo` by us.
 
-    Used by `SdkAgent._run` against the item's own WORKTREE, so the agent is briefed with exactly
-    the version of the skill it is working under. The size ceiling is checked before the read.
+    Called by a backend against the item's own WORKTREE, so the agent is briefed with exactly the
+    version of the skill it is working under. The size ceiling is checked before the read.
 
     **A load-bearing dependency worth stating, because nothing else states it.** The rule is
     a process must not be configured by the repo it operates on, and this reads the agent's SYSTEM
@@ -1336,22 +1237,11 @@ ORDINARY_SYSTEM_PROMPT_OPENING = (
     "Three things about your environment:\n"
     "\n")
 
-# The SDK backend's own environment: five tools, a checkout to explore, a page it writes itself.
-# **Byte-identical to what it always was** — the extraction that produced this constant is a pure
-# refactor, and `build_filing_header(ORDINARY_SDK_ENVIRONMENT)` reproduces the pre-ADR-033
-# `SYSTEM_PROMPT_HEADER` exactly, which is the property a test pins by extracting the old string
-# from git.
-ORDINARY_SDK_ENVIRONMENT = (
-    "1. The repo's own `CLAUDE.md` (the page contract) and the templates under `ops/templates/` "
-    "are NOT loaded for you. Read them from the checkout with `Read` when the procedure below "
-    "tells you to.\n"
-    "2. You have exactly these tools: Read, Glob, Grep, Write, Edit — no shell, no network, no "
-    "subagents. Reads are confined to this checkout. Writes are confined to a `.md` page in its "
-    "knowledge folders THAT DOES NOT EXIST YET: you may not modify a page that is already in the "
-    "repo, and a write to one is denied by code. Path identity is decided case- and "
-    "normalization-insensitively, so re-spelling an existing page's name is denied too and is not "
-    "a way to reach it. Edits to existing pages are declared in your outcome's `edits` and "
-    "performed by the worker.\n")
+# RETIRED with the tool-holding backend: `ORDINARY_SDK_ENVIRONMENT`, the paragraph that told an
+# agent it held Read/Glob/Grep/Write/Edit over the checkout. Nothing composes it any more, and a
+# preamble describing tools no shipped backend holds is the exact defect this split exists to
+# prevent (see `build_filing_header`). `pydantic_backend.ORDINARY_ENVIRONMENT` is the one
+# environment paragraph left; a third backend adds its own beside it rather than editing that one.
 
 # True of every backend: nothing in this repo configures the agent.
 ORDINARY_SYSTEM_PROMPT_BODY = (
@@ -1365,34 +1255,19 @@ ORDINARY_SKILL_SEPARATOR = (
     "── the `librarian` skill, from {relpath} ──\n"
     "\n")
 
-# **The one place the SDK run contradicts the brief, said out loud and immediately before it.**
+# RETIRED with the tool-holding backend: `ORDINARY_SDK_OVERRIDE_NOTE`, the named correction that
+# told the exploring run to ignore the parts of the brief describing a handed context and a
+# returned page body.
 #
-# The direction of this note is the inverse of the meeting flow's (`pydantic_backend.OVERRIDE_NOTE`
-# overrides a tool-holding brief for a tool-less run), and the inversion is the milestone: after
-# ADR 033 the brief is written for the STRUCTURED flow — the worker hands you the material and the
-# gathered context in one message, you return one account, code writes the page — because that is
-# the shape both future backends share and the shape the brief will still be right about when the
-# SDK path retires. The SDK backend is now the one that departs from it: it is handed no gathered
-# context, it holds five tools, and it writes its own page.
+# **The mechanism it belonged to is alive and is the point of `build_filing_header`'s
+# `override_note` parameter**, which the meeting flow still uses
+# (`pydantic_backend.OVERRIDE_NOTE`): where a backend contradicts the brief, it says so out loud,
+# immediately in front of the text it overrides, scoped to MECHANICS only — the judgment the brief
+# documents always applies unchanged.
 #
-# Named, positioned last so a reader meets the correction before the text being corrected, and
-# scoped as narrowly as it can honestly be: the JUDGMENT the brief documents — placement,
-# anchoring, wikilinks, overlap-versus-duplicate, the injection posture, the one ask — applies
-# to this run unchanged, and only the mechanics differ.
-ORDINARY_SDK_OVERRIDE_NOTE = (
-    "One override, and it is the only place this run departs from the skill below. The skill is "
-    "written for a run whose worker HANDS it a gathered context — candidate pages with excerpts, "
-    "the resolved entity view, the link neighbourhood, the repo's page names — in the same "
-    "message as the material, and which returns the page's own text inside its account for the "
-    "worker to write. THIS run receives none of that and writes the page itself: where the skill "
-    "describes context you were handed, you hold `Read`, `Glob` and `Grep` and must go and find "
-    "it in the checkout yourself — glob before you link, and confirm a page exists before you "
-    "name it — and where it describes returning the page's text in `page`, you `Write` the page "
-    "into its folder and return the path you wrote in `page_path` instead. You also write the "
-    "page's frontmatter yourself, which the skill tells a tool-less run not to: `Read` "
-    "`ops/templates/<type>.md` for the fields and sections that type owes, since a run that holds "
-    "no tools has only the skill's own summary of them. Every judgment the skill asks of you is "
-    "unchanged.\n")
+# The note died with its backend rather than with the idea, and ADR 033 D4 predicted exactly this:
+# the brief was rewritten for the STRUCTURED shape precisely because that is the shape it would
+# still be right about once this path retired. It is right about it now, with nothing to correct.
 
 
 def build_filing_header(environment: str, *, override_note: str = "") -> str:
@@ -1408,22 +1283,20 @@ def build_filing_header(environment: str, *, override_note: str = "") -> str:
             + (override_note + "\n" if override_note else "") + ORDINARY_SKILL_SEPARATOR)
 
 
-SYSTEM_PROMPT_HEADER = build_filing_header(ORDINARY_SDK_ENVIRONMENT,
-                                           override_note=ORDINARY_SDK_OVERRIDE_NOTE)
-
-
-def build_system_prompt(skill_text: str, *, header: str = SYSTEM_PROMPT_HEADER) -> str:
-    """The agent's system prompt: our preamble plus the skill's body.
+def build_system_prompt(skill_text: str, *, header: str) -> str:
+    """The agent's system prompt: the caller's preamble plus the skill's body.
 
     The skill's YAML frontmatter is dropped — `name`/`description` are metadata for the loader we
     are deliberately no longer using (and `allowed-tools`, where a brief still carries one, would
-    be a second, unenforced statement of the tool list next to `ALLOWED_TOOLS`). Reuses
-    `page.split_frontmatter` rather than a second regex.
+    be a second, unenforced statement of a tool list). Reuses `page.split_frontmatter` rather than
+    a second regex.
 
-    `header` is a CALLER-DECLARED fact, defaulting to the SDK backend's own preamble, for the
-    reason `build_meeting_system_prompt`'s is: the preamble describes the ENVIRONMENT and the
-    backends differ there, while the BRIEF's body — the knowledge repo's own text and the actual
-    procedure — is identical for every backend.
+    **`header` is REQUIRED, and it stopped having a default when the last backend that owned one
+    here retired.** It describes the ENVIRONMENT, which is the backend's own fact — this module
+    drives no model and therefore has no environment to default to. A default would have to be
+    some backend's, which is how a caller ends up briefed with another backend's tool list. The
+    BRIEF's body — the knowledge repo's own text and the actual procedure — is identical for every
+    backend, which is why this function exists at all.
 
     **`replace`, not `format`.** `header` is a parameter, so `str.format` would scan
     caller-supplied text for braces and raise on any that are not `{relpath}` — a preamble
@@ -1443,14 +1316,12 @@ def build_system_prompt(skill_text: str, *, header: str = SYSTEM_PROMPT_HEADER) 
 # procedure at all — it needs its own, incompatible one (a page SET, per-page anchoring).
 MEETING_BRIEF_RELPATH = ".claude/skills/meeting-distiller/SKILL.md"
 
-# The meeting agent's own tool allow-list, narrower than the ordinary agent's
-# (`ALLOWED_TOOLS`) — one tool, `Write`, and one legal target for it (its own outcome file,
-# `_MEETING_NO_PAGE_WRITES_RE`'s exception). Read/Glob/Grep are gone too, not only Edit: there is
-# nothing left in the worktree for the agent to explore, because everything it needs (the
-# transcript, the resolved entity registry, the meeting metadata, the source page's own path) is
-# handed to it in `build_meeting_prompt`.
-MEETING_ALLOWED_TOOLS = ("Write",)
-MEETING_DISALLOWED_TOOLS = DISALLOWED_TOOLS + ("Read", "Glob", "Grep", "Edit")
+# RETIRED with the tool-holding backend: `MEETING_ALLOWED_TOOLS` (one tool, `Write`) and
+# `MEETING_DISALLOWED_TOOLS`, this flow's tool allow-lists. They configured a harness that is gone;
+# the PROPERTY they expressed is now structural rather than configured — the surviving backend
+# holds no tool at all, and everything the distiller needs (the transcript, the resolved entity
+# registry, the meeting metadata, the source page's own path) is handed to it in
+# `build_meeting_prompt` because there is nothing it could go and look for.
 
 # ── the meeting preamble, in four pieces because exactly ONE of them is per-backend ───────────
 # The preamble in front of the brief describes the agent's ENVIRONMENT — which tools it holds and
@@ -1465,16 +1336,9 @@ MEETING_SYSTEM_PROMPT_OPENING = (
     "repo checkout you are working in.\n"
     "\n")
 
-# The SDK backend's own environment: one tool, one legal target for it.
-MEETING_SDK_ENVIRONMENT = (
-    "Your environment (narrower than the ordinary librarian agent's):\n"
-    "\n"
-    "1. You have exactly ONE tool, Write, and exactly one legal target for it: "
-    f"`{OUTCOME_FILENAME}` at the repo root. You cannot Read, Glob or Grep this repo, you cannot "
-    "Edit anything, and you cannot write any page yourself — no shell, no network, no subagents "
-    "either. Everything you need is handed to you in the worker's own message below: the "
-    "transcript, the entity registry (every entity this brain already knows), the meeting "
-    "metadata, and the source page's own path.\n")
+# RETIRED with the tool-holding backend: `MEETING_SDK_ENVIRONMENT`, the paragraph that told the
+# distiller it held exactly one `Write` tool with one legal target.
+# `pydantic_backend.MEETING_ENVIRONMENT` is the one environment paragraph left on this flow.
 
 # True of every backend: code writes the pages, and nothing in the repo configures the agent.
 MEETING_SYSTEM_PROMPT_BODY = (
@@ -1500,22 +1364,17 @@ def build_meeting_header(environment: str, *, override_note: str = "") -> str:
             + (override_note + "\n" if override_note else "") + MEETING_SKILL_SEPARATOR)
 
 
-MEETING_SYSTEM_PROMPT_HEADER = build_meeting_header(MEETING_SDK_ENVIRONMENT)
-
-
-def build_meeting_system_prompt(brief_text: str, *,
-                                header: str = MEETING_SYSTEM_PROMPT_HEADER) -> str:
+def build_meeting_system_prompt(brief_text: str, *, header: str) -> str:
     """The meeting agent's system prompt: a preamble plus the brief's body. Mirrors
     `build_system_prompt`, over the meeting brief instead of the librarian skill.
 
-    `header` is a CALLER-DECLARED fact, defaulting to the SDK backend's own preamble so this call
-    is byte-identical to what it always produced. It exists because the preamble describes the
-    agent's ENVIRONMENT — which tools it holds, how its account travels home — and the backends
-    genuinely differ there: the tool-less structured backend
-    (`pydantic_backend.MEETING_SYSTEM_PROMPT_HEADER`) would otherwise be told it holds a `Write`
-    tool it does not have. Both are composed by `build_meeting_header` from the same three shared
-    pieces. The BRIEF's body, which is the knowledge repo's own text and the actual procedure, is
-    identical for every backend — one frontmatter strip, one substitution, one place.
+    **`header` is REQUIRED**, for the reason `build_system_prompt`'s is: the preamble describes the
+    agent's ENVIRONMENT — which tools it holds, how its account travels home — and that is the
+    backend's fact, not this module's. The default that used to live here was one backend's own
+    preamble, and it was exactly what would have told a tool-less run it holds a `Write` tool.
+    `pydantic_backend.MEETING_SYSTEM_PROMPT_HEADER` composes today's through `build_meeting_header`
+    from the shared pieces. The BRIEF's body, which is the knowledge repo's own text and the actual
+    procedure, is identical for every backend — one frontmatter strip, one substitution, one place.
 
     **`replace`, not `format`.** `header` is a parameter now, so `str.format` would scan
     caller-supplied text for braces and raise `KeyError`/`IndexError` on any that are not
@@ -1527,10 +1386,11 @@ def build_meeting_system_prompt(brief_text: str, *,
 
 
 # How the account travels home, as the sentence the agent reads — the one line of the per-item
-# prompt the two channels disagree about. The file channel is the default because it is what the
-# SDK backend needs and what the brief documents; a structured backend passes its own
+# prompt the two channels disagree about. The file channel is this builder's neutral default, for
+# a backend that HOLDS a write tool; a structured backend passes its own
 # (`pydantic_backend.OUTCOME_CHANNEL`) rather than being handed an instruction to write a file it
-# has no tool to write.
+# has no tool to write. `OUTCOME_CHANNEL_FILE`'s note about no shipped backend taking the default
+# applies here too.
 MEETING_OUTCOME_CHANNEL_FILE = (
     f"\nWrite your account to `{OUTCOME_FILENAME}` at the repo root, in the shape the skill "
     "documents — the ONLY file you write, ever.")
@@ -1587,334 +1447,27 @@ def build_meeting_prompt(*, material: str, meeting_meta: dict, registry, source_
     return "\n".join(parts)
 
 
-def build_meeting_options_kwargs(*, settings, worktree_root: str, brief_text: str,
-                                 environ: dict | None = None) -> dict:
-    """`build_options_kwargs`'s meeting sibling: the same lockdown (no settings, no MCP), the
-    meeting brief as the system prompt instead of the librarian skill, and a much narrower
-    tool allow-list — one tool, no exploration, because everything the agent needs is in the
-    prompt rather than in the repo it would otherwise have to Read/Glob/Grep for."""
-    return {
-        "cwd": worktree_root,
-        "model": settings.model,
-        "max_turns": settings.max_turns,
-        "system_prompt": build_meeting_system_prompt(brief_text),
-        "allowed_tools": list(MEETING_ALLOWED_TOOLS),
-        "disallowed_tools": list(MEETING_DISALLOWED_TOOLS),
-        "permission_mode": "dontAsk",
-        "env": agent_env(environ),
-        "setting_sources": [],
-        "mcp_servers": {},
-        "strict_mcp_config": True,
-    }
-
-
-def build_options_kwargs(*, settings, worktree_root: str, skill_text: str,
-                         environ: dict | None = None) -> dict:
-    """The `ClaudeAgentOptions` kwargs for one run — as a plain dict, with no SDK import.
-
-    This is the seam the SDK path never had. `hooks` is NOT here: the three hooks close over the
-    per-run `AgentRun` counter and the resolved worktree root, so they are built in `_run`. Every
-    other option is a decision worth asserting, and the ones that matter most are the two that were
-    wrong: `setting_sources` and `strict_mcp_config`.
-
-    """
-    return {
-        "cwd": worktree_root,
-        "model": settings.model,
-        "max_turns": settings.max_turns,
-        # The procedure, injected by us. Previously the SDK was handed no system prompt at all
-        # (`system_prompt=None` makes the transport pass `--system-prompt ""`) and the skill was
-        # expected to arrive through project settings — which is what loaded `.mcp.json` with it.
-        "system_prompt": build_system_prompt(skill_text),
-        "allowed_tools": list(ALLOWED_TOOLS),
-        "disallowed_tools": list(DISALLOWED_TOOLS),
-        "permission_mode": "dontAsk",
-        # An EXPLICIT environment, so the CLI subprocess does not inherit `os.environ` — which
-        # on the machine this runs on holds the GitHub App private key path and the queue DSN.
-        "env": agent_env(environ),
-        # NO filesystem settings, from any source. `["project"]` here is what made the CLI load
-        # `<worktree>/.claude/` — user settings were already excluded (a service must not inherit
-        # the operator's home directory), and the project half turned out to be the same mistake
-        # pointed at the data instead of the operator.
-        "setting_sources": [],
-        # No MCP servers from us, and `strict_mcp_config` so none from anywhere else either: not
-        # the repo's `.mcp.json`, not user or global settings, not a plugin. Both halves are
-        # needed — an empty `mcp_servers` alone is not a refusal to load other sources.
-        "mcp_servers": {},
-        "strict_mcp_config": True,
-    }
-
-
-class SdkAgent:
-    """The real agent: Claude Code headless, bounded, confined to the worktree.
-
-    Conforms to `filing_port.FilingAgent` structurally — no base class, no registration: a backend
-    is a class that answers `run` and `run_meeting` with an `AgentRun`. It is the one backend that
-    prices ITSELF: the SDK's `ResultMessage` carries `total_cost_usd`, which is passed straight
-    through to `AgentRun.cost_usd` and never recomputed from tokens (`pricing.py` exists for the
-    backends that report only counts).
-    """
-
-    # The EXPLORING shape of the ordinary flow, declared rather than inferred (see
-    # `filing_port.FilingAgent.structured_ordinary`). This backend holds five tools, goes looking
-    # through the checkout itself, and writes the page — so `processing` runs no gatherer for it
-    # and expects `Outcome.page_path` rather than `Outcome.page`.
-    structured_ordinary = False
-
-    def __init__(self, settings):
-        self.settings = settings
-
-    def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
-            corrective: str = "", reply: str = "", flow_note: str = "",
-            gathered: str = "") -> AgentRun:
-        # `gathered` is accepted and unused: the port carries it for the structured backends and
-        # `processing` never builds one for a backend that declares `structured_ordinary = False`.
-        # Accepting it keeps this signature honest against the port rather than against one caller.
-        import asyncio
-        return asyncio.run(self._run(worktree=worktree, material=material, hints=hints,
-                                     submitted_by=submitted_by, corrective=corrective,
-                                     reply=reply, flow_note=flow_note))
-
-    async def _run(self, *, worktree, material, hints, submitted_by, corrective,
-                   reply="", flow_note="") -> AgentRun:
-        import asyncio
-
-        # Imported HERE, not at module scope: an offline run must never load the agent
-        # framework, and the architecture test asserts it.
-        from claude_agent_sdk import (
-            AssistantMessage,
-            ClaudeAgentOptions,
-            HookMatcher,
-            ResultMessage,
-            query,
-        )
-
-        run = AgentRun()
-        # `realpath`, matching what the confinement helpers resolve against. `abspath` here was
-        # what broke every write on darwin.
-        worktree_root = os.path.realpath(worktree)
-        # Read ONCE, before the agent runs: the set of pages that already exist. Recomputing it
-        # per tool call would let a page the agent itself just wrote start looking "existing".
-        existing_paths = gitcmd.tracked_paths(worktree_root)
-
-        def _deny(reason: str) -> dict:
-            return {"hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason}}
-
-        async def bound_tool_calls(input_data, tool_use_id, context):
-            """The tool-call ceiling the SDK does not provide."""
-            run.tool_calls += 1
-            if run.tool_calls > self.settings.max_tool_calls:
-                return {"continue_": False}
-            return {}
-
-        async def confine_writes(input_data, tool_use_id, context):
-            """Every Write/Edit must land on a NEW page in the lane, or on the outcome file.
-
-            An allow-list rather than "inside the worktree": inside the worktree are `.git/`, the
-            dotfiles and everything outside the lane. See `confined_write`, which holds the rule
-            so it can be tested without an SDK — including the half that denies any path that
-            already exists, because edits to existing pages are declared and performed by code.
-            """
-            if input_data.get("hook_event_name") != "PreToolUse":
-                return {}
-            if input_data.get("tool_name") not in ("Write", "Edit"):
-                return {}
-            target = (input_data.get("tool_input") or {}).get("file_path", "")
-            if not confined_write(worktree_root, target, existing=existing_paths):
-                return _deny("writes are confined to a NEW .md page in one of this repo's "
-                             "fast-lane knowledge folders; an edit to a page that already exists "
-                             "is declared in the outcome's `edits` and performed by the worker")
-            return {}
-
-        async def confine_reads(input_data, tool_use_id, context):
-            """Reads are confined too — they were not confined at all.
-
-            `Read`/`Glob`/`Grep` are pre-approved unscoped under `permission_mode="dontAsk"`, so
-            the agent could read anything the worker user could: the App private key, the operator's
-            home directory, another item's worktree. Combined with a write into a page, that is a
-            credential-exfiltration path whose only remaining obstacle was the secrets gate.
-            """
-            if input_data.get("hook_event_name") != "PreToolUse":
-                return {}
-            if input_data.get("tool_name") not in ("Read", "Glob", "Grep"):
-                return {}
-            tool_input = input_data.get("tool_input") or {}
-            for key in _PATH_INPUTS:
-                value = tool_input.get(key)
-                if isinstance(value, str) and value and not is_inside(worktree_root, value):
-                    return _deny("reads are confined to this worktree")
-            return {}
-
-        # The procedure comes out of the WORKTREE, not out of `settings.repo`: the worktree is the
-        # checkout at the commit this item is being filed against, so the agent is briefed with
-        # exactly the version of the skill it is working under. `startup_checks` has already proven
-        # the file exists in the repo, so this raising here means it went missing mid-run.
-        options = ClaudeAgentOptions(
-            **build_options_kwargs(
-                settings=self.settings, worktree_root=worktree_root,
-                skill_text=read_skill(worktree_root)),
-            hooks={
-                "PreToolUse": [HookMatcher(hooks=[confine_writes]),
-                               HookMatcher(hooks=[confine_reads])],
-                "PostToolUse": [HookMatcher(hooks=[bound_tool_calls])],
-            },
-        )
-        prompt = build_prompt(material=material, hints=hints, submitted_by=submitted_by,
-                              corrective=corrective, reply=reply, flow_note=flow_note)
-        try:
-            async with asyncio.timeout(self.settings.timeout_s):
-                async for message in query(prompt=prompt, options=options):
-                    if isinstance(message, AssistantMessage):
-                        continue
-                    if isinstance(message, ResultMessage):
-                        run.turns = message.num_turns or 0
-                        run.cost_usd = message.total_cost_usd or 0.0
-                        run.stop_reason = message.subtype or ""
-                        if message.subtype != "success":
-                            raise AgentError(
-                                f"the agent run ended as {message.subtype!r} after "
-                                f"{run.turns} turn(s)")
-        except TimeoutError as ex:
-            raise _priced(run, AgentError(
-                f"the agent exceeded its {self.settings.timeout_s}s budget")) from ex
-        except AgentError as ex:
-            _priced(run, ex)
-            raise
-        except Exception as ex:  # noqa: BLE001 — class name only: SDK errors can carry prompt text
-            raise _priced(run, AgentError(
-                f"the agent run failed ({ex.__class__.__name__})")) from ex
-
-        if run.tool_calls > self.settings.max_tool_calls:
-            raise _priced(run, AgentError(
-                f"the agent exceeded its {self.settings.max_tool_calls} tool-call budget"))
-        try:
-            run.outcome = read_outcome(worktree)
-        except AgentError as ex:   # a missing/oversized/malformed outcome file: the run is priced
-            _priced(run, ex)
-            raise
-        return run
-
-    def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
-                    source_page_path: str, corrective: str = "", reply: str = "") -> AgentRun:
-        """The meeting flow's sibling to `run`: the meeting brief instead of the
-        librarian skill, ONE tool instead of five, `read_meeting_outcome` instead of `read_outcome`.
-        Genuinely never exercised by this repo's suite (every test runs `backend="double"`, per
-        `tests/test_architecture.py`) — kept structurally parallel to `_run` above so a live run is
-        a brief-content change, not a mechanism one.
-        """
-        import asyncio
-        return asyncio.run(self._run_meeting(worktree=worktree, material=material,
-                                             meeting_meta=meeting_meta, registry=registry,
-                                             source_page_path=source_page_path,
-                                             corrective=corrective, reply=reply))
-
-    async def _run_meeting(self, *, worktree, material, meeting_meta, registry, source_page_path,
-                           corrective, reply="") -> AgentRun:
-        import asyncio
-
-        from claude_agent_sdk import (
-            AssistantMessage,
-            ClaudeAgentOptions,
-            HookMatcher,
-            ResultMessage,
-            query,
-        )
-
-        run = AgentRun()
-        worktree_root = os.path.realpath(worktree)
-        existing_paths = gitcmd.tracked_paths(worktree_root)
-
-        def _deny(reason: str) -> dict:
-            return {"hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason}}
-
-        async def bound_tool_calls(input_data, tool_use_id, context):
-            """Kept, because it still guards something: the model should make exactly one
-            `Write` call and stop, but a bound the SDK does not enforce natively is a bound we
-            still own if it ever does not."""
-            run.tool_calls += 1
-            if run.tool_calls > self.settings.max_tool_calls:
-                return {"continue_": False}
-            return {}
-
-        async def confine_writes(input_data, tool_use_id, context):
-            """The agent's ONE legal write, ever: its own outcome file. There is no page-writing
-            lane left to name (`_MEETING_NO_PAGE_WRITES_RE` matches nothing;
-            `confined_write`'s own unconditional outcome-file exception is what actually permits
-            this one write)."""
-            if input_data.get("hook_event_name") != "PreToolUse":
-                return {}
-            if input_data.get("tool_name") != "Write":
-                return {}
-            target = (input_data.get("tool_input") or {}).get("file_path", "")
-            if not confined_write(worktree_root, target, existing=existing_paths,
-                                  allowed_re=_MEETING_NO_PAGE_WRITES_RE):
-                return _deny(f"the meeting agent writes only its own outcome file "
-                            f"({OUTCOME_FILENAME}) — every page in the set is written by the "
-                            f"worker from what it returns there")
-            return {}
-
-        # There is deliberately no `confine_reads` hook here: Read/Glob/Grep are not in
-        # `MEETING_ALLOWED_TOOLS` at all, so a hook scoping them would have nothing to scope —
-        # absent, not merely unreachable. `setting_sources=[]`/`mcp_servers={}`/
-        # `strict_mcp_config=True` (in `build_meeting_options_kwargs`) and `agent_env`'s allow-list
-        # STAY: they guard the model PROCESS itself (no repo-declared settings or MCP servers, no
-        # ambient credentials in its environment) regardless of which tools it holds, so removing
-        # them would not be "no longer needed" — it would be a real loss of defense in depth.
-        options = ClaudeAgentOptions(
-            **build_meeting_options_kwargs(settings=self.settings, worktree_root=worktree_root,
-                                           brief_text=read_meeting_brief(worktree_root)),
-            hooks={
-                "PreToolUse": [HookMatcher(hooks=[confine_writes])],
-                "PostToolUse": [HookMatcher(hooks=[bound_tool_calls])],
-            },
-        )
-        prompt = build_meeting_prompt(material=material, meeting_meta=meeting_meta,
-                                      registry=registry, source_page_path=source_page_path,
-                                      corrective=corrective, reply=reply)
-        try:
-            async with asyncio.timeout(self.settings.timeout_s):
-                async for message in query(prompt=prompt, options=options):
-                    if isinstance(message, AssistantMessage):
-                        continue
-                    if isinstance(message, ResultMessage):
-                        run.turns = message.num_turns or 0
-                        run.cost_usd = message.total_cost_usd or 0.0
-                        run.stop_reason = message.subtype or ""
-                        if message.subtype != "success":
-                            raise AgentError(
-                                f"the agent run ended as {message.subtype!r} after "
-                                f"{run.turns} turn(s)")
-        except TimeoutError as ex:
-            raise _priced(run, AgentError(
-                f"the agent exceeded its {self.settings.timeout_s}s budget")) from ex
-        except AgentError as ex:
-            _priced(run, ex)
-            raise
-        except Exception as ex:  # noqa: BLE001
-            raise _priced(run, AgentError(
-                f"the agent run failed ({ex.__class__.__name__})")) from ex
-
-        if run.tool_calls > self.settings.max_tool_calls:
-            raise _priced(run, AgentError(
-                f"the agent exceeded its {self.settings.max_tool_calls} tool-call budget"))
-        try:
-            run.outcome = read_meeting_outcome(worktree)
-        except AgentError as ex:   # same pricing road as `_run`'s own outcome read
-            _priced(run, ex)
-            raise
-        return run
+# ── RETIRED with the tool-holding backend ─────────────────────────────────────────────────────
+# `build_options_kwargs`, `build_meeting_options_kwargs` and `SdkAgent` lived here: the option
+# dict a Claude Code run was configured with (no filesystem settings from any source, no MCP
+# servers from any source, an explicit environment allow-list), the three `PreToolUse`/`PostToolUse`
+# hooks that scoped its five tools, and the driver that ran both flows through them.
+#
+# **Two of the properties they enforced are not lost, and one is stronger.** The confinement rule
+# is `confined_write` above, still exercised on every offline run by the double. The
+# "nothing in this repo configures you" rule is now structural rather than configured: the
+# surviving backend loads no settings file and holds no tool, so there is no `setting_sources` to
+# set to `[]` and no `.mcp.json` that could be read. What is genuinely GONE is the tool-call
+# ceiling those hooks counted (`settings.max_tool_calls`) — a structured call makes one model call
+# and has no tool loop to bound. The WALL CLOCK survives in the backend that still needs one
+# (`pydantic_backend`'s `asyncio.timeout(settings.timeout_s)`), because a provider that never
+# answers is a lease this worker still has to outlive.
 
 
 def read_meeting_brief(repo: str) -> str:
     """The `meeting-distiller` brief's text, read out of `repo` by us — `read_skill`'s sibling,
     same size-then-content validation, same mechanism (this
-    docstring's own former claim): `repo` here is `SdkAgent._run_meeting`'s WORKTREE, built by
+    docstring's own former claim): `repo` here is the backend's own WORKTREE, built by
     `gitcmd.ephemeral_worktree(deps.repo, base.sha, ...)` at the item's base commit and reset
     between passes (`processing._reset_for_retry`) — so this read IS a base-commit read (the
     point 5), the same way `read_skill`'s own docstring says the ordinary flow's is, not through a
@@ -1936,24 +1489,28 @@ def read_meeting_brief(repo: str) -> str:
 
 
 def build_agent(settings) -> FilingAgent:
-    """`backend` dispatch. An unknown value fails fast — a typo must never fall through to the
-    real path, nor silently pick the double.
+    """`backend` dispatch. An unusable value fails fast — a typo must never fall through to the
+    real path, nor silently pick the double, and a RETIRED value must say so in those words
+    (`ensure_known_backend`).
 
     Every branch returns a `filing_port.FilingAgent`: the port is what `processing.py` is written
-    against, and this annotation is where the three implementations are declared to satisfy it
-    (structurally — none of them inherits anything, and a backend is a class that answers the two
+    against, and this annotation is where both implementations are declared to satisfy it
+    (structurally — neither inherits anything, and a backend is a class that answers the two
     calls). The conformance test is what checks the claim.
 
-    Each backend is imported INSIDE its own branch, so a `double` run loads neither agent framework
-    and the import graph never claims this package depends on one unconditionally.
+    **There is no fall-through branch any more, deliberately.** The dispatch used to end by
+    RETURNING the SDK driver for anything the two `if`s did not catch, which was safe only because
+    the membership check above it was exhaustive — one tuple edit away from a typo reaching the
+    paid path. Every backend now names itself, and the end of the function is unreachable by
+    construction.
+
+    Each backend is imported INSIDE its own branch, so a `double` run loads neither the agent
+    framework nor the other backend's module, and the import graph never claims this package
+    depends on one unconditionally.
     """
-    if settings.backend not in BACKENDS:
-        raise LibrarianConfigError(
-            f"invalid librarian backend {settings.backend!r} (use one of: {', '.join(BACKENDS)})")
+    ensure_known_backend(settings.backend)
     if settings.backend == "double":
         from stigmergy.librarian.double import DoubleAgent
         return DoubleAgent(settings)
-    if settings.backend == PYDANTIC_BACKEND:
-        from stigmergy.librarian.pydantic_backend import PydanticFilingAgent
-        return PydanticFilingAgent(settings)
-    return SdkAgent(settings)
+    from stigmergy.librarian.pydantic_backend import PydanticFilingAgent
+    return PydanticFilingAgent(settings)

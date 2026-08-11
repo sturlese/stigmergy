@@ -45,13 +45,9 @@ a literal-word expectation cost the QA golden; this set does not repeat it.
   # keyless plumbing self-check (the offline double, NOT a measurement — appends no history row)
   python evals/run_filing.py --backend double
 
-  # the real measurement (needs ANTHROPIC_API_KEY and the `claude` CLI on PATH)
-  python evals/run_filing.py --backend sdk --model claude-sonnet-5 \
-      --report evals/out/filing-sonnet-5.json
-
-  # the structured flow, every capture, on the pydantic-ai backend (ADR 033)
+  # the real measurement (needs the model's own provider key — ANTHROPIC_API_KEY here)
   python evals/run_filing.py --backend pydantic \
-      --model anthropic:claude-sonnet-5 --report evals/out/filing-structured.json
+      --model anthropic:claude-sonnet-5 --report evals/out/filing-sonnet-5.json
 
 **A subset is a different measurement, and says so.** `--kinds` scores only the captures of the
 named kinds, and everything downstream is recomputed from that subset rather than from the shipped
@@ -158,16 +154,53 @@ _STOPWORDS = frozenset({"a", "an", "the", "and", "or", "of", "for", "to", "in", 
 _WORD_SPLIT_RE = re.compile(r"[^a-z0-9]+")
 
 
-# ── pure scoring: no Postgres, no git, no SDK, no model ────────────────────────────────────────
+# ── pure scoring: no Postgres, no git, no framework, no model ──────────────────────────────────
 # Everything below this line is a function of data. `_run` builds the `observed` dicts from a real
 # run and hands them here; a keyless test builds the same dicts by hand and gets identical scores.
 # That is the whole seam, and it is why the heavy imports live inside `_run` rather than at module
 # scope: `from evals import run_filing` costs nothing but the standard library.
 
 def _words(text: str) -> frozenset:
-    """The significant words of a title or a path, normalized for comparison."""
+    """The significant words of a title or a path, normalized for comparison.
+
+    A pure tokenizer: it lowercases, splits and drops stopwords, and it does NOT fold morphology.
+    The one fold this instrument makes lives in `_same_word` below, at the COMPARISON, so a token
+    is still the token the title actually carries — a `_words` that rewrote its own output would be
+    a stemmer wearing a tokenizer's name.
+    """
     return frozenset(w for w in _WORD_SPLIT_RE.split((text or "").lower())
                      if w and w not in _STOPWORDS)
+
+
+def _same_word(want: str, got: str) -> bool:
+    """One token against one token: equal, or the same word in the other grammatical NUMBER.
+
+    Exactly one fold and deliberately no more — a trailing `s`, in either direction. Not a stemmer,
+    not a table, nothing that could be extended without somebody noticing: `tracked` and `tracking`
+    are still two words here, and the yardstick's obligation to name uninflected content words is
+    unchanged for every inflection except this one.
+
+    **It is here because grammatical number turned out to be run-to-run NOISE, measured.** Three
+    independent runs of the same code on the same model titled F08's review decision three ways —
+    two singular ("…-for-review-…", scored PASS) and one plural ("…-reviews-…", scored FAIL) — with
+    the anchors right every time. A 2-denominator facet flipping on whether a model wrote "review"
+    or "reviews" is the instrument measuring the model's grammar, which is the same defect
+    `globex-meeting-budget` records one series over, arrived at from the other direction: there an
+    expectation demanded a literal word, here it demanded a literal ENDING.
+
+    **What the narrowness does and does not buy, stated exactly** — the first draft of this comment
+    overclaimed and the claim is the part that matters. It folds ONE suffix: a plural written `es`
+    is not folded (`process`/`processes` is still a miss), and neither is any other inflection. What
+    it cannot do is what a stem table does — reach `ed`, `ing`, `ies` or an irregular form, or grow
+    a new entry without somebody editing this line.
+
+    What it CAN do, and the reason this is a two-line rule rather than a one-line one: `a == b + "s"`
+    also fires when a token happens to be another token plus `s` (`bus` and `bu`). That is only a
+    false match if BOTH strings are words a title would carry, and a two-letter fragment is not —
+    every expectation here is written in proper nouns and stable nouns. It is a residual, not an
+    impossibility, and if one ever bites, the fix is the expectation rather than a longer rule.
+    """
+    return want == got or want == f"{got}s" or got == f"{want}s"
 
 
 def title_matches(expected: str, candidate: str) -> bool:
@@ -180,20 +213,34 @@ def title_matches(expected: str, candidate: str) -> bool:
     Northwind" is the same decision as one titled "Northwind second wave", and an instrument that
     scored the first a miss would be measuring the model's word order.
 
-    So an expectation matches when every significant word it names appears in the candidate. It is
-    deliberately generous in one direction only: a candidate may say MORE than the expectation, and
-    never less.
+    So an expectation matches when every significant word it names appears in the candidate, in
+    either grammatical number (`_same_word`). It is deliberately generous in one direction only: a
+    candidate may say MORE than the expectation, and never less.
 
-    **`_words` does no stemming, and will not grow any.** "tracked" and "tracking" are two words
-    here, so the obligation sits on the yardstick instead: an expectation is written in the
-    UNINFLECTED content words a paraphrase cannot drop — a proper noun plus a stable noun — and
-    never in the verb form one particular run happened to produce. A stemmer would move that
-    judgment into a table nobody reviews and would silently start matching words the expectation
-    never meant. `evals/filing/expected/expectations.json`'s `_looseness` note states the same rule
-    where the expectations are written, which is where it has to be obeyed.
+    **Beyond that one fold, `_words` does no stemming and will not grow any.** "tracked" and
+    "tracking" are two words here, so the obligation sits on the yardstick instead: an expectation
+    is written in the UNINFLECTED content words a paraphrase cannot drop — a proper noun plus a
+    stable noun — and never in the verb form one particular run happened to produce. A stemmer
+    would move that judgment into a table nobody reviews and would silently start matching words
+    the expectation never meant. `evals/filing/expected/expectations.json`'s `_looseness` note
+    states the same rule where the expectations are written, which is where it has to be obeyed.
+
+    **This loosening is ONE-DIRECTIONAL, which is what keeps the series comparable** — a recorded
+    score stays valid rather than needing a re-run to mean anything. The predicate is strictly
+    weaker than the one it replaces, so every pairing that matched before matches now: a recorded
+    PASS cannot become a FAIL, and only a FAIL can flip.
+
+    **With one caveat, stated because it is real rather than hidden**: `_decisions_match` pairs
+    expectations to pages GREEDILY and one-to-one, so a weaker predicate can in principle change
+    which page a title claims and starve a later expectation — a PASS→FAIL the loosening itself
+    cannot cause but the pairing can. That is precisely what
+    `tests/evals/test_filing_golden_fixture.py::test_no_expected_decision_title_can_swallow_a_later`
+    `_ones_page` exists to prevent, and it calls THIS function — so widening the match widened that
+    guard's net in the same commit. The property is preserved by the guard, not by the fold alone.
     """
     want = _words(expected)
-    return bool(want) and want <= _words(candidate)
+    got = _words(candidate)
+    return bool(want) and all(any(_same_word(w, g) for g in got) for w in want)
 
 
 def _anchor_matches(expected: dict, observed: dict) -> bool:
@@ -250,6 +297,29 @@ def _decisions_match(expected: list, observed: list) -> bool:
     separately, which is the granularity failure the meeting brief spends a whole section on.
     Matching is greedy and one-to-one, so two expected titles cannot both be satisfied by the same
     page.
+
+    **An entry MAY omit `title`, and then it pairs on its ANCHOR alone.** Three separate runs
+    taught the same lesson in three shapes, and this is the third: F08's review decision flipped on
+    grammatical number (closed by `_same_word`), and F09's after_reply put the word "summary" on the
+    OTHER decision's title than the expectation assumed — "Project Wren tracked formally under
+    Quillon Labs" plus "weekly summaries consolidated into the shared summary", where the yardstick
+    had written "Wren summary" and "Wren". Both splits are defensible readings of the same
+    transcript; which noun lands on which page is the distiller's prose, not its judgment.
+
+    **Across all five measured runs of all three shapes, the ANCHORS were right every time.** That
+    is the real finding: a decision's aboutness is a fact with one spelling (a resolved registry id,
+    or the company-wide empty list), and its title is a sentence somebody wrote. So the anchor is
+    the load-bearing pair-er and a title is written only where a proper noun or a stable term held
+    across runs. Omitting one is not weakening the facet — it is moving the assertion off the
+    dimension that was measuring the model's vocabulary and onto the one that was right five times
+    out of five. The count, the one-to-one pairing and the per-decision anchor are untouched.
+
+    **A title-less entry is the WEAKEST matcher, so it has to be written LAST** — greedy pairing
+    walks the expectations in the order the file lists them, so an anchor-only entry placed first
+    would take the first page whose anchor matches and starve a titled sibling that needed it. That
+    is the same trap the "more specific first" rule already covers for titles, and it is enforced
+    rather than hoped for: `_check_set` refuses a set that orders them the other way, before a
+    single model call is spent.
     """
     if len(expected) != len(observed):
         return False
@@ -257,7 +327,12 @@ def _decisions_match(expected: list, observed: list) -> bool:
     for want in expected:
         hit = None
         for candidate in remaining:
-            if not title_matches(want.get("title", ""), candidate.get("path", "")):
+            # `want.get("title")` absent — not merely empty — is what makes this anchor-only. An
+            # entry that named a title and got it wrong still has to match it: `title_matches("")`
+            # is False by design (an empty expectation matches nothing rather than everything), so
+            # the two states cannot be confused.
+            if "title" in want and not title_matches(want["title"],
+                                                     candidate.get("path", "")):
                 continue
             if "anchor" in want and not _anchor_matches(want["anchor"],
                                                         candidate.get("anchor") or {}):
@@ -413,7 +488,7 @@ def render(report: dict) -> str:
 def _history_metrics(report: dict, phases: list, provenance: dict) -> dict:
     """The `metrics` dict a real-instrument run hands `eval_history.append_run` — pulled out of
     the append site so a typo in a key name is a keyless test's problem, never something that
-    first shows up in the durable `evals/history.ndjson` artifact a paid SDK run writes to.
+    first shows up in the durable `evals/history.ndjson` artifact a paid run writes to.
 
     A pure function of what the caller already has in hand: `report` (`aggregate`'s own output,
     for `backend`/`model`/`total_cost_usd`/`agent_passes`/`wall_s`/`facets`), `phases` (for
@@ -580,8 +655,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the frozen mini knowledge repo to file into (default: evals/filing/repo)")
     ap.add_argument("--manifest", default=str(FIXTURE / "captures" / "manifest.json"))
     ap.add_argument("--expectations", default=str(FIXTURE / "expected" / "expectations.json"))
-    ap.add_argument("--backend", choices=["sdk", "double", STRUCTURED_BACKEND], default="sdk",
-                    help="the agent backend (default: sdk — the real measurement)")
+    ap.add_argument("--backend", choices=[STRUCTURED_BACKEND, "double"],
+                    default=STRUCTURED_BACKEND,
+                    help=f"the agent backend (default: {STRUCTURED_BACKEND} — the real "
+                         f"measurement; 'double' is the keyless plumbing self-check)")
     ap.add_argument("--model", default=None,
                     help="the librarian model (default: librarian Settings' own default). The "
                          f"{STRUCTURED_BACKEND!r} backend needs a provider-prefixed id, e.g. "
@@ -725,6 +802,43 @@ def _check_set(manifest: dict, expectations: dict, *, whole_set: bool = True) ->
     if half:
         sys.exit(f"these expectations carry a `reply` without an `after_reply` block or the other "
                  f"way round — an ask-back case is only measured when both are present: {half}")
+
+    # ── the fifth refusal: what a DECISION entry has to assert, and in what order ──────────────
+    # Both halves guard the same mechanism from opposite ends, and both are set defects that would
+    # otherwise read as a backend result.
+    #
+    #  * an entry asserting NEITHER a title nor an anchor matches the first page left on the table,
+    #    which is a facet that reads as measured and measures nothing — the same defect `edits: []`
+    #    has, recorded in `_edits_match`;
+    #  * an anchor-only entry is the WEAKEST matcher (`_decisions_match`), and greedy pairing walks
+    #    the file's own order, so one written before a titled sibling can take the page that
+    #    sibling needed and score a miss for a page set that was exactly right. The titled-first
+    #    rule is the same one the `_morphology` note already states for specific-before-broad; a
+    #    title-less entry is simply the broadest case of it. Enforced here rather than left to
+    #    whoever edits the file next, because nothing about the failure would point at the ordering
+    #    — and `test_no_expected_decision_title_can_swallow_a_later_ones_page` cannot see it (an
+    #    absent title matches nothing, so its subset test is vacuously satisfied).
+    empty, misordered = [], []
+    for entry in expectations["expectations"]:
+        for block in _expect_blocks(entry):
+            decisions = block.get("decisions") or []
+            if any("title" not in d and "anchor" not in d for d in decisions):
+                empty.append(entry["id"])
+            seen_titleless = False
+            for decided in decisions:
+                if "title" not in decided:
+                    seen_titleless = True
+                elif seen_titleless:
+                    misordered.append(entry["id"])
+                    break
+    if empty:
+        sys.exit(f"these expectations name a decision with neither a `title` nor an `anchor`, so it "
+                 f"matches whatever page is left and measures nothing: {sorted(set(empty))}")
+    if misordered:
+        sys.exit(f"these expectations put a title-less decision BEFORE a titled one; matching is "
+                 f"greedy in file order and an anchor-only entry is the weakest matcher, so it "
+                 f"would take the titled entry's page and score a correct page set a miss. Write "
+                 f"the titled entries first: {sorted(set(misordered))}")
 
     denominators = _denominators(expectations)
     if not whole_set:

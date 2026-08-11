@@ -1,13 +1,17 @@
 """The filing agent PORT: what `processing.py` may assume of a backend, written down once.
 
-The seam was a CONVENTION. `SdkAgent`, `DoubleAgent` and `processing.py` agreed about two method
+The seam was a CONVENTION. The first two backends and `processing.py` agreed about two method
 signatures, one result envelope and one fault contract, and none of the three stated it anywhere a
-FOURTH implementation could read — so the only way to learn what a backend owed the worker was to
+THIRD implementation could read — so the only way to learn what a backend owed the worker was to
 read the two that existed and hope they agreed. This module states it, `build_agent` returns it,
 and a keyless conformance test asserts every backend satisfies it.
 
+**The port has already outlived one of its implementations**, which is the argument for it made in
+one sentence: the Claude-Code backend was retired without `processing.py` changing a line, because
+what the worker is written against is this file and not that class.
+
 Deliberately the bottom of this package's own graph: it imports `errors` and nothing else, so any
-backend module can depend on it without inheriting the SDK driver's imports. `AgentRun` lives here
+backend module can depend on it without inheriting another one's imports. `AgentRun` lives here
 rather than in `agent.py` for the same reason — the envelope belongs to the contract, not to the
 first implementation of it — and `agent.AgentRun` stays a re-export so every existing importer is
 unaffected.
@@ -26,7 +30,7 @@ unaffected.
   branches on either — `report.filed` carries no turn counter at all, and the eval runner counts
   passes at its own seam (`CountingAgent`) precisely because no report does.
 - `cost_usd` — what THIS attempt cost, in dollars. A backend that is priced by its own provider
-  (the Claude Agent SDK reports `total_cost_usd` per run) passes that figure through; one that
+  (a harness reporting `total_cost_usd` per run) passes that figure through; one that
   reports only TOKENS computes it through `pricing.compute_cost_usd`. `processing.AgentPasses`
   sums the passes of one item and `_stamp_cost` puts the sum on the report. `0.0` is a real
   answer: an offline double spends nothing, and so does a park re-file.
@@ -37,8 +41,8 @@ unaffected.
 
 A backend that cannot produce a usable outcome raises `AgentError` (or its `OutcomeShapeError`
 subclass, which carries `gates.Finding`s into the one corrective retry) — never a provider
-exception, and never with a provider message spliced into it: an SDK error can carry prompt text,
-which is to say the captured material, and this text reaches an operator's log.
+exception, and never with a provider message spliced into it: a framework error can carry prompt
+text, which is to say the captured material, and this text reaches an operator's log.
 
 **A fault must still say what the attempt cost.** Most agent faults fire AFTER the run was priced,
 so `priced()` attaches the figure as `run_cost_usd` on the exception and `processing` banks it off
@@ -121,9 +125,11 @@ class FilingAgent(Protocol):
     # backend, or a test double standing in for one, would take the wrong branch by being the
     # wrong class rather than by declaring the wrong thing.
     #
-    # `False` — the SDK driver and the offline double — means the EXPLORING shape: the agent is
+    # `False` — the offline double — means the EXPLORING shape: the agent is
     # handed the material, goes looking through the checkout itself, writes the page, and declares
-    # the path it wrote in `Outcome.page_path`.
+    # the path it wrote in `Outcome.page_path`. It is the shape the retired Claude-Code backend
+    # also answered, and the double keeps it exercised: `processing`'s two branches are both live
+    # offline, so the one the suite does not deploy cannot rot.
     #
     # `True` — the pydantic-ai backend — means the STRUCTURED shape (ADR 033): `processing` runs
     # the deterministic gatherer first and passes the rendered context in `gathered`, the agent

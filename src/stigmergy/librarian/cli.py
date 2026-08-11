@@ -305,13 +305,20 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--branch", default=None, help="branch to commit to (default: main)")
     # `choices` is the BACKENDS tuple itself, never a retyped list: a backend argparse rejects at
     # parse time gets "invalid choice", where `startup_checks` would have explained what the value
-    # actually does — and every remaining refusal for these three (an unpriced model, a bare id on
-    # the wrong backend, a missing provider key) is a sentence that has to reach the operator.
+    # actually does — and every remaining refusal for these two (an unpriced model, a bare id, a
+    # missing provider key) is a sentence that has to reach the operator.
+    #
+    # **A RETIRED value typed here still gets argparse's "invalid choice", not the retirement
+    # message.** That is the same accepted trade, and it is the right way round: the value that
+    # matters is the CONFIGURED one — `$STIGMERGY_LIBRARIAN_BACKEND` out of a stale `fly.toml` or
+    # `.env`, which never passes through `choices` and reaches `startup_checks` with its own
+    # sentence (`agent.RETIRED_BACKENDS`). Somebody TYPING `--backend sdk` is reading a list of two
+    # in the same breath; a deployment carrying it is not reading anything.
     ap.add_argument("--backend", default=None, choices=agent_module.BACKENDS,
-                    help="'sdk' runs the real Claude agent, which explores the checkout (needs a "
-                         "key); 'double' runs the offline double (default: double); 'pydantic' "
-                         "runs both flows structured — no tools, a gathered context, code writes "
-                         "the page (see ADR 033); it needs a provider-prefixed, priced model")
+                    help="'pydantic' runs both flows structured — no tools, a gathered context, "
+                         "code writes the page (ADR 033); it needs a provider-prefixed, priced "
+                         "model and that provider's key. 'double' runs the offline double "
+                         "(default: double)")
     sub = ap.add_subparsers(dest="command", required=True)
 
     p_once = sub.add_parser(

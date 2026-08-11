@@ -90,10 +90,18 @@ kill_timeout = "300s"
   # authenticates over https through `stigmergy-librarian-credential`, and an ssh key would be a
   # second credential to manage.
   STIGMERGY_LIBRARIAN_REPO_URL = "https://github.com/CHANGEME/stigmergy-brain.git"
-  # `sdk` runs the REAL agent. The default everywhere else is the offline double, which files
+  # `pydantic` runs the REAL agent. The default everywhere else is the offline double, which files
   # fabricated pages — this is the one deployment where that default would be catastrophic, so it
   # is explicit here exactly as it is explicit in `make librarian-walk`.
-  STIGMERGY_LIBRARIAN_BACKEND = "sdk"
+  STIGMERGY_LIBRARIAN_BACKEND = "pydantic"
+  # This backend resolves model strings through pydantic-ai, where a BARE name means the OpenAI
+  # Responses API — so the id must carry its provider, and a worker configured without one is
+  # refused at startup rather than left to file through a provider nobody chose. Explicit here
+  # rather than inherited from `config.DEFAULT_MODEL` for the same reason the backend is: this is
+  # the deployment where the value actually spends money, and it should be readable in the file an
+  # operator opens. It is the model staging already runs — the retired backend named the same one
+  # under its bare spelling. It authenticates with the app-wide ANTHROPIC_API_KEY secret.
+  STIGMERGY_LIBRARIAN_MODEL = "anthropic:claude-sonnet-5"
   # Tuned BY MEASUREMENT (ADR 028): the default 300s was calibrated for paste-sized captures; a
   # real figure-dense Drive deck (7.7 KB extracted, overlapping an entity with existing coverage)
   # exceeded it twice while a simpler deck filed just under it. Deck-sized documents earn a
@@ -142,10 +150,17 @@ kill_timeout = "300s"
 [[vm]]
   processes = ["worker"]
   size = "shared-cpu-1x"
-  # More than the server's 512mb because one item runs a Node process (the Claude Code CLI) beside
-  # the Python worker, plus gitleaks and two whole-repo linter passes over a git worktree. Raise it
-  # if the machine OOMs mid-item — the symptom is a capture that keeps coming back with an attempt
-  # burned and nothing in its report.
+  # More than the server's 512mb because one item runs gitleaks and two whole-repo linter passes
+  # over a git worktree, and the structured flow additionally walks and tokenizes the whole checkout
+  # per agent pass (`librarian/gather.py`). Raise it if the machine OOMs mid-item — the symptom is a
+  # capture that keeps coming back with an attempt burned and nothing in its report.
+  #
+  # **This figure is now generous and is deliberately NOT being lowered here.** It was sized for a
+  # worker that also ran a Node process beside the Python one — the retired filing backend drove an
+  # agent CLI as a subprocess — and that process is gone. Resizing is a separate, measured change:
+  # the honest input is observed RSS on the deployed worker over a spread of captures, not
+  # subtraction on paper, and being wrong downward costs a capture that keeps coming back with an
+  # attempt burned.
   memory = "1gb"
 
 [[vm]]

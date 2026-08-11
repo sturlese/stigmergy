@@ -71,12 +71,21 @@ def _pydantic(deps, **overrides):
 # `test_operator_surface.py`, which is this package's declared home for both and which keeps the
 # credential refusal's `make librarian-walk` and the push-identity refusal's runbook honest.
 #
-# **One pruning finding falls out of this and belongs to the developer, not to a test:**
-# `pydantic_backend.ADR` and `pydantic_backend.ORDINARY_ADR` now have NO reader in production. `ADR`
-# was read only by the deleted refusal; `ORDINARY_ADR` was added by this milestone and is read by
-# nothing at all. Two module constants naming documents that no message cites is the shape this
-# repo prunes on sight — reported rather than deleted here, because production code is not the
-# tester's to edit.
+# **The pruning finding this note used to carry is CLOSED, and half of it was wrong — which is why
+# the correction is written down rather than the paragraph simply deleted.** It read:
+# `pydantic_backend.ADR` and `pydantic_backend.ORDINARY_ADR` now have NO reader in production.
+#
+#   * `ADR` — correct, and actioned: it was cited by exactly one message (the refusal above), and
+#     it is gone, with its own tombstone at the top of `pydantic_backend.py`.
+#   * `ORDINARY_ADR` — **not correct.** `worker._check_brief_matches_backend` cites it by name in
+#     the refusal a structured worker meets when the knowledge repo's brief still describes a
+#     tool-holding run, and `test_a_structured_worker_is_refused_a_brief_written_for_a_run_that_
+#     holds_tools` below asserts it appears in that message. Acting on the finding as written would
+#     have deleted a constant a live refusal reads.
+#
+# The lesson is the one this file's own doctrine already states about refusals: check the call
+# sites before calling something dead. A pruning note is a fix instruction, and a wrong one costs
+# more than none.
 
 
 # ── the lifted state, which is what M2 actually changed ────────────────────────────────────────
@@ -114,11 +123,12 @@ def test_that_worker_is_still_refused_when_its_provider_key_is_missing(rig, monk
     assert pydantic_backend.PROVIDER_KEY_ENV["openai"] in str(exc_info.value)
 
 
-def test_the_skill_is_now_required_of_this_backend_too_and_not_only_of_the_sdk_one(rig,
-                                                                                   monkeypatch):
-    """ADR 033's one ADDITION to this pre-flight: the structured backend injects the SAME brief the
-    exploring one does, so a base commit without it fails both identically — one loud line before
-    the first claim rather than a `failed` row per capture.
+def test_the_skill_is_required_of_the_backend_that_injects_it(rig,
+                                                              monkeypatch):
+    """ADR 033's one ADDITION to this pre-flight: a backend that injects the brief is proven to
+    have one at the base commit — one loud line before the first claim rather than a `failed`
+    row per capture. It was added when a SECOND backend started injecting the same brief the
+    first one did; it is now the check for the only one that does.
 
     Driven by deleting the skill from the base COMMIT (`support.commit_and_push`), never from the
     working tree: `startup_checks` reads at the base ref, and a test that unlinked the file on disk
@@ -137,9 +147,9 @@ def test_the_skill_is_now_required_of_this_backend_too_and_not_only_of_the_sdk_o
 
 def test_the_double_is_not_asked_for_a_skill_it_never_reads(rig):
     """The addition's specificity half, and it is the one that could refuse a working deployment:
-    `SKILL_READING_BACKENDS` is `sdk` and `pydantic`, and the offline double reads no brief at all.
-    Requiring one of a `double` worker would be a check that can only ever fail on something
-    nothing was going to use — which is the same argument the credential check makes for itself."""
+    `SKILL_READING_BACKENDS` names every backend that INJECTS the brief, and the offline double
+    reads none at all. Requiring one of a `double` worker would be a check that can only ever
+    fail on something nothing was going to use."""
     env, deps = rig
     pathlib.Path(env.repo, *agent_module.SKILL_RELPATH.split("/")).unlink()
     support.commit_and_push(env.repo, "test: a base commit with no librarian skill")
@@ -189,7 +199,11 @@ def test_a_structured_worker_is_refused_a_brief_written_for_a_run_that_holds_too
     assert "holds" in message and "none" in message              # ...and why it cannot follow it
     assert "land BEFORE this worker runs" in message             # ...and the ordering
     assert pydantic_backend.ORDINARY_ADR in message              # ...and the decision behind it
-    assert "STIGMERGY_LIBRARIAN_BACKEND=sdk" in message          # ...and the other way out
+    # ...and that there is NO other way out. The refusal used to end by naming the backend the
+    # old brief was written for, which was a real second road while that backend existed. It
+    # retired; a message still offering it would send an operator mid-incident to the refusal
+    # one check up, so the absence is asserted rather than left to a reader to notice.
+    assert "STIGMERGY_LIBRARIAN_BACKEND=sdk" not in message
 
 
 def test_the_document_that_refusal_cites_exists_and_decides_the_thing_it_claims(rig):
@@ -202,20 +216,6 @@ def test_the_document_that_refusal_cites_exists_and_decides_the_thing_it_claims(
     assert "D4" in body
     assert agent_module.SKILL_RELPATH in body, (
         "the ADR the refusal cites says nothing about the brief whose landing order it decides")
-
-
-def test_the_SAME_old_brief_boots_an_sdk_worker_which_is_the_run_it_was_written_for(rig,
-                                                                                    monkeypatch):
-    """**The first benign twin, and the one that decides whether this check is safe to ship.** The
-    old brief is not broken — it is CORRECT for a run that holds five tools and writes its own
-    page, which is exactly what the `sdk` backend still is. A check keyed on the brief's text alone
-    would ground every existing deployment on the day the platform landed."""
-    env, deps = rig
-    monkeypatch.setenv(agent_module.CREDENTIAL_ENV[0], FAKE_KEY)
-    _with_old_brief(env)
-
-    worker.startup_checks(dataclasses.replace(deps.settings, backend="sdk",
-                                              model="claude-sonnet-5"))   # must not raise
 
 
 def test_the_NEW_brief_boots_the_structured_backend_which_is_the_landed_state(rig, monkeypatch):
@@ -261,7 +261,7 @@ def test_the_backend_checks_still_run_from_the_check_function_itself(rig):
 
 def test_a_bare_model_name_is_refused_because_pydantic_ai_would_pick_a_provider_nobody_chose(rig):
     """The provider-prefix rule, and the reason it is a refusal rather than a default: pydantic-ai
-    reads a bare name as the OpenAI Responses API, so the `sdk` backend's own `claude-sonnet-5`
+    reads a bare name as the OpenAI Responses API, so the retired backend's own `claude-sonnet-5`
     would file this brain's meetings through a provider the operator never named — silently, and
     correctly enough that nothing downstream would notice."""
     _, deps = rig
@@ -375,52 +375,33 @@ def test_the_key_preflight_reads_the_process_environment_when_nothing_is_injecte
         worker._check_pydantic_backend(_pydantic(deps))
 
 
-# ── the MIRROR: a prefixed id handed to the backend that cannot read one ───────────────────────
-# The asymmetry was the defect. One backend refusing a bare id while the other silently accepted a
-# prefixed one caught exactly half of one configuration mistake — an operator who set
-# `STIGMERGY_LIBRARIAN_MODEL=openai:gpt-5.6-terra` and left `backend=sdk` reached the Claude Agent
-# SDK, which has never heard of a provider prefix, and learned it from a failed run instead of a
-# startup line. A spelling belongs to a backend; both are now refused by the backend they do not
-# belong to.
-def test_an_sdk_worker_is_refused_a_provider_prefixed_model(rig):
-    """The mirror refusal, and it has to name the fix in the operator's own vocabulary: the bare
-    spelling to use, and the backend the prefixed one belongs to."""
-    _, deps = rig
-
-    with pytest.raises(LibrarianConfigError) as exc_info:
-        worker.startup_checks(dataclasses.replace(deps.settings, backend="sdk",
-                                                  model=PRICED_MODEL))
-
-    message = str(exc_info.value)
-    assert PRICED_MODEL in message                       # what they set
-    assert "'gpt-5.6-terra'" in message                  # ...and the bare spelling to use instead
-    assert agent_module.PYDANTIC_BACKEND in message      # ...and whose spelling it actually is
-
-
-def test_an_sdk_worker_with_the_bare_spelling_passes_that_check(rig, monkeypatch):
-    """The benign twin, and the one that matters most: `claude-sonnet-5` is the DEFAULT and the
-    shipped configuration. A mirror refusal that also bounced it would refuse every real `sdk`
-    worker there is.
-
-    **It used to stop on the missing librarian skill and it no longer does** — ADR 033 put the
-    brief into this fixture knowledge repo, because the structured backend reads the same one and
-    the suite needed it present. So the claim gets STRONGER rather than weaker: an `sdk` worker
-    with a credential and the bare spelling now boots through the whole pre-flight, which is a
-    stricter statement than "it was refused for some other reason".
-    """
-    _, deps = rig
-    monkeypatch.setenv(agent_module.CREDENTIAL_ENV[0], FAKE_KEY)
-
-    worker.startup_checks(dataclasses.replace(deps.settings, backend="sdk",
-                                              model="claude-sonnet-5"))   # must not raise
-
-
-# The specificity half of the twin above — an `sdk` worker with NO credential is still refused
-# before it claims anything — is `test_startup_preflight.py`'s
-# `test_startup_checks_refuses_an_sdk_run_with_no_credential`, which is that file's subject and
-# which drives the real check against the package's own cleared environment. Not restated here: a
-# second extraction of one refusal is how one of them quietly stops matching while the other stays
-# green.
+# ── RETIRED with the `sdk` backend: the model-spelling MIRROR ─────────────────────────────────
+# Three tests went with `worker._check_model_spelling_for`, and the comment block that framed them:
+#
+#   `test_an_sdk_worker_is_refused_a_provider_prefixed_model`
+#   `test_an_sdk_worker_with_the_bare_spelling_passes_that_check`   (its benign twin)
+#   `test_the_SAME_old_brief_boots_an_sdk_worker_which_is_the_run_it_was_written_for`  (above)
+#
+# The first pair existed because the asymmetry was the defect: one backend refused a bare id while
+# the other silently accepted a prefixed one, so exactly HALF of one configuration mistake was
+# caught, and an operator who set `openai:gpt-5.6-terra` on the wrong backend learned it from a
+# failed run. With one backend there is one spelling and no mirror to hold up.
+#
+# **The surviving half is not weaker, it is the whole of it**: a bare id is refused by
+# `_check_pydantic_backend`, tested by
+# `test_a_bare_model_name_is_refused_because_pydantic_ai_would_pick_a_provider_nobody_chose` above,
+# and its message now names the retirement explicitly — a deployment that changed the backend and
+# not the model lands exactly there. The RULE outlives the mirror and is recorded in `worker.py`
+# where the helper used to be: a model spelling belongs to a backend, and a backend must refuse the
+# spelling that is not its own.
+#
+# **A FOURTH test went and should not have: `test_the_prefixed_spelling_is_accepted_by_the_backend_
+# it_belongs_to`.** It closed the fourth cell of the spelling table (prefixed + `pydantic` boots).
+# It is not restored because it is now a strict subset of
+# `test_each_known_provider_family_passes_once_its_key_is_present` above, which drives the same
+# call for EVERY provider family off the production table rather than for one hand-picked id — a
+# second, narrower copy of a covered property is the kind of duplicate that goes stale first. The
+# two below WERE restored: they are live properties about surfaces that never had an `sdk` half.
 
 
 def test_the_double_is_never_refused_over_a_model_it_does_not_read(rig):
@@ -430,15 +411,6 @@ def test_the_double_is_never_refused_over_a_model_it_does_not_read(rig):
     for spelling in (PRICED_MODEL, "claude-sonnet-5", "not-a-model-at-all"):
         worker.startup_checks(dataclasses.replace(deps.settings, backend="double",
                                                   model=spelling))
-
-
-def test_the_prefixed_spelling_is_accepted_by_the_backend_it_belongs_to(rig):
-    """The fourth cell of the table, closing it: prefixed + `pydantic` is the configuration this
-    backend exists for, and its pre-flight passes it."""
-    _, deps = rig
-    worker._check_pydantic_backend(
-        _pydantic(deps, model=PRICED_MODEL),
-        environ={pydantic_backend.PROVIDER_KEY_ENV["openai"]: FAKE_KEY})
 
 
 # ── the preflight table covers what the price table prices ─────────────────────────────────────
@@ -456,6 +428,34 @@ def test_every_provider_the_price_table_names_has_a_key_preflight():
         f"librarian/pricing.PRICES prices {missing} and pydantic_backend.PROVIDER_KEY_ENV has no "
         f"key for them — a model this repo ships a price for must not fall through to the "
         f"unknown-provider advisory")
+
+
+# ── the two tables that must AGREE about the deployed worker's stripped key ────────────────────
+def test_the_only_provider_key_the_deployed_worker_strips_is_the_read_paths_own():
+    """**The coupling nothing else states, between two tables edited for unrelated reasons.**
+
+    `bootstrap.READ_PATH_ONLY_ENV` is what `stigmergy-librarian-boot` deletes from the DEPLOYED
+    worker's environment before exec'ing the loop, so the write path cannot reach the read path's
+    embedder key. `pydantic_backend.PROVIDER_KEY_ENV` is what the filing backend AUTHENTICATES
+    with. Where they intersect, an operator can configure a model whose key the container strips
+    on purpose — the pre-flight then refuses on the deployed worker and passes on a laptop, and no
+    export can fix it there.
+
+    That intersection is exactly one entry today (OpenAI's), it is deliberate, and the refusal says
+    so. This pins the SIZE of it: a second provider joining `READ_PATH_ONLY_ENV`, or a new
+    read-path key that happens to be a provider key, would silently make another model family
+    unusable in the container with nothing to say why.
+    """
+    from stigmergy.librarian import bootstrap
+
+    stripped = set(bootstrap.READ_PATH_ONLY_ENV) & set(pydantic_backend.PROVIDER_KEY_ENV.values())
+
+    assert stripped == {pydantic_backend.PROVIDER_KEY_ENV["openai"]}, (
+        f"bootstrap.READ_PATH_ONLY_ENV and pydantic_backend.PROVIDER_KEY_ENV now intersect at "
+        f"{sorted(stripped)}. Every variable in that intersection names a provider the DEPLOYED "
+        f"worker cannot authenticate as, whatever the operator exports. If this is intended, "
+        f"update this test AND `worker._check_pydantic_backend`'s missing-key refusal, which names "
+        f"the dead end for exactly these variables")
 
 
 def test_every_provider_the_preflight_knows_is_one_a_priced_model_could_use():
