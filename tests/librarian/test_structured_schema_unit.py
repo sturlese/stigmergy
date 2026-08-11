@@ -1,0 +1,462 @@
+"""The structured backends' OUTPUT SCHEMAS: what the framework refuses before this package sees it.
+
+**This file exists because a paid run measured the cost of getting it wrong.** Every field of both
+accounts carried a default, `decision` included, on the reasoning that a provider omitting something
+should produce an account the boundary can judge and refuse on its own terms rather than a
+validation error inside the framework. That reasoning had the mechanism backwards, and the first
+paid structured golden showed how: a default does not make an omission VISIBLE, it makes it
+INVISIBLE. The framework's output validation accepted a half-empty account, so its own
+`OUTPUT_RETRIES` never fired; `agent.parse_outcome` then refused downstream; and the WORKER's one
+corrective retry — the expensive one, a whole second agent pass — was spent re-asking a model to
+repair a shape a brief cannot reliably teach. Five of the golden's ten ordinary captures died that
+way, two passes each.
+
+So the schema demands what the boundary demands, and the two enforcement points are DECLARED
+duplication:
+
+* the SCHEMA is the cheap, early road. pydantic-ai hands a validator's `ValueError` back to the
+  model as its retry prompt, so the completeness messages below are not diagnostics for an
+  operator — **they are the repair instruction, and the only text that gets a chance to work**.
+  That is why each one is asserted for what it NAMES rather than for its existence;
+* the BOUNDARY (`agent.parse_*_outcome`) keeps every check regardless, because it also judges the
+  FILE channel and because a typed provider response is not a trusted one.
+
+**What is NOT restated here, and the distinction is the whole design.** Bounds belong to the
+boundary — identifiers refused over `MAX_IDENTIFIER_LEN`, prose truncated, a page body refused,
+lists capped — and a second set of limits in a schema would be a second answer to one question.
+Requiredness is the opposite case. `test_pydantic_meeting_pg`'s own refused-shape tests are the
+other side of this line: they drive an over-long identifier precisely because that is what the
+schema declines to catch.
+
+Keyless and pure apart from the two framework-driven cases at the bottom, which use pydantic-ai's
+own offline models — a real `Agent.run`, real usage accounting, no key and no network.
+"""
+import dataclasses
+
+import pytest
+from pydantic import ValidationError
+from pydantic_ai.messages import ModelResponse, ToolCallPart
+from pydantic_ai.models.function import FunctionModel
+
+from stigmergy.librarian import agent as agent_module
+from stigmergy.librarian import config, pydantic_backend
+from stigmergy.librarian.errors import OutcomeShapeError
+from stigmergy.librarian.pydantic_backend import (
+    FilingAccount,
+    MeetingAccount,
+    MeetingAnchoring,
+    MeetingDecision,
+    MeetingTriage,
+    OrdinaryAnchoring,
+    OrdinaryPage,
+    OrdinaryTriage,
+    PydanticFilingAgent,
+)
+from tests.librarian import support
+
+PRICED_MODEL = "openai:gpt-5.6-terra"
+
+
+def _page_body() -> str:
+    return "## What the capture said\n\nThe renewal window was confirmed."
+
+
+def _filing(**over) -> dict:
+    """The keyword arguments of a COMPLETE ordinary filing account, so each case below overrides
+    exactly the one field it is about and nothing else drifts."""
+    base = dict(decision="file",
+                page=OrdinaryPage(title="Acme Corp Renewal Window", page_type="note",
+                                  body=_page_body()),
+                anchoring=OrdinaryAnchoring(kind="entity", entities=["Acme Corp"]),
+                summary="filed the renewal note")
+    base.update(over)
+    return base
+
+
+def _meeting(**over) -> dict:
+    base = dict(decision="file", meeting_title="Q3 sync",
+                decisions=[MeetingDecision(
+                    title="Q3 sync — the renewal scope", body="## Context\n\nAgreed.",
+                    anchoring=MeetingAnchoring(kind="entity", entities=["Acme Corp"]))],
+                summary="distilled one decision")
+    base.update(over)
+    return base
+
+
+def _message(exc_info) -> str:
+    return str(exc_info.value)
+
+
+# ── LEG 1: `decision` is required and enum-constrained ─────────────────────────────────────────
+@pytest.mark.parametrize("account", [FilingAccount, MeetingAccount],
+                         ids=["ordinary", "meeting"])
+def test_an_account_that_omits_its_decision_cannot_be_built_at_all(account):
+    """**The exact shape the paid run died on.** `decision` used to default to `""`, so an account
+    with no decision satisfied the schema, spent no framework retry, and was refused downstream
+    with `unknown-decision` after the worker had already paid for the pass.
+
+    It is required now, so the framework re-asks — which is free, immediate, and names the field.
+    """
+    with pytest.raises(ValidationError) as exc_info:
+        account()
+
+    assert "decision" in _message(exc_info)
+    assert "Field required" in _message(exc_info), (
+        "the omission was refused for some other reason — `decision` may have re-acquired a "
+        "default and be failing the completeness validator instead")
+
+
+@pytest.mark.parametrize("account, complete", [(FilingAccount, _filing), (MeetingAccount, _meeting)],
+                         ids=["ordinary", "meeting"])
+def test_a_decision_outside_the_vocabulary_is_refused_by_the_enum(account, complete):
+    """`Literal[*agent.DECISIONS]`, derived rather than retyped — so the schema and
+    `agent.parse_*_outcome`'s `DECISIONS` check cannot come to disagree about the vocabulary.
+
+    `"publish"` is the case this suite used to drive through the schema on purpose, precisely
+    because a plain string took it. It does not any more, and that is the milestone.
+    """
+    with pytest.raises(ValidationError) as exc_info:
+        account(**{**complete(), "decision": "publish"})
+
+    message = _message(exc_info)
+    assert "decision" in message
+    for known in agent_module.DECISIONS:
+        assert known in message, (
+            f"the enum refusal does not name {known!r} — a model told only 'invalid' has nothing "
+            f"to repair towards, and this text IS its retry prompt")
+
+
+def test_the_schemas_decision_vocabulary_is_the_boundarys_own():
+    """One vocabulary, two enforcement points, derived from one tuple. A schema that hardcoded
+    `Literal["file", "triage"]` would be a second list to keep in step, and the failure mode is
+    silent: a third decision added to `agent.DECISIONS` would be refused by the framework as
+    invalid while the boundary accepted it."""
+    import typing
+
+    for account in (FilingAccount, MeetingAccount):
+        field = account.model_fields["decision"]
+        assert typing.get_args(field.annotation) == agent_module.DECISIONS
+        assert field.is_required(), f"{account.__name__}.decision acquired a default again"
+
+
+# ── LEG 2: what each DECISION obliges — the conditional half a field-by-field schema cannot say ─
+@pytest.mark.parametrize("field, over", [
+    ("page.title", {"page": OrdinaryPage(title="  ", page_type="note", body=_page_body())}),
+    ("page.page_type", {"page": OrdinaryPage(title="T", page_type="", body=_page_body())}),
+    ("page.body", {"page": OrdinaryPage(title="T", page_type="note", body="   ")}),
+])
+def test_a_filing_that_omits_a_half_it_obliges_is_refused_with_the_field_named(field, over):
+    """Each conditional refusal, one case per field, asserted for WHAT IT NAMES.
+
+    These strings are the framework's retry prompt — the model reads them and answers again — so
+    "it raised" is not the property. The field has to be named (a model told "invalid account" can
+    only guess) and so has the repair. `gates.Finding.brief`'s own rule, one layer out.
+
+    Whitespace counts as absent, deliberately: a `page.title` of two spaces produces a filename of
+    two spaces, and a model that answered `" "` has not answered.
+    """
+    with pytest.raises(ValidationError) as exc_info:
+        FilingAccount(**_filing(**over))
+
+    message = _message(exc_info)
+    assert f"`{field}`" in message, f"the refusal does not name {field}: {message}"
+    assert "is required and came back empty" in message
+
+
+def test_the_page_body_refusal_offers_the_park_as_the_other_way_out():
+    """The one conditional message with a second repair in it, and it is the one that matters most:
+    a model that genuinely should not file this capture has an answer that is not "invent a body".
+    Without it the cheapest way to satisfy the validator is to fabricate page text, which is the
+    failure this whole flow exists to prevent."""
+    with pytest.raises(ValidationError) as exc_info:
+        FilingAccount(**_filing(page=OrdinaryPage(title="T", page_type="note", body="")))
+
+    message = _message(exc_info)
+    assert "triage" in message
+    assert "no frontmatter block" in message or "frontmatter" in message
+
+
+def test_a_filing_is_told_to_name_a_TYPE_and_never_a_folder():
+    """ADR 033 D3's confinement claim, said to the model at the one moment it is listening: there
+    is no field in this account that can name a location, and the refusal for a missing type says
+    so rather than leaving the agent to infer it from the schema's shape."""
+    with pytest.raises(ValidationError) as exc_info:
+        FilingAccount(**_filing(page=OrdinaryPage(title="T", page_type="", body=_page_body())))
+
+    message = _message(exc_info)
+    assert "never a folder or a path" in message
+    for creatable in ("note", "decision", "concept"):
+        assert creatable in message
+
+
+@pytest.mark.parametrize("kind, required", sorted(agent_module.TRIAGE_REQUIRED_FIELD.items()))
+def test_a_park_that_omits_the_field_its_kind_obliges_is_refused(kind, required):
+    """Parametrized off `agent.TRIAGE_REQUIRED_FIELD` itself — the table the boundary reads — so a
+    third park kind is covered the day it is added rather than the day somebody remembers this
+    file."""
+    with pytest.raises(ValidationError) as exc_info:
+        FilingAccount(decision="triage", triage=OrdinaryTriage(kind=kind))
+
+    assert f"`triage.{required}`" in _message(exc_info)
+
+
+def test_a_park_with_no_usable_kind_is_refused_and_told_the_vocabulary():
+    with pytest.raises(ValidationError) as exc_info:
+        FilingAccount(decision="triage", triage=OrdinaryTriage(kind="something-else"))
+
+    message = _message(exc_info)
+    assert "`triage.kind`" in message
+    for known in agent_module.TRIAGE_KINDS:
+        assert known in message
+
+
+# ── LEG 2b: the MEETING twins, on a flow where the mechanism had not fired yet ─────────────────
+# Identical mechanism, no observed failure — the meeting flow has real passing runs (the terra
+# trial, the golden's two meeting captures). Closing it on two samples' worth of evidence is what
+# this repository's rule about untested rules asks for, and it costs a passing run nothing.
+def test_a_meeting_filing_must_name_the_meeting_page_it_is_about_to_write():
+    with pytest.raises(ValidationError) as exc_info:
+        MeetingAccount(**_meeting(meeting_title="  "))
+
+    message = _message(exc_info)
+    assert "`meeting_title`" in message
+    assert "title hint is not a substitute" in message, (
+        "the refusal does not say why the drop's own hint will not do — a model that has one will "
+        "otherwise echo it back")
+
+
+def test_every_decision_in_a_meeting_filing_must_carry_its_own_title():
+    """One decision becomes one page, and the title is that page's name. The refusal names WHICH
+    decision by its position, because a model handed "a title is missing" over four decisions has
+    to guess — and a wrong guess costs the whole account another round."""
+    decisions = [
+        MeetingDecision(title="Q3 sync — the renewal scope", body="## Context\n\nAgreed.",
+                        anchoring=MeetingAnchoring(kind="company", reason="every team")),
+        MeetingDecision(title="", body="## Context\n\nAlso agreed.",
+                        anchoring=MeetingAnchoring(kind="company", reason="every team")),
+    ]
+
+    with pytest.raises(ValidationError) as exc_info:
+        MeetingAccount(**_meeting(decisions=decisions))
+
+    message = _message(exc_info)
+    assert "`decisions[1].title`" in message
+    assert "decision number 2" in message
+
+
+def test_a_parked_meeting_must_carry_the_PLURAL_names_field():
+    """**The one place this flow's rule differs from the ordinary one**, and it is a difference the
+    boundary already has: a meeting can fail to anchor on several names at once, so
+    `parse_meeting_outcome` asks for `names` where `parse_outcome` asks for `name`. A schema that
+    copied the ordinary validator would demand a field this account does not have."""
+    with pytest.raises(ValidationError) as exc_info:
+        MeetingAccount(decision="triage",
+                       triage=MeetingTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY))
+
+    assert "`triage.names`" in _message(exc_info)
+
+
+def test_a_parked_meeting_naming_its_unresolved_entities_validates():
+    """The park's benign twin: whitespace-only names are absent, real ones are not."""
+    MeetingAccount(decision="triage",
+                   triage=MeetingTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
+                                        names=["Halcyon Grid"]))
+
+
+# ── LEG 3: the BENIGN twins — every complete account still validates ───────────────────────────
+def test_a_complete_filing_account_validates():
+    """**The half that decides whether this schema is safe to ship.** A validator that also
+    refused correct accounts would turn every structured filing into a framework retry loop and
+    then a `failed` row — strictly worse than the defect it was written for."""
+    account = FilingAccount(**_filing())
+
+    assert account.decision == "file"
+    assert account.page.body == _page_body()
+
+
+def test_a_complete_ordinary_PARK_validates_and_carries_no_page():
+    """`OrdinaryPage`'s own fields stay optional on purpose, and this is why: a `triage` account
+    legitimately carries no page at all. Requiring them field-by-field would refuse the correct
+    outcome for a capture this brain cannot place — which is the park the whole governed-entity
+    design depends on."""
+    account = FilingAccount(decision="triage",
+                            triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
+                                                  name="Halcyon Grid"))
+
+    assert account.page.title == "" and account.page.body == ""
+
+
+def test_a_complete_meeting_account_validates():
+    assert MeetingAccount(**_meeting()).meeting_title == "Q3 sync"
+
+
+def test_a_complete_account_parses_through_the_BOUNDARY_unchanged():
+    """The two enforcement points agree on a good account, which is the property that makes them
+    duplication rather than two different contracts: what the schema accepts, `parse_outcome`
+    accepts, and the fields land where every downstream reader looks for them."""
+    outcome = agent_module.parse_outcome(FilingAccount(**_filing()).model_dump())
+
+    assert outcome.decision == "file"
+    assert outcome.title == "Acme Corp Renewal Window"      # mirrored up from `page`
+    assert outcome.page_type == "note"
+    assert outcome.page.body == _page_body()
+
+
+# ── LEG 4: through the FRAMEWORK — the two roads an incomplete account can now take ────────────
+def _rig(tmp_path, model_factory):
+    env = support.build_repo(str(tmp_path / "git"))
+    settings = support.build_settings(env, worktree_root=str(tmp_path / "worktrees"),
+                                      backend="pydantic", model=PRICED_MODEL)
+    return env, PydanticFilingAgent(settings, model_factory=model_factory)
+
+
+def _run(agent, env):
+    return agent.run(worktree=env.repo, material="A note about Acme Corp.", hints={},
+                     submitted_by="a@b.test")
+
+
+def test_a_model_that_never_completes_its_account_exhausts_the_framework_and_is_PRICED(tmp_path):
+    """**The tolerance direction, driven by a model that really does emit an incomplete account** —
+    which is the discipline ADR 033's own meta-finding asks for: every other structured test in
+    this suite hands the flow a COMPLETE account, so none of them would notice the schema getting
+    looser.
+
+    A model answering `{}` forever is refused by the validator, re-asked with the completeness
+    message, refused again, and the framework gives up — `UnexpectedModelBehavior`, which the
+    backend turns into an `OutcomeShapeError` carrying findings so the WORKER's corrective retry
+    can still see what was wrong. Priced, because the re-asks were real requests.
+    """
+    calls = {"n": 0}
+
+    def _always_empty():
+        def _empty(messages, info):
+            calls["n"] += 1
+            return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name, {})])
+        return FunctionModel(_empty)
+
+    env, agent = _rig(tmp_path, _always_empty)
+
+    with pytest.raises(OutcomeShapeError) as exc_info:
+        _run(agent, env)
+
+    assert calls["n"] == 1 + pydantic_backend.OUTPUT_RETRIES, (
+        "the framework's own re-ask budget is not the constant the backend hands it")
+    findings = exc_info.value.findings
+    assert findings and {f.gate for f in findings} == {agent_module._OUTCOME_GATE}
+    assert exc_info.value.run_cost_usd > 0, (
+        "the re-asks were real requests and the fault reported no spend")
+
+
+def test_the_framework_repairs_an_incomplete_account_inside_ONE_worker_pass(tmp_path):
+    """**The saving, measured.** This is the shape that cost the golden five captures: the first
+    answer omits the halves a filing obliges, and before the schema round that account satisfied
+    the framework, reached the boundary, and burned the worker's one corrective retry.
+
+    Now the model is re-asked INSIDE the same worker pass — the run returns a usable outcome, and
+    `processing` never learns anything went wrong. Two assertions carry it: the model was called
+    more than once (the repair really happened at this layer) and `run()` RETURNED rather than
+    raising (the worker's retry was never touched).
+    """
+    calls = {"n": 0}
+
+    def _incomplete_then_good():
+        def _answer(messages, info):
+            calls["n"] += 1
+            name = info.output_tools[0].name
+            if calls["n"] == 1:
+                # decision present, and nothing a filing obliges — the golden's own shape
+                return ModelResponse(parts=[ToolCallPart(name, {"decision": "file"})])
+            return ModelResponse(parts=[ToolCallPart(name, FilingAccount(**_filing()).model_dump())])
+        return FunctionModel(_answer)
+
+    env, agent = _rig(tmp_path, _incomplete_then_good)
+
+    run = _run(agent, env)
+
+    assert calls["n"] == 2, "the framework did not re-ask — the incomplete account was accepted"
+    assert run.outcome.decision == "file"
+    assert run.outcome.title == "Acme Corp Renewal Window"
+    assert run.cost_usd > 0
+
+
+def test_a_complete_first_answer_costs_no_extra_request_at_all(tmp_path):
+    """The happy path, unchanged and asserted as unchanged: a model that answers completely is
+    asked ONCE. A validator that fired on a good account would double the cost of every structured
+    filing and nothing but a request count would show it."""
+    calls = {"n": 0}
+
+    def _good():
+        def _answer(messages, info):
+            calls["n"] += 1
+            return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name,
+                                                     FilingAccount(**_filing()).model_dump())])
+        return FunctionModel(_answer)
+
+    env, agent = _rig(tmp_path, _good)
+
+    run = _run(agent, env)
+
+    assert calls["n"] == 1, "a complete account was re-asked"
+    assert run.outcome.decision == "file"
+
+
+# ── the promoted table: one mapping, two readers ───────────────────────────────────────────────
+def test_the_triage_required_field_table_is_shared_rather_than_restated():
+    """`agent._TRIAGE_REQUIRED_FIELD` became `TRIAGE_REQUIRED_FIELD` because it acquired a second
+    reader: the schema's completeness validator demands the same field of the same kind that
+    `parse_outcome` does.
+
+    Two enforcement points reading ONE table is the design; two tables would be a drift nobody
+    would see until a park was refused by one and accepted by the other. Asserted at the source,
+    because the mapping's second reader is a validator whose output is a string.
+    """
+    import inspect
+
+    assert set(agent_module.TRIAGE_REQUIRED_FIELD) == set(agent_module.TRIAGE_KINDS), (
+        "a park kind has no required field, or the table names one that is not a kind")
+
+    schema_source = inspect.getsource(pydantic_backend)
+    assert "agent_module.TRIAGE_REQUIRED_FIELD[kind]" in schema_source, (
+        "the schema no longer reads the shared table — a restated mapping is a second answer to "
+        "one question")
+    assert not hasattr(agent_module, "_TRIAGE_REQUIRED_FIELD"), (
+        "the private name survived beside the public one — two names for one table is how half "
+        "the readers keep reading the old one")
+
+
+@pytest.mark.parametrize("kind, required", sorted(agent_module.TRIAGE_REQUIRED_FIELD.items()))
+def test_both_readers_refuse_the_same_incomplete_park(kind, required):
+    """**The agreement itself, exercised rather than inferred from a shared import.** The same
+    park, missing the same field, is refused by the schema AND by the boundary — which is what
+    "declared duplication" has to mean to be worth the second enforcement point.
+    """
+    with pytest.raises(ValidationError):
+        FilingAccount(decision="triage", triage=OrdinaryTriage(kind=kind))
+
+    with pytest.raises(OutcomeShapeError) as boundary:
+        agent_module.parse_outcome({"decision": "triage", "triage": {"kind": kind}})
+
+    assert any(f"`triage.{required}`" in f.message for f in boundary.value.findings), (
+        f"the boundary does not name triage.{required} for a {kind!r} park, so the two "
+        f"enforcement points disagree about what the same table means")
+
+
+def test_a_complete_park_satisfies_BOTH_readers(tmp_path):
+    """The benign twin of the agreement: a park that names its field is accepted by both, so
+    neither enforcement point is refusing work the other would let through."""
+    values = {agent_module.TRIAGE_UNRESOLVED_ENTITY: {"name": "Halcyon Grid"},
+              agent_module.TRIAGE_UNSUPPORTED_TYPE: {"judged_type": "dataset"}}
+
+    for kind, extra in values.items():
+        account = FilingAccount(decision="triage", triage=OrdinaryTriage(kind=kind, **extra))
+        outcome = agent_module.parse_outcome(account.model_dump())
+        assert outcome.decision == "triage"
+        assert outcome.triage["kind"] == kind
+
+
+def test_the_settings_default_backend_is_still_the_offline_double():
+    """A guard rail for this whole file: it constructs a `PydanticFilingAgent` several times, and
+    the suite stays keyless only because nothing here is the shipped default. If the default ever
+    moves, every test in this repository starts needing a provider key."""
+    assert config.Settings().backend == "double"
+    assert dataclasses.replace(config.Settings(), backend="pydantic").backend == "pydantic"

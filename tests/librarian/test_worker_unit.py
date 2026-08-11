@@ -76,6 +76,12 @@ def test_build_deps_wires_the_dispatched_agent_and_the_resolved_repo(rig):
 
 # ── process_next: exceptions are mapped to a `failed` Result, never left to propagate ──────────
 class _RaisingAgent:
+    """A standalone stub — it wraps nothing, so it DECLARES the port member rather than copying one
+    (`filing_port.FilingAgent.structured_ordinary`). `False` is the shape every test here means: the
+    exploring ordinary flow, which is what `processing._one_pass` does when nothing gathers."""
+
+    structured_ordinary = False
+
     def __init__(self, exc):
         self.exc = exc
 
@@ -206,6 +212,13 @@ class _RaisingOnAttempt:
 
     def __init__(self, inner, fail_on: int, exc):
         self.inner = inner
+        # The declared port member, copied from what this wraps (ADR 033). Plain attribute
+        # access with NO default: `processing._one_pass` refuses an agent that carries no
+        # `structured_ordinary` rather than defaulting it, so a wrapper that swallowed the
+        # declaration would silently change which shape of the ordinary flow runs behind it.
+        # Reading it here means a wrapper around a non-conforming backend fails at
+        # CONSTRUCTION, in the test that built it, instead of one queue delivery at a time.
+        self.structured_ordinary = inner.structured_ordinary
         self.fail_on = fail_on
         self.exc = exc
         self.calls = 0

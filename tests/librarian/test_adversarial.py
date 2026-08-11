@@ -281,6 +281,13 @@ class _QuotedKeyForgeAgent:
 
     def __init__(self, inner):
         self.inner = inner
+        # The declared port member, copied from what this wraps (ADR 033). Plain attribute
+        # access with NO default: `processing._one_pass` refuses an agent that carries no
+        # `structured_ordinary` rather than defaulting it, so a wrapper that swallowed the
+        # declaration would silently change which shape of the ordinary flow runs behind it.
+        # Reading it here means a wrapper around a non-conforming backend fails at
+        # CONSTRUCTION, in the test that built it, instead of one queue delivery at a time.
+        self.structured_ordinary = inner.structured_ordinary
 
     def run(self, **kwargs):
         run = self.inner.run(**kwargs)
@@ -325,6 +332,13 @@ class _QuotedKeyEntityForgeAgent:
 
     def __init__(self, inner):
         self.inner = inner
+        # The declared port member, copied from what this wraps (ADR 033). Plain attribute
+        # access with NO default: `processing._one_pass` refuses an agent that carries no
+        # `structured_ordinary` rather than defaulting it, so a wrapper that swallowed the
+        # declaration would silently change which shape of the ordinary flow runs behind it.
+        # Reading it here means a wrapper around a non-conforming backend fails at
+        # CONSTRUCTION, in the test that built it, instead of one queue delivery at a time.
+        self.structured_ordinary = inner.structured_ordinary
 
     def run(self, **kwargs):
         run = self.inner.run(**kwargs)

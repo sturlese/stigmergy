@@ -872,6 +872,146 @@ def _committed_page(tmp_path, text: str) -> tuple[str, "os.PathLike"]:
 
 
 
+# ── the page-name byte ceiling: ONE bound, ONE string, both callers ────────────────────────────
+# `page.unnameable_reason` bounds a name in UTF-8 BYTES (`MAX_PAGE_STEM_BYTES`), because that is
+# the unit `NAME_MAX` counts and because a character bound would pass names the filesystem refuses
+# — 200 accented or CJK characters are 400–600 bytes, and this corpus is expected to carry them.
+#
+# It has TWO callers, and they used to disagree about WHICH STRING the bound was on: `gate_zone`
+# asked it of the basename (`.md` included) while `processing._write_ordinary_page` asked it of the
+# stem it was about to build a filename from. Three bytes of disagreement, and the band between
+# them was reachable: a 198-byte title passed the writer, WROTE its page, and was then vetoed here
+# — a `failed` row, reported as a librarian fault, over a title the agent could have shortened if
+# anything had told it to.
+#
+# Both callers now pass the stem, and the parameter is named `stem` so the next one cannot get it
+# wrong silently. Asserted over a REAL diff rather than a fabricated `DiffEntry`: the whole point is
+# what `gate_zone` does with a path git actually reports, and the boundary is exactly where a
+# stale `.md`-inclusive reading would still bite.
+def _zone_findings_for_stem(tmp_path, name: str, stem: str) -> list:
+    """Write one real page under `stem`, take the REAL diff, and run `gate_zone` over it.
+
+    A seeded first commit, because `gitcmd.diff_entries` diffs against `HEAD` — the same shape
+    every filing worktree is in when the gates run, where the base commit is the knowledge repo's
+    own tip.
+    """
+    # **The FILESYSTEM's own ceiling, checked here rather than requested in a comment.** `NAME_MAX`
+    # is 255 BYTES per path component on ext4 (what CI runs) and applies to the whole name,
+    # `.md` included. A stem past it cannot be written at all, so the fixture dies at `open` and
+    # the gate is never asked — which is precisely how the CJK case below passed on APFS (which
+    # counts CHARACTERS) and was impossible on CI. Asking a comment not to raise it is what failed
+    # the first time; this fails the caller instead, on every machine.
+    component = len(f"{stem}.md".encode())
+    assert component <= 255, (
+        f"this fixture would write a {component}-byte filename, past NAME_MAX (255) on ext4: it "
+        f"cannot be created on CI at all, so the gate under test would never run. Drive a figure "
+        f"this large through `page.unnameable_reason` directly instead — it is a pure function and "
+        f"needs no filesystem.")
+    repo = str(tmp_path / name)
+    os.makedirs(repo)
+    gitcmd.run("init", "--quiet", "-b", "main", repo)
+    gitcmd.run("commit", "--quiet", "--no-verify", "--allow-empty", "-m", "seed",
+               cwd=repo, env=_COMMIT_ENV)
+    page = os.path.join(repo, "wiki", "notes", f"{stem}.md")
+    os.makedirs(os.path.dirname(page), exist_ok=True)
+    with open(page, "w", encoding="utf-8") as handle:
+        handle.write('---\ntype: note\ntitle: "T"\n---\n\n# T\n\nA page.\n')
+    gitcmd.run("add", "-A", cwd=repo)
+    # A declared `note`, matching the folder — so the ONLY thing these cases can be refused for is
+    # the name. Without it every page here also earns `undeclared-type`, and the benign twins would
+    # be measuring the outcome's shape instead of the byte ceiling.
+    outcome = SimpleNamespace(page_type="note", page_path="", title="T")
+    return gates.gate_zone(_ctx(repo, gitcmd.diff_entries(repo), outcome=outcome))
+
+
+def test_gate_zone_admits_a_stem_at_exactly_the_byte_ceiling(tmp_path):
+    """**The benign twin, and the one the disagreement actually broke.** A stem of exactly
+    `MAX_PAGE_STEM_BYTES` is a legal filename — `.md` fits inside `NAME_MAX` with room to spare,
+    which is what the constant's own 200-versus-255 margin is for — so the gate must admit it.
+
+    Under the old `.md`-inclusive reading this string measured 203 and was vetoed, while the writer
+    that produced it measured 200 and accepted: the page was written and then refused. Nothing else
+    in this file would have noticed, because every other zone case is about a path shape rather
+    than a length.
+    """
+    stem = "T" * page_policy.MAX_PAGE_STEM_BYTES
+
+    assert [f.code for f in _zone_findings_for_stem(tmp_path, "at-ceiling", stem)] == []
+
+
+def test_gate_zone_vetoes_the_first_stem_past_the_byte_ceiling(tmp_path):
+    """The sharp half, one byte over — so the two tests together pin the boundary itself rather
+    than "long names are refused somewhere".
+
+    The finding is `unnameable-page` and it names the reason in the operator's own units: an agent
+    reading "write a shorter title" can act on it, where an `ENAMETOOLONG` escaping into stage
+    `unexpected` tells a steward the librarian broke.
+    """
+    stem = "T" * (page_policy.MAX_PAGE_STEM_BYTES + 1)
+
+    findings = _zone_findings_for_stem(tmp_path, "over-ceiling", stem)
+
+    assert [f.code for f in findings] == ["unnameable-page"]
+    assert "not a character count" in findings[0].message, (
+        "the veto must say the bound is in BYTES — a reader who shortens by characters and is "
+        "refused again has been told the wrong thing")
+
+
+# The CJK fixture's own arithmetic, and it is pinned rather than eyeballed because the last version
+# of it was green on APFS and impossible on ext4.
+#
+# **The name this test WRITES has to satisfy two ceilings at once**, and they are not the same
+# ceiling:
+#
+#   * `MAX_PAGE_STEM_BYTES` (200) is the bound under test — the stem must exceed it, or the gate has
+#     nothing to veto;
+#   * `NAME_MAX` (255 BYTES on ext4, which is what CI runs) is the FILESYSTEM's, and it applies to
+#     the whole component INCLUDING `.md`. A stem over it cannot be written at all, so the fixture
+#     fails at `open` before the gate is ever asked — which is exactly what happened: 105 CJK
+#     characters is 315 bytes, and APFS counts CHARACTERS so it fit locally and only locally.
+#
+# 80 characters x 3 bytes = 240, plus `.md` = 243. Twelve bytes of headroom under 255, forty over
+# the bound being tested. **Do not raise this**: `* 4` of the phrase below is 252 + 3 = exactly 255,
+# which is the limit itself with no margin at all.
+_CJK_PHRASE = "再生可能エネルギー導入計画の四半期レビュー"          # 21 chars, 63 bytes
+_CJK_OVER = (_CJK_PHRASE * 4)[:80]                                # 80 chars, 240 bytes
+# The far-over figure the fixture used to write, kept as a PURE assertion below: the magnitude the
+# rule is really about (a title no filesystem will take) stays pinned without a filesystem in it.
+_CJK_FAR_OVER = _CJK_PHRASE * 5                                   # 105 chars, 315 bytes
+
+
+def test_a_CJK_stem_is_bounded_by_its_BYTES_and_not_by_its_character_count(tmp_path):
+    """The reason the unit is bytes at all, over a real diff: 80 CJK characters is well under any
+    plausible character bound and 240 BYTES, comfortably over `MAX_PAGE_STEM_BYTES`. A
+    character-counting bound would have written it and met `ENAMETOOLONG` at `open` later, on a
+    longer title.
+
+    Its twin sits beside it — the same script, short enough to fit — so this is a boundary rule and
+    not a rule that refuses non-Latin titles.
+    """
+    assert len(_CJK_OVER) < page_policy.MAX_PAGE_STEM_BYTES < len(_CJK_OVER.encode("utf-8"))
+
+    assert [f.code for f in _zone_findings_for_stem(tmp_path, "cjk-over", _CJK_OVER)] == [
+        "unnameable-page"]
+    assert [f.code for f in _zone_findings_for_stem(tmp_path, "cjk-fits", _CJK_PHRASE)] == []
+
+
+def test_the_far_over_CJK_title_the_filesystem_itself_refuses_is_bounded_too():
+    """The magnitude the real-diff case can no longer carry, pinned WITHOUT a filesystem.
+
+    315 bytes is past `NAME_MAX` on ext4, so a fixture that wrote it fails at `open` before any
+    gate is asked — the portability defect this pair was split to fix. `unnameable_reason` is a
+    pure function of a string, so the figure stays pinned here at no cost, and the assertion says
+    what a filesystem would do with it rather than asking one to prove it.
+    """
+    assert len(_CJK_FAR_OVER.encode("utf-8")) > 255 > len(_CJK_FAR_OVER)
+
+    reason = page_policy.unnameable_reason(_CJK_FAR_OVER)
+
+    assert reason
+    assert "not a character count" in reason
+
+
 def _body_rewrite_findings(repo, page, after_text: str, **over):
     """Rewrite the committed page, read the REAL diff back out of git, and run the gate over it.
 

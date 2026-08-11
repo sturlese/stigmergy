@@ -425,8 +425,13 @@ def test_the_librarian_meeting_backend_installs_the_repair(spy, tmp_path):
     """
     from pydantic_ai.models.test import TestModel
 
+    from stigmergy.librarian import agent as agent_module
     from stigmergy.librarian import config
-    from stigmergy.librarian.pydantic_backend import MeetingAccount, PydanticMeetingAgent
+    from stigmergy.librarian.pydantic_backend import (
+        MeetingAccount,
+        MeetingTriage,
+        PydanticMeetingAgent,
+    )
 
     brief = tmp_path / ".claude" / "skills" / "meeting-distiller"
     brief.mkdir(parents=True)
@@ -434,9 +439,17 @@ def test_the_librarian_meeting_backend_installs_the_repair(spy, tmp_path):
               / "meeting-distiller" / "SKILL.md")
     (brief / "SKILL.md").write_text(frozen.read_text(encoding="utf-8"), encoding="utf-8")
 
+    # A COMPLETE account, because `MeetingAccount` demands one now: `decision` is required and a
+    # park owes its kind and its names. An empty `MeetingAccount()` raises inside this lambda, and
+    # the lambda is lazy — so the run would die at model resolution instead of reaching the
+    # framework, and this test would still pass (the repair installs first) while exercising none
+    # of the `Agent` construction it exists to observe.
+    account = MeetingAccount(
+        decision="triage",
+        triage=MeetingTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY, names=["Halcyon Grid"]))
     backend = PydanticMeetingAgent(
         config.Settings(repo=str(tmp_path), model="openai:gpt-5.6-terra"),
-        model_factory=lambda: TestModel(custom_output_args=MeetingAccount().model_dump()))
+        model_factory=lambda: TestModel(custom_output_args=account.model_dump()))
     try:
         backend.run_meeting(worktree=str(tmp_path), material="a transcript", meeting_meta={},
                             registry=None, source_page_path="sources/meetings/x.md")

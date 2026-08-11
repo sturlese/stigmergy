@@ -230,9 +230,13 @@ make filing-golden BACKEND=double
 # the real measurement (needs a Claude credential and gitleaks on PATH)
 make filing-golden FILING_ARGS="--report evals/out/filing-sonnet-5.json"
 
-# one KIND of capture only — here the two meeting captures on the pydantic-ai backend (ADR 032)
+# the STRUCTURED flow over the whole set, on the pydantic-ai backend (ADR 033). Same model as the
+# sdk baseline on purpose: that is what isolates the FLOW change from a model change.
 make filing-golden BACKEND=pydantic \
-    FILING_ARGS="--kinds meeting --model openai:gpt-5.6-terra"
+    FILING_ARGS="--model anthropic:claude-sonnet-5 --report evals/out/filing-structured.json"
+
+# one KIND of capture only — here the two meeting captures
+make filing-golden FILING_ARGS="--kinds meeting"
 ```
 
 **`--kinds` is a different measurement and the instrument says so.** It scores only the captures of
@@ -241,10 +245,10 @@ denominators are derived rather than held against `EXPECTED_DENOMINATORS` (which
 shipped set and only it), the table's caption names the kinds, and so does the history row — so a
 three-phase meeting-only score can never be read later as the twelve-phase set's. A filter that
 selects captures scoring no facet at all is refused rather than printed as a table of zeros.
-`--backend pydantic` REQUIRES `--kinds meeting`: that backend serves the meeting flow only in this
-milestone and would refuse every ordinary capture, and a column of refusals is not a measurement.
-It is a real backend on a real model, so its row is appended to the series like any other; only
-`--backend double` never appends.
+`--backend pydantic` used to REQUIRE `--kinds meeting`, because that backend served the meeting flow
+only and would have refused every ordinary capture. ADR 033 gave it both flows, so it runs the whole
+set and that guard is gone with the limitation it described. It is a real backend on a real model,
+so its row is appended to the series like any other; only `--backend double` never appends.
 
 `make` exports the operator's gitignored env file into every target, so the runner **deletes the
 librarian GitHub App's five variables from its own environment and pins the LLM backend to the

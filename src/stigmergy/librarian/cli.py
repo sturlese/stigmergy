@@ -305,12 +305,13 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--branch", default=None, help="branch to commit to (default: main)")
     # `choices` is the BACKENDS tuple itself, never a retyped list: a backend argparse rejects at
     # parse time gets "invalid choice", where `startup_checks` would have explained what the value
-    # actually does — which is the whole point of the `pydantic` refusal (it is a real backend, and
-    # a worker may not run it; that sentence has to reach the operator).
+    # actually does — and every remaining refusal for these three (an unpriced model, a bare id on
+    # the wrong backend, a missing provider key) is a sentence that has to reach the operator.
     ap.add_argument("--backend", default=None, choices=agent_module.BACKENDS,
-                    help="'sdk' runs the real agent (needs a key); 'double' runs the offline "
-                         "double (default: double); 'pydantic' serves the meeting flow only and is "
-                         "refused for a worker (see ADR 032)")
+                    help="'sdk' runs the real Claude agent, which explores the checkout (needs a "
+                         "key); 'double' runs the offline double (default: double); 'pydantic' "
+                         "runs both flows structured — no tools, a gathered context, code writes "
+                         "the page (see ADR 033); it needs a provider-prefixed, priced model")
     sub = ap.add_subparsers(dest="command", required=True)
 
     p_once = sub.add_parser(

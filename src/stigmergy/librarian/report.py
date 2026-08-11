@@ -825,7 +825,7 @@ def triage_type(*, judged_type: str, agent_rationale: str = "", findings: list =
 
 # ── failed ────────────────────────────────────────────────────────────────────────────────────
 def failed_system(*, attempts: int, stage: str, reason: str, agent_attempts: int = 0,
-                  cost_usd: float = 0.0) -> dict:
+                  cost_usd: float = 0.0, findings: list = ()) -> dict:
     """The librarian could not comply. Deliberately a different sentence SHAPE from every
     `rejected` above: there is nothing for the submitter to fix.
 
@@ -839,6 +839,18 @@ def failed_system(*, attempts: int, stage: str, reason: str, agent_attempts: int
     - it reported `attempts`, the QUEUE DELIVERY counter, in a sentence a reader takes to mean the
       agent's tries ("after 1 attempts" while the agent had had two). Both numbers are now present
       and each says which one it is, so an operator can tell whether the corrective retry ran.
+
+    **And a third: it was the ONE terminal builder that took no `findings`.** Every other one —
+    `filed`, `_rejected`'s family, `triage_entity`, `triage_type`, `needs_input` — threads them into
+    `base_report`, which is the dict `queue.finish` persists to `capture_queue.report` and
+    `brain_submissions` hands back. `_refuse`/`_refuse_meeting` compose the injection notes for
+    EVERY road they can take and then reached this one, where the notes went onto `Result.findings`
+    — a field nothing persists — and vanished. So a capture whose material tried to steer the
+    librarian AND which then hit a system fault recorded the steering attempt nowhere, which is the
+    same "two roads to one destination disagree about what happened" defect `processing._triage`'s
+    own docstring records having fixed for the parked road. The parameter has a default, so the
+    fault road that genuinely has no findings (`processing.failure_result`, raised from anywhere in
+    the path including before the agent ran) is unchanged.
     """
     inside = (f", {_plural(agent_attempts, 'agent attempt')} inside it"
               if agent_attempts else "")
@@ -851,7 +863,8 @@ def failed_system(*, attempts: int, stage: str, reason: str, agent_attempts: int
                f"will not fix the fault.")
     return base_report(status=schema.FAILED, summary=summary,
                        stage=stage, deliveries=attempts, agent_attempts=agent_attempts,
-                       cost_usd=round(cost_usd, 6))
+                       cost_usd=round(cost_usd, 6),
+                       findings=list(_as_list(findings)))
 
 
 # ── findings ──────────────────────────────────────────────────────────────────────────────────

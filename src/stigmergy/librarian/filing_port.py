@@ -50,10 +50,14 @@ a timeout, a provider that raised before answering — and the field must be pre
 
 They are NOT the same rule, and a backend must not average them:
 
-- **`run` (the ordinary flow)** — the agent may write inside the worktree, bounded by
-  `agent.confined_write`: ONE new `.md` page in one of the creatable fast-lane folders, plus its
-  own outcome file. It may never touch a page that already exists; an edit to one is DECLARED in
-  the outcome and PERFORMED by `edits.py`.
+- **`run` (the ordinary flow), `structured_ordinary = False`** — the agent may write inside the
+  worktree, bounded by `agent.confined_write`: ONE new `.md` page in one of the creatable fast-lane
+  folders, plus its own outcome file. It may never touch a page that already exists; an edit to one
+  is DECLARED in the outcome and PERFORMED by `edits.py`.
+- **`run` (the ordinary flow), `structured_ordinary = True`** — the agent writes NO page, exactly
+  like `run_meeting` below: code is the sole author (`processing._write_ordinary_page`) and the
+  account carries the page's own text in `Outcome.page`. Its only legal write is its own outcome
+  file, and a backend that carries the outcome home in the envelope writes nothing whatsoever.
 - **`run_meeting`** — the agent writes NO page at all. Code is the sole author of every page in the
   set (`processing._write_meeting_pages`), so the agent's only legal write is its own outcome file,
   and a backend that carries the outcome home in the envelope instead writes nothing whatsoever.
@@ -102,21 +106,48 @@ def priced(run: AgentRun, ex: AgentError) -> AgentError:
 
 @runtime_checkable
 class FilingAgent(Protocol):
-    """The two calls `processing.py` makes, and the only two it may make.
+    """The two calls `processing.py` makes, and the only two it may make — plus the one thing it
+    must be able to ASK a backend before making them.
 
     Keyword-only throughout, matching what the flows already call with: the argument lists are long
     and half of them are strings, so a positional call site is a defect waiting for somebody to
     swap two of them.
     """
 
+    # ── the one capability a backend DECLARES rather than one the worker sniffs ────────────────
+    # Which shape of the ordinary flow this backend answers, and it is a declaration precisely so
+    # `processing` never has to ask `isinstance(agent, PydanticFilingAgent)`. A type test would put
+    # the flow's own branch inside the worker's knowledge of which classes exist — so a fourth
+    # backend, or a test double standing in for one, would take the wrong branch by being the
+    # wrong class rather than by declaring the wrong thing.
+    #
+    # `False` — the SDK driver and the offline double — means the EXPLORING shape: the agent is
+    # handed the material, goes looking through the checkout itself, writes the page, and declares
+    # the path it wrote in `Outcome.page_path`.
+    #
+    # `True` — the pydantic-ai backend — means the STRUCTURED shape (ADR 033): `processing` runs
+    # the deterministic gatherer first and passes the rendered context in `gathered`, the agent
+    # holds no tool and writes nothing at all, and its account CARRIES the page's own text in
+    # `Outcome.page` for code to write. Both halves of the outcome envelope are valid; this is
+    # what says which one is required of this backend.
+    structured_ordinary: bool
+
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
-            corrective: str = "", reply: str = "", flow_note: str = "") -> AgentRun:
+            corrective: str = "", reply: str = "", flow_note: str = "",
+            gathered: str = "") -> AgentRun:
         """The ordinary flow: file ONE capture as one new page.
 
         `corrective` is the repair brief of the single retry (`gates.corrective_brief`), `reply` the
         submitter's answer to the one ask-back question, and `flow_note` a server-composed fact
-        about the flow this item rides (today: the source attachment's half of the work). All three
+        about the flow this item rides (today: the source attachment's half of the work). All four
         are empty on a first, unattached pass.
+
+        `gathered` is the deterministic gatherer's context, ALREADY RENDERED to prompt text
+        (`agent.render_gathered` over `gather.gather`) — a string, not the dataclass, and that is
+        the seam rather than a convenience. The gatherer belongs to the FLOW, not to a backend: two
+        structured backends must share one context builder and one fence discipline, and handing a
+        backend the object instead would invite each one to render it its own way. Empty for a
+        backend that declares `structured_ordinary = False`, which is handed nothing and explores.
         """
         ...
 

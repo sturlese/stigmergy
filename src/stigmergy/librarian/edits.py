@@ -54,7 +54,7 @@ def _finding(code: str, message: str, locator: str = "") -> gates.Finding:
     return gates.Finding("edits", code, message, locator=locator)
 
 
-def page_names(worktree: str) -> set[str]:
+def page_names(worktree: str, *, confined: bool = False) -> set[str]:
     """Every page basename (without `.md`) in EVERY content zone of the worktree.
 
     A wikilink resolves by bare basename, which is what the contract linter does too — so this is
@@ -67,13 +67,28 @@ def page_names(worktree: str) -> set[str]:
     here as `edits/dead-link` — "resolves to no page in the graph" — about a page that plainly
     exists. `apply_declared` is all-or-nothing, so nothing was applied, the capture burned its one
     corrective retry and landed `failed`.
+
+    **`confined` drops any page that does not resolve inside the worktree, or whose leaf is a
+    symlink** — the same filter `gather._confined` applies to the corpus parse, and it is a
+    PARAMETER rather than the default for a reason each caller can state. `validate` (the default,
+    `False`) is answering "would this link be dead?", and the answer must be the linter's, whose
+    own index has no containment notion; it separately refuses to WRITE through a symlink
+    (`os.path.islink(full)` below, plus `O_NOFOLLOW`), which is where containment actually bites on
+    that road. `gather` passes `True` because its answer becomes a list of names in a model's
+    prompt, and a page whose bytes come from outside the commit being filed against must not be
+    offered as something to link.
     """
     names = set()
     for zone in corpus.ZONES:
-        for _parent, _dirs, files in os.walk(os.path.join(worktree, zone)):
+        for parent, _dirs, files in os.walk(os.path.join(worktree, zone)):
             for name in files:
-                if name.endswith(".md") and not name.startswith("."):
-                    names.add(name[: -len(".md")])
+                if not name.endswith(".md") or name.startswith("."):
+                    continue
+                full = os.path.join(parent, name)
+                if confined and (os.path.islink(full)
+                                 or not page_policy.is_inside(worktree, full)):
+                    continue
+                names.add(name[: -len(".md")])
     return names
 
 

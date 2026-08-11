@@ -1,0 +1,517 @@
+"""The deterministic gatherer: what the filing agent is HANDED, instead of what it went looking for.
+
+The ordinary flow's agent used to explore the checkout itself — `Read`, `Glob`, `Grep` — and that
+exploration is the whole reason a provider swap was a rewrite rather than a configuration change
+(ADR 033). It is also not obviously the better design at corpus scale: a model grepping for
+"what does this brain already know about Northwind" spends turns, spends tokens, and answers a
+question code can answer exactly. So code answers it, once, before the model call, and the answer
+travels in the prompt.
+
+**A pure function of `(worktree, registry, material)`.** No database, no clock, no network, no
+model. That is what makes it unit-testable without a key and what makes the same capture gather
+the same context twice — the property a golden run depends on, since a gatherer that reorders its
+own output makes two runs of one model incomparable.
+
+**It reads the CHECKOUT, never `pages_index`.** The worktree is the knowledge repo at this item's
+base commit, which is the same data the SDK agent's own `Glob`/`Read` reached — so the data ORIGIN
+is unchanged and only the READER moved from the model to code. Reading the index instead would put
+a write-path worker on the read path's ACL-governed table and would need an exception entry it has
+no business needing (`server.acl.visible()` is where read access is decided, and nothing here
+serves a reader). Recorded in ADR 033; reopening it needs a design, not a patch.
+
+**That "same data" claim is TRUE BECAUSE OF `_confined`, and false without it.** The agent's reads
+were bounded by a permission hook that resolved `realpath` first (`agent.confine_reads` ->
+`page.is_inside`); `corpus.load_pages` is the INDEX's parser and has no such notion, so every row
+it hands back is filtered here before anything else looks at one. Without that filter the
+structured shape would read strictly MORE of the filesystem than the shape it replaces, which is a
+regression wearing a refactor's clothes.
+
+**One cross-package reach, declared.** `stigmergy.index.corpus` is imported for its parser —
+`load_pages`/`ZONES`, pure code over a directory, no database and no ACL surface — the same edge
+`librarian.edits` already declares for `ZONES` and `views.skeleton`/`staleness` declare for the
+same reason. It is a LIBRARY reach, not a layer: nothing here touches `pages_index`, and a change
+that made this import need one would be a design change, not a wider import.
+
+**What it does NOT reuse, and why.** `dedup.py`'s two levels are DB-backed (`find_retry`,
+`find_already_filed`) and have ALREADY run by the time this is called — `processing._pre_agent`
+collapses a retry and refuses an exact re-file before the worktree even exists. There is no pure
+overlap signal left in that module to share, so this one does not fabricate a second: the ranked
+`candidates` list below IS the overlap signal the brief asks the agent to judge against, and
+saying so here is more honest than an import that would look like reuse.
+
+**Every page-derived string in here is captured material on the way back into a prompt** — titles
+somebody wrote, bodies somebody wrote — so `agent.render_gathered` fences the whole content half.
+The structural half (entity ids and names, and each entity's page path) is rendered unfenced, and
+what makes THAT inert is JSON escaping plus `text.sanitize`, not its provenance — a page path is a
+filename a person chose. `structural_payload`'s own docstring carries the argument. Nothing in this
+module builds a fence itself (`tests/test_architecture.py` keeps the fence in one place); this
+module produces plain data and `agent.py` decides how it is framed.
+"""
+import logging
+import os
+import re
+import unicodedata
+from dataclasses import dataclass
+
+from stigmergy import text as textutil
+from stigmergy.index import corpus
+from stigmergy.librarian import edits, gates
+from stigmergy.librarian import page as page_policy
+
+log = logging.getLogger(__name__)
+
+# The zone a CANDIDATE may come from. `wiki/` only, and the two exclusions are decisions rather
+# than an oversight:
+#
+#  * `views/` is regenerated from an entity's members and is never a wikilink TARGET at all
+#    (`corpus.by_stem_index` drops the zone for exactly that reason) — handing one to the agent as
+#    a page to overlap with or link to would invite a link that resolves to nothing;
+#  * `sources/` is verbatim captured evidence. It is a legitimate link target (it stays in
+#    `link_names` below), but it is not a knowledge destination: a transcript never "covers the
+#    same ground" as a synthesis in the sense the overlap judgment means, and excerpting one would
+#    spend the excerpt budget re-showing the agent raw material.
+CANDIDATE_ZONE = "wiki/"
+
+# The link neighbourhood's own ceiling — one hop out of the candidates and the entity pages, and
+# a hop is fanout-shaped. A number rather than a `Settings` field on purpose: `top_k` and the
+# excerpt height are the two dials an operator would ever tune (they trade prompt cost against
+# recall), and this one only bounds a list of `path`/`title` pairs that costs almost nothing.
+MAX_NEIGHBOURS = 40
+
+# How many page NAMES the wikilink vocabulary may carry before it is reported as a count instead.
+# A truncated vocabulary is worse than an honest count for the same reason
+# `gates.MAX_BRIEF_REGISTRY_NAMES` says it is: "not in the list" would read as proof that a name
+# does not exist when it is merely unlisted, and the agent would then decline a link it should have
+# made — or, worse, make one it should not.
+MAX_LINK_NAMES = 400
+
+# One excerpt line's own ceiling. A page is line-bounded by the contract linter, not
+# CHARACTER-bounded, so a single pathological line can carry a page's whole body.
+MAX_EXCERPT_LINE = 400
+
+# Below this many pages, the corpus is too small for "a term most pages carry is noise" to mean
+# anything — in a five-page repo the most common term may be the one the material is about. The
+# fixture repos this suite runs against sit under it, which is deliberate: their scoring is the
+# plain overlap count, with nothing filtered.
+MIN_CORPUS_FOR_TERM_FREQUENCY = 8
+
+# A term is a word of at least three characters. Two-character words carry almost no signal and
+# every language is full of them; digits are kept (a year, a version, an amount is often exactly
+# the thing two pages share).
+_TERM_RE = re.compile(r"\w{3,}", re.UNICODE)
+
+# The weights, and they are ordinal rather than tuned: a term shared with a page's TITLE is
+# stronger evidence than one shared with the names it links, which is stronger than one shared
+# with its body. Integers, so a score is exactly reproducible and a tie is a real tie.
+_TITLE_WEIGHT = 3
+_RELATED_WEIGHT = 2
+_BODY_WEIGHT = 1
+
+
+@dataclass(frozen=True)
+class GatheredEntity:
+    """One registered entity the MATERIAL names, resolved through the registry's own alias map.
+
+    `page_path` is `""` when the registry knows the entity and this checkout carries no page for
+    it — a real and legitimate state (an entity is minted in `ops/entity-registry.json`, and its
+    page is written by the steward flow, not by the fast lane), and one the agent must be able to
+    tell apart from "this entity does not exist".
+    """
+    entity_id: str
+    name: str
+    aliases: tuple = ()
+    page_path: str = ""
+
+
+@dataclass(frozen=True)
+class GatheredPage:
+    """One candidate page, with enough of it to judge overlap without reading the file."""
+    path: str
+    title: str
+    page_type: str
+    related: tuple = ()          # the names this page links out to, as a reader would write them
+    excerpt: str = ""
+    score: int = 0
+
+
+@dataclass(frozen=True)
+class GatheredLink:
+    """One page a candidate or an entity page links to — the second hop, named but not excerpted."""
+    path: str
+    title: str
+
+
+@dataclass(frozen=True)
+class Gathered:
+    """Everything code found in the checkout about one capture, frozen.
+
+    Frozen for the reason `agent.Outcome` is: it is evidence about what the model was shown, and
+    a prompt builder must not be able to edit the context into agreement with the answer.
+    """
+    entities: tuple = ()
+    candidates: tuple = ()
+    neighbours: tuple = ()
+    link_names: tuple = ()
+    link_names_total: int = 0
+    corpus_pages: int = 0
+
+
+def gather(worktree: str, registry, material: str, *, top_k: int,
+           excerpt_lines: int) -> Gathered:
+    """The whole gather, in one pass over the checkout.
+
+    `top_k` and `excerpt_lines` are the caller's (`config.Settings.gather_top_k` /
+    `gather_excerpt_lines`) rather than defaults here, for this package's standing reason: a bound
+    with a default at the point of use is a bound two places can disagree about.
+
+    Deterministic end to end — `corpus.load_pages` returns rows sorted by path, every ranking below
+    breaks its ties by path, and every list is materialized in a stated order. Two calls with the
+    same three arguments return equal objects.
+    """
+    rows = _confined(worktree, corpus.load_pages(worktree))
+    by_path = {row.path: row for row in rows}
+    # Tokenized ONCE per row and threaded through both readers below. `_corpus_stopwords` and
+    # `_candidates` each used to tokenize the whole corpus themselves, and `_candidates` tokenized
+    # every body a second time inside its own loop — four full passes over every byte of the
+    # checkout, per agent pass, on a step that runs twice per capture. One pass, one dict.
+    terms_by_path = {row.path: _terms(f"{row.title}\n{row.body}") for row in rows}
+    entities = _entities(rows, registry, material)
+    entity_paths = {e.page_path for e in entities if e.page_path}
+
+    candidates = _candidates(rows, material, terms_by_path, top_k=top_k,
+                             excerpt_lines=excerpt_lines, skip=entity_paths)
+    neighbours = _neighbours(by_path, [*(c.path for c in candidates), *sorted(entity_paths)],
+                             skip=entity_paths | {c.path for c in candidates})
+
+    # The wikilink vocabulary, read through the SAME function `edits.validate` answers "does this
+    # link resolve" with. A second walk of the checkout is the price of not having a second answer:
+    # a gatherer that offered the agent a name the edit validator would then refuse is precisely
+    # the drift this repo pays a full corrective retry for. `confined=True` applies the containment
+    # filter below to that walk too — see `_confined`.
+    names = sorted(edits.page_names(worktree, confined=True))
+    log.info("gathered for one capture: %d entities, %d candidate(s) of %d page(s), %d neighbour(s)",
+             len(entities), len(candidates), len(rows), len(neighbours))
+    return Gathered(
+        entities=tuple(entities),
+        candidates=tuple(candidates),
+        neighbours=tuple(neighbours),
+        link_names=tuple(names[:MAX_LINK_NAMES]),
+        link_names_total=len(names),
+        corpus_pages=len(rows),
+    )
+
+
+def _confined(worktree: str, rows: list) -> list:
+    """Every row whose bytes really came from INSIDE this capture's own checkout.
+
+    **This is what makes "the reader moved, the data origin did not" true rather than merely
+    intended** (ADR 033 D1). The exploring agent's reads were confined by a `PreToolUse` hook that
+    resolved `realpath` before allowing one (`agent.confine_reads` -> `page.is_inside`), so a
+    `wiki/notes/x.md` symlinked at `/etc/passwd`, or a `wiki/playbooks` directory component
+    symlinked out of the worktree, was denied. `corpus.load_pages` has no such notion — it is the
+    INDEX's parser, walking `rglob("*.md")` and `read_text`-ing whatever it finds — so without this
+    filter the structured shape would read strictly MORE than the shape it replaces, and a page's
+    body would reach a model prompt from outside the commit being filed against.
+
+    Fixed HERE and never in `corpus.py`: that module belongs to the index, whose own callers walk a
+    checkout they cloned themselves, and pushing a librarian confinement rule into it would make one
+    package's threat model another package's default.
+
+    Both halves are needed and neither implies the other: `page.is_inside` resolves the whole path
+    (so a symlinked DIRECTORY component is caught, which an `islink` test on the leaf never sees),
+    and `os.path.islink` on the leaf catches a symlink pointing back INSIDE the worktree — legal by
+    containment, and still a file whose bytes are not the ones git tracks at that path.
+
+    Logged at WARNING rather than INFO: a symlinked page inside a knowledge repo has no legitimate
+    producer in this system, so it is an indicator, not housekeeping.
+    """
+    kept, dropped = [], []
+    for row in rows:
+        full = os.path.join(worktree, row.path)
+        if page_policy.is_inside(worktree, row.path) and not os.path.islink(full):
+            kept.append(row)
+        else:
+            dropped.append(row.path)
+    if dropped:
+        log.warning("the gatherer dropped %d page(s) that do not resolve inside this capture's "
+                    "checkout: %s — a symlinked page in a knowledge repo has no legitimate "
+                    "producer in this system", len(dropped), ", ".join(sorted(dropped)))
+    return kept
+
+
+# ── which entities the material names ─────────────────────────────────────────────────────────
+def _entities(rows, registry, material: str) -> list[GatheredEntity]:
+    """The registered entities this material mentions, by the registry's OWN spellings.
+
+    Matching is never re-implemented here: the candidate set comes from `gates.registry_candidates`
+    (THE one reading of "which entities exist" — see its docstring for why a second one is worse
+    than none), and a matched spelling is turned into an id by `Registry.canonical_id`, which is
+    the same normalization `gates.resolve_entity_ids` resolves a DECLARED anchor with. So an
+    entity the gatherer surfaces is an entity the anchoring gate would resolve, by construction.
+
+    Whole-TOKEN containment, not substring: `Marlowe` must not match inside `marlowepublishing`,
+    and a substring test over a normalized haystack is exactly how a gatherer starts handing an
+    agent entities the material never mentioned.
+    """
+    hay = f" {' '.join(_tokens(material))} "
+    resolve = getattr(registry, "canonical_id", None)
+    found: dict[str, GatheredEntity] = {}
+    for entry in gates.registry_candidates(registry):
+        aliases = tuple(entry.get("aliases") or ())
+        for spelling in (entry.get("name", ""), *aliases):
+            if not _mentions(hay, spelling):
+                continue
+            entity_id = str(resolve(spelling) or "") if callable(resolve) else ""
+            if not entity_id or entity_id in found:
+                continue
+            found[entity_id] = GatheredEntity(
+                entity_id=entity_id, name=str(entry.get("name", "")), aliases=aliases,
+                page_path=_entity_page(rows, entity_id, resolve))
+            break
+    return [found[key] for key in sorted(found)]
+
+
+def _mentions(haystack: str, spelling: str) -> bool:
+    """Does the tokenized material carry this spelling as a contiguous run of whole tokens?"""
+    tokens = _tokens(spelling)
+    return bool(tokens) and f" {' '.join(tokens)} " in haystack
+
+
+def _entity_page(rows, entity_id: str, resolve) -> str:
+    """This entity's own page in the checkout, or `""`.
+
+    Asked of the page's own `entity:` frontmatter FIRST — that field is server-stamped from a
+    resolved id, so it is the fact — and of the title through the registry only as the fallback,
+    for an entity page written before anything stamped one. Never by a filename convention: a
+    `wiki/entities/<Name>.md` rule would be a fourth place that knows where entity pages live.
+    """
+    for row in rows:
+        if str(row.type or "").lower() == "entity" and entity_id in (row.entity or []):
+            return row.path
+    if callable(resolve):
+        for row in rows:
+            if str(row.type or "").lower() != "entity":
+                continue
+            if str(resolve(row.title or "") or "") == entity_id:
+                return row.path
+    return ""
+
+
+# ── the ranked candidates ─────────────────────────────────────────────────────────────────────
+def _candidates(rows, material: str, terms_by_path: dict, *, top_k: int, excerpt_lines: int,
+                skip: set) -> list[GatheredPage]:
+    """The top-K pages this material overlaps with, lexically, deterministically.
+
+    The score is a weighted count of DISTINCT material terms the page carries, by field:
+    `3 x title + 2 x its outbound link names + 1 x body`. Integer arithmetic, so a tie is a real
+    tie and is broken by path — the same "ties break by path" rule `corpus.load_pages` sorts under,
+    which is what makes two gathers of one capture byte-identical.
+
+    **The corpus decides what a stopword is.** A term carried by more than half the pages is
+    dropped rather than counted, so "the", "page" and this brain's own house vocabulary stop
+    dominating every score without anybody maintaining a word list — which would be one more thing
+    to keep in step with a corpus that is not necessarily in English. Under
+    `MIN_CORPUS_FOR_TERM_FREQUENCY` pages the filter is skipped entirely: in a five-page repo the
+    commonest term may be exactly what the material is about.
+
+    Pages with a score of zero are dropped: a candidate list padded to `top_k` with pages that
+    share nothing is a list the agent has to disbelieve, and an empty list is the honest answer for
+    material about something this brain has never seen.
+    """
+    pages = [row for row in rows
+             if row.path.startswith(CANDIDATE_ZONE)
+             and str(row.type or "").lower() != "entity"
+             and row.path not in skip]
+    material_terms = _terms(material) - _corpus_stopwords(rows, terms_by_path)
+    if not material_terms:
+        return []
+
+    scored = []
+    for row in pages:
+        related = _related_names(row)
+        # The BODY half reads the precomputed set (`terms_by_path` covers title + body, which is a
+        # superset of the body alone — a title term counted twice is a title term the page really
+        # carries, and the weights are ordinal rather than calibrated). Title and link names are
+        # tokenized here because they are a handful of words each and no precomputation pays for
+        # itself on them.
+        page_terms = terms_by_path.get(row.path) or set()
+        score = (_TITLE_WEIGHT * len(material_terms & _terms(row.title))
+                 + _RELATED_WEIGHT * len(material_terms & _terms(" ".join(related)))
+                 + _BODY_WEIGHT * len(material_terms & page_terms))
+        if score > 0:
+            scored.append((-score, row.path, row, related, score))
+    scored.sort(key=lambda entry: (entry[0], entry[1]))
+    return [GatheredPage(path=row.path, title=str(row.title or ""),
+                         page_type=str(row.type or ""), related=tuple(related),
+                         excerpt=_excerpt(row.body, excerpt_lines), score=score)
+            for _neg, _path, row, related, score in scored[:max(int(top_k), 0)]]
+
+
+def _corpus_stopwords(rows, terms_by_path: dict) -> set:
+    """Terms carried by more than half this corpus's pages — see `_candidates` for the argument.
+
+    Reads the tokenization `gather` already did rather than repeating it: this used to walk every
+    body itself, which made the corpus-wide pass happen twice per agent pass and four times per
+    capture, on the one step whose cost scales with the whole knowledge repo.
+    """
+    if len(rows) < MIN_CORPUS_FOR_TERM_FREQUENCY:
+        return set()
+    counts: dict[str, int] = {}
+    for row in rows:
+        for term in terms_by_path.get(row.path) or ():
+            counts[term] = counts.get(term, 0) + 1
+    ceiling = len(rows) // 2
+    return {term for term, seen in counts.items() if seen > ceiling}
+
+
+def _related_names(row) -> list[str]:
+    """The page names this page links out to, as a reader would write them in a wikilink.
+
+    `corpus.page_row` resolves `links` to repo-relative PATHS (the index's currency); a wikilink is
+    written by BASENAME, so this is the same set spelled the way the agent has to spell it. Sorted,
+    for determinism, and deduplicated — two links to one page are one name.
+    """
+    names = {path.rsplit("/", 1)[-1].removesuffix(".md") for path in (row.links or [])}
+    return sorted(name for name in names if name)
+
+
+def _excerpt(body: str, lines: int) -> str:
+    """The first `lines` non-blank lines of a body, each sanitized and clamped.
+
+    Non-blank rather than raw: a page that opens with its own H1 and two blank lines would
+    otherwise spend a third of the budget on whitespace. Sanitized because these bytes go into a
+    prompt (`text.sanitize` is the seam every other echoed value in this repo goes through) and
+    clamped per line because a page is bounded by LINE count, not by characters, so one
+    pathological line can carry the whole body.
+
+    **`lines=0` means NO excerpts, and it is a supported setting rather than an accident.** The
+    budget used to be checked AFTER the append, so a zero produced one line — the ablation an
+    operator would reach for (`STIGMERGY_LIBRARIAN_GATHER_EXCERPT_LINES=0`: hand the model the
+    candidate PATHS and titles and nothing of their content, to measure what the excerpts are
+    worth) silently measured something else. The check moved above the append.
+    """
+    budget = max(int(lines), 0)
+    out = []
+    for line in (body or "").splitlines():
+        if len(out) >= budget:
+            break
+        if not line.strip():
+            continue
+        out.append(textutil.clamp(textutil.sanitize(line), MAX_EXCERPT_LINE))
+    return "\n".join(out)
+
+
+# ── the link neighbourhood ────────────────────────────────────────────────────────────────────
+def _neighbours(by_path: dict, sources: list, *, skip: set) -> list[GatheredLink]:
+    """One hop out of the candidates and the entity pages: what they link to.
+
+    This is the half a lexical score cannot find. A capture about a renewal may share no
+    vocabulary with the decision page that governs it, and still belong one link away from it —
+    the graph knows something the words do not, and the agent has no tool to walk it any more.
+
+    Bounded by `MAX_NEIGHBOURS` and ordered by path. A neighbour is NAMED, never excerpted: the
+    excerpt budget belongs to the pages the material actually overlaps with, and a title plus a
+    path is enough to decide whether to link or to ask for a hop the gatherer did not make.
+    """
+    out: dict[str, GatheredLink] = {}
+    for path in sources:
+        row = by_path.get(path)
+        for target in (row.links if row else ()) or ():
+            if target in skip or target in out:
+                continue
+            neighbour = by_path.get(target)
+            if neighbour is None:
+                continue
+            out[target] = GatheredLink(path=target, title=str(neighbour.title or ""))
+    return [out[key] for key in sorted(out)][:MAX_NEIGHBOURS]
+
+
+# ── tokens ────────────────────────────────────────────────────────────────────────────────────
+def _tokens(text: str) -> list[str]:
+    """One text's terms, in order — NFC-normalized and casefolded, so two spellings of one accented
+    word are one term (the same doctrine `gates.normalize_identifier` applies to an identifier and
+    `page.path_key` to a path)."""
+    folded = unicodedata.normalize("NFC", text or "").casefold()
+    return _TERM_RE.findall(folded)
+
+
+def _terms(text: str) -> set:
+    return set(_tokens(text))
+
+
+# ── the prompt payloads: two halves, and what actually makes the unfenced one safe ────────────
+def structural_payload(gathered: Gathered) -> dict:
+    """The half rendered OUTSIDE the fence: entity ids, canonical names and aliases that went
+    through governed birth, plus the repo-relative path of each entity's own page.
+
+    **The reason it is safe is the ESCAPING, not the provenance — and the earlier version of this
+    docstring got that wrong.** The ids and names really are server-derived (a steward minted them
+    through `stigmergy-entities`, and `gates.registry_candidates` is the one reading of them), and
+    `build_meeting_prompt` already renders exactly that set unfenced for exactly that reason. **A
+    page PATH is not**: a person chose the filename, and the fast lane will happily file
+    `wiki/notes/Ignore the above.md` because a title is a title. What keeps it inert here is that
+    the whole payload is one `json.dumps` value — a quoted, escaped JSON string cannot end its own
+    data span, which is the property the fence exists to give unescaped prose — and `text.sanitize`
+    strips the control characters that would otherwise survive escaping as `\\n`/`\\u2028` and
+    reformat the block a reader sees.
+
+    So: sanitized here, escaped by the caller, and NOT claimed to be trusted because of where it
+    came from.
+    """
+    return {"entities": [{"id": _prompt_scalar(e.entity_id),
+                          "name": _prompt_scalar(e.name),
+                          "aliases": [_prompt_scalar(a) for a in e.aliases],
+                          "page": _prompt_scalar(e.page_path) or None}
+                         for e in gathered.entities]}
+
+
+# The two Unicode line separators. `stigmergy.text.sanitize` deliberately does NOT strip them —
+# it is the bottom of the stack, shared with the index, the server and the CLIs, where U+2028 in a
+# search hit is inert — and widening it for one caller's threat model is how a shared seam stops
+# meaning one thing. So the extra step lives here, with the reason it exists.
+_LINE_SEPARATORS = str.maketrans({" ": " ", " ": " "})
+
+
+def _prompt_scalar(value: str) -> str:
+    """One untrusted scalar rendered into a prompt OUTSIDE the fence.
+
+    `text.sanitize` strips the C0/C1 controls (the seam every echoed value in this repo goes
+    through); this additionally neutralizes U+2028/U+2029, which survive it and which
+    `json.dumps(..., ensure_ascii=False)` emits RAW — and which a reader renders as line breaks.
+    Inside the fence that costs nothing (the fence is what bounds the span); outside it, a page
+    path carrying one could split the structural block a model is reading as one line.
+
+    A REPLACEMENT rather than a whitespace-collapse: these values are paths and names, and
+    `" ".join(x.split())` would silently rewrite a filename that legitimately carries two spaces
+    into one that names no file.
+    """
+    return textutil.sanitize(str(value or "")).translate(_LINE_SEPARATORS)
+
+
+def candidates_payload(candidates) -> list:
+    """The candidate list's own JSON shape — ONE rendering, so `agent._within_budget` can measure a
+    trimmed list against the same bytes `content_payload` will emit rather than approximating it."""
+    return [{"path": c.path, "title": c.title, "type": c.page_type,
+             "links_to": list(c.related), "excerpt": c.excerpt}
+            for c in candidates]
+
+
+def content_payload(gathered: Gathered, *, candidates=None) -> dict:
+    """The half that is PAGE-DERIVED: titles, bodies and the names somebody chose for their own
+    pages. Every string in here was written by a person or by a model reading captured material, so
+    `agent.render_gathered` puts the whole of it inside the UNTRUSTED-DATA fence — a page excerpt
+    re-entering a prompt is captured content on the way back in, and the fence is the only thing
+    that stops one closing the data span early.
+
+    `candidates` overrides the gathered list with the one that survived the whole-block size budget
+    (`agent.MAX_GATHERED_CHARS`). Defaulting to `gathered.candidates` keeps every other caller —
+    and every test that builds a `Gathered` by hand — reading exactly what it gathered.
+    """
+    chosen = gathered.candidates if candidates is None else candidates
+    return {
+        "candidates": candidates_payload(chosen),
+        "neighbourhood": [{"path": n.path, "title": n.title} for n in gathered.neighbours],
+        "link_names": list(gathered.link_names),
+        "link_names_total": gathered.link_names_total,
+        "corpus_pages": gathered.corpus_pages,
+    }

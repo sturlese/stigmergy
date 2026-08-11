@@ -51,14 +51,36 @@ DEFAULT_TIMEOUT_S = 300
 MAX_AGENT_ATTEMPTS = 2
 
 # What one item costs BESIDES its agent attempts: two gitleaks runs (material, then diff), two
-# whole-repo contract-linter runs, the worktree add/remove, the commit, and a push that retries up to
+# whole-repo contract-linter runs, the worktree add/remove, the commit, a push that retries up to
 # `gitcmd.PUSH_ATTEMPTS` times with a rebase and a doubling backoff in between (~5s of waiting at the
-# current budget, so the push is a rounding error inside this number rather than the bulk of it).
+# current budget, so the push is a rounding error inside this number rather than the bulk of it) —
+# and, on the STRUCTURED ordinary shape only, up to two GATHERS (ADR 033): one per agent pass, each
+# a `corpus.load_pages` walk of the checkout plus one tokenization of every page
+# (`gather.gather`'s `terms_by_path`) and a second directory walk for the wikilink vocabulary.
+#
+# The gather is the only term here that scales with the SIZE OF THE KNOWLEDGE REPO rather than with
+# one capture, which is what makes it worth naming separately: everything else above is bounded by
+# the diff. At the corpus this ships against it is well under a second; see
+# `minimum_visibility_timeout_s` for where that assumption is recorded and when to re-measure it.
 GATE_BUDGET_S = 120
 
 # Headroom on top of the worst case. Being wrong in this direction costs a slower recovery from a
 # genuine crash; being wrong in the other direction files a capture twice.
 VISIBILITY_HEADROOM_S = 180
+
+# ── the gatherer's two dials (ADR 033) ────────────────────────────────────────────────────────
+# What the STRUCTURED ordinary flow hands the model instead of the exploration it no longer does
+# (`librarian/gather.py`). Both trade prompt cost against recall, which is why they are
+# configuration and not constants: the number that is right for a 40-page brain is not the number
+# that is right for a 4,000-page one, and finding out is a measurement somebody runs against a
+# deployment rather than a value this file can know.
+#
+# Twelve candidates at twenty lines each is roughly a page's worth of excerpt — enough for the
+# overlap-versus-duplicate judgment the brief asks for, and small enough that the gathered context
+# stays a fraction of the captured material it sits beside. Read by `processing._one_pass`; the
+# `sdk` backend consults neither, because it still explores.
+DEFAULT_GATHER_TOP_K = 12
+DEFAULT_GATHER_EXCERPT_LINES = 20
 
 DEFAULT_POLL_INTERVAL_S = 3.0
 
@@ -135,7 +157,19 @@ def refused_diff_dir(root: str = "") -> str:
 def minimum_visibility_timeout_s(*, timeout_s: int = DEFAULT_TIMEOUT_S) -> int:
     """The smallest lease that outlives one item's worst case. `worker.startup_checks` refuses
     anything at or below this, and the default below is this plus headroom — one arithmetic, read
-    by the default, by the refusal and by the test that asserts the relationship."""
+    by the default, by the refusal and by the test that asserts the relationship.
+
+    **The GATHER is assumed to fit inside `VISIBILITY_HEADROOM_S` rather than being a term here**,
+    and that is an assumption with a scale attached to it (ADR 033). It is the one per-item cost
+    that grows with the SIZE OF THE KNOWLEDGE REPO — two walks of the checkout and one tokenization
+    of every page, per agent pass — where every other term above is bounded by one capture. At a
+    few hundred pages it is well under a second against a 180s headroom, so folding it into
+    `GATE_BUDGET_S` would be precision nobody has.
+    **Re-measure it at roughly 5,000 pages**, or sooner if a `stigmergy-librarian status` p95 starts
+    tracking corpus growth rather than model latency: past that, the honest fix is a term in
+    `GATE_BUDGET_S` computed from the corpus, not a bigger headroom. A lease that is too short
+    files a capture twice, which is why this assumption is written down rather than left implicit.
+    """
     return MAX_AGENT_ATTEMPTS * int(timeout_s) + GATE_BUDGET_S
 
 
@@ -198,13 +232,18 @@ class Settings:
     require_remote_base: bool = False
 
     # the agent
-    # 'sdk' | 'double' | 'pydantic' — CI and the suite stay on the double; `pydantic` serves the
-    # meeting flow only and `worker.startup_checks` refuses it for a worker (ADR 032).
+    # 'sdk' | 'double' | 'pydantic' — CI and the suite stay on the double. All three serve BOTH
+    # flows since ADR 033; `pydantic` runs the ordinary flow structured (a deterministic gatherer,
+    # one tool-less call, code writes the page) where `sdk` still explores the checkout.
     backend: str = "double"
     model: str = DEFAULT_MODEL
     max_turns: int = DEFAULT_MAX_TURNS
     max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS
     timeout_s: int = DEFAULT_TIMEOUT_S
+
+    # the gatherer (structured ordinary flow only — the `sdk` backend explores instead)
+    gather_top_k: int = DEFAULT_GATHER_TOP_K
+    gather_excerpt_lines: int = DEFAULT_GATHER_EXCERPT_LINES
 
     # the loop
     poll_interval_s: float = DEFAULT_POLL_INTERVAL_S
@@ -276,6 +315,10 @@ class Settings:
             max_tool_calls=int(os.environ.get("STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS",
                                               cls.max_tool_calls)),
             timeout_s=agent_timeout_s,
+            gather_top_k=int(os.environ.get("STIGMERGY_LIBRARIAN_GATHER_TOP_K",
+                                            cls.gather_top_k)),
+            gather_excerpt_lines=int(os.environ.get("STIGMERGY_LIBRARIAN_GATHER_EXCERPT_LINES",
+                                                    cls.gather_excerpt_lines)),
             poll_interval_s=float(flag("poll_interval", cls.poll_interval_s)),
             visibility_timeout_s=int(flag("visibility_timeout", derived_visibility_s)),
             max_attempts=int(flag("max_attempts", cls.max_attempts)),

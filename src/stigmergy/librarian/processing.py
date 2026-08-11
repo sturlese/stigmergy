@@ -88,6 +88,7 @@ from stigmergy.librarian import (
     edits,
     filing_port,
     gates,
+    gather,
     gitcmd,
     report,
 )
@@ -559,6 +560,27 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
     reset-and-retry tail exists once rather than once per way a pass can be refused.
     """
     settings = deps.settings
+    # **Which SHAPE of the ordinary flow this backend answers** (ADR 033) — DECLARED by the
+    # backend (`filing_port.FilingAgent.structured_ordinary`), never sniffed from its class. Every
+    # branch below is behind this one boolean, and with it `False` — the `sdk` driver and the
+    # offline double — this function does byte-for-byte what it did before the structured path
+    # existed: no gather, no code-written page, the agent's own `page_path`.
+    #
+    # **Absence is REFUSED, never defaulted.** This read was `getattr(…, False)`, and a default is
+    # exactly the silence this package refuses everywhere else: a backend — or, far more likely, a
+    # WRAPPER around one, which is how `Deps.agent` is built in the eval rig and in half the suite
+    # — that does not carry the attribute would take the exploring branch while being structured,
+    # and every ordinary capture would then be refused for carrying no `page_path`. That is a
+    # misconfiguration wearing a filing-quality result's clothes. `AgentError` because
+    # `processing`'s callers already turn that family into a `failed` row naming the stage.
+    if not hasattr(deps.agent, "structured_ordinary"):
+        raise AgentError(
+            f"the configured agent ({type(deps.agent).__name__}) declares no "
+            f"`structured_ordinary`, which is a required member of the filing port "
+            f"(librarian/filing_port.py): the worker cannot tell whether to gather a context for "
+            f"it and whether it writes its own page. A backend declares it as a class attribute; a "
+            f"WRAPPER around one must copy it from what it wraps")
+    structured = bool(deps.agent.structured_ordinary)
     # The source attachment — `None` for every capture whose
     # door did not assert it, and everything it changes below is behind that `None`.
     attachment = _source_attachment(item)
@@ -580,11 +602,25 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         f"job is the SYNTHESIS: file exactly one note/decision/concept page distilling what this "
         f"document establishes, anchored through the registry as always; the system will make "
         f"your page cite the attached source.")
+    # ── the deterministic gatherer, for the backend that has no tool to go looking ──────────
+    # Built HERE and handed over as rendered prompt text, never inside a backend: the gather is a
+    # property of the FLOW, and two structured backends must share one context builder and one
+    # fence discipline. Read from the WORKTREE, which is the checkout at this item's base commit —
+    # the same data the exploring agent's own Read/Glob reached, so ADR 033 moved the reader and
+    # not the origin. Re-run on the corrective pass on purpose: `_reset_for_retry` puts the
+    # worktree back, and a second pass judging a context it can no longer see would be judging
+    # something else.
+    gathered = ""
+    if structured:
+        gathered = agent_module.render_gathered(gather.gather(
+            worktree, deps.registry, material,
+            top_k=settings.gather_top_k, excerpt_lines=settings.gather_excerpt_lines))
     try:
         run = deps.agent.run(worktree=worktree, material=material,
                              hints=(item.get("hints") or {}).get("client", {}),
                              submitted_by=item["submitted_by"], corrective=corrective,
-                             reply=item.get("reply") or "", flow_note=flow_note)
+                             reply=item.get("reply") or "", flow_note=flow_note,
+                             gathered=gathered)
     except AgentError as ex:
         # A pass that died mid-run still spent real money — `agent._priced` attached the SDK's
         # figure to the fault (0.0 for a timeout, honestly: no ResultMessage ever arrived).
@@ -616,6 +652,37 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
                 f"worktree; nothing was filed and nothing was committed")
         return _triage(item, deps, outcome), [], outcome
 
+    # ── CODE writes the page, on the structured path (ADR 033) ──────────────────────────────
+    # The meeting flow's division of labour, one entry point over: the agent decided and drafted,
+    # everything about a PAGE — the filename, the folder, the frontmatter, the H1 — is built here.
+    # Placed BEFORE the `GateContext` is built and before `edits.apply_declared`, which is the same
+    # position the agent's own write occupied on the exploring path: from here down, every line of
+    # this function is unaware of which shape produced the page, and the stamp, the eight gates and
+    # the cross-check judge code's construction exactly as they judged the agent's.
+    if structured:
+        page_findings = _require_page_content(outcome)
+        if page_findings:
+            # RETURNED, not raised — the same road `_write_ordinary_page`'s own refusals take three
+            # lines below, and the road this function's docstring already promised ("a non-`None`
+            # result is TERMINAL... otherwise `findings` is what the corrective brief is built
+            # from"). Raising `OutcomeShapeError` reached the retry too, but through
+            # `_run_in_worktree`'s `except`, which sets `outcome = None` — so a capture whose
+            # material had tried to steer the librarian AND whose account was shape-refused lost
+            # the recorded steering attempt entirely: `_refuse` composes its notes from
+            # `_injection_categories(outcome)`, and `None` has no findings. Two refusals from the
+            # same function, three lines apart, must not disagree about how they travel.
+            return None, page_findings, outcome
+        written_page = _write_ordinary_page(worktree, outcome, created=deps.as_of())
+        if isinstance(written_page, list):
+            # A collision, an uncreatable type or an unnameable title: nothing was written, so this
+            # takes the SAME corrective-retry road every other finding takes
+            # (`_write_meeting_pages`' precedent).
+            return None, written_page, outcome
+        # The plan's own `path` is deliberately NOT carried forward. `_file` reads `page_path` off
+        # the DIFF and never off an account (its docstring carries the argument), and code's own
+        # plan is an account like any other from that check's point of view — taking the path the
+        # diff proves is what keeps the two honest if this writer ever has a bug.
+
     # With the attachment ON, the lane widens by exactly the attachment's own folder — the
     # same per-flow, on-the-context widening the meeting flow does (`GateContext.write_prefixes`'s
     # own comment), so every ordinary capture keeps the unwidened defaults.
@@ -635,7 +702,12 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin, **lane_kwargs)
 
     if not ctx.entries:
-        raise AgentError("the agent wrote nothing and did not park the capture")
+        # Unreachable on the structured path — code has just written a page — so the sentence names
+        # the right actor for the path where it CAN fire, rather than sending an operator after a
+        # model for a fault in `_write_ordinary_page`.
+        raise AgentError("code wrote nothing for a capture the agent decided to file"
+                         if structured else
+                         "the agent wrote nothing and did not park the capture")
 
     # ── code's own additive edits, from the agent's DECLARATION ──────────────────────
     # The agent wrote only new files; the reciprocal links and callouts it asked for on
@@ -678,6 +750,189 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
                       source_pages=tuple(written_sources["paths"]) if written_sources else ()),
                 [], outcome)
     return None, findings, outcome
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# CODE writes the ordinary flow's ONE page, when the account carried its content home (ADR 033).
+#
+# The meeting flow's writers (`_write_meeting_pages`, `_build_decision_page`) applied to the
+# entry point that files one page: the agent decides the placement, the anchor and the prose;
+# everything about a PAGE is built here. The confinement argument is what changes shape — on the
+# exploring path a hostile write is stopped by an allow-list in a permission hook, and here there
+# is no write to stop. Code puts the page where `page.FOLDER_BY_TYPE` says a page of that type
+# goes, under the filename the title spells, and nothing in the account can name a path at all.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+
+def _require_page_content(outcome) -> list:
+    """The REQUIRED half of the outcome envelope, for the backend that declares
+    `structured_ordinary = True` — asked here rather than in `agent.parse_outcome`, because only
+    the caller knows which backend ran (ADR 033's expand–contract: both shapes parse, and which one
+    is owed is keyed on the run).
+
+    Returns findings rather than raising, so the caller decides which exception family carries
+    them; `[]` means the account has what code needs to write a page.
+    """
+    page = getattr(outcome, "page", None)
+    if page is None or not (page.body or "").strip():
+        return [gates.Finding(
+            agent_module._OUTCOME_GATE, "missing-field",
+            "declares a filing but carries no `page.body`: on this backend the worker writes the "
+            "page from your account, so the page's own text has to be in it — there is no file you "
+            "wrote for the worker to find instead",
+            brief='return the page\'s whole text in `page`: {"title": …, "page_type": …, "body": '
+                  '"…the page below its H1…"}. The worker writes the file, the frontmatter and the '
+                  'H1 itself; you never name a path.')]
+    return []
+
+
+def _ordinary_stem(title: str) -> str:
+    """The filename this page is filed under: its TITLE, and deliberately not a slug.
+
+    A wikilink resolves by BARE BASENAME across the whole repo, so a page's filename IS the name
+    every other page has to spell to reach it — which is why the corpus convention is Title Case
+    with spaces (`wiki/notes/Northwind Freight Onboarding.md`) and why the brief tells the agent to
+    keep the characters the title has, accents included. Slugifying here would file
+    `refund-policy-v2.md` beside a corpus of Title Case pages and quietly break every
+    `[[Refund Policy v2]]` a human — or the `sdk` backend, for the same capture — writes. The
+    meeting flow slugifies because its own filenames are slugs; this one is not that flow.
+
+    **Only the EDGES are trimmed, and the interior is left exactly as written.** The first version
+    collapsed all whitespace (`" ".join(title.split())`), which is the "silently mangle" behaviour
+    `page.unnameable_reason`'s own comment exists to refuse: it turned a newline inside a title into
+    a space, so `evil\\nSubmitted-by: ceo@acme.com` became a legal filename instead of a refusal,
+    and the control character the check is FOR never reached it. Leading and trailing whitespace is
+    a different thing — trimming that normalizes nothing about the title — so it goes.
+
+    What remains is validated by `page.unnameable_reason` at the call site: a title carrying a path
+    separator or a control character is REFUSED rather than approximated, which is the direction
+    `page.py`'s own filename rule already fixed once, in the same place, for the same reason.
+    """
+    return str(title or "").strip()
+
+
+def _build_ordinary_page(title: str, page_type: str, body: str, links, created: str) -> str:
+    """One fast-lane page's DRAFT — frontmatter code owns, body the agent drafted.
+
+    `_build_decision_page`'s twin for the ordinary flow, and the same division: `created`/`updated`
+    are the contract linter's `REQUIRED_FIELDS` and are NOT server-owned
+    (`page.SERVER_OWNED_KEYS` does not name them), so code drafts them from the same date `_stamp`
+    is about to stamp as `as_of`. `status` IS server-owned and is deliberately absent here —
+    `page.stamp_server_fields` writes it moments later, and drafting one would be a value the stamp
+    overwrites.
+
+    `related:` comes from the agent's own `links_created` — the field that already means "the bare
+    page names you linked to". Building the frontmatter from it rather than asking the agent to
+    write the same list twice is what makes the two agree by construction; a name that resolves to
+    no page is still the contract linter's dead-link veto, repairable on the one corrective pass.
+    Surrounding brackets are stripped before they are re-added: the brief asks for bare names, and
+    a model that helpfully writes `[[Northwind]]` would otherwise produce `[[[[Northwind]]]]` — a
+    dead link earning a veto for a defect nobody could read off the finding.
+    """
+    related = [f"[[{str(name).strip().strip('[]').strip()}]]"
+               for name in (links or ()) if str(name).strip().strip("[]").strip()]
+    front = [
+        f"type: {page_type}",
+        f"title: {_yaml_str(title)}",
+        f"created: {created}",
+        f"updated: {created}",
+        f"tags: [{page_type}]",
+        f"related: [{', '.join(_yaml_str(link) for link in related)}]",
+        "sources: []",
+    ]
+    body_text = (body or "").strip()
+    return "---\n" + "\n".join(front) + "\n---\n\n" + f"# {title}\n\n{body_text}\n"
+
+
+def _write_ordinary_page(worktree: str, outcome, *, created: str) -> "dict | list":
+    """Write the one page this capture files, or hand back one veto finding having written nothing.
+
+    Four refusals, in the order that spends the least: a type the fast lane may not create, a title
+    no filename can carry, a page that already exists, and a path that does not resolve inside this
+    checkout. Each returns a `list` of findings the caller routes onto the ordinary
+    corrective-retry road — the same all-or-nothing shape `_write_meeting_pages` and
+    `_write_attached_sources` use, for the same reason: a half-written worktree is one nobody can
+    reason about.
+
+    **The folder is DERIVED, never declared.** `page.folder_for` reads the one placement table
+    (`page.PAGE_TYPES`), which is what makes "the structured path writes nothing outside the lane"
+    a property of construction rather than a check: there is no field in the account that could
+    name a folder, so there is nothing for a gate to catch. `gate_zone` still judges the resulting
+    diff, which is defence in depth against a bug in this function rather than against the model.
+
+    **Deriving a path is not the same as resolving one**, though, and conflating the two is how the
+    write confinement this flow replaced was wrong three times over. `wiki/notes/X.md` is inside
+    the lane by its spelling and outside the checkout by its resolution, if `wiki/notes` is a
+    symlink somebody merged into the repo — so the last check resolves it (`page.is_inside`), and
+    `_write_new` refuses the same thing again at the moment of writing, for every writer.
+    """
+    declared_type = str(outcome.page_type or "")
+    policy = page_policy.classify_page_type(declared_type)
+    if not policy.creatable:
+        # Routed to the STEWARD, not to `failed`: a capture the librarian judges to be a governed
+        # type belongs in `triage` with the reason, and `_uncreatable_type` reads the type off
+        # `values` (the verbatim identifier this finding is about) because there is no folder to
+        # derive it from — code never made one.
+        #
+        # **`locator` is EMPTY, and that is the fix rather than an omission.** `Finding.locator`
+        # means "the PATH this finding is about" everywhere else in this module, and `_refuse`'s
+        # steering branch renders `zone.locator` straight into `report.rejected_steering(path=…)`
+        # — so putting the TYPE there showed a submitter `'entity'` where a page path belongs, in
+        # the one sentence that tells them what in their capture caused a refusal. There IS no
+        # path: this refusal happens before anything is written, precisely so none exists.
+        return [gates.Finding(
+            "zone", gates.TYPE_NOT_CREATABLE,
+            f"the account asks for a {policy.page_type or 'typeless'!r} page, which the fast lane "
+            f"cannot create: {policy.reason}",
+            locator="", values=(policy.page_type,))]
+
+    # `outcome.title`, never `outcome.page.title` — the RESOLVED single field `parse_outcome`
+    # already reconciled the two declaration sites into. Reading the sub-object here would let an
+    # account that declared both file a page whose FILENAME and whose commit subject
+    # (`_commit_message`, which reads `outcome.title`) name two different things.
+    stem = _ordinary_stem(outcome.title)
+    unnameable = page_policy.unnameable_reason(stem)
+    if unnameable:
+        return [gates.Finding(
+            agent_module._OUTCOME_GATE, "unnameable-page",
+            f"the page's title cannot be a filename: {unnameable}",
+            locator=stem)]
+
+    path = f"{policy.folder}/{stem}.md"
+    if page_policy.path_key(path) in page_policy.path_keys(gitcmd.tracked_paths(worktree)):
+        # `path_key`, not `==`: the deployment filesystem folds case and Unicode normalization, so
+        # a re-spelled title names an EXISTING page — the exact bypass `agent.confined_write`'s own
+        # docstring records, closed here for the writer that replaced it.
+        return [gates.Finding(
+            agent_module._OUTCOME_GATE, "existing-page-collision",
+            f"a page already exists at {path} — this material may already be filed, or the title "
+            f"needs to be the one that distinguishes this page from it",
+            locator=path,
+            brief=f"`{path}` already exists and the worker never writes over a page. If this "
+                  f"material genuinely adds to that page, declare an `overlap` edit against it and "
+                  f"file this one under a title that says what is new; if it IS that page, park "
+                  f"the capture instead of filing a second copy.")]
+
+    if not page_policy.is_inside(worktree, path):
+        # `_write_new` refuses this too, and would RAISE — but a raise here would finish the item
+        # as a system fault over a path built from an agent-supplied TITLE, which is the one input
+        # on this road a corrective pass could change at all. So the readable refusal comes first,
+        # and the exception stays as the guard covering every OTHER writer.
+        #
+        # `repairable=False` even so: the escape is a symlinked DIRECTORY component somebody merged
+        # into the repo (`wiki/notes` itself linked elsewhere), not anything about this title —
+        # every page of that type would land the same way, so spending the retry buys the same
+        # refusal one agent run later (`gates.unrepairable`'s own rule).
+        return [gates.Finding(
+            agent_module._OUTCOME_GATE, "outside-worktree",
+            f"{path} does not resolve inside this capture's own checkout — a directory on that "
+            f"path is a symlink out of it; nothing was written",
+            locator=path, repairable=False)]
+
+    _write_new(worktree, path,
+               _build_ordinary_page(stem, policy.page_type, outcome.page.body,
+                                    outcome.links_created, created))
+    return {"path": path, "stem": stem}
 
 
 # ── the refused diff, preserved ───────────────────────────────────────────────────────────────
@@ -1010,7 +1265,14 @@ def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
     # and cannot reach" that work. Routed as steering, they told the SUBMITTER their
     # material had tried to write outside the lane — naming a colleague's page — for
     # a fault this module's own docstring classifies as a system fault.
-    zone = next((f for f in veto if f.gate == "zone" and f.repairable), None)
+    # `f.locator` too, not only `f.repairable`: this selector's output goes straight into
+    # `report.rejected_steering(path=…)`, so a zone finding that names no PATH has nothing
+    # for that sentence to be about. `_write_ordinary_page`'s `type-not-creatable` is the
+    # producer that has none — it refuses BEFORE writing, so no path exists — and it carries
+    # its type in `values` instead. Skipping it here is what keeps it on its own road
+    # (`_uncreatable_type`, a steward park) rather than being rendered to a submitter as a
+    # page path spelled `'entity'`.
+    zone = next((f for f in veto if f.gate == "zone" and f.repairable and f.locator), None)
     categories = _injection_categories(outcome)
     if zone and categories:
         # The veto fired AND the material carries a traceable steering attempt: content-
@@ -1068,7 +1330,12 @@ def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
                   report.failed_system(attempts=item.get("attempts", 1),
                                        agent_attempts=agent_attempts,
                                        stage=worst.gate if worst else "gates",
-                                       reason=worst.message if worst else "unknown"),
+                                       reason=worst.message if worst else "unknown",
+                                       # Into the REPORT, not only onto the `Result` — the report
+                                       # is what `queue.finish` persists and `brain_submissions`
+                                       # returns, and this was the one road of the four in this
+                                       # function that dropped them (see `report.failed_system`).
+                                       findings=notes),
                   findings=notes, diagnostics_path=diagnostics_path)
 
 
@@ -1107,7 +1374,14 @@ def _uncreatable_type(veto) -> str:
     if kinds != {uncreatable}:
         return ""
     finding = next(f for f in veto if (f.gate, f.code) == uncreatable)
-    judged = page_policy.type_for_folder(finding.locator)
+    # TWO producers now, and they know the type by different routes. `gate_zone` judges a page the
+    # agent already WROTE, so the folder it landed in supplies the type and nothing is judged
+    # (below). `_write_ordinary_page` refuses BEFORE writing anything, so there is no folder to
+    # invert — it carries the declared type verbatim in `values`, the field that exists for a
+    # reader comparing identity rather than displaying it. Reading `values` first keeps that
+    # producer from having to invent a folder for a page it deliberately did not create.
+    judged = (finding.values[0] if finding.values
+              else page_policy.type_for_folder(finding.locator))
     # And the derived type must still be one the fast lane may not create. The gate's contract
     # already says so, and asking the shared table again is what keeps this routing from inventing
     # a park the moment the two disagree: "this reads like a note page, and note needs a steward's
@@ -2115,10 +2389,42 @@ def _build_meeting_page(outcome, title: str, source_stem: str, decision_stems: l
 
 
 def _write_new(worktree: str, rel_path: str, text: str) -> None:
+    """Create one brand-new page inside `worktree`, or raise `WorktreeError` naming the stage.
+
+    **THE write every page-building flow goes through** — `_write_ordinary_page`,
+    `_write_meeting_pages` and `_write_attached_sources` — which is why both guards live here
+    rather than at three call sites that could come to disagree:
+
+    * **containment.** `page.is_inside` RESOLVES the path before the write, so a directory
+      component that is a symlink out of the checkout (a `wiki/playbooks` link merged into the
+      repo) is refused rather than written through, as the worker. `open_for_new`'s `O_NOFOLLOW`
+      only ever sees the leaf, which is the same blind spot `edits.validate`'s own docstring
+      records — the two halves are not redundant, and neither implies the other.
+    * **`OSError` becomes a NAMED stage.** `os.makedirs` and `open_for_new` raise the ordinary
+      filesystem family (`ENAMETOOLONG` for an over-long stem, `EEXIST` from `O_EXCL`, `ENOSPC`),
+      and none of those is a `LibrarianError` — so one escaped every handler in these flows and
+      landed in `worker.process_next`'s generic catch as stage `unexpected`, with the item's spend
+      already banked and the worktree half-written. `_decision_stems`' own docstring records that
+      exact escape happening once. A named stage is the difference between "the librarian broke"
+      and a fault an operator can read.
+
+    Neither raise carries a repair the agent could perform, which is why this is an exception
+    rather than a `Finding`: the path a page lands on is CODE's, on every one of these flows.
+    """
+    if not page_policy.is_inside(worktree, rel_path):
+        raise WorktreeError(
+            f"refusing to write {rel_path}: it does not resolve inside this capture's own "
+            f"checkout — a directory component on that path is a symlink out of the worktree")
     full = os.path.join(worktree, rel_path)
-    os.makedirs(os.path.dirname(full), exist_ok=True)
-    with page_policy.open_for_new(full) as f:
-        f.write(text)
+    try:
+        os.makedirs(os.path.dirname(full), exist_ok=True)
+        with page_policy.open_for_new(full) as f:
+            f.write(text)
+    except OSError as ex:
+        # The class name and the path only — never `str(ex)`, which on some platforms carries a
+        # filesystem path this package does not put on the wire (`worker.process_next`'s own rule).
+        raise WorktreeError(
+            f"could not write {rel_path} ({ex.__class__.__name__}); nothing was committed") from ex
 
 
 def _write_meeting_pages(worktree: str, outcome, meeting_meta: dict, material: str, *,
@@ -2652,7 +2958,14 @@ def _refuse_meeting(item, findings, outcome, *, agent_attempts: int = 0,
     # flow's agent could have been). A repairable zone finding — `outside-lane`,
     # `type-not-creatable` — still routes here, because there the diff really could be the agent
     # acting on injected text.
-    zone = next((f for f in veto if f.gate == "zone" and f.repairable), None)
+    # `f.locator` too, not only `f.repairable`: this selector's output goes straight into
+    # `report.rejected_steering(path=…)`, so a zone finding that names no PATH has nothing
+    # for that sentence to be about. `_write_ordinary_page`'s `type-not-creatable` is the
+    # producer that has none — it refuses BEFORE writing, so no path exists — and it carries
+    # its type in `values` instead. Skipping it here is what keeps it on its own road
+    # (`_uncreatable_type`, a steward park) rather than being rendered to a submitter as a
+    # page path spelled `'entity'`.
+    zone = next((f for f in veto if f.gate == "zone" and f.repairable and f.locator), None)
     categories = _injection_categories(outcome)
     if zone and categories:
         return Result(schema.REJECTED, "",
@@ -2703,5 +3016,10 @@ def _refuse_meeting(item, findings, outcome, *, agent_attempts: int = 0,
                   report.failed_system(attempts=item.get("attempts", 1),
                                        agent_attempts=agent_attempts,
                                        stage=worst.gate if worst else "gates",
-                                       reason=worst.message if worst else "unknown"),
+                                       reason=worst.message if worst else "unknown",
+                                       # Into the REPORT, not only onto the `Result` — the report
+                                       # is what `queue.finish` persists and `brain_submissions`
+                                       # returns, and this was the one road of the four in this
+                                       # function that dropped them (see `report.failed_system`).
+                                       findings=notes),
                   findings=notes, diagnostics_path=diagnostics_path)

@@ -16,7 +16,21 @@ capture_queue row (claimed, fenced by `attempts`)
   ├─ secrets / PII over the MATERIAL  gitleaks + 4 patterns           -> rejected, whole
   │
   └─ ephemeral git worktree of the knowledge repo
-       │  agent (Claude Agent SDK, skill from the knowledge repo)  ->  a NEW .md, and an outcome
+       │
+       │  ── the agent step has TWO shapes, and a backend DECLARES which one it answers ──
+       │     (`filing_port.FilingAgent.structured_ordinary`; the brief is the same for both,
+       │      only the ENVIRONMENT preamble in front of it differs — ADR 033)
+       │
+       │  EXPLORING (`sdk`, `double`)          STRUCTURED (`pydantic`)
+       │  ────────────────────────────         ─────────────────────────────────────────────
+       │                                       code gathers the context (gather.py: entities,
+       │                                         candidates + excerpts, link neighbourhood,
+       │                                         the wikilink vocabulary — from the CHECKOUT)
+       │  agent explores with Read/Glob/Grep    agent holds NO tool and explores nothing
+       │  agent writes a NEW .md itself         agent returns the page's own TEXT in `page`
+       │  outcome names `page_path`             CODE writes the page: filename from the title,
+       │                                         folder from the type, frontmatter, the H1
+       │
        │  code applies the outcome's DECLARED edits to existing pages
        │  code writes the attached `sources/` page(s), when the door asserted one (see below)
        │  code stamps the server-owned frontmatter
@@ -25,6 +39,10 @@ capture_queue row (claimed, fenced by `attempts`)
        │                 (no retry at all when no veto names a repair the agent can perform)
        └─ commit (librarian GitHub App) -> push (rebase-and-retry) -> filed, page@sha
 ```
+
+Everything below the two columns is shared, byte for byte: one stamp, the same eight gates, the
+same "exactly one new page per capture" cross-check, one commit path. That is what keeps two shapes
+of one flow from becoming two flows.
 
 ## Where it sits
 
@@ -36,6 +54,12 @@ importable from anywhere, [ADR 026](../decisions/026-the-purge.md) D4). It must 
 queue, a durable row, so a slow agent run can never happen inside an HTTP request. Both edges are
 asserted by `tests/test_architecture.py`.
 
+One further edge is **declared**: `stigmergy.index.corpus`, reached by `edits.py` (the zone list)
+and by `gather.py` (the corpus parse). It is a pure repo parser — frontmatter and the wikilink
+graph over a directory, no database connection and no ACL surface — and the same reach
+`stigmergy.views` already declares for the same module. Nothing here touches `pages_index` itself;
+`stigmergy.index.store`, the connection, is reached by `cli.py` alone.
+
 | Module | Does |
 |---|---|
 | `cli.py` | `stigmergy-librarian` — `once`, `run`, `status` |
@@ -46,13 +70,14 @@ asserted by `tests/test_architecture.py`.
 | `processing.py` | one item, end to end: dedup → worktree → agent → edits → stamp → gates → commit. `process_item` is the ordinary flow; `process_meeting_item` is a genuine second flow (a page SET); `process_drive_item` converts the fetched bytes to text and then delegates to `process_item` itself |
 | `base_inputs.py` | the three repo-sourced inputs, read at the item's own base commit |
 | `filing_port.py` | the PORT — the two calls `processing.py` makes, the `AgentRun` envelope, the fault contract, the per-flow side-effect rules |
-| `agent.py` | the SDK backend, the options it is confined by, the outcome contract |
+| `agent.py` | the SDK backend, the options it is confined by, the outcome contract, and the two preambles the brief is injected under |
+| `gather.py` | the deterministic gatherer: what the structured ordinary flow is HANDED instead of exploring — a pure function of (worktree, registry, material) ([ADR 033](../decisions/033-structured-filing-flow.md)) |
 | `double.py` | the offline double: misbehaves on demand, behaves on ordinary material |
-| `pydantic_backend.py` | the pydantic-ai backend: one structured call, no tools, MEETING flow only ([ADR 032](../decisions/032-filing-port-and-pricing-seam.md)) |
+| `pydantic_backend.py` | the pydantic-ai backend: one structured call per flow, no tools, BOTH flows ([ADR 032](../decisions/032-filing-port-and-pricing-seam.md), [ADR 033](../decisions/033-structured-filing-flow.md)) |
 | `pricing.py` | model id → $/MTok, for the backends that report tokens instead of dollars |
 | `gates.py` | the deterministic vetoes over the diff |
 | `edits.py` | code's own additive edits, from the agent's declaration |
-| `page.py` | the page vocabulary — SEVEN known types, of which the fast lane may CREATE three — their folders, the server-owned frontmatter stamp, path identity (case/Unicode-fold) |
+| `page.py` | the page vocabulary — SEVEN known types, of which the fast lane may CREATE three — their folders, the server-owned frontmatter stamp, path identity (case/Unicode-fold), and what a filename may be (`unnameable_reason`, bounded in UTF-8 BYTES) |
 | `gitcmd.py` | worktrees, the diff, the commit, the push |
 | `githubapp.py` | app JWT → installation token → push URL; the commit identity |
 | `acl_rules.py` | audience labels from the ordered path rules, fail-closed |
@@ -219,11 +244,13 @@ landmine.
 |---|---|---|
 | `STIGMERGY_REPO` (`--repo`) | `../stigmergy-brain` | the knowledge-repo checkout the worktrees branch from |
 | `STIGMERGY_LIBRARIAN_BRANCH` (`--branch`) | `main` | the branch the fast lane commits to |
-| `STIGMERGY_LIBRARIAN_BACKEND` (`--backend`) | `double` | `sdk` runs the real agent; `double` is offline; `pydantic` serves the MEETING flow only and is refused for a worker (see below) |
-| `STIGMERGY_LIBRARIAN_MODEL` | `claude-sonnet-5` | a Sonnet-class model is right for routine filing. `sdk` takes the bare name; `pydantic` requires a provider-prefixed one (`openai:gpt-5.6-terra`) |
+| `STIGMERGY_LIBRARIAN_BACKEND` (`--backend`) | `double` | `sdk` runs the real Claude agent, which EXPLORES the checkout; `double` is offline; `pydantic` runs both flows STRUCTURED — no tools, a gathered context, code writes the page (see below) |
+| `STIGMERGY_LIBRARIAN_MODEL` | `claude-sonnet-5` | a Sonnet-class model is right for routine filing. `sdk` takes the bare name; `pydantic` requires a provider-prefixed one (`anthropic:claude-sonnet-5`) |
 | `STIGMERGY_LIBRARIAN_PRICING` | — | `{"<model>": [input, cached input, output]}`, dollars per MILLION tokens, merged per id over `librarian/pricing.py`'s own table. Only the backends that report tokens rather than dollars read it |
-| `STIGMERGY_LIBRARIAN_MAX_TURNS` | 30 | per-item agent bound |
-| `STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS` | 120 | per-item agent bound (enforced by us, not the SDK) |
+| `STIGMERGY_LIBRARIAN_MAX_TURNS` | 30 | per-item agent bound (the EXPLORING shape only — a structured call has no loop) |
+| `STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS` | 120 | per-item agent bound (enforced by us, not the SDK; the EXPLORING shape only) |
+| `STIGMERGY_LIBRARIAN_GATHER_TOP_K` | 12 | the STRUCTURED shape only: how many existing pages the gatherer offers the model as overlap candidates |
+| `STIGMERGY_LIBRARIAN_GATHER_EXCERPT_LINES` | 20 | the STRUCTURED shape only: how many lines of each candidate it shows |
 | `STIGMERGY_LIBRARIAN_TIMEOUT_S` | 300 | per-item wall clock (enforced by us) |
 | `STIGMERGY_LIBRARIAN_DEDUP_WINDOW_S` | 600 | the retry-collapse window |
 | (`--poll-interval`) | 3.0 | `run` only; must be > 0 |
@@ -269,24 +296,31 @@ The agent step is a named, typed port — `librarian.filing_port.FilingAgent`, t
 (`run` for an ordinary capture, `run_meeting` for a transcript), one `AgentRun` envelope back, one
 fault contract. Three implementations answer it, and `STIGMERGY_LIBRARIAN_BACKEND` picks one:
 
-| Backend | Flows | Model string | Cost |
-|---|---|---|---|
-| `sdk` | every flow | bare (`claude-sonnet-5`) — the Claude Agent SDK resolves it | the SDK prices each run and the figure is passed through |
-| `double` | every flow | none — no model runs | `0.0`, and it says so |
-| `pydantic` | the **meeting flow only** | provider-prefixed (`openai:gpt-5.6-terra`) — pydantic-ai resolves it | computed from tokens through `librarian/pricing.py` |
+| Backend | Flows | Ordinary shape | Model string | Cost |
+|---|---|---|---|---|
+| `sdk` | every flow | **exploring** — Read/Glob/Grep, writes the page itself | bare (`claude-sonnet-5`) — the Claude Agent SDK resolves it | the SDK prices each run and the figure is passed through |
+| `double` | every flow | **exploring** — writes the page through the same confinement rule | none — no model runs | `0.0`, and it says so |
+| `pydantic` | every flow | **structured** — no tools, a gathered context, code writes the page | provider-prefixed (`anthropic:claude-sonnet-5`) — pydantic-ai resolves it | computed from tokens through `librarian/pricing.py` |
 
-**`pydantic` is refused for a worker, on purpose.** A worker's queue carries ordinary captures too,
-so a backend that can file only one `kind` would burn deliveries one row at a time while looking
-configured — `worker.startup_checks` refuses it before the first claim and names the two backends
-that serve every flow. What it does serve is the meeting-only measurement rig
-(`evals/run_filing.py --backend pydantic --kinds meeting`), which is the only caller that may pass
-`startup_checks(..., meeting_only=True)`. That path validates what the backend actually needs and
-refuses each one out loud: a model string with no provider prefix (pydantic-ai reads a bare name as
-an OpenAI model, so inheriting it silently would file meetings through a provider nobody chose), a
-model with no configured price, and a missing provider key (`openai:`→`OPENAI_API_KEY`,
-`anthropic:`→`ANTHROPIC_API_KEY`, `google-gla:`→`GEMINI_API_KEY`; an unrecognized prefix is a
-warning, not a refusal — the adapter stays provider-agnostic). Design record and the plan for
-lifting the limitation: [ADR 032](../decisions/032-filing-port-and-pricing-seam.md).
+**A backend DECLARES its ordinary shape; nothing infers one.** `FilingAgent.structured_ordinary` is
+a class attribute `processing._one_pass` reads, and it decides three things: whether the gatherer
+runs before the call, whether the account is expected to CARRY the page's text (`Outcome.page`) or
+to name a path it wrote (`Outcome.page_path`), and whether code writes the page. A type test would
+put the branch inside the worker's knowledge of which classes exist, so a fourth backend would take
+the wrong road by being the wrong class rather than by declaring the wrong thing.
+
+**`pydantic` serves a worker now, and the refusal that said otherwise is gone.** M1 refused it
+outright, because a worker's queue carries ordinary captures too and a backend serving one `kind`
+would have burned deliveries one row at a time while looking configured
+([ADR 032](../decisions/032-filing-port-and-pricing-seam.md) D3). It serves both flows since
+[ADR 033](../decisions/033-structured-filing-flow.md), so what `worker.startup_checks` validates is
+what was always about the BACKEND, each refused out loud: a model string with no provider prefix
+(pydantic-ai reads a bare name as an OpenAI model, so inheriting it silently would file through a
+provider nobody chose), a model with no configured price, and a missing provider key
+(`openai:`→`OPENAI_API_KEY`, `anthropic:`→`ANTHROPIC_API_KEY`, `google-gla:`→`GEMINI_API_KEY`; an
+unrecognized prefix is a warning, not a refusal — the adapter stays provider-agnostic). The
+librarian skill is proven at the base commit for `sdk` and `pydantic` alike: both inject it, and
+only the ENVIRONMENT preamble in front of it differs.
 
 **A spelling belongs to a backend, and BOTH mistakes are refused.** The mirror of the rule above is
 enforced too: `backend=sdk` with a provider-prefixed id (`openai:gpt-5.6-terra`) is refused at
@@ -302,6 +336,52 @@ at startup instead, naming the id, the `STIGMERGY_LIBRARIAN_PRICING` line that f
 date the table was last set by a human (`AS_OF`). The table is configuration for the same reason
 model ids are: prices move, and an introductory rate expires on a date nobody wants to learn from a
 bill.
+
+### The gatherer — what the structured shape is handed instead of a search
+
+`librarian/gather.py` is a pure function of `(worktree, registry, material)` plus `gather_top_k` and
+`gather_excerpt_lines`. It runs before the model call on the structured shape only, and it produces
+four things:
+
+- **the entities the material names**, resolved through the registry's own alias map (never a second
+  matching rule — `gates.registry_candidates` is the one reading of "which entities exist"), each
+  with its registry id, its aliases and the path of its own page when this brain has one;
+- **the top-K candidate pages** it lexically overlaps with, each with a bounded excerpt and its own
+  outbound link names. The score is an integer: `3 × title + 2 × its links + 1 × body` term overlap,
+  ties broken by path. The corpus decides what a stopword is — a term more than half the pages carry
+  is dropped rather than counted, so nobody maintains a word list for a corpus that need not be in
+  English;
+- **the link neighbourhood**, one hop out from those candidates and the entity pages. This is the
+  half a lexical score cannot find: a capture may share no vocabulary with the page it belongs
+  beside;
+- **the wikilink vocabulary** — every page name in the repo, read through `edits.page_names`, which
+  is the SAME function `edits.validate` later answers "does this link resolve" with. One reading, so
+  the gatherer cannot offer a name the edit validator would refuse. It is bounded, and it says so
+  (`link_names_total`), because a truncated list would read as proof that a name does not exist.
+
+**It reads the checkout, never `pages_index`.** The worktree is the knowledge repo at this item's
+base commit — the same data the exploring agent's own `Read`/`Glob` reached — so ADR 033 moved the
+reader and not the data's origin. Reading the index would put a write-path worker on the read path's
+ACL-governed table and would need an exception it does not need. There is no semantic-similarity
+gathering either; reopening that is a design with an ACL question in it, not a patch.
+
+**"The same data" holds because of one filter.** The agent's own reads were resolved before being
+allowed (`page.is_inside`); `corpus.load_pages` has no such notion, so `gather._confined` drops
+every page that is a symlink or does not resolve inside the worktree, and the wikilink-vocabulary
+walk gets the same treatment. Without it the structured shape would read more of the filesystem
+than the shape it replaces. A dropped page is logged at WARNING — a symlinked page inside a
+knowledge repo has no legitimate producer in this system.
+
+Page excerpts are captured material coming back into a prompt, so they render through the same
+UNTRUSTED-DATA fence the material does. The registry half is rendered outside it, and what makes
+that safe is the JSON escaping plus `text.sanitize` — not provenance: the entity ids and names are
+server-owned, but each entity's page PATH is a filename a person chose.
+
+**The whole block is bounded** (`agent.MAX_GATHERED_CHARS`), not only field by field: `top_k`,
+`gather_excerpt_lines` and the per-line clamp multiply, and two of the three are operator-tunable.
+Over the ceiling, the lowest-ranked candidates are dropped whole — never a JSON value cut in half —
+and the block says so, because a model told "these are the candidates" about a silently shortened
+list is being misled about its own context.
 
 ### `STIGMERGY_LIBRARIAN_REFUSED_DIFF_DIR` — the refused diff, preserved
 

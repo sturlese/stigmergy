@@ -24,9 +24,14 @@ treats its test suite as the contract.
   with an env override that refuses non-finite, negative and zero-output rates — an unpriced model
   is a loud startup refusal, never a silent `$0.00`).
 - **A pydantic-ai meeting backend** (`STIGMERGY_LIBRARIAN_BACKEND=pydantic`) — the meeting flow
-  runs as one structured, tool-less call on any provider-prefixed pydantic-ai model string. Meeting
-  flow only in this milestone: a worker configured with it refuses at startup by name, and only the
-  eval rig's meeting-only runs may use it. The ordinary flow stays on the Claude Agent SDK.
+  runs as one structured, tool-less call on any provider-prefixed pydantic-ai model string.
+- **The structured ordinary flow** (ADR 033) — a deterministic gatherer (`librarian/gather.py`)
+  reads the checkout at the base commit and hands the model candidates, an entity view and the
+  link neighbourhood instead of live `Read`/`Glob`/`Grep` exploration; the agent returns the page's
+  own text in its account and code writes it, confined by construction rather than by a permission
+  hook. The pydantic-ai backend now serves both flows, so the meeting-only restriction above (and
+  its eval-rig escape) is gone; the Claude Agent SDK remains the staging default and the only path
+  that still explores.
 
 Sixteen bug-sweep fixes and one documentation correction since `0.1.0`, none of them behaviour
 changes in the ADR sense — each closes a gap between what the code promised and what it did. Grouped
