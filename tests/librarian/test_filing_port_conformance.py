@@ -18,7 +18,18 @@ prove each half of that comparison can actually fail.
 does run the two calls — against an offline model, a scratch brief and a real scratch git repo,
 because what a backend HANDS BACK cannot be read off a signature. Neither agent framework is
 loaded by any of it: the `pydantic` backend imports its own inside the method, and no test here
-reaches the SDK branch.
+reaches the SDK branch. **Every `pydantic` run below is driven through an injected
+`model_factory`**, never through the configured id — a run that resolved the real model would
+reach the network on any machine that happens to export a provider key, which is the one way a
+keyless suite stops being keyless by accident rather than by decision.
+
+**The port grew a third member in ADR 033** and it is not a method: `structured_ordinary`, the
+declaration `processing._one_pass` branches on. A `runtime_checkable` Protocol counts an annotated
+attribute as a member, so `isinstance` now checks it too — which is why every hand-written stand-in
+below declares it. That is not bookkeeping: a stand-in that satisfied the port WITHOUT the
+declaration would be a backend the worker silently reads as `False` and hands no gathered context
+to, and the tests written around it would be measuring the exploring flow while claiming the
+structured one.
 """
 import dataclasses
 import inspect
@@ -32,11 +43,20 @@ from stigmergy.librarian import config, filing_port
 from stigmergy.librarian.double import DoubleAgent
 from stigmergy.librarian.errors import AgentError, LibrarianConfigError, OutcomeShapeError
 from stigmergy.librarian.filing_port import AgentRun, FilingAgent
-from stigmergy.librarian.pydantic_backend import PydanticMeetingAgent
+from stigmergy.librarian.pydantic_backend import (
+    FilingAccount,
+    OrdinaryAnchoring,
+    OrdinaryPage,
+    PydanticMeetingAgent,
+)
 from tests.librarian import support
 
 # The two calls `processing.py` makes on `Deps.agent`, and the only two it may make.
 PORT_METHODS = ("run", "run_meeting")
+
+# The port's non-method member (ADR 033) — asserted as part of the protocol's own attribute set
+# below rather than assumed, because `isinstance` behaviour depends on it being one.
+PORT_DECLARATIONS = ("structured_ordinary",)
 
 # Every implementation the port claims, named by the backend id that dispatches to it. Derived from
 # `agent.BACKENDS` in the test below rather than trusted here: a fourth backend added to that tuple
@@ -117,31 +137,162 @@ def test_an_unknown_backend_fails_fast_rather_than_falling_through_to_one_of_the
         assert name in message
 
 
-# ── isinstance: the two methods are present ────────────────────────────────────────────────────
+# ── isinstance: the two methods AND the one declaration are present ────────────────────────────
 def test_every_backend_satisfies_the_runtime_checkable_port(backend):
     assert isinstance(backend, FilingAgent)
+
+
+def test_the_port_really_does_carry_the_declaration_isinstance_now_depends_on():
+    """The blindness guard for everything below it. `structured_ordinary` is an ANNOTATION on the
+    Protocol, and a `runtime_checkable` Protocol counts annotated names among its members — which
+    is the only reason the stand-ins below have to declare one. If it were ever demoted to a plain
+    comment, `isinstance` would stop checking it, every stub here would still pass, and a backend
+    that never declared its shape would sail through the port claiming conformance it does not
+    have.
+    """
+    import typing
+
+    members = typing.get_protocol_members(FilingAgent)
+    assert set(PORT_METHODS) | set(PORT_DECLARATIONS) == members
+
+
+@pytest.mark.parametrize("name", sorted(BACKEND_CLASSES))
+def test_every_backend_declares_which_shape_of_the_ordinary_flow_it_answers(name):
+    """The declaration is read off the backend by `processing._one_pass`, so a backend that omits
+    it is silently read as the EXPLORING shape: no gather, no code-written page, and an account
+    whose `page.body` nothing requires. `getattr(..., False)` is the production default and it is
+    the safe one — which is exactly why the value has to be pinned per backend here rather than
+    left to that fallback.
+
+    The values themselves, not merely their presence: the SDK driver and the offline double
+    explore, the pydantic backend is handed its context.
+    """
+    expected = {"sdk": False, "double": False, agent_module.PYDANTIC_BACKEND: True}[name]
+    declared = BACKEND_CLASSES[name].structured_ordinary
+    assert declared is expected, (
+        f"{BACKEND_CLASSES[name].__name__}.structured_ordinary is {declared!r} — `processing` "
+        f"branches the whole ordinary flow on this one boolean")
+
+
+# ── the WRAPPERS, which is where a declared port member actually gets swallowed ────────────────
+# A backend is written once and read by everybody; a wrapper is written per test file, per rig and
+# per instrument, by somebody thinking about the one thing they are counting. That asymmetry is why
+# the port's newest member went missing in ten places at once and in the eval rig — and why the
+# refusal in `processing._one_pass` is a REFUSAL rather than a `getattr(..., False)`: a default
+# would have made every one of those wrappers report the exploring shape while wrapping a
+# structured backend, and the paid golden would have scored that as filing quality.
+#
+# The two wrappers that ship OUTSIDE a test file are pinned here, as objects, against the real port.
+_WRAPPERS = ("evals.run_filing.CountingAgent", "tests.librarian.support.DelayedAgent")
+
+
+def _wrapped(name: str, inner):
+    from evals.run_filing import CountingAgent
+    from tests.librarian.support import DelayedAgent
+
+    return {"evals.run_filing.CountingAgent": lambda: CountingAgent(inner),
+            "tests.librarian.support.DelayedAgent": lambda: DelayedAgent(inner, 0.0)}[name]()
+
+
+@pytest.mark.parametrize("name", _WRAPPERS)
+@pytest.mark.parametrize("declares", [True, False], ids=["structured", "exploring"])
+def test_a_shipped_wrapper_forwards_the_shape_its_inner_backend_declares(name, declares):
+    """**Forwarded, not defaulted, and asserted for BOTH values.** A wrapper that hardcoded `False`
+    would pass a test written only against the double — which is the shape almost every rig wraps —
+    and would silently take the exploring branch behind the structured backend. So each wrapper is
+    built over an inner that declares `True` and over one that declares `False`, and the value has
+    to come back out.
+    """
+    class Inner:
+        structured_ordinary = declares
+
+        def run(self, **kwargs):
+            return AgentRun()
+
+        def run_meeting(self, **kwargs):
+            return AgentRun()
+
+    assert _wrapped(name, Inner()).structured_ordinary is declares
+
+
+@pytest.mark.parametrize("name", _WRAPPERS)
+def test_a_shipped_wrapper_around_a_real_backend_is_itself_a_filing_agent(name):
+    """The wrapper is what `processing.Deps.agent` actually holds, so the port claim has to be true
+    of the WRAPPER and not only of what it wraps. `isinstance` covers all three members now — two
+    methods and the declaration — which is exactly why this is worth asserting on the object a
+    rig builds rather than on the class it wraps."""
+    wrapped = _wrapped(name, DoubleAgent(_settings()))
+
+    assert isinstance(wrapped, FilingAgent)
+    assert wrapped.structured_ordinary is False
+
+
+@pytest.mark.parametrize("name", _WRAPPERS)
+def test_a_wrapper_around_a_backend_that_declares_nothing_fails_at_CONSTRUCTION(name):
+    """**Where the loud failure has to land, and the whole argument for plain attribute access.**
+
+    `getattr(inner, "structured_ordinary", False)` would build the wrapper happily and hand back a
+    lie — the exploring shape, for a backend that never said so. The wrapper reads the attribute
+    directly, so a non-conforming inner raises `AttributeError` in the line that builds the rig,
+    with the test or the eval run that built it in the traceback, before a single capture is
+    claimed.
+    """
+    class Undeclared:
+        def run(self, **kwargs):
+            return AgentRun()
+
+        def run_meeting(self, **kwargs):
+            return AgentRun()
+
+    with pytest.raises(AttributeError, match="structured_ordinary"):
+        _wrapped(name, Undeclared())
 
 
 def test_a_class_missing_run_meeting_is_not_a_filing_agent():
     """The benign twin's sharp half: `isinstance` is worth running because it can fail. A backend
     that only implements the ordinary flow is exactly the half-backend the meeting dispatch would
-    meet with an `AttributeError` mid-item."""
+    meet with an `AttributeError` mid-item.
+
+    It declares `structured_ordinary` so the ONE thing missing is the method — a stand-in short of
+    two members would fail this assertion whichever one the port stopped caring about, and prove
+    nothing about either.
+    """
     class OrdinaryOnly:
+        structured_ordinary = False
+
         def run(self, *, worktree, material, hints, submitted_by,
-                corrective="", reply="", flow_note=""):
+                corrective="", reply="", flow_note="", gathered=""):
             return AgentRun()
 
     assert not isinstance(OrdinaryOnly(), FilingAgent)
 
 
+def test_a_class_answering_both_calls_but_declaring_no_shape_is_not_one_either():
+    """The declaration's own sharp half, and the failure it exists to catch: this stand-in answers
+    every call `processing.py` makes and would run — taking the exploring branch by default, which
+    is a shape it never claimed. The port refuses it at `isinstance` instead."""
+    class Undeclared:
+        def run(self, *, worktree, material, hints, submitted_by,
+                corrective="", reply="", flow_note="", gathered=""):
+            return AgentRun()
+
+        def run_meeting(self, *, worktree, material, meeting_meta, registry,
+                        source_page_path, corrective="", reply=""):
+            return AgentRun()
+
+    assert not isinstance(Undeclared(), FilingAgent)
+
+
 def test_a_class_answering_both_calls_is_a_filing_agent_however_it_was_written():
     """...and its benign half: conformance is STRUCTURAL. Nothing inherits, nothing registers, and
     a class written by somebody who never read `filing_port.py` conforms the moment it answers the
-    two calls — which is what lets the test doubles this suite is built on exercise the same
-    contract a live backend does."""
+    two calls and declares its shape — which is what lets the test doubles this suite is built on
+    exercise the same contract a live backend does."""
     class HandWritten:
+        structured_ordinary = False
+
         def run(self, *, worktree, material, hints, submitted_by,
-                corrective="", reply="", flow_note=""):
+                corrective="", reply="", flow_note="", gathered=""):
             return AgentRun()
 
         def run_meeting(self, *, worktree, material, meeting_meta, registry,
@@ -193,41 +344,96 @@ def test_the_optional_arguments_default_the_same_way_everywhere(backend, method)
 
 def test_the_signature_check_catches_a_positional_worktree_that_isinstance_waves_through():
     """**The sabotage twin, and the whole argument for comparing signatures at all.** This backend
-    answers both calls, so `isinstance` says yes — and its `worktree` is positional, which is
-    precisely the drift a Protocol cannot see. If the comparison above ever stops being able to
-    fail, this test goes red first."""
+    answers both calls and declares its shape, so `isinstance` says yes — and its `worktree` is
+    positional, which is precisely the drift a Protocol cannot see. If the comparison above ever
+    stops being able to fail, this test goes red first.
+
+    **Everything else mirrors the port exactly, annotations included**, so the inequality below is
+    caused by the sabotage and by nothing else. A stand-in written in shorthand would differ from
+    the port for three or four reasons at once and would keep "differing" long after the positional
+    argument was the least of them — a sabotage twin that cannot attribute its own failure is a
+    green light wearing a warning's clothes.
+    """
     class PositionalWorktree:
-        def run(self, worktree, *, material, hints, submitted_by,
-                corrective="", reply="", flow_note=""):
+        structured_ordinary = False
+
+        def run(self, worktree: str, *, material: str, hints: dict, submitted_by: str,
+                corrective: str = "", reply: str = "", flow_note: str = "",
+                gathered: str = "") -> AgentRun:
             return AgentRun()
 
-        def run_meeting(self, worktree, *, material, meeting_meta, registry,
-                        source_page_path, corrective="", reply=""):
+        def run_meeting(self, worktree: str, *, material: str, meeting_meta: dict, registry,
+                        source_page_path: str, corrective: str = "",
+                        reply: str = "") -> AgentRun:
             return AgentRun()
 
     assert isinstance(PositionalWorktree(), FilingAgent), (
         "isinstance must still accept it — that is the gap this test exists to cover")
     for method in PORT_METHODS:
-        assert (inspect.signature(getattr(PositionalWorktree, method))
-                != inspect.signature(getattr(FilingAgent, method)))
+        mine = inspect.signature(getattr(PositionalWorktree, method))
+        port = inspect.signature(getattr(FilingAgent, method))
+        assert mine != port
+        # ...and the difference is the KIND of exactly one parameter, nothing else
+        assert [p.name for p in mine.parameters.values()] == [p.name for p in port.parameters
+                                                              .values()]
+        assert [p.name for p in mine.parameters.values()
+                if p.kind is not port.parameters[p.name].kind] == ["worktree"]
 
 
 def test_the_signature_check_catches_a_renamed_argument_too():
     """The second shape the same gap takes, and the likelier one: a backend written from memory
     spells `meeting_meta` `meta`. Keyword-only throughout means the call site raises `TypeError` on
-    a real item — this catches it with no key, no queue and no model."""
+    a real item — this catches it with no key, no queue and no model.
+
+    Its `run` mirrors the port exactly, which is the control: one method drifted, one did not, and
+    the assertions below say which is which.
+    """
     class Renamed:
-        def run(self, *, worktree, material, hints, submitted_by,
-                corrective="", reply="", flow_note=""):
+        structured_ordinary = False
+
+        def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
+                corrective: str = "", reply: str = "", flow_note: str = "",
+                gathered: str = "") -> AgentRun:
             return AgentRun()
 
-        def run_meeting(self, *, worktree, material, meta, registry,
-                        source_page_path, corrective="", reply=""):
+        def run_meeting(self, *, worktree: str, material: str, meta: dict, registry,
+                        source_page_path: str, corrective: str = "",
+                        reply: str = "") -> AgentRun:
             return AgentRun()
 
     assert isinstance(Renamed(), FilingAgent)
     assert (inspect.signature(Renamed.run_meeting)
             != inspect.signature(FilingAgent.run_meeting))
+    assert (inspect.signature(Renamed.run)
+            == inspect.signature(FilingAgent.run)), (
+        "the undrifted method must still match — otherwise this twin proves the comparison is "
+        "noisy rather than that it is sharp")
+
+
+def test_the_signature_check_catches_a_backend_that_never_learned_about_the_gathered_context():
+    """ADR 033's own drift shape, and the one this milestone made possible: a backend written
+    against the M1 port answers both calls, declares its shape, and has no `gathered` parameter at
+    all. `processing._one_pass` passes `gathered=` on EVERY ordinary call — empty for an exploring
+    backend — so this one raises `TypeError` on the first item it claims, against a real queue row.
+    The equality above is what catches it here instead.
+    """
+    class PreGatherer:
+        structured_ordinary = False
+
+        def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
+                corrective: str = "", reply: str = "", flow_note: str = "") -> AgentRun:
+            return AgentRun()
+
+        def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
+                        source_page_path: str, corrective: str = "",
+                        reply: str = "") -> AgentRun:
+            return AgentRun()
+
+    assert isinstance(PreGatherer(), FilingAgent)
+    assert (inspect.signature(PreGatherer.run) != inspect.signature(FilingAgent.run))
+    with pytest.raises(TypeError):
+        PreGatherer().run(worktree="/x", material="m", hints={}, submitted_by="a@b.test",
+                          gathered="context")
 
 
 # ── the envelope and the fault contract, which moved with the port ─────────────────────────────
@@ -286,16 +492,55 @@ def _finite_dollars(value) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(value) and value >= 0
 
 
+def _frozen_brief(*parts: str) -> pathlib.Path:
+    return pathlib.Path(__file__).parent.joinpath("fixtures", "repo", ".claude", "skills", *parts)
+
+
 def _brief_worktree(tmp_path) -> str:
     """A directory carrying just the frozen meeting brief — what `read_meeting_brief` needs and
     nothing else. No git: this file is keyless AND repo-free, and the brief read is an ordinary
     `open()` at a known relative path."""
-    brief = (pathlib.Path(__file__).parent / "fixtures" / "repo" / ".claude" / "skills"
-             / "meeting-distiller" / "SKILL.md")
     target = tmp_path / ".claude" / "skills" / "meeting-distiller"
     target.mkdir(parents=True)
-    (target / "SKILL.md").write_text(brief.read_text(encoding="utf-8"), encoding="utf-8")
+    (target / "SKILL.md").write_text(
+        _frozen_brief("meeting-distiller", "SKILL.md").read_text(encoding="utf-8"),
+        encoding="utf-8")
     return str(tmp_path)
+
+
+def _skill_worktree(tmp_path) -> str:
+    """Its ordinary-flow twin: a directory carrying just the frozen librarian brief, which is what
+    `agent.read_skill` reads out of an item's worktree (`agent.SKILL_RELPATH`).
+
+    The real file, never a stub string: `build_system_prompt` splits its frontmatter off and the
+    backend refuses an empty one, so a placeholder would exercise a shorter path than production's.
+    """
+    target = tmp_path / ".claude" / "skills" / "librarian"
+    target.mkdir(parents=True)
+    (target / "SKILL.md").write_text(
+        _frozen_brief("librarian", "SKILL.md").read_text(encoding="utf-8"), encoding="utf-8")
+    return str(tmp_path)
+
+
+def _filing_account() -> FilingAccount:
+    """A well-formed structured ordinary account — the shape `parse_outcome` accepts and
+    `processing._write_ordinary_page` writes a page from. Nothing here is a page on disk: this file
+    is about the ENVELOPE, and what the worker does with the account afterwards belongs to
+    `test_structured_processing_pg.py`."""
+    return FilingAccount(
+        decision="file",
+        page=OrdinaryPage(title="Acme Corp Renewal Window", page_type="note",
+                          body="## Context\n\nThe renewal window was confirmed."),
+        anchoring=OrdinaryAnchoring(kind="entity", entities=["Acme Corp"]),
+        summary="filed the renewal note")
+
+
+def _test_model(account: FilingAccount):
+    """pydantic-ai's own offline model, answering with `account`. Imported inside the helper for
+    this file's standing rule: neither agent framework may be loaded by the signature half."""
+    from pydantic_ai.models.test import TestModel
+
+    return TestModel(custom_output_args=account.model_dump())
 
 
 def _raises():
@@ -305,8 +550,12 @@ def _raises():
 # The ORDINARY flow, per backend, over every offline outcome each one actually supports.
 # What each supports is a fact about the backend, not a choice, and it is worth writing down:
 #
-#   * `pydantic` — refuses the flow outright. A fault, and the only one of the three that is a
-#     refusal rather than an accident.
+#   * `pydantic` — **both roads, and it used to have neither.** M1's `run` was a refusal, priced at
+#     `0.0`; ADR 033 made it a real structured call, so the returning half is a real framework run
+#     against a `TestModel` (whose `cost_usd` is computed from real token counts and must be
+#     positive) and the faulting half is a model that cannot be built (priced at `0.0`, honestly:
+#     nothing was spent). Driven through `model_factory`, so no configured provider is ever
+#     resolved and nothing here can reach a network.
 #   * `double` — both roads. A well-formed note FILES, which exercises the returning half (an
 #     envelope whose `cost_usd` is a real `0.0`: an offline pass spends nothing, and that is an
 #     answer rather than a gap); `DOUBLE:bad-shape` drives its account through the same
@@ -321,13 +570,19 @@ def _ordinary_flow_cases(tmp_path):
     env = support.build_repo(str(tmp_path / "git"))
     double = DoubleAgent(dataclasses.replace(settings, repo=env.repo))
     return {
-        "pydantic": (PydanticMeetingAgent(settings), env.repo, "A note about Acme Corp."),
+        "pydantic-files": (PydanticMeetingAgent(settings,
+                                                model_factory=lambda: _test_model(
+                                                    _filing_account())),
+                           _skill_worktree(tmp_path / "structured"), "A note about Acme Corp."),
+        "pydantic-fault": (PydanticMeetingAgent(settings, model_factory=_raises),
+                           _skill_worktree(tmp_path / "faulting"), "A note about Acme Corp."),
         "double-files": (double, env.repo, "A note about Acme Corp."),
         "double-bad-shape": (double, env.repo, "DOUBLE:bad-shape\nA note about Acme Corp."),
     }
 
 
-@pytest.mark.parametrize("name", ["pydantic", "double-files", "double-bad-shape"])
+@pytest.mark.parametrize("name", ["pydantic-files", "pydantic-fault", "double-files",
+                                  "double-bad-shape"])
 def test_every_reachable_ordinary_flow_outcome_carries_a_usable_spend(tmp_path, name):
     """**The contract that decides what a `failed` row says it cost**, on whichever road the flow
     takes.
@@ -392,22 +647,73 @@ def test_the_doubles_shape_road_and_its_structural_road_are_both_priced():
     assert shape_info.value.run_cost_usd == 0.0
 
 
-def test_the_meeting_only_backends_refusal_is_priced_like_every_other_fault(tmp_path):
-    """The F4 case on its own, because it is a REFUSAL rather than an accident and it is the one a
-    reader would assume needs no figure: nothing was spent, no model was built, no request was made.
-    `0.0` is how the port says exactly that — and saying it is what keeps `processing` able to tell
-    it apart from a fault nobody annotated."""
-    backend = PydanticMeetingAgent(_settings())
+def test_the_structured_ordinary_pass_is_priced_like_every_other_returning_pass(tmp_path):
+    """**The case that replaced M1's refusal, and it is a stronger claim than the one it replaced.**
+
+    Until ADR 033 this backend's `run` raised — a refusal, priced at `0.0`, and the test here
+    asserted the field was present on it. There is nothing left to refuse: the ordinary flow is a
+    real structured call now, and what has to hold is the returning half of the same contract. A
+    real `Agent.run` against pydantic-ai's own `TestModel` reports real token counts,
+    `pricing.compute_cost_usd` multiplies them by the CONFIGURED model's rates, and `AgentPasses`
+    sums the figure onto the row a person reads.
+
+    `> 0` is the assertion that can catch the failure worth catching: a backend that priced a real
+    pass at nothing would report every structured filing as free, and free is the one direction
+    this instrument must never be wrong in. The envelope's other two fields are the structured
+    shape's own honesty — no conversational loop, no tool, so `0` rather than an invented `1`.
+    """
+    backend = PydanticMeetingAgent(_settings(),
+                                   model_factory=lambda: _test_model(_filing_account()))
+
+    run = backend.run(worktree=_skill_worktree(tmp_path), material="A note about Acme Corp.",
+                      hints={}, submitted_by="a@b.test", gathered="")
+
+    assert isinstance(run, AgentRun)
+    assert run.outcome.decision == "file"
+    assert run.outcome.page is not None and run.outcome.page.body
+    # the resolved single field, filled from `page.title` — what `_commit_message` and `_stamp` read
+    assert run.outcome.title == "Acme Corp Renewal Window"
+    assert _finite_dollars(run.cost_usd) and run.cost_usd > 0, (
+        "a real framework run priced at nothing — a silent zero reads as free")
+    assert (run.turns, run.tool_calls) == (0, 0)
+
+
+def test_the_structured_ordinary_faults_carry_the_spend_the_same_way(tmp_path):
+    """The other half of the same contract, on the road that raises. A model that cannot be built
+    fails before a token is spent, so `0.0` is the honest figure — and the FIELD has to be there,
+    because `processing` reads `getattr(ex, "run_cost_usd", 0.0)` and cannot otherwise tell "spent
+    nothing" from "nobody attached it"."""
+    backend = PydanticMeetingAgent(_settings(), model_factory=_raises)
 
     with pytest.raises(AgentError) as exc_info:
-        backend.run(worktree=str(tmp_path), material="an ordinary note", hints={},
+        backend.run(worktree=_skill_worktree(tmp_path), material="an ordinary note", hints={},
                     submitted_by="a@b.test")
 
     assert hasattr(exc_info.value, "run_cost_usd"), (
-        "the ordinary-flow refusal carries no run_cost_usd at all")
+        "the ordinary-flow fault carries no run_cost_usd at all")
     assert exc_info.value.run_cost_usd == 0.0
-    # ...and it is still the same refusal, not a thinner one wearing a price
-    assert "meeting flow only" in str(exc_info.value)
+    # the configuration fault names the setting an operator would change, never the provider's text
+    assert "$STIGMERGY_LIBRARIAN_MODEL" in str(exc_info.value)
+
+
+def test_the_ordinary_flow_no_longer_refuses_this_backend_at_all(tmp_path):
+    """The retired refusal, pinned as retired.
+
+    M1's `run` raised "serves the meeting flow only in this milestone" for every ordinary capture,
+    and `worker.startup_checks` refused the backend outright so nobody met it. Both are gone with
+    the limitation (ADR 033 D5). A sentence that came back — here, or in a message a `failed` row
+    carries — would mean the structured path had been reverted while the worker still dispatched to
+    it, which is the one regression this file is placed to notice.
+    """
+    backend = PydanticMeetingAgent(_settings(),
+                                   model_factory=lambda: _test_model(_filing_account()))
+
+    run = backend.run(worktree=_skill_worktree(tmp_path), material="an ordinary note", hints={},
+                      submitted_by="a@b.test")
+
+    assert run.outcome is not None
+    source = inspect.getsource(type(backend))
+    assert "meeting flow only" not in source
 
 
 @pytest.mark.parametrize("factory, why", [

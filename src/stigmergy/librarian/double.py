@@ -125,14 +125,23 @@ class DoubleAgent:
     answer rather than a missing one.
     """
 
+    # The EXPLORING shape of the ordinary flow (see `filing_port.FilingAgent.structured_ordinary`).
+    # The double WRITES the page — through `agent.confined_write`, the same rule the SDK's own hook
+    # enforces — which is exactly what makes the offline suite prove something about the production
+    # write path. A second, structured double is a decision to take when the structured path needs
+    # adversarial coverage of its own, not a flag on this one.
+    structured_ordinary = False
+
     def __init__(self, settings):
         self.settings = settings
 
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
-            corrective: str = "", reply: str = "", flow_note: str = "") -> AgentRun:
-        # `flow_note` is accepted and unused: the double's behaviour is directive-driven,
-        # and the note is a prompt fact for the REAL agent. Accepting it keeps the double's
-        # signature honest against `processing._one_pass`'s call.
+            corrective: str = "", reply: str = "", flow_note: str = "",
+            gathered: str = "") -> AgentRun:
+        # `flow_note` and `gathered` are accepted and unused: the double's behaviour is
+        # directive-driven, and both are prompt facts for a REAL agent (`gathered` is never even
+        # built for a backend declaring `structured_ordinary = False`). Accepting them keeps the
+        # double's signature honest against the PORT rather than against one caller.
         directives = _directives(material)
         findings = [f for f in _findings(material)]
         run = AgentRun(turns=1, tool_calls=3)

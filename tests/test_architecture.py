@@ -554,6 +554,97 @@ def test_the_librarian_really_does_drive_pydantic_ai_somewhere(tmp_path):
                   "nothing left to guard and must be retired with the backend it was written for")
 
 
+# ── the librarian's reach into stigmergy.index: DECLARED, symbol-scoped, per module ────────────
+# The librarian is the WRITE path and `stigmergy.index` is the read path's own package. The reach
+# below is a LIBRARY one and it has to stay that: `corpus` is a pure parser over a directory
+# (`load_pages`/`ZONES`/`page_row` — no database handle, no ACL surface, no `pages_index`), and
+# ADR 033 D1 refused reading the INDEX for exactly the reason a wider door would reopen — a
+# write-path worker on the read path's ACL-governed table would need an exception to
+# `server.acl.visible()` for a question it can answer without one.
+#
+# Symbol-scoped and PER MODULE (`_imported_symbols`'s granularity, the same shape
+# `_WEBHOOK_ALLOWED_LIBRARIAN_SYMBOLS` and `_REVIEW_ALLOWED_LIBRARIAN_SYMBOLS` use): `stigmergy.
+# index.corpus` is a different door from `stigmergy.index.store`, and a package-level
+# `startswith("stigmergy.index")` allowance would let the next module open the connection seam
+# under a rule written for a parser.
+#
+# `cli.py` is the separate, older door and it is the pattern every operator CLI in this repo
+# already has (`capture.cli`, `entities.cli`): one entry point opens the connection and reads the
+# environment, and no other module in its package has an opinion about where the queue lives.
+_LIBRARIAN_ALLOWED_INDEX_SYMBOLS = {
+    "gather.py": ("stigmergy.index.corpus",),   # ADR 033's deterministic gatherer: the repo parser
+    "edits.py": ("stigmergy.index.corpus",),    # ZONES: which folders hold pages at all
+    "cli.py": ("stigmergy.index.store",),       # the operator CLI's own connection seam
+}
+
+
+@pytest.mark.parametrize("path", LIBRARIAN_SOURCES, ids=lambda p: p.name)
+def test_the_librarian_reaches_stigmergy_index_only_where_it_is_declared(path):
+    """Every librarian reach into the read path's package is a named exception, and every OTHER
+    librarian module reaches it not at all.
+
+    The negative half is the one that matters as the package grows: `gather.py` made this edge
+    normal-looking, and "the gatherer already imports the index" is exactly the sentence under
+    which `processing.py` or a gate would acquire a `pages_index` query. A module not in the table
+    has no door, and adding one is an edit to this table with a reason beside it.
+    """
+    allowed = _LIBRARIAN_ALLOWED_INDEX_SYMBOLS.get(path.name, ())
+    offenders = [f"{path.name}:{line} -> {sym}"
+                 for sym, line in _imported_symbols(path)
+                 if sym.startswith("stigmergy.index") and sym not in allowed]
+    assert not offenders, (
+        f"a stigmergy.librarian module reached into stigmergy.index outside its declared "
+        f"exception ({allowed or 'none — this module has no door at all'}):\n  "
+        + "\n  ".join(offenders)
+        + "\nThe librarian is the WRITE path. If a new reach is genuinely a pure-parser one, add "
+          "it to _LIBRARIAN_ALLOWED_INDEX_SYMBOLS with the reason; if it needs pages_index, it "
+          "needs an ACL predicate and a decision (ADR 033 D1), not a wider import.")
+
+
+def test_every_declared_librarian_index_door_is_one_something_walks_through():
+    """The pruning half, in the `declared ⊆ used` shape `test_review_actually_uses_its_declared_
+    librarian_exception` argues for at length: an exception nothing exercises is a door held open
+    "just in case", and it reads as a reviewed decision long after the code that needed it went.
+
+    Asserted per module AND per symbol, so retiring `gather.py` — or narrowing it to `ZONES` alone
+    — turns this red rather than leaving `stigmergy.index.corpus` standing as a granted reach
+    nobody takes.
+    """
+    for name, declared in _LIBRARIAN_ALLOWED_INDEX_SYMBOLS.items():
+        source = LIBRARIAN / name
+        assert source.is_file(), (
+            f"_LIBRARIAN_ALLOWED_INDEX_SYMBOLS declares a door for {name}, which no longer exists "
+            f"— remove the entry with the module")
+        used = {sym for sym, _ in _imported_symbols(source)}
+        unused = set(declared) - used
+        assert not unused, (
+            f"librarian/{name} is granted {sorted(unused)} and imports none of it — remove the "
+            f"unused door rather than leaving an exception nothing exercises")
+
+
+def test_the_librarian_index_rule_can_actually_see_an_offender(tmp_path):
+    """The sabotage twin: a green parametrized ban proves nothing about whether the predicate can
+    SEE an offender. A scratch module carrying the two reaches this rule exists to refuse — the
+    connection seam and a `pages_index` query surface — is parsed by the real predicate, and the
+    declared parser reach beside them must NOT be flagged.
+
+    Written to a scratch file rather than mutating a source under `src/`, for
+    `test_the_pydantic_ai_rule_bites_and_leaves_plain_pydantic_alone`'s own reason.
+    """
+    offender = tmp_path / "gather.py"                      # a NAME the table grants a door to
+    offender.write_text(
+        "from stigmergy.index import corpus\n"             # declared, and must stay legal
+        "from stigmergy.index import store\n"              # the connection seam — not this door
+        "from stigmergy.index import rank\n",              # any other index surface — likewise
+        encoding="utf-8")
+
+    allowed = _LIBRARIAN_ALLOWED_INDEX_SYMBOLS["gather.py"]
+    flagged = [sym for sym, _ in _imported_symbols(offender)
+               if sym.startswith("stigmergy.index") and sym not in allowed]
+
+    assert flagged == ["stigmergy.index.store", "stigmergy.index.rank"]
+
+
 # The ONE declared exception to the rule below. `webhook.py` reaches `librarian.githubapp` (the
 # App-credential primitives: JWT signing, installation-token minting, `configured()`) and
 # `librarian.errors.LibrarianConfigError` (the exception `githubapp` itself raises on a

@@ -314,7 +314,15 @@ def gate_zone(ctx: GateContext) -> list[Finding]:
         # upstream: a title sanitizer that quietly dropped non-ASCII put "Reuni n" in a filename, an
         # H1, a `title` field and a commit subject, permanently. Accents pass; a path separator and
         # a control byte do not.
-        unnameable = page_policy.unnameable_reason(basename)
+        #
+        # **The STEM, not the basename** — `.md` comes off first. `page.unnameable_reason` bounds a
+        # name in UTF-8 bytes (`MAX_PAGE_STEM_BYTES`), and the other caller of that one answer,
+        # `processing._write_ordinary_page`, asks it of the stem it is about to build a filename
+        # from. Asking it here of a string three bytes longer made one bound mean two things: a
+        # 198-byte title passed the writer, wrote its page, and was then vetoed by this gate as a
+        # LIBRARIAN FAULT — a `failed` row over three characters, on a road the agent could have
+        # repaired if anything had told it. One bound, one string, both callers.
+        unnameable = page_policy.unnameable_reason(basename.removesuffix(".md"))
         if unnameable:
             out.append(Finding("zone", "unnameable-page",
                                f"wrote {path}, which cannot be filed under that name: "

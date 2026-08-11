@@ -7,15 +7,16 @@ reasoning, as the frozen contract linter two directories over (`../../tools/FROZ
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/skills/librarian/SKILL.md` |
-| **Copied at commit** | `0a988bd153ced3202bbd7e822cb7acb59c403017` |
-| **Drift guard** | none, on purpose — see `../../tools/FROZEN.md` |
+| **Copied at commit** | `31e49f8c0ce00c0ad4fd9fcf3128b4bbe0b3b4d9` |
+| **Drift guard** | `tests/librarian/test_librarian_brief_contract.py` — the rule table, over the copy in `tests/librarian/fixtures/repo/`; this copy stays a yardstick with no guard (see `../../tools/FROZEN.md`) |
 
 ## Why the filing golden needs it
 
 `agent.read_skill` reads `.claude/skills/librarian/SKILL.md` **out of the item's own worktree**
-and injects it as the system prompt, and `worker.startup_checks` refuses an `sdk` run whose base
-commit does not carry one. A mini knowledge repo without this file cannot be filed into at all by
-the backend the instrument exists to measure.
+and injects it as the system prompt, and `worker.startup_checks` refuses an `sdk` or `pydantic`
+run whose base commit does not carry one (ADR 033: both real backends inject this same brief —
+only the ENVIRONMENT preamble in front of it differs). A mini knowledge repo without this file
+cannot be filed into at all by either backend the instrument exists to measure.
 
 ## Why it is frozen rather than resynced
 

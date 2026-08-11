@@ -152,10 +152,19 @@ Both skills and the linter are read **at the base commit the worker files agains
 working tree, and startup refuses if the linter is not in that commit. A local edit nobody pushed
 might as well not exist.
 
-This repository keeps a **frozen copy** of the linter and the meeting brief as test fixtures, and a
-test asserts they are byte-identical to the knowledge repo's own when both are on the same machine
+This repository keeps a **frozen copy** of the linter and of BOTH briefs as test fixtures, and a
+test asserts each is byte-identical to the knowledge repo's own when both are on the same machine
 (and skips cleanly when they are not). A stale frozen copy would mean CI enforcing a contract the
-agent is no longer given.
+agent is no longer given. Each brief is a **two-sided contract** with the platform's own code, and
+each has its own rule table asserted in both directions —
+`tests/librarian/test_meeting_brief_contract.py` and `test_librarian_brief_contract.py` — so an
+edit to either side alone turns the suite red rather than being discovered by a filing.
+
+**The librarian brief is backend-NEUTRAL** ([ADR 033](../decisions/033-structured-filing-flow.md)):
+it describes a worker that hands the agent its context in one message and writes the page from one
+structured account, and it names no tool. Which tools a particular run actually holds is stated in
+the platform's own preamble in front of it, so a brief in this repository never has to be rewritten
+when a backend changes.
 
 **A `.mcp.json` in this repository is content, not configuration, and the librarian treats it as
 such.** The agent runs with an explicitly empty MCP server list and strict MCP config, so the

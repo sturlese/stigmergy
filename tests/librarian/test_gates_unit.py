@@ -872,6 +872,96 @@ def _committed_page(tmp_path, text: str) -> tuple[str, "os.PathLike"]:
 
 
 
+# ── the page-name byte ceiling: ONE bound, ONE string, both callers ────────────────────────────
+# `page.unnameable_reason` bounds a name in UTF-8 BYTES (`MAX_PAGE_STEM_BYTES`), because that is
+# the unit `NAME_MAX` counts and because a character bound would pass names the filesystem refuses
+# — 200 accented or CJK characters are 400–600 bytes, and this corpus is expected to carry them.
+#
+# It has TWO callers, and they used to disagree about WHICH STRING the bound was on: `gate_zone`
+# asked it of the basename (`.md` included) while `processing._write_ordinary_page` asked it of the
+# stem it was about to build a filename from. Three bytes of disagreement, and the band between
+# them was reachable: a 198-byte title passed the writer, WROTE its page, and was then vetoed here
+# — a `failed` row, reported as a librarian fault, over a title the agent could have shortened if
+# anything had told it to.
+#
+# Both callers now pass the stem, and the parameter is named `stem` so the next one cannot get it
+# wrong silently. Asserted over a REAL diff rather than a fabricated `DiffEntry`: the whole point is
+# what `gate_zone` does with a path git actually reports, and the boundary is exactly where a
+# stale `.md`-inclusive reading would still bite.
+def _zone_findings_for_stem(tmp_path, name: str, stem: str) -> list:
+    """Write one real page under `stem`, take the REAL diff, and run `gate_zone` over it.
+
+    A seeded first commit, because `gitcmd.diff_entries` diffs against `HEAD` — the same shape
+    every filing worktree is in when the gates run, where the base commit is the knowledge repo's
+    own tip.
+    """
+    repo = str(tmp_path / name)
+    os.makedirs(repo)
+    gitcmd.run("init", "--quiet", "-b", "main", repo)
+    gitcmd.run("commit", "--quiet", "--no-verify", "--allow-empty", "-m", "seed",
+               cwd=repo, env=_COMMIT_ENV)
+    page = os.path.join(repo, "wiki", "notes", f"{stem}.md")
+    os.makedirs(os.path.dirname(page), exist_ok=True)
+    with open(page, "w", encoding="utf-8") as handle:
+        handle.write('---\ntype: note\ntitle: "T"\n---\n\n# T\n\nA page.\n')
+    gitcmd.run("add", "-A", cwd=repo)
+    # A declared `note`, matching the folder — so the ONLY thing these cases can be refused for is
+    # the name. Without it every page here also earns `undeclared-type`, and the benign twins would
+    # be measuring the outcome's shape instead of the byte ceiling.
+    outcome = SimpleNamespace(page_type="note", page_path="", title="T")
+    return gates.gate_zone(_ctx(repo, gitcmd.diff_entries(repo), outcome=outcome))
+
+
+def test_gate_zone_admits_a_stem_at_exactly_the_byte_ceiling(tmp_path):
+    """**The benign twin, and the one the disagreement actually broke.** A stem of exactly
+    `MAX_PAGE_STEM_BYTES` is a legal filename — `.md` fits inside `NAME_MAX` with room to spare,
+    which is what the constant's own 200-versus-255 margin is for — so the gate must admit it.
+
+    Under the old `.md`-inclusive reading this string measured 203 and was vetoed, while the writer
+    that produced it measured 200 and accepted: the page was written and then refused. Nothing else
+    in this file would have noticed, because every other zone case is about a path shape rather
+    than a length.
+    """
+    stem = "T" * page_policy.MAX_PAGE_STEM_BYTES
+
+    assert [f.code for f in _zone_findings_for_stem(tmp_path, "at-ceiling", stem)] == []
+
+
+def test_gate_zone_vetoes_the_first_stem_past_the_byte_ceiling(tmp_path):
+    """The sharp half, one byte over — so the two tests together pin the boundary itself rather
+    than "long names are refused somewhere".
+
+    The finding is `unnameable-page` and it names the reason in the operator's own units: an agent
+    reading "write a shorter title" can act on it, where an `ENAMETOOLONG` escaping into stage
+    `unexpected` tells a steward the librarian broke.
+    """
+    stem = "T" * (page_policy.MAX_PAGE_STEM_BYTES + 1)
+
+    findings = _zone_findings_for_stem(tmp_path, "over-ceiling", stem)
+
+    assert [f.code for f in findings] == ["unnameable-page"]
+    assert "not a character count" in findings[0].message, (
+        "the veto must say the bound is in BYTES — a reader who shortens by characters and is "
+        "refused again has been told the wrong thing")
+
+
+def test_a_CJK_stem_is_bounded_by_its_BYTES_and_not_by_its_character_count(tmp_path):
+    """The reason the unit is bytes at all, over a real diff: ~85 CJK characters is well under any
+    plausible character bound and over 250 BYTES, which is a name the filesystem refuses. A
+    character-counting bound would have written it and met `ENAMETOOLONG` at `open`.
+
+    Its twin sits beside it — the same script, short enough to fit — so this is a boundary rule and
+    not a rule that refuses non-Latin titles.
+    """
+    over = "再生可能エネルギー導入計画の四半期レビュー" * 5      # 100 chars, 300 bytes
+    fits = "再生可能エネルギー導入計画の四半期レビュー"          # 20 chars, 60 bytes
+    assert len(over) < page_policy.MAX_PAGE_STEM_BYTES < len(over.encode("utf-8"))
+
+    assert [f.code for f in _zone_findings_for_stem(tmp_path, "cjk-over", over)] == [
+        "unnameable-page"]
+    assert [f.code for f in _zone_findings_for_stem(tmp_path, "cjk-fits", fits)] == []
+
+
 def _body_rewrite_findings(repo, page, after_text: str, **over):
     """Rewrite the committed page, read the REAL diff back out of git, and run the gate over it.
 

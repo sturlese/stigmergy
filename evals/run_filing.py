@@ -49,17 +49,17 @@ a literal-word expectation cost the QA golden; this set does not repeat it.
   python evals/run_filing.py --backend sdk --model claude-sonnet-5 \
       --report evals/out/filing-sonnet-5.json
 
-  # one KIND of capture only — the meeting flow's own two, on the pydantic-ai backend (ADR 032)
-  python evals/run_filing.py --backend pydantic --kinds meeting \
-      --model openai:gpt-5.6-terra --report evals/out/filing-terra-meetings.json
+  # the structured flow, every capture, on the pydantic-ai backend (ADR 033)
+  python evals/run_filing.py --backend pydantic \
+      --model anthropic:claude-sonnet-5 --report evals/out/filing-structured.json
 
 **A subset is a different measurement, and says so.** `--kinds` scores only the captures of the
 named kinds, and everything downstream is recomputed from that subset rather than from the shipped
 set: `_check_set` derives the per-facet denominators instead of holding them against
 `EXPECTED_DENOMINATORS` (which pins the WHOLE set and only the whole set), and the history row
-records `kinds` so a subset score can never be read later as a full-set one. `--backend pydantic`
-REQUIRES a meeting-only subset, because that backend serves the meeting flow only in this milestone
-and would refuse every ordinary capture — a table of refusals is not a measurement.
+records `kinds` so a subset score can never be read later as a full-set one. Every backend runs
+every kind now (ADR 033 lifted the meeting-only restriction on `--backend pydantic`), so a subset
+is an ablation somebody chose rather than a limitation they worked around.
 
 Both need the local Postgres (`make db-up`) and `gitleaks` on PATH — the secrets gate shells out
 to the real scanner, and a filing eval that skipped it would be measuring a shorter pipeline than
@@ -525,10 +525,24 @@ class CountingAgent:
     It also gives the meeting reuse its honest observable: the reuse attempt runs no agent pass at
     all, so a re-file that reused a parked distillation is the one that arrives here with
     `calls == 0`.
+
+    **A wrapper of a PORT owes every declared member of it, not only the methods** (ADR 033). This
+    class stands where `processing` expects a `filing_port.FilingAgent`, and that port declares
+    `structured_ordinary` — the attribute that decides whether the gatherer runs, which half of the
+    outcome envelope is owed, and whether CODE writes the page. Swallowing it made every backend
+    look EXPLORING from behind this wrapper: the paid golden on `--backend pydantic` would have run
+    the structured backend down the exploring branch, refused every ordinary capture for carrying
+    no `page_path`, and reported that as a filing-quality score. An instrument that changes the
+    thing it measures is worse than no instrument.
+
+    Copied by plain attribute access with NO default, so a backend that forgot to declare it fails
+    loudly HERE, at construction, before a single capture is submitted — rather than one delivery
+    at a time inside a measurement.
     """
 
     def __init__(self, inner):
         self.inner = inner
+        self.structured_ordinary = inner.structured_ordinary
         self.calls = 0
 
     def reset(self) -> None:
@@ -543,11 +557,16 @@ class CountingAgent:
         return self.inner.run_meeting(**kwargs)
 
 
-# The backend that serves the MEETING flow only (ADR 032). Named here rather than imported so
-# `--help` costs nothing but the standard library, like everything else at this module's scope;
-# `_require_measurable_subset` below resolves the KIND through `capture.schema`, which is the value
-# that would actually be expensive to get wrong.
-MEETING_ONLY_BACKEND = "pydantic"
+# The structured backend (ADR 033: every flow, no tools, code writes the page). Named here rather
+# than imported so `--help` costs nothing but the standard library, like everything else at this
+# module's scope.
+#
+# **It used to be `MEETING_ONLY_BACKEND`, guarded by `_require_measurable_subset`**, which refused
+# any `--kinds` but `meeting` for it because M1's backend would have scored a column of refusals on
+# the ordinary captures. Both the constant's name and that guard are gone with the restriction they
+# described; the `--kinds` flag itself stays, because an ablation somebody chooses is a different
+# thing from a limitation they work around.
+STRUCTURED_BACKEND = "pydantic"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -561,12 +580,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="the frozen mini knowledge repo to file into (default: evals/filing/repo)")
     ap.add_argument("--manifest", default=str(FIXTURE / "captures" / "manifest.json"))
     ap.add_argument("--expectations", default=str(FIXTURE / "expected" / "expectations.json"))
-    ap.add_argument("--backend", choices=["sdk", "double", MEETING_ONLY_BACKEND], default="sdk",
+    ap.add_argument("--backend", choices=["sdk", "double", STRUCTURED_BACKEND], default="sdk",
                     help="the agent backend (default: sdk — the real measurement)")
     ap.add_argument("--model", default=None,
                     help="the librarian model (default: librarian Settings' own default). The "
-                         f"{MEETING_ONLY_BACKEND!r} backend needs a provider-prefixed id, e.g. "
-                         "openai:gpt-5.6-terra")
+                         f"{STRUCTURED_BACKEND!r} backend needs a provider-prefixed id, e.g. "
+                         "anthropic:claude-sonnet-5")
     ap.add_argument("--kinds", default="",
                     help="comma-separated capture kinds to measure (default: all of them). A "
                          "subset recomputes its own denominators and records the kinds in the "
@@ -581,7 +600,6 @@ def main() -> int:
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     expectations = json.loads(Path(args.expectations).read_text(encoding="utf-8"))
     selected = _select_kinds(manifest, args.kinds)
-    meeting_only = _require_measurable_subset(args.backend, selected)
     # **A `--kinds` that names every kind the set carries is the WHOLE set**, and it still owes the
     # pinned denominators. Reading the flag's presence instead of what it selected would let
     # `--kinds meeting,raw` skip the drift check on the full golden set — the one check that makes
@@ -590,8 +608,7 @@ def main() -> int:
     if selected is not None:
         manifest, expectations = _subset(manifest, expectations, selected)
     _check_set(manifest, expectations, whole_set=whole)
-    return _run(args, manifest, expectations, kinds=_manifest_kinds(manifest),
-                meeting_only=meeting_only)
+    return _run(args, manifest, expectations, kinds=_manifest_kinds(manifest))
 
 
 def _manifest_kinds(manifest: dict) -> list[str]:
@@ -617,24 +634,14 @@ def _select_kinds(manifest: dict, raw: str) -> list[str] | None:
     return wanted
 
 
-def _require_measurable_subset(backend: str, kinds: list | None) -> bool:
-    """Refuse a backend/subset pairing that could not measure anything — and answer whether the
-    run is meeting-only, which is what the librarian's own pre-flight has to be told.
-
-    The `pydantic` backend serves the meeting flow only in this milestone, so a run that also
-    submits ordinary captures scores a column of refusals and calls it a backend result. Refused
-    here, before the queue is touched, with the flag that fixes it.
-    """
-    from stigmergy.capture import schema
-
-    if backend != MEETING_ONLY_BACKEND:
-        return False
-    if kinds != [schema.MEETING]:
-        sys.exit(f"--backend {MEETING_ONLY_BACKEND} serves the {schema.MEETING!r} flow only in "
-                 f"this milestone (ADR 032), so it must be given that subset and nothing else: "
-                 f"add --kinds {schema.MEETING}. An ordinary capture would be refused by the "
-                 f"backend and scored as a filing failure, which measures nothing about it.")
-    return True
+# REMOVED with the meeting-only restriction (ADR 033): `_require_measurable_subset`, which refused
+# `--backend pydantic` unless it was given `--kinds meeting` and nothing else. Its argument was
+# sound for M1 — an ordinary capture would have been refused by the backend and scored as a filing
+# failure, which measures nothing about it — and it is simply not true any more: that backend now
+# serves every kind the golden set carries, which is what this milestone is for. Recorded here
+# rather than deleted in silence, because the RULE it enforced still stands for the next
+# backend/subset pairing somebody adds: a run that cannot measure a capture must be refused before
+# the queue is touched, not scored as a failure.
 
 
 def _subset(manifest: dict, expectations: dict, kinds: list) -> tuple:
@@ -736,14 +743,11 @@ def _check_set(manifest: dict, expectations: dict, *, whole_set: bool = True) ->
                  "EXPECTED_DENOMINATORS in the same commit, on purpose:\n  " + "\n  ".join(diff))
 
 
-def _run(args, manifest: dict, expectations: dict, *, kinds: list | None = None,
-         meeting_only: bool = False) -> int:
+def _run(args, manifest: dict, expectations: dict, *, kinds: list | None = None) -> int:
     """One measurement, end to end.
 
-    `kinds` and `meeting_only` are `main`'s to pass, and only `main`'s: it is where the subset was
-    resolved and refused, so it is the only caller that can honestly tell the librarian's own
-    pre-flight "this rig hands the agent meeting rows and nothing else". Both default to the
-    unfiltered, every-flow run a direct caller means.
+    `kinds` is `main`'s to pass, and only `main`'s: it is where the subset was resolved and
+    refused. It defaults to the unfiltered, every-flow run a direct caller means.
     """
     # Deferred on purpose — see the pure-scoring banner above. Nothing heavier than the standard
     # library is imported until a run actually happens, so the scorer stays importable keylessly.
@@ -819,11 +823,7 @@ def _run(args, manifest: dict, expectations: dict, *, kinds: list | None = None,
             # both skills are committed at `base`, and `_check_push_identity` returns early because
             # this run's origin is a local bare path rather than github.com.
             try:
-                # `meeting_only` is what lets the pre-flight run at all for the meeting-only
-                # backend: it refuses that backend for a WORKER (whose queue carries every kind)
-                # and validates the rest of its configuration — the provider-prefixed model, a
-                # configured price, the provider's key — for this rig.
-                worker.startup_checks(settings, meeting_only=meeting_only)
+                worker.startup_checks(settings)
             except LibrarianConfigError as ex:
                 sys.exit(f"the filing golden cannot run against this configuration: {ex}")
             counting = CountingAgent(build_agent(settings))

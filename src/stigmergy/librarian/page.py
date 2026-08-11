@@ -693,19 +693,45 @@ def open_for_new(full: str):
 # mangled name is a wrong page title nobody notices until it is in history.
 _FILENAME_FORBIDDEN = re.compile(r"[\x00-\x1f\x7f/\\]")
 
+# How long a page's STEM may be, **in UTF-8 BYTES** — the unit the filesystem actually counts.
+# Linux and macOS both cap one path component at `NAME_MAX` = 255 bytes, and a name over it fails
+# the `open` with `ENAMETOOLONG` rather than being truncated. 200 leaves the `.md` suffix and room
+# for a `-p2`-style discriminator under that ceiling with margin.
+#
+# **Bytes, not characters, and the distinction is the whole point**: 200 accented or CJK characters
+# are 400–600 bytes, so a character bound would pass names the filesystem refuses — and the corpus
+# this runs on names European customers and is expected to carry non-ASCII titles routinely.
+#
+# Enforced HERE rather than at a writer, so the gate and the writer share one answer: a title over
+# it is a REPAIRABLE refusal ("write a shorter title") instead of an `OSError` escaping every
+# handler as stage `unexpected`, with the item's agent spend already banked.
+MAX_PAGE_STEM_BYTES = 200
 
-def unnameable_reason(basename: str) -> str:
-    """Why this page filename cannot be filed, or `""` when it is fine.
 
-    Deliberately short: a path separator or a control byte. Accents, ideographs, emoji and
-    punctuation all pass — a corpus naming European customers carries these routinely, so they
-    are the normal case rather than the edge one.
+def unnameable_reason(stem: str) -> str:
+    """Why this page name cannot be filed, or `""` when it is fine.
+
+    Deliberately short: a path separator, a control byte, or a name the filesystem itself will not
+    take. Accents, ideographs, emoji and punctuation all pass — a corpus naming European customers
+    carries these routinely, so they are the normal case rather than the edge one.
+
+    **The argument is the STEM — the name WITHOUT `.md`** — and the parameter is called that
+    because both callers have to agree about which string this bound is on. It was `basename`, and
+    `gate_zone` duly passed one while `processing._write_ordinary_page` passed the stem it was
+    about to build a filename from: three bytes of disagreement, which turned a 198-byte title into
+    a page the writer accepted and the gate then vetoed as a LIBRARIAN FAULT. One bound with two
+    meanings is not one bound, and a parameter name is the cheapest place to say which.
     """
-    if not basename:
+    if not stem:
         return "it has no name at all"
-    if _FILENAME_FORBIDDEN.search(basename):
+    if _FILENAME_FORBIDDEN.search(stem):
         return ("its name contains a character a filename cannot carry (a path separator or a "
                 "control character) — spell the title without it rather than approximating it")
+    size = len(stem.encode("utf-8"))
+    if size > MAX_PAGE_STEM_BYTES:
+        return (f"its name is {size} bytes long and a filename may not exceed "
+                f"{MAX_PAGE_STEM_BYTES} — write a shorter title (accented and non-Latin "
+                f"characters cost more than one byte each, so this is not a character count)")
     return ""
 
 

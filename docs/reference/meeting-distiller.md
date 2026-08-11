@@ -366,8 +366,10 @@ reads perfectly plausibly on its own.
   own source attachment without a conditional inside any individual gate. `edits_allowed=False` is
   the one this flow alone sets; the other six are also widened, differently, by an attached
   fast-lane capture ([librarian.md](./librarian.md#the-source-attachment-a-parameter-never-a-third-flow)).
-- `librarian.pydantic_backend.PydanticMeetingAgent` — the flow's SECOND real backend, and the only
-  flow that has one ([ADR 032](../decisions/032-filing-port-and-pricing-seam.md)). It exists because
+- `librarian.pydantic_backend.PydanticFilingAgent` — the flow's SECOND real backend
+  ([ADR 032](../decisions/032-filing-port-and-pricing-seam.md)). It was the only flow that had one
+  until [ADR 033](../decisions/033-structured-filing-flow.md) gave the ORDINARY flow this flow's
+  shape and the same backend with it. It exists because
   everything above made this flow portable without anybody planning it: the agent holds no
   page-writing tool, explores nothing, and answers with one structured account — so it needs a model
   that can return a typed object, not an agent harness. One pydantic-ai call with the meeting
@@ -387,9 +389,10 @@ reads perfectly plausibly on its own.
   carries an explicit OVERRIDE paragraph immediately before the brief — the tool and the file
   describe the SHAPE of the account, every other word of the skill applies unchanged — rather than
   leaving a model to guess which half of a contradiction is operative.
-  `STIGMERGY_LIBRARIAN_BACKEND=pydantic` is refused for a worker at startup, since a worker's queue
-  carries ordinary captures too; the meeting-only measurement rig is
-  `evals/run_filing.py --backend pydantic --kinds meeting`.
+  `STIGMERGY_LIBRARIAN_BACKEND=pydantic` was refused for a worker at startup while it served this
+  flow alone; ADR 033 lifted that refusal, and the OVERRIDE paragraph above is now the only place
+  either flow's preamble contradicts its brief — the ordinary brief was rewritten backend-neutral
+  and this one was not.
 - `librarian.double.DoubleAgent.run_meeting` — the offline double's meeting-specific directives,
   planted in the transcript itself: `DOUBLE:decisions=<n>`, the four
   `DOUBLE:meeting-hallucinate*` variants (first decision, first pass only, LAST decision, the

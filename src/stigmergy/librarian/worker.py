@@ -96,16 +96,17 @@ def visibility_timeout_clause(visibility_timeout_s) -> str:
             f"incremented")
 
 
-def startup_checks(settings, *, meeting_only: bool = False) -> dict:
+def startup_checks(settings) -> dict:
     """Validate EVERYTHING the worker needs, once, before a single item is claimed.
 
-    **`meeting_only` is not a worker option.** It is passed by ONE caller — `evals/run_filing.py`,
-    when it drives a meeting-only subset through the `pydantic` backend — and it means "this rig
-    will only ever hand the agent `kind="meeting"` rows". `worker.run` and `cli` never pass it, so
-    a real worker still gets the refusal below. It exists because the pre-flight is worth running
-    for that rig too (the whole point of a fail-closed pre-flight is that a misconfiguration is one
-    loud line rather than a table of `failed` rows), and the ONE check that does not apply to it is
-    the one about a queue carrying ordinary captures.
+    **A `meeting_only` escape used to live here and it is gone (ADR 033).** M1 refused
+    `backend="pydantic"` for any worker outright — a worker's queue carries ordinary captures too,
+    and a backend that served one `kind` would have burned deliveries one row at a time while
+    looking configured — with one opt-out for the meeting-only measurement rig. All three backends
+    serve both flows now, so the refusal has nothing left to refuse and the parameter that softened
+    it has nothing left to soften. The checks that remain for this backend are the ones that were
+    always about the backend rather than about the flow: a provider-prefixed model id, a configured
+    price, the provider's own key.
 
     Every check here is fail-closed and loud. Per-item validation was the alternative and is
     strictly worse: a malformed `ops/acl.json` would produce N identical `failed` rows and bury
@@ -143,7 +144,7 @@ def startup_checks(settings, *, meeting_only: bool = False) -> dict:
             f"invalid librarian backend {settings.backend!r} "
             f"(use one of: {', '.join(agent_module.BACKENDS)})")
     if settings.backend == agent_module.PYDANTIC_BACKEND:
-        _check_pydantic_backend(settings, meeting_only=meeting_only)
+        _check_pydantic_backend(settings)
     else:
         _check_model_spelling_for(settings)
 
@@ -192,20 +193,31 @@ def startup_checks(settings, *, meeting_only: bool = False) -> dict:
     if settings.backend == "sdk":
         # The credential BEFORE the skill: it is the cheapest of the two (no git read at all) and
         # by far the more frequent fault, so an operator with neither is told about that one
-        # rather than about a skill they may well have pushed.
+        # rather than about a skill they may well have pushed. `sdk` only — the pydantic backend
+        # authenticates with the provider's own key, checked in `_check_pydantic_backend`.
         _check_agent_credential()
-        _check_skill_at(repo, base)
+    if settings.backend in agent_module.SKILL_READING_BACKENDS:
+        # **Every backend that READS the skill is checked for it**, which is `sdk` and `pydantic`
+        # since ADR 033 — the structured backend injects the same brief as the exploring one, so a
+        # missing skill fails it identically and must be one loud line before the first claim
+        # rather than a `failed` row per capture. The offline double reads no skill at all, and
+        # requiring one of a `double` run would be a check that can only ever fail on something
+        # nothing was going to use.
+        skill_text = _check_skill_at(repo, base)
+        # ...and the brief it just proved must be the one this BACKEND can follow. See below.
+        _check_brief_matches_backend(
+            settings, skill_text, base_inputs.where(base, agent_module.SKILL_RELPATH))
         # The meeting-distiller brief is deliberately NOT checked here, unlike the ordinary
         # librarian skill above. The skill is needed by every item this worker will ever claim
         # (100% of them); the meeting brief is needed only by `kind="meeting"` rows, which may be
         # zero for a deployment's whole lifetime. Blocking the WHOLE worker at startup over a
         # brief that flow may never need would refuse ordinary captures for an unrelated reason.
-        # `agent.read_meeting_brief` (called from `SdkAgent._run_meeting`, on the FIRST meeting
-        # item actually claimed) already fails closed with the same `LibrarianConfigError`, which
-        # `worker.process_next` turns into a `failed` row naming the config stage — fail-closed at
-        # the point of need, not globally. A deployment that wants a global meeting-brief
-        # pre-flight can build one against `base_inputs.MEETING_BRIEF_RELPATH` the same way
-        # `_check_skill_at` below reads the ordinary skill's.
+        # `agent.read_meeting_brief` (called from either backend's own `_run_meeting`, on the FIRST
+        # meeting item actually claimed) already fails closed with the same `LibrarianConfigError`,
+        # which `worker.process_next` turns into a `failed` row naming the config stage —
+        # fail-closed at the point of need, not globally. A deployment that wants a global
+        # meeting-brief pre-flight can build one against `base_inputs.MEETING_BRIEF_RELPATH` the
+        # same way `_check_skill_at` below reads the ordinary skill's.
     _check_push_identity(repo)
 
     # Both read AT `base`, never off the working tree (`base_inputs` carries the argument),
@@ -220,8 +232,10 @@ def startup_checks(settings, *, meeting_only: bool = False) -> dict:
             "base": base}
 
 
-def _check_skill_at(repo: str, base: gitcmd.BaseRef) -> None:
-    """The skill must be present, non-empty and under the ceiling AT `base` — not merely on disk."""
+def _check_skill_at(repo: str, base: gitcmd.BaseRef) -> str:
+    """The skill must be present, non-empty and under the ceiling AT `base` — not merely on disk.
+    Returns the validated text, so the backend-agreement check below reads the SAME bytes rather
+    than fetching the blob a second time and possibly a different one."""
     relpath = agent_module.SKILL_RELPATH
     where = base_inputs.where(base, relpath)
     size = gitcmd.blob_size(repo, base.sha, relpath)
@@ -236,22 +250,59 @@ def _check_skill_at(repo: str, base: gitcmd.BaseRef) -> None:
     except GitError as ex:
         raise LibrarianConfigError(
             f"the librarian skill at {where} could not be read ({ex})") from ex
-    agent_module.validate_skill(text, where=where)
+    return agent_module.validate_skill(text, where=where)
 
 
-def _usable_example(model: str) -> bool:
-    """Would pasting this id into the printed command survive the next two refusals — the
-    provider-prefix rule and the price check? A refusal whose own example fails the refusal below it
-    is worse than one with no example."""
-    from stigmergy.librarian import pricing, pydantic_backend
+def _check_brief_matches_backend(settings, skill_text: str, where: str) -> None:
+    """Refuse a STRUCTURED backend whose brief still describes the tool-holding run (ADR 033).
 
-    if not pydantic_backend.provider_of(model):
-        return False
-    try:
-        pricing.require_priced(model)
-    except LibrarianConfigError:
-        return False
-    return True
+    **The landing order is the real rule and this is its depth.** The brief lives in the knowledge
+    repo and the platform lives here, so ADR 033's two halves land as two PRs — and if the platform
+    half arrives first, a `pydantic` worker injects a brief telling the model, in its own voice, to
+    write its account to a file it has no tool to write. `pydantic_backend.OVERRIDE_NOTE`'s comment
+    records what that costs when it happens on the MEETING flow, where the contradiction is named
+    out loud and scoped: a model that resolves it the other way describes writing a file it cannot
+    write, and the run comes back with an account about the wrong thing. On the ordinary flow after
+    ADR 033 there is no such override, because the brief is supposed to be the structured text — so
+    an old brief is a silent, uncorrected contradiction, and the score it produces is noise on the
+    exact measurement M3's retire-or-keep decision reads.
+
+    The signal is the outcome FILE's own name appearing in the brief at all: a backend-neutral
+    brief names no channel, and every version that predates ADR 033 documents `.librarian-outcome.
+    json` by name. Cheap, specific, and it cannot fire on a brief written for this milestone.
+
+    Asked of what the backend DECLARES (`build_agent(settings).structured_ordinary`) rather than of
+    `settings.backend`, so a fourth structured backend inherits the check by declaring the same
+    thing — the same reason `processing._one_pass` reads the attribute instead of a class.
+    """
+    if not agent_module.build_agent(settings).structured_ordinary:
+        return
+    if agent_module.OUTCOME_FILENAME not in skill_text:
+        return
+    # Imported HERE and not at module scope: this line is reached only by a run that has ALREADY
+    # built a structured backend, so the framework is loaded anyway — where an `sdk` or `double`
+    # run returns above and never touches it.
+    from stigmergy.librarian import pydantic_backend
+
+    raise LibrarianConfigError(
+        f"the librarian skill at {where} still names {agent_module.OUTCOME_FILENAME}, which is the "
+        f"outcome channel of a run that HOLDS TOOLS — and the {settings.backend!r} backend holds "
+        f"none: it returns its account as a structured object and the worker writes the page. "
+        f"Injecting that brief would tell the model to write a file it cannot write, and the pages "
+        f"it filed would be judged on a procedure it could not follow. The knowledge repo's brief "
+        f"has to land BEFORE this worker runs — that ordering is the ADR's, not this check's. "
+        f"Either push the rewritten brief (see {pydantic_backend.ORDINARY_ADR}, D4) or run "
+        f"STIGMERGY_LIBRARIAN_BACKEND=sdk, which is the backend that brief was written for")
+
+
+# REMOVED with the meeting-only refusal (ADR 033): `_usable_example`, which answered "would
+# pasting this model id into the printed command survive the next two refusals?" for the one
+# message that printed a ready-to-run `evals/run_filing.py` line. That message is gone — the
+# backend serves both flows and there is no rig to redirect an operator to — and the helper had
+# exactly one caller. Recorded here rather than deleted in silence: the rule it embodied (a refusal
+# whose own example fails the refusal below it is worse than one with no example) still applies to
+# the next message that prints a command, and the next person to write one should not have to
+# rediscover it.
 
 
 def _check_model_spelling_for(settings) -> None:
@@ -282,41 +333,20 @@ def _check_model_spelling_for(settings) -> None:
         f"switch to the backend that spelling belongs to")
 
 
-def _check_pydantic_backend(settings, *, meeting_only: bool, environ: dict | None = None) -> None:
-    """Everything the `pydantic` backend needs, refused before the first claim — starting with the
-    flow it cannot serve.
+def _check_pydantic_backend(settings, *, environ: dict | None = None) -> None:
+    """Everything the `pydantic` backend needs, refused before the first claim.
 
-    The three checks below are the meeting-only rig's; the refusal above them is the worker's, and
-    it is the whole reason this backend is not simply "available". Config that half-works is the
-    failure this repo refuses on principle: a worker that claims every `kind` and can file only one
-    of them would drain ordinary captures into `failed`, one delivery at a time, while looking
-    configured.
+    **The refusal that used to open this function is gone (ADR 033).** It said this backend served
+    the meeting flow only and that a worker's queue carries ordinary captures too — true of M1, and
+    the right shape of refusal for it: config that half-works is the failure this repo refuses on
+    principle. It serves both flows now, so what remains are the three checks that were always
+    about the BACKEND rather than about a flow it could not run.
 
     `environ` is injectable for the same reason `agent.credential_status`'s is: the key preflight is
     a pure function of a mapping and a model string, and it must be assertable without a process
     whose environment has been mutated around it.
     """
     from stigmergy.librarian import pricing, pydantic_backend
-
-    if not meeting_only:
-        # An id the operator can paste, and it has to satisfy BOTH of the next two refusals or the
-        # paste walks them straight into one: provider-prefixed AND priced. Their own when it
-        # already is, otherwise one this environment can actually price. Derived rather than
-        # hardcoded — a model id in a message is configuration like every other one.
-        example = (settings.model if _usable_example(settings.model)
-                   else (pricing.priced_models() or [""])[0])
-        raise LibrarianConfigError(
-            f"the {agent_module.PYDANTIC_BACKEND!r} librarian backend serves the MEETING flow only "
-            f"in this milestone, and a worker's queue carries ordinary captures too — the first "
-            f"`raw` or `drive` row it claimed would be refused and would burn its deliveries one "
-            f"at a time. A worker must run one of the two backends that serve every flow: "
-            f"STIGMERGY_LIBRARIAN_BACKEND=sdk (the real agent) or "
-            f"STIGMERGY_LIBRARIAN_BACKEND=double (the offline double, which fabricates pages and "
-            f"is for tests only). To MEASURE this backend on the meeting golden, use the "
-            f"meeting-only rig instead of a worker: "
-            f"python evals/run_filing.py --backend {agent_module.PYDANTIC_BACKEND} "
-            f"--kinds meeting --model {example}. "
-            f"See {pydantic_backend.ADR}")
 
     provider = pydantic_backend.provider_of(settings.model)
     if not provider:

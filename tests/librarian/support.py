@@ -289,10 +289,26 @@ class DelayedAgent:
     before sending it a real OS signal — the double itself runs near-instantly (no network, no
     model), so without an artificial delay there would be no reliable window to interrupt.
     `on_ready` is used to print a line the parent test process reads with a real timeout instead
-    of guessing with a fixed sleep (mirrors `tests/capture/test_cli.py`'s `_read_until`)."""
+    of guessing with a fixed sleep (mirrors `tests/capture/test_cli.py`'s `_read_until`).
+
+    **It copies `structured_ordinary` for the reason `evals/run_filing.CountingAgent` does** (ADR
+    033): this stands where `processing` expects a `filing_port.FilingAgent`, and a wrapper that
+    swallows a declared port member silently changes which branch of the ordinary flow runs behind
+    it. Plain attribute access with no default, so a backend that forgot to declare it fails at
+    construction rather than one delivery at a time.
+
+    **And it forwards `run_meeting`, which it did not used to.** The delay belongs to the ORDINARY
+    flow this harness interrupts, so the second call was simply absent — and a wrapper standing in
+    for the port while answering one of its two calls is the same half-backend
+    `test_filing_port_conformance` refuses in every other shape: a worker whose queue happened to
+    hand this harness a `kind="meeting"` row would meet an `AttributeError` mid-item rather than a
+    filed page set. Forwarded UNDELAYED and deliberately so — the sleep exists to open a window for
+    a real SIGINT on the flow the signal tests actually drive, and slowing a call nothing here
+    interrupts would only make the suite wait."""
 
     def __init__(self, inner, seconds: float, on_ready=lambda: None):
         self.inner = inner
+        self.structured_ordinary = inner.structured_ordinary
         self.seconds = seconds
         self.on_ready = on_ready
 
@@ -300,3 +316,6 @@ class DelayedAgent:
         self.on_ready()
         time.sleep(self.seconds)
         return self.inner.run(**kwargs)
+
+    def run_meeting(self, **kwargs):
+        return self.inner.run_meeting(**kwargs)

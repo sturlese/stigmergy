@@ -1,10 +1,18 @@
 """`--kinds`: a subset is a DIFFERENT measurement, and every part of the instrument has to say so.
 
 The filing golden was one set, scored whole, against pinned denominators. ADR 032 gave it a subset
-mode so a backend that serves the meeting flow only can be measured at all — and a subset is where
+mode so a backend that served the meeting flow only could be measured at all — and a subset is where
 a score series can quietly start lying: three phases and twelve phases both render a table with the
 same column headings, and a row in `history.ndjson` read two years later has nothing but its own
 fields to say which one it was.
+
+**ADR 033 lifted the RESTRICTION and kept the flag.** `_require_measurable_subset` — which refused
+`--backend pydantic` anything but `--kinds meeting` — is gone with the limitation it described:
+that backend serves every kind the golden set carries now. The four tests that pinned the refusal
+went with it (see the code comment that replaced the function in `evals/run_filing.py`, which keeps
+the RULE: a run that cannot measure a capture is refused before the queue is touched, never scored
+as a failure). What is asserted in its place is the lifted state itself — the structured backend
+parses and measures the WHOLE set, which is the invocation M1 refused.
 
 So every seam the subset touches is pinned here, on both sides:
 
@@ -12,8 +20,7 @@ So every seam the subset touches is pinned here, on both sides:
 * the NARROWING takes both halves of the golden set with it, never the manifest alone;
 * the DENOMINATOR check stops holding a subset against the whole set's pin — and still refuses a
   subset that would score nothing at all, and still refuses drift when the whole set IS being run;
-* the BACKEND/subset pairing that could not measure anything is refused before the queue is
-  touched;
+* every backend argparse accepts is one dispatch knows, and vice versa;
 * and `kinds` reaches the report, the caption a human screenshots, and the history row.
 
 Pure: no Postgres, no git, no model. `_run` — the half that spends money — is never called here,
@@ -192,52 +199,38 @@ def test_a_subset_still_owes_the_three_checks_that_are_true_of_any_set(golden):
         run_filing._check_set(sub_manifest, orphaned, whole_set=False)
 
 
-# ── the backend/subset pairing ─────────────────────────────────────────────────────────────────
-def test_the_meeting_only_backend_refuses_a_subset_it_could_not_measure():
-    """A run that also submits ordinary captures on this backend scores a column of refusals and
-    calls it a backend result. Refused before the queue is touched, naming the flag that fixes it —
-    which is what makes it a refusal rather than an obstacle."""
-    with pytest.raises(SystemExit) as exc_info:
-        run_filing._require_measurable_subset(run_filing.MEETING_ONLY_BACKEND,
-                                              ["raw", schema.MEETING])
+# ── the backend/subset pairing, after the restriction was lifted ───────────────────────────────
+# **DELETED here, with the restriction they pinned (ADR 033):**
+# `test_the_meeting_only_backend_refuses_a_subset_it_could_not_measure`,
+# `test_the_meeting_only_backend_refuses_the_whole_set_too`,
+# `test_the_meeting_only_subset_is_accepted_and_declares_itself_meeting_only` and
+# `test_every_other_backend_may_measure_any_subset_and_is_never_meeting_only`. All four drove
+# `run_filing._require_measurable_subset`, which no longer exists: `--backend pydantic` served the
+# meeting flow only in M1, so a run that also submitted ordinary captures scored a column of
+# refusals and called it a backend result. That backend serves both flows now, so there is no
+# unmeasurable pairing left for the rig to refuse. Their rule — a run that cannot measure a capture
+# is refused BEFORE the queue is touched, never scored as a failure — is recorded in
+# `evals/run_filing.py` where the function was, for the next backend/subset pairing somebody adds.
+#
+# What follows is the lifted state, which nothing asserted before because it was refused.
+def test_the_runner_carries_no_backend_subset_refusal_at_all_any_more():
+    """The removal, asserted directly rather than only by the absence of four tests.
 
-    message = str(exc_info.value)
-    assert f"--kinds {schema.MEETING}" in message
-    assert run_filing.MEETING_ONLY_BACKEND in message
-
-
-def test_the_meeting_only_backend_refuses_the_whole_set_too():
-    """`None` — no `--kinds` at all — is the default and the most likely mistake: an operator who
-    copies the ordinary invocation and only changes the backend."""
-    with pytest.raises(SystemExit, match=f"--kinds {schema.MEETING}"):
-        run_filing._require_measurable_subset(run_filing.MEETING_ONLY_BACKEND, None)
-
-
-def test_the_meeting_only_subset_is_accepted_and_declares_itself_meeting_only():
-    """The benign twin, and the return value that matters: `True` is what the rig passes to
-    `worker.startup_checks(meeting_only=…)`, which is the ONE thing that lets the librarian's own
-    pre-flight validate this backend instead of refusing it."""
-    assert run_filing._require_measurable_subset(
-        run_filing.MEETING_ONLY_BACKEND, [schema.MEETING]) is True
+    A helper that came back — under this name or another — would silently re-impose a limitation
+    the milestone lifted, and the four tests that would have caught it are gone. So the name is
+    pinned as ABSENT, which is the cheapest thing that notices.
+    """
+    assert not hasattr(run_filing, "_require_measurable_subset")
 
 
-@pytest.mark.parametrize("backend", ["sdk", "double"])
-@pytest.mark.parametrize("kinds", [None, ["meeting"], ["raw", "meeting"]])
-def test_every_other_backend_may_measure_any_subset_and_is_never_meeting_only(backend, kinds):
-    """The specificity half: this refusal is about ONE backend's limitation, and a `--kinds` subset
-    is a legitimate thing to ask of the other two. `False` is equally load-bearing — an `sdk` run
-    that claimed `meeting_only` would skip the worker refusal it is supposed to be subject to."""
-    assert run_filing._require_measurable_subset(backend, kinds) is False
-
-
-def test_the_backend_the_runner_names_is_the_one_the_librarian_refuses_for_a_worker():
+def test_the_backend_the_runner_names_is_the_structured_one_the_librarian_dispatches():
     """The two modules spell the backend id independently — the runner names it at its own module
     scope so `--help` costs nothing but the standard library. Two spellings of one id is a defect
-    that would surface as a refusal nobody can satisfy, so they are compared here."""
+    that would surface as a run nobody can ask for, so they are compared here."""
     from stigmergy.librarian import agent as agent_module
 
-    assert run_filing.MEETING_ONLY_BACKEND == agent_module.PYDANTIC_BACKEND
-    assert run_filing.MEETING_ONLY_BACKEND in agent_module.BACKENDS
+    assert run_filing.STRUCTURED_BACKEND == agent_module.PYDANTIC_BACKEND
+    assert run_filing.STRUCTURED_BACKEND in agent_module.BACKENDS
 
 
 # ── the parser, as a value ─────────────────────────────────────────────────────────────────────
@@ -247,10 +240,10 @@ def test_the_backend_the_runner_names_is_the_one_the_librarian_refuses_for_a_wor
 # cases that are about what `main` does with those arguments afterwards.
 def test_the_parser_is_a_value_and_accepts_every_flag_the_docs_promise():
     args = run_filing.build_parser().parse_args(
-        ["--backend", run_filing.MEETING_ONLY_BACKEND, "--kinds", schema.MEETING,
+        ["--backend", run_filing.STRUCTURED_BACKEND, "--kinds", schema.MEETING,
          "--model", "openai:gpt-5.6-terra", "--report", "/tmp/x.json"])
 
-    assert args.backend == run_filing.MEETING_ONLY_BACKEND
+    assert args.backend == run_filing.STRUCTURED_BACKEND
     assert args.kinds == schema.MEETING
     assert args.model == "openai:gpt-5.6-terra"
     assert args.report == "/tmp/x.json"
@@ -267,7 +260,7 @@ def test_the_parsers_defaults_are_the_whole_shipped_set_on_the_real_backend():
     assert args.manifest.endswith("manifest.json")
 
 
-@pytest.mark.parametrize("name", ["sdk", "double", run_filing.MEETING_ONLY_BACKEND])
+@pytest.mark.parametrize("name", ["sdk", "double", run_filing.STRUCTURED_BACKEND])
 def test_every_backend_dispatch_knows_is_a_choice_the_parser_accepts(name):
     """The `--backend` choices and `agent.BACKENDS` must not drift: a backend argparse accepts and
     dispatch does not is a run that dies after the fixture repo is built, and one dispatch knows and
@@ -291,18 +284,21 @@ def parse(monkeypatch):
     money.
 
     This is for what happens AFTER parsing — the `--kinds` resolution against the manifest on disk,
-    the backend/subset pairing, the whole-set decision and the denominator check. `_run` itself
-    needs Postgres, git, gitleaks and (for a real backend) a key, which is exactly why it is the
-    boundary rather than a convenience. Argument shapes alone are asserted through `build_parser()`
-    above, with no stub at all.
+    the whole-set decision and the denominator check. `_run` itself needs Postgres, git, gitleaks
+    and (for a real backend) a key, which is exactly why it is the boundary rather than a
+    convenience. Argument shapes alone are asserted through `build_parser()` above, with no stub at
+    all.
+
+    **The stub's signature is `_run`'s own**, deliberately: `meeting_only` went with the refusal
+    (ADR 033), and a stub that kept accepting `**kwargs` would swallow a keyword `main` stopped
+    passing — or one it started passing — without a single test noticing.
     """
     def _parse(*argv):
         captured = {}
 
-        def _record(args, manifest, expectations, *, kinds=None, meeting_only=False):
+        def _record(args, manifest, expectations, *, kinds=None):
             captured.update(backend=args.backend, model=args.model, report=args.report,
-                            kinds=kinds, meeting_only=meeting_only,
-                            ids=[c["id"] for c in manifest["captures"]])
+                            kinds=kinds, ids=[c["id"] for c in manifest["captures"]])
             return 0
 
         monkeypatch.setattr(run_filing, "_run", _record)
@@ -314,27 +310,31 @@ def parse(monkeypatch):
     return _parse
 
 
-@pytest.mark.parametrize("backend", ["sdk", "double"])
-def test_the_every_flow_backends_parse_and_measure_the_whole_set_by_default(parse, backend):
-    """The default invocation, unchanged by this milestone: no `--kinds`, the whole set, and
-    `meeting_only` false — a run that claimed otherwise would skip the worker refusal it is
-    supposed to be subject to."""
+@pytest.mark.parametrize("backend", ["sdk", "double", run_filing.STRUCTURED_BACKEND])
+def test_every_backend_parses_and_measures_the_whole_set_by_default(parse, backend):
+    """The default invocation, and the milestone in one assertion: no `--kinds`, the whole set,
+    on EVERY backend.
+
+    The structured one is the row that changed. `--backend pydantic` with no subset was the exact
+    invocation M1 exited on before the queue was touched; it now reaches the measurement carrying
+    all ten captures, which is what "the backend serves both flows" means at the rig's seam.
+    """
     captured = parse("--backend", backend)
 
     assert captured["backend"] == backend
-    assert captured["meeting_only"] is False
     assert len(captured["ids"]) == 10
     assert captured["kinds"] == ["meeting", "raw"], (
         "a whole-set run must still record which kinds it measured, or its row is the ambiguous "
         "one every later row is compared against")
 
 
-def test_the_meeting_only_backend_parses_with_its_required_subset(parse):
-    """The one invocation the worker refusal tells an operator to run, through the real parser."""
-    captured = parse("--backend", run_filing.MEETING_ONLY_BACKEND, "--kinds", schema.MEETING,
+def test_the_structured_backend_may_still_be_given_a_subset_as_an_ablation(parse):
+    """`--kinds` survived the restriction that made it necessary, and it has to: a subset somebody
+    CHOSE is a different thing from a limitation they worked around, and the meeting-only row
+    already recorded in `history.ndjson` must stay reproducible."""
+    captured = parse("--backend", run_filing.STRUCTURED_BACKEND, "--kinds", schema.MEETING,
                      "--model", "openai:gpt-5.6-terra")
 
-    assert captured["meeting_only"] is True
     assert captured["kinds"] == [schema.MEETING]
     assert captured["ids"] == list(MEETING_IDS)
     assert captured["model"] == "openai:gpt-5.6-terra"

@@ -59,6 +59,31 @@ FROZEN_MARKERS = (
 )
 _SHA_RE = re.compile(r"\b[0-9a-f]{40}\b")
 
+# ── the one state a frozen copy may be in WITHOUT a sha, and only until its PR lands ───────────
+# ADR 033 rewrote the librarian brief, and the platform PR and the knowledge-repo PR land together:
+# at the moment these bytes were copied here, the commit that carries them did not exist yet. A sha
+# row naming the PREVIOUS brief would be worse than a placeholder, because it would look answered —
+# `eval_history.corpus_provenance` copies `PROVENANCE.json`'s value into every `suite: "filing"`
+# row, so a wrong sha makes every future score comparable to the wrong predecessor. That is the one
+# failure this pin exists to prevent.
+#
+# So the placeholder is TOLERATED and BOUNDED, not ignored:
+#
+#  * the sha-shape assertion accepts 40 hex OR exactly this literal, and goes green either way once
+#    the real sha lands — no test edit at landing;
+#  * `_PENDING_ALLOWED` names the only files that may carry it, so a placeholder cannot spread to a
+#    copy nobody was expecting to see one in;
+#  * a file carrying it must also carry the command that replaces it, so the instruction cannot be
+#    dropped while the placeholder stays;
+#  * and the LANDING TRIPWIRE — the check that turns this from a polite request into a failure —
+#    lives in `tests/librarian/test_librarian_brief_contract.py`, because it has to read the live
+#    knowledge repo and this file deliberately never does (see the module docstring: a yardstick is
+#    not drift-guarded). It fails the moment the knowledge repo's brief matches these frozen bytes
+#    while a placeholder is still here.
+_PENDING_SHA = "PENDING-KNOWLEDGE-REPO-SHA"
+_PENDING_REPLACEMENT_COMMAND = "log -1 --format=%H -- .claude/skills/librarian/SKILL.md"
+_PENDING_ALLOWED = (REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",)
+
 # The BYTES of the three frozen copies, pinned. This is what turns the freeze from a request into
 # an enforced fact — `FROZEN.md` asks a human not to resync, and asking is what failed everywhere
 # this repo has needed a guard. It is deliberately NOT a drift guard against the live knowledge
@@ -70,11 +95,15 @@ _SHA_RE = re.compile(r"\b[0-9a-f]{40}\b")
 #
 # A deliberate re-freeze updates these three numbers IN THE SAME COMMIT as the bytes, which is the
 # review moment this pin exists to force — and, per `evals/README.md`, retires the series with it.
+#
+# The librarian brief's pin moved once, deliberately, in the commit that rewrote it: ADR 033 made
+# the brief backend-NEUTRAL (no tool mechanics in it at all), which is not an edit to a yardstick
+# but a new yardstick — so it retires the series with it, per `evals/README.md`.
 FROZEN_SHA256 = {
     ".claude/tools/stigmergy_lint.py":
         "5c914e43a33e05a276142b26cd6ebc3ff84479b43703c783b9959e6a28948f28",
     ".claude/skills/librarian/SKILL.md":
-        "688378c8a9714c4d60dff36fbe227f92382d7ab1ded005e6e2939851d3f688b1",
+        "37bf1faabfd7a0e88a6a9d0c8992f890db6cc0fac636331e944ec97ee28ac319",
     ".claude/skills/meeting-distiller/SKILL.md":
         "b3686f91666c5fa6f9f9a2aa602230db716abbf503792c60d64f7d0e2300476a",
 }
@@ -461,13 +490,70 @@ def test_every_fast_lane_type_has_a_template_to_draft_from():
 def test_each_frozen_copy_exists_and_records_the_commit_it_was_taken_at():
     """Not compared with the live knowledge repo, on purpose (see the module docstring). What
     must hold is that each copy is present and still says WHICH version it is — without that sha,
-    "which brief scored this run?" has no answer and the series stops being comparable."""
+    "which brief scored this run?" has no answer and the series stops being comparable.
+
+    A copy whose knowledge-repo commit does not exist yet may say `PENDING-KNOWLEDGE-REPO-SHA`
+    instead, and only that: see `_PENDING_SHA` above for why a placeholder beats a stale sha here,
+    and for the three things that keep it from becoming permanent.
+    """
     data = json.loads((REPO / "PROVENANCE.json").read_text(encoding="utf-8"))
     assert len(data["frozen_copies"]) == len(FROZEN_MARKERS)
     for relpath in data["frozen_copies"]:
         assert (REPO / relpath).is_file(), relpath
     for marker in FROZEN_MARKERS:
-        assert _SHA_RE.search(marker.read_text(encoding="utf-8")), marker.name
+        text = marker.read_text(encoding="utf-8")
+        assert _SHA_RE.search(text) or _PENDING_SHA in text, (
+            f"{marker.parent.name}/FROZEN.md records neither a 40-character source commit sha nor "
+            f"{_PENDING_SHA}")
+
+
+def test_the_knowledge_repo_landing_is_DONE_and_no_copy_is_pending_any_more():
+    """**The landing, asserted as an accomplished fact rather than tolerated as a state.**
+
+    While the knowledge-repo PR was unlanded these four files carried `PENDING-KNOWLEDGE-REPO-SHA`,
+    and the assertions around them were written to tolerate it and to go green without an edit the
+    day it was replaced. It has been replaced. Tolerance nobody can exercise is a permanently-green
+    check reading as coverage, so what the tolerance becomes is this: the pending state is now
+    ABSENT, and the day somebody re-freezes the brief and re-enters that state deliberately, this
+    is the test that says the landing is unfinished.
+
+    The bounded-allowance machinery below stays, and is what makes re-entering it survivable
+    rather than silent.
+    """
+    pending = {marker.parent.name for marker in FROZEN_MARKERS
+               if _PENDING_SHA in marker.read_text(encoding="utf-8")}
+
+    assert not pending, (
+        f"{sorted(pending)} still carries {_PENDING_SHA}. If a re-freeze put it back deliberately, "
+        f"the knowledge-repo commit has to land and every copy plus PROVENANCE.json takes its sha "
+        f"together — see tests/librarian/test_librarian_brief_contract.py's landing tripwire")
+
+
+def test_a_copy_that_is_still_pending_says_so_in_the_one_place_it_is_allowed_to():
+    """The placeholder, BOUNDED — the machinery that makes RE-ENTERING the pending state
+    survivable, now that the state itself is behind us.
+
+    Two properties, and each closes a way the tolerance could rot into a permanent hole:
+
+    * only an enumerated copy may carry it, so a second file cannot quietly acquire one and inherit
+      the exemption;
+    * a file carrying it must also carry the command that replaces it, so whoever lands the
+      knowledge-repo PR reads the fix in the file rather than having to reconstruct it.
+
+    A SUBSET rather than an equality, which is what let it go green when the sha landed without an
+    edit here — and what lets it keep working for the next re-freeze.
+    """
+    pending = {marker for marker in FROZEN_MARKERS
+               if _PENDING_SHA in marker.read_text(encoding="utf-8")}
+
+    assert pending <= set(_PENDING_ALLOWED), (
+        f"{sorted(p.parent.name for p in pending - set(_PENDING_ALLOWED))} carries "
+        f"{_PENDING_SHA}, and only the librarian brief's copy is allowed to be pending")
+    for marker in pending:
+        assert _PENDING_REPLACEMENT_COMMAND in marker.read_text(encoding="utf-8"), (
+            f"{marker.parent.name}/FROZEN.md carries {_PENDING_SHA} without the command that "
+            f"replaces it — a placeholder whose fix is not written beside it is how a placeholder "
+            f"becomes permanent")
 
 
 def test_provenance_and_every_frozen_copy_name_the_same_source_commit():
@@ -477,12 +563,21 @@ def test_provenance_and_every_frozen_copy_name_the_same_source_commit():
     not the brief in this tree, and `eval_history.corpus_provenance` copies that value into every
     `suite: "filing"` row. A score naming the wrong brief version is the one thing the series
     exists to answer, answered wrongly, and nothing about a run would show it.
+
+    **A pending copy is the one exemption, and it is a narrow one**: a placeholder makes no claim
+    about a commit, so it cannot disagree with `PROVENANCE.json`. A copy carrying a REAL sha that
+    differs still fails — which is exactly what catches the half-finished landing where the
+    librarian's `FROZEN.md` is filled in and `PROVENANCE.json` is left naming the old brief.
     """
     sha = json.loads((REPO / "PROVENANCE.json").read_text(encoding="utf-8"))["stigmergy_sha"]
     assert _SHA_RE.fullmatch(sha)
     for marker in FROZEN_MARKERS:
-        assert sha in marker.read_text(encoding="utf-8"), (
-            f"{marker.parent.name}/FROZEN.md does not record PROVENANCE.json's {sha}")
+        text = marker.read_text(encoding="utf-8")
+        assert sha in text or _PENDING_SHA in text, (
+            f"{marker.parent.name}/FROZEN.md does not record PROVENANCE.json's {sha}. If the "
+            f"knowledge-repo PR has just landed, PROVENANCE.json's stigmergy_sha and ALL THREE "
+            f"FROZEN.md files take the new commit together — that is what 'one freeze, one commit' "
+            f"means, and a partial update is the drift this test exists for")
 
 
 def test_the_frozen_copies_are_byte_for_byte_the_bytes_the_series_was_measured_under():

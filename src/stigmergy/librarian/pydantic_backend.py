@@ -1,32 +1,40 @@
-"""The meeting flow on pydantic-ai — one structured model call, no tools, no outcome file.
+"""BOTH flows on pydantic-ai — one structured model call each, no tools, no outcome file.
 
-The third `FilingAgent` implementation, and the first one that is not Claude's. It exists because
-the meeting flow was ALREADY portable and nothing had noticed: the agent holds no page-writing tool
-(code is the sole author of every page in the set), it explores nothing (the transcript, the
-registry and the metadata are all handed to it), and its whole answer is one structured account. A
-flow shaped like that does not need an agent harness at all — it needs a model that can return a
-typed object. ADR 032 records the decision and the expand–contract plan; ADR 020 is why the flow
-has this shape in the first place.
+The third `FilingAgent` implementation, and the first one that is not Claude's. It started with the
+meeting flow because that flow was ALREADY portable and nothing had noticed: the agent holds no
+page-writing tool (code is the sole author of every page in the set), it explores nothing (the
+transcript, the registry and the metadata are all handed to it), and its whole answer is one
+structured account. A flow shaped like that does not need an agent harness at all — it needs a
+model that can return a typed object. ADR 032 records that half; ADR 020 is why the meeting flow
+had the shape in the first place.
 
-**MEETING ONLY, in this milestone.** `run` exists because the port requires it and raises, which is
-a state no worker can reach: `worker.startup_checks` refuses `backend="pydantic"` outright unless
-the caller is the meeting-only eval rig (`meeting_only=True`), because a worker's queue carries
-ordinary captures too and a backend that half-serves a queue is the configuration this repo refuses
-on principle. Lifting that is M2's job, not a flag.
+**ADR 033 gave the ORDINARY flow the same shape, and this backend now serves both.** M1's `run`
+was a refusal, and `worker.startup_checks` refused this backend for any worker outright — because
+a worker's queue carries ordinary captures too and a backend that half-serves a queue is the
+configuration this repo refuses on principle. What lifted it is not a flag: the ordinary flow got
+the meeting flow's division of labour. A deterministic gatherer (`librarian/gather.py`) reads the
+checkout at the base commit and `processing` hands the result over as rendered prompt text, the
+agent returns a structured account CARRYING the page's own body, and `processing._write_ordinary_page`
+writes it. There is nothing left for this backend to explore and nothing left for it to write.
+
+**The gatherer is deliberately NOT in here.** `processing` gathers and renders; this backend
+receives a string. Two structured backends must share one context builder and one fence
+discipline, and a gatherer living inside a backend is a gatherer the second one reimplements.
 
 **What is NOT reused, deliberately.** `kernel.llm.build_processor` is this repo's fake/real
 dispatch for every OTHER agent, and it is the wrong seam here: the librarian's offline path is
 `double.DoubleAgent` — a whole adversarial backend the suite is built on — and routing this module
 through `resolve_backend` would create a SECOND offline path with different semantics answering to
 a different variable (`$CLEAN_LLM` rather than `$STIGMERGY_LIBRARIAN_BACKEND`). What IS reused is
-everything the flow already owns: `agent.read_meeting_brief` (the base-commit read),
-`agent.build_meeting_prompt` (the per-item message), `agent.build_meeting_system_prompt` (the
-brief's body as instructions) and `agent.parse_meeting_outcome` (the SAME trust boundary the file
-channel goes through — a structured provider is not a trusted one).
+everything each flow already owns: `agent.read_skill`/`read_meeting_brief` (the base-commit reads),
+`agent.build_structured_prompt`/`build_meeting_prompt` (the per-item message),
+`agent.build_system_prompt`/`build_meeting_system_prompt` (the brief's body as instructions) and
+`agent.parse_outcome`/`parse_meeting_outcome` (the SAME trust boundary the file channel goes
+through — a structured provider is not a trusted one).
 
-**`pydantic_ai` is imported inside the method**, exactly as `claude_agent_sdk` is in `agent.py`:
+**`pydantic_ai` is imported inside the methods**, exactly as `claude_agent_sdk` is in `agent.py`:
 a keyless run must not load an agent framework, and the import graph must not claim this package
-depends on one unconditionally. `pydantic` itself is module-scope — the output schema below is
+depends on one unconditionally. `pydantic` itself is module-scope — the output schemas below are
 plain data, and a test that builds one by hand must not have to reach through a backend to do it.
 """
 import json
@@ -44,7 +52,15 @@ log = logging.getLogger(__name__)
 
 BACKEND_NAME = "pydantic"
 
-ADR = "docs/decisions/032-filing-port-and-pricing-seam.md"
+# The decision record a REFUSAL points an operator at. Read by
+# `worker._check_brief_matches_backend`, which is the one message that has to tell somebody where
+# the landing-order rule it enforces is written down.
+#
+# `ADR = "…/032-…"` used to sit beside this and is gone: it was cited by exactly one message — the
+# meeting-only refusal ADR 033 removed — and a module constant naming a document nothing quotes is
+# the shape this repo prunes on sight. ADR 032 is still this module's other design record and is
+# cited in the prose above, which is where a reference with no runtime reader belongs.
+ORDINARY_ADR = "docs/decisions/033-structured-filing-flow.md"
 
 # How many times the FRAMEWORK may re-ask the model when its answer does not satisfy the output
 # schema. One constant, read twice on purpose: it is both the retry budget handed to the `Agent`
@@ -134,7 +150,103 @@ class MeetingAccount(BaseModel):
     triage: MeetingTriage = Field(default_factory=MeetingTriage)
 
 
-# This backend's own environment paragraph — the ONE part of the preamble that differs per backend.
+# ── the ORDINARY account, as a schema instead of a file (ADR 033) ─────────────────────────────
+# The same field-for-field mirror discipline the meeting schema above follows, over the shape
+# `agent.parse_outcome` reads — and with THREE deliberate omissions, each one a field this backend
+# must not be able to declare:
+#
+#  * `page_path` — code decides every path here (`processing._write_ordinary_page`), from the
+#    title and from `page.FOLDER_BY_TYPE`. A field the model could fill is a path the model could
+#    steer, and `_cross_check_outcome` would then be defending against a claim nothing needed to
+#    make. `parse_outcome` still ACCEPTS one (the `sdk` backend declares it), which is the whole
+#    of the expand–contract: one parser, two shapes, and each backend emitting only its own.
+#  * top-level `title`/`page_type` — they live in `page` for this backend, and `parse_outcome`
+#    fills the single fields every downstream reader uses from there. Declaring both would let one
+#    account carry two answers to one question.
+class OrdinaryAnchoring(BaseModel):
+    """This page's anchor. `kind` is `entity` (with `entities`) or `company` (with a written
+    `reason`); the registry, not this schema, decides whether a name resolves."""
+    kind: str = ""
+    reason: str = ""
+    entities: list[str] = Field(default_factory=list)
+
+
+class OrdinaryPage(BaseModel):
+    """The page itself — the title it is filed under, its type, and its whole body. No path: the
+    worker derives the folder from the type and the filename from the title."""
+    title: str = ""
+    page_type: str = ""
+    body: str = ""
+
+
+class OrdinaryOverlap(BaseModel):
+    path: str = ""
+    note: str = ""
+
+
+class OrdinaryEdit(BaseModel):
+    """One DECLARED edit to a page that already exists — performed by the worker, never by this
+    agent (`edits.py`)."""
+    path: str = ""
+    kind: str = ""
+    link: str = ""
+    note: str = ""
+
+
+class OrdinaryFinding(BaseModel):
+    """A steering attempt the agent noticed. Only `category` travels — never the payload."""
+    category: str = ""
+
+
+class OrdinaryTriage(BaseModel):
+    """Why the capture was parked, when `decision` is `triage`."""
+    kind: str = ""
+    name: str = ""
+    judged_type: str = ""
+
+
+class FilingAccount(BaseModel):
+    """The whole account of one ordinary capture: `decision` is `file` or `triage`, and the rest is
+    judgment plus the page's own CONTENT."""
+    decision: str = ""
+    page: OrdinaryPage = Field(default_factory=OrdinaryPage)
+    anchoring: OrdinaryAnchoring = Field(default_factory=OrdinaryAnchoring)
+    links_created: list[str] = Field(default_factory=list)
+    overlaps: list[OrdinaryOverlap] = Field(default_factory=list)
+    edits: list[OrdinaryEdit] = Field(default_factory=list)
+    summary: str = ""
+    findings: list[OrdinaryFinding] = Field(default_factory=list)
+    triage: OrdinaryTriage = Field(default_factory=OrdinaryTriage)
+
+
+# This backend's own ordinary environment — the ONE part of the preamble that differs per backend.
+# TWO numbered points, because the SDK's own environment (`agent.ORDINARY_SDK_ENVIRONMENT`) is two
+# and the shared point after it is numbered `3.`; the opening, that shared point and the separator
+# come from `agent.build_filing_header`, where they are written once.
+ORDINARY_ENVIRONMENT = (
+    "1. You have NO tools. You cannot read, search or write anything, and you do not write your "
+    "account to a file: you RETURN it, as the structured object this run's output schema "
+    "declares. Everything you need is in the worker's own message below: the captured material, "
+    "the entities it names resolved through the registry, the candidate pages this brain already "
+    "holds (with excerpts), the link neighbourhood around them, and the repo's own page names. "
+    "The page contract and this type's template are summarised in the procedure below; you do not "
+    "read them from the checkout because you cannot.\n"
+    "2. The worker writes the page from what you return — the filename from your title, the "
+    "folder from your page type, the server-owned frontmatter, the declared edits, the commit. "
+    "Your job is judgment and DRAFTING: where it belongs, what it anchors to, what it overlaps, "
+    "and the page's own text.\n")
+
+ORDINARY_SYSTEM_PROMPT_HEADER = agent_module.build_filing_header(ORDINARY_ENVIRONMENT)
+
+# The one line of the per-item prompt that differs between the two channels — see
+# `agent.build_prompt`, whose default is the file channel's own sentence.
+ORDINARY_OUTCOME_CHANNEL = (
+    "\nReturn your account as the structured object this run's output schema declares, in the "
+    "shape the skill documents — the page's own text included, in `page.body`. You write no file "
+    "and you have no tool that could.")
+
+
+# This backend's own MEETING environment paragraph.
 # The opening, the shared points and the separator come from `agent.build_meeting_header`, which is
 # where they are written once.
 MEETING_ENVIRONMENT = (
@@ -177,8 +289,8 @@ OUTCOME_CHANNEL = (
     "shape the skill documents. You write no file and you have no tool that could.")
 
 
-class PydanticMeetingAgent:
-    """The meeting flow's pydantic-ai backend. Conforms to `filing_port.FilingAgent` structurally —
+class PydanticFilingAgent:
+    """The pydantic-ai backend, for BOTH flows. Conforms to `filing_port.FilingAgent` structurally —
     never by inheritance, so a backend is a class that answers the two calls and nothing more.
 
     `model_factory` is the offline seam, and it is the ONLY one this module has. It is a zero-arg
@@ -193,6 +305,13 @@ class PydanticMeetingAgent:
     injected double can never make a run look free.
     """
 
+    # The STRUCTURED shape of the ordinary flow, declared rather than inferred (see
+    # `filing_port.FilingAgent.structured_ordinary`). `processing` reads THIS, never
+    # `isinstance(agent, PydanticFilingAgent)`: a fourth backend, or a test double standing in for
+    # one, must be able to take the structured branch by declaring it rather than by being the
+    # right class.
+    structured_ordinary = True
+
     def __init__(self, settings, *, model_factory=None):
         self.settings = settings
         self.model_factory = model_factory
@@ -205,25 +324,103 @@ class PydanticMeetingAgent:
         pricing.require_priced(settings.model)
 
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
-            corrective: str = "", reply: str = "", flow_note: str = "") -> AgentRun:
-        """The ordinary flow — refused, and unreachable through a worker.
+            corrective: str = "", reply: str = "", flow_note: str = "",
+            gathered: str = "") -> AgentRun:
+        """The ordinary flow: file ONE capture, in one structured call, writing nothing.
 
-        The port requires the method, so it exists and it is honest about why it does nothing:
-        `worker.startup_checks` refuses `backend="pydantic"` for any worker before a single item is
-        claimed, precisely so this branch is never how somebody discovers the limitation. It is
-        still a real refusal rather than a `NotImplementedError`, because `AgentError` is the
-        family `processing` already turns into a `failed` row with a sentence on it — a bare
-        `NotImplementedError` would surface as an unexpected crash with a traceback at an operator.
-
-        **Priced at `0.0` like every other fault this backend raises**, and that is the port's rule
-        rather than a formality: `processing` reads `run_cost_usd` off the exception, so a fault
-        without the field cannot be told apart from one nobody attached it to. Nothing was spent
-        here — no model was built and no request was made — and `0.0` is the honest way to say so.
+        Structurally parallel to `run_meeting` below and to `agent.SdkAgent.run` above, on purpose —
+        a backend swap should be a provider change, not a mechanism one. `gathered` is the
+        deterministic gatherer's context, already rendered to prompt text by `processing`; this
+        backend never builds one (see the module docstring).
         """
-        raise priced(AgentRun(), AgentError(
-            f"the {BACKEND_NAME!r} librarian backend serves the meeting flow only in this "
-            f"milestone, and this capture is an ordinary one. A worker must run backend 'sdk' (the "
-            f"real agent, every flow) or 'double' (the offline double, every flow); see {ADR}"))
+        import asyncio
+        return asyncio.run(self._run(
+            worktree=worktree, material=material, hints=hints, submitted_by=submitted_by,
+            corrective=corrective, reply=reply, flow_note=flow_note, gathered=gathered))
+
+    async def _run(self, *, worktree, material, hints, submitted_by, corrective, reply="",
+                   flow_note="", gathered="") -> AgentRun:
+        import asyncio
+
+        # Imported HERE, never at module scope — see the module docstring.
+        from pydantic_ai import Agent
+        from pydantic_ai.exceptions import UnexpectedModelBehavior
+        from pydantic_ai.usage import RunUsage, UsageLimits
+
+        from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
+
+        ensure_usage_extraction_repaired()
+
+        # `turns`/`tool_calls` stay at the envelope's own zero — one call, no tools, no loop.
+        run = AgentRun()
+        worktree_root = os.path.realpath(worktree)
+
+        # The skill comes out of the WORKTREE, which is the checkout at this item's base commit —
+        # the same read `SdkAgent._run` makes, deliberately not a second reader. A missing skill
+        # raises `LibrarianConfigError` here, before any model call is spent.
+        instructions = agent_module.build_system_prompt(
+            agent_module.read_skill(worktree_root), header=ORDINARY_SYSTEM_PROMPT_HEADER)
+        prompt = agent_module.build_structured_prompt(
+            material=material, hints=hints, submitted_by=submitted_by, gathered_block=gathered,
+            outcome_channel=ORDINARY_OUTCOME_CHANNEL, corrective=corrective, reply=reply,
+            flow_note=flow_note)
+
+        # Model resolution gets its OWN narrow try, for the reason `_run_meeting` records: the
+        # blanket handler below would report a configuration fault as "the run failed".
+        try:
+            model = self.model_factory() if self.model_factory else self.settings.model
+            filer = Agent(model, output_type=FilingAccount, instructions=instructions,
+                          retries=OUTPUT_RETRIES)
+        except Exception as ex:  # noqa: BLE001 — class name only, like every other wrap here
+            raise priced(run, AgentError(
+                f"could not resolve the configured model ({ex.__class__.__name__}); "
+                f"$STIGMERGY_LIBRARIAN_MODEL is {self.settings.model!r}")) from ex
+        usage = RunUsage()
+        limits = UsageLimits(request_limit=1 + OUTPUT_RETRIES)
+        try:
+            async with asyncio.timeout(self.settings.timeout_s):
+                result = await filer.run(prompt, usage=usage, usage_limits=limits)
+        except TimeoutError as ex:
+            run.cost_usd = self._fault_cost(usage, flow="filing")
+            raise priced(run, AgentError(
+                f"the filing agent exceeded its {self.settings.timeout_s}s budget")) from ex
+        except UnexpectedModelBehavior as ex:
+            # A SHAPE problem — the class the worker's corrective retry exists for. Travels as an
+            # `OutcomeShapeError` carrying a finding, exactly as a refused account from the file
+            # channel does; see `_run_meeting`'s own arm for the full argument.
+            run.cost_usd = self._fault_cost(usage, flow="filing")
+            raise priced(run, OutcomeShapeError([gates.Finding(
+                agent_module._OUTCOME_GATE, "framework-rejected",
+                f"the account did not satisfy this run's output schema after "
+                f"{OUTPUT_RETRIES} re-validation attempt(s) ({ex.__class__.__name__}); return "
+                f"every field the schema declares, in the shape the skill documents")])) from ex
+        except Exception as ex:  # noqa: BLE001 — class name only: provider errors carry prompt text
+            run.cost_usd = self._fault_cost(usage, flow="filing")
+            raise priced(run, AgentError(
+                f"the filing agent run failed ({ex.__class__.__name__})")) from ex
+
+        run.cost_usd = self._cost(usage, flow="filing")
+        run.stop_reason = str(getattr(result.response, "finish_reason", "") or "")
+        # The SAME boundary the file channel goes through. A typed provider response is not a
+        # trusted one: it was written by a model that has just read untrusted material.
+        # Deliberately OUTSIDE the try above, so an `OutcomeShapeError` reaches the corrective
+        # retry carrying its findings instead of being flattened into a bare `AgentError`.
+        raw = result.output.model_dump()
+        # The SAME ceiling the file channel applies to `.librarian-outcome.json`, on the channel
+        # that has no file to stat — and it matters MORE here than in the meeting flow, because
+        # `page.body` is an unbounded string a model can fill with the whole material. One
+        # constant, two channels. Dumped ONCE: `parse_outcome` reads the dict, not these bytes.
+        size = len(json.dumps(raw, ensure_ascii=False, default=str).encode("utf-8"))
+        if size > agent_module.MAX_OUTCOME_BYTES:
+            raise priced(run, AgentError(
+                f"the filing agent's account is {size} bytes, over the "
+                f"{agent_module.MAX_OUTCOME_BYTES}-byte ceiling"))
+        try:
+            run.outcome = agent_module.parse_outcome(raw)
+        except AgentError as ex:
+            priced(run, ex)
+            raise
+        return run
 
     def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
                     source_page_path: str, corrective: str = "", reply: str = "") -> AgentRun:
@@ -361,7 +558,7 @@ class PydanticMeetingAgent:
             raise
         return run
 
-    def _fault_cost(self, usage) -> float:
+    def _fault_cost(self, usage, *, flow: str = "meeting") -> float:
         """`_cost`, on a road where it must never raise.
 
         Every caller of this is already handling a fault, and `_cost` can itself refuse — an
@@ -371,14 +568,18 @@ class PydanticMeetingAgent:
         the price cannot be resolved: nothing was computed, and the fault keeps its own message.
         """
         try:
-            return self._cost(usage)
+            return self._cost(usage, flow=flow)
         except LibrarianConfigError:
             log.warning("could not price the failed pass: no price is configured for %r — the "
                         "fault below is reported with a spend of $0.00", self.settings.model)
             return 0.0
 
-    def _cost(self, usage) -> float:
+    def _cost(self, usage, *, flow: str = "meeting") -> float:
         """This attempt's dollars, computed from tokens because no provider here prices itself.
+
+        ONE arithmetic for both flows — `flow` names the pass in the log line and nothing else. A
+        second `_cost` per flow would be a second multiplication at a second call site, which is
+        the one thing `pricing.compute_cost_usd`'s own docstring says never to grow.
 
         Read defensively (`getattr`) for the same reason `answer.service._usage_facts` is: the
         framework's usage object has grown fields before, and an injected offline model may hand
@@ -393,8 +594,21 @@ class PydanticMeetingAgent:
             cached_input_tokens=counts["cache_read_tokens"],
             cache_write_tokens=counts["cache_write_tokens"],
             output_tokens=counts["output_tokens"])
-        log.info("meeting pass on %s: %s prompt tokens (%s cached, %s cache-written) / %s output "
-                 "-> $%s (computed from librarian/pricing.py, as of %s)", self.settings.model,
+        log.info("%s pass on %s: %s prompt tokens (%s cached, %s cache-written) / %s output "
+                 "-> $%s (computed from librarian/pricing.py, as of %s)", flow, self.settings.model,
                  counts["input_tokens"], counts["cache_read_tokens"],
                  counts["cache_write_tokens"], counts["output_tokens"], cost, pricing.AS_OF)
         return cost
+
+
+# ── the name this class had while it served one flow ──────────────────────────────────────────
+# `PydanticMeetingAgent` was accurate for exactly one milestone and is now a lie: this backend
+# serves both flows (ADR 033). Renaming it outright would have broken four test modules in the
+# same commit that changed the behaviour they cover, which is the one thing the breaking-change
+# doctrine here refuses — so the rename EXPANDS first and the old spelling stays importable.
+#
+# **Removal criterion, and it is an adoption signal rather than a date**: the alias goes when no
+# module outside this file imports it. The consumers are fully enumerable — they are all in this
+# repository's own `tests/librarian/` — so this is a transition with a known end, not an
+# indefinite compatibility surface.
+PydanticMeetingAgent = PydanticFilingAgent
