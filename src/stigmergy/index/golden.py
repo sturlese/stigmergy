@@ -1,22 +1,19 @@
-"""Golden-set scoring: Recall@5 per retrieval arm. Pure logic — the runner in
-`evals/run_retrieval.py` wires it to a live index.
+"""Golden-set scoring: Recall@5 per retrieval arm. Pure logic — `evals/run_retrieval.py` wires it
+to a live index.
 
-Golden format follows `evals/qa_golden.json`: a `questions` list where each entry carries `q` and
-`expect.pages` (page ids — frontmatter `id`, or the file stem for pages without one), plus an
-OPTIONAL `filters` object handed straight to `search.search_arms(filters=...)`. The set grows with
-every observed miss, and the arm's mean recall@5 is gated at 0.80 in CI.
-
-`filters` is carried, never interpreted: this module stays pure (no `search` import, no DB),
-so an illegal column is caught by `_filter_clause`'s own `ValueError` — and, keylessly and
-minutes earlier, by `tests/index/test_golden.py`'s legal-columns test over the shipped set.
+Golden format: a `questions` list of `q` + `expect.pages` (page ids — frontmatter `id`, or the
+file stem) plus an OPTIONAL `filters` object handed straight to `search.search_arms`. `filters`
+is carried, never interpreted: this module stays pure (no `search` import, no DB); an illegal
+column is `_filter_clause`'s `ValueError`, and `tests/index/test_golden.py` checks the shipped
+set keylessly.
 """
 import json
 from pathlib import Path
 
 from stigmergy.index.rank import chain_base
 
-# fts / vec / rrf are the individual arms, kept for comparable numbers; `final` is the product
-# ranking — RRF plus the contract factors — and the arm the R@5 >= 0.80 bar is read on.
+# fts / vec / rrf are the individual arms, for comparable numbers; `final` is the product ranking
+# (RRF + contract factors) and the arm the R@5 >= 0.80 bar is read on.
 ARMS = ("fts", "vec", "rrf", "final")
 
 
@@ -48,12 +45,10 @@ def hit_at_k(expected: list[str], ranking: list[str], k: int) -> bool:
 
 def evaluate(questions: list[dict], arm_rankings_fn, k: int = 5) -> dict:
     """Score every question. `arm_rankings_fn(q, filters)` returns {arm: [page ids, best first]}
-    for each of ARMS. Reports per-arm mean recall@k and hit@k plus per-question detail — the
-    per-arm numbers are what arbitrates the RRF-vs-vec design point.
-
-    The callback takes TWO arguments, REQUIRED: a golden question that declares `filters` must
-    reach the search call filtered, and an optional-second-argument signature would let a caller
-    silently drop them — measuring the wrong thing while reporting a number."""
+    for each of ARMS; reports per-arm mean recall@k and hit@k plus per-question detail. The
+    callback takes TWO arguments, REQUIRED: an optional-second-argument signature would let a
+    caller silently drop a question's declared filters — measuring the wrong thing while
+    reporting a number."""
     detail = []
     sums = {arm: {"recall": 0.0, "hits": 0} for arm in ARMS}
     for item in questions:

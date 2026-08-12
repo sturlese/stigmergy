@@ -18,10 +18,9 @@ _FENCE_SUFFIX = "\nUNTRUSTED-DATA;end>>>"
 
 
 def _unfence(body: str) -> str:
-    """`read_page`'s body is fenced for an AGENT's context (`BrainService.fence`) — the affordance
-    is for a human reading Slack, so the decorative fence delimiters are stripped for display. This
-    changes nothing about trust or sanitization (both already happened upstream); it only removes
-    markers a human reader has no use for."""
+    """`read_page`'s body is fenced for an AGENT's context; this affordance is for a human, so
+    the fence delimiters are stripped for display — trust and sanitization already happened
+    upstream."""
     if body.startswith(_FENCE_PREFIX) and body.endswith(_FENCE_SUFFIX):
         return body[len(_FENCE_PREFIX):-len(_FENCE_SUFFIX)]
     return body
@@ -30,30 +29,20 @@ def _unfence(body: str) -> str:
 # ── ask-back: the submitter's reply, and nobody else's ───────────────────────────────────────────
 async def handle_thread_message(ctx, *, team_id: str, channel_id: str, thread_ts: str,
                                 slack_user_id: str, text: str) -> None:
-    """Called for every ordinary message inside a thread (never for a fresh top-level message —
-    the caller only invokes this when `thread_ts` names an EXISTING thread). A no-op for every
-    thread that is neither a Slack-originated capture's origin thread NOR a staged `@brain`/DM
-    Q&A thread — the overwhelming majority of Slack's traffic.
+    """Called for every ordinary message inside an EXISTING thread; a no-op for any thread
+    holding no Slack-originated capture — the overwhelming majority of Slack's traffic.
 
-    **Only the original submitter's reply counts**: a reply from anyone else is ignored ENTIRELY —
-    no `brain_reply`, no error, no reaction — because `brain_reply` runs under the replier's
-    identity, and accepting another person's text would attribute their words to the submitter (an
-    attribution forgery, not a UX detail). The identity check happens here, BEFORE
-    `BrainService.reply()` is ever called, precisely so a bystander's ordinary chatter in the
-    thread never reaches the write path at all.
+    **Only the original submitter's reply counts** — anyone else is ignored ENTIRELY (no
+    `brain_reply`, no error, no reaction), because accepting another person's text would
+    attribute their words to the submitter. Checked here, BEFORE `BrainService.reply()` is ever
+    called.
 
-    `team_id` is the EVENT's own workspace (`stigmergy.slack.app._event_team_id`), and it is also the
-    value the workspace check inside `resolve_slack_identity` uses. Passing the CONFIGURED
-    `ctx.settings.team_id` instead would make that comparison a tautology that can never fail.
-
-    A thread may legally hold more than one Slack-originated capture — the UNIQUE key is
-    `(team_id, channel_id, thread_ts, slack_user_id)`, so two DIFFERENT people reacting in the SAME
-    thread each reserve their own row — so the row that matters is never "whichever is newest". It
-    is the CURRENT replier's own row that is actually `needs_input`, found by filtering on the
-    resolved email, never assumed from the newest row in the thread. And "not `needs_input`" is not
-    the same as "already answered": `q.reply` (set only once a `needs_input` question was actually
-    answered, per `capture.queue.record_reply`) is what decides that — a row that was never asked
-    anything (`queued`, right after the capture ack) gets silence, symmetric with a bystander.
+    `team_id` is the EVENT's own workspace; passing the configured `ctx.settings.team_id` would
+    make the workspace check a tautology. A thread may hold several captures (the UNIQUE key is
+    per (thread, reactor)), so the row that matters is the CURRENT replier's own `needs_input`
+    row, filtered by resolved email — and "not `needs_input`" is not "already answered": `q.reply`
+    (set only once a question was actually answered) decides that, and a row never asked anything
+    gets silence, symmetric with a bystander.
     """
 
     submissions = find_thread_submissions(ctx.conn, team_id=team_id, channel_id=channel_id,
@@ -106,24 +95,17 @@ async def handle_thread_message(ctx, *, team_id: str, channel_id: str, thread_ts
 async def handle_show_it_here(ctx, *, action_value: str, clicking_slack_user_id: str,
                               channel_id: str, thread_ts: str | None, is_dm: bool,
                               event_team_id: str) -> None:
-    """`action_value` is the OPAQUE token `SlackContext.mint_show_it_here_token` minted — NEVER the
-    asker's email in cleartext. A button value is retrievable by any workspace member via
-    `conversations.history` and by any other app with history scope, so `(path,
-    owner_slack_user_id)` lives server-side, keyed on the token, short-TTL. `event_team_id` is the
-    clicking interaction's OWN workspace (`app.py`'s `on_show_it_here` sources it from
-    `body["team"]["id"]`); passing the configured `ctx.settings.team_id` instead would make the
-    workspace check a tautology on this read path too.
+    """`action_value` is the OPAQUE token `SlackContext.mint_show_it_here_token` minted — a
+    button value is retrievable by any workspace member via `conversations.history`, so
+    `(path, owner_slack_user_id)` lives server-side, keyed on the token, short-TTL.
 
-    **Server-side scoping is the whole of the affordance's access control.** The button itself is
-    visible to everyone who can see the message (Slack has no per-viewer button visibility) — so
-    ANYONE may click it, and this function's first job is deciding whether the CLICK counts. A
-    click from anyone other than the original asker is silently declined: no ephemeral, no error,
-    nothing observable to them — the "must not exist as a button other channel members can press"
-    property, enforced at the only point that can enforce it. The comparison is a plain
-    Slack-user-id equality (the token's owner, set at render time from the ORIGINAL asker's own
-    event) rather than a resolved-email comparison — cheaper (no `users.info` call wasted on a
-    mismatched clicker) and exactly as strong, since a Slack user id is Slack's own authenticated
-    fact about who clicked.
+    **Server-side scoping is the whole of the affordance's access control**: the button is
+    visible to everyone, so ANYONE may click, and the first job is deciding whether the CLICK
+    counts. A click from anyone but the original asker is silently declined — nothing observable
+    to them. The comparison is a plain Slack-user-id equality (Slack's own authenticated fact
+    about who clicked), cheaper than an email resolution and exactly as strong. `event_team_id`
+    is the interaction's OWN workspace — the configured one would make the workspace check a
+    tautology here too.
     """
     entry = ctx.consume_show_it_here_token(action_value)
     if entry is None:
@@ -143,13 +125,10 @@ async def handle_show_it_here(ctx, *, action_value: str, clicking_slack_user_id:
     try:
         result = service.read_page(path)
     except Exception:
-        # Silence is this function's DELIBERATE answer to a wrong clicker, an expired token and an
-        # identity failure (see the declines above) — which is exactly why a real fault must not
-        # borrow it. `read_page` goes through `BrainService._call`, which checks the rate limiter
-        # FIRST, so `RateLimitError` is an ordinary, user-reachable raise; unwrapped, it escaped to
-        # `app.py`'s listener backstop, which logs and posts nothing. The asker over their budget
-        # was told, by silence, that they were not the owner of their own answer. `mention.py`
-        # already renders the rate-limit copy for this same exception one surface over.
+        # Silence is the DELIBERATE answer for a wrong clicker, an expired token and an identity
+        # failure — which is exactly why a real fault must not borrow it. `RateLimitError` is an
+        # ordinary, user-reachable raise through `BrainService._call`, and swallowed silence
+        # would tell an asker over budget they were not the owner of their own answer.
         log.error("slack show-it-here: read_page failed for %s", path, exc_info=True)
         await ctx.post_or_log(
             ctx.gateway.chat_post_ephemeral(channel_id, clicking_slack_user_id,

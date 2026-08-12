@@ -1,12 +1,5 @@
-"""The result envelope every offline backend returns from `run()`.
-
-It lives here rather than beside a fake backend, and that placement is the point: while it sat
-inside one, production modules imported a large offline backend at module level just to build a
-two-attribute namespace for the fakes they define themselves. The import graph then said
-"production depends on the offline backend" when the real dependency was this envelope.
-
-Nothing here is a backend or a test double: it is the shape `worker.py` reads back from any
-processor, real or fake.
+"""The result envelope every offline backend returns from `run()` — the shape `worker.py` reads
+back from any processor, real or fake. Nothing here is a backend or a test double.
 """
 import types
 
@@ -21,5 +14,5 @@ class _Usage:
 
 def fake_result(output):
     """The (.output, .usage) result shape every fake backend returns from run() — one definition
-    for all of them (the fakes in fake_llm plus the in-module ones in views/versions/claims/ops)."""
+    for all of them."""
     return types.SimpleNamespace(output=output, usage=_Usage())

@@ -32,10 +32,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
-# ...and the repo root, so `tests.adversarial_payloads` resolves — the same import
-# `scripts/e2e_librarian.py` makes, for the reason that module's docstring gives: an adversarial
-# payload lives in ONE place, shared by the pytest suites and by the e2e drivers, so the two halves
-# of one guarantee cannot drift apart.
+# ...and the repo root, so `tests.adversarial_payloads` resolves: an adversarial payload lives in
+# ONE place, shared by the pytest suites and the e2e drivers, so the two halves cannot drift apart.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from stigmergy.capture import evidence, queue, retention, schema  # noqa: E402
@@ -85,16 +83,12 @@ def console_command(script: str, module: str) -> list[str]:
     """The argv prefix that runs one of this repo's console scripts, wherever it is installed.
 
     Three ways this driver gets run, and it must work under all of them:
-      1. `make e2e-write` locally  -> `.venv/bin/<script>` (the venv `make venv` bootstraps)
-      2. CI                        -> `pip install -e ".[dev]"` into the runner's own Python, no
-                                      `.venv` in the tree at all; the console script lands on PATH
-      3. a bare source checkout    -> nothing installed; fall back to `python -m <module>`
+      1. locally           -> `.venv/bin/<script>`
+      2. CI                -> installed into the runner's own Python, no `.venv`; script on PATH
+      3. a bare checkout   -> nothing installed; fall back to `python -m <module>`
 
-    ONE resolver, every caller. The first cut hardcoded `.venv/bin/stigmergy-queue` for the killed
-    worker while `stigmergy-server` had this logic — an asymmetry no local run could catch, because
-    locally `.venv` always exists and the hardcoded branch always won. CI, which has no `.venv`
-    (`e2e_write.sh` already accounts for that with `PY=`; this file did not), died on it at
-    phase 5. That is the whole reason this is a function and not three lines at each call site.
+    ONE resolver, every caller: a hardcoded `.venv/bin/...` at any call site always wins locally
+    and always fails in CI, so no local run can catch it.
     """
     beside = ROOT / ".venv" / "bin" / script
     if beside.exists():
@@ -105,10 +99,8 @@ def console_command(script: str, module: str) -> list[str]:
 
 def child_env() -> dict:
     """The environment a spawned child gets: this process's, plus `src` on `PYTHONPATH` and the
-    resolved DSN. The `PYTHONPATH` entry matters only for resolution case 3 above — a child asked
-    to run `python -m stigmergy.…` from an uninstalled checkout has to be able to import it, the
-    same way this driver does for itself at the top of the file. Harmless in cases 1 and 2, where
-    the package is installed and the entry is simply redundant."""
+    resolved DSN. The `PYTHONPATH` entry matters only for resolution case 3 above — a child running
+    `python -m stigmergy.…` from an uninstalled checkout has to be able to import it."""
     env = dict(os.environ)
     src = str(ROOT / "src")
     existing = env.get("PYTHONPATH", "")
@@ -173,19 +165,10 @@ async def submit_phase(workdir: pathlib.Path) -> list[dict]:
         own = listed.get("submissions", [])
         check("brain_submissions returns the caller's submissions, all marked mine",
               len(own) == 3 and all(row["mine"] for row in own), f"{len(own)} rows")
-        # A fence check USED to live here as "every excerpt starts with <<<UNTRUSTED-DATA", and
-        # the withholding rule made it fail in CI while every unit test stayed green — correctly,
-        # because these rows are `queued` and a queued row's material is withheld until the
-        # librarian has scanned it. There is no echoed text here left to fence.
-        #
-        # It is REPLACED rather than rewritten as `... for row in own if row["excerpt"]`, which was
-        # the first instinct and is worse than nothing: with every excerpt withheld at this point,
-        # that predicate is `all([])` — a check that cannot fail, wearing the name of a security
-        # assertion. The fence is genuinely asserted where an excerpt IS shown, by two tests that
-        # deliberately move a row past the gate first:
-        #   tests/server/test_service_capture.py::test_submissions_echoed_excerpt_is_fenced_as_untrusted_data
-        #   tests/server/test_mcp_harness.py (see its own comment at the T10 line)
-        # What this e2e can still prove, and nothing checked before, is the other half of R1:
+        # Do NOT add a fence check here. Every row at this point is `queued`, so its material is
+        # withheld and there is no echoed text to fence — a fence assertion over these rows is
+        # `all([])`, a check that cannot fail wearing a security assertion's name. The fence is
+        # asserted in the server suites, where a row is deliberately moved past the gate first.
         check("R1 — a queued row withholds its material and explains the absence",
               all(not row["excerpt"] and row["withheld_reason"] for row in own),
               f"{sum(1 for r in own if r['withheld_reason'])}/{len(own)} rows carry a reason")

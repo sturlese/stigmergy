@@ -1,24 +1,9 @@
 """ACL resolution — audience labels derived deterministically from the source path.
 
-Who may see a document is a property of WHERE it lives (the same insight as entity resolution):
-"Finance/" is for finance+leadership, "Clients/" for sales, board minutes for leadership. The
-mapping is config, not code, and never an LLM decision:
-
-    {"default": ["all"],
-     "rules": [
-       {"path_prefix": "/Drive/Finance", "audiences": ["finance", "leadership"]},
-       {"unit": "Clients", "audiences": ["sales", "leadership"]},
-       {"path_contains": "board", "audiences": ["leadership"]}
-     ]}
-
-First matching rule wins (ordered, like the corpus taxonomy). The resolved list lands in the
-page frontmatter (`acl: [...]`), and on views as the INTERSECTION of their members' audiences —
-a rollup must never widen access to what it summarizes. `stigmergy.server.acl.visible()` enforces
-it at query time; pages without `acl` are visible to every client.
-
-Deliberate limitation, documented: this maps *conventions* to audiences. Mirroring live Drive
-per-file permissions is a connector concern (the fetch sidecar already persists whatever
-metadata Drive returns) and would feed the same field.
+Who may see a document is a property of WHERE it lives. The mapping is config, never an LLM
+decision: `{"default": [...], "rules": [{<matcher>: ..., "audiences": [...]}]}`, first matching
+rule wins. The resolved list lands in page frontmatter (`acl: [...]`); pages without `acl` are
+visible to every client. `stigmergy.server.acl.visible()` enforces at query time.
 """
 import json
 
@@ -37,15 +22,10 @@ def load_acl_config(path: str | None) -> dict | None:
 def load_acl_config_text(text: str, *, label: str) -> dict | None:
     """The same validation over CONTENT rather than a path, with `label` naming the source.
 
-    The seam exists because not every caller has a file to open. The librarian reads
-    `ops/acl.json` out of the commit its worktrees branch from rather than out of a working tree
-    (ST3, `stigmergy.librarian.base_inputs`), so what it holds is bytes and a locator like
-    `origin/main@abc123def456:ops/acl.json`. Every message below names `label` for that reason —
-    the dialect adapter in `librarian.acl_rules` re-raises them, and a message naming a temp file
-    or nothing at all would tell an operator to go and edit something that does not exist.
-
-    `load_acl_config` is now this function plus a `read()`, so there is one validator and the two
-    entry points cannot drift about what a malformed config is.
+    Not every caller has a file: the librarian reads `ops/acl.json` out of a commit, so its
+    locator is e.g. `origin/main@abc123:ops/acl.json` — every message names `label` so an
+    operator is never sent to edit a temp file that does not exist. One validator for both
+    entry points, so they cannot drift about what a malformed config is.
     """
     cfg = json.loads(text)
     rules = cfg.get("rules", [])
@@ -66,9 +46,8 @@ def load_acl_config_text(text: str, *, label: str) -> dict | None:
 
 
 def _check_labels(path: str, audiences: list) -> None:
-    """Audience labels can be CSV-serialized downstream: a comma inside a label would silently
-    split into two audiences at enforcement time — the exact silent-corruption failure mode an
-    access-control config must not have. Empty labels would vanish in the same round-trip."""
+    """Labels can be CSV-serialized downstream: a comma inside one would silently split into two
+    audiences at enforcement time, and an empty label would vanish in the same round-trip."""
     for a in audiences:
         s = str(a)
         if "," in s or not s.strip():
@@ -95,9 +74,9 @@ def resolve_acl(config: dict | None, source_path: str, unit: str | None,
 
 
 def view_acl(member_acls: list) -> list[str] | None:
-    """A view summarizes all its members: its audience is the INTERSECTION of theirs. Members
-    without ACLs don't restrict; all-None -> None (open). An empty intersection means nobody
-    below unrestricted clients sees it — restrictive by construction, never silently open."""
+    """A view's audience is the INTERSECTION of its members' — a rollup must never widen access.
+    Members without ACLs don't restrict; all-None -> None (open). An empty intersection is
+    restrictive by construction, never silently open."""
     sets = [set(a) for a in member_acls if a is not None]
     if not sets:
         return None
@@ -106,22 +85,12 @@ def view_acl(member_acls: list) -> list[str] | None:
 
 
 def visible_to_view(row_acl: list[str] | None, view_acl: list[str] | None) -> bool:
-    """Whether a row from a GOVERNED BUT NON-MEMBER source (a backlink page, for instance) may
-    render on a view. The rule: *no string derived from a governed source may render on a view
-    whose audience is not a subset of that source's audience.* `view_acl` (the intersection,
-    above) already computes
-    the view's OWN audience from its MEMBERS only; this is a separate read gate applied to
-    every OTHER governed source a view's skeleton feeds from — never folded into the
-    intersection itself, because a non-member source must never NARROW the view, only be
-    excluded from rendering on it.
-
-    `row_acl is None` (open) is visible on any view, open or narrowed alike — an unrestricted
-    source cannot leak anything a broader audience could not already read elsewhere. Otherwise: an
-    OPEN view (`view_acl is None`, visible to unrestricted clients too) may include ONLY
-    equally open rows, because a restricted row rendered there would reach an audience its own
-    author restricted it from; a NARROWED view may include a restricted row only when the row's
-    own audience covers the view's WHOLE audience (`set(view_acl) <= set(row_acl)`) — every
-    client that can read the view can also read the row."""
+    """Whether a row from a governed NON-MEMBER source (a backlink page, say) may render on a
+    view. Kept separate from `view_acl`: a non-member source must never NARROW the view, only be
+    excluded from rendering on it. Truth table: an open row (None) renders anywhere; an open view
+    admits only open rows (a restricted row there would reach an audience its author restricted
+    it from); a narrowed view admits a restricted row only when `set(view_acl) <= set(row_acl)`
+    — every client that can read the view can also read the row."""
     if row_acl is None:
         return True
     if view_acl is None:

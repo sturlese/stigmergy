@@ -48,12 +48,12 @@ the bare `<stem>-p<n>` stem, which is now the fallback for parts filed before th
 an id at all. Matching only one of the two left this propagation inert over a whole generation of
 parts, silently — which is why both stay matched even though the live producer only writes one.
 
-Compensating at RANK time instead meant reconstructing chain membership from whichever candidates
-happened to be in a given search's pool — which silently failed to demote a continuation part
-whenever its primary fell outside that pool. `corpus.load_pages` propagates the primary's
-`superseded_by` onto its siblings over the WHOLE corpus — so by the time a row reaches `rank()`,
-its own column already tells the truth regardless of what any one query's candidate set contains.
-There is no rank-time reconstruction left; it was deleted, not bypassed.
+Compensating at RANK time instead would mean reconstructing chain membership from whichever
+candidates happened to be in a given search's pool — which silently fails to demote a continuation
+part whenever its primary falls outside that pool. `corpus.load_pages` therefore propagates the
+primary's `superseded_by` onto its siblings over the WHOLE corpus — so by the time a row reaches
+`rank()`, its own column already tells the truth regardless of what any one query's candidate set
+contains.
 
 The propagation is **marker-gated and directional**, not "first non-empty value in the group": only
 a row whose `page_id` IS the chain base may DONATE (`corpus.is_chain_primary`), and only a row

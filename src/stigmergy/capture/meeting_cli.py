@@ -4,28 +4,14 @@ future target.
     stigmergy-meeting drop <file> --title <t> --date <YYYY-MM-DD> [--attendees a,b] \\
                                  [--submitted-by email]
 
-An operator CLI in the `stigmergy-queue` mold: direct DB and bucket access, no MCP transport, run
-by the operator from their own terminal right after a meeting. It does exactly one thing —
-upload the transcript as evidence and enqueue **exactly one** `capture_queue` row with
-`kind="meeting"` — and nothing else. Filing is the librarian's job (`librarian.processing`);
-this command does not claim, does not file, and prints so honestly.
+An operator CLI in the `stigmergy-queue` mold: direct DB and bucket access, no MCP transport.
+It uploads the transcript as evidence and enqueues exactly one `kind="meeting"` row — filing is
+the librarian's, and the ack says so. Validate -> upload -> insert, so "no row and no object"
+holds for every refusal this CLI names. Attendees are hints, never identities.
 
-**Validate -> upload -> insert, in that order, for every refusal.** Every check below runs BEFORE
-`queue.submit` (which itself uploads before it inserts — `queue.submit`'s own docstring), so "no
-row and no object" is true by construction for every refusal this CLI names: a missing
-`--title`/`--date`, an empty file, an over-cap file, and a malformed `--date`
-(`schema.validate_meeting_date`).
-
-**Attendees are hints, never identities**: they ride in `hints["attendees"]` exactly like
-`SOURCE_HINT_KEYS`'s Slack provenance fields do, and the drop ack says so explicitly at the
-moment the belief they "resolve" something would otherwise form.
-
-**The oversize message deliberately does NOT reuse `capture.schema.prepare_submission`'s own
-string.** That one says "submit the part worth keeping, not the whole transcript" — advice that
-directly contradicts the meeting flow's premise: the source page carries the whole transcript
-extraction, and every page in the set is anchored to THAT run's text. This CLI checks the size
-itself, before `prepare_submission` ever runs, so its own honest refusal is the one an operator
-sees.
+The oversize refusal deliberately does NOT reuse `prepare_submission`'s string: "submit the part
+worth keeping" contradicts the meeting flow's whole-transcript premise, so this CLI checks the
+size first and its own refusal is the one an operator sees.
 """
 import argparse
 import os
@@ -35,10 +21,8 @@ from stigmergy.capture import cli, evidence, queue, schema
 from stigmergy.capture.errors import CaptureError, SubmissionRejected
 from stigmergy.index import store
 
-# The operator identity `--submitted-by` defaults to when not given. This surface carries
-# single-operator traffic, so one env var is the whole of "configured" — there is no identity
-# service to resolve against, unlike the MCP transport's token-derived identity
-# (`server.service`).
+# The operator identity `--submitted-by` defaults to. Single-operator traffic: one env var is
+# the whole of "configured" — there is no identity service to resolve against.
 OPERATOR_EMAIL_ENV = "STIGMERGY_MEETING_OPERATOR_EMAIL"
 
 EXIT_INTERRUPTED = 130
@@ -51,14 +35,12 @@ def _connect(dsn: str | None):
 
 
 def _refuse(message: str) -> "SubmissionRejected":
-    """One `SubmissionRejected`, unprefixed — `main()`'s `except CaptureError` adds the
-    `stigmergy-meeting: ` prefix exactly once, the same split `capture.cli`'s own refusals use."""
+    """Unprefixed — `main()`'s `except CaptureError` adds the prefix exactly once."""
     return SubmissionRejected(message)
 
 
 def _read_transcript(path: str) -> bytes:
-    """The file's raw bytes, refusing BEFORE any upload — a clear local sentence naming the path
-    beats a bare traceback, for the same reason every other refusal here names the path."""
+    """The file's raw bytes, refused with a local sentence naming the path before any upload."""
     try:
         with open(path, "rb") as f:
             return f.read()
@@ -68,8 +50,8 @@ def _read_transcript(path: str) -> bytes:
 
 
 def _check_size(path: str, data: bytes) -> str:
-    """Empty and over-cap, both refused with the FILE's own name and size — LOCAL and specific,
-    before `evidence.put` or `queue.submit` ever run. Returns the decoded text."""
+    """Empty and over-cap refused with the file's own name and size, before any upload or
+    insert. Returns the decoded text."""
     if len(data) == 0:
         raise _refuse(f"refusing to drop {path} — the file is empty (0 bytes). Nothing was "
                       f"uploaded and nothing was queued; check the export and re-run once it has "
@@ -97,18 +79,14 @@ def _resolve_submitted_by(args) -> str:
     return submitted_by
 
 
-
 def _cmd_drop(args) -> int:
     ev = evidence.store_from_env()
     refused = cli.refuse_split_stores(args, "stigmergy-meeting", ev)
     if refused:
         return refused
 
-    # Refuses before any file is touched. `schema.validate_meeting_date` is the SEAM-level
-    # validator — it also runs, unconditionally, inside `prepare_submission` for every caller of
-    # `queue.submit`, so its own message is transport-neutral and does not name a flag. This CLI's
-    # early copy exists to name the flag, so it puts the flag back on here rather than in the
-    # shared seam.
+    # Refuses before any file is touched. The seam validator also runs inside
+    # `prepare_submission` for every caller; this early copy exists to name the flag.
     try:
         meeting_date = schema.validate_meeting_date(args.date)
     except SubmissionRejected as ex:
@@ -130,9 +108,8 @@ def _cmd_drop(args) -> int:
     ack = queue.submit(conn, ev, kind=schema.MEETING, material=text, hints=hints,
                        submitted_by=submitted_by)
 
-    # The store is NAMED: an operator reading "uploaded … as evidence <hash>" could not tell
-    # whether the bytes went to the deployment's bucket or to their own laptop while the row went
-    # to Fly. Operator-CLI posture — local and specific, the deliberate opposite of the wire's.
+    # The store is NAMED, so the operator can tell the bytes did not go to their own laptop
+    # while the row went to the deployment. Operator-CLI posture: local and specific.
     print(f"uploaded {args.file} as evidence {ack['content_sha256'][:12]} "
           f"({ack['bytes']:,} bytes) to {ev.bucket} at {evidence.host_of(ev.endpoint_url)}")
     print(f"queued #{ack['id']} (meeting) — \"{args.title}\", {meeting_date}, attributed to "

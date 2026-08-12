@@ -1,25 +1,11 @@
-"""Frontmatter parsing — the read half of the page contract.
-
-The write half lives in `kernel.page` (`_yaml`). Nothing else belongs here: entity pages are
-minted by `stigmergy.entities` through the governed door, and links are computed once at
-index-build time.
-"""
+"""Frontmatter parsing — the read half of the page contract. The write half is `kernel.page`
+(`_yaml`)."""
 import re
 
 import yaml
 
-# `\r?\n`, the same as `index.corpus`'s own block matcher and for the same reason: a CRLF checkout
-# is not a malformed page. Anchored on bare `\n`, this matched NOTHING on a page written on Windows
-# or normalized by a `.gitattributes` rule, so a well-formed page read as frontmatter-less — and
-# `entities.generator` reads entity pages through here, so it refused them with "declares no
-# `title`, so it names no entity", blocking `stigmergy-entities regenerate` and the governed mint
-# door behind it. The two parsers are twins; when one learns something the other has to.
-#
-# The BOM is the second thing learned that way, and it is the same failure a few bytes earlier: an
-# editor that writes one before `---` produced a page `index.corpus` read perfectly and this one
-# refused, so a BOM'd entity page indexed with its title and its acl while
-# `stigmergy-entities regenerate` still said it named no entity. The twin rule is what this comment
-# exists for, so the fix is written in the shape the other parser uses.
+# `\r?\n` and the optional BOM: a CRLF checkout or a BOM-writing editor is not a malformed page.
+# Twin of `index.corpus`'s own block matcher — when one parser learns a tolerance, the other must.
 _FRONTMATTER_RE = re.compile("^﻿?---\r?\n(.*?)\r?\n---\r?\n?(.*)$", re.S)
 _OPENS_FRONTMATTER_RE = re.compile("^﻿?---")
 

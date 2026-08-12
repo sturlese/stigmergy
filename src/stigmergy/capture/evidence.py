@@ -1,29 +1,20 @@
-"""The evidence plane: an S3-compatible, content-addressed archive of every capture's raw material.
+"""The evidence plane: an S3-compatible, content-addressed archive of every capture's raw
+material.
 
-Why it exists: the librarian reads a capture's material from HERE, not from the queue row
-(`processing` resolves `blob_refs` through this store), and the raw material has to outlive the
-row. Retention NULLs `payload`/`hints` 30 days after a row goes terminal, and git must never hold
-the conversation in the first place — git cannot delete. So the raw text gets a home with its own
-lifecycle, addressed by what it IS rather than by who sent it:
+The librarian reads a capture's material from HERE, not from the queue row, and the material
+must outlive the row: retention NULLs `payload`/`hints`, and git must never hold the
+conversation (git cannot delete). Keys:
 
     key = sha256/<first two hex>/<next two hex>/<full sha256 hex>
 
-Content addressing buys three things for free: identical material submitted twice occupies
-exactly ONE object while still producing two queue rows (dedup against the graph is the
-librarian's judgment, not a storage side effect); the key is verifiable (re-hash the bytes and
-compare); and the two-level fan-out keeps any single prefix listing small.
+Content addressing: identical material occupies ONE object while still producing two queue rows
+(dedup against the graph is the librarian's judgment, not a storage side effect); the key is
+verifiable by re-hashing; the fan-out keeps prefix listings small. Backends: MinIO locally, R2
+in staging — same code, only the four environment values differ.
 
-Backends: MinIO locally (docker-compose, defaults below), an R2 bucket in staging. Same code,
-same protocol — only the four environment values differ, which is why `boto3` is a dependency at
-all (`scripts/r2_smoke.py` proves the credentials against the real bucket independently of this
-writer).
-
-**Errors are reduced to a class name on the way out.** The exceptions boto3 raises embed the
-endpoint URL, the bucket name and the access key id, none of which may reach the wire; the real
-cause is logged server-side. `MemoryEvidenceStore` is the offline double the fast test suite uses
-(same `put/get/exists` surface) — production ships its own fake here for the same reason
-`stigmergy.index.backends.fake_embedder` does: a test double that hand-rolls the key scheme would
-prove the double, not the store.
+Errors are reduced to a class name on the way out: boto3's exceptions embed the endpoint,
+bucket and access key id, none of which may reach the wire. `MemoryEvidenceStore` is the
+offline double — a double that hand-rolled the key scheme would prove the double, not the store.
 """
 import hashlib
 import ipaddress
@@ -37,11 +28,9 @@ log = logging.getLogger(__name__)
 
 KEY_PREFIX = "sha256"
 
-# Local defaults match the `minio` service in docker-compose.yml, exactly as
-# `stigmergy.index.store.DSN_DEFAULT` matches the `postgres` service: `make db-up` and a submit
-# work with zero configuration, and staging overrides all four with real R2 values (Fly secrets;
-# see docs/reference/operator-runbook.md). Nothing here is a secret — `minioadmin` is the compose
-# file's own value, the same posture as the `stigmergy:stigmergy` DSN.
+# Local defaults match the `minio` service in docker-compose.yml, so a submit works with zero
+# configuration; staging overrides all four. Nothing here is a secret — `minioadmin` is the
+# compose file's own value.
 ENDPOINT_ENV = "STIGMERGY_EVIDENCE_ENDPOINT"
 BUCKET_ENV = "STIGMERGY_EVIDENCE_BUCKET"
 ACCESS_KEY_ENV = "STIGMERGY_EVIDENCE_ACCESS_KEY_ID"
@@ -53,14 +42,11 @@ BUCKET_DEFAULT = "stigmergy-evidence"
 ACCESS_KEY_DEFAULT = "minioadmin"
 SECRET_KEY_DEFAULT = "minioadmin"
 
-# **These bound a STALL, not a slow upload.** `put`/`get` are reached from `brain_submit`, which
-# the MCP SDK invokes as a SYNC tool body — directly on the event loop, with no threadpool. So a
-# degraded object store does not slow one caller's submit: it freezes the single process serving
-# every other identity. boto3's defaults (60 s connect, 60 s read, retrying) make that minutes.
-#
-# botocore reads `max_attempts` as RETRIES and resolves it to `total_max_attempts = RETRIES + 1`,
-# so the bound is the PRODUCT, not any one number. Written as the arithmetic because three
-# constants nobody multiplies is how a 30-second bound quietly becomes a three-minute one.
+# These bound a STALL, not a slow upload: `put`/`get` run as a SYNC tool body on the server's
+# event loop, so a degraded store freezes the single process serving every identity (boto3's
+# defaults make that minutes). botocore reads `max_attempts` as RETRIES (+1), so the bound is
+# the PRODUCT — written as the arithmetic because three constants nobody multiplies is how a
+# 30-second bound quietly becomes a three-minute one.
 CONNECT_TIMEOUT_S = 5
 READ_TIMEOUT_S = 10
 RETRIES = 1
@@ -70,31 +56,20 @@ _NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound", "NoSuchBucket"}
 
 
 # ── the two halves have to belong to the same deployment ──────────────────────────────────────
-# The queue and the evidence plane are configured INDEPENDENTLY (`$STIGMERGY_INDEX_DSN` here, the
-# four `STIGMERGY_EVIDENCE_*` above), and nothing used to check they name the same world. A drop
-# against staging with the evidence group unset uploaded the bytes to the operator's own laptop
-# and put the row in Fly; the deployed worker then looked for a key that was never there and the
-# capture died 8 seconds later with `NoSuchKey`. Queue row in the cloud, evidence on a laptop:
-# guaranteed failure, discovered only after the material had been consumed.
-#
-# The mistake is easy and silent, which is why this is a guard and not a paragraph: the repo's own
-# `.env` carries the bucket under `R2_*` names (for `make r2-smoke`) while the code reads
-# `STIGMERGY_EVIDENCE_*`, so `set -a; source .env` LOOKS like it configured the deployment's store
-# and instead leaves it pointing at whatever local MinIO that file names.
-#
+# The queue and the evidence plane are configured independently, and a drop with the evidence
+# group unset puts the row in the cloud and the bytes on the operator's laptop — the deployed
+# worker then dies on `NoSuchKey` after the material has been consumed (the repo's own `.env`
+# carries the bucket under `R2_*` names, so sourcing it looks like configuration and is not).
 # Deliberately ONE combination, not a general consistency check: a remote database with a
-# loopback evidence endpoint is never right, because the deployed worker structurally cannot
-# reach a loopback address on somebody else's machine. The mirror case (a local database with a
-# remote bucket) is odd but works, so it is not refused — a guard that fires on the merely
-# unusual gets disabled.
+# loopback evidence endpoint is never right, while the mirror case (local database, remote
+# bucket) is odd but works — a guard that fires on the merely unusual gets disabled.
 _LOOPBACK_HOSTS = ("localhost", "0.0.0.0", "[::1]", "::1")
 
 
 def host_of(endpoint_url: str) -> str:
-    """The host of an S3 ENDPOINT URL, lowercased, port and path stripped. Deliberately not a URL
-    parser and deliberately not for DSNs: a DSN's host is `index.store.host_of_dsn`'s job, through
-    libpq's own parser, because the keyword form carries a password that string surgery here would
-    hand straight to a printed sentence."""
+    """The host of an S3 ENDPOINT URL, lowercased, port and path stripped. Not for DSNs: those
+    are `index.store.host_of_dsn`'s job through libpq's parser, because the keyword form carries
+    a password that string surgery here would hand straight to a printed sentence."""
     value = (endpoint_url or "").strip().lower()
     if "://" in value:
         value = value.split("://", 1)[1]
@@ -107,10 +82,9 @@ def host_of(endpoint_url: str) -> str:
 
 
 def is_loopback_host(host: str) -> bool:
-    """Does this host name the machine asking? Literal spellings first, then a REAL address test
-    (`ipaddress`) so the whole 127/8, `::1`, `0:0:0:0:0:0:0:1`, `::ffff:127.0.0.1` and the octal/
-    decimal/hex spellings of 127.0.0.1 all resolve correctly — a `startswith("127.")` string test
-    both misses those and classifies `127.evil.com` as local."""
+    """Does this host name the machine asking? Literal spellings first, then a real address test
+    (`ipaddress`) — a `startswith("127.")` string test misses the 127/8 and IPv6 spellings and
+    classifies `127.evil.com` as local."""
     value = (host or "").strip().lower().rstrip(".")
     if value in _LOOPBACK_HOSTS:
         return True
@@ -119,13 +93,10 @@ def is_loopback_host(host: str) -> bool:
         return ipaddress.ip_address(literal).is_loopback
     except ValueError:
         pass
-    # `ipaddress` is deliberately STRICT: it takes full dotted-quad IPv4 and nothing else, so it
-    # refuses `127.1`, `2130706433`, `0x7f000001` and `017700000001` — every abbreviated spelling
-    # the docstring above promises. `socket.getaddrinfo` resolves all four to 127.0.0.1, so each
-    # one is a WORKING local endpoint, and reading them as REMOTE is the direction that hurts:
-    # `split_stores_reason` then admits the cloud-queue/laptop-evidence pair it exists to refuse.
-    # `inet_aton` accepts exactly this classic family and still rejects a HOSTNAME, so
-    # `127.evil.com` stays remote — the case the string test this replaced got wrong.
+    # `ipaddress` refuses abbreviated IPv4 (`127.1`, decimal/octal/hex forms) that are WORKING
+    # local endpoints; reading them as remote would admit the cloud-queue/laptop-evidence pair.
+    # `inet_aton` accepts exactly that classic family and still rejects a hostname, so
+    # `127.evil.com` stays remote.
     try:
         return ipaddress.ip_address(socket.inet_ntoa(socket.inet_aton(literal))).is_loopback
     except OSError:
@@ -141,14 +112,10 @@ def split_stores_reason(*, db_host: str, endpoint_url: str) -> str:
     """`""` when the queue and the evidence plane can belong to the same deployment, and the
     sentence explaining the refusal when they provably cannot.
 
-    Takes a HOST, never a DSN: this module owns the S3 endpoint and has no business parsing a
-    credential-bearing string it would then interpolate into a message.
-
-    **Fails open in both directions.** A `db_host` that is empty (PG* defaults, an unreadable
-    connstring) or a unix-socket directory names no remote machine, so it can only be local —
-    refusing there would block the everyday local drop and, worse, tell the operator to go export
-    R2 credentials. Only a host we can positively read as remote, against an endpoint we can
-    positively read as loopback, is refused.
+    Takes a HOST, never a DSN — no parsing of a credential-bearing string this would then
+    interpolate into a message. Fails open in both directions: an empty `db_host` or a
+    unix-socket directory can only be local, and only a positively-remote host against a
+    positively-loopback endpoint is refused.
     """
     if not db_host or db_host.startswith("/") or is_loopback_host(db_host):
         return ""
@@ -173,8 +140,7 @@ def content_key(data: bytes) -> str:
 
 
 class MemoryEvidenceStore:
-    """The offline double: same surface, a dict instead of a bucket. Keeps the fast suite fast
-    and keyless, and gives any caller an injectable store."""
+    """The offline double: same surface, a dict instead of a bucket."""
 
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}
@@ -196,10 +162,9 @@ class MemoryEvidenceStore:
 class S3EvidenceStore:
     """The real store over any S3-compatible endpoint (MinIO, R2).
 
-    The boto3 client is built lazily and cached: constructing this object does no I/O, so
-    `build_service` can wire one unconditionally and a server whose bucket is unreachable still
-    serves every READ tool — only a submit fails, and it fails with a clean error rather than a
-    startup crash. `client` is injectable for tests that want to drive a stub without boto3.
+    The boto3 client is built lazily and cached: constructing this object does no I/O, so a
+    server whose bucket is unreachable still serves every READ tool — only a submit fails, with
+    a clean error rather than a startup crash. `client` is injectable for tests.
     """
 
     def __init__(self, *, endpoint_url: str, bucket: str, access_key_id: str,
@@ -260,18 +225,16 @@ class S3EvidenceStore:
             return self._fail(op, key, ex)
 
     def _fail(self, op: str, key: str, ex: Exception):
-        # Server-side log: the full detail, including the bucket and endpoint the operator needs.
-        # Wire-side message: the class name only — never the bucket, endpoint, credentials or the
-        # key, and never `str(ex)`, which carries all of them.
+        # Full detail in the server-side log; class name only on the wire — never `str(ex)`,
+        # which carries the bucket, endpoint and credentials.
         log.error("evidence store %s failed (bucket=%s endpoint=%s key=%s)",
                   op, self.bucket, self.endpoint_url, key, exc_info=True)
         raise EvidenceError(f"evidence store unavailable ({ex.__class__.__name__})") from ex
 
 
 def store_from_env(env: dict | None = None) -> S3EvidenceStore:
-    """Build the configured store. `env` is injectable so a caller can pass an explicit mapping
-    instead of the process environment (the modules-never-read-the-environment-at-import rule:
-    this is a function, called from the entry point, exactly like `Settings.from_args`)."""
+    """Build the configured store. `env` is injectable, and this is a function called from the
+    entry point — modules never read the environment at import."""
     env = os.environ if env is None else env
     return S3EvidenceStore(
         endpoint_url=env.get(ENDPOINT_ENV) or ENDPOINT_DEFAULT,

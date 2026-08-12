@@ -1,49 +1,17 @@
-"""The two sections' data — each a query over the gardener/corpus tables, returning plain dicts;
-`render.py` is the only reader and the only place any of this becomes text (mirrors
-`gardener.checks`/`gardener.report`'s own split, one package over: never touches the store itself,
-never prints anything).
+"""The two sections' data — plain dicts; `render.py` is the only reader and the only place any of
+this becomes text.
 
-**How each section is populated:**
+Corpus health reads the latest completed gardener run through `gardener.store` — reused, never
+re-derived. Corpus deltas: "pages filed" resolves `capture_queue.result_ref`/`report` through
+`_filed_page_paths`; "entities born" reads the governed-birth log (`review_decisions` approvals)
+— never `pages_index.updated` (an entity page updates long after its birth) and never a registry
+run-over-run diff.
 
-- **corpus health** reads the LATEST completed `job='gardener'` run
-  (`gardener.store.latest_completed_run`) and, only when its own `finished_at` falls inside the
-  window, its findings (`gardener.store.findings_for_run`) — both reused, never re-derived; this
-  package writes no `gardener_findings` row and runs no check itself.
-- **corpus deltas**: "pages filed" resolves `capture_queue.result_ref`/`report` through
-  `_filed_page_paths` below — the shared answer to the meeting-capture blind spot
-  (`librarian.report.filed_meeting`'s own shape: `result_ref` names only the MEETING page; the
-  source page(s) and every decision page live in `report['filed_meeting']`, verified against
-  `librarian/processing.py::_file_meeting`). A correction is single-page in practice —
-  `librarian.processing._cross_check_outcome` vetoes a multi-page fast-lane filing — but the
-  general-case helper is shared anyway, so neither query has to independently reason about a case
-  the other already handles correctly. "Entities born" reads the governed-birth log
-  (`review_decisions`, `item_kind='entity-proposal'`, `verdict='approve'`): entity approval IS the
-  birth event, timestamped and append-only; never `pages_index.updated` (an entity page updates
-  long after its birth) and never a registry run-over-run diff (its window would be the GARDENER's
-  run cadence, not the digest's own, and a first gardener run has no predecessor to diff against).
-
-**The broadcast scope** (`stigmergy.digest`'s own package docstring): every page this module names —
-every "pages filed" title — passes through `_visible_pages`, which is the
-ONE place `server.acl.visible()` is called in this package. `audiences` is always a real
-`set[str]` (`slack.channels.channel_audiences`' own return contract: never `None`), so a page is
-counted and named here if, and only if, the CHANNEL this digest is about to post to could see it —
-never the operator's own, unscoped view of the corpus.
-
-**Why this module reads `pages_index`/`capture_queue`/`review_decisions` directly, by raw SQL,
-rather than through a `gardener`-precomputed shape.** The tempting alternative for corpus deltas
-is to have `stigmergy-gardener` compute "pages filed"/"entities born" into its own `job_runs.stats`
-(it already reads the corpus every run) and have `digest` read them through the ONE edge it
-already has, `gardener.store` — no new import edge, and a clean gardener-reads-corpus →
-digest-reads-gardener's-output pipeline. It is not taken, for a reason that is structural rather
-than a style preference: the digest broadcasts, so every page TITLE it names must be filtered at
-the DESTINATION CHANNEL's own audience scope (`_visible_pages`, above) — and the gardener does not
-know the destination channel. It is an operator tool with no caller identity at all (this
-package's own layering notes; ADR 024 D5), so a title it precomputed into `job_runs.stats` would
-necessarily be rendered against no audience, or the wrong one — a value that never passed an ACL
-predicate, sitting in a persisted, ungated blob for any future reader of `job_runs` to see
-unscoped. Reading the tables directly, HERE, at the one place that actually knows the posting
-channel's own audiences, is what keeps the ACL-scoping decision where `acl.visible()` is the one
-place it is ever made.
+Every page this module names passes `_visible_pages`, the ONE `server.acl.visible()` call in the
+package, at the destination channel's audiences. The tables are read directly HERE rather than
+through a gardener-precomputed shape for a structural reason: the gardener does not know the
+destination channel, so a title it precomputed would sit in `job_runs.stats` having passed no ACL
+predicate at all — the scoping decision must live where the channel is known.
 """
 from stigmergy.capture import schema as capture_schema
 from stigmergy.gardener import schema as gardener_schema
@@ -53,20 +21,12 @@ from stigmergy.server.acl import visible
 from stigmergy.text import parse_result_ref
 
 
-# ── the shared page-resolution + ACL-scoping seam (see the package docstring) ────────────────────
+# ── the shared page-resolution + ACL-scoping seam ────────────────────────────────────────────────
 def _filed_page_paths(report: dict | None, result_ref: str) -> list[str]:
-    """Every page path ONE filed `capture_queue` row actually put in the repo.
-
-    Held against `librarian.processing._file_meeting`'s own construction and
-    `librarian.report.filed_meeting`'s own documented return shape: a meeting capture's
-    `result_ref` names ONLY the meeting page (`'<meeting page path>@<sha>'`); the source page(s)
-    (the verbatim transcript, possibly split into parts) and every decision page live in
-    `report['filed_meeting']` — `source_pages: [...]`, `meeting_page: str`,
-    `decisions: [{"path": ..., "anchored_to": ...}, ...]`. Every OTHER capture (`raw`/`page`, and
-    a correction's own fast-lane promotion) has no `filed_meeting` key at all, and `result_ref`
-    names its one page directly — the ordinary, single-page case this function handles when the
-    key is absent.
-    """
+    """Every page path ONE filed `capture_queue` row actually put in the repo. A meeting
+    capture's `result_ref` names only the MEETING page; the source page(s) and every decision
+    page live in `report['filed_meeting']`. Every other capture has no `filed_meeting` key and
+    `result_ref` names its one page directly."""
     filed_meeting = (report or {}).get("filed_meeting")
     if filed_meeting:
         paths = list(filed_meeting.get("source_pages") or [])
@@ -80,12 +40,9 @@ def _filed_page_paths(report: dict | None, result_ref: str) -> list[str]:
 
 
 def _visible_pages(conn, paths: list[str], *, audiences: set[str]) -> dict[str, dict]:
-    """`path -> {"title": ...}` for every one of `paths` that is (a) still indexed and (b) `acl.
-    visible()` clears for `audiences` — the digest's ONE ACL-filtering seam, shared by every
-    caller below rather than re-derived per section. A path that is not (yet) indexed, or that
-    fails the ACL check, is silently absent from the returned mapping: excluded from BOTH the
-    count and the list a caller renders, never counted without being nameable (a count and a list
-    that disagree is its own kind of dishonest report)."""
+    """`path -> {"title": ...}` for every path still indexed AND visible at `audiences` — the
+    digest's one ACL-filtering seam. A path that fails either test is absent from BOTH the count
+    and the list: never counted without being nameable."""
     if not paths:
         return {}
     with conn.cursor() as cur:
@@ -98,18 +55,9 @@ def _visible_pages(conn, paths: list[str], *, audiences: set[str]) -> dict[str, 
 # ── corpus health ────────────────────────────────────────────────────────────────────────────────
 def gather_corpus_health(conn, *, since) -> dict:
     """`{"state": "never_run"}`, `{"state": "stale", ...}` or `{"state": "ok", ...}` — the three
-    honest cases: no gardener run has EVER completed; the latest one predates this window; or a
-    real, in-window run whose findings (`gardener.store.findings_for_run`, the findings store this
-    package is granted) are grouped by severity and, within `sla`/`warn`, by check slug — the exact
-    shape `render.py` needs and never re-derives from raw finding dicts a second time.
-
-    **`sweep_incomplete`**: `latest_completed_run` widens to `status IN ('ok', 'partial')`, so the
-    "ok" state below can describe a run whose deterministic findings are complete but whose model
-    sweep failed (`job_runs.stats.sweep.error`, set by `gardener.run._run_sweep_pass`) — read
-    straight off the SAME `stats` blob `latest_completed_run` already returns, never a second
-    query. `render._render_health` surfaces this so a reader is never left to infer "no sweep
-    findings this run" as "the sweep found nothing" when it may instead mean "the sweep did not
-    run to completion"."""
+    honest cases. `sweep_incomplete` is read off the run's own `stats` blob (a `'partial'` run's
+    deterministic findings are complete but its sweep failed) so a reader never infers "the sweep
+    found nothing" from "the sweep did not complete"."""
     run = gardener_store.latest_completed_run(conn)
     if run is None:
         return {"state": "never_run"}
@@ -135,8 +83,7 @@ def gather_corpus_health(conn, *, since) -> dict:
             "sweep_incomplete": sweep_incomplete}
 
 
-# ── corpus deltas — both queries bounded, `until` the same `now` `run.run_digest` resolves
-# before either of them runs ──────────────────────────────────────────────────────────────────────
+# ── corpus deltas — both queries bounded by the same `now` `run.run_digest` resolves first ───────
 _FILED_PAGES_SQL = (
     "SELECT result_ref, report FROM capture_queue "
     "WHERE status = %(filed)s AND finished_at >= %(since)s AND finished_at < %(until)s "
@@ -178,17 +125,10 @@ def _entities_born_count(conn, *, since, until) -> int:
 
 
 def gather_corpus_deltas(conn, *, since, until, audiences: set[str]) -> dict:
-    """The section's two facts: pages filed (count + titles, ACL-scoped) and entities born (a
-    COUNT only).
-
-    Since ADR 030 a server-driven approval mints in the same act and records `entity_id`/`commit`
-    in `review_decisions.extra`, so the ledger CAN name the entity for those rows — but not for
-    every row: a CLI `stigmergy-entities approve` still writes no ledger row at all, and rows
-    predating ADR 030 carry no `extra`. This query is a bare count and reads none of it. Naming
-    entities here would therefore mean naming SOME of them, which reads as a complete list and is
-    not one; re-deriving the rest from the capture row behind each approval would be a guess about
-    a row that can have moved on by digest time (re-queued, re-processed) — exactly what this
-    codebase's "never guessed at" discipline refuses. An honest count is what the data supports."""
+    """The section's two facts: pages filed (count + titles, ACL-scoped) and entities born — a
+    COUNT only. The ledger names the minted entity for some rows but not all (a CLI approve
+    writes no ledger row), so naming entities would read as a complete list and is not one; an
+    honest count is what the data supports."""
     pages = _pages_filed(conn, since=since, until=until, audiences=audiences)
     return {
         "pages_filed_count": pages["count"],

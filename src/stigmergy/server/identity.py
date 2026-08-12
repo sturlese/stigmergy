@@ -1,24 +1,11 @@
-"""Identity → audiences resolution, in two halves.
+"""Identity → audiences resolution, in two halves: the file seam (`ops/identities.json`,
+`{"steward": "*", "ana": ["finance"]}` — `"*"` = unrestricted, returns None) and the per-request
+half (bearer token → sha256 → token store → email → the SAME `resolve_audiences`). Fail-closed on
+EVERY path: any failure raises `IdentityError`; the server never starts open.
 
-The FILE seam below maps a name to its audience scope. Beside it sits the PER-REQUEST half: a
-bearer token → sha256 → a server-side token store → email, which then feeds the SAME
-`resolve_audiences`. An email is just a string key, so keying `ops/identities.json` by email
-rather than by name needs no change to the resolver at all. An OAuth flow, if one is ever added,
-would replace only the token-store lookup below.
-
-One resolver reads a versioned JSON file (`ops/identities.json` in the knowledge repo by
-default, path injectable) mapping a name to its audience scope:
-
-    {"steward": "*", "ana": ["finance"], "bob": ["sales", "leadership"]}
-
-`"*"` means unrestricted (returns None — sees everything). A list becomes the client's audience
-tuple. Fail-closed on EVERY path — missing identity, unknown identity, unreadable or malformed
-file all raise `IdentityError`; the server never starts open.
-
-**Security note: the identities file is CONFIGURATION, not authentication.** Anyone who can edit
-it or set the `--identity` flag impersonates anyone, which is acceptable only for a single local
-operator over stdio. Real verification — a bearer token no impersonator can fabricate — is the
-per-request resolution below, and it is what the public HTTP transport uses.
+The identities file is CONFIGURATION, not authentication — anyone who can edit it or set
+`--identity` impersonates anyone, acceptable only for one local operator over stdio. The bearer
+token, which an impersonator cannot fabricate, is what the public HTTP transport verifies.
 """
 import hashlib
 import json
@@ -78,8 +65,7 @@ def resolve_audiences(identities_path: str, identity: str | None) -> tuple[str, 
 
 # ── per-request token resolution (HTTP transport) ──────────────────────────────────────────────
 # The token store is a deploy secret shaped {"<sha256hex>": "<email>"}: plaintext bearer tokens
-# are NEVER stored — only their hash. Issuance is `stigmergy-issue-token`
-# (stigmergy/server/issue_token.py), which prints the plaintext once and the hash for this store.
+# are NEVER stored — only their hash. Issuance is `stigmergy-issue-token`.
 TOKEN_STORE_ENV = "STIGMERGY_TOKEN_STORE"            # inline JSON (a Fly secret, typically)
 TOKEN_STORE_FILE_ENV = "STIGMERGY_TOKEN_STORE_FILE"  # a path to the same JSON shape
 
@@ -121,15 +107,13 @@ def load_token_store(raw_json: str | None, path: str | None) -> dict[str, str]:
 
 
 def resolve_email_for_token(token_store: dict[str, str], token: str | None) -> str:
-    """Bearer token → email, fail-closed. Unlike `resolve_audiences`'s unknown-identity message
-    (a local CLI/stderr affordance), this NEVER enumerates known tokens or emails: the caller (the
-    HTTP auth middleware) catches `IdentityError` here and returns one fixed, generic 401 body —
-    the detailed reason is for the server's own log only."""
+    """Bearer token → email, fail-closed. NEVER enumerates known tokens or emails: the HTTP auth
+    middleware catches `IdentityError` here and returns one fixed, generic 401 body — the
+    detailed reason is for the server's own log only."""
     if not token:
         raise IdentityError("no bearer token presented")
-    # No constant-time compare needed here: this is a dict-key lookup on the SHA-256 hash, not a
-    # byte-by-byte comparison of the token itself — an attacker who can't already invert SHA-256
-    # (a preimage attack) learns nothing timing-wise from a hash-table miss vs. hit.
+    # No constant-time compare needed: a dict lookup on the SHA-256 hash leaks nothing timing-wise
+    # to anyone who cannot already invert SHA-256.
     email = token_store.get(hash_token(token))
     if not email:
         raise IdentityError("token not recognized")

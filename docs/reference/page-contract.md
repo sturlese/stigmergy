@@ -48,20 +48,12 @@ would anchor to it, and the `entity` filter would match half the corpus.
   Same value, three readings, one rule each, written down here so nobody has to infer it from
   which folder a page happens to sit in.
 
-  **The provenance distinction had to be written down because it had a consequence**, found by a
-  real filing walk rather than by a test — no meeting page had ever reached the situation before.
-  Any review step that asks a human to CONFIRM a company-wide claim before acting on a page
-  carrying `entity: []` would, under the single reading, put such a claim in front of a person and
-  ask them to sign it for a page that never made one. Asking somebody to vouch for an assertion
-  nobody wrote is precisely the failure such a confirmation exists to prevent, arrived at from the
-  other side. (There is no maturity-promotion lane in this codebase for that step to live on today
-  — maturity is a field, not a lane — so the live consequence is the second, quieter one.) That
-  one: views read `entity:` to build member sets, where a meeting page reads as "about everything"
-  under the company-wide interpretation and "a member of nothing" under the provenance one. They
-  agreed by luck of implementation; now a provenance page is a member of nothing BY CONTRACT,
-  because `page.is_provenance_type` answers the question and answers `False` for an unknown type —
-  the conservative direction, which costs one extra human question rather than silently skipping a
-  governance check.
+  **The distinction is load-bearing for views**: views read `entity:` to build member sets, and a
+  meeting page reads as "about everything" under the company-wide interpretation and "a member of
+  nothing" under the provenance one. A provenance page is a member of nothing BY CONTRACT —
+  `page.is_provenance_type` answers the question, and answers `False` for an unknown type, the
+  conservative direction: one extra human question rather than a silently skipped governance
+  check.
 
 - **The fast lane can only CREATE three of the seven page types.** `librarian/page.py::PAGE_TYPES`
   is the single vocabulary table, and a type carries a `folder` only when the fast lane may mint
@@ -95,11 +87,10 @@ uncommitted local edit — `librarian/base_inputs.py`) — an id, a display name
 declared, and the page is stamped with the **resolved canonical id**, whichever of the three the
 agent actually typed.
 
-**The strip compares on a normalized key, and that is not decoration.** `_strip_keys` matched bare,
-exact, lower-case keys once, so `"entity": [...]` (quoted) survived beside the
-server's own line — and `yaml.safe_load`'s last-key-wins made the survivor the value that counted.
-The sibling defect is the same shape: `Entity:` and `еntity:` (Cyrillic е, U+0435) are both bypasses
-of an `in keys` test. `page.normalize_key` is what both the strip and
+**The strip compares on a normalized key, and that is not decoration.** A bare exact-match strip
+is bypassed by `"entity": [...]` (quoted — and `yaml.safe_load`'s last-key-wins makes the survivor
+the value that counts), by `Entity:`, and by `еntity:` (Cyrillic е, U+0435).
+`page.normalize_key` is what both the strip and
 `gates.FORBIDDEN_PAGE_KEYS`' presence check compare on now: a small explicit homoglyph fold, then
 NFKC, then casefold — NFKC alone does **not** cover a cross-script look-alike, because Cyrillic and
 Latin are unrelated scripts to Unicode rather than a compatibility pair.
@@ -143,19 +134,17 @@ is legitimate governance, not a forged trust claim.
 
 `index/corpus.entity_list` normalizes both dialects into `pages_index.entity`, a Postgres `text[]`,
 and it does so **fail-CLOSED**, not fail-open: it strips every string element, rejects bools
-outright (a YAML 1.1 truthy word is never a plausible id — `entity: no` used to become `["False"]`,
-a real scoring change for any query containing the token "false"), drops anything that is not a
+outright (a YAML 1.1 truthy word is never a plausible id — an unguarded parse turns `entity: no`
+into `["False"]`, a real scoring change for any query containing the token "false"), drops anything that is not a
 string/int/float instead of stringifying it, and folds `""` to `[]`, never `[""]`. Each of those
 was a real declaration nobody wrote reaching the ranker with a label a human never typed.
 
 `search_brain`'s `entity` filter is membership (`%s = ANY(entity)`); its **public contract is
 unchanged** — a caller still passes one id.
 
-**The entity boost is TOLD, not inferred.** It used to fire when any
-element of the list matched a query **token**. That form was structurally dead for every
-multi-word entity: an id like `northwind-group` can never equal one token of "Northwind
-Capital", so the boost had silently narrowed itself to single-word ids, and it took
-someone eyeballing a search result to notice. Today `BrainService._search` resolves the query
+**The entity boost is TOLD, not inferred.** A boost keyed on query-TOKEN matches is structurally
+dead for every multi-word entity — an id like `northwind-group` can never equal one token of
+"Northwind Capital" — so `BrainService._search` resolves the query
 against the registry and passes the resolved id DOWN as `entity_hint`; `rank.contract_factors`
 fires the boost on **membership of that hint** in the page's list, and the factor label names the
 hint (`entity:borealis-dynamics`), never the whole list. No hint means no entity factor at all:

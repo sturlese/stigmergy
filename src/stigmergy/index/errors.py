@@ -1,8 +1,5 @@
-"""Domain errors of the index subsystem.
-
-Library code raises these instead of SystemExit: the CLIs translate them to exit codes, and the
-MCP server consumes the same seams (`build.rebuild`, `search.search`) — a server must get an
-exception it can map to a response, never a process kill.
+"""Domain errors of the index subsystem. Library code raises these instead of SystemExit: the
+CLIs translate them to exit codes, and the server maps them to responses — never a process kill.
 """
 
 

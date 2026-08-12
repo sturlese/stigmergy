@@ -1,13 +1,8 @@
 """`stigmergy-slack` — the process entry point: Bolt's ASYNC app, ONE process, Socket Mode. Every
 listener acks its envelope FIRST (Slack's 3-second budget), then keeps running in the same
-coroutine — Socket Mode already dispatches each incoming event as its own asyncio task, so nothing
-here needs a second `create_task` to keep the ack cheap. The socket loop itself is never blocked,
-because the listener returns control to the event loop at every `await`, starting with `ack()`.
-
-This module is the ONLY place `slack_bolt`/`slack_sdk` are imported at module scope in this
-package (besides `bolt_gateway.py`, which it uses) — every other module in `stigmergy.slack` takes a
-`SlackGateway` as a plain argument and is fully testable without either dependency installed
-mattering to its own logic.
+coroutine — Socket Mode dispatches each event as its own asyncio task. Only this module and
+`bolt_gateway.py` import `slack_bolt`/`slack_sdk` at module scope; every other module takes a
+`SlackGateway` as a plain argument.
 """
 import argparse
 import asyncio
@@ -47,10 +42,8 @@ def build_context(settings: SlackSettings, *, gateway=None, conn=None) -> SlackC
         from stigmergy.slack.bolt_gateway import BoltSlackGateway
         gateway = BoltSlackGateway(AsyncWebClient(token=settings.bot_token))
 
-    # There is no browsable read surface for pages, so `no_link_resolver` is wired in as
-    # CONFIGURATION and every citation renders with the "Show it here" affordance and no link. A
-    # future browsable surface wires its own resolver in here, replacing the VALUE, never this
-    # module or `render.py`'s contract.
+    # There is no browsable read surface for pages: every citation renders the "Show it here"
+    # affordance and no link. A future surface replaces this VALUE, never `render.py`'s contract.
     link_resolver = no_link_resolver
 
     return SlackContext(settings=settings, gateway=gateway, conn=conn, embedder=embedder,
@@ -60,68 +53,41 @@ def build_context(settings: SlackSettings, *, gateway=None, conn=None) -> SlackC
 
 def _event_team_id(event: dict, body: dict | None = None) -> str:
     """The EVENT'S OWN workspace — never `context["team_id"]`, which Bolt populates from the
-    *authorization* (the workspace this app is INSTALLED in). For an event from an external user in
-    a Slack Connect shared channel, the authorization's team_id equals the configured one BY
-    CONSTRUCTION, so comparing against it would be a tautology that can never fail. `user_team` is
-    the sender's own workspace; `team` is the fallback Slack uses when `user_team` is absent (a
-    same-workspace event).
+    *authorization* (the workspace this app is INSTALLED in): for an external user in a Slack
+    Connect shared channel that comparison is a tautology that can never fail. Order matters:
+    `user_team` (the sender's own workspace), then `team`, then the envelope's `body["team_id"]`.
 
-    **`body["team_id"]` is the third fallback, and it is not optional — leaving it out silently
-    disables the entire 🧠 capture path.** A `reaction_added` payload is
-    `{type, user, reaction, item, item_user, event_ts}` and carries **neither `user_team` nor
-    `team`** — those fields exist on message events only. Without the envelope fallback this
-    returns `""`, and the hardening in `identity.resolve_slack_identity` — absence fails CLOSED —
-    classifies every reaction as `ForeignTeam`: silent by design, zero Slack traffic, not one log
-    line. The gesture is dead and looks like nothing happening.
-
-    No test catches that on its own, because every reaction test **constructs its own payload** and
-    includes a team field the real event does not have.
-
-    The envelope's `team_id` is the workspace the event was DELIVERED from — weaker than
-    `user_team` (which names the sender), stronger than the authorization (which names us), and
-    the only thing Slack offers for this event type. Order matters: sender first, then the
-    event's own team, then the envelope. `context["team_id"]` is never consulted."""
+    **The envelope fallback is not optional**: a `reaction_added` payload carries neither
+    `user_team` nor `team` (those exist on message events only), so without it this returns `""`,
+    identity resolution fails closed to `ForeignTeam`, and the whole 🧠 capture path dies
+    silently — zero Slack traffic, not one log line."""
     return (event.get("user_team") or event.get("team")
             or (body or {}).get("team_id") or "")
 
 
 def _log_listener_failure(listener_name: str) -> None:
-    """The top-level guard every listener has, matching `poller.run_poller`'s own "one bad pass must
-    never kill the process" posture — the ack already happened (Bolt's 3-second budget is
-    satisfied), so an unexpected exception here degrades to a logged incident rather than an
-    uncaught traceback Bolt would otherwise log with no correlation id. Each handler's OWN internal
-    guards (`SlackContext.post_or_log`, `mention.handle_mention`'s edit-into-server-error path)
-    already cover the specific failures that CAN produce a user-facing reply; this is the
-    last-resort backstop for everything else."""
+    """The last-resort backstop every listener wraps its body in — the ack already happened, so an
+    unexpected exception degrades to a logged incident with a correlation ref. Handlers' own
+    guards cover every failure that can produce a user-facing reply."""
     ref = uuid.uuid4().hex[:8]
     log.error("slack: %s failed unexpectedly (ref=%s)", listener_name, ref, exc_info=True)
 
 
 def _is_dm(*, channel_type: str = "") -> bool:
-    """The ONE shared fact-check for "is this a 1:1 DM with the bot" — never a channel-id prefix
-    guess. `channel_type == "im"` is what Slack's own EVENT payloads carry (`message`,
-    `app_mention`), and it is Slack asserting the channel's TYPE, not its label.
-
-    **There is deliberately no `channel_name == "directmessage"` fallback.** INTERACTION payloads
-    (block actions, slash commands) carry no `channel_type`, and the name Slack puts in their
-    channel object for a DM is workspace-authored: any member who can create a public channel can
-    call it `directmessage`, at which point `on_show_it_here` would read "yes, this is a private
-    1:1" and post the page body with `chat_post_message` — publicly, at the clicking asker's own
-    scope. Interaction payloads ask Slack what the channel IS instead (`_is_dm_channel` below),
-    which is the pattern `capture.py` uses for the same question."""
+    """The ONE check for "is this a 1:1 DM with the bot": `channel_type == "im"`, Slack's own
+    assertion on EVENT payloads. **Deliberately no `channel_name == "directmessage"` fallback**:
+    interaction payloads carry no `channel_type`, and a DM's channel NAME is workspace-authored —
+    any member can create a public channel called `directmessage`, at which point
+    `on_show_it_here` would post the page body publicly. Interaction payloads ask Slack what the
+    channel IS instead (`_is_dm_channel` below)."""
     return channel_type == "im"
 
 
 async def _is_dm_channel(ctx, channel_id: str) -> bool:
-    """`_is_dm`'s sibling for INTERACTION payloads: the authoritative answer, from
-    `conversations.info`'s `is_im` — the same fact `capture.is_public_channel` reads, asked the
-    same way.
-
-    **Fail-closed is `False` here**, and the direction is worth stating because it is the
-    opposite of what "closed" usually means for a DM check: `True` makes the caller post with
-    `chat_post_message` (everyone in the channel sees it) and `False` makes it post ephemerally
-    (only the clicker does). So an API failure, an unknown channel, or a missing id degrades to
-    the private answer — the reader still gets their page, nobody else does."""
+    """`_is_dm`'s sibling for INTERACTION payloads: `conversations.info`'s `is_im`. **Fail-closed
+    is `False`**: `True` posts publicly with `chat_post_message`, `False` posts ephemerally — so
+    an API failure or unknown channel degrades to the private answer, and the reader still gets
+    their page while nobody else does."""
     if not channel_id:
         return False
     try:
@@ -133,9 +99,8 @@ async def _is_dm_channel(ctx, channel_id: str) -> bool:
 
 
 def build_bolt_app(ctx: SlackContext):
-    """Register every listener. `context["bot_user_id"]` is populated by Bolt's own
-    `auth.test`-backed middleware on every event — no separate lookup needed here.
-    `context["team_id"]` is NOT used to identify an event's sender (see `_event_team_id`)."""
+    """Register every listener. Bolt's own middleware populates `context["bot_user_id"]`;
+    `context["team_id"]` is never used to identify an event's sender (see `_event_team_id`)."""
     from slack_bolt.async_app import AsyncApp
 
     app = AsyncApp(token=ctx.settings.bot_token)
@@ -184,10 +149,8 @@ def build_bolt_app(ctx: SlackContext):
                 await mention.handle_mention(
                     ctx, event_team_id=team_id, channel_id=channel_id, thread_ts=event["ts"],
                     is_dm=True, asker_slack_user_id=event["user"],
-                    # Stripped, exactly as `on_app_mention` above does it. A DM needs no mention to
-                    # reach the bot, but people write one anyway — and the raw text handed the
-                    # answering agent a literal `<@UBOT>` as part of the question, so the same
-                    # sentence asked in a channel and in a DM became two different questions.
+                    # Stripped exactly as `on_app_mention` does: people mention the bot in DMs
+                    # anyway, and a raw `<@UBOT>` would make the same sentence a different question.
                     question=mention.strip_mention(event.get("text", ""),
                                                    context.get("bot_user_id", "")),
                     identity_result=identity_result)
@@ -196,12 +159,10 @@ def build_bolt_app(ctx: SlackContext):
             if not thread_ts:
                 return   # a fresh top-level channel message with no mention: not this bot's business
 
-            # Slack fires BOTH `message` and `app_mention` for a channel mention — skip a message
-            # `on_app_mention` above is already answering, so a mention-inside-a-thread is not
-            # ALSO mistaken for an ask-back reply. Guarded on `bot_user_id` itself, never on the
-            # composed `f"<@{bot_user_id}>"`: that string is ALWAYS truthy (a literal `"<@>"` is
-            # still non-empty), so guarding on it never short-circuits and a message containing the
-            # literal text `<@>` would wrongly skip reply handling.
+            # Slack fires BOTH `message` and `app_mention` for a channel mention — skip what
+            # `on_app_mention` is already answering. Guarded on `bot_user_id` itself, never on
+            # the composed `f"<@{bot_user_id}>"`: that string is non-empty even when the id is
+            # empty, so guarding on it never short-circuits.
             bot_user_id = context.get("bot_user_id", "")
             if bot_user_id and f"<@{bot_user_id}>" in (event.get("text") or ""):
                 return
@@ -226,28 +187,18 @@ def build_bolt_app(ctx: SlackContext):
             message_ts = item.get("ts", "")
             slack_user_id = event.get("user", "")
 
-            # `is_configured_workspace` is the same fail-closed check `resolve_slack_identity` runs
-            # internally, asked here BEFORE any identity work so an Ignored event (filtered above)
-            # or a ForeignTeam one never gets the progress reaction either — genuinely zero Slack
-            # traffic, reaction included, not merely zero chat traffic.
-            #
-            # It is the ONLY gate in front of the marker, and that is a deliberate trade, not an
-            # oversight. The channel check (`is_public_channel`) and the identity outcome are
-            # decided further down, inside `handle_reaction_added`, so a PRIVATE channel, an
-            # unrecognized reactor and a transient identity failure all get an hourglass that is
-            # then removed — where they previously produced no channel-visible artifact at all.
-            # Gating on the channel too would mean a `conversations.info` round-trip before the
-            # reaction, which is the exact wait this marker exists to remove. Nothing is queued on
-            # those paths and the refusal is still the ephemeral only the reactor sees; what
-            # changed is that the bot now briefly shows it noticed. Stated in
-            # `docs/reference/slack.md` so it is a decision rather than a surprise.
+            # The same fail-closed check `resolve_slack_identity` runs internally, asked BEFORE
+            # any identity work so an Ignored/ForeignTeam event never gets the progress reaction
+            # either — genuinely zero Slack traffic. It is the ONLY gate in front of the marker,
+            # deliberately: the channel and identity checks live inside `handle_reaction_added`,
+            # so a private channel or an unrecognized reactor gets an hourglass that is then
+            # removed — gating on the channel too would cost the `conversations.info` round trip
+            # this marker exists to hide. Stated in `docs/reference/slack.md`.
             reacted = is_configured_workspace(team_id, ctx.settings.team_id)
             queued = False
             try:
-                # The progress reaction fires as the FIRST thing inside this `try`, before
-                # identity resolution (which needs neither a `users.info` call nor the cache) —
-                # and INSIDE the `try`, not before it, so that even an unexpected failure in
-                # `mark_in_progress` itself still reaches the `finally` below and gets cleaned up.
+                # First thing INSIDE the `try` — not before it — so even an unexpected failure in
+                # `mark_in_progress` itself reaches the `finally` below and gets cleaned up.
                 if reacted:
                     await capture.mark_in_progress(ctx.gateway, channel_id=channel_id,
                                                    message_ts=message_ts)
@@ -258,8 +209,7 @@ def build_bolt_app(ctx: SlackContext):
                     identity_result=identity_result)
             finally:
                 # Every exit path clears the progress reaction — a refused/failed capture must
-                # never leave a dangling ⏳ — a live failure of exactly this shape, for a message
-                # edit rather than a reaction, is why every exit path clears it.
+                # never leave a dangling ⏳.
                 if reacted:
                     await capture.finish_progress(ctx.gateway, channel_id=channel_id,
                                                   message_ts=message_ts, ok=queued)
@@ -288,10 +238,8 @@ def build_bolt_app(ctx: SlackContext):
         except Exception:
             _log_listener_failure("on_show_it_here")
 
-    # Every button on a doorbell card (`review:<kind>:<verdict>` /
-    # `review-modal:<kind>:<verdict>`, `stigmergy.slack.render`'s own convention) — one regex
-    # matcher rather than one `@app.action(...)` per (kind, verdict) pair, since the set is closed
-    # and named in exactly one place (`render.py`).
+    # Every button on a doorbell card (`review:<kind>:<verdict>` / `review-modal:<kind>:<verdict>`,
+    # `render.py`'s convention) — one regex matcher, since the set is named in exactly one place.
     @app.action(re.compile(r"^(review|review-modal):"))
     async def on_review_action(ack, body, action):
         await ack()
@@ -312,10 +260,8 @@ def build_bolt_app(ctx: SlackContext):
         await ack()
         try:
             state_values = ((view or {}).get("state") or {}).get("values") or {}
-            # WHO is submitting comes from this event's OWN authoritative `body`, exactly like
-            # `on_review_action`/`on_show_it_here` above — never from the modal's
-            # `private_metadata`, which is a value this package itself wrote when the modal was
-            # opened, not a fact Slack is asserting about who just clicked Submit.
+            # WHO is submitting comes from this event's OWN authoritative `body` — never from the
+            # modal's `private_metadata`, a value this package itself wrote when the modal opened.
             user_id = (body.get("user") or {}).get("id", "")
             event_team_id = (body.get("team") or {}).get("id", "")
             await review.handle_note_modal_submission(
@@ -329,8 +275,8 @@ def build_bolt_app(ctx: SlackContext):
         await ack()
         try:
             state_values = ((view or {}).get("state") or {}).get("values") or {}
-            # Same rule as `on_review_note_modal_submission` above: WHO submitted comes from this
-            # event's OWN authoritative `body`, never round-tripped through `private_metadata`.
+            # Same rule as above: WHO submitted comes from this event's own authoritative `body`,
+            # never round-tripped through `private_metadata`.
             user_id = (body.get("user") or {}).get("id", "")
             event_team_id = (body.get("team") or {}).get("id", "")
             await review.handle_entity_mint_modal_submission(
@@ -343,21 +289,16 @@ def build_bolt_app(ctx: SlackContext):
 
 
 # Socket Mode has no leader election, and `fly deploy` creates two machines by default for a new
-# process group — a comment in `fly.toml` plus a runbook line is prose, not a mechanism. A
-# DIFFERENT key from `capture.schema._STARTUP_DDL_LOCK_KEY` (both are session-scoped advisory locks
-# on the SAME database; sharing a key would make the two locks interfere).
+# process group. A DIFFERENT key from `capture.schema._STARTUP_DDL_LOCK_KEY` — both are
+# session-scoped advisory locks on the SAME database, and sharing a key would make them interfere.
 _SINGLETON_LOCK_KEY = int.from_bytes(b"SYNSLCK", "big")
 
 
 def acquire_singleton_lock(conn) -> None:
-    """Refuse to start a SECOND `stigmergy-slack` process against this database — a mechanism, not an
-    intention: `pg_try_advisory_lock`, never the blocking `pg_advisory_lock`, because a second
-    machine must FAIL its startup immediately, not hang forever waiting for the first one to exit.
-    Session-scoped, on the SAME connection this process already holds for everything else, so the
-    lock dies the instant this connection closes — a crash, a deploy, `fly machine stop` — and the
-    next machine to start acquires it automatically. No new dependency: the database is already
-    serializing this the same way `capture.schema.startup_ddl_lock` serializes startup DDL, just
-    with its own key."""
+    """Refuse to start a SECOND `stigmergy-slack` process against this database.
+    `pg_try_advisory_lock`, never the blocking variant — a second machine must FAIL its startup
+    immediately, not hang. Session-scoped on the connection this process already holds, so the
+    lock dies the instant the connection closes and the next machine to start acquires it."""
     with conn.cursor() as cur:
         cur.execute("SELECT pg_try_advisory_lock(%s::bigint)", (_SINGLETON_LOCK_KEY,))
         acquired = cur.fetchone()[0]
@@ -377,8 +318,8 @@ async def _async_main(settings: SlackSettings) -> None:
     app = build_bolt_app(ctx)
     handler = AsyncSocketModeHandler(app, settings.app_token)
     poller_task = asyncio.create_task(poller.run_poller(ctx))
-    # The steward doorbell rides the SAME process — no extra always-on process group — as a second
-    # background task beside the poller above, never a second machine.
+    # The steward doorbell rides the SAME process as a second background task beside the poller —
+    # never a second machine or process group.
     doorbell_task = asyncio.create_task(doorbell.run_doorbell(ctx))
     try:
         await handler.start_async()
@@ -395,10 +336,8 @@ def main(argv=None) -> int:
     parser.add_argument("--repo", default=None,
                         help="knowledge-repo checkout (defaults --identities/--channels/"
                              "--entity-registry)")
-    # `Settings.from_args` (the same builder stdio/HTTP use) reads `args.identity` unconditionally
-    # — unused here (identity resolves PER SLACK EVENT, never per-process; same posture
-    # `mcp_server.py`'s `--transport http` branch already takes), kept only so that shared builder
-    # does not need an HTTP/Slack-specific carve-out.
+    # `Settings.from_args` (the shared builder) reads `args.identity` unconditionally — unused
+    # here (identity resolves PER SLACK EVENT), declared only so the builder needs no carve-out.
     parser.add_argument("--identity", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--identities", default=None,
                         help="path to identities.json (default: <repo>/ops/identities.json)")

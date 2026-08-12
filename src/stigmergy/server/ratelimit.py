@@ -1,25 +1,11 @@
 """Per-identity rate limiting: a token bucket caps how much of the server — and the OpenAI spend
-behind it — a single leaked token can drain.
+behind it — a single leaked token can drain. Two buckets on every call the service layer wraps:
+`overall` (30/min, every tool call, including the reads an `ask` run makes internally) and `ask`
+(an ADDITIONAL 10/min for the expensive synthesizer).
 
-TWO buckets are consulted on every call the service layer wraps (`BrainService._call` /
-`.call_async` — one seam, both transports):
-
-- `overall`: 30 requests/min, spent by every tool call (`search_brain`, `read_page`,
-  `list_entities`, `ask`, `review_decide`, ...) — including the read calls an `ask` run makes
-  internally through the same `BrainService` methods, so the budget also throttles `ask`'s
-  fan-out cost, not just its own call count.
-- `ask`: an ADDITIONAL 10 requests/min, spent only by `ask` itself (the OpenAI-backed
-  synthesizer is the expensive resource behind a public URL).
-
-`propose_per_min` is accepted and stored, but NOTHING spends it: `self._extra` registers `ask`
-alone, and no tool is keyed to a propose bucket. It survives as the shape for the next expensive
-write tool, because the tool it was written for — a worktree, the eight code gates, gitleaks over
-the worktree, a linter SUBPROCESS and a real remote push — was the one entry point on this seam
-with no cost bucket of its own at all, sharing the same 30/min budget as every read tool. Adding
-that next tool should be one line in `_extra`, never a third copy of the branch in `check`.
-
-The clock is injectable (constructor `clock=`) so tests can drive the bucket deterministically
-without real sleeps, which is how the boundary (30th ok, 31st refused) is pinned.
+`propose_per_min` is accepted and stored but NOTHING spends it — a deliberate dead knob, kept as
+the shape for the next expensive tool: one line in `_extra`, never a third copy of the branch in
+`check`. The clock is injectable (`clock=`) so tests pin the boundary without real sleeps.
 """
 import time
 
@@ -31,13 +17,9 @@ DEFAULT_PROPOSE_PER_MIN = 5
 
 
 class _Bucket:
-    """A continuous token bucket: starts full (so the (N+1)th immediate call is the first
-    refusal — 30th ok, 31st refused), refills at `capacity` tokens/minute.
-
-    `available`/`consume` are split on purpose: `check()` below peeks BOTH buckets `ask` needs
-    before committing either, so a call refused by the ask bucket never over-charges the overall
-    one — refilling in `available` is idempotent (safe to call without following it with
-    `consume`), so peeking costs nothing."""
+    """A continuous token bucket: starts full (30th immediate call ok, 31st refused), refills at
+    `capacity` tokens/minute. `available`/`consume` are split so `check()` can peek BOTH buckets
+    before committing either — a refusal never over-charges the other bucket."""
 
     __slots__ = ("capacity", "tokens", "last")
 
@@ -70,23 +52,16 @@ class RateLimiter:
         self.propose_per_min = propose_per_min
         self._clock = clock
         self._overall: dict[str, _Bucket] = {}
-        # One extra, stricter bucket per named expensive tool, on top of the shared overall one.
-        # A dict of (capacity, per-identity buckets) rather than a hand-written `if tool == ...`
-        # per entry: every such tool is the same SHAPE of exception to "every tool spends the
-        # shared bucket and nothing more", so the next one is one line here rather than a second
-        # copy of the branch below.
+        # One extra, stricter bucket per named expensive tool, on top of the shared overall one —
+        # the next such tool is one line here, never a second copy of the branch in `check`.
         self._extra: dict[str, tuple[int, dict[str, _Bucket]]] = {
             "ask": (self.ask_per_min, {}),
         }
 
     def check(self, identity: str, tool: str) -> None:
-        """Raise `RateLimitError` when `identity` is over budget for this call. Every tool spends
-        the shared overall bucket; a tool named in `self._extra` additionally spends its own
-        stricter bucket.
-
-        Both buckets `this call` needs are checked for availability BEFORE either is consumed:
-        a refusal — from either bucket — leaves BOTH untouched, so a call that never ran never
-        spends any part of next minute's budget either."""
+        """Raise `RateLimitError` when `identity` is over budget. Every tool spends the shared
+        overall bucket; a tool named in `self._extra` additionally spends its own stricter one.
+        Both buckets are checked BEFORE either is consumed — a refusal leaves both untouched."""
         now = self._clock()
         overall = self._bucket(self._overall, identity, self.overall_per_min, now)
         extra_bucket, extra_capacity = None, 0

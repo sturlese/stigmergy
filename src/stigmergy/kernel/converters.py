@@ -15,7 +15,7 @@ EXT_METHOD = {
     ".xlsx": "sheet", ".xlsm": "sheet", ".xls": "sheet", ".csv": "sheet", ".tsv": "sheet",
     ".docx": "docx",
     # .ods goes through LibreOffice (Gotenberg), NOT openpyxl — openpyxl cannot read OpenDocument
-    # spreadsheets and raised on every pass, wedging the doc in an error/requeue loop forever.
+    # spreadsheets.
     ".pptx": "office", ".ppt": "office", ".doc": "office", ".odt": "office", ".odp": "office",
     ".ods": "office", ".rtf": "office",
     ".md": "text", ".txt": "text", ".json": "text",
@@ -126,9 +126,7 @@ def _csv_rows(path: str, delim: str) -> list:
 
 
 def sheet_rows(path: str) -> list:
-    """Full parsed grid per sheet: [(sheet_name, rows)] with rows capped at SHEET_MAX_ROWS.
-    Shared by every consumer that needs the grid, so a sheet is parsed once rather than re-read
-    per reader — one parse, one truth."""
+    """Full parsed grid per sheet: [(sheet_name, rows)] with rows capped at SHEET_MAX_ROWS."""
     ext = os.path.splitext(path)[1].lower()
     if ext == ".xls":
         return _xls_rows(path)
@@ -140,9 +138,8 @@ def sheet_rows(path: str) -> list:
 
 
 def _sheet_profile(path: str) -> str:
-    """Compact per-sheet profile: dimensions + a sample of rows. The full grid stays in the
-    original file, which the evidence plane keeps byte-for-byte — the profile is a reading aid,
-    never the record."""
+    """Compact per-sheet profile: dimensions + a sample of rows. A reading aid, never the
+    record — the full grid stays in the original file the evidence plane keeps."""
     sheets = sheet_rows(path)
     parts = []
     for name, rows in sheets:
@@ -164,8 +161,7 @@ VISION_OCR_PROMPT = (
 
 
 def vision_extract(path: str) -> dict:
-    """OCR a scanned/visual PDF via Gemini (native-PDF, single call). The engine behind the
-    agent's ocr() tool. Lazy SDK import (only loaded when vision is used)."""
+    """OCR a scanned/visual PDF via Gemini (native-PDF, single call). Lazy SDK import."""
     model = os.environ.get("VISION_MODEL", "gemini-3-flash-preview")
     key = os.environ.get("GEMINI_API_KEY")
     if not key:

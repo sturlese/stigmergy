@@ -1,53 +1,21 @@
-"""`stigmergy-entities` — governed entity birth, and the registry's derived view.
+"""`stigmergy-entities` — governed entity birth: list · show · approve · reject · create ·
+regenerate. Each subcommand is a thin skin over the library, in `stigmergy-queue`'s dialect
+(exit 130 on Ctrl-C, `--json` emitting the machine value first, shared renderings imported —
+`format_age`, `_clean` — never re-implemented).
 
-Six subcommands, each a thin skin over the library (nothing CLI-only — the same discipline
-`stigmergy-queue` and `stigmergy-librarian` follow):
+Everything `show` prints about a capture is UNTRUSTED: every value crosses `capture.cli._clean`
+(the same seam `stigmergy-queue show` uses — two renderers disagreeing about trust is how one
+ends up wrong), and the suggested approve command is built from a name only when `_suggestable`
+allows it, quoted even then; otherwise the name is printed on its own inert line and the steward
+types `--name` themselves. `reject` and `--requeue` ride `capture.dispositions`' own seams — a
+second triage->rejected path would be a second set of state guards to keep in agreement.
 
-    stigmergy-entities list                  what is parked on an identity decision
-    stigmergy-entities show <queue-id>       one situation: the material, the agent's reading, the name
-    stigmergy-entities approve <queue-id>    mint the entity, regenerate the registry, ONE commit, push
-    stigmergy-entities reject <queue-id>     decline it — reuses the steward drain's own transition
-    stigmergy-entities create                the same birth with no capture behind it
-    stigmergy-entities regenerate [--check]  the derived view, rebuilt or verified
+Exit codes: 0 the command did what it said; 1 it refused (a collision, a dirty clone, a
+non-situation row) or `--check` found drift; 2 the TOOL could not run (no repo, no database).
 
-Conventions are `stigmergy-queue`'s, because the three tools sit side by side in one operator's
-terminal and must not speak different dialects: exit 130 on Ctrl-C, `--json` emitting the
-machine-readable value FIRST, local and specific errors, and every shared rendering IMPORTED
-(`format_age`, `_clean`) rather than re-implemented.
-
-**Everything `show` prints about a capture is UNTRUSTED and is treated as such.** The
-excerpt, the agent's rationale, the submitter's reply, the hint and the unresolved name are all
-written from material somebody else wrote, and they land on a terminal that holds this operator's
-push identity for `main`, the queue DSN and — on the operator machine — the App key path. Two
-consequences, and they are different sizes:
-
-- every one of those values crosses `capture.cli._clean` on the way out, the same seam
-  `stigmergy-queue show` puts them through. Two renderers of one value disagreeing about whether it
-  is untrusted is how one of them ends up being the wrong one;
-- and `show`'s **suggested approve command is not built from any of them unless the name is safe
-  to put in a shell**. A printed command is an invitation to paste, `$(…)` inside double quotes
-  executes where it is pasted, and a name spelled `Acme" --aliases "<a registered name>` reads to
-  a human as one argument while a shell reads it as three. So the name is checked against an
-  ALLOW-list (`_suggestable`), quoted with `shlex.quote` even then, and when it fails the check the
-  tool prints the name on its own inert line and tells the steward to type `--name` themselves —
-  refusing to suggest rather than suggesting something quoted-but-unreadable.
-
-**`reject` does not write a transition.** It calls `capture.dispositions.reject`, the seam the
-drain already owns — a second path from `triage` to `rejected` would be a second set of state
-guards to keep in agreement with the first, and this CLI's judgment about an identity is not a
-different kind of rejection from a steward's judgment about anything else. Same for `--requeue`,
-which is `dispositions.requeue` and nothing more.
-
-**Exit codes.** 0 when the command did what it said; 1 when it refused (a collision, a dirty
-clone, a row that is not a situation) or when `--check` found drift; 2 when the TOOL could not
-run (no repo, no database). A refusal is not a crash and drift is not a bug — but both are
-non-zero, because both mean the thing the operator asked for did not happen.
-
-**Order of operations in `approve`, which is a correctness property and not a style choice:** the
-queue row is only requeued AFTER the push lands. A requeue that ran first would hand the librarian
-a capture whose entity is not yet on the remote it fetches from, and the capture would park a
-second time — the full park-approve-refile circle failing for a reason that has nothing to do with
-the circle.
+Order of operations in `approve` — a correctness property: the queue row is requeued only AFTER
+the push lands, because a requeue that ran first would hand the librarian a capture whose entity
+is not yet on the remote it fetches from, and the capture would park a second time.
 """
 import argparse
 import json
@@ -73,9 +41,8 @@ EXIT_INTERRUPTED = 130
 
 
 def _repo(args) -> str:
-    """The steward's clone. Same env var and same default as the librarian's `--repo`
-    (`librarian.config`), because it is the same checkout — an operator who has already told one
-    tool where the knowledge repo is should not have to tell the other."""
+    """The steward's clone. Same env var and default as the librarian's `--repo` — it is the
+    same checkout, told to one tool once."""
     repo = args.repo or os.environ.get(librarian_config.REPO_ENV) or librarian_config.REPO_DEFAULT
     path = os.path.abspath(repo)
     if not os.path.isdir(os.path.join(path, ".git")):
@@ -120,13 +87,11 @@ def _cmd_list(conn, args) -> int:
     return 0
 
 
-# The name is offered inside a shell command, so it is checked against an ALLOW-list rather than
-# scrubbed of known-bad characters: a deny-list of shell metacharacters is a list somebody has to
-# keep complete forever, against a shell that gains meaning for new punctuation, and the value
-# being filtered arrives from captured material. Letters and digits are `str.isalnum()`, so accents
-# and non-Latin scripts pass; the punctuation a real entity name needs is enumerated. `'` is
-# deliberately NOT here: `shlex.quote` handles it correctly but renders it `'L'"'"'Oreal'`, and a
-# command a steward cannot read is a command they retype wrong.
+# An ALLOW-list, never a deny-list: a deny-list of shell metacharacters must be kept complete
+# forever, against a value that arrives from captured material. `str.isalnum()` lets accents and
+# non-Latin scripts pass; the punctuation a real entity name needs is enumerated. `'` is
+# deliberately absent: `shlex.quote` renders it `'L'"'"'Oreal'`, and a command a steward cannot
+# read is a command they retype wrong.
 _SUGGESTABLE_PUNCTUATION = frozenset(" .,&+-")
 MAX_SUBJECT_CHARS = 120
 
@@ -140,10 +105,8 @@ def _cmd_show(conn, args) -> int:
         return 0
     report = row.get("report") or {}
     situation, subject = row["situation"], row["subject"]
-    # A row parked BEFORE `schema.SITUATION_KEY` existed records no subject at all, and saying so
-    # is the honest rendering — `parked as an unsupported type ("")` reads as a bug in the tool
-    # rather than as an old row, and sends a steward looking for a value nothing ever wrote.
-    # `open_question` is what those rows do carry, so it stands in.
+    # A row parked before `schema.SITUATION_KEY` existed records no subject at all; rendering `""`
+    # would read as a bug in the tool. `open_question` is what those rows do carry, so it stands in.
     legacy = _clean(str(report.get("open_question") or "").strip(), 300)
     shown = _clean(subject, MAX_SUBJECT_CHARS)
     if situation == schema.SITUATION_UNRESOLVED_ENTITY:
@@ -158,8 +121,7 @@ def _cmd_show(conn, args) -> int:
     print(f"capture #{row['id']} — {headline}")
     print(f"  submitted by: {row['submitted_by']}, {row['created_at']} "
           f"(parked {format_age(row.get('parked_age_ms'))})")
-    # Every value below was written from material this system did not author. `_clean` is
-    # `stigmergy-queue show`'s own seam, imported rather than re-derived (module docstring).
+    # Every value below was written from material this system did not author (module docstring).
     if report.get("agent_rationale"):
         print(f"  agent's reading: \"{_clean(report['agent_rationale'], 300)}\"")
     if row.get("hints"):
@@ -182,25 +144,12 @@ def _suggestable(name: str) -> bool:
     """Whether `name` may be pasted into a printed command at all.
 
     Not "whether it can be quoted" — `shlex.quote` can quote anything. The question is whether a
-    human reading the suggested line sees the same arguments the shell will. `Acme" --aliases "<a
-    registered name>` quotes safely and still reads to a person as one argument while parsing as
-    three, which combines with the alias-collision chain the birth gate exists to close.
-
-    **No WORD may start with `-`**, not merely the name. `Acme" --aliases "<a registered name>`
-    survives the source-side filter in `librarian.report` as `Acme --aliases <name>`, which
-    `shlex.quote` renders as one correctly quoted argument — safe to RUN, and still a line whose
-    reader has to notice the quoting to know that. Refusing it costs nothing real (no entity is
-    called `-anything`) and removes the last shape that reads as more arguments than it is.
-
-    **`schema.UNNAMED_ENTITY_PLACEHOLDER` is refused by VALUE, not by shape.**
-    `gates._unresolved_name` and `processing._triage` both fall back to this exact word —
-    "nothing was named at all" — when a park carries no real name, and it is syntactically an
-    ordinary name (letters and a space): every OTHER check here would happily pass it, and
-    `_print_next_commands` would suggest `stigmergy-entities approve ... --name "something unnamed"`
-    as a ready-to-run command. Run, it mints a garbage entity that then resolves for every future
-    capture mentioning it — exactly the failure governed birth exists to prevent, self-inflicted by
-    the tool meant to guard against it. The park itself is correct and stands; only the willingness
-    to hand THIS one value back as a fillable suggestion is withheld.
+    human reading the line sees the same arguments the shell will parse. No WORD may start with
+    `-` (a quoted `Acme --aliases <name>` is safe to RUN and still reads as three arguments; no
+    real entity is called `-anything`). `schema.UNNAMED_ENTITY_PLACEHOLDER` is refused by VALUE:
+    it is syntactically an ordinary name the librarian falls back to when nothing was named, and
+    suggesting it ready-to-run would mint a garbage entity that then resolves for every future
+    capture mentioning it.
     """
     value = str(name or "").strip()
     if not value or len(value) > MAX_SUBJECT_CHARS:
@@ -213,26 +162,15 @@ def _suggestable(name: str) -> bool:
 
 
 def _print_next_commands(submission_id: int, situation: str, subjects: list) -> None:
-    """The exact next command(s) — but only ever built from values that are safe to print as one.
+    """The exact next command(s) — built only from values that are safe to print as one.
 
-    The convention `stigmergy-queue`'s `RECLAIM_NOW` set, under the same obligation: a message
-    containing a command is a promise, so the flags printed here are the flags `birth.prepare`
-    accepts, including the derived `--id` it would otherwise refuse.
-
-    A promise has a second half, though, which is that running the printed line does what the line
-    says and nothing else. When a name cannot carry that promise the tool says so and stops
-    filling it in: the name is printed on its own line, where it is inert text rather than shell
-    input, and the command becomes a template with `--name` left for the steward. That is strictly
-    more useful than a correctly-quoted line nobody can verify by reading — and it is the branch
-    any row whose name never passed `librarian.report`'s own identity filter lands in.
-
-    **`subjects` is a LIST** — one entry for the ordinary single-name case, several for a
-    meeting park (`entities.situations.subjects_of`). Every name gets its OWN command block,
-    printed and checked against `_suggestable` INDEPENDENTLY: a steward approving one name must
-    not be blocked because a sibling name also happens to fail `_suggestable`, and vice versa.
-    Approving one is `stigmergy-entities approve {submission_id} ...` for EACH name, one call per
-    name; only the last one should pass `--requeue`, since `approve` requeues the whole submission
-    (there is one row, not one per name) — every command block below says so.
+    A message containing a command is a promise: the flags printed are the flags `birth.prepare`
+    accepts, including the derived `--id`, and running the line must do what it reads as doing.
+    A name that cannot carry that promise is printed on its own inert line and the command becomes
+    a template with `--name` left for the steward. `subjects` is a LIST (several for a meeting
+    park): each name gets its own block, checked against `_suggestable` INDEPENDENTLY, so a
+    sibling unsafe name never blocks the others; only the last call passes `--requeue`, since
+    `approve` requeues the whole submission (one row, not one per name).
     """
     unresolved = situation == schema.SITUATION_UNRESOLVED_ENTITY
     types = f"--type <{'|'.join(birth.ENTITY_TYPES)}>"
@@ -241,8 +179,7 @@ def _print_next_commands(submission_id: int, situation: str, subjects: list) -> 
     multi = unresolved and len(subjects) > 1
 
     if not unresolved:
-        # `unsupported-type`: the subject is a TYPE, not a name, so there is no name to fill in and
-        # nothing untrusted reaches the line at all.
+        # `unsupported-type`: the subject is a TYPE, not a name — nothing untrusted reaches the line.
         print("\n  to approve it as a new entity:")
         print(f"    stigmergy-entities approve {submission_id} --id <canonical-id> "
               f"--name \"<Entity Name>\" {types} {tail}")
@@ -275,12 +212,9 @@ def _print_next_commands(submission_id: int, situation: str, subjects: list) -> 
 
 # ── the birth path: approve / create ───────────────────────────────────────────────────────────
 def _mint(repo: str, args, *, submission_id: int | None, on_output) -> dict:
-    """A thin adapter over the shared `entities.mint.mint` (ADR 030 D4): resolves the STEWARD's own
-    identity from this clone's git config (`clone.preflight`, which is also where "your clone has
-    no git identity configured" is refused) and hands it in as `author`, along with the parsed
-    `args`. Every discipline — drift refusal, resolve-before-mint, the template render, the
-    secrets scan, the one commit, the bounded rebase-and-retry — lives in `mint()` itself, shared
-    with a server-driven mint (`entities.remote.mint_via_clone`) so the two doors can never
+    """A thin adapter over the shared `entities.mint.mint`: resolves the STEWARD's own identity
+    from this clone's git config (`clone.preflight`) and hands it in as `author`. Every mint
+    discipline lives in `mint()` itself, shared with the server-driven door so the two can never
     silently drift apart.
     """
     branch = args.branch
@@ -306,9 +240,8 @@ def _cmd_approve(conn, args) -> int:
                    on_output=lambda line: print(line, file=sys.stderr))
     requeued = None
     if args.requeue:
-        # AFTER the push, never before (see the module docstring). Through the drain's own seam, so
-        # the state guard, the trace event and the `attempts` invariant are the same ones
-        # `stigmergy-queue requeue` gets.
+        # AFTER the push, never before (module docstring). Through the drain's own seam, so the
+        # state guard, the trace event and the `attempts` invariant are `stigmergy-queue requeue`'s.
         requeued = dispositions.requeue(
             conn, args.id, actor=args.by or result["steward"],
             note=f"entity {result['entity_id']} approved and pushed ({result['commit'][:12]})")
@@ -351,13 +284,8 @@ def _cmd_reject(conn, args) -> int:
 
 
 def _steward(args) -> str:
-    """Who is answering for this, defaulting to the clone's own git identity.
-
-    Defaulted rather than required, and only here: this tool's whole premise is that the steward's
-    git identity is the signature, so asking them to retype it as `--by` would invite a second,
-    different answer to a question the clone has already answered. Still overridable — attribution,
-    not authorization.
-    """
+    """Who is answering, defaulting to the clone's own git identity — the signature this tool is
+    premised on. Still overridable: attribution, not authorization."""
     name, email = clone.identity(_repo(args))
     return f"{name} <{email}>"
 
@@ -385,11 +313,10 @@ def _cmd_regenerate(conn, args) -> int:
         print(f"{generator.REGISTRY_RELPATH} already matches {generator.ENTITIES_RELDIR}/*.md "
               f"({outcome.page_count} entity page(s)) — nothing to write")
         return 0
-    # Written locally and NOT committed, and the line says so. `approve`/`create` are the one
-    # governed push path in this subsystem (dirty check, divergence check, steward identity, one
-    # commit); a `regenerate` that pushed on its own would be a second writer to `main` with
-    # different safety properties. Drift also means the pages and the registry already disagree,
-    # which is a thing a human should look at before publishing the resolution.
+    # Written locally and NOT committed: `approve`/`create` are the one governed push path here,
+    # and a self-pushing `regenerate` would be a second writer to `main` with different safety
+    # properties. Drift is also a disagreement a human should look at before publishing the
+    # resolution.
     print(f"regenerated {generator.REGISTRY_RELPATH} from {outcome.page_count} entity page(s) — "
           f"written locally, NOT committed")
     for divergence in outcome.divergences:
@@ -439,12 +366,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_create.set_defaults(fn=_cmd_create, needs_db=False)
 
     for parser in (p_approve, p_create):
-        # `dest="entity_id"`, NOT the default `id` — `approve` already has a POSITIONAL `id` (the
-        # queue row), and argparse resolves both to the same attribute, so `--id globex-corp`
-        # silently overwrites the submission id and the queue lookup goes looking for a row
-        # numbered "globex-corp". Two flags with one meaning is a naming collision; two flags with
-        # one DEST is a data collision, and it fails at the far end of the command with a database
-        # error about a value the operator never typed there.
+        # `dest="entity_id"`, NOT the default `id`: `approve` already has a POSITIONAL `id` (the
+        # queue row), and argparse would resolve both to one attribute — `--id globex-corp` would
+        # silently overwrite the submission id and the queue lookup would chase "globex-corp".
         parser.add_argument("--id", dest="entity_id", required=True,
                             help="the canonical registry id. It must be the slug of --name: the "
                                  "registry is DERIVED from the pages, so an id nothing regenerates "
@@ -507,9 +431,8 @@ def main(argv=None) -> int:
     try:
         return args.fn(conn, args)
     except (EntityError, CaptureError, LibrarianError) as ex:
-        # One sentence, no traceback — including for the git faults `librarian.gitcmd` raises,
-        # whose stderr it has already scrubbed and truncated. A raw traceback where a person
-        # expected a sentence is this project's most-repeated defect.
+        # One sentence, no traceback — including for git faults, whose stderr `librarian.gitcmd`
+        # has already scrubbed and truncated.
         print(f"stigmergy-entities: {ex}", file=sys.stderr)
         return EXIT_REFUSED
     except KeyboardInterrupt:

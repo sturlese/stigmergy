@@ -1,22 +1,14 @@
 """Manual walk of the view flow, driven end to end against the real local stack.
 
-Not a test: a narrated walk of the view flow the way an operator meets it — drop a meeting
-transcript through the meeting flow, watch the librarian file it AND, in the same run, regenerate
-the touched entity's view (the post-filing trigger); read the committed view back from git; then
-run `stigmergy-views regenerate --entity <id>` by hand (the manual trigger) and watch the honest
-no-op,
-since the worker already did the work. Real Postgres, real git, real gates, the offline double
-standing in for the agent (no API key needed — the same posture every other walk script in this
-repo takes).
+Not a test: a narrated walk the way an operator meets it — drop a meeting transcript, watch the
+librarian file it and regenerate the touched entity's view in the same run (the post-filing
+trigger); read the committed view back from git; then run `stigmergy-views regenerate --entity <id>`
+by hand and watch the honest no-op. Real Postgres, real git, real gates, the offline double.
 
-**What this script does NOT do**, and why: it does not run a live `stigmergy-server ask "what
-sabemos de stigmergy?"` against a real LLM and a real knowledge repo. That needs a real
-embedder/model call against the operator's own checkout and their own judgment ("the view wins,
-judged by the operator"), which is not something an offline, keyless script can stand in for
-without lying about what it proved. This script proves the MECHANISM (the skeleton, the synthesis,
-the commit, the trigger, the no-op); the live judgment stays a hand step against a real corpus.
+It proves the MECHANISM only — skeleton, synthesis, commit, trigger, no-op. Whether a live `ask`
+prefers the view is the operator's judgment against a real corpus and stays a hand step.
 
-Run: `.venv/bin/python scripts/walk_views.py` (from the repo root, with `make db-up` already run).
+Run: `.venv/bin/python scripts/walk_views.py` from the repo root, after `make db-up`.
 """
 import asyncio
 import os

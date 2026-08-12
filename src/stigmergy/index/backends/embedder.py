@@ -1,8 +1,6 @@
-"""The real embedder: OpenAI `text-embedding-3-large`, chosen because it measured ES->EN
-hit@5 = 1.00 on this corpus — cross-language retrieval is the requirement, not an extra.
-
-`build_embedder` is the one fake/real dispatch: the offline double is imported DEFERRED, only when
-selected, so production never loads it and the import graph stays honest.
+"""The real embedder: OpenAI `text-embedding-3-large` — cross-language retrieval is the
+requirement (ES->EN hit@5 measured 1.00 on this corpus). `build_embedder` is the one fake/real
+dispatch; the offline double is imported DEFERRED so production never loads it.
 """
 import os
 
@@ -18,16 +16,13 @@ class OpenAIEmbedder:
                  transport: httpx.BaseTransport | None = None):
         self.model = model
         self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        # `transport` is the injectable HTTP seam: production passes None (real network), tests
-        # pass an httpx.MockTransport so the request/response parsing path runs fully offline.
+        # the injectable HTTP seam: production passes None (real network), tests an
+        # httpx.MockTransport
         self._transport = transport
         if not self._api_key:
-            # NOT "use --embedder fake for keyless runs". A query embedded by the fake embedder
-            # against an index built with the real one lands in a different vector space: search
-            # returns noise and does not fail, which is the one failure mode worse than an error.
-            # `embedder_for_model` exists precisely to keep query and index in the same space, so
-            # the honest advice is the key — or a whole index rebuilt fake, which is a different
-            # index and only useful offline.
+            # Never suggest the fake as a keyless substitute: a query embedded by the fake against
+            # an index built real lands in a different vector space — search returns noise and
+            # does not fail, the one failure mode worse than an error.
             raise RuntimeError(
                 "OPENAI_API_KEY is not set, and this index was built with the real embedder. "
                 "`--embedder fake` is NOT a substitute: it embeds into a different space, so "
@@ -49,8 +44,8 @@ class OpenAIEmbedder:
 
 
 def build_embedder(kind: str = "openai", model: str | None = None):
-    """'openai' (default) or 'fake'. The fake import is deferred on purpose — production
-    modules must never load the offline double (same rule the ingest layering enforces)."""
+    """'openai' (default) or 'fake'. The fake import is deferred on purpose — production modules
+    must never load the offline double."""
     if kind == "fake":
         from stigmergy.index.backends.fake_embedder import FakeEmbedder
         return FakeEmbedder()

@@ -2,16 +2,9 @@
 
     stigmergy-gardener [--repo PATH] [--dsn DSN] [--json]
 
-Same dialect as `stigmergy-queue`/`stigmergy-views`/`stigmergy-digest`: `--json` for machine-readable
-output, `stigmergy-gardener: {message}` on stderr for a refusal, no raw traceback on interrupt.
-Findings present -> exit 0, because findings are data, not errors; a failed run (DB error, an
-`sla` finding whose notice could not post) -> nonzero.
-
-This is the only module in the package that imports `stigmergy.index.store` (the connection seam,
-mirroring `capture.cli`'s one permitted edge) or `stigmergy.slack.bolt_gateway` (its
-`build_gateway` factory — the real gateway, from just a bot token) — every other module in this
-package takes `conn`/`gateway` as plain arguments, and nothing outside `stigmergy.slack` ever
-imports the Slack web-client SDK directly.
+Findings present -> exit 0 (findings are data, not errors); a failed run -> nonzero. The only
+module in the package that imports `stigmergy.index.store` or `stigmergy.slack.bolt_gateway` —
+every other module takes `conn`/`gateway` as plain arguments.
 """
 import argparse
 import asyncio
@@ -40,21 +33,10 @@ def _err(message: str) -> None:
 
 def _connect(args):
     conn = store.connect(args.dsn)
-    # Every schema a `stigmergy-gardener` database is expected to carry, ensured in one place. A
-    # narrower version of this function ensured only the first and the last of these three, which
-    # is invisible over a MATURE database — every test fixture's own
-    # `tests.gardener.support.connect_or_skip` already ensures all three, so no test over it could
-    # catch the gap — and leaves a FRESH one a table short, surfacing as a bare `UndefinedTable`.
-    # Mirrors `digest/cli.py::_connect`'s identical three-schema-ensure shape, in the identical
-    # order: two sibling commands over one database, one "DDL is run by whoever opens the
-    # database" convention (`capture/schema.py`'s own module docstring).
-    capture_schema.ensure_capture_schema(conn)   # capture_queue/job_runs — the two windowed
-                                                 # checks and the sweep read the queue; this run's
-                                                 # own job_runs row is written to the latter
-    review.ensure_review_schema(conn)            # review_decisions — never read by this package,
-                                                 # but read by `stigmergy-digest` against the same
-                                                 # database, and this package owns no DDL that
-                                                 # would let the two be ensured separately
+    # All three schemas, so a FRESH database is never a table short (`UndefinedTable`) — a gap a
+    # mature database, and every test fixture, hides. Same shape and order as `digest/cli.py`.
+    capture_schema.ensure_capture_schema(conn)   # capture_queue/job_runs
+    review.ensure_review_schema(conn)            # review_decisions — read by stigmergy-digest
     ensure_gardener_schema(conn)                 # gardener_findings — this package's own table
     return conn
 
@@ -65,13 +47,9 @@ def _repo(args) -> str:
 
 
 def _gateway():
-    """The real Slack gateway, constructed only when a bot token is configured —
-    `run.run_gardener` treats `None` as "no notice can be posted", which is only a problem if
-    this run actually produces an `sla` finding (`notice.post_sla_notice`'s own lazy check).
-    Constructing the client is cheap (no network call until a method is awaited), so it is always
-    attempted rather than deferred further. `stigmergy.slack.bolt_gateway.build_gateway` is imported
-    lazily, inside this function, matching `stigmergy.slack.app.build_context`'s own posture — and
-    it, not this module, is what actually reaches the SDK."""
+    """The real Slack gateway, or `None` when no bot token is configured — only a problem if this
+    run actually produces an `sla` finding. The SDK-reaching import stays lazy, inside this
+    function."""
     token = os.environ.get(SLACK_BOT_TOKEN_ENV)
     if not token:
         return None
@@ -117,10 +95,8 @@ def _run(conn, args) -> int:
                                                     result.sweep_sampled_count),
             sweep_failed=bool(result.sweep_error)), end="")
 
-    # Both checks below run regardless of the other — a sweep outage and a notice failure are
-    # independent (a DETERMINISTIC `sla` finding's notice can fail on the same run the model sweep
-    # also failed on) and both leave the report above intact: everything printed was already
-    # committed before either was attempted (see `run.run_gardener`).
+    # A sweep outage and a notice failure are independent; both leave the already-committed
+    # report above intact.
     failed = False
     if result.sweep_error:
         _err(f"the model sweep failed ({result.sweep_error}) — the {len(result.findings)} "

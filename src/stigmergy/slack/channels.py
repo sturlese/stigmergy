@@ -1,31 +1,16 @@
-"""`ops/slack-channels.json` — the channel's audience scope.
+"""`ops/slack-channels.json` — the channel's audience scope: `channel_id -> [labels]`, read fresh
+on every lookup (a stale read of an access-scoping file is the wrong kind of cheap), fail-closed
+on a malformed file.
 
-A second, smaller version of the shape `stigmergy.server.identity` establishes for
-`ops/identities.json`: a versioned JSON file in the SAME knowledge-repo checkout
-(`channel_id -> [labels]`), read fresh on every lookup (no caching — this file changes rarely and
-a stale read of an ACCESS-SCOPING file is the wrong kind of cheap), fail-closed on a malformed
-file, and defaulting to the EMPTY set for any channel not listed.
+**The empty-set default is the load-bearing property.** Per `acl.visible()`'s truth table, an
+empty audience set sees only pages carrying no `acl` label — widening takes a deliberate edit to
+this file, being safe takes none. A channel's scope is ALWAYS a `set[str]`, never `None`: even an
+unrestricted asker gets the empty set in an unlisted channel. Until the first labelled page
+exists, that default is indistinguishable from no scoping at all — a green two-identity channel
+test is not, on its own, evidence that scoping restricts anything.
 
-**The empty-set default is the load-bearing property, not an edge case.** Per `acl.visible()`'s
-truth table, an empty audience set sees pages carrying no `acl` label and nothing else — the
-fail-closed default that requires a deliberate edit (adding the channel to this file) to widen,
-and no edit at all to be safe. A channel's scope is therefore ALWAYS a `set[str]`, never `None`:
-even the unrestricted asker in a channel not listed here gets the empty set, not "everything", and
-this function's return type makes that structurally true (`set[str]`, never `set[str] | None`).
-
-**What that default resolves to depends entirely on whether any page carries a label.** Where
-`ops/slack-channels.json` has not been created at all, every channel resolves to the empty
-audience set — and per the truth table above, the empty set sees every page carrying no `acl`
-label. If no rule in `ops/acl.json` labels anything either, the fail-closed default resolves to
-the whole corpus. Nothing here is wrong — the default is correct, and it becomes genuinely
-restrictive the moment the first labelled page exists — but it is indistinguishable from no
-scoping at all until then, so a green two-identity test in a channel is not on its own evidence
-that channel scoping restricts anything.
-
-This module never calls `acl.visible()` and never decides whether a page is visible — it only
-resolves ONE fact (a channel's labels), the same way `identity.resolve_audiences` resolves one
-fact about a person. `BrainService` (via `stigmergy.server`) is what actually enforces the scope,
-exactly as `stigmergy.slack`'s package docstring requires.
+This module never calls `acl.visible()`: it resolves ONE fact about a channel, and `BrainService`
+enforces the scope.
 """
 import json
 import os
@@ -36,23 +21,16 @@ DEFAULT_RELATIVE = os.path.join("ops", "slack-channels.json")
 
 
 def default_path(repo_dir: str | None) -> str:
-    """The conventional channels file inside a knowledge-repo checkout, mirroring
-    `identity.default_path` — '' when no repo is given, so the resolver fails closed with an
-    actionable message rather than silently reading nothing."""
+    """The conventional channels file inside a knowledge-repo checkout — `''` when no repo is
+    given, so the resolver fails closed rather than silently reading nothing."""
     return os.path.join(repo_dir, DEFAULT_RELATIVE) if repo_dir else ""
 
 
 def channel_audiences(channels_path: str, channel_id: str) -> set[str]:
-    """The effective audience scope for a public-channel answer: the labels `channel_id` is
-    mapped to, or the EMPTY set for a channel not listed (or when `channels_path` itself is not
-    configured — a Slack deployment that never created this file gets the safe default on every
-    channel, not an error, because "no file yet" and "no scope for THIS channel" are the same
-    fact from a channel's point of view).
-
-    Malformed content (the file does not parse, is not a JSON object, or a channel's value is not
-    a list of strings) raises `IdentityError` — read once, fail loudly, the same posture
-    `identity.resolve_audiences` takes for its own file: a scoping file the server cannot make
-    sense of must never be treated as "no restrictions apply".
+    """The labels `channel_id` maps to, or the EMPTY set for a channel not listed or a
+    `channels_path` never configured — "no file yet" and "no scope for THIS channel" are the same
+    fact from a channel's point of view. Malformed content raises `IdentityError`: a scoping file
+    the server cannot make sense of must never be treated as "no restrictions apply".
     """
     if not channels_path or not os.path.exists(channels_path):
         return set()

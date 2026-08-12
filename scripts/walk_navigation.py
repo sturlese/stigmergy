@@ -1,18 +1,14 @@
 """Manual walk of entity navigation, driven against the real local stack.
 
 Not a test: a narrated walk of the navigation read surface the way an agent meets it —
-`list_entities` to learn the vocabulary, `describe_entity` for the layered dated view,
-`read_page` to walk one hop along served links/backlinks — and, at every new surface, the
-existence rule shown live: two identities, same calls, and the scoped one gets ABSENCE,
-byte-identical to nonexistence, never a refusal. Real Postgres, fake embedder, keyless —
-the same posture every other walk script in this repo takes.
+`list_entities`, `describe_entity`, `read_page` one hop along served links/backlinks — and, at
+every surface, the existence rule shown live: two identities, same calls, and the scoped one gets
+ABSENCE, byte-identical to nonexistence, never a refusal. Real Postgres, fake embedder, keyless.
 
-**What this script does NOT do**, and why (the same reason as the view walk): it does not run
-the live "what do we know about X?" `ask` against a real model and a real corpus — that stays a hand
-step, because which surface the model chooses is the model's call and has to be observed, not
-asserted. This script proves the MECHANISM; the hand steps are printed at the end.
+It proves the MECHANISM only. The live `ask` against a real model stays a hand step, printed at the
+end: which surface the model chooses has to be observed, not asserted.
 
-Run: `.venv/bin/python scripts/walk_navigation.py` (repo root, `make db-up` already run).
+Run: `.venv/bin/python scripts/walk_navigation.py` from the repo root, after `make db-up`.
 """
 import json
 import os
@@ -113,9 +109,9 @@ def main() -> int:
     step("unknown entity vs out-of-scope entity — byte-identical absence")
     a1 = scoped.describe_entity("nonexistent-widgets")
     show("unknown    ", a1)
-    # every acme page is open except one, so acme itself stays visible to eng; the byte-identity
-    # rule is shown against a FULLY scoped entity in the automated suite (fixtures with labels) —
-    # here the demonstrable half is: absence carries the same shape as unknown.
+    # Every acme page is open except one, so acme itself stays visible to eng. The demonstrable
+    # half here is that absence carries the same shape as unknown; byte-identity against a FULLY
+    # scoped entity is shown in the automated suite.
     assert a1 == {"error": "unknown entity: nonexistent-widgets"}
 
     step("read_page serves the graph — and one hop along it")

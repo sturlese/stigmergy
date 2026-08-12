@@ -21,11 +21,9 @@ from stigmergy.index.store import read_meta
 FILTER_COLUMNS = ("zone", "type", "status", "entity", "owner", "tier", "as_of")
 
 # OR of the query's own lexemes: websearch_to_tsquery ANDs every term, so a whole natural-language
-# question would trivially match nothing and the lexical arm would measure 0 by construction —
-# measured, not assumed. Each lexeme is
-# single-quoted (inner quotes doubled) before reaching to_tsquery: normalized lexemes can
-# still contain tsquery syntax characters (':' in URLs, '/'), which would otherwise make a
-# hostile or merely URL-bearing query crash the arm.
+# question would match nothing by construction. Each lexeme is single-quoted (inner quotes
+# doubled) before to_tsquery: normalized lexemes can still contain tsquery syntax (':' in URLs,
+# '/'), which would otherwise let a hostile or merely URL-bearing query crash the arm.
 _FTS_SQL = """
 WITH q AS (
     SELECT to_tsquery(%(fts_config)s::regconfig,
@@ -46,22 +44,13 @@ LIMIT %(pool)s
 
 
 def _filter_clause(filters: dict | None) -> tuple[str, dict]:
-    """The frontmatter filters, AND-ed onto the base query: a caller passes ONE value per column,
-    `entity` included.
+    """The frontmatter filters, AND-ed onto the base query: ONE value per column. `entity` is the
+    one `text[]` column, matched by MEMBERSHIP (`%s = ANY(entity)`) so a page anchored to several
+    entities is found by any one; every other column is scalar equality.
 
-    `entity` is the one column that is `text[]` — matched by MEMBERSHIP (`%s = ANY(entity)`)
-    rather than equality, so a page anchored to several entities is still found by any one of
-    them. Every other column is a scalar equality.
-
-    **Documented, not "fixed": `filters={"entity": ""}` matches NOTHING.** When `entity` was a
-    nullable scalar, an unanchored page could store `entity = ''` and this filter enumerated every
-    unanchored page — a real, if accidental, capability. `entity` is `text[]` `NOT NULL DEFAULT
-    '{}'` now, and `corpus.entity_list` never produces `['']` (an empty declaration normalizes to
-    `[]`, never a list holding one empty string), so `'' = ANY(entity)` matches only a row that
-    would itself be a contract violation. This is a genuine contract change for any external MCP
-    client that relied on the old behavior, but it is safe in DIRECTION — the filter goes from the
-    old accidental meaning to "matches nothing" rather than to something new and surprising — so
-    it is recorded here rather than patched around.
+    `filters={"entity": ""}` matches NOTHING, by contract: `entity` is `NOT NULL DEFAULT '{}'`
+    and `corpus.entity_list` never produces `['']`, so `'' = ANY(entity)` matches only a row that
+    would itself be a contract violation.
     """
     if not filters:
         return "", {}
@@ -98,10 +87,9 @@ def vec_ranking(conn, query_embedding: list[float], filters: dict | None = None,
 def fetch_pages(conn, paths: list[str]) -> dict[str, dict]:
     if not paths:
         return {}
-    # `links` and `generated_at` are among the fetched columns — both `BrainService.read_page`
-    # (the navigation surface) and `describe_entity` (the view layer) share this ONE fetch rather
-    # than each opening a second SELECT; `rank.rank` simply ignores the extra keys, because these
-    # change what is SERVED, not what SCORES.
+    # `links`/`generated_at` are fetched here so the serving surfaces (`read_page`,
+    # `describe_entity`) share this ONE fetch; `rank.rank` ignores the extra keys — they change
+    # what is SERVED, not what SCORES.
     cols = ("path", "page_id", "zone", "title", "body", "type", "status", "entity", "owner",
             "tier", "as_of", "updated",
             "superseded_by", "supersedes", "acl", "inlinks", "links", "generated_at",
@@ -119,14 +107,11 @@ def search_arms(conn, query: str, *, embedder=None, k: int = rank.TOP_K,
     `embedder` defaults to the one the index was built with (index_meta) — queries must embed
     in the same space the documents did.
 
-    Two facts a caller that owns the entity registry (the service) may TELL this module; it
-    never resolves anything itself:
-      * `entity_hint` — the resolved entity id, handed to `rank` for the entity boost
-        (told rather than inferred — `rank.contract_factors`).
-      * `fts_expansion` — the registry's other names for that entity (canonical name +
-        aliases), appended to the LEXICAL arm's query only: the tsquery is an OR of lexemes,
-        so extra names can only ever ADD candidates. The vector arm embeds the raw query
-        untouched — expansion is a lexical repair, not a semantic one."""
+    Two facts the registry-owning service may TELL this module (it resolves nothing itself):
+    `entity_hint`, the resolved entity id handed to `rank` for the entity boost; and
+    `fts_expansion`, the registry's other names for it, appended to the LEXICAL arm only (an OR
+    of lexemes can only ADD candidates) — the vector arm embeds the raw query untouched, because
+    expansion is a lexical repair, not a semantic one."""
     meta = read_meta(conn)
     if meta is None:
         raise EmptyIndexError("the index is empty — run `stigmergy-index --rebuild --repo <dir>` first")

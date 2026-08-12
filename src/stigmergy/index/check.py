@@ -1,34 +1,17 @@
-"""The retrieval-substrate lint. The knowledge repo's linter lints the PAGES; nothing linted the
-INDEX, which is how a multi-word entity-boost defect sat latent — the only way to see a substrate
-defect was eyeballing a search result. This module asks the index itself the questions an operator
-would not think to ask until something already looked wrong.
+"""The retrieval-substrate lint: the knowledge repo's linter lints the PAGES, this lints the
+INDEX — the only other witness to a substrate defect is eyeballing a search result.
 
-Checks, each deterministic SQL over `pages_index` (plus one optional file read):
-
-  ERROR — the index is lying to an arm or an identity layer; exit 1:
-    * duplicate `page_id` — two layers key on it (golden expectations, chain grouping), and a
-      duplicate makes both ambiguous. The fix is a frontmatter `id:` on one page — cheap, and
-      the stem-fallback twins this catches are exactly the dangerous class (`quarterly-update.md`
-      in two folders).
-    * orphan continuation part — a `-p<n>`/`#p<n>` page_id whose primary (the bare base id, same
-      directory) is not in the index: the chain machinery (superseded propagation, rank-time
-      collapse) silently treats it as its own document.
-    * missing embedding / empty tsv — a page invisible to one arm is a silent retrieval hole
-      that no golden question will find until it happens to expect that page.
-
-  WARN — worth an operator's eyes, never an exit code:
-    * dangling `superseded_by` — the named successor id doesn't exist in the index (may be
-      historical; versions machinery is not required to keep targets alive).
-    * anchored-but-unregistered entity — an `entity` value with no registry record resolves for
-      navigation (ADR 022 D5) but gets no aliases, no entity-first search, and no entity boost.
+Deterministic SQL over `pages_index`, plus one optional file read. ERROR (exit 1 via the CLI):
+duplicate `page_id` (golden expectations and chain grouping both key on it), orphan continuation
+part (a part-shaped id with no primary beside it — the chain machinery treats it as its own
+document), missing embedding / empty tsv (a page invisible to one arm is a silent retrieval
+hole). WARN: dangling `superseded_by` (may be legitimately historical), anchored-but-unregistered
+entity (resolves for navigation but gets no aliases, no entity-first search, no TOLD boost).
 
 The registry is read as a FILE (id set only), never through `stigmergy.server` — the index sits
-BELOW the server in the import graph, and packages talk through files.
-
-This lint sees the WHOLE index by design: a scoped lint is blind to out-of-scope corruption, which
-is corruption all the same. It is an operator tool with terminal output only and no caller
-identity to scope to, which is why `tests/test_architecture.py` names it an explicit exception to
-"every reader of `pages_index` names an ACL predicate".
+below the server, and packages talk through files. The lint sees the WHOLE index by design: it is
+an operator tool with no caller identity to scope to, a named ACL exception in
+`tests/test_architecture.py`.
 """
 import json
 import os
@@ -42,9 +25,9 @@ def _finding(severity: str, check: str, detail: str) -> dict:
 
 
 def registry_ids(path: str | None) -> set[str] | None:
-    """The registry's id set, or None when there is no registry to check against (missing path
-    or missing file — the loader class's documented fail-open). Malformed JSON raises: a broken
-    registry is an operator-visible fault everywhere else in this system too."""
+    """The registry's id set, or None when there is no registry to check against (missing path or
+    file — the coverage check is then skipped). Malformed JSON raises: a broken registry is an
+    operator-visible fault."""
     if not path or not os.path.exists(path):
         return None
     with open(path, encoding="utf-8") as f:

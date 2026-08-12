@@ -1,47 +1,28 @@
-"""Dedup, three levels, cheapest first.
+"""Dedup, three levels, cheapest first. Levels 1-2 match only `status='filed'` rows.
 
 1. **Retry collapse** — identical content from the SAME submitter inside a short window is one
-   capture arriving twice, not two captures. Deterministic, and it runs BEFORE the agent, so a
-   double-tap costs nothing. The second row reaches `filed` with the SAME `result_ref` as the
-   first: the material genuinely is filed, at that page. `rejected` was considered and refused —
-   resubmitting identical material is ordinary behavior and telling that person their capture
-   was rejected reads as a penalty for a retry.
-2. **Already filed** — content whose hash matches a page already filed, outside that window or
-   from someone else. `rejected`, with a pointer to the page. Also deterministic, also before
-   the agent.
-3. **Near-duplicate** — the agent's judgment against the graph: filed, with a mutual overlap
-   callout and `related:` on both sides. Nothing deleted, nothing overwritten. That level lives
-   in the agent and the report, not here — it is a meaning problem, and meaning problems belong
-   to the agent.
+   capture arriving twice. The second row reaches `filed` with the SAME `result_ref`, never
+   `rejected`: resubmitting is ordinary behavior and must not read as a penalty for a retry.
+2. **Already filed** — the same hash outside that window or from someone else: `rejected`, with a
+   pointer to the page. Deterministic and before the agent, like level 1.
+3. **Near-duplicate** — the agent's judgment against the graph. It lives in the agent and the
+   report, not here.
 
-**Keyed on the queue's own hash, not on a page field.** `capture_queue.payload->>'sha256'` is
-computed at submit time by `schema.prepare_submission` and is the same number the evidence key
-is built from. Grepping the repo for a `content_hash` frontmatter field was the alternative; it
-is slower, and that field belongs to source pages rather than to fast-lane captures.
-
-**A purged row cannot be matched**, and that is correct rather than unfortunate: retention nulls
-`payload` on terminal rows after 30 days, so the hash is gone. Pointing a submitter at a page
-whose provenance the system can no longer establish would be a worse answer than treating the
+Keyed on `capture_queue.payload->>'sha256'`, computed at submit time. A purged row therefore
+cannot be matched — retention nulls `payload` after 30 days — which is correct: pointing a
+submitter at a page whose provenance is no longer establishable is worse than treating the
 capture as new.
 
-**The window is measured between the two SUBMISSIONS, never against the clock the worker happens
-to run on**, and that is a correction. It used to read `created_at > now() - window`, where `now()`
-is *processing* time — so the window closed as the queue lagged. Draining by hand with
-`stigmergy-librarian once`, minutes apart: two rows submitted five seconds apart (a real network
-glitch) were processed twenty minutes later, level 1 no longer matched anything, and level 2 —
-which has no window at all — answered both rows with "rejected, this matches a page already in
-the graph". The whole point of level 1 is that a retrying person is not told "rejected", and it
-was unreachable in practice. Anchoring on the current row's own `created_at` makes the check what
-its definition always said it was: a property of the two submissions, independent of when
-anything got around to filing them.
+The window is measured between the two SUBMISSIONS (the current row's own `created_at`), never
+against the worker's clock, or the window closes as the queue lags and level 1 becomes
+unreachable — leaving level 2, which has no window, to answer a retry with "rejected".
 """
 from dataclasses import dataclass
 
 from stigmergy.capture import schema
 
-# One query, two semantic entry points over it. The scoping difference — "mine, within a window of
-# THIS submission" vs "anyone's, ever" — is the whole distinction between a retry and a
-# re-submission, so it is made once here by name rather than re-remembered at each call site.
+# One query, two semantic entry points over it: "mine, within a window of THIS submission" vs
+# "anyone's, ever" is the whole distinction between a retry and a re-submission.
 _MATCHING_FILED = f"""
 SELECT id, result_ref, submitted_by, finished_at
 FROM capture_queue
@@ -84,19 +65,13 @@ def query_filed_with_digest(conn, *, digest: str, kind: str, exclude_id: int,
                             anchor: str | None = None) -> Match | None:
     """THE shared base: the earliest FILED submission whose material hashes to `digest`.
 
-    `submitter=None` means "any identity". `window_s=None` means "any time"; with a window,
-    `anchor` is the timestamp the window is measured back from — the CURRENT submission's
-    `created_at`, never the wall clock (see the module docstring). Callers do not build this call
-    themselves — they go through the two wrappers below.
+    `submitter=None` means "any identity"; `window_s=None` means "any time", and with a window
+    `anchor` is the CURRENT submission's `created_at`, never the wall clock. Callers go through
+    the two wrappers below.
 
-    **`kind` is REQUIRED, not optional.** Two captures can share a material
-    digest while meaning entirely different things to the system that files them: a meeting drop's
-    digest is the archived TRANSCRIPT's hash, and an ordinary capture's is the pasted TEXT's — the
-    same bytes submitted once as `kind="raw"` and once as `kind="meeting"` are not a retry of one
-    another, they are two different requests that happen to carry identical content. Before this,
-    a meeting drop whose digest matched an already-filed ORDINARY page collapsed onto that page's
-    single `result_ref` — a `filed` report naming one page for a meeting capture that never
-    produced a page SET at all (`report.filed_meeting`'s own shape, silently skipped).
+    `kind` is REQUIRED: the same bytes submitted as `raw` and as `meeting` are two different
+    requests, not a retry — collapsing them would report one page for a meeting capture that
+    should have produced a page SET.
     """
     with conn.cursor() as cur:
         cur.execute(_MATCHING_FILED, {"digest": digest, "kind": kind, "exclude_id": exclude_id,
@@ -111,12 +86,11 @@ def query_filed_with_digest(conn, *, digest: str, kind: str, exclude_id: int,
 
 
 def find_retry(conn, item: dict, *, window_s: int) -> Match | None:
-    """LEVEL 1 — the same person's identical material, submitted within `window_s` of THIS row,
-    of the SAME kind. A retry.
+    """LEVEL 1 — the same person's identical material, of the SAME kind, submitted within
+    `window_s` of THIS row. A retry.
 
-    Runs before level 2 and, now that the window is anchored to this row's own submission time,
-    actually gets the chance to: a row with no `created_at` (nothing in production produces one)
-    falls through to level 2 rather than silently widening the window to "ever".
+    A row with no `created_at` falls through to level 2 rather than silently widening the window
+    to "ever".
     """
     digest = (item.get("payload") or {}).get("sha256") or ""
     anchor = item.get("created_at") or ""

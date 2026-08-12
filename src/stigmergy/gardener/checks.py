@@ -1,30 +1,12 @@
-"""The eight deterministic checks — each a query over the index/registry tables or the repo
-checkout, none interpreting meaning. Every function returns a list of finding dicts (`{"check",
-"severity", "source", "subject", "detail", "suggested_action"}` — `source` is always
-`SOURCE_DETERMINISTIC` here; the model editorial sweep in `sweep.py` is the only writer of
-`SOURCE_MODEL`), never touches `gardener_findings` itself (that is `store.py`'s job) and never
-prints anything (that is `report.py`'s).
+"""The eight deterministic checks. Each returns a list of finding dicts, never touches
+`gardener_findings` (`store.py`'s job) and never prints (`report.py`'s).
 
-**Population notes, read together with `docs/decisions/024-gardener-digest.md`:**
-
-- `check_orphans`, `check_aging_seeds` and `check_company_page_names_entity` read `pages_index`
-  directly; `check_stale_views`, `check_dead_vocabulary` and `check_date_bearing_body_links` read
-  the repo checkout instead. Both shapes answer the same question: corpus/registry health.
-- The two windowed checks (`check_anchor_concentration`, `check_company_wide_fraction`) resolve
-  "the last N filings" out of `capture_queue` — real `timestamptz`, real filing semantics — never
-  the `updated`/`as_of` TEXT columns, which describe a PAGE's own authored date, not when it was
-  FILED. A `result_ref` that does not parse, or that resolves to a page no longer indexed, is
-  skipped and counted — never guessed at.
-- Those two checks and `check_company_page_names_entity` exclude PROVENANCE-type pages
-  (`librarian.page.is_provenance_type` — "meeting", "source") from their notion of "declared
-  company-wide"/"anchored to an entity": a provenance page's `entity: []` means "the extractor
-  found no evidence", never a checked company-wide declaration — counting it either way would make
-  these three checks lie about exactly the population they exist to measure.
-- `check_aging_seeds` ages off `updated` (`current_date - updated::date`, computed IN Postgres,
-  never in Python) — the only per-page date this corpus carries (`index.corpus.PageRow`; there is
-  no `created` column). Clock injection over sleeps: a test backdates the FIXTURE row via SQL and
-  lets the check's own `current_date`/`now()` do the comparison, the same pattern
-  `capture.retention`'s own test suite already uses.
+Population invariants: the two windowed checks resolve "the last N filings" out of
+`capture_queue` — never the `updated`/`as_of` TEXT columns, which describe a page's authored
+date, not when it was FILED. Those two and `check_company_page_names_entity` exclude
+provenance-type pages: a provenance page's `entity: []` means "the extractor found no evidence",
+never a checked company-wide declaration. `check_aging_seeds` ages `updated` IN Postgres, so a
+test backdates the fixture row and lets `current_date` do the comparison.
 """
 import re
 
@@ -39,7 +21,7 @@ from stigmergy.librarian import page as page_policy
 from stigmergy.text import parse_result_ref
 from stigmergy.views import staleness as view_staleness
 
-# ── check slugs — code with the exemption/population reasons beside them, never silent ─────────
+# ── check slugs ──────────────────────────────────────────────────────────────────────────────
 CHECK_ORPHAN_PAGE = "orphan-page"
 CHECK_AGING_SEED = "aging-seed"
 CHECK_STALE_VIEW = "stale-view"
@@ -47,10 +29,8 @@ CHECK_ANCHOR_CONCENTRATION = "anchor-concentration"
 CHECK_DEAD_VOCABULARY = "dead-vocabulary"
 CHECK_COMPANY_WIDE_FRACTION = "company-wide-fraction"
 CHECK_COMPANY_PAGE_NAMES_ENTITY = "company-page-names-entity"
-# A style convention, not a safety property, so it lives here as a finding rather than in the
-# meeting flow as a filing veto — gates veto the irreversible; the gardener flags conventions.
-# `librarian.processing` names the same slug where it explains that it does NOT veto this, so one
-# grep finds both halves of the rule.
+# A style convention, not a safety property — a finding here, never a filing veto.
+# `librarian.processing` names the same slug where it declines to veto it; one grep finds both.
 CHECK_DATE_BEARING_BODY_LINK = "date-bearing-body-link"
 
 ALL_CHECK_SLUGS = (
@@ -62,13 +42,9 @@ ALL_CHECK_SLUGS = (
 
 def build_finding(*, check: str, severity: str, subject: str, detail: str,
             suggested_action: str, source: str = SOURCE_DETERMINISTIC, **extra) -> dict:
-    """The one place a finding dict is assembled — shared by every check IN this module and by
-    `gardener.sweep.to_finding` for a model-sourced one (`source=SOURCE_MODEL`, `model_id=...`
-    riding through `**extra`, the same escape hatch the SLA notice's `_notice_detail`/
-    `_notice_action` keys use). Public rather than module-private for exactly that cross-module
-    reuse — `store.py` only ever reads the SIX named keys below plus `model_id`, never any other
-    `extra` key; `notice.py` is the one reader of `_notice_detail`/`_notice_action`, falling back
-    to `detail`/`suggested_action` when they are absent."""
+    """The one place a finding dict is assembled — shared by every check here and by
+    `gardener.sweep.to_finding` (`model_id` and the `_notice_*` keys ride through `**extra`).
+    `store.py` persists the six named keys plus `model_id` and nothing else."""
     finding = {
         "check": check, "severity": severity, "source": source,
         "subject": subject, "detail": detail[:MAX_DETAIL_CHARS],
@@ -79,21 +55,14 @@ def build_finding(*, check: str, severity: str, subject: str, detail: str,
 
 
 def count_indexed_pages(conn) -> int:
-    """`pages_index`'s total row count — the report header's "checked N pages" (`run.py`; kept
-    here, not there, so it lives beside this module's OWN other raw `pages_index` touches).
-
-    This module is not the package's only raw `pages_index` reader — `sweep.select_pages` queries
-    it directly too. Both files are named in
-    `tests/test_architecture.py::ACL_REACHABILITY_EXCEPTIONS`, for the same stated reason: an
-    operator tool, terminal output only, with no caller identity to scope reads to."""
+    """`pages_index`'s total row count — the report header's "checked N pages"."""
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM pages_index")
         return cur.fetchone()[0]
 
 
 # ── orphans ──────────────────────────────────────────────────────────────────────────────────
-# The exemption list: TYPES a zero-inbound page never gets flagged for, each with its own stated
-# reason — never by silence. Extensible; a new entry is a reviewed code change, not a quiet skip.
+# Types a zero-inbound page is never flagged for, each with a stated reason — never by silence.
 ORPHAN_EXEMPT_TYPES = {
     "entity": (
         "entity pages are addressed through `entity:` frontmatter anchoring, never through a "
@@ -114,9 +83,9 @@ ORDER BY p.path
 
 
 def check_orphans(conn) -> list[dict]:
-    """Population: `zone = 'wiki'` pages of a non-exempt type with zero inbound wikilinks
-    (`NOT EXISTS ... links @> ARRAY[path]` — a live containment check via the GIN index, never the
-    `inlinks` column, which is only as fresh as the last FULL index rebuild)."""
+    """Population: `zone = 'wiki'` pages of a non-exempt type with zero inbound wikilinks — a
+    live `links @> ARRAY[path]` containment check, never the `inlinks` column, which is only as
+    fresh as the last FULL index rebuild."""
     with conn.cursor() as cur:
         cur.execute(_ORPHANS_SQL, {"exempt": list(ORPHAN_EXEMPT_TYPES)})
         rows = cur.fetchall()
@@ -135,33 +104,12 @@ def check_orphans(conn) -> list[dict]:
 
 
 # ── aging seeds ──────────────────────────────────────────────────────────────────────────────
-# A hand-edited `updated:` value that is not a date must not be able to take the health surface
-# down. Casting every non-empty `updated` unconditionally makes Postgres RAISE mid-query on
-# `updated: "next week"`, aborting this check and — since `_run_all_checks` runs the checks inline
-# — the WHOLE run with it: status='error', zero findings, every day, until a human diagnoses a cast
-# error. The health surface must not be takeable-down by the exact data defect it exists to
-# surface.
-#
-# Guarding the value's SHAPE is not enough. `updated ~ '^\d{4}-\d{2}-\d{2}'` before the cast passes
-# `updated: "2026-02-30"` — a real, non-existent calendar date, arguably the more likely
-# hand-editing mistake of the two — and `updated::date` still raises on it, aborting the run
-# through the identical mechanism. Worse, PostgreSQL does not guarantee left-to-right evaluation of
-# ANDed WHERE conditions at all (the planner is free to reorder quals by estimated cost), so "the
-# regex runs before the cast" is never a rule — only the shape a given plan happens to pick, and a
-# plan change alone could reintroduce the abort with no code change at all.
-#
-# So: `pg_input_is_valid(updated, 'date')` (PostgreSQL 16+; the local stack pins
-# `pgvector/pgvector:pg16`) never raises and tests the VALUE, not the shape, wrapped in
-# `CASE WHEN ... THEN ... ELSE false END` — `CASE` is PostgreSQL's documented mechanism for
-# conditional evaluation (unlike a plain function call's arguments, a `CASE` branch not taken is
-# never evaluated at all), so this forces "is it valid" to run before "cast and compare" regardless
-# of what the planner would otherwise choose to do with two independent ANDed quals. A malformed
-# (non-empty, calendar-invalid OR shape-invalid) `updated` is excluded and COUNTED
-# (`_MALFORMED_UPDATED_SQL`, the same predicate negated), never silently dropped, matching this
-# package's own "counted, never silently dropped" discipline (`_recent_filed_pages`'s identical
-# posture, one section over). The SELECT list's own `age_days` expression still casts
-# `updated::date` directly — safe, since it is only ever evaluated for rows that already survived
-# the WHERE clause's `CASE`, which by then has proven `updated` a valid date.
+# A malformed hand-edited `updated:` must not abort the whole run mid-query. A regex guard is not
+# enough (it passes "2026-02-30", and Postgres may reorder ANDed quals, so "regex before cast" is
+# never guaranteed): `pg_input_is_valid` (PG16+) tests the VALUE without raising, and `CASE` is
+# the documented way to force it to run before the cast. Malformed rows are excluded and COUNTED
+# (`_MALFORMED_UPDATED_SQL`). The SELECT's own `updated::date` is safe: the WHERE already proved
+# validity for every row that reaches it.
 _AGE_SQL = """
 SELECT path, status, updated, (current_date - updated::date) AS age_days
 FROM pages_index
@@ -179,10 +127,8 @@ WHERE status = ANY(%(statuses)s) AND updated <> '' AND NOT pg_input_is_valid(upd
 
 
 def _age_query(conn, *, statuses: list[str], days: int, population_stats: dict | None = None):
-    """The age query `check_aging_seeds` runs: rows in `statuses` older than `days`, with a
-    malformed (non-empty, invalid as a date — shape OR calendar value) `updated` excluded from the
-    age comparison and counted separately into `population_stats["malformed_updated"]` when given.
-    Kept generic in `statuses` so a second status-scoped age check needs no second query."""
+    """Rows in `statuses` older than `days`; a malformed `updated` is excluded and counted into
+    `population_stats["malformed_updated"]` when given."""
     with conn.cursor() as cur:
         cur.execute(_AGE_SQL, {"statuses": statuses, "days": days})
         rows = cur.fetchall()
@@ -196,10 +142,7 @@ def _age_query(conn, *, statuses: list[str], days: int, population_stats: dict |
 def check_aging_seeds(conn, *, threshold_days: int, population_stats: dict | None = None
                       ) -> list[dict]:
     """Population: `status IN ('seed', 'developing')` pages whose `updated` is older than
-    `threshold_days` (`STIGMERGY_GARDENER_AGING_SEED_DAYS`, default 30). `seed` is a legal, if
-    rarely-written, status value — `index.rank`'s own maturity factor ranks it against
-    `evergreen` — so both it and `developing` count as "a page still being worked on".
-    `population_stats`, when given, gets this check's own malformed-`updated` count."""
+    `threshold_days`. `population_stats`, when given, gets the malformed-`updated` count."""
     rows = _age_query(conn, statuses=["seed", "developing"], days=threshold_days,
                       population_stats=population_stats)
     return [
@@ -217,24 +160,16 @@ def check_aging_seeds(conn, *, threshold_days: int, population_stats: dict | Non
 
 # ── stale views — file-based, no DB ──────────────────────────────────────────────────────────
 def check_stale_views(repo: str) -> list[dict]:
-    """Population: every entity `views.staleness.list_stale_entities` names (member-hash
-    mismatch since the view was last generated) — reused verbatim, never re-derived. No
-    threshold: staleness here is a hash mismatch, not an age.
-
-    `views.staleness`, not `views.regenerate`: `regenerate.py` module-level-imports `views.writer`
-    (the commit-and-push path), so importing IT would load the full git write stack into every
-    gardener process — exactly the reach this package's whole design promise (findings-only, no
-    write path) rules out. `staleness.py` is the read-only extraction of these two population
-    functions with none of that."""
+    """Population: every entity `views.staleness.list_stale_entities` names — reused verbatim,
+    never re-derived. Staleness is a member-hash mismatch, not an age. Import `views.staleness`,
+    never `views.regenerate`: the latter would load the git write stack into every gardener
+    process."""
     return [
         build_finding(
             check=CHECK_STALE_VIEW, severity=SEVERITY_WARN, subject=entity_id,
             detail="the view's member set has changed since it was last generated",
-            # The WHOLE value is one code span: a real, runnable command is backtick-quoted, and
-            # the backticks are baked into the stored string rather than added by the report
-            # renderer, so `--json` and the printed report carry the identical value. "Executable
-            # verbatim" means the text BETWEEN the backticks, the ordinary markdown-code-span
-            # reading — never the backticks themselves as shell syntax.
+            # Backticks baked into the stored string, so `--json` and the printed report carry
+            # the identical value; the runnable command is the text between them.
             suggested_action=f"`stigmergy-views regenerate --entity {entity_id}`",
         )
         for entity_id in view_staleness.list_stale_entities(repo)
@@ -249,12 +184,9 @@ ORDER BY finished_at DESC LIMIT %(window)s
 
 
 def _recent_filed_pages(conn, *, window: int) -> tuple[list[dict], dict]:
-    """The last `window` FILED `capture_queue` rows, resolved to their page. Returns `(pages,
-    stats)`: `pages` is `[{"path", "type", "entity"}]` for every row that resolved to an indexed,
-    NON-PROVENANCE page (a provenance page's `entity` is never a checked declaration, so it cannot
-    honestly count as "anchored" or "company-wide" either); `stats` counts everything that did not
-    resolve — an unparseable `result_ref`, or one naming a page no longer indexed — never silently
-    guessed at."""
+    """The last `window` FILED `capture_queue` rows resolved to their page: `(pages, stats)`,
+    `pages` = `[{"path", "type", "entity"}]` for indexed, non-provenance pages; `stats` counts
+    every row that did not resolve — never silently guessed at."""
     with conn.cursor() as cur:
         cur.execute(_RECENT_FILED_REFS_SQL, {"window": window})
         result_refs = [row[0] for row in cur.fetchall()]
@@ -293,18 +225,10 @@ def _recent_filed_pages(conn, *, window: int) -> tuple[list[dict], dict]:
 def check_anchor_concentration(conn, registry: Registry, *, window: int,
                                share_threshold: float, population_stats: dict | None = None
                                ) -> list[dict]:
-    """Population: the last `window` filed pages (`STIGMERGY_GARDENER_CONCENTRATION_WINDOW`, default
-    30), each contributing to every entity its `entity:` array names (membership, not a single
-    top pick — mirrors `index.rank`'s own "any element" boost). Fires when the single most-
-    anchored entity's share exceeds `share_threshold` (`STIGMERGY_GARDENER_CONCENTRATION_SHARE`,
-    default 0.6). An empty window (nothing filed yet, or nothing survived the population filter)
-    fires nothing — there is no "share" of zero filings.
-
-    `population_stats`, when given, gets THIS check's own `_recent_filed_pages` exclusion counters
-    written into it under `"anchor_concentration"`, so an operator can see how many of the window's
-    filings were dropped (an unparsed `result_ref`, a page no longer indexed, a provenance page)
-    before this check ever got to judge a share. `run.py` passes one shared dict so this check and
-    `check_company_wide_fraction` land in the SAME `job_runs.stats` key, keyed by check name."""
+    """Population: the last `window` filed pages, each contributing to every entity its `entity:`
+    array names. Fires when the top entity's share exceeds `share_threshold`; an empty window
+    fires nothing. `population_stats`, when given, gets this check's `_recent_filed_pages`
+    exclusion counters under `"anchor_concentration"`."""
     pages, stats = _recent_filed_pages(conn, window=window)
     if population_stats is not None:
         population_stats["anchor_concentration"] = stats
@@ -338,9 +262,8 @@ def check_anchor_concentration(conn, registry: Registry, *, window: int,
 # ── dead vocabulary — file-based, no DB ───────────────────────────────────────────────────────
 def check_dead_vocabulary(repo: str, registry: Registry) -> list[dict]:
     """Population: every registered entity id NOT in
-    `views.staleness.list_all_anchored_entities` (reused, never re-derived) — zero pages, in
-    either `wiki/` or `sources/`, declare `entity: [<id>]`. `views.staleness`, not
-    `views.regenerate` — see `check_stale_views`'s own docstring immediately above for why."""
+    `views.staleness.list_all_anchored_entities` (reused, never re-derived) — zero pages declare
+    `entity: [<id>]`."""
     anchored = set(view_staleness.list_all_anchored_entities(repo))
     findings = []
     for entity_id in sorted(registry.entities):
@@ -361,15 +284,10 @@ def check_dead_vocabulary(repo: str, registry: Registry) -> list[dict]:
 # ── company-wide fraction ─────────────────────────────────────────────────────────────────────
 def check_company_wide_fraction(conn, *, window: int, share_threshold: float,
                                 population_stats: dict | None = None) -> list[dict]:
-    """Population: the same last-`window` filed pages `check_anchor_concentration` reads
-    (`STIGMERGY_GARDENER_COMPANY_WINDOW`, default 20), sharing `_recent_filed_pages` rather than a
-    second "which filings count" query. Fires when the share declaring `entity: []` (company-wide
-    — provenance pages already excluded, so `[]` here always means the checked declaration, never
-    "no evidence found") exceeds `share_threshold` (`STIGMERGY_GARDENER_COMPANY_SHARE`, default 0.3).
-    No single subject — this is a corpus-wide fraction, not a per-page or per-entity fact.
-
-    `population_stats`, when given, gets this check's own exclusion counters under
-    `"company_wide_fraction"` — see `check_anchor_concentration`'s identical parameter for why."""
+    """Population: the last `window` filed pages (shared `_recent_filed_pages`, provenance already
+    excluded, so `entity: []` always means the checked declaration). Fires when the company-wide
+    share exceeds `share_threshold`. No subject — a corpus-wide fraction. `population_stats` gets
+    the exclusion counters under `"company_wide_fraction"`."""
     pages, stats = _recent_filed_pages(conn, window=window)
     if population_stats is not None:
         population_stats["company_wide_fraction"] = stats
@@ -393,9 +311,8 @@ def check_company_wide_fraction(conn, *, window: int, share_threshold: float,
 
 # ── company-scoped page naming a registry entity ─────────────────────────────────────────────
 def _entity_spellings(registry: Registry) -> list[tuple[str, list[str]]]:
-    """`[(entity_id, [name, id, *aliases])]`, entities sorted by id — every registered spelling
-    `check_company_page_names_entity` tests a page's body against, not only the display name: an
-    id or an alias appearing verbatim is exactly as strong a signal."""
+    """`[(entity_id, [name, id, *aliases])]`, sorted by id — every registered spelling a body is
+    tested against; an id or alias appearing verbatim is as strong a signal as the name."""
     out = []
     for entity_id in sorted(registry.entities):
         info = registry.entities[entity_id]
@@ -412,20 +329,11 @@ def _entity_spellings(registry: Registry) -> list[tuple[str, list[str]]]:
 
 
 def _first_verbatim_match(body: str, spellings: list[str]) -> str | None:
-    """The first of `spellings` found as exact, word-bounded text in `body` (case-insensitive) —
-    word-bounded so a short alias/id is never credited for matching as a substring of an unrelated,
-    longer word.
-
-    **Lookarounds (`(?<!\\w)`/`(?!\\w)`), never `\\b`.** `\\b` matches at a word/non-word
-    TRANSITION, which means a trailing `\\b` right after a spelling ending in punctuation
-    (`"Beta Robotics, Inc."`) requires the very NEXT character in the body to be a word
-    character — in ordinary prose that position is almost always whitespace or more punctuation,
-    so the match could never actually fire: a control that appears to work, per alias, and
-    silently never does for any alias with a trailing non-word character. `(?!\\w)`
-    asserts only "not immediately followed by a word character" — true for whitespace, punctuation
-    or end of string alike — which is the property this check actually wants; `(?<!\\w)` is its
-    mirror on the leading edge, preserving the original "not a substring of a longer word" intent
-    exactly."""
+    """The first of `spellings` found as exact, word-bounded text in `body` (case-insensitive).
+    Lookarounds, never `\\b`: a trailing `\\b` after a spelling ending in punctuation
+    ("Beta Robotics, Inc.") requires the NEXT body character to be a word character, so it
+    silently never matches in prose; `(?!\\w)`/`(?<!\\w)` assert exactly "not inside a longer
+    word"."""
     for spelling in spellings:
         pattern = r"(?<!\w)" + re.escape(spelling) + r"(?!\w)"
         if re.search(pattern, body or "", re.IGNORECASE):
@@ -442,10 +350,8 @@ ORDER BY path
 
 def check_company_page_names_entity(conn, registry: Registry) -> list[dict]:
     """Population: every company-wide (`entity: []`), non-provenance `zone = 'wiki'` page — the
-    whole corpus, not a window, because this check has no threshold to window against. For each,
-    every registered entity's name/id/aliases are tested against the body; one finding per (page,
-    entity) match, naming the matched spelling and the entity it resolved to. The copy says
-    "company-wide", the term `docs/reference/page-contract.md` uses for the same declaration."""
+    whole corpus, no window. One finding per (page, entity) verbatim body match, naming the
+    matched spelling."""
     with conn.cursor() as cur:
         cur.execute(_COMPANY_WIDE_PAGES_SQL)
         rows = cur.fetchall()
@@ -475,11 +381,8 @@ def check_company_page_names_entity(conn, registry: Registry) -> list[dict]:
 
 
 # ── date-bearing wikilinks in body prose ──────────────────────────────────────────────────────
-# Only a meeting page's own filename carries a calendar date
-# (`wiki/meetings/YYYY-MM-DD-<slug>.md`), so a `[[YYYY-MM-DD-…]]` target in any page's BODY prose
-# is a pointer that belongs in `sources:`/`related:` frontmatter instead. Style, not safety, which
-# is why this is a finding here and not a veto at filing time — see
-# `docs/decisions/027-the-contraction.md`.
+# A `[[YYYY-MM-DD-…]]` target in BODY prose is a pointer that belongs in `sources:`/`related:`
+# frontmatter — style, not safety, so a finding here rather than a filing-time veto.
 _DATE_STEM_RE = re.compile(r"^\d{4}-\d{2}-\d{2}\b")
 # A wikilink target, alias/anchor stripped: `[[target|alias#anchor]]` resolves by `target` alone,
 # and a leading `!` prefixes an embed.
@@ -487,11 +390,8 @@ _WIKILINK_RE = re.compile(r"!?\[\[([^\[\]]+?)\]\]")
 
 
 def check_date_bearing_body_links(repo: str) -> list[dict]:
-    """Population: every page in the three content zones, read from the repo checkout (the same
-    posture as `check_stale_views`/`check_dead_vocabulary`: this is a corpus-shape question, not
-    an index one). One WARN finding per offending page, naming the first offending stem — the fix
-    (move the pointer into `sources:`/`related:` frontmatter) is per-page, so one line per page is
-    what an operator acts on."""
+    """Population: every page in the three content zones, read from the repo checkout. One WARN
+    finding per offending page, naming the first offending stem."""
     import pathlib
 
     findings = []

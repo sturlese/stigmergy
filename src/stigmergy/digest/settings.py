@@ -1,21 +1,10 @@
-"""Runtime configuration for `stigmergy-digest`: the digest window's own default, env-tunable per
-the `Settings.from_args` convention (`server/settings.py` states it; `gardener/settings.py` applies
-it one package over) — modules never read the environment at import time;
-`DigestSettings.from_args` is the ONE place env fallbacks are consulted.
+"""Runtime configuration for `stigmergy-digest`. `DigestSettings.from_args` is the one place the
+environment is consulted; modules never read it at import time.
 
-**The channel and bot-token env NAMES are defined in `gardener.settings`, not here, and
-re-exported.** `STIGMERGY_DIGEST_CHANNEL_ID` is the ONE name both `gardener` (the SLA notice) and
-`digest` read: one channel, one place to look, and each SIDE imports the name rather than spelling
-a second independent copy of the literal. `SLACK_BOT_TOKEN_ENV` is re-exported for the identical
-reason: `gardener.settings` already hand-mirrors it once from `slack.settings.BOT_TOKEN_ENV` (with
-its own stated rationale); a second, independent hand-mirror here would be a THIRD copy of the same
-literal. Every other `digest` module that needs either name imports it from HERE, never straight
-from `gardener.settings` — this module is the one funnel, so "which digest module reaches into
-gardener" stays answerable by reading one file.
-
-Deliberately does NOT carry `dsn`/`repo`/`channels` — those are connection/location arguments
-`cli.py` reads directly off `args` (mirroring `gardener/settings.py`'s identical posture, which
-itself mirrors `views/cli.py`), not tunable behaviour.
+The channel and bot-token env NAMES are defined in `gardener.settings` and re-exported here —
+one spelling per literal, and every other digest module imports them from THIS module, the one
+funnel into gardener. `dsn`/`repo`/`channels` are deliberately not settings — connection/location
+arguments `cli.py` reads off `args`.
 """
 import os
 from dataclasses import dataclass
@@ -28,17 +17,14 @@ __all__ = ["DIGEST_CHANNEL_ID_ENV", "SLACK_BOT_TOKEN_ENV", "WINDOW_DAYS_ENV",
 
 # ── the window's own default ───────────────────────────────────────────────────────────────────
 WINDOW_DAYS_ENV = "STIGMERGY_DIGEST_WINDOW_DAYS"
-# Used only when NEITHER a watermark (the latest completed `job='digest'` run) NOR an explicit
-# `--since` is available — a genuine first-ever run (`run.py::_resolve_since`). Grep-asserted
-# (`tests/test_architecture.py`, mirroring the fence-literal ban and `gardener`'s own threshold
-# scan): this literal may not appear outside this module's own constants/defaults.
+# Used only on a genuine first-ever run (no watermark, no `--since`). Grep-asserted: this literal
+# may not appear outside this module.
 DEFAULT_WINDOW_DAYS = 7
 
 
 def _int_setting(env_name: str, default: int) -> int:
-    """Mirrors `gardener.settings._int_setting` exactly (hand-mirrored, not imported — that
-    function is module-private, and a single small validator does not earn a new shared-utility
-    edge between two sibling packages that otherwise declare none)."""
+    """Hand-mirrors `gardener.settings._int_setting` (module-private there; one small validator
+    does not earn a cross-package edge)."""
     raw = os.environ.get(env_name)
     if raw is None or raw == "":
         return default
@@ -58,21 +44,16 @@ def _int_setting(env_name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class DigestSettings:
-    # Named `digest_channel_id`, never the bare word this comment is carefully NOT using twice:
-    # that identifier is banned anywhere below `stigmergy.slack` (`tests/test_architecture.py::
-    # test_no_slack_identifiers_below_the_slack_package`), and `GardenerSettings` already set the
-    # precedent this field matches on purpose. Empty is a real, honest state: a `--dry-run` never
-    # needs it. Required only at the moment a REAL post is about to happen — see `run.py::
-    # _require_channel`, checked lazily, never at startup.
+    # Named `digest_channel_id` — the bare identifier is banned below `stigmergy.slack`
+    # (`test_no_slack_identifiers_below_the_slack_package`). Empty is honest: a `--dry-run` never
+    # needs it; required only when a real post happens (`run._require_channel`).
     digest_channel_id: str = ""
     window_days: int = DEFAULT_WINDOW_DAYS
 
     @classmethod
     def from_args(cls, args=None) -> "DigestSettings":
-        """`args` is accepted, not consulted — no flag overrides either of these (env-tunable
-        only, the same posture `GardenerSettings.from_args` takes for its own thresholds).
-        Kept for the convention's own sake, and so a future flag can be added here without a
-        rename."""
+        """`args` is accepted, not consulted — env-tunable only; kept for the convention's
+        shape."""
         return cls(
             digest_channel_id=os.environ.get(DIGEST_CHANNEL_ID_ENV, ""),
             window_days=_int_setting(WINDOW_DAYS_ENV, DEFAULT_WINDOW_DAYS),

@@ -8,11 +8,10 @@ share no code); it reads a **subset** of what follows into the queryable columns
 `supersedes`, `superseded_by`, `generated_at`, and `extracted_at` as a fallback for `updated`
 (`index.corpus`). Everything else below is read by humans and by clients, not by the index.
 
-**Read this as the READ contract.** The extraction pipeline that once minted pages in this exact
-shape no longer exists; the live writers are narrower. Real pages already committed under
-`sources/` still carry this frontmatter, and `stigmergy.index`'s tolerant parser,
-`stigmergy.views`'s skeleton reader and the librarian's stamping code all still read it. Treat every
-field below as "what this page means," not "what gets written next."
+**Read this as the READ contract.** The live writers mint a narrower subset, but real pages
+already committed under `sources/` carry the full dialect, and `stigmergy.index`'s tolerant
+parser, `stigmergy.views`'s skeleton reader and the librarian's stamping code all read it. Treat
+every field below as "what this page means," not "what gets written next."
 
 **What actually writes a `sources/` page today** is one function,
 `librarian.processing._build_source_parts`, called from three places: the meeting flow's transcript
@@ -129,7 +128,7 @@ the field — no writer produces one now.
 | `detail_in_source: true` + `source_format: spreadsheet` | page is a summary of a *live* sheet — open the source (via `source_file_id`) for exact/current figures |
 | `representation: digest` / `minimal` | summary/pointer; detail is in the source |
 | `extraction_quality: manual_review` | page carries a warning banner; extraction was lossy — offer to open the original |
-| ~~`verification: failed` / `partial`~~ | **HISTORICAL.** Meant "largely untrustworthy figures" / "isolated problem figures". No longer produced and no longer read — not indexed, not filterable, not a ranking factor. A value on an old page says something about the extraction run that wrote it, nothing about the page today. |
+| ~~`verification: failed` / `partial`~~ | **HISTORICAL.** Produced by nothing and read by nothing — not indexed, not filterable, not a ranking factor. A value on an old page describes the extraction run that wrote it, nothing about the page today. |
 | ~~`unverified_numbers` / `unanchored_numbers`~~ | **HISTORICAL**, same layer, same status. |
 | `extraction_method: vision` | body came from OCR (`ocr_model` says which); trust accordingly. Nothing sets it today: the Drive door's own vision fallback (`processing._with_vision_fallback`, code-decided, once per document) records the escalation in the operator's log and on no page field, so an OCR'd document and a text-layer one are indistinguishable to a reader |
 | `mentions` | names the page refers to without anchoring to them. Still read: `index.corpus` folds them into the page's searchable text, so a mentioned name finds the page. Nothing writes them any more |
@@ -154,13 +153,10 @@ the field — no writer produces one now.
   stray `---`; the frontmatter is protected instead by `gate_frontmatter`, which re-parses what was
   actually written and refuses an unparseable or forged block outright. A rewriter that silently
   fixed a page would be changing content nobody reviewed.
-- **Zero invention was once enforced, not just prompted**: after generation, every
-  number in the body was deterministically traced back to the source text, and any figure the page
-  tied to a period (date, month, quarter) had to be compatible with the period the source gave it
-  (the `verification` frontmatter above). That check is gone, and no code computes a `verification`
-  value for a NEW page. Deterministic figure checking survives, relocated: at ANSWER time,
-  cites-or-refuses (see [answer.md](./answer.md)). A `verification` value on an old page is a
-  frozen, historical fact about that extraction run, not a live guarantee.
+- **No ingest-time figure verification exists**: no code computes a `verification` value for a
+  NEW page. Deterministic figure checking lives at ANSWER time, cites-or-refuses (see
+  [answer.md](./answer.md)). A `verification` value on an old page is a frozen, historical fact
+  about that extraction run, not a live guarantee.
 
 ## Oversize documents: split parts
 

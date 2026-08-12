@@ -66,7 +66,7 @@ no `list_entities` tool and `ANSWER_SYS` never names one: ids come from search h
 | `verify_answer.py` | `verify(out, evidence_text, get_page, read_paths)` (figures + citations → `verified`/`partial`/`failed`), `check_citations()`, `feedback()` (the one corrective-retry prompt). A refusal is vacuously `verified` here. The strict gate is deliberately OUTSIDE this module. `_normalize_page`/`_normalize_quote` fold whitespace and case, then apply a typographic fold (`_fold`): Unicode NFC plus a curly-quote/ellipsis map, applied AFTER the derender step — folding first would lengthen the string past the `_SPAN` bound and stop a struck span from being dropped (see the comment above `_normalize_page`). Dashes are deliberately excluded from that fold and NFKC is deliberately not used, both for stated security reasons (see the comment above `_FOLD`). The two sides are NOT symmetric. The PAGE side (`_derender_page`) consumes every MATCHED marker pair — emphasis/strong, inline code, both link forms, `_` and lone `*` only at word boundaries — plus drops a struck span (`~~…~~`) WHOLE, up to `_SPAN` (200) characters: the page's own markup is never seen by a reader, so consuming all of it is reader-equivalence, and a struck span is the page RETRACTING a value. A retraction LONGER than `_SPAN` is NOT dropped — a bounded, known residual, not a guarantee — and its text stays quotable. The QUOTE side (`_derender_pairs`, the payload-free half shared with the page) consumes only emphasis/strong and inline code: a link or a struck span in the MODEL's own quote carries a destination or a retraction that consuming would delete from the claim before it is checked, so those two forms must match the page character for character. Digits are never touched, the only punctuation removed is a matched delimiter, and a word boundary collapses only where a renderer collapses it too — so "the quote exists in what the tools returned this run" cannot soften into "resembles" |
 | `brain.py` | `AnswerBrain` — the evidence ledger: turns the service's structured (JSON) results into the exact TEXT the agent and verifier see. **Three renderers**: `search_text`, `page_text` and `entity_text` (search surfaces `SEARCH_RESULTS` = 8 hits per call), plus `get_page` (the verifier's verbatim-quote base) and `known_entities` (a thin pass-through to `BrainService.scoped_entities`, which is where the ACL/existence-scope assertions in `tests/answer/test_adversarial_cat2.py` read the vocabulary from). Every renderer lays the service's results out VERBATIM — the service already decided ACL scoping and neutralized titles, so nothing here re-derives, re-neutralizes or re-fences |
 | `synthesize.py` | the pydantic_ai agent and its **three** tools (`search`, `read_page`, `describe_entity`), the `AnswerOutput` schema, usage limits (`ANSWER_REQUEST_LIMIT` 6, `ANSWER_TOOL_CALLS_LIMIT` 8), `ANSWER_SYS`, `FakeSynthesizer` (offline double). `pydantic_ai` is imported lazily inside the openai branch only, so the fake path never touches it |
-| `service.py` | `AnswerService.ask()` — the loop; `_shape`/`_shape_refusal`/`_shape_budget_refusal` — the **strict gate** and the transport-agnostic response; `run_facts_reason` (the server-composed refusal prose); `audit_summary` — `ask`'s one `audit_log.result` summary, shared with the Slack transport, which reduces BOTH verdicts to COUNTS (`_verdict_shape`) because `check_citations`' own problem strings embed up to 80 characters of the drafted quote and that is answer text, which never belongs in a log. It records `first_verdict` beside the shipped `verdict`: the shipped one cannot distinguish a retried ask that ended clean from one that never needed a retry, so it cannot say what the retry BOUGHT. The 2026-08 staging read of exactly that column — ~41 % of asks retrying, almost always for a single citation problem whose answer ships `partial` either way — is what confined the retry to the suppression case (ADR 031), so retries now concentrate where `first_verdict` shows figures or a `failed`. `usage` (token counts, both runs summed; `null` on the budget refusal) rides beside the verdict fields, because this table had `duration_ms` and no dollars |
+| `service.py` | `AnswerService.ask()` — the loop; `_shape`/`_shape_refusal`/`_shape_budget_refusal` — the **strict gate** and the transport-agnostic response; `run_facts_reason` (the server-composed refusal prose); `audit_summary` — `ask`'s one `audit_log.result` summary, shared with the Slack transport, which reduces BOTH verdicts to COUNTS (`_verdict_shape`) because `check_citations`' own problem strings embed up to 80 characters of the drafted quote, and answer text never belongs in a log. It records `first_verdict` beside the shipped `verdict`, so what a retry actually bought stays measurable. `usage` (token counts, both runs summed; `null` on the budget refusal) rides beside the verdict fields, because this table had `duration_ms` and no dollars |
 
 ## The evidence ledger (the verifier's corpus)
 
@@ -106,9 +106,9 @@ The token regex also knows the `x` multiplier: `2.3x` would otherwise tokenize a
 `.3x` tail failing the trailing boundary) and withhold a **correct, page-backed** figure.
 `x` is a DIMENSION, never a magnitude — `2.3x` pools as 2.3 and scales nothing.
 
-**Named accepted residual**: the mirrored prose direction regressed — an
-answer's `$2M` no longer traces to evidence saying "2 millones", because the bare mantissa that
-used to bridge them is the very hole this closed. The agent is told to quote figures as the page
+**Named accepted residual**: the mirrored prose direction — an answer's `$2M` tracing to
+evidence saying "2 millones" — is not supported: the bare-mantissa bridge is the laundering hole
+closed above. The agent is told to quote figures as the page
 states them, so the shape of the fix — if a real answer ever hits it — is EVIDENCE-side
 word-magnitude parsing, never a wider answer-side claim. Pinned as a named test in
 `tests/answer/test_numbers.py`.
@@ -131,8 +131,7 @@ stays a pure judgement and only this one function decides what ships:
    findings (`feedback()`) plus the FIRST run's own message history
    (`message_history=result.all_messages()`), so the model redrafts from evidence already in its
    context instead of re-gathering it. A lone citation problem spends no retry: it ships labelled
-   `partial` with or without one, and paying a second full agent run for that label was the
-   measured majority case that retired the old retry-on-anything policy (ADR 031). The retry
+   `partial` with or without one. The retry
    replaces the first draft **only if it improves what would ship** (the gate's own rank — the
    trigger, the win comparison and the gate read ONE scan, so they cannot drift apart). A second
    failure never triggers a third attempt.
@@ -149,27 +148,17 @@ stays a pure judgement and only this one function decides what ships:
    problems); `suppressed`/`refused` mark it, and `failed` appears **only** when suppressed. The
    verdict object travels with **every** response.
 
-   **The model has no `reason` field, and that is deliberate.** A refusal's `reason` used to be
-   model-authored prose, and this gate merely scanned it for a smuggled figure before shipping it or
-   swapping in a neutral template. That is what produced a *correct* refusal ("Borealis's ARR
-   doesn't answer that") justified by a *wrong* claim about the corpus ("only a quarterly value
-   exists, not monthly") that nobody had verified. `AnswerOutput` no longer HAS a `reason` field —
-   the shipped `reason` on every refusal (genuine or suppressed) is composed entirely by
-   `answer.service.run_facts_reason`, from `ctx.searched` (the queries this run tried) and
-   `ctx.read_paths_order`/`out.citations` (the pages the ACL-scoped tools actually surfaced), never
-   from anything the model wrote. See "Refusal is a first-class result", below, for the five shapes
-   that composer produces. `_compose_reason` still runs a defensive figure scan over what it
-   composed — the only variables are the asker's own words and page titles, neither of which should
-   be a numeral, but a title that happens to contain one is cheap to imagine — and falls back to
-   the generic `no_surface` sentence if it ever fires. That scan is against the QUESTION, never the
-   evidence: evidence is everything any tool returned this run, which is a far weaker basis for a
-   sentence the server asserts in its own voice. It used to be load-bearing for a second reason —
-   the tool renderers echoed their own argument on the absence path (`no results for: <query>`), so
-   a figure inside a model-chosen query entered the evidence and would have been "traced" by
-   construction. The three absence strings carry no argument at all now
-   (`brain.NO_RESULTS`/`UNKNOWN_PAGE`/`UNKNOWN_ENTITY`), which closes that channel at the source
-   and leaves this scan as defense in depth rather than the only thing standing between a steered
-   query and a verified figure. Neither half may be reopened on the grounds that the other exists.
+   **The model has no `reason` field, and that is deliberate** — a model-authored reason is
+   persuasive prose nobody verified. The shipped `reason` on every refusal (genuine or suppressed)
+   is composed entirely by `answer.service.run_facts_reason`, from `ctx.searched` (the queries this
+   run tried) and `ctx.read_paths_order`/`out.citations` (the pages the ACL-scoped tools actually
+   surfaced). See "Refusal is a first-class result", below, for the five shapes that composer
+   produces. `_compose_reason` still runs a defensive figure scan over what it composed — against
+   the QUESTION, never the evidence — and falls back to the generic `no_surface` sentence if it
+   fires. The three absence strings carry no argument at all
+   (`brain.NO_RESULTS`/`UNKNOWN_PAGE`/`UNKNOWN_ENTITY`), so a figure inside a model-chosen query
+   cannot enter the evidence through a renderer echo; that closure and this scan are defense in
+   depth — neither half may be reopened on the grounds that the other exists.
 
 ## Refusal is a first-class result
 

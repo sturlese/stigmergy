@@ -1,13 +1,7 @@
-"""`admin_actions` — the console's own bookkeeping, and the only state this package owns.
-
-One row per mutation attempted through the console (who said they were, what they asked for, how
-it ended), the web equivalent of `--by` on the steward CLIs. Same posture as `capture.ops`:
-bookkeeping must never fail the work it records, so the writer swallows and logs.
-
-DDL runs behind `capture.schema.startup_ddl_lock` — the shared advisory lock every other startup
-DDL in this database already takes (`ensure_audit_table`'s docstring explains why an
-all-`IF NOT EXISTS` migration still needs one) — and ONLY from `routes.compose` when the console
-is actually configured: an inert console executes no DDL.
+"""`admin_actions` — the console's own bookkeeping, the only state this package owns: one row
+per attempted mutation, the web equivalent of `--by`. The writer swallows and logs — bookkeeping
+must never fail the work it records. DDL runs behind `startup_ddl_lock`, and only from
+`routes.compose` when the console is configured: an inert console executes no DDL.
 """
 import logging
 
@@ -50,8 +44,8 @@ def ensure_admin_schema(conn) -> None:
 
 def record_action(conn, *, actor: str, action: str, args: dict, outcome: str,
                   error_class: str = "") -> int | None:
-    """One row per attempted mutation. Returns the row id, or None when the write itself failed —
-    logged loudly, never raised (`capture.ops.record_job_run`'s contract, inherited on purpose)."""
+    """One row per attempted mutation; returns the id, or None when the write itself failed —
+    logged loudly, never raised."""
     try:
         with conn.cursor() as cur:
             cur.execute(_INSERT, (actor, action, Jsonb(args or {}), outcome, error_class))
@@ -63,8 +57,7 @@ def record_action(conn, *, actor: str, action: str, args: dict, outcome: str,
 
 
 def recent_actions(conn, *, limit: int = 50) -> list[dict]:
-    """The console's own audit trail, newest first — rendered on the activity tab so a mutation
-    made from the web is as inspectable as a `--by` on the CLI."""
+    """The console's own audit trail, newest first."""
     with conn.cursor() as cur:
         cur.execute(_RECENT, (max(1, min(int(limit), 500)),))
         rows = cur.fetchall()

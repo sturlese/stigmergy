@@ -5,10 +5,8 @@ subcommand, one required target:
     stigmergy-views regenerate --stale
     stigmergy-views regenerate --all
 
-Conventions are `stigmergy-entities`'/`stigmergy-queue`'s, so this tool never teaches an operator a
-third dialect: exit 130 on Ctrl-C, `--json` emitting the machine-readable value first, one
-sentence (no traceback) for a domain refusal, id-and-display-name pairing on every entity named
-in output (`librarian.report._anchor_phrase`'s convention, reused unmodified).
+Exit 130 on Ctrl-C, `--json` first, one sentence (no traceback) per domain refusal,
+id-and-display-name pairing on every entity named in output.
 """
 import argparse
 import asyncio
@@ -35,10 +33,8 @@ REGISTRY_RELPATH = "ops/entity-registry.json"
 def _repo(args) -> str:
     repo = args.repo or os.environ.get(librarian_config.REPO_ENV) or librarian_config.REPO_DEFAULT
     path = os.path.abspath(repo)
-    # `.git` is a DIRECTORY in an ordinary clone but a FILE (a `gitdir: ...` pointer) in a
-    # `git worktree add` checkout, so the test is `exists`, not `isdir`: `isdir` would refuse a
-    # genuine worktree with the "not a git checkout" message below. `exists` accepts both real
-    # shapes and still refuses a plain, non-git directory.
+    # `.git` is a directory in an ordinary clone but a FILE in a worktree checkout — `exists`,
+    # not `isdir`, accepts both and still refuses a plain non-git directory.
     if not os.path.exists(os.path.join(path, ".git")):
         raise ViewError(
             f"{path} is not a git checkout — `--repo` (or ${librarian_config.REPO_ENV}) must "
@@ -55,12 +51,10 @@ def _connect(args):
 
 
 def _who(entity_id: str, name: str) -> str:
-    """`Name (`id`)` — `librarian.report._anchor_phrase`'s pairing, reused unmodified."""
+    """`Name (`id`)` — `librarian.report._anchor_phrase`'s pairing."""
     return f"{name} (`{entity_id}`)"
 
 
-# The one road to a withheld synthesis: the bounded agent ran out of budget before a draft
-# existed. `_report_single` below carries the longer form of the same fact.
 WITHHELD_SUMMARY = "synthesis withheld (ran out of budget before a draft was ready)"
 
 
@@ -90,21 +84,16 @@ def _cmd_regenerate(conn, args) -> int:
     registry = _registry(repo)
 
     if args.entity:
-        # Routed through the SAME `regenerate.run` the batch flags use, rather than a second,
-        # hand-rolled `job_run` block around `regenerate_entity`. A per-entity copy of that
-        # bookkeeping gets three things wrong at once: it records nothing at all when the call
-        # raises, it has no `refused` key in its stats, and it can no more see a
-        # `KeyboardInterrupt` than `job_run` itself can. `run` over a single-element list has all
-        # three already.
+        # Routed through the same `regenerate.run` the batch flags use — a hand-rolled per-entity
+        # `job_run` block records nothing on a raise, lacks the `refused` stats key, and cannot
+        # see a `KeyboardInterrupt`.
         result = asyncio.run(regenerate.run(repo, conn, [args.entity], registry=registry,
                                             branch=args.branch, force=args.force))
         return _report_single(result.outcomes[0], args)
 
     population = "with an existing view" if args.stale else "with at least one anchored page"
-    # `--force` widens `--stale`'s population to every entity with an existing view, which is
-    # what its help text promises — computing the stale-only population here would make the flag
-    # silently do nothing for the natural spelling of the retry lever it exists to be. `--all`'s
-    # population is ALREADY "every anchored entity" regardless of force, so it needs no widening.
+    # `--force` widens `--stale`'s population to every entity with an existing view (its help
+    # text's promise); `--all`'s population needs no widening.
     entity_ids = (sorted(regenerate.existing_view_ids(repo)) if (args.stale and args.force)
                  else regenerate.list_stale_entities(repo) if args.stale
                  else regenerate.list_all_anchored_entities(repo))
@@ -224,10 +213,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _interrupted() -> int:
-    # `commit_and_push` commits LOCALLY, then pushes — a Ctrl-C landing between those two calls
-    # leaves the entity genuinely committed but not yet pushed, so any message asserting it "was
-    # NOT committed" would be false in exactly that window. The message names the range of states
-    # instead of a specific one this code cannot know.
+    # `commit_and_push` commits locally, then pushes — a Ctrl-C between the two leaves the entity
+    # committed but unpushed, so the message names the range of states, not one it cannot know.
     print("stigmergy-views: interrupted while regenerating — entities already committed AND "
          "pushed before the interrupt are done (see the lines printed above this one); the entity "
          "being written when this happened may be anywhere from untouched to locally committed "

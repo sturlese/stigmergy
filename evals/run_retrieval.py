@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""Recall@5 runner over the retrieval golden set (ADR 012) — per-arm numbers.
+"""Recall@k runner over the retrieval golden set — per-arm numbers.
 
-Assumes a running Postgres (docker compose up) and, unless --rebuild is given, an already
-built index. Offline with --embedder fake (plumbing + idempotency only — the numbers mean
-nothing semantically); the exit-evidence measurement uses the real embedder:
-
-The corpus is `evals/corpus/` — committed and frozen, so the series it feeds stays comparable.
-See `evals/corpus/PROVENANCE.json`.
+Needs a running Postgres and, unless `--rebuild` is given, a built index. `--embedder fake` checks
+plumbing and idempotency only; its numbers mean nothing semantically. The corpus is `evals/corpus/`,
+committed and frozen so the series stays comparable.
 
   # keyless self-check / e2e arm:
   python evals/run_retrieval.py --embedder fake --rebuild --repo evals/corpus
@@ -15,32 +12,17 @@ See `evals/corpus/PROVENANCE.json`.
   python evals/run_retrieval.py --embedder openai --rebuild --repo evals/corpus \
       --report evals/out/retrieval-report.json
 
-Arms: fts / vec / rrf are the raw retrieval arms; `final` adds the contract factors — the arm the
-R@5 >= 0.80 bar is read on.
+Arms: fts / vec / rrf are the raw retrieval arms; `final` adds the contract factors and is the arm
+`bars.BAR_RECALL` is read on.
 
-**Substrate posture:** this runner measures the ranking SUBSTRATE — arms, fusion, contract
-factors, chain collapse — and deliberately does NOT resolve entities: `search_arms` is called with
-no `entity_hint`/`fts_expansion`, so the entity boost and the alias expansion (both fed by the
-SERVICE's registry resolution) never fire here. The served path's fidelity is the QA golden's job
-(`run_qa.py`, which builds the very `Settings` the deployed server runs with). Teaching this
-runner to resolve would make it measure a hybrid nobody serves — the blended search with a TOLD
-`entity_hint` lives in `BrainService._search` and is pinned by
-`tests/server/test_entity_first_search_pg.py`.
+This measures the ranking SUBSTRATE — arms, fusion, contract factors, chain collapse — and
+deliberately does NOT resolve entities: `search_arms` gets no `entity_hint`/`fts_expansion`, so the
+entity boost and the alias expansion never fire. The served path is `run_qa.py`'s job; teaching this
+runner to resolve would make it measure a hybrid nobody serves.
 
-**Why the questions carry `filters`.** Called as `search.search_arms(conn, q, embedder=embedder,
-k=args.k)` with no `filters` argument, the golden run is a real, moveable witness for the
-FTS/vector folding and the `entity` BOOST, but structurally BLIND to the `entity` FILTER (the
-`%(entity)s = ANY(entity)` membership clause): a broken filter could not change the run's output
-no matter how broken, because the run never asked it to filter anything. `make_arm_rankings` below
-forwards each question's declared `filters` to `search_arms`, and 10 of the 16 golden questions
-declare `filters.entity` (the ones whose subject is a named entity — see
-`retrieval_golden.json`'s `_filters_comment` for why the other 6 are a deliberate unfiltered
-control half).
-
-Sabotage-verified, which is the only proof that matters here: inverting the membership clause in
-`index/search.py` (`= ANY(entity)` -> `<> ALL(entity)`) moves this run's numbers. It could not,
-before. `tests/index/test_pg_integration.py`'s Postgres tests remain the FILTER's unit-level
-evidence; this run is now its end-to-end one.
+Each question's declared `filters` ARE forwarded (`make_arm_rankings`). Without that the run is
+structurally blind to the `entity` FILTER — a broken membership clause could not move the numbers,
+because the run never asked it to filter. Part of the golden set is a deliberate unfiltered control.
 """
 import argparse
 import json
@@ -84,11 +66,9 @@ def main() -> int:
 
 
 def make_arm_rankings(conn, embedder, k: int):
-    """The per-question ranking callback `golden.evaluate` drives, as a factory so the one thing
-    that matters most — that a question's `filters` actually REACH `search_arms` — is provable
-    without a Postgres (`tests/evals/test_run_retrieval_filters.py`). A closure built inside
-    `_run` is only ever testable by a keyed, DB-bound end-to-end run, which is how a gap like that
-    survives unnoticed."""
+    """The per-question ranking callback `golden.evaluate` drives. A factory rather than a closure
+    inside `_run` so that "a question's `filters` reach `search_arms`" is provable without a
+    Postgres."""
     def arm_rankings(q: str, filters: dict | None = None) -> dict:
         arms = search.search_arms(conn, q, embedder=embedder, k=k, filters=filters or None)
         ids = arms["page_ids"]
@@ -123,9 +103,7 @@ def _run(args, questions) -> int:
         Path(args.report).write_text(json.dumps(report, indent=2, ensure_ascii=False),
                                      encoding="utf-8")
         print(f"report -> {args.report}")
-    # A real-instrument run — the embedder actually resolved is not the fake one
-    # (`embedder_for_model`'s own `model.startswith("fake")` convention) — appends R@5 (the arm the
-    # exit bar reads on, per this module's own docstring) to the durable, git-resident series.
+    # Only a run whose RESOLVED embedder is real appends to the durable series.
     if not report["embedder"].startswith("fake"):
         eval_history.append_run(
             suite="retrieval", git_sha=eval_history.resolve_git_sha(ROOT),

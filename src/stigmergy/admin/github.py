@@ -1,17 +1,11 @@
-"""The GitHub Actions gateway — the crons tab's ONLY reach out of this process.
+"""The GitHub Actions gateway — the crons tab's ONLY reach out of this process: exactly four
+Actions endpoints (list workflows, list runs, dispatch, enable/disable); deploys, releases and
+repo contents are out of scope.
 
-The console is a remote control for the workflows that already run the heavy jobs, so this module
-speaks to exactly four endpoints of the Actions API: list workflows (state), list a workflow's
-runs, dispatch, enable/disable. Nothing else — deploys, releases, repo contents are all out of
-scope by design.
-
-`urllib` with an injectable `opener`, `server.webhook`'s own pattern, so every test drives the
-real request-building code offline. Reads are cached for `cache_ttl_s` (GitHub rate limits; a
-dashboard polling every 10s must not spend 6 requests/min per workflow); mutations are never
-cached and invalidate the read cache.
-
-Error hygiene: an `ActionsError` carries the endpoint's name and the status code — never the
-token, never a response body echoed whole (a proxy's error page can be arbitrary HTML).
+`urllib` with an injectable `opener`, so tests drive the real request-building offline. Reads are
+cached for `cache_ttl_s` (GitHub rate limits); mutations are never cached and invalidate the
+cache. An `ActionsError` carries the endpoint and status — never the token, never a response body
+echoed whole (a proxy's error page can be arbitrary HTML).
 """
 import json
 import time
@@ -48,8 +42,7 @@ class ActionsGateway:
 
     # ── the four calls ────────────────────────────────────────────────────────────────────────
     def workflows(self) -> list[dict]:
-        """Every workflow with its `state` (`active` / `disabled_manually` / ...) — the
-        enabled/disabled fact the crons tab renders. Cached."""
+        """Every workflow with its `state` (`active` / `disabled_manually` / ...). Cached."""
         data = self._cached("workflows", f"/repos/{self._repo}/actions/workflows?per_page=100")
         return [
             {"id": w.get("id"), "name": w.get("name", ""), "path": w.get("path", ""),
@@ -85,8 +78,7 @@ class ActionsGateway:
         self._cache.clear()
 
     def set_enabled(self, workflow_file: str, *, enabled: bool) -> None:
-        """Enable/disable the workflow — `index-rebuild` off while a feature-branch build carries
-        index schema to staging, without remembering the `gh` incantation."""
+        """Enable/disable the workflow."""
         verb = "enable" if enabled else "disable"
         self._request(
             "PUT",
@@ -118,9 +110,8 @@ class ActionsGateway:
             with self._opener(request, timeout=_TIMEOUT_S) as response:
                 raw = response.read()
         except urllib.error.HTTPError as ex:
-            # 401/403: a revoked or under-scoped PAT; 404: repo or workflow name wrong; 422: a
-            # dispatch input the workflow does not declare. The status is the diagnosis — the body
-            # is not echoed (it is GitHub's, sometimes a proxy's, and never needed to act).
+            # The status is the diagnosis — the body is never echoed (GitHub's, sometimes a
+            # proxy's, and never needed to act).
             raise ActionsError(
                 f"GitHub answered {ex.code} for {method} {path.split('?')[0]}",
                 status=ex.code) from ex

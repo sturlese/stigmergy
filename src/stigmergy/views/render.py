@@ -1,9 +1,8 @@
 """views.render — assembling the skeleton sections and the synthesis into one page.
 
-The page carries no `verification:` verdict, because nothing computes one: a view's figures are
-not machine-checked, and `SYNTHESIS_CAPTION` states that on the page itself rather than letting
-an absent verdict read as a passing one. `entity:` is a LIST (`entity: [<id>]`), matching every
-other page type's frontmatter and the parity rule `index.corpus.entity_list` depends on.
+The page carries no `verification:` verdict because nothing computes one — `SYNTHESIS_CAPTION`
+says so on the page itself. `entity:` is a LIST, the parity rule `index.corpus.entity_list`
+depends on.
 """
 import datetime
 import hashlib
@@ -12,10 +11,7 @@ from stigmergy.kernel.acl import view_acl
 from stigmergy.kernel.page import _yaml
 from stigmergy.views.skeleton import Member
 
-# The one road to a withheld synthesis (`synthesis.write_synthesis`'s `UsageLimitExceeded`
-# catch): the agent's run exceeded its request/tool-call budget before a draft existed. State the
-# fact, never the implication — this block claims a budget, not a verdict, because no verdict is
-# computed.
+# The withheld block claims a budget, never a verdict — no verdict is computed.
 WITHHELD_BLOCK = """**Withheld — the automatic summary ran out of budget before it could be finished.**
 
 An agent began drafting a summary of this entity from the pages above, but the run exceeded its
@@ -61,19 +57,13 @@ def render(entity_id: str, entity_title: str, members: list[Member], *, member_h
          f"entity: [{_yaml(entity_id)}]", "tags: [view]", "tier: 3",
          f'content_hash: "sha256:{body_hash}"', f'generated_at: "{generated_at}"',
          f"members: {len(members)}",
-         # An honest "unchanged" no-op needs SOME persisted signal of the member set the last
-         # regeneration produced, and for a derived page that signal belongs on the page itself,
-         # git-versioned — never in a side-channel state file that can drift out of step with the
-         # page it describes. Machine-only; the contract linter has no unknown-key rejection, so
-         # this field needs no linter change.
+         # The persisted staleness signal, on the derived page itself and git-versioned — never
+         # in a side-channel state file that can drift from the page it describes.
          f'member_hash: "{member_hash}"']
     acl = view_acl([m.acl for m in members])
     if acl is not None:
-        # The INTERSECTION of the members' audiences — a rollup never widens access.
-        # `view_acl` returns `None` for an open corpus (nothing to add) and a
-        # (possibly empty) sorted list otherwise; an empty list IS a legal, meaningful value
-        # ("restrictive by construction, never silently open" — view_acl's own docstring), so
-        # it is still rendered as `acl: []`, never omitted.
+        # The INTERSECTION of the members' audiences — a rollup never widens access. An empty
+        # list is a legal, meaningful value and is rendered as `acl: []`, never omitted.
         fm.append("acl: [" + ", ".join(_yaml(a) for a in acl) + "]")
     fm.append("---")
     return "\n".join(fm) + "\n\n" + body

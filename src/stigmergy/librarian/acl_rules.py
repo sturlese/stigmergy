@@ -1,25 +1,16 @@
 """ACL label resolution for a filed page — an adapter over `kernel.acl`.
 
-**Why an adapter and not a direct call.** `kernel.acl.load_acl_config` reads one dialect —
-"`path_prefix` / `unit` / `entity_kind` → audiences; first match wins; explicit default". The
-file actually on disk in the knowledge repo is written in another — `{"path": "wiki/**",
-"acl": []}` with `"default": []` — and loading it raises. A malformed ACL config is a loud,
-fail-closed error by design, so without this adapter the worker would refuse to start against the
-real repo and nothing could ever be filed.
-
-The file cannot simply be rewritten without changing live visibility: every current rule
-resolves to no labels and the reader cannot express that (a non-empty `default` is mandatory,
-and its implicit `["all"]` fallback is not "open" — it would hide pages from the one
-audience-scoped identity that exists).
-
-**What it does NOT do**: reimplement resolution. It normalizes the on-disk dialect into the
-reader's shape and hands off to `acl.resolve_acl` — one matching algorithm, in the module that
-already owns it and already has the tests. The adapter lives here rather than in the kernel so
-the blast radius is one subsystem: the kernel's own contract is untouched.
+The file on disk in the knowledge repo is written in another dialect than the reader's
+(`{"path": "wiki/**", "acl": []}` with `"default": []`), and `kernel.acl.load_acl_config`
+raises on it — a malformed ACL config is a loud, fail-closed error by design, so without this
+adapter the worker could not start against the real repo. The file cannot simply be rewritten
+without changing live visibility: every current rule resolves to no labels and the reader
+cannot express that (a non-empty `default` is mandatory, and its implicit `["all"]` fallback is
+not "open"). What this does NOT do is reimplement resolution: it normalizes into the reader's
+shape and hands off to `acl.resolve_acl` — one matching algorithm, in the module that owns it.
 
 **Empty means open.** A resolved empty list yields `None`, and `page.py` omits the `acl:` line
-entirely. That is the file's own stated intent ("Absent acl = open") and matches `acl.py`'s
-docstring: "pages without `acl` are visible to every client."
+entirely — the file's own stated intent and `acl.py`'s semantics for pages without `acl`.
 """
 import json
 import os
@@ -27,32 +18,25 @@ import os
 from stigmergy.kernel import acl as acl_model
 from stigmergy.librarian.errors import LibrarianConfigError
 
-# The on-disk dialect's keys, and what each maps to in the reader's dialect. `path` carries a
-# glob (`wiki/**`); the reader matches by prefix, so the glob tail is stripped. That is a
-# faithful translation for the trailing-`**` form and nothing else — anything more exotic is
-# refused rather than guessed at, because guessing wrong on an access-control file is the one
-# failure mode it must not have.
+# The on-disk dialect's `path` carries a glob (`wiki/**`); the reader matches by prefix, so the
+# glob tail is stripped. Faithful for the trailing-`**` form and nothing else — anything more
+# exotic is refused rather than guessed at, because guessing wrong on an access-control file is
+# the one failure mode it must not have.
 _GLOB_SUFFIX = "/**"
 
 
-# Reader matchers the librarian cannot supply an input for. `acl.resolve_acl` is called with
-# `(config, page_path, None, None)` — there is no unit and no entity kind at filing time — and its
-# `unit`/`entity_kind` branches require a truthy value, so such a rule can NEVER match. It would
-# fall through to `default`, which in the real `ops/acl.json` is `[]`, i.e. OPEN. A config written
-# to restrict something must not silently resolve to something weaker than intended, so it stops
-# the worker instead.
+# Reader matchers the librarian cannot supply an input for: `acl.resolve_acl` is called with
+# `(config, page_path, None, None)`, and the `unit`/`entity_kind` branches require a truthy
+# value, so such a rule can NEVER match — it would fall through to `default`, which in the real
+# `ops/acl.json` is `[]`, i.e. OPEN. A config written to restrict something must not silently
+# resolve to something weaker, so it stops the worker instead.
 _UNSUPPORTED_MATCHERS = ("unit", "entity_kind")
 
 
 def _guard_delegation(path_label: str, call):
-    """Run a `kernel.acl` call, re-raising its `ValueError` as a config error.
-
-    The delegated label validation raises a bare `ValueError`, which is neither
-    `LibrarianConfigError` nor even a `LibrarianError` — so `cli.main()`, which catches those,
-    let it through as a raw traceback. Every other malformed ACL config in this module produces one
-    clean fail-closed line; a comma in an audience label produced a stack trace. Same defect class
-    as an interrupt answered with a traceback, at a different seam.
-    """
+    """Run a `kernel.acl` call, re-raising its `ValueError` as a config error — a bare
+    `ValueError` escapes `cli.main`'s handlers as a raw traceback, and every other malformed ACL
+    config here produces one clean fail-closed line."""
     try:
         return call()
     except LibrarianConfigError:
@@ -77,36 +61,22 @@ def _translate_rule(path_label: str, rule: dict) -> dict:
 
 
 def _adopt_reader_rule(path_label: str, rule: dict) -> dict:
-    """A rule that already matches in the READER's dialect, checked for the half it may be missing.
+    """A rule that already matches in the READER's dialect, checked for the half it may be
+    missing.
 
-    Dialect detection is per KEY, not per rule, so "has a reader matcher" never implied "is a
-    reader rule": `{"path_prefix": "wiki/private", "acl": ["leadership"]}` is a half-migrated rule —
-    the matcher migrated, the labels did not — and it used to be adopted verbatim. The final
-    normalization then keeps only `(*_MATCHERS, "audiences")`, so `acl` was DROPPED, and the rule
-    reached `resolve_acl` carrying a matcher and no labels at all. Two ways that ended, neither
-    of them the intended restriction:
-
-    - the rule matched, and `resolve_acl`'s `rule["audiences"]` raised `KeyError` — not a
-      `LibrarianError`, so it escaped every handler, on EVERY item, from a config that had passed
-      the startup validation whose whole job is to be the loud place this is caught;
-    - the rule did not match, and the page fell through to `default`, which in the real
-      `ops/acl.json` is `[]` — OPEN. A rule written to restrict something resolving to open is
-      the one failure mode this file may not have (module docstring), and it is why the
-      unsupported-matcher check above already refuses rather than letting a never-matching rule
-      fall through.
-
-    So: `audiences` wins if present; `acl` is translated when it is the only one, which is the
-    same faithful translation `_translate_rule` performs for the fully on-disk dialect; both
-    present and disagreeing is refused rather than guessed at; neither is refused too.
+    Dialect detection is per KEY, so a half-migrated rule exists: `path_prefix` with `acl`
+    labels. Adopting it verbatim once dropped the label list entirely — a matcher with no
+    labels, which either raised `KeyError` on every item or fell through to an OPEN default, the
+    one failure mode this file may not have. So: `audiences` wins if present; `acl` is
+    translated when it is the only one; both present and disagreeing is refused rather than
+    guessed at; neither is refused too.
     """
     adopted = {k: rule[k] for k in acl_model._MATCHERS if k in rule}
     has_audiences = isinstance(rule.get("audiences"), list)
     has_acl = isinstance(rule.get("acl"), list)
     # Compared as SETS, and the message says so: an audience list is a set everywhere it is
-    # actually used (`resolve_acl` hands the list on, `server.acl.visible()` does membership), so
-    # `["a", "b"]` and `["b", "a"]` are the same rule. Comparing them as ordered lists refused a
-    # config that had been resolving correctly — and refused it with a message that rendered both
-    # sides `sorted()`, telling the operator to reconcile two lists it had just printed identical.
+    # used (`resolve_acl` hands it on, `server.acl.visible()` does membership), so
+    # `["a", "b"]` and `["b", "a"]` are the same rule.
     if has_audiences and has_acl and set(map(str, rule["audiences"])) != set(map(str, rule["acl"])):
         raise LibrarianConfigError(
             f"acl config {path_label}: rule {sorted(rule)} carries BOTH 'audiences' and 'acl' and "
@@ -127,13 +97,10 @@ def load(path: str | None):
     """Load the ACL config from a FILE, whichever dialect it is written in.
 
     Returns the reader's normalized config, or `None` when there is no file at all (open
-    corpus — `acl.py`'s own semantics for a missing config). Raises `LibrarianConfigError` on
-    anything malformed: called ONCE at worker startup, never per item.
-
-    The fast lane does not use this entry point — it reads `ops/acl.json` at the commit it files
-    against (`base_inputs.load_acl`). This one stays because "the config as it sits in a checkout"
-    is a real question for the steward tooling that edits that file, and because reading a path is
-    the only shape a caller with a file has.
+    corpus). Raises `LibrarianConfigError` on anything malformed: called ONCE at worker startup,
+    never per item. The fast lane does not use this entry point — it reads `ops/acl.json` at the
+    commit it files against (`base_inputs.load_acl`); this stays for the steward tooling, whose
+    only shape is a path to a checkout.
     """
     if not path or not os.path.exists(path):
         return None
@@ -148,16 +115,12 @@ def load(path: str | None):
 def load_text(text: str | None, *, label: str):
     """The same loader over CONTENT, with `label` naming where the content came from.
 
-    This is the seam the base-pinned read needs. The worker reads `ops/acl.json` out of `base.sha`
-    with `gitcmd.show`, so it holds bytes and a locator (`origin/main@abc123def456:ops/acl.json`)
-    rather than a path — and an ACL config resolved from the working tree while the page is
-    committed against another tree can stamp audience labels that do not match the commit they
-    land in.
-
-    `None` content means the commit carries no such file, which is the same thing a missing file
-    means: an open corpus. Everything else — unreadable, wrong shape, an unsupported matcher, an
-    invalid label — is the same loud fail-closed refusal it has always been, because a
-    silently-open access-control file is the one failure mode this may not have.
+    The seam the base-pinned read needs: the worker reads `ops/acl.json` out of `base.sha` with
+    `gitcmd.show`, so it holds bytes and a locator rather than a path — and an ACL config
+    resolved from the working tree while the page is committed against another tree can stamp
+    audience labels that do not match the commit they land in. `None` content means the commit
+    carries no such file: an open corpus. Everything else fails closed loudly — a silently-open
+    access-control file is the one failure mode this may not have.
     """
     if text is None:
         return None
@@ -186,9 +149,9 @@ def load_text(text: str | None, *, label: str):
                 f"match, so it would silently fall through to the default. Rewrite it as a "
                 f"'path_prefix' rule, or remove it")
         if any(k in rule for k in acl_model._MATCHERS):
-            # A rule whose LABELS still come from `acl` is half-migrated, not pure reader dialect:
-            # the delegation below re-validates the original TEXT with the reader's own loader,
-            # which requires `audiences` on every rule and would refuse the very rule this adopts.
+            # A rule whose LABELS still come from `acl` is half-migrated, not pure reader
+            # dialect: the delegation below re-validates the original TEXT with the reader's own
+            # loader, which requires `audiences` on every rule and would refuse this very rule.
             if not isinstance(rule.get("audiences"), list):
                 on_disk_dialect = True
             translated.append(_adopt_reader_rule(label, rule))
@@ -204,9 +167,9 @@ def load_text(text: str | None, *, label: str):
         raise LibrarianConfigError(f"acl config {label}: 'default' must be a list")
 
     if not on_disk_dialect and all(r.get("audiences") for r in translated) and default:
-        # Pure reader dialect and nothing empty: let the module that owns the format validate it,
-        # so its label rules (no commas, no blanks) apply unchanged. Through its TEXT entry point,
-        # so this adapter never needs a file the caller may not have.
+        # Pure reader dialect and nothing empty: let the module that owns the format validate
+        # it, so its label rules apply unchanged — through its TEXT entry point, so this adapter
+        # never needs a file the caller may not have.
         return _guard_delegation(
             label, lambda: acl_model.load_acl_config_text(text, label=label))
 
@@ -227,9 +190,9 @@ def load_text(text: str | None, *, label: str):
 def resolve(config, page_path: str) -> list[str] | None:
     """Audience labels for a page at `page_path`, or `None` when it carries no `acl:` line.
 
-    `None` is returned both when ACLs are off entirely and when the matching rule resolves to no
-    labels — from the page's point of view those are the same thing, and the page contract has
-    one way to say it: omit the field.
+    `None` both when ACLs are off entirely and when the matching rule resolves to no labels —
+    from the page's point of view those are the same thing, and the page contract has one way to
+    say it: omit the field.
     """
     labels = acl_model.resolve_acl(config, page_path, None, None)
     return list(labels) if labels else None

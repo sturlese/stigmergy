@@ -1,39 +1,16 @@
 """Slack profile email -> `ops/identities.json`, fail closed — this package's security surface.
 
-`resolve_slack_identity` is the ONE function every Slack event handler calls before constructing a
-`BrainService`. It never reads `ops/identities.json` itself: the audience resolution is
-`stigmergy.server.identity.resolve_audiences`, the SAME function and the SAME file every other
-transport uses — there is no second identity registry. What this module adds, on top of that
-shared seam, is entirely about resolving a SLACK IDENTITY to the email that function takes:
+`resolve_slack_identity` is the ONE function every handler calls before constructing a
+`BrainService`:
 
     Slack user id -> `users.info` -> profile email -> resolve_audiences(email)
 
-**Five outcomes, deliberately five different types, so a caller cannot collapse two of them by
-accident** (a `match`/`isinstance` on `IdentityResult` is exhaustive-checkable, unlike a shared
-sentinel string would be):
-
-- `Ignored`   — a bot/app/workflow event, or the bot's own message. ZERO Slack traffic; identity
-               resolution is not even attempted.
-- `ForeignTeam` — the event's `team_id` does not match the configured workspace. Also silent: a
-               shared channel from another company gets nothing, not the no-access reply, which
-               would presume a relationship a stranger from an unrelated workspace does not have.
-- `TransientFailure` — `users.info` itself failed (a timeout, a 5xx, a rate limit): NOT an
-               unmapped user. The caller renders the server-error copy, never the "ask to be
-               added" copy — and, like every other branch here, no `BrainService` is constructed.
-- `NoAccess`  — the email is absent, empty, or `resolve_audiences` raised `IdentityError` (an
-               email genuinely not in the file, or a malformed file). One outcome for all three
-               reasons, on purpose — this is not a degraded read tier, no `BrainService` is
-               constructed at all, and a caller must not distinguish "no email" from "email not
-               registered" in what it tells the user, or a determined prober learns the identity
-               file's shape by comparing responses (the same discipline `read_page`'s "unknown
-               page" shape already applies).
-- `Resolved`  — an email and its audience scope (`None` = unrestricted), ready to build a
-               `BrainService` from, exactly the way `transport_http._BearerAuthMiddleware` builds
-               one per bearer token.
-
-Bot users, app users, workflow users and the bot's OWN messages must be excluded BEFORE any of the
-above runs — `is_ignorable_event` is the one place that check lives, so an `app_mention` fired by
-the bot's own post can never loop.
+— the SAME `stigmergy.server.identity.resolve_audiences` and the SAME file every transport uses;
+there is no second identity registry. The five outcomes are five separate types, so a
+`match`/`isinstance` is exhaustive-checkable and a caller cannot collapse two by accident; each
+type's docstring says what it means, and no `BrainService` is constructed on any non-`Resolved`
+path. Bot/app/workflow events and the bot's OWN messages are excluded FIRST
+(`is_ignorable_event`), so an `app_mention` fired by the bot's own post can never loop.
 """
 import time
 from dataclasses import dataclass
@@ -45,9 +22,8 @@ from stigmergy.slack.gateway import SlackApiError
 # Slack marks an automated message this way; a genuine human event never carries it.
 BOT_MESSAGE_SUBTYPE = "bot_message"
 
-# How long a positive users.info -> email lookup is trusted before it is refreshed. Small relative
-# to how rarely a person's Slack profile email changes, generous enough that a busy thread does not
-# re-hit the rate-limited API on every message in it.
+# How long a positive users.info -> email lookup is trusted: small relative to how rarely a
+# profile email changes, generous enough that a busy thread does not re-hit the rate-limited API.
 DEFAULT_TTL_SECONDS = 300
 
 
@@ -59,7 +35,8 @@ class Ignored:
 
 @dataclass(frozen=True)
 class ForeignTeam:
-    """The event's `team_id` does not match the configured workspace. Silent."""
+    """The event's `team_id` does not match the configured workspace. Silent — a stranger from an
+    unrelated workspace gets nothing, not a reply that presumes a relationship."""
     team_id: str
 
 
@@ -73,7 +50,8 @@ class TransientFailure:
 @dataclass(frozen=True)
 class NoAccess:
     """No email, an empty email, or an email `resolve_audiences` does not recognize. One outcome
-    for all three — the caller's copy must not distinguish them."""
+    for all three — a caller's copy that distinguished them would let a prober learn the identity
+    file's shape by comparing responses."""
 
 
 @dataclass(frozen=True)
@@ -87,33 +65,25 @@ class Resolved:
 IdentityResult = Ignored | ForeignTeam | TransientFailure | NoAccess | Resolved
 
 
-# A bound, not a tune: no real workspace has anywhere near this many distinct Slack users, so this
-# never fires in practice — it exists so the cache cannot grow without bound for the life of the
-# process (a misbehaving workspace, or an Enterprise Grid org fanning out many distinct team_ids).
-# Eviction is oldest-first, on insert, which is exactly enough to bound memory; it is not an LRU
-# and does not need to be — a re-evicted, still-active user simply pays one extra `users.info`
-# call on their next question, the same cost as a cold cache entry.
+# A bound, not a tune — it exists so the cache cannot grow for the life of the process. Eviction
+# is oldest-first on insert, deliberately not an LRU: a re-evicted, still-active user pays one
+# extra `users.info` call.
 DEFAULT_MAX_ENTRIES = 10_000
 
 
 class UsersInfoCache:
-    """THREE separate TTL maps, each keyed on a workspace-scoped pair — never on the Slack user id
-    or the email alone, so a person can never be resolved under the wrong workspace's cached value
-    (defense in depth: this bot serves one configured workspace, but the key is the fact that
-    identifies a person, not an assumption about how many workspaces ever call this):
+    """THREE separate TTL maps, each keyed on a workspace-scoped pair — never the user id or the
+    email alone, so a person can never resolve under the wrong workspace's cached value:
 
-    - `_entries` — `(team_id, slack_user_id)` -> EMAIL, the identity lookup the ACL depends on;
+    - `_entries` — `(team_id, slack_user_id)` -> EMAIL, the lookup the ACL depends on;
     - `_by_email` — `(team_id, email)` -> slack_user_id, the doorbell's reverse direction;
     - `_display_names` — `(team_id, slack_user_id)` -> display name, decorative copy only.
 
-    They are separate dicts with separate accessors on purpose, and the separation is the security
-    property: nothing writes a display name through the email accessors, so a user-settable display
-    name can never reach an identity — and therefore an ACL — decision. Each map carries its own
-    `max_entries` bound, so the process ceiling is three bounds, not one.
-
-    All three hold ONLY positive results: the cache is never consulted for a negative one, so an
-    unmapped user who gets mapped works on their next question. `clock` is injectable so a test
-    drives expiry without a real sleep."""
+    The separation IS the security property: nothing writes a display name through the email
+    accessors, so a user-settable display name can never reach an identity — and therefore an
+    ACL — decision. All three hold ONLY positive results, so an unmapped user who gets mapped
+    works on their next question. `clock` is injectable so a test drives expiry without a real
+    sleep."""
 
     def __init__(self, ttl_seconds: int = DEFAULT_TTL_SECONDS, clock=time.monotonic,
                 max_entries: int = DEFAULT_MAX_ENTRIES):
@@ -121,27 +91,15 @@ class UsersInfoCache:
         self._clock = clock
         self._max_entries = max_entries
         self._entries: dict[tuple[str, str], tuple[float, str]] = {}
-        # The steward doorbell's REVERSE lookup (email -> Slack user id, `users.lookupByEmail`)
-        # shares this SAME cache object (`ctx.cache`, already threaded through every handler)
-        # rather than a second store. Without a cache, `doorbell._resolve_slack_user_id` calls
-        # `users.lookupByEmail` once per (item, steward) on EVERY poll pass, and that is a Tier-3
-        # endpoint (~50/min): twenty open items on a 10-second loop is 120 calls/min, sustained
-        # 429s, and — because a 429 collapses to the SAME `None` an honest "no such person" does —
-        # every steward reads as having no Slack identity until the rate limit clears, which it
-        # never does under that load. Same TTL/eviction shape as the forward direction, positive
-        # results only.
+        # The doorbell's REVERSE lookup shares this same object rather than a second store —
+        # `users.lookupByEmail` is Tier-3 (~50/min), and uncached per-(item, steward)-per-pass
+        # calls turn a transient 429 into a sustained one that reads every steward as having no
+        # Slack identity. Same TTL/eviction shape, positive results only.
         self._by_email: dict[tuple[str, str], tuple[float, str]] = {}
-        # The 🧠 gesture's own need (`capture.py`): a display name, not an email — decorative
-        # copy for the ack and the `source_participants` hint, never load-bearing. A THIRD map,
-        # not a bigger cached VALUE on `_entries` (a `(email, display_name)` tuple, or the raw
-        # profile dict): the email lookup and this cache's eviction bound stay untouched by a
-        # feature that has nothing to do with identity, and a caller that wants only the email
-        # stays uncoupled from whether a display name was ever fetched for the same user.
-        # Populated two ways: as a side effect of `resolve_slack_identity`'s OWN `users.info`
-        # call, at zero extra network cost, for whichever user that call already resolved (almost
-        # always the reactor); lazily by `capture._display_name` on its own cache miss for every
-        # OTHER thread participant, who `resolve_slack_identity` never touches at all. Same
-        # TTL/eviction shape as `_entries`, positive results only.
+        # The 🧠 gesture's display names — a THIRD map, not a bigger value on `_entries`, so the
+        # email lookup stays uncoupled from a decorative feature. Populated free of charge from
+        # `resolve_slack_identity`'s own `users.info` response, and lazily by
+        # `capture._display_name` for the other thread participants.
         self._display_names: dict[tuple[str, str], tuple[float, str]] = {}
 
     def get(self, team_id: str, slack_user_id: str) -> str | None:
@@ -164,9 +122,8 @@ class UsersInfoCache:
         self._entries[key] = (self._clock() + self._ttl, email)
 
     def get_id_by_email(self, team_id: str, email: str) -> str | None:
-        """The reverse direction (`users.lookupByEmail`'s own question) — `None` on a miss OR an
-        expired entry, exactly like `get` above; a miss here means "ask the API", never "this
-        person has no Slack identity" (that fact is not this cache's to assert)."""
+        """`None` on a miss OR an expired entry, like `get` — a miss means "ask the API", never
+        "this person has no Slack identity" (not this cache's fact to assert)."""
         key = (team_id, email)
         entry = self._by_email.get(key)
         if entry is None:
@@ -186,9 +143,8 @@ class UsersInfoCache:
         self._by_email[key] = (self._clock() + self._ttl, slack_user_id)
 
     def get_display_name(self, team_id: str, slack_user_id: str) -> str | None:
-        """The display-name sibling of `get` — same key shape, same TTL, same positive-only rule.
-        `None` on a miss OR an expired entry, exactly like `get` — a miss means "ask `users.info`",
-        never "this person has no display name"."""
+        """The display-name sibling of `get` — same key shape, same TTL, same positive-only
+        rule."""
         key = (team_id, slack_user_id)
         entry = self._display_names.get(key)
         if entry is None:
@@ -225,13 +181,10 @@ def is_ignorable_event(event: dict, *, bot_user_id: str | None) -> bool:
 
 
 def is_configured_workspace(event_team_id: str, configured_team_id: str) -> bool:
-    """The cheap, synchronous half of `resolve_slack_identity`'s fail-closed workspace check — no
-    `await`, no cache, no API call. Extracted so a caller that needs to know "is this our
-    workspace" before doing ANY identity work — the 🧠 gesture's instant progress reaction
-    (`app.on_reaction_added`), fired before `resolve_slack_identity` is even called — asks the
-    SAME question the fail-closed guard below asks, rather than a second comparison that could
-    drift from it. Fails CLOSED exactly like the guard it is extracted from: an absent
-    `event_team_id` is never "the configured workspace"."""
+    """The cheap, synchronous half of `resolve_slack_identity`'s fail-closed workspace check —
+    extracted so the 🧠 progress reaction can ask the SAME question before any identity work,
+    rather than a second comparison that could drift. Fails CLOSED: an absent `event_team_id` is
+    never "the configured workspace"."""
     return bool(event_team_id) and event_team_id == configured_team_id
 
 
@@ -239,14 +192,10 @@ async def resolve_slack_identity(gateway, cache: UsersInfoCache, *, identities_p
                                  configured_team_id: str, event_team_id: str,
                                  slack_user_id: str) -> IdentityResult:
     """The one function every handler calls before constructing a `BrainService`. Callers run
-    `is_ignorable_event` FIRST and pass only events that survive it — this function assumes a real
-    human Slack user id, and its job starts at the workspace check.
-
-    **Fails CLOSED on an absent event team, not open**: a missing or empty `event_team_id` — an
-    Enterprise Grid org-wide install, or a caller that failed to source one — is untrusted, never
-    treated as "the configured workspace". `configured_team_id` is already `_require_env`-backed
-    (`SlackSettings.from_args`), so there is no legitimate reason for the comparison to be
-    skipped; a second way to disable this check would be dead weight."""
+    `is_ignorable_event` FIRST; this function assumes a real human Slack user id and starts at
+    the workspace check. **Fails CLOSED on an absent event team**: a missing `event_team_id` (an
+    Enterprise Grid org-wide install, or a caller that failed to source one) is untrusted, never
+    treated as the configured workspace."""
     if not is_configured_workspace(event_team_id, configured_team_id):
         return ForeignTeam(event_team_id or "<absent>")
 
@@ -259,10 +208,8 @@ async def resolve_slack_identity(gateway, cache: UsersInfoCache, *, identities_p
         prof = (profile.get("user") or {}).get("profile") or {}
         email = prof.get("email") or ""
         cache.put(event_team_id, slack_user_id, email)
-        # A side effect of the SAME `users.info` response, at zero extra network cost: whoever
-        # this call just resolved (almost always the 🧠 gesture's reactor) has their display name
-        # cached too, so `capture._display_name`'s later lookup for this identical
-        # (team_id, slack_user_id) is a hit rather than a second `users.info` round-trip.
+        # A free side effect of the SAME `users.info` response: the display name is cached too,
+        # so `capture._display_name`'s later lookup is a hit rather than a second round trip.
         cache.put_display_name(event_team_id, slack_user_id,
                                prof.get("display_name") or prof.get("real_name") or "")
 
