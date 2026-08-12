@@ -501,15 +501,19 @@ def test_the_repaired_counts_price_a_real_run_to_a_real_figure(installed):
     from stigmergy.librarian import pricing
 
     model = "openai:gpt-5.6-terra"
-    rate_in, rate_cached, rate_out = pricing.require_priced(model)
+    rate_in, rate_cached, rate_write, rate_out = pricing.require_priced(model)
     usage = installed.extract(CRASH_PAYLOAD, details=dict(CRASH_DETAILS), **RESPONSES)
 
     cost = pricing.compute_cost_usd(
         model, input_tokens=usage.input_tokens, cached_input_tokens=usage.cache_read_tokens,
         cache_write_tokens=usage.cache_write_tokens, output_tokens=usage.output_tokens)
 
-    fresh = REPORTED_INPUT - REPORTED_CACHED
-    expected = round((fresh * rate_in + REPORTED_CACHED * rate_cached
+    # This payload reports no cache-write count (an Anthropic concept), so the write term is
+    # zero today — kept in the derivation with its own rate so a payload that grows one moves
+    # both sides together.
+    written = usage.cache_write_tokens or 0
+    fresh = REPORTED_INPUT - REPORTED_CACHED - written
+    expected = round((fresh * rate_in + REPORTED_CACHED * rate_cached + written * rate_write
                       + REPORTED_OUTPUT * rate_out) / 1_000_000, 6)
     assert cost == expected
     assert cost > 0

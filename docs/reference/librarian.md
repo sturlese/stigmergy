@@ -250,7 +250,8 @@ landmine.
 | `STIGMERGY_LIBRARIAN_BRANCH` (`--branch`) | `main` | the branch the fast lane commits to |
 | `STIGMERGY_LIBRARIAN_BACKEND` (`--backend`) | `double` | `pydantic` is the real one: an ordinary capture is an ITERATING run with five tools over the checkout, seeded with the gathered context, writing its own page (see below); a meeting transcript is one structured call. `double` is the offline double. A retired third value, `sdk`, is refused at startup by name |
 | `STIGMERGY_LIBRARIAN_MODEL` | `anthropic:claude-sonnet-5` | a Sonnet-class model is right for routine filing. PROVIDER-PREFIXED: pydantic-ai reads a bare name as an OpenAI model, so a worker without a prefix is refused at startup |
-| `STIGMERGY_LIBRARIAN_PRICING` | — | `{"<model>": [input, cached input, output]}`, dollars per MILLION tokens, merged per id over `librarian/pricing.py`'s own table. Only the backends that report tokens rather than dollars read it |
+| `STIGMERGY_LIBRARIAN_PRICING` | — | `{"<model>": [input, cached input, cache write, output]}`, dollars per MILLION tokens, merged per id over `librarian/pricing.py`'s own table. Only the backends that report tokens rather than dollars read it. A legacy 3-figure row (`[input, cached input, output]`) is still accepted, with the cache write rate taken equal to the input rate |
+| `STIGMERGY_LIBRARIAN_PROMPT_CACHE` | `5m` | Anthropic prompt caching on the ORDINARY run only ([ADR 036](../decisions/036-librarian-prompt-caching.md)): `off` \| `5m` \| `1h`, refused by name for anything else. Has no effect on a non-Anthropic model or on the meeting flow, which makes one call and would only pay the cache-write premium for a read that never happens |
 | `STIGMERGY_LIBRARIAN_MAX_TURNS` | 30 | the ORDINARY run's iteration budget — how many model requests one capture may spend going round with its tools, handed to pydantic-ai as `UsageLimits(request_limit=…)`. Exceeding it is a refusal that names this variable, never a silent stop. The meeting flow does not read it: it makes one call and derives its own ceiling. **Un-deprecated in [ADR 034](../decisions/034-agentic-pydantic-harness.md)**, at the same value it always had — the bound this system already ran a tool-using filing agent under. A value below **2** is refused by name at startup (an iterating run needs at least two requests — one to call a tool, one to finish — so a `1` would fail every ordinary capture at full model cost); a malformed value still fails the boot with a Python error rather than a named one |
 | `STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS` | 120 | **DEPRECATED — read by no shipped backend.** It was a tool-call ceiling the worker counted itself for a harness that had none; pydantic-ai accumulates tool calls and the request ceiling above bounds the loop that makes them, so a second hand-maintained ceiling would need a defect behind it. Still parsed, so a value an operator set is not silently dropped. Removal is a recorded follow-up |
 | `STIGMERGY_LIBRARIAN_GATHER_TOP_K` | 12 | how many existing pages the gatherer offers the model as overlap candidates — and how many a `search_pages` tool call returns. One pair of dials for the seed and the search |
@@ -381,8 +382,23 @@ asks "what did this cost?", and a backend that reports only token counts can ans
 a price table. A missing entry that resolved to `$0.00` would read as free — so `pricing.py` refuses
 at startup instead, naming the id, the `STIGMERGY_LIBRARIAN_PRICING` line that fixes it, and the
 date the table was last set by a human (`AS_OF`). The table is configuration for the same reason
-model ids are: prices move, and an introductory rate expires on a date nobody wants to learn from a
-bill.
+model ids are: prices move, and a promotional rate can expire on a date nobody wants to learn from a
+bill — `anthropic:claude-sonnet-5`'s own $2/$10 rate was introductory when this table first priced
+it and is now confirmed PERMANENT by Anthropic's own pricing notice, which is exactly the kind of
+fact `AS_OF` exists to date rather than assume.
+
+**A fourth figure, and Anthropic prompt caching on by default** ([ADR
+036](../decisions/036-librarian-prompt-caching.md)). Every `PRICES` row and every
+`STIGMERGY_LIBRARIAN_PRICING` entry is `[input, cached input, cache write, output]` dollars per
+million tokens; `anthropic:claude-sonnet-5`'s cached and write figures are Anthropic's own standing
+multipliers — 0.1x and 1.25x on its input rate — and `compute_cost_usd` bills a cache write at that
+rate rather than borrowing the input one. A legacy three-figure override still works, normalized
+with the write rate equal to the input rate — the exact number a write was billed at before this
+column existed. The ORDINARY run caches its system prompt, tool schemas and growing message list by
+default (`STIGMERGY_LIBRARIAN_PROMPT_CACHE`, `off` the escape hatch): an iterating run resends that
+identical prefix on every turn, and a cache read prices at a fraction of ordinary input, so past the
+first turn that prefix is where the bill actually lives. The meeting flow is untouched — one call
+per capture means a cache write with no read ever to offset its own premium.
 
 ### The gatherer — what the agent is handed before it searches for itself
 

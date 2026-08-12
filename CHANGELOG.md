@@ -9,6 +9,25 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
+## [Unreleased]
+
+### Added
+
+- **Anthropic prompt caching on the ordinary filing run** (ADR 036) —
+  `STIGMERGY_LIBRARIAN_PROMPT_CACHE` (`off` | `5m` | `1h`, default `5m`, refused by name for
+  anything else) caches the system prompt, the five tool schemas and the growing message list on
+  every turn of an iterating capture, where a cache read prices at a fraction of ordinary input.
+  The meeting flow is untouched, byte for byte: one call per capture means a cache write with no
+  read ever to offset its own premium.
+
+### Changed
+
+- **`pricing.PRICES` and `$STIGMERGY_LIBRARIAN_PRICING` gain a fourth figure** — `[input, cached
+  input, cache write, output]` dollars per million tokens, closing the follow-up ADR 032 named. A
+  legacy 3-figure row (`[input, cached input, output]`) is still accepted, normalized with the
+  cache write rate equal to the input rate — today's semantics before this column existed — so an
+  operator's existing override keeps working unedited.
+
 ## [0.2.0] - 2026-08-12
 
 The filing engine moves onto this project's own agentic harness (pydantic-ai), and the
