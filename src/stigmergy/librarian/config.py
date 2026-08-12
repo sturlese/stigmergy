@@ -46,6 +46,16 @@ from stigmergy.librarian.errors import LibrarianConfigError
 # reads it — and priced under this id in `pricing.py`, which the same pre-flight requires.
 DEFAULT_MODEL = "anthropic:claude-sonnet-5"
 
+# Anthropic prompt caching for the ORDINARY run, ON by default (ADR 036). An iterating run resends
+# the whole growing prefix every turn — the skill, the five tool schemas and the gathered seed are
+# byte-identical from the first request to the last — and a cache READ prices at a fraction of an
+# ordinary input token, so past turn one that identical prefix is most of the bill.
+# `pydantic_backend.prompt_cache_settings` is the mechanism this knob feeds; its own docstring
+# carries the arithmetic. `'off' | '5m' | '1h'` — `'off'` is the escape hatch, and has no effect on
+# a non-Anthropic model or on the meeting flow, which makes one call and would only pay the cache
+# WRITE surcharge for a read that never happens.
+DEFAULT_PROMPT_CACHE = "5m"
+
 # Per-item bounds. They cap ONE runaway run; nothing here caps a day of them.
 #
 # **`max_turns` is LIVE again (ADR 034), under a new mechanism and the same meaning.** It bounded
@@ -159,6 +169,14 @@ REPO_URL_ENV = "STIGMERGY_LIBRARIAN_REPO_URL"
 # it was written for.
 REQUIRE_REMOTE_BASE_ENV = "STIGMERGY_LIBRARIAN_REQUIRE_REMOTE_BASE"
 TIMEOUT_ENV = "STIGMERGY_LIBRARIAN_TIMEOUT_S"
+PROMPT_CACHE_ENV = "STIGMERGY_LIBRARIAN_PROMPT_CACHE"
+# The TTLs Anthropic's cache fields accept — the single source of truth `pydantic_backend.
+# prompt_cache_settings` reads instead of a second, hand-copied tuple, so the two modules can never
+# disagree about which settings actually turn caching on.
+PROMPT_CACHE_TTLS = ("5m", "1h")
+# The only three spellings `resolved_prompt_cache` accepts — order matters here, since it is also
+# the order the refusal below lists them in.
+PROMPT_CACHE_VALUES = ("off", *PROMPT_CACHE_TTLS)
 
 # What counts as "yes" in an environment variable. One spelling for the one boolean this package
 # reads.
@@ -264,6 +282,29 @@ def resolved_visibility_timeout_s(*, timeout_s: int | None = None) -> int:
     return minimum_visibility_timeout_s(timeout_s=budget) + VISIBILITY_HEADROOM_S
 
 
+def resolved_prompt_cache() -> str:
+    """`$STIGMERGY_LIBRARIAN_PROMPT_CACHE` or the class default, read at call time — the ONE place
+    this variable is consulted, so `from_args` and `pydantic_backend.prompt_cache_settings` (which
+    turns the resolved string into the framework's own cache fields) can never disagree about which
+    values are valid.
+
+    Refused eagerly, the same doctrine `resolved_timeout_s` follows: a value an operator set and the
+    process quietly ignored is the one outcome that teaches them the tool lies, so an unrecognized
+    spelling fails the boot with the variable, the bad value and the three it accepts — rather than
+    silently falling back to the default or reaching `pydantic_backend.prompt_cache_settings` as an
+    off switch nobody chose.
+    """
+    raw = os.environ.get(PROMPT_CACHE_ENV)
+    if raw is None:
+        return DEFAULT_PROMPT_CACHE
+    value = raw.strip()
+    if value not in PROMPT_CACHE_VALUES:
+        raise LibrarianConfigError(
+            f"${PROMPT_CACHE_ENV} must be one of {', '.join(PROMPT_CACHE_VALUES)}, not {raw!r} — "
+            f"the ordinary filing run's Anthropic prompt-cache TTL ('off' is the escape hatch)")
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     """The librarian's runtime configuration. Pure data — no I/O, no clock, no environment."""
@@ -289,6 +330,7 @@ class Settings:
     max_turns: int = DEFAULT_MAX_TURNS          # the ordinary run's request ceiling; see above
     max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS  # DEPRECATED — no backend reads it; see above
     timeout_s: int = DEFAULT_TIMEOUT_S
+    prompt_cache: str = DEFAULT_PROMPT_CACHE    # 'off' | '5m' | '1h' — the ordinary run's cache TTL
 
     # the gatherer (a backend that declares `wants_gathered` — and its `search_pages` tool)
     gather_top_k: int = DEFAULT_GATHER_TOP_K
@@ -364,6 +406,7 @@ class Settings:
             max_tool_calls=int(os.environ.get("STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS",
                                               cls.max_tool_calls)),
             timeout_s=agent_timeout_s,
+            prompt_cache=resolved_prompt_cache(),
             gather_top_k=int(os.environ.get("STIGMERGY_LIBRARIAN_GATHER_TOP_K",
                                             cls.gather_top_k)),
             gather_excerpt_lines=int(os.environ.get("STIGMERGY_LIBRARIAN_GATHER_EXCERPT_LINES",

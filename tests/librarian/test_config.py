@@ -28,7 +28,7 @@ def test_defaults_with_no_flags_and_no_env(monkeypatch):
                "STIGMERGY_LIBRARIAN_MODEL", "STIGMERGY_LIBRARIAN_MAX_TURNS",
                "STIGMERGY_LIBRARIAN_MAX_TOOL_CALLS", "STIGMERGY_LIBRARIAN_TIMEOUT_S",
                "STIGMERGY_LIBRARIAN_DEDUP_WINDOW_S", "STIGMERGY_GITLEAKS_BIN",
-               "STIGMERGY_LIBRARIAN_WORKTREE_ROOT"):
+               "STIGMERGY_LIBRARIAN_WORKTREE_ROOT", config.PROMPT_CACHE_ENV):
         monkeypatch.delenv(var, raising=False)
 
     settings = config.Settings.from_args(_args())
@@ -38,6 +38,7 @@ def test_defaults_with_no_flags_and_no_env(monkeypatch):
     assert settings.backend == "double"
     assert settings.model == config.DEFAULT_MODEL
     assert settings.max_turns == config.DEFAULT_MAX_TURNS
+    assert settings.prompt_cache == config.DEFAULT_PROMPT_CACHE
     assert settings.gitleaks_bin == "gitleaks"
     assert settings.worktree_root == ""
 
@@ -373,3 +374,69 @@ def test_the_lease_derives_from_this_settings_objects_own_budget(monkeypatch):
     settings = config.Settings.from_args(_args())
     assert settings.visibility_timeout_s == config.minimum_visibility_timeout_s(
         timeout_s=settings.timeout_s) + config.VISIBILITY_HEADROOM_S
+
+
+# ── prompt caching (ADR 036) — same eager-refusal doctrine as the agent budget above ────────────
+# `resolved_prompt_cache` is a plain-value domain check with no dependency on which backend or
+# model is configured (unlike `max_turns`, whose `< 2` refusal is scoped to the pydantic backend
+# in `worker.startup_checks` because only an ITERATING run reads it) — so it sits beside
+# `resolved_timeout_s` and is refused the same way: eagerly, in `from_args`, by name.
+def test_prompt_cache_defaults_to_5m_which_is_on(monkeypatch):
+    monkeypatch.delenv(config.PROMPT_CACHE_ENV, raising=False)
+    settings = config.Settings.from_args(_args())
+    assert settings.prompt_cache == "5m"
+    assert settings.prompt_cache == config.DEFAULT_PROMPT_CACHE
+
+
+@pytest.mark.parametrize("value", ["off", "5m", "1h"])
+def test_prompt_cache_env_var_sets_each_valid_value(monkeypatch, value):
+    monkeypatch.setenv(config.PROMPT_CACHE_ENV, value)
+    assert config.Settings.from_args(_args()).prompt_cache == value
+
+
+@pytest.mark.parametrize("raw", [" 5m", "5m ", " 5m ", "5m\n", "\t5m\t"])
+def test_a_prompt_cache_value_with_surrounding_whitespace_is_stripped(monkeypatch, raw):
+    """The same trailing-space-out-of-an-env-file, newline-out-of-a-shell-export story
+    `test_the_model_is_stripped_at_the_one_place_the_environment_is_read` pins for
+    `$STIGMERGY_LIBRARIAN_MODEL` — `resolved_prompt_cache`'s own `raw.strip()` is what makes ` 5m `
+    a recognized value instead of a spelling outside `off|5m|1h`. Checked both through
+    `Settings.from_args` (what a worker actually boots with) and through `resolved_prompt_cache`
+    directly (the one place the strip happens), so the wiring between the two is covered as well as
+    the strip itself."""
+    monkeypatch.setenv(config.PROMPT_CACHE_ENV, raw)
+    assert config.Settings.from_args(_args()).prompt_cache == "5m"
+    assert config.resolved_prompt_cache() == "5m"
+
+
+def test_an_invalid_prompt_cache_value_is_refused_by_name(monkeypatch):
+    monkeypatch.setenv(config.PROMPT_CACHE_ENV, "10m")
+    with pytest.raises(LibrarianConfigError) as exc_info:
+        config.Settings.from_args(_args())
+    message = str(exc_info.value)
+    assert config.PROMPT_CACHE_ENV in message      # which variable
+    assert "10m" in message                        # ...the bad value it was given
+    for valid in ("off", "5m", "1h"):               # ...and the three it accepts
+        assert valid in message
+
+
+def test_an_empty_prompt_cache_value_is_refused_the_same_way_as_an_unset_line_uncommented(
+        monkeypatch):
+    """`.env.example` ships the knob commented out, so uncommenting it with no value yields `""` —
+    absence and empty string are different things, the same distinction `resolved_timeout_s`
+    already draws for `$STIGMERGY_LIBRARIAN_TIMEOUT_S`."""
+    monkeypatch.setenv(config.PROMPT_CACHE_ENV, "")
+    with pytest.raises(LibrarianConfigError, match=config.PROMPT_CACHE_ENV):
+        config.Settings.from_args(_args())
+
+
+def test_resolved_prompt_cache_is_read_at_call_time_not_at_import(monkeypatch):
+    """The module's standing rule, proven the same way `resolved_visibility_timeout_s` proves it:
+    two calls in one process, with the environment changed between them and no re-import."""
+    monkeypatch.delenv(config.PROMPT_CACHE_ENV, raising=False)
+    assert config.resolved_prompt_cache() == "5m"
+
+    monkeypatch.setenv(config.PROMPT_CACHE_ENV, "off")
+    assert config.resolved_prompt_cache() == "off"
+
+    monkeypatch.setenv(config.PROMPT_CACHE_ENV, "1h")
+    assert config.resolved_prompt_cache() == "1h"

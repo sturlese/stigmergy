@@ -5,7 +5,7 @@ librarian went without one for as long as its only backend was that kind. Provid
 and a report that answered "what did
 filing this cost?" with `0.0` because nobody did the multiplication would be worse than one that
 said nothing — a silent zero reads as free (ADR 031 D2 records why the figure has to reach the row
-at all; ADR 032 records this half).
+at all; ADR 032 records this half; ADR 036 records the fourth column, below).
 
 **The table is CONFIGURATION, not a constant, and the same rule model ids already live under**
 (`config.py`: "model IDs are configuration, never constants — models get deprecated and a hardcoded
@@ -38,22 +38,18 @@ PRICING_ENV = "STIGMERGY_LIBRARIAN_PRICING"
 # When the figures below were last set by a human. Printed in the refusal, so somebody reading a
 # surprising number knows how old the arithmetic behind it is — and so a stale table is a visible
 # fact rather than an assumption.
-AS_OF = "2026-08-11"
+AS_OF = "2026-08-12"
 
-# `{model id: (input, cached input, output)}`, US dollars per MILLION tokens.
+# `{model id: (input, cached input, cache write, output)}`, US dollars per MILLION tokens.
 #
-# **Cached input is set equal to input for every id here, and that is deliberate rather than
-# researched.** Most providers bill a cache read at a fraction of an ordinary input token; none of
-# those fractions is verified for the ids below, and over-stating a cost is the safe direction for
-# an instrument whose whole job is to stop a bill surprising somebody. It also makes the
-# inclusive-versus-exclusive question `compute_cost_usd` documents arithmetically irrelevant today.
-# The paid trial corrects both halves — through `$STIGMERGY_LIBRARIAN_PRICING` for one deployment,
-# or through an edit here plus a new `AS_OF` for all of them.
-#
-# A three-figure row cannot price a cache WRITE separately, so `compute_cost_usd` bills one at the
-# input rate — the single figure in this seam that errs DOWNWARD (Anthropic charges 1.25x base
-# input to write a cache entry). Stated here as well as there, because this is the table somebody
-# edits when a number looks wrong.
+# **Anthropic's row is the one this milestone verified; the other two stay deliberately
+# over-stated.** `openai:gpt-5.6-terra` and `google-gla:gemini-3.6-flash` set cached input AND cache
+# write equal to input — none of either provider's real fractions is verified here, and
+# over-stating a cost is the safe direction for an instrument whose whole job is to stop a bill
+# surprising somebody. No caching path is built for either provider today, so both figures are
+# unreachable regardless of what they say. The paid trial corrects a row through
+# `$STIGMERGY_LIBRARIAN_PRICING` for one deployment, or through an edit here plus a new `AS_OF` for
+# all of them.
 #
 # The bare `claude-sonnet-5` is deliberately ABSENT, and stays absent now that the backend which
 # used that spelling has retired. Adding it would make an unusable model id look configured: a bare
@@ -63,18 +59,31 @@ AS_OF = "2026-08-11"
 PRICES = {
     # The milestone's own trial model. $2 in / $12 out is what the trial was budgeted against;
     # nothing here has been confirmed against a published price sheet, which is why this module
-    # refuses to be the last word on any of it.
-    "openai:gpt-5.6-terra": (2.00, 2.00, 12.00),
-    # INTRODUCTORY pricing, and it expires: $2/$10 holds until 2026-08-31, after which the standing
-    # rate is $3 in / $15 out. Whoever passes that date edits this line and `AS_OF` with it — the
-    # expiry is the entire reason this milestone exists, so it must not be discovered by a bill.
-    "anthropic:claude-sonnet-5": (2.00, 2.00, 10.00),
+    # refuses to be the last word on any of it. Cached input and cache write are UNVERIFIED, set
+    # equal to input — see the block comment above.
+    "openai:gpt-5.6-terra": (2.00, 2.00, 2.00, 12.00),
+    # CONFIRMED PERMANENT: Anthropic's 2026-08-12 pricing notice states $2 in / $10 out for this
+    # model holds with no expiry — the step to $3/$15 this milestone was originally budgeted
+    # against, and once carried here as an introductory rate with a 2026-08-31 cutover, does not
+    # apply. Still corrected against the real bill rather than trusted outright: a pricing notice
+    # is not a line item, and `AS_OF` is what says how recently a human last checked. Cached input
+    # and cache write ARE Anthropic's own standing multipliers applied to the $2 base — 0.1x for a
+    # cache read, 1.25x for a five-minute cache write — re-derive both if the base rate ever moves.
+    "anthropic:claude-sonnet-5": (2.00, 0.20, 2.50, 10.00),
     # The Flash family's standing shape at the time of writing, NOT a confirmed 3.6 figure. Treat a
     # number computed from this row as an order of magnitude and correct it before quoting it.
-    "google-gla:gemini-3.6-flash": (0.30, 0.30, 2.50),
+    # Cached input and cache write are UNVERIFIED, set equal to input — see the block comment above.
+    "google-gla:gemini-3.6-flash": (0.30, 0.30, 0.30, 2.50),
 }
 
 _TOKENS_PER_UNIT = 1_000_000
+
+# The two shapes `_override` accepts, keyed by row length — the LEGACY one predates the cache-write
+# column (ADR 036) and is read with the write rate normalized to the input rate, exactly the
+# semantics `compute_cost_usd` billed a write at before this column existed. `require_priced`
+# always hands back the second shape, whichever one configured it.
+_LEGACY_POSITIONS = ("input", "cached input", "output")
+_CURRENT_POSITIONS = ("input", "cached input", "cache write", "output")
 
 
 def _rate(value, *, model: str, position: str) -> float:
@@ -96,8 +105,9 @@ def _rate(value, *, model: str, position: str) -> float:
     except (TypeError, ValueError):
         raise LibrarianConfigError(
             f"${PRICING_ENV} entry for {model!r} carries something that is not a number in the "
-            f"{position} position; it must be [input, cached input, output] in dollars per million "
-            f"tokens") from None
+            f"{position} position; it must be [input, cached input, cache write, output] in "
+            f"dollars per million tokens (a legacy three-figure [input, cached input, output] row "
+            f"is also accepted)") from None
     if not math.isfinite(rate):
         raise LibrarianConfigError(
             f"${PRICING_ENV} entry for {model!r} has a {position} rate of {value!r}, which is not a "
@@ -118,6 +128,13 @@ def _override() -> dict:
     Malformed is refused rather than ignored, for the reason `config.resolved_timeout_s` refuses a
     malformed timeout — a variable somebody set and the process quietly dropped is the one outcome
     that teaches them the tool lies.
+
+    **Both a 4-figure row and a legacy 3-figure one are accepted.**
+    `[input, cached input, cache write, output]` is the shape `require_priced` always returns.
+    `[input, cached input, output]` — every row this variable could hold before the cache-write
+    column existed (ADR 036) — is still read, with the cache write rate taken equal to the input
+    rate: today's documented semantics, kept so an operator's existing variable is not broken by
+    this change. An operator widens to four figures on their own schedule, not this module's.
     """
     raw = os.environ.get(PRICING_ENV)
     if not (raw or "").strip():
@@ -127,27 +144,36 @@ def _override() -> dict:
     except ValueError as ex:
         raise LibrarianConfigError(
             f"${PRICING_ENV} is not valid JSON ({ex.__class__.__name__}). It is a map of model id "
-            f"to three dollars-per-million-token figures, for example: "
-            f'{PRICING_ENV}=\'{{"openai:gpt-5.6-terra": [2.0, 2.0, 12.0]}}\' '
-            f"(input, cached input, output)") from None
+            f"to four dollars-per-million-token figures, for example: "
+            f'{PRICING_ENV}=\'{{"openai:gpt-5.6-terra": [2.0, 2.0, 2.0, 12.0]}}\' '
+            f"(input, cached input, cache write, output) — a legacy three-figure "
+            f"[input, cached input, output] row is also accepted") from None
     if not isinstance(parsed, dict):
         raise LibrarianConfigError(
             f"${PRICING_ENV} must be a JSON OBJECT mapping a model id to [input, cached input, "
-            f"output] dollars per million tokens, not a {type(parsed).__name__}")
+            f"cache write, output] dollars per million tokens, not a {type(parsed).__name__}")
     prices = {}
     for model, row in parsed.items():
-        if not isinstance(row, (list, tuple)) or len(row) != 3:
+        if not isinstance(row, (list, tuple)) or len(row) not in (3, 4):
             raise LibrarianConfigError(
-                f"${PRICING_ENV} entry for {model!r} is not three numbers — it must be "
-                f"[input, cached input, output] in dollars per million tokens")
+                f"${PRICING_ENV} entry for {model!r} is not three or four numbers — it must be "
+                f"[input, cached input, cache write, output] in dollars per million tokens (a "
+                f"legacy three-figure [input, cached input, output] row is also accepted)")
+        positions = _LEGACY_POSITIONS if len(row) == 3 else _CURRENT_POSITIONS
         rates = tuple(_rate(value, model=str(model), position=name)
-                      for value, name in zip(row, ("input", "cached input", "output"), strict=True))
-        # A zero OUTPUT rate is refused where zero input and zero cached-input are not: a cached
-        # read really can be free somewhere, and an input rate of zero is at least conceivable
-        # under a promotion, but output tokens are what a model is FOR and nobody gives them away.
-        # A `0.0` here is a typo or a placeholder, and it would price every filing on that model at
-        # a fraction of its real cost — silently, and in the direction nobody audits.
-        if rates[2] == 0:
+                      for value, name in zip(row, positions, strict=True))
+        if len(rates) == 3:
+            # LEGACY shape: no cache-write figure at all, normalized to the input rate — see the
+            # docstring above.
+            rates = (rates[0], rates[1], rates[0], rates[2])
+        # A zero OUTPUT rate is refused where zero input, cached-input and cache-write are not: a
+        # cached read (or an unusually cheap write) really can be free somewhere, and an input rate
+        # of zero is at least conceivable under a promotion, but output tokens are what a model is
+        # FOR and nobody gives them away. A `0.0` here is a typo or a placeholder, and it would
+        # price every filing on that model at a fraction of its real cost — silently, and in the
+        # direction nobody audits. Keyed on position 3 unconditionally: by this point `rates` is
+        # always the normalized 4-tuple, whichever shape it arrived in.
+        if rates[3] == 0:
             raise LibrarianConfigError(
                 f"${PRICING_ENV} entry for {model!r} prices output tokens at $0.00, which no "
                 f"provider does — that is a placeholder or a typo, and it would under-report every "
@@ -164,10 +190,15 @@ def priced_models() -> list[str]:
 
 
 def require_priced(model: str) -> tuple:
-    """The `(input, cached input, output)` rates for `model`, or a loud refusal.
+    """The `(input, cached input, cache write, output)` rates for `model`, or a loud refusal.
 
     Called by `worker.startup_checks` for a backend that must compute its own cost, so an unpriced
     model is one line before the first claim instead of a column of `$0.00` nobody questions.
+
+    **Always the normalized 4-tuple, whichever shape priced it.** A `PRICES` row is written as one
+    already; an override row may be four figures or a legacy three (see `_override`), and either
+    way what comes back here is the same shape — so every caller downstream of this function reads
+    one convention regardless of which shape configured it.
     """
     name = (model or "").strip()
     rates = {**PRICES, **_override()}.get(name)
@@ -175,8 +206,8 @@ def require_priced(model: str) -> tuple:
         raise LibrarianConfigError(
             f"no price is configured for the model {name!r}, so this run could only report $0.00 "
             f"for work that costs money. Either add it to ${PRICING_ENV} — "
-            f'{PRICING_ENV}=\'{{"{name}": [2.0, 2.0, 12.0]}}\', the three figures being dollars '
-            f"per million tokens for input, cached input and output — or add a row to "
+            f'{PRICING_ENV}=\'{{"{name}": [2.0, 2.0, 2.0, 12.0]}}\', the four figures being dollars '
+            f"per million tokens for input, cached input, cache write and output — or add a row to "
             f"librarian/pricing.PRICES. Priced today (as of {AS_OF}): "
             f"{', '.join(priced_models())}")
     return rates
@@ -201,17 +232,16 @@ def compute_cost_usd(model: str, *, input_tokens: int = 0, cached_input_tokens: 
     silently doubles a bill the first time a provider's numbers land the other way round. Floored at
     zero, so no arithmetic here can bill a negative number of tokens whatever a provider reports.
 
-    **Cache WRITES are billed at the input rate, which UNDER-bills Anthropic by 20 %.** Anthropic
-    charges 1.25x base input to write a cache entry; a three-figure row cannot express that, and the
-    gap is stated rather than hidden because it is the one place this table errs downward — every
-    other approximation here over-states. A fourth element on a `PRICES` row (and on the override,
-    which cannot express it either) is the follow-up that closes it.
+    **Cache writes are billed at their OWN rate — the fourth element of a `PRICES` row (ADR 036).**
+    A legacy three-figure override has no such figure and is normalized by `_override` to the input
+    rate instead: the same approximation this module used everywhere, for every id, before this
+    column existed.
     """
-    rate_in, rate_cached, rate_out = require_priced(model)
+    rate_in, rate_cached, rate_write, rate_out = require_priced(model)
     cached = max(int(cached_input_tokens or 0), 0)
     written = max(int(cache_write_tokens or 0), 0)
     fresh = max(max(int(input_tokens or 0), 0) - cached - written, 0)
-    dollars = (fresh * rate_in + cached * rate_cached + written * rate_in
+    dollars = (fresh * rate_in + cached * rate_cached + written * rate_write
                + max(int(output_tokens or 0), 0) * rate_out) / _TOKENS_PER_UNIT
     # Six decimals, the same rounding `processing._stamp_cost` applies to the item's own sum: a
     # float tail on a dollar figure reads as precision nobody has.

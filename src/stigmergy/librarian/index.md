@@ -276,7 +276,7 @@ reported about one (see Data & contracts, below).
 |---|---|
 | `cli.py` | `stigmergy-librarian` — `once` / `run` / `status`; the operator's front door |
 | `filing_port.py` | `FilingAgent` — the agent seam as a `Protocol` instead of a convention: the two calls, the `AgentRun` envelope, `priced()` and the fault contract, and the per-flow side-effect rules. Imports `errors` and nothing else, so every backend can depend on it |
-| `pricing.py` | model id → $/MTok (`PRICES` + `$STIGMERGY_LIBRARIAN_PRICING`, `AS_OF`), `compute_cost_usd`, `require_priced` — for the backends that report TOKENS rather than dollars |
+| `pricing.py` | model id → $/MTok, FOUR figures per row (`PRICES` + `$STIGMERGY_LIBRARIAN_PRICING`, `AS_OF`) — input, cached input, cache write, output ([ADR 036](../../../docs/decisions/036-librarian-prompt-caching.md); a legacy 3-figure override is still accepted), `compute_cost_usd`, `require_priced` — for the backends that report TOKENS rather than dollars |
 | `pydantic_backend.py` | `PydanticFilingAgent` — the real backend, one of the two behind the port, serving BOTH flows: an ITERATING ordinary run (five tools, an outcome file, it writes its own page — [ADR 034](../../../docs/decisions/034-agentic-pydantic-harness.md)) and one structured meeting call ([ADR 032](../../../docs/decisions/032-filing-port-and-pricing-seam.md)). `FilingToolbox` holds the five tools' bodies so every confinement rule is reachable with no model; `_register_tools` writes the model-facing docstrings, which ARE the tool schema. `PydanticMeetingAgent` survives as a deprecated alias until its callers migrate |
 | `gather.py` | the deterministic gatherer — a pure function of `(worktree, registry, material)` producing what the ordinary agent is handed BEFORE it searches for itself, and the bodies its search/read tools are built from (`load_corpus`, `search_candidates`, `confined_page`). Reads the CHECKOUT, never `pages_index`, and `_confined` is what makes "the same data the agent read" true rather than intended ([ADR 033](../../../docs/decisions/033-structured-filing-flow.md), [ADR 034](../../../docs/decisions/034-agentic-pydantic-harness.md)) |
 | `worker.py` | the loop, `startup_checks` (every fail-closed startup refusal), `sweep`, `Worker` (signal handling) |
@@ -608,6 +608,9 @@ Everything else is reached FROM `processing.py`; read it first when tracing one 
 - **`config.Settings`** (frozen) — every tunable; see `docs/reference/librarian.md`'s configuration
   table for the full var/flag/default list. Resolved once by `from_args`, precedence CLI flag → env
   var → class default, `is None` (not falsiness) so an explicit `0` is never silently discarded.
+  **`prompt_cache`** (`$STIGMERGY_LIBRARIAN_PROMPT_CACHE`, default `"5m"`) is the newest of them —
+  `off | 5m | 1h`, refused by name for anything else, read by `pydantic_backend.prompt_cache_settings`
+  for the ORDINARY run only ([ADR 036](../../../docs/decisions/036-librarian-prompt-caching.md)).
 - **`errors.LibrarianError`** hierarchy — `LibrarianConfigError` (the WORKER cannot run, raised at
   startup before any claim), `StaleBaseError` (a `LibrarianConfigError` subclass: the DEPLOYED
   worker resolved a base that did not come from the remote on a PER-ITEM fetch, after startup already

@@ -122,6 +122,36 @@ def provider_of(model: str) -> str:
     return name.split(":", 1)[0] if ":" in name else ""
 
 
+def prompt_cache_settings(model: str, prompt_cache: str) -> dict | None:
+    """The `model_settings` dict for the ORDINARY run's `Agent(...)` (ADR 036), or `None` to pass
+    nothing — a PURE function of the two strings `config.Settings` already resolved, so it needs no
+    `pydantic_ai` import at all: `ModelSettings` is a `TypedDict`, and pydantic-ai accepts any plain
+    mapping carrying the right keys.
+
+    **Why messages-caching matters here, specifically.** The ordinary flow ITERATES — up to
+    `max_turns` model requests for one capture — and every one of those requests
+    resends the whole growing prefix: the system prompt (the knowledge-repo skill), the five tool
+    schemas and the gathered seed are BYTE-IDENTICAL from the first turn to the last, and only the
+    tool results and the model's own replies grow underneath them. Anthropic prices a cache READ at
+    roughly 0.1x the ordinary input rate, so past the first turn that identical prefix — not the
+    part that changes — is where the bill actually lives. `anthropic_cache_messages` is what makes
+    the growing conversation itself cacheable turn over turn; `anthropic_cache_instructions` and
+    `anthropic_cache_tool_definitions` cover the two other blocks that never change at all.
+
+    `None` for `"off"` (the escape hatch `config.Settings.prompt_cache` documents) and for any
+    non-Anthropic model id: a Gemini or OpenAI model has no `anthropic_cache_*` field to set, and
+    `provider_of` is the SAME prefix check `PROVIDER_KEY_ENV` already reads, so this does not grow a
+    second answer to "is this model Anthropic's".
+    """
+    if provider_of(model) != "anthropic" or prompt_cache not in config.PROMPT_CACHE_TTLS:
+        return None
+    return {
+        "anthropic_cache_instructions": prompt_cache,
+        "anthropic_cache_tool_definitions": prompt_cache,
+        "anthropic_cache_messages": prompt_cache,
+    }
+
+
 # ── the accounts, as schemas instead of a file ────────────────────────────────────────────────
 # Field-for-field mirrors of the JSON `agent.parse_outcome` / `parse_meeting_outcome` already read,
 # so the two channels carry the SAME shape and the boundary parse is shared rather than forked.
@@ -982,7 +1012,13 @@ class PydanticFilingAgent:
         # shapes, and leave `_cross_check_outcome` two claims to reconcile.
         try:
             model = self.model_factory() if self.model_factory else self.settings.model
-            filer = Agent(model, instructions=instructions, retries=OUTPUT_RETRIES)
+            # The cache settings are keyed by the CONFIGURED model id — the same rule `_cost`
+            # follows for the price — never by whatever `model_factory` injected, so an offline
+            # test exercises the exact settings dict a live run would build, and an injected
+            # double can never make caching look like it fired when it did not.
+            filer = Agent(model, instructions=instructions, retries=OUTPUT_RETRIES,
+                          model_settings=prompt_cache_settings(self.settings.model,
+                                                               self.settings.prompt_cache))
         except Exception as ex:  # noqa: BLE001 — class name only, like every other wrap here
             raise priced(run, AgentError(
                 f"could not resolve the configured model ({ex.__class__.__name__}); "
