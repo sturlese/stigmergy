@@ -9,7 +9,13 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
-## [Unreleased]
+## [0.2.0] - 2026-08-12
+
+The filing engine moves onto this project's own agentic harness (pydantic-ai), and the
+Claude-Code-harness path retires. Two changes an operator upgrading from `0.1.0` must act on:
+`STIGMERGY_LIBRARIAN_BACKEND=sdk` is refused at startup, by name (see **Removed**), and
+`STIGMERGY_LIBRARIAN_MODEL` now takes a provider-prefixed id — `anthropic:claude-sonnet-5`, not
+`claude-sonnet-5` (see **Changed**).
 
 ### Added
 
@@ -73,6 +79,9 @@ treats its test suite as the contract.
   legitimate answer and now means one specific thing — this shape has no loop (every meeting run,
   any structured backend) — never "nobody counted".
 
+- The HTTP tier's tests skip without Docker instead of failing, and the librarian code map names
+  both halves of the refusal-routing suite.
+
 ### Removed
 
 - **The `sdk` filing backend — the Claude Code harness path — is retired** (ADR 033 D6's gate,
@@ -105,11 +114,23 @@ treats its test suite as the contract.
   own mechanics in the preamble it composes. `pydantic_backend.ORDINARY_ADR` retired with its only
   reader.
 
-Sixteen bug-sweep fixes and one documentation correction since `0.1.0`, none of them behaviour
-changes in the ADR sense — each closes a gap between what the code promised and what it did. Grouped
-by what they protect:
-
 ### Fixed
+
+- **Filing reliability: a symmetric brief, a corrective facts line, and faults that name
+  themselves** (ADR 035) — measured on the agentic harness, 8 of 13 first-pass drafts omitted the
+  page's frontmatter block entirely under the old brief emphasis; after the knowledge-repo brief
+  rewrite, 0 of 12. Two shape-neutral defenses land with it: the contract gate's `frontmatter`
+  finding now appends a facts line stating the field split (what the worker stamps after the draft
+  versus what the draft must already carry) to every corrective retry, and a pydantic-ai
+  `UnexpectedModelBehavior` fault now persists its real message — bounded, fence-neutralized where
+  it reaches a prompt — instead of surviving only as a class name. The two hand-rolled one-line
+  composers collapse into one seam, `stigmergy.text.one_line`. The filing eval fixture is re-frozen
+  a third time (the librarian brief alone moved; the linter and the meeting brief are
+  byte-identical).
+
+Sixteen further bug-sweep fixes and one documentation correction, none of them behaviour changes in
+the ADR sense — each closes a gap between what the code promised and what it did. Grouped by what
+they protect:
 
 - **Pages that indexed open.** A page whose frontmatter could not be parsed, and two further routes
   to the same end, no longer land in the index with no `acl` label — the failure mode where an
@@ -126,11 +147,6 @@ by what they protect:
   that was matched as a substring; a snippet that was not reproducible.
 - **Prose that the code did not keep.** Six documented promises reconciled with the code, and four
   faults that nothing told anybody about.
-
-### Changed
-
-- The HTTP tier's tests skip without Docker instead of failing, and the librarian code map names
-  both halves of the refusal-routing suite.
 
 ## [0.1.0] - 2026-08-07
 
@@ -183,4 +199,5 @@ previous one — there isn't one.
   (nothing emits an `sla` finding) — both are stated in the reference docs rather than left to be
   discovered.
 
+[0.2.0]: https://github.com/sturlese/stigmergy/releases/tag/v0.2.0
 [0.1.0]: https://github.com/sturlese/stigmergy/releases/tag/v0.1.0
