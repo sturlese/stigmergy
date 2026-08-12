@@ -9,6 +9,42 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
+## [0.2.2] - 2026-08-12
+
+Prose only. No executable code changed in this release, and that is a mechanically verified
+claim rather than an assurance: for all 156 modified modules the AST with docstrings blanked is
+byte-identical to `v0.2.1`, so no statement, import, name or string literal moved.
+
+### Changed
+
+- **Narrative prose purged from code comments and reference documentation.** This repository's
+  own doctrine — *a comment states a constraint the code cannot show, never the story of how the
+  code got here* — was not being honoured by the code itself: essay-length docstrings, obituaries
+  for deleted subsystems and process narration had accumulated to roughly 46% of `src/`. That text
+  cost twice: every change paid upkeep on prose no test protects, and a reader (agent or human)
+  spent most of a module's context on history instead of on the system. `src/` goes from 41,180 to
+  29,946 lines, with 59% fewer comment/docstring lines; `docs/reference/` from 6,687 to 5,798;
+  `evals/` and `scripts/` prose down 44%, `evals/README.md` from 495 to 229 lines. Every package's
+  `index.md` code map is rewritten as a present-tense map. Nothing is lost that was not already
+  recorded: history lives in `git log` and in `docs/decisions/`, which is exactly what makes it
+  safe to remove from the code.
+- **Every trace of subsystems that no longer exist is gone from code prose** — the learning loop,
+  the extraction pipeline, the retired filing backend, the read site and the canon lane. A reader
+  grepping `src/` for a name now finds only names the system actually has.
+
+### Notes for contributors
+
+Four bodies of prose were deliberately left alone, each for a reason worth knowing before the next
+cleanup: `tests/` (a test's prose is this project's specification, and the reproduce-first rule
+requires a test to say what the old behaviour was), `docs/decisions/` (an ADR records a decision,
+so history belongs there by design), MCP tool and pydantic schema docstrings (they are contracts
+sent to models and clients, not commentary), and the frozen fixtures asserted byte-identical to
+the knowledge repo's own copies.
+
+Two mechanical guards caught genuine over-deletion during the work — the meeting brief's
+`date-bearing-body-link` contract marker and the operator runbook's sweep line — and both were
+satisfied by restoring the fact, never by relaxing the check.
+
 ## [0.2.1] - 2026-08-12
 
 ### Added
@@ -221,6 +257,7 @@ previous one — there isn't one.
   (nothing emits an `sla` finding) — both are stated in the reference docs rather than left to be
   discovered.
 
+[0.2.2]: https://github.com/sturlese/stigmergy/releases/tag/v0.2.2
 [0.2.1]: https://github.com/sturlese/stigmergy/releases/tag/v0.2.1
 [0.2.0]: https://github.com/sturlese/stigmergy/releases/tag/v0.2.0
 [0.1.0]: https://github.com/sturlese/stigmergy/releases/tag/v0.1.0
