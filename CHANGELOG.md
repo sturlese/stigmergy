@@ -9,7 +9,7 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
-## [Unreleased]
+## [0.2.1] - 2026-08-12
 
 ### Added
 
@@ -18,7 +18,10 @@ treats its test suite as the contract.
   anything else) caches the system prompt, the five tool schemas and the growing message list on
   every turn of an iterating capture, where a cache read prices at a fraction of ordinary input.
   The meeting flow is untouched, byte for byte: one call per capture means a cache write with no
-  read ever to offset its own premium.
+  read ever to offset its own premium. Measured on the filing golden against the third-re-freeze
+  baseline — same fixture, same brief, same model, caching the only variable — $0.577 against
+  $1.590 over 11 agent passes: **-63.7%**, with the facet table byte-identical and every gated
+  bar PASS. The row is in `evals/history.ndjson`.
 
 ### Changed
 
@@ -218,5 +221,6 @@ previous one — there isn't one.
   (nothing emits an `sla` finding) — both are stated in the reference docs rather than left to be
   discovered.
 
+[0.2.1]: https://github.com/sturlese/stigmergy/releases/tag/v0.2.1
 [0.2.0]: https://github.com/sturlese/stigmergy/releases/tag/v0.2.0
 [0.1.0]: https://github.com/sturlese/stigmergy/releases/tag/v0.1.0
