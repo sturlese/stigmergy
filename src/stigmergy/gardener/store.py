@@ -1,12 +1,6 @@
-"""`gardener_findings`: insert one run's findings, and read them back. Pure persistence — never
-composes report text (`report.py`) and never decides what a check found (`checks.py`); this
-module's whole job is turning a finding dict into a row and back.
-
-**Read-back after insert, deliberately, not a re-use of the in-memory list `checks.py` built.**
-`run.py` re-fetches via `findings_for_run` once its `job_runs` row (and this run's findings) are
-committed, so `--json` and the printed report render exactly what is now durably true — the same
-"the preview and the action share one predicate" discipline `capture.retention.purge`'s dry-run
-already applies, one level over: what a reader sees is never allowed to drift from what is stored.
+"""`gardener_findings`: insert one run's findings, read them back. Pure persistence — composes no
+text, decides nothing. `run.py` re-fetches after commit so the report renders what is durably
+true, never the in-memory list.
 """
 from stigmergy.gardener.schema import JOB_NAME, SOURCE_DETERMINISTIC
 
@@ -19,11 +13,9 @@ VALUES (%(run_id)s, %(check)s, %(severity)s, %(source)s, %(subject)s, %(detail)s
 
 
 def insert_findings(conn, run_id: int, findings: list[dict]) -> None:
-    """Persist one run's findings. Exactly seven keys are read off each finding dict — `check`,
-    `severity`, `source`, `subject`, `detail`, `suggested_action`, `model_id` — plus the `run_id`
-    argument; any `_notice_*` key carrying the SLA notice's own wording is deliberately NOT among
-    them, so those keys never survive a round trip through the table. `model_id` defaults to `''`
-    for a deterministic finding — the same "empty is a real, honest state" posture `source` has."""
+    """Persist one run's findings — exactly seven keys per dict; the `_notice_*` keys are
+    deliberately not among them, so they never survive a round trip. `model_id` defaults to
+    `''`."""
     with conn.cursor() as cur:
         for f in findings:
             cur.execute(_INSERT_FINDING, {
@@ -43,21 +35,9 @@ FROM gardener_findings WHERE run_id = %s ORDER BY id
 
 
 def findings_for_run(conn, run_id: int) -> list[dict]:
-    """Every finding this run persisted, in insertion order — `report.py` applies its own
-    severity/slug/subject sort at RENDER time, never baked in here, so `--json`'s row order and
-    the printed report's grouping can each choose their own from the same read.
-
-    **`check_slug AS check` is deliberately not done in SQL.** `CHECK` is a reserved SQL keyword
-    (Postgres and the SQL standard) — usable as a column ALIAS only quoted (`AS "check"`), and
-    quoting-dependent correctness is exactly the kind of thing a typo turns into a bug. Renamed
-    here, in Python, once.
-
-    **`model_id` is always present in the returned dict, `''` for a deterministic finding** — the
-    same "an absent field would read as something false" reasoning `report.render_json`'s own
-    `suggested_action` already applies, one column over: `report._source_tag` reads
-    `finding.get("model_id", "?")`, and a KeyError there would be a worse failure mode than a
-    harmless empty string nothing ever prints (deterministic findings never reach that branch at
-    all — `_source_tag` only reads `model_id` when `source == SOURCE_MODEL`)."""
+    """Every finding this run persisted, in insertion order — `report.py` sorts at render time.
+    `check_slug` -> `"check"` is renamed here in Python, not by a quoted SQL alias (`CHECK` is a
+    reserved keyword). `model_id` is always present, `''` for a deterministic finding."""
     with conn.cursor() as cur:
         cur.execute(_FINDINGS_FOR_RUN, (run_id,))
         rows = cur.fetchall()
@@ -77,27 +57,13 @@ ORDER BY started_at DESC LIMIT 1
 
 
 def latest_completed_run(conn, *, job: str = JOB_NAME) -> dict | None:
-    """The most recent completed run for `job` (default `'gardener'`), or `None` when none has
-    ever completed — read via the existing `job_runs (job, started_at DESC)` index, the SAME
-    lookup `gardener.sweep.previous_run_watermark` makes for its own, narrower purpose (that one
-    also reads the sweep's private sample-rotation offset out of `stats`; this is the general read
-    `stigmergy.digest`'s corpus-health section needs: the latest gardener run's findings summarized
-    by check + severity, naming the run date).
+    """The most recent completed run, or `None`. Public for `stigmergy.digest`'s corpus-health
+    read.
 
-    **`status IN ('ok', 'partial')`, not `= 'ok'` alone.** A `'partial'` run
-    (`gardener.run.run_gardener`'s own status when the model sweep failed but the deterministic
-    checks still committed) is exactly as trustworthy a source of FINDINGS as an `'ok'` one — the
-    findings themselves were computed and persisted before the sweep pass ever ran (module
-    docstring). Excluding `'partial'` here would make a sweep outage ALSO blank out the digest's
-    corpus-health section for that run — a second, independent honesty failure on top of the one
-    the `'partial'` status exists to prevent at the watermark. Deliberately NOT the same predicate
-    `gardener.sweep.previous_run_watermark` uses (that one stays `'ok'`-only on purpose — see
-    `capture.ops`'s module docstring for why the two readers of this same column disagree).
-
-    `stigmergy.digest` is why this is public rather than another module's private helper: the
-    layering grants `digest` an edge into the findings store — this module — precisely so a run's
-    findings are read back through the ONE place that already knows how (`findings_for_run`,
-    immediately above), never a second, independently-written `job_runs` query in that package."""
+    `status IN ('ok', 'partial')`, not `'ok'` alone: a `'partial'` run's FINDINGS are exactly as
+    trustworthy — they committed before the sweep ever ran. Deliberately wider than
+    `sweep.previous_run_watermark`'s `'ok'`-only predicate; the two readers of this column
+    disagree on purpose."""
     with conn.cursor() as cur:
         cur.execute(_LATEST_COMPLETED_RUN, (job,))
         row = cur.fetchone()

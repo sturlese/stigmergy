@@ -1,16 +1,9 @@
 """LLM backend construction — the ONE fake/real dispatch for every agent in the package.
 
-Every agent module used to re-type the same branch by hand: read the backend, return its own
-offline fake, or lazily import `build_model` and assemble a PydanticAI Agent. That makes the
-module graph a consequence of import placement instead of structure. This module owns the
-mechanism once, in two functions:
-
-- `build_model()` — model + settings from CLEAN_MODEL / CLEAN_REASONING_EFFORT (call-time reads).
-- `build_processor()` — the dispatch: the validated backend (settings.resolve_backend) picks the
-  caller's fake or a real Agent; tool registration stays with the caller via the `tools` hook.
-
-Deliberately imports nothing from the package except settings, so any agent module can use it
-without inheriting the converter/tooling stack.
+`build_model()`: model + settings from CLEAN_MODEL / CLEAN_REASONING_EFFORT, read at call time.
+`build_processor()`: the validated backend picks the caller's fake or a real Agent; tool
+registration stays with the caller via the `tools` hook. Imports nothing from the package except
+settings, so any agent module can use it without inheriting the converter/tooling stack.
 """
 import os
 from collections.abc import Callable
@@ -27,24 +20,21 @@ _VALID_EFFORTS = ("minimal", "low", "medium", "high")
 
 def build_model(model_name: str | None = None):
     """Model + settings for the agents. Without an explicit name, CLEAN_MODEL is resolved HERE,
-    at call time — never at import (the config ground rule; this is the single place that reads it).
+    at call time, never at import — this is the single place that reads it.
 
-    Two forms of CLEAN_MODEL:
-    - bare name ("gpt-5.6-terra"): OpenAI Responses API with an EXPLICIT reasoning effort
-      (never the API's implicit default). Requires OPENAI_API_KEY.
-    - provider-prefixed pydantic-ai string ("anthropic:claude-sonnet-4-5",
-      "google-gla:gemini-2.5-pro", ...): resolved by pydantic-ai; the provider reads its own
-      env key. Provider-specific tuning is yours to add — the agents don't care.
+    Two forms of CLEAN_MODEL: a bare name ("gpt-5.6-terra") means the OpenAI Responses API with
+    an EXPLICIT reasoning effort (never the API's implicit default; requires OPENAI_API_KEY); a
+    provider-prefixed pydantic-ai string ("anthropic:claude-sonnet-4-5") is resolved by
+    pydantic-ai, whose provider reads its own env key.
     """
     from pydantic_ai.models.openai import OpenAIResponsesModel, OpenAIResponsesModelSettings
     from pydantic_ai.providers.openai import OpenAIProvider
 
     from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
 
-    # Before any real model is built: the pinned pydantic-ai silently extracts ZERO tokens for any
-    # OpenAI model reporting reasoning details, and a zero that reads as free is the one direction
-    # this system's cost figures must never lie in. Idempotent, and a no-op the day the framework
-    # constructs its own usage correctly — see `usage_repair`'s docstring for the defect.
+    # The pinned pydantic-ai silently extracts ZERO tokens for any OpenAI model reporting
+    # reasoning details — a zero that reads as free is the one direction cost figures must never
+    # lie in. Repaired before any real model is built; idempotent (see `usage_repair`).
     ensure_usage_extraction_repaired()
 
     model_name = model_name or os.environ.get("CLEAN_MODEL", DEFAULT_MODEL)
@@ -67,16 +57,10 @@ def build_processor(output_type, instructions: str, *, fake: Callable[[bool], An
     """The CLEAN_LLM dispatch shared by every agent builder in the package.
 
     `fake(flawed)` constructs the caller's offline backend — resolve_backend has already
-    validated the value (a typo fails fast), so the only decision left is fake vs fake-flawed.
-    On the real path, the caller's `tools` hook registers its @agent.tool functions on the
-    constructed Agent; builders without tools just omit it.
-
-    `model_name` is additive: a caller that omits it keeps reading
-    CLEAN_MODEL exactly as before): lets a caller OUTSIDE this package's own CLEAN_MODEL
-    convention name its own model setting (today the gardener sweep's `STIGMERGY_GARDENER_MODEL`,
-    the model policy — model is configuration, never hardcoded — for a
-    DIFFERENT subsystem than the one CLEAN_MODEL governs). Threaded straight to `build_model`,
-    which already accepts an explicit name and only falls back to CLEAN_MODEL when none is given.
+    validated the value, so the only decision left is fake vs fake-flawed. On the real path the
+    caller's `tools` hook registers its @agent.tool functions on the constructed Agent.
+    `model_name` lets a caller outside the CLEAN_MODEL convention name its own model setting;
+    omitted, CLEAN_MODEL applies.
     """
     backend = resolve_backend()
     if backend != "openai":

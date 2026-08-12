@@ -1,20 +1,11 @@
 """The Slack review surface: buttons on a doorbell DM that call `review_decide`, and the modals
 some verdicts require first — a short one for the one piece of free text a note/reason needs, and
-a longer one for the identity metadata an entity-proposal Approve mints from (ADR 030 D5). The same
-rule applies here as everywhere else in this package — **the bot enforces nothing**. It resolves
-who is asking and calls the SAME `BrainService.review_decide` every MCP caller calls
-(`stigmergy.server.review.review_decide_safe`, which never raises a CLEAN refusal — see its own
-docstring for why this module needs that rather than catching `CaptureError` itself), so
-`review_decide`'s own validation stays the one place a decision is actually made.
-
-Two item kinds reach a human here: a parked capture and an entity proposal.
-
-This module reaches into `stigmergy.server.review` for its safe-call wrapper (`review_decide_safe`),
-its item-kind/verdict constants, and ONE read — `items_for_doorbell`, the SAME management-shaped,
-unscoped read the doorbell card itself was built from, reused here (never re-queried a second way)
-so the entity-mint modal can prefill the proposal's own name at click time. Every decision is still
-made by calling a `BrainService` a resolved identity built (`ctx.build_service`), exactly like
-every other handler in this package.
+a longer one for the metadata an entity-proposal Approve mints from. **The bot enforces
+nothing**: it resolves who is asking and calls the SAME `review_decide_safe` every MCP caller
+calls, so `review_decide`'s own validation stays the one place a decision is made. Two item kinds
+reach a human here: a parked capture and an entity proposal. `items_for_doorbell` is the one read
+this module reuses (never re-queried a second way), so the entity-mint modal can prefill the
+proposal's own name at click time.
 """
 import json
 import logging
@@ -53,9 +44,8 @@ def _verdict_for(verdict_token: str) -> str:
 
 def _parse_action_id(action_id: str) -> tuple[str, str, str] | None:
     """`(mode, kind, verdict_token)` from `review:<kind>:<verdict>` (fire directly) or
-    `review-modal:<kind>:<verdict>` (open the note modal first) — `None` for any action_id this
-    module does not own, so a listener that also handles OTHER actions can call this first and
-    fall through cleanly."""
+    `review-modal:<kind>:<verdict>` (open a modal first) — `None` for any action_id this module
+    does not own, so a listener handling other actions can fall through cleanly."""
     for prefix, mode in ((render.MODAL_ACTION_PREFIX, "modal"),
                         (render.DIRECT_ACTION_PREFIX, "direct")):
         if action_id.startswith(prefix):
@@ -78,12 +68,9 @@ async def _resolve(ctx, *, event_team_id: str, slack_user_id: str):
 
 
 def _confirmation_text(result: dict, *, kind: str, item_id: str, verdict: str) -> str:
-    """`result["minted"]` (ADR 030 D5) gets its OWN confirmation, naming the entity and the short
-    commit — `_decide_entity_proposal` composes no `message` key for that outcome (unlike reject
-    and every parked-capture verdict), so falling through to the generic
-    `f"recorded: {verdict} ..."` line below would name neither. `mint_command` is gone from the
-    response shape entirely (phase 1 of this branch) — there is no third fallback for it any
-    more."""
+    """`result["minted"]` gets its OWN confirmation, naming the entity and the short commit —
+    `_decide_entity_proposal` composes no `message` key for that outcome, so the generic
+    `f"recorded: {verdict} ..."` fallback would name neither."""
     if "error" in result:
         return result["error"]
     if result.get("minted"):
@@ -96,9 +83,8 @@ def _confirmation_text(result: dict, *, kind: str, item_id: str, verdict: str) -
 
 async def _post_decision_confirmation(ctx, *, channel_id: str, result: dict, kind: str,
                                       item_id: str, verdict: str, what: str) -> None:
-    """Post `review_decide`'s own confirmation (or clean refusal) back to the steward — the ONE
-    place both call sites below post one, so what a decision's confirmation looks like is decided
-    once. Every confirmation is the same plain message, whatever the verdict was."""
+    """Post `review_decide`'s own confirmation (or clean refusal) back to the steward — decided
+    in ONE place; every confirmation is the same plain message, whatever the verdict."""
     text = _confirmation_text(result, kind=kind, item_id=item_id, verdict=verdict)
     await ctx.post_or_log(ctx.gateway.chat_post_message(channel_id, text=text), what=what)
 
@@ -106,21 +92,11 @@ async def _post_decision_confirmation(ctx, *, channel_id: str, result: dict, kin
 async def _decide_and_confirm(ctx, service, *, channel_id: str, kind: str, item_id: str,
                               verdict: str, what: str, **decide_kwargs) -> None:
     """Make the decision and say what happened — including when it goes wrong.
-
-    `review_decide_safe` converts CLEAN refusals into a result dict, and its docstring is explicit
-    about what it deliberately does NOT do: "An UNANTICIPATED exception still propagates… The
-    caller here is expected to do the same: catch broad `Exception` separately and show a GENERIC
-    failure (the same rule `stigmergy.slack.replies` already follows for `service.reply`)." All
-    three call sites below skipped that half, so anything outside `(CaptureError,
-    CapabilityUnavailableError)` — a psycopg blip on `record_decision`, an `OSError` inside the
-    mint — escaped to `app.py`'s listener backstop, which LOGS and posts nothing. A steward's
-    Approve button was indistinguishable from a dead one.
-
-    The ordering inside `_decide_entity_proposal` is what makes the silence expensive: it mints and
-    PUSHES before it records the decision, so a fault after the push left the entity born in the
-    knowledge repo, the steward told nothing, the doorbell still ringing about an open item, and
-    the obvious retry — click Approve again — hitting a collision refusal for an entity they were
-    never told they had created.
+    `review_decide_safe` converts CLEAN refusals into a result dict; an UNANTICIPATED exception
+    still propagates and is caught here as a GENERIC failure message. Silence instead is
+    expensive: `_decide_entity_proposal` mints and PUSHES before it records the decision, so an
+    untold steward retries Approve and hits a collision refusal for an entity they were never
+    told they had created.
     """
     try:
         result = review.review_decide_safe(service, item_kind=kind, item_id=item_id,
@@ -219,8 +195,7 @@ async def handle_block_action(ctx, *, action_id: str, value: str, trigger_id: st
     if mode == "modal":
         # An entity-proposal Approve needs the mint-metadata modal, not the generic note one — it
         # is checked FIRST, ahead of `_MODAL_FIELD`, because it has no `(field, label, placeholder)`
-        # entry to look up there at all (ADR 030 D5; see `render.render_entity_mint_modal`'s own
-        # docstring for why this is a distinct shape rather than a `_MODAL_FIELD` entry).
+        # entry to look up there at all.
         if kind == "entity-proposal" and verdict_token == "approve":
             metadata = json.dumps({"item_kind": kind, "item_id": item_id,
                                    "channel_id": channel_id})
@@ -312,8 +287,7 @@ async def handle_entity_mint_modal_submission(ctx, *, private_metadata: str, sta
 
     `entity_id` is never collected or forwarded here: `review._decide_entity_proposal` prefills it
     from `name`'s own slug, and a steward who needs a different one uses `stigmergy-entities`/MCP
-    directly, where `birth.prepare` validates it against a real collision check — ADR 030 D5's own
-    "one less field to mistype" for the surface that cannot run that check itself."""
+    directly, where `birth.prepare` validates it against a real collision check."""
     try:
         metadata = json.loads(private_metadata or "{}")
     except json.JSONDecodeError:

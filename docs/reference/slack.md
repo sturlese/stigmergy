@@ -182,9 +182,8 @@ stays a stored column (the gesture's own provenance) without being part of the k
 `reaction_removed` is ignored outright: the material may already be queued or
 filed, and an undo the system cannot honour is worse than no undo.
 
-**The instant progress reaction.** Before the "queued" thread ack — which used to be the reactor's
-first feedback, 1.5-4s after the 🧠, behind 6+N sequential Web API calls —
-`app.on_reaction_added` adds an hourglass (`capture.mark_in_progress`) as close to the raw event as
+**The instant progress reaction.** Long before the "queued" thread ack can arrive (it sits
+1.5-4s behind 6+N sequential Web API calls), `app.on_reaction_added` adds an hourglass (`capture.mark_in_progress`) as close to the raw event as
 it can: after `is_ignorable_event` and `is_configured_workspace` (a foreign workspace or an ignored
 event gets no reaction, exactly like it gets no other Slack traffic), but before any identity
 resolution, so it needs neither `users.info` nor the cache. `capture.finish_progress` runs in a
@@ -322,11 +321,10 @@ it passes is an identity resolved and a per-identity `BrainService` built, so th
 still goes through `acl.visible()` like every other read.
 
 **Its `block_id` is opaque for an unrelated reason: Slack rejects a whole message when two blocks
-share one explicit `block_id`.** The id used to be derived from the cited path
-(`show_it_here:<path>`), which collided the moment one answer cited the same page twice — ordinary
-on a small corpus — and Slack's rejection stranded the entire render, "thinking…" placeholder
-included. Each button's `block_id` now carries a random suffix instead, so it can never
-collide however many buttons one render builds; a page cited twice still gets exactly one button,
+share one explicit `block_id`.** A path-derived id collides the moment one answer cites the same
+page twice — ordinary on a small corpus — and Slack's rejection strands the entire render,
+"thinking…" placeholder included. Each button's `block_id` therefore carries a random suffix, so
+it can never collide however many buttons one render builds; a page cited twice still gets exactly one button,
 deduped by PATH before rendering — a presentation choice, unrelated to why the id itself is random.
 The fix has a floor beneath it for the wider `invalid_blocks` class (an unsupported block, a
 nesting/length limit — not only a `block_id` collision): `mention._edit_or_fallback` retries the

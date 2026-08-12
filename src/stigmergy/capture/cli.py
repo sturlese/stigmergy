@@ -1,42 +1,13 @@
 """`stigmergy-queue` — the steward's view of the write path, without a SQL client.
 
-Eight subcommands, each a thin skin over the library (the same seams `stigmergy.server` and the
-librarian call — nothing CLI-only):
+Eight subcommands (`list`, `show`, `claim`, `reclaim`, `requeue`, `resolve`, `reject`, `purge`),
+each a thin skin over the library — the same seams the server and the librarian call. The three
+dispositions are the steward's drain out of a park; `claim` deliberately processes nothing
+(draining is the librarian's job) and holding a claim is how a dead worker is simulated.
 
-    stigmergy-queue list                 what is waiting, what is stuck, what needs a decision
-    stigmergy-queue show <id>            one submission's trace: created -> claimed -> finished
-    stigmergy-queue claim [--hold N]     take one item off the queue (the claim primitive)
-    stigmergy-queue reclaim --visibility-timeout N   return timed-out claims (N is mandatory)
-    stigmergy-queue requeue <id> --by    a parked row goes back to the librarian
-    stigmergy-queue resolve <id> --by    a parked row is closed as `resolved`: handled by hand
-    stigmergy-queue reject  <id> --by    a parked row is closed as `rejected`, by a human
-    stigmergy-queue purge                retention: delete payload/hints of old terminal rows
-
-**The last three are the steward's drain**, and they are the instrument `triage` was missing:
-without them, `triage` is a state the librarian can write and nothing can move a row out of. They
-share one guarded transition, refuse a row a worker is holding, never touch `attempts`, and leave
-the row claimable — see the section above `_cmd_requeue`, and `queue.dispose` for where the guard
-lives.
-
-`claim` deliberately does NOT process anything: draining the queue is the librarian's job, not
-this CLI's. It takes an item, prints it, optionally holds the claim for `--hold` seconds and exits
-WITHOUT finishing it, which is precisely how a dead worker is simulated: kill it (or let it exit)
-and watch the item come back to the queue after the visibility timeout with `attempts`
-incremented.
-
-Errors here are LOCAL and may be specific — generic over HTTP, specific in a local CLI. An
-operator staring at an unreachable database needs the host in the message, not a class name.
-
-This module is the ONLY place in `stigmergy.capture` that opens a database connection or reads the
-environment: the library takes `conn` as an argument, so nothing below it has an opinion about
-where the queue lives. That is the rule `store.connect` is here for, and it is unchanged.
-
-It also uses `stigmergy.text`'s `sanitize`/`clamp` — control-character stripping and word-safe
-clipping for untrusted text headed to a terminal. That seam is not this module's alone:
-`dispositions.clean` takes the same edge, because a steward's `--reason` reaches a SUBMITTER and
-`stigmergy-entities` calls `dispositions.reject` without passing through any of this file. A text
-seam only one CLI crosses is a seam the next CLI skips, so it lives below both. Every edge is
-downward; `capture` never reaches sideways into `server` or up into `answer`.
+Errors here are LOCAL and may be specific — generic over HTTP, specific in a local CLI. This
+module is the ONLY place in `stigmergy.capture` that opens a database connection or reads the
+environment: the library takes `conn` as an argument.
 """
 import argparse
 import json
@@ -50,38 +21,22 @@ from stigmergy.index import store
 
 _DUMP = {"ensure_ascii": False, "indent": 2}
 
-# `list`'s `kind` column width, COMPUTED from `schema.KINDS` rather than hand-picked: the field
-# used to be a bare `:<5`, sized for `raw`/`page` (both ≤4 chars) and never revisited when
-# `meeting` (7 chars) joined the vocabulary — every meeting row broke the column's alignment on a
-# tool nobody thought to look at. Deriving the width from the vocabulary is what keeps the NEXT
-# kind from repeating the regression.
+# `list`'s `kind` column width, computed from `schema.KINDS` so the next kind cannot break the
+# column's alignment (a hand-picked width did, when `meeting` joined).
 _KIND_WIDTH = max(len(k) for k in schema.KINDS)
 
-# Ctrl-C exits 130 — 128 + SIGINT(2), the shell's own convention, and already what CPython returns
-# for an UNCAUGHT KeyboardInterrupt: catching it here removes the traceback without changing the
-# status any wrapper script already observes. 0 was rejected deliberately: an interrupted
-# `claim --hold` leaves a real orphaned lease behind, so telling automation "success, nothing left
-# to do" would be a lie — the reclaim (or the visibility timeout) still has to happen.
+# Ctrl-C exits 130 (128 + SIGINT) — what CPython already returns uncaught, minus the traceback.
+# Not 0: an interrupted `claim --hold` leaves a real orphaned lease behind.
 EXIT_INTERRUPTED = 130
 
-# How an operator gets a stranded claim back RIGHT NOW, written in exactly one place because its
-# ARGUMENT is a defect this repo has already shipped: `--visibility-timeout 300` (this run's
-# configured lease) releases nothing at second zero, so the advice contradicted the word
-# "immediately" and taught an operator the recovery path was broken. `_report_orphaned_lease`
-# explains the two numbers; `stigmergy-librarian`'s own interrupt message imports THIS constant
-# rather than retyping the command, so the same mistake cannot be made a second time in a second
-# tool. The command belongs here because this module IS `stigmergy-queue`.
+# How an operator gets a stranded claim back RIGHT NOW, written once because its argument is
+# subtle: `--visibility-timeout <lease>` releases nothing at second zero. `stigmergy-librarian`
+# imports this constant rather than retyping the command.
 RECLAIM_NOW = "stigmergy-queue reclaim --visibility-timeout 0"
 
 # ── the drop doors' shared configuration guard ────────────────────────────────────────────────
-# Lives here, below BOTH drop CLIs, for the reason this package already paid for once: a steward's
-# `--reason` cleaning was written into one CLI and not the other, and the fix was to move it below
-# both where no future caller can skip it. The next door (a webhook is named as future work in
-# `meeting_cli`'s own docstring) inherits this instead of having to remember it.
-#
-# Distinct from `main`'s catch-all 2 ("cannot reach the queue database or evidence store"): a
-# wrapper has to be able to tell "refused by policy, nothing happened" from "infrastructure is
-# down", and a shared exit code that means both is a code that means neither.
+# Below BOTH drop CLIs, so no future door can skip it. Distinct from `main`'s catch-all 2: a
+# wrapper must be able to tell "refused by policy, nothing happened" from "infrastructure down".
 EXIT_SPLIT_STORES = 3
 
 
@@ -96,12 +51,9 @@ def add_split_stores_flag(parser) -> None:
 
 def refuse_split_stores(args, prog: str, ev) -> int:
     """`0` to proceed, `EXIT_SPLIT_STORES` when the queue and the evidence plane provably belong
-    to different deployments and the operator has not said they mean it.
-
-    Called FIRST in a drop, before anything is read, fetched, uploaded or inserted — the door's own
-    "no row and no object" discipline, and refusing before a fetch also spares the operator a
-    download they would only have to repeat. Building the store does no I/O, so asking it where it
-    points is free."""
+    to different deployments and the operator has not said they mean it. Called FIRST in a drop,
+    before anything is read, fetched, uploaded or inserted; building the store does no I/O, so
+    asking it where it points is free."""
     reason = evidence.split_stores_reason(
         db_host=store.host_of_dsn(getattr(args, "dsn", None) or store.dsn()),
         endpoint_url=ev.endpoint_url)
@@ -122,67 +74,40 @@ def _connect(args):
     return conn
 
 
-# ── the two shared renderings `stigmergy-librarian` reuses ──────────────────────────────────────
-# Public, and here rather than in the librarian, for the same reason `RECLAIM_NOW` is here: this
-# module IS `stigmergy-queue`, and these are its vocabulary. The two tools sit side by side in one
-# operator's terminal, so `stigmergy-librarian status` prints the byte-identical depth line and the
-# byte-identical duration format `stigmergy-queue list`/`show` print. A second dialect for the same
-# two facts is how an operator learns to distrust both.
+# ── shared renderings other CLIs import ───────────────────────────────────────────────────────
+# Public and here because this module IS `stigmergy-queue`: two tools in one operator's terminal
+# must print the same facts in the same dialect.
 def depth_line(counts: dict[str, int]) -> str:
-    """`queue: queued=3 · claimed=1` — non-zero statuses only, or `queue: empty`.
-
-    Zeroes are dropped on purpose: `counts_by_status` returns every declared status so no caller has
-    to guess whether a missing key means zero, and printing all eight of them would bury the one or
-    two that are not.
-    """
+    """`queue: queued=3 · claimed=1` — non-zero statuses only, or `queue: empty`. Zeroes are
+    dropped on purpose: printing all eight statuses would bury the one or two that matter."""
     depth = " · ".join(f"{status}={n}" for status, n in counts.items() if n)
     return f"queue: {depth or 'empty'}"
 
 
 def format_ms(value) -> str:
-    """A measured duration in milliseconds, as one number a person reads: `4.2s`, or `—` when there
-    is nothing to report.
-
-    Deliberately NOT `worker.human_duration`, which renders `900s (15 min)`. That one describes a
-    CONFIGURED value that has to match a flag and a column, so it prints the raw seconds too; this
-    one describes something that was measured, where the machine value has no second life.
-    """
+    """A MEASURED duration as one number a person reads: `4.2s`, or `—`. Not
+    `worker.human_duration`, which renders a CONFIGURED value and must keep the raw seconds."""
     return "—" if value is None else f"{value / 1000:.1f}s"
 
 
 def _clean(text: str, width: int = 0) -> str:
     """Untrusted captured text on its way to a terminal: control characters stripped (a capture
-    can contain ANSI escapes), newlines flattened, optionally clipped.
-
-    The clip is `stigmergy.text.clamp` — word-safe — and that is a fix rather than a tidy-up. It was
-    a hard byte slice, which was merely ugly on an excerpt and became a real defect once `error`
-    started carrying the ask-back question: a hard cut through
-    `brain_reply(submission_id=14, answer=…)` produces a string that is not a valid call, printed
-    under a line telling the reader to run it. The clip is now word-safe everywhere AND the two
-    renderers below never clip a question at all (see `_note_line`); belt and braces, because a
-    message containing a command is an executable promise.
-    """
+    can contain ANSI escapes), newlines flattened, clipped word-safe — a hard slice through
+    `brain_reply(...)` printed under "run this" is an invalid call, and a message containing a
+    command is an executable promise."""
     return textutil.clamp(textutil.sanitize(text or "").replace("\n", " ⏎ "), width)
 
 
-# A STEWARD's own words, on their way into a submitter's report — the one string in this system not
-# built from a fixed vocabulary. The cleaning used to live HERE, and that was the defect: a seam a
-# CLI has to remember to call is one `stigmergy-entities reject --reason` can skip, and did. It now
-# lives in `dispositions.clean`, below every CLI, where the three functions this module calls run it
-# whether or not anybody remembered. Kept as a local name because the call sites read better with it
-# and because a reader following `--note` from the parser lands here first.
+# A steward's own words, headed for a submitter's report. The cleaning lives in
+# `dispositions.clean`, below every CLI, so no CLI can skip it; the local name keeps call sites
+# readable.
 _note = dispositions.clean
 
 
 def format_age(ms) -> str:
     """How long something has been waiting, as a person says it: `12 min`, `3h`, `1d 2h`.
-
-    The third shared rendering, beside `depth_line` and `format_ms`, and separate from both on
-    purpose. `format_ms` renders a MEASURED latency (`4.2s`) where sub-second precision is the whole
-    point; this renders an AGE, where it is noise — a steward scanning parked rows is choosing
-    between "this morning" and "last week", and `93847.2s` makes them do arithmetic to find out
-    which. `worker.human_duration` is the third and renders a CONFIGURED value (`900s (15 min)`),
-    which has to keep the machine number because it must match a flag.
+    An AGE, where sub-second precision is noise — `format_ms` renders a measured latency,
+    `worker.human_duration` a configured value.
     """
     if ms is None:
         return "—"
@@ -209,17 +134,13 @@ def _cmd_list(conn, args) -> int:
         return 0
     for row in rows:
         flags = f" flagged={','.join(row['flagged_hints'])}" if row["flagged_hints"] else ""
-        # Who is being waited on, and for how long — the two facts a steward triages a list on, and
-        # the reason `needs_input` and `triage` must not look alike here. Without them, a steward
-        # scanning for what needs THEIR attention has to open `show` on every parked row just to
-        # learn it is not theirs to act on yet.
+        # Who is being waited on, and for how long — the two facts a steward triages a list on.
         parked = (f" waiting on: {row['waiting_on']} · parked {format_age(row['parked_age_ms'])}"
                   if row["waiting_on"] else "")
         print(f"#{row['id']} {row['status']:<11} {row['kind']:<{_KIND_WIDTH}} {row['submitted_by']}"
               f" attempts={row['attempts']} {row['created_at']}{flags}{parked}")
-        # Three ways a row has nothing to show, and each says which one it is. The withheld case
-        # is NOT `_clean`ed or clipped: it is the queue's own sentence (`schema`), not captured
-        # text, and it is the whole answer to "why is this line empty".
+        # Three ways a row has nothing to show, each named. The withheld sentence is the queue's
+        # own, not captured text — neither cleaned nor clipped.
         if row["payload_purged"]:
             body = "(payload purged)"
         elif row["withheld_reason"]:
@@ -232,24 +153,11 @@ def _cmd_list(conn, args) -> int:
 
 
 def _print_note(row: dict, *, one_line: bool) -> None:
-    """The row's `error`/`question` line — and the one place a `needs_input` row is NOT clipped.
-
-    A parked question is a multi-line, code-built message that ENDS in the exact command the
-    submitter has to run. Both renderers here were written when this column held a one-line
-    refusal, and both clipped it (200 characters in `list`, 300 in `show`) — which on this content
-    truncates the promised `brain_reply(...)` mid-call. So:
-
-    - `show` prints the question WHOLE, indented, newlines intact. It is what a steward reads
-      before deciding whether to reply on somebody's behalf, and there is nothing in it that is not
-      worth reading.
-    - `list` prints no question at all — a fifteen-line message per row would make the list
-      unreadable — and instead prints the ONE thing a scanning steward needs, the invocation,
-      structurally rather than as a slice of prose. It comes from `schema.reply_invocation`, the
-      same function that built the sentence, so it cannot drift from it and cannot be cut.
-
-    Every other status keeps the old clipped one-liner: those really are one-line refusals, and the
-    clip is now word-safe (`_clean`).
-    """
+    """The row's `error`/`question` line — and the one place a `needs_input` row is NOT clipped:
+    a parked question ENDS in the exact command to run, and a clip cuts `brain_reply(...)`
+    mid-call. `show` prints the question whole; `list` prints only the invocation, from
+    `schema.reply_invocation` — the function that built the sentence, so it cannot drift or be
+    cut. Every other status keeps a word-safe clipped one-liner."""
     if row["status"] == schema.NEEDS_INPUT:
         invocation = schema.reply_invocation(row["id"])
         if one_line:
@@ -290,22 +198,13 @@ def _cmd_show(conn, args) -> int:
     if trace["reply"]:
         print(f"  reply       {_clean(trace['reply'], 500)}")
     elif trace["withheld_reason"]:
-        # The query suppressed the reply, so SAY so. A capture can be asked, answered, and only then
-        # refused for a secret the gates found in the drafted page — the answer is the submitter's
-        # own free text, scanned by nothing, and it is withheld with the rest of the material. An
-        # empty line here with no explanation reads as "they never answered", which is a different
-        # and false story. The sentence is the queue's own (`schema`), so it is neither cleaned nor
-        # clipped — the same treatment `list` gives it.
+        # Say why the reply is suppressed: an unexplained empty line reads as "they never
+        # answered" — a false story. The sentence is the queue's own; neither cleaned nor clipped.
         print(f"  reply       ({trace['withheld_reason']})")
     for event in trace["events"]:
-        # The row's own history: who did what to it, and what they said about it. Sanitized but not
-        # clipped for the same reason `show`'s question is not — this is the surface a steward reads
-        # before disposing of a row, and a note cut in half is a note that misinforms them.
-        #
-        # The `asked` event's note IS the question, so it is suppressed while the row is still
-        # `needs_input` and the question block above has just printed it in full. Once the row has
-        # moved on the block is gone and this is the only surviving copy, which is exactly why it
-        # is recorded — but printing it twice on the one screen where both exist reads as a bug.
+        # Sanitized but not clipped: a note cut in half misinforms the steward reading it before
+        # disposing. The `asked` note IS the question — suppressed while the row is still
+        # `needs_input`, because the block above just printed it in full.
         kind = str(event.get("event", ""))
         print(f"  · {_clean(event.get('at', ''), 40)}  {_clean(kind, 20)}"
               f"  by {_clean(event.get('actor', ''), 80) or '—'}")
@@ -342,11 +241,8 @@ def _cmd_claim(conn, args) -> int:
         try:
             time.sleep(args.hold)
         except KeyboardInterrupt:
-            # The ONE interruption this tool explicitly invites, one line above. Answering an
-            # invited action with a stack trace teaches an operator that something broke at the
-            # exact moment everything worked as designed — so it is caught here, where we still
-            # know WHICH submission is now holding an orphaned lease. That fact is the whole
-            # point of the message and cannot be reconstructed from `main`'s generic handler.
+            # The ONE invited interruption, caught here where we still know WHICH submission now
+            # holds an orphaned lease — a fact `main`'s generic handler cannot reconstruct.
             return _report_orphaned_lease(item, args)
     print(f"exiting WITHOUT finishing #{item['id']} — this command drains nothing; the librarian "
           "is what will file it", flush=True)
@@ -354,19 +250,11 @@ def _cmd_claim(conn, args) -> int:
 
 
 def _report_orphaned_lease(item: dict, args) -> int:
-    """What the operator needs after interrupting a held claim: which row is stranded, that this
-    is precisely what a dead worker leaves behind, and the two ways it comes back.
-
-    `--json` gets a JSON object, never prose — same convention `claim` already follows, where a
-    JSON value is emitted first and any advisory text after it (a consumer reads the leading value
-    with `json.JSONDecoder().raw_decode`).
-
-    The recovery command names `--visibility-timeout 0`, NOT this run's configured timeout. They
-    are different numbers meaning different things: on `claim` it is how long the lease lasts, on
-    `reclaim` it is how old a claim must be to be released. Echoing the configured value here (the
-    first cut did) produces advice that contradicts the word "immediately" — at the default,
-    `reclaim --visibility-timeout 300` releases claims older than 300s, so run at second zero it
-    does nothing and the operator concludes the recovery path is broken."""
+    """What the operator needs after interrupting a held claim: which row is stranded and the two
+    ways it comes back. `--json` gets a JSON object, never prose. The recovery command names
+    `--visibility-timeout 0`, NOT this run's configured timeout: on `claim` the value is how long
+    the lease lasts, on `reclaim` how old a claim must be to be released — echoing the lease
+    releases nothing at second zero."""
     recovery = RECLAIM_NOW
     if args.json:
         print(json.dumps({
@@ -390,10 +278,8 @@ def _report_orphaned_lease(item: dict, args) -> int:
 
 
 def _cmd_reclaim(conn, args) -> int:
-    # No default, deliberately. `reclaim` decides how dead a worker must be before its work is
-    # taken away, and this CLI cannot see the worker's lease — a wrong guess here requeues a
-    # capture out from under a process that is still filing it. So the operator states the
-    # horizon, and the refusal names the two values that are almost always the right ones.
+    # No default, deliberately: this CLI cannot see the worker's lease, and a wrong guess
+    # requeues a capture out from under a process still filing it.
     if args.visibility_timeout is None:
         print("stigmergy-queue: reclaim needs --visibility-timeout — how old a claim must be "
               "before its worker is presumed dead. There is no safe default: this command "
@@ -415,16 +301,10 @@ def _cmd_reclaim(conn, args) -> int:
 
 
 # ── the steward's drain: requeue / resolve / reject ────────────────────────────────────────────
-# Three commands, one guarded transition underneath (`queue.dispose`), and one rule they share:
-# the state check is the DATABASE's, so a disposition typed a second after a worker claimed the row
-# fails loudly instead of silently doing nothing. Every refusal an operator can hit here comes back
-# through `main`'s `except CaptureError` as one `stigmergy-queue: …` line naming which of the three
-# refusals it was — nonexistent, claimed, or not parked.
-#
-# `--by` is required on all three and is ATTRIBUTION, not authorization: this tool does not know
-# who is running it and does not pretend to. Recording who said they did it is what makes
-# a drained queue auditable; checking it would be security theatre on a local CLI whose operator
-# already has the DSN.
+# Three commands over one guarded transition (`queue.dispose`); the state check is the
+# DATABASE's, so a disposition typed a second after a worker claimed the row fails loudly.
+# `--by` is ATTRIBUTION, not authorization: recorded, never checked — checking would be theatre
+# on a local CLI whose operator already has the DSN.
 def _cmd_requeue(conn, args) -> int:
     result = dispositions.requeue(conn, args.id, actor=args.by, note=_note(args.note))
     if args.json:
@@ -438,13 +318,9 @@ def _cmd_requeue(conn, args) -> int:
 def _cmd_resolve(conn, args) -> int:
     """Close a parked row as `resolved` — a steward handled it outside the fast lane.
 
-    **The missing-pointer warning is a real finding, not decoration.** `resolve` with neither
-    `--page` nor `--commit` leaves the submitter's report permanently silent about where their
-    material went — on the one state whose entire point (unlike `rejected`) is that the material WAS
-    used. It is warned about rather than prompted for: `stigmergy-queue` is documented in a runbook
-    and run non-interactively, and a blocking prompt in a scriptable tool is how automation hangs
-    forever on a question nobody is there to answer. So the command still does what it was asked,
-    and says what that costs — in the JSON payload for a scripted run, on stderr for a human one.
+    `resolve` with neither `--page` nor `--commit` leaves the submitter's report permanently
+    silent about where the material went, on the one state whose point is that it WAS used —
+    warned about, never prompted for: a blocking prompt in a scriptable tool hangs automation.
     """
     note = _note(args.note)
     result = dispositions.resolve(conn, args.id, actor=args.by, note=note,
@@ -520,15 +396,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "them, now)")
     p_reclaim.set_defaults(fn=_cmd_reclaim)
 
-    # SAME flag name, two genuinely different meanings — which is what made the interrupted-claim
-    # message wrong before: on `claim` the value is how long THIS lease lasts, on `reclaim` it is
-    # how old a claim must be to be released. The wording is per-command, because a single
-    # sentence covering both is exactly the ambiguity an operator then acts on.
-    #
-    # The DEFAULTS differ for the same reason. `claim` states the lease it is taking, so it knows
-    # the number and can default. `reclaim` states when someone else's work may be seized, and
-    # this CLI cannot see that worker's lease — so it has no default and `_cmd_reclaim` refuses
-    # with the two values that are almost always right.
+    # Same flag name, two meanings: on `claim` it is how long THIS lease lasts, on `reclaim` how
+    # old a claim must be to be released — which is also why only `claim` can default: `reclaim`
+    # states when someone else's work may be seized, and this CLI cannot see that worker's lease.
     p_claim.add_argument("--visibility-timeout", type=int,
                          default=queue.DEFAULT_VISIBILITY_TIMEOUT_S,
                          help="seconds this claim is held before the queue assumes the worker died")
@@ -540,9 +410,7 @@ def build_parser() -> argparse.ArgumentParser:
         parser.add_argument("--max-attempts", type=int, default=queue.DEFAULT_MAX_ATTEMPTS,
                             help="deliveries before an item is failed instead of requeued")
 
-    # ── the drain ────────────────────────────────────────────────────────────────────────────
-    # `--by` on all three, and the SAME help text on all three, because it means the same thing on
-    # all three (see the section comment above `_cmd_requeue`).
+    # ── the drain: `--by` and its help text identical on all three ───────────────────────────
     p_requeue = sub.add_parser(
         "requeue", help="send a parked row back to the queue for the librarian to try again")
     p_requeue.add_argument("--note", default="",
@@ -583,13 +451,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _interrupted(during: str) -> int:
-    """The generic Ctrl-C net: one honest line, no traceback, on STDERR.
-
-    Stderr rather than stdout on purpose — it is a diagnostic about the run, not the command's
-    output, so a `--json` invocation keeps a clean, parseable stdout without this handler needing
-    to know anything about output modes. `_report_orphaned_lease` is the deliberate exception: the
-    interruption it handles is INVITED, its message is the useful result of the run, and it is
-    mode-aware for exactly that reason."""
+    """The generic Ctrl-C net: one honest line, no traceback, on STDERR — a diagnostic, so a
+    `--json` invocation keeps a parseable stdout. `_report_orphaned_lease` is the deliberate
+    exception: its interruption is invited and its message is the run's useful result."""
     print(f"stigmergy-queue: interrupted {during} — nothing was left half-written (every queue "
           f"transition is a single statement); re-run when ready", file=sys.stderr)
     return EXIT_INTERRUPTED
@@ -611,9 +475,7 @@ def main(argv=None) -> int:
         print(f"stigmergy-queue: {ex}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        # The net for every command `_cmd_claim` does not already handle specifically: a `purge`
-        # over a large backlog, a `reclaim` waiting on a row lock, a `list` against a slow
-        # database. None of them INVITE a Ctrl-C, but all of them can receive one.
+        # The net for every command `_cmd_claim` does not handle specifically.
         return _interrupted(f"during `{args.command}`")
     finally:
         conn.close()

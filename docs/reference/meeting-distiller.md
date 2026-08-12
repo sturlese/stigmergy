@@ -62,16 +62,8 @@ filed: report.filed_meeting names every page path and every decision's anchor ou
 and returns the decisions, their anchors and the drafted prose as DATA;
 `processing._write_meeting_pages` builds and writes every page of the set from that one structured
 object. Everything downstream — the stamp, all eight gates, the cross-check, the commit — is
-unchanged and unaware. The earlier shape, where the agent made Write/Edit/Read/Glob/Grep calls
-inside the worktree and separately DECLARED what it had written, carried two independent claims
-that could disagree; collapsing them removed the disagreement rather than policing it.
-
-There was a middle state worth naming, because it is what "no tool at all" replaced: a tool
-allow-list of exactly one entry (`Write`), a denial list beside it, and a `PreToolUse` hook
-refusing every target but the agent's own outcome file. That machinery configured a harness this
-platform no longer drives ([ADR 033](../decisions/033-structured-filing-flow.md)), and what
-replaces it is stronger rather than thinner — there is no write to refuse, because there is no
-tool to make one with.
+unchanged and unaware. An account declared beside separately-written pages would be two
+independent claims that could disagree; with code as the sole author, only one claim exists.
 
 ## Why filing is atomic
 
@@ -82,8 +74,8 @@ until every page in the set has passed every gate; a terminal veto on any single
 set's own shape — a page outside the set, a missing meeting page, a mismatched decision count)
 refuses the capture with **no page committed at all**. This is why `_cross_check_meeting_outcome` exists
 separately from the ordinary flow's `_cross_check_outcome` ("exactly one page created"): the ordinary
-rule stays exactly what it was, unchanged, and still governs every non-meeting capture; the meeting
-flow gets its own, wider contract instead of a conditional bolted onto the old one.
+rule still governs every non-meeting capture; the meeting flow gets its own, wider contract
+instead of a conditional bolted onto it.
 
 `_cross_check_meeting_outcome` checks, over the diff the gates are about to judge:
 
@@ -101,24 +93,18 @@ And one more, raised by `_write_meeting_pages` before it writes anything at all:
   written rather than being discovered mid-write. The repair is a different meeting or decision
   title, which is why it takes the ordinary corrective-retry road.
 
-**This list used to be twice as long, and code-as-sole-author is why it is not.** `duplicate-decision-
-declared`, `decision-set-mismatch`, `source-path-mismatch` and `meeting-path-mismatch` all existed
-to catch an ADVERSARIAL author: an agent that declared three decisions and wrote two, or claimed a
-`source_page_path` that did not match the file on disk. With code as the sole author, building every
-page from the SAME structured outcome this function reads, those disagreements are not merely
-unlikely — they are unconstructible. `meeting-links-mismatch` survived a while longer as
-double-entry bookkeeping and went out on the same argument: `_build_meeting_page` writes
-the `## Decisions` section from the identical `decision_stems` list it names the decision pages
-with, so the two cannot diverge without `decision-count-mismatch` catching the construction bug
-first. What is left is a self-check on code's own construction, and `source-page-count`'s `< 1` arm
-is explicitly kept as one — it cannot fire by construction either.
+**Code-as-sole-author is why the list is this short.** Every page is built from the SAME
+structured outcome this function reads, so an author-vs-diff disagreement — three decisions
+declared and two written, a claimed `source_page_path` that does not match the file on disk, a
+`## Decisions` section diverging from the decision pages it names — is unconstructible, not merely
+checked. What is left is a self-check on code's own construction, and `source-page-count`'s `< 1`
+arm is explicitly kept as one — it cannot fire by construction either.
 
-**`date-bearing-body-link` left this list too, and did not die.** The convention is real — only the
+**`date-bearing-body-link` is a gardener check, not a gate.** The convention is real — only the
 meeting page's filename carries a calendar date, so a `[[YYYY-MM-DD-…]]` target in body prose is a
-pointer that belongs in `sources:`/`related:` frontmatter. But refusing a whole
-capture over a style convention is the wrong side of the line this codebase draws: gates veto the
-irreversible, the gardener flags conventions. It is now a gardener check under the same
-slug — see [`gardener-digest.md`](./gardener-digest.md#the-eight-deterministic-checks). The
+pointer that belongs in `sources:`/`related:` frontmatter — but gates veto the irreversible and
+the gardener flags conventions; see
+[`gardener-digest.md`](./gardener-digest.md#the-eight-deterministic-checks). The
 `_build_decision_page` builder still avoids producing one, by citing the transcript through
 `sources:` rather than a body wikilink.
 
@@ -353,19 +339,12 @@ reads perfectly plausibly on its own.
   system prompt (the brief, not the librarian skill), no page-writing tool at all, and a different
   outcome parse (`parse_meeting_outcome`, a page SET rather than one page). The single write an
   agent is permitted on this flow is allowed by `confined_write`'s unconditional outcome-file
-  exception, and code is the sole author of every page in the set. The tool allow-lists, the
-  no-page-writes pattern and the permission hooks that enforced all of this went with the
-  Claude-Code backend ([ADR 033](../decisions/033-structured-filing-flow.md)); the surviving
-  backend holds no tool, so the property is structural rather than configured. The harness settings
-  that hardened the model PROCESS itself — no repo-declared settings files, no MCP servers from any
-  source, an environment allow-list in front of the subprocess — went with the subprocess they
-  configured. They were defence in depth rather than a tidy-up, and what replaces them is that
-  there is no subprocess and no configuration surface left to harden: one in-process call to a
+  exception, and code is the sole author of every page in the set. The backend holds no tool, so
+  the no-page-writes property is structural rather than configured: one in-process call to a
   provider, with the brief injected by us.
 - `librarian.processing.MEETING_WRITE_PREFIXES` — the same three folders, the FLOW's own
   placement contract (where CODE may create a page for this capture) rather than the agent's lane.
-  `gate_zone` still judges the diff against them: a defence against a bug in code's construction
-  where it used to be a defence against a steered agent.
+  `gate_zone` still judges the diff against them: a defence against a bug in code's construction.
 - `librarian.gates.GateContext`'s seven flow-scoped fields (`write_prefixes`, `creatable_types`,
   `extra_folder_types`, `page_declared`, `stamped_by_path`, `provenance_pages`, `edits_allowed`) —
   the mechanism that lets one gate suite serve this flow, the plain fast lane and the fast lane's

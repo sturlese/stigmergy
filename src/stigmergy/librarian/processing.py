@@ -1,64 +1,10 @@
 """Processing ONE capture: the filing path, from queue row to commit — or to a refusal.
 
-The order is cheapest-first and refuse-early, because every step below the agent costs an agent
-run:
-
-    material -> retry collapse -> already-filed -> secrets/PII over the MATERIAL
-             -> worktree -> agent -> apply the agent's DECLARED edits -> stamp server fields
-             -> gates -> [one corrective retry] -> commit -> push -> filed
-
-**Why code applies the edits.** The agent writes only new files; the reciprocal `related:` links and
-overlap/contradiction callouts it wants on pages that already exist are named in its outcome and
-performed here, between the agent and the gates (see `edits.py` for the two live runs that
-settled it). They are not exempt from anything: they land in the same
-diff, the gates run over the whole of it, and `gate_body_rewrite` judges code's work exactly as it
-judged the agent's.
-
-**Why the secrets scan runs over the material and not only over the diff.** A capture containing
-a secret bounces WHOLE — whether or not the agent copied it onto the page — so scanning the
-material is the required behaviour, not an optimization. It also happens to save
-an agent run, which is why it sits above the worktree. The diff is scanned again afterwards, by
-the gate, because that is the surface that would actually be committed.
-
-**The one corrective retry**: the gates hand their findings back and the agent gets exactly one
-more attempt. Not two — an agent that cannot satisfy deterministic
-gates in two tries is not going to on the third, and the budget is per item.
-
-**And not one, when no veto names a repair the agent can perform.** A pass spent on a finding the
-agent cannot act on — a page it cannot write, a scanner that could not run — is not a chance, it is
-a certainty of the same refusal one agent run later, and for `zone/body-rewrite` it hands back an
-instruction to repair work code did (`gates.unrepairable`). The item then refuses after ONE pass
-and the report says so.
-
-**And the outcome's own SHAPE reaches that retry by the same road.** It did not: `parse_outcome`
-raised `AgentError` for every shape problem, which finished the item, so the agent was never told
-what was wrong and did the same thing on both passes — on the librarian's first real walk, over a
-`summary` four characters too long. `errors.OutcomeShapeError` now carries findings and
-`_run_in_worktree` treats them exactly as it treats a gate veto. What stayed an exception is what
-telling the agent cannot fix: no outcome file at all, an unreadable one, one over the byte ceiling,
-invalid JSON, nesting past the depth ceiling.
-
-**The human loop, routed by CODE from the agent's declared outcome.** The agent declares
-`triage: {kind: "unresolved-entity", name: ...}` when it cannot place a capture, and code decides
-where that lands: on a capture that still has its one question, `_ask_or_park` asks the SUBMITTER
-(`needs_input`, with a code-built question naming the registry's actual contents); on one whose
-question is spent — because it was already asked, whatever happened next — it parks with the
-STEWARD (`triage`) and never asks twice.
-The budget is a database column (`asked_at`), so it survives a requeue and a lease redelivery, which
-is precisely where a counter held in this process would not. A submitter's answer comes back in on
-the next ordinary delivery and reaches the agent as fenced, labelled DATA (`_one_pass`).
-
-**Terminal states split by cause, not by gate.** A secrets or PII match is the submitter's to act
-on (`rejected`, naming the rule and the line). A zone veto on ordinary material is a system fault
-(`failed`)
-— the benign-twin rule says it must never fire on ordinary content, so if it does the librarian
-malfunctioned, and telling the submitter to "fix and resubmit" would send them looping against a
-bug. The same veto WITH a traceable steering attempt in the material is content-actionable
-(`rejected`), because then something in the capture really did cause it. And two vetoes are
-neither, because their honest destination is the steward's queue: an anchoring veto that is the
-only thing still refusing is a park (`_unanchorable`), and so is a page minted in a folder the
-fast lane may not create (`_uncreatable_type`). Both are destinations the cooperative agent
-reaches by parking the capture itself.
+Cheapest-first: material -> retry collapse -> already-filed -> secrets/PII over the MATERIAL ->
+worktree -> agent -> declared edits -> stamp -> gates -> [one corrective retry] -> commit -> push.
+The scan runs over the MATERIAL because a capture containing a secret bounces WHOLE. Terminal
+states split by CAUSE, not by gate: content `rejected`, system `failed`, unresolved `triage`. The
+one submitter question is budgeted by `asked_at`, surviving a requeue and a lease redelivery.
 """
 import asyncio
 import dataclasses
@@ -74,9 +20,7 @@ from dataclasses import dataclass, field
 from stigmergy.capture import queue, schema
 from stigmergy.capture.errors import CaptureError
 
-# `MAX_BODY_LINES`/`SPLIT_CHUNK_LINES` are IMPORTED, not re-declared: the two NUMBERS the contract
-# linter and this flow's own splitter must agree on come from one place, so they cannot drift the
-# way independent literals that happen to match already have once.
+# `MAX_BODY_LINES`/`SPLIT_CHUNK_LINES` are IMPORTED: the linter and the splitter must agree.
 from stigmergy.kernel import converters
 from stigmergy.kernel.normalize import slugify
 from stigmergy.kernel.page import MAX_BODY_LINES, SPLIT_CHUNK_LINES
@@ -107,77 +51,47 @@ from stigmergy.views import regenerate as views_regenerate
 
 log = logging.getLogger(__name__)
 
-# The first pass plus exactly one corrective retry. Defined in `config` because the visibility
-# timeout is computed from it — two numbers that must agree do not live in two modules — and
-# re-exported here under the name every call site already uses.
+# The first pass plus exactly one corrective retry; `config` owns it because the visibility
+# timeout is computed from it.
 MAX_AGENT_ATTEMPTS = config.MAX_AGENT_ATTEMPTS
 
 
 @dataclass
 class Result:
-    """What `process_item` decided. `error` is the queue column's one human sentence; `report` is
-    the structured fact set. They agree by construction — both come from `report.py`.
-
-    `diagnostics_path` is deliberately NOT part of `report`: it names a local file for an operator
-    and has no business crossing to a submitter through `brain_submissions`.
-    """
+    """What `process_item` decided. `diagnostics_path` is NOT part of `report`: it names a local
+    file for an operator, never for a submitter."""
     status: str
     result_ref: str = ""
     report: dict = field(default_factory=dict)
     findings: list = field(default_factory=list)
     diagnostics_path: str = ""
-    # The agent's structured account, to be stored on `capture_queue.outcome` so a
-    # re-file after a park can reuse it instead of re-reading the material. Set only on a PARK and
-    # only when there is something worth keeping (`_with_park_outcome`); `None` everywhere else,
-    # which `queue.finish` reads as "this caller has no outcome and must not blank the column".
+    # Stored on `capture_queue.outcome` for a re-file; `None` means "do not blank the column".
     outcome: dict | None = None
 
     @property
     def error(self) -> str:
-        """The `capture_queue.error` column means one thing: why the row is where it is.
-        A filed row has no problem to report, so it stays empty and the report carries the news."""
+        """Why the row is where it is; empty on `filed`."""
         return "" if self.status == schema.FILED else self.report.get("summary", "")
 
 
 @dataclass
 class AgentPasses:
-    """How many agent passes this item has STARTED — mutable, and shared with the caller on purpose.
-
-    The count is known only inside the retry loop; the failure report is composed a layer up, in
-    `worker.process_next`, from an exception. So the loop records the pass it is on here, and
-    `process_item` stamps it onto any `LibrarianError` on its way out (`at_agent_attempt`). Without
-    it the report named the queue delivery and nothing else, and "queue delivery 1" while the agent
-    had had two tries is precisely the ambiguity `report.failed_system` was fixed to remove.
-
-    `cost_usd` accumulates beside the count for the same structural reason: a backend prices every
-    pass (`AgentRun.cost_usd`) and this loop is the only scope that sees every run of one item,
-    so the sum lives here — stamped onto every Result by `_stamp_cost`, and onto the exception by
-    `at_agent_attempt` for the failure path.
-    """
+    """Agent passes STARTED and their summed cost — mutable and shared on purpose: `process_item`
+    stamps both onto any `LibrarianError` on the way out."""
     count: int = 0
     cost_usd: float = 0.0
 
 
 def _stamp_cost(result: "Result", passes: "AgentPasses") -> "Result":
-    """Every Result leaving an agent loop says what its passes cost. A backend reports the real
-    dollar figure per run and, until this stamp existed, the number died with the run object —
-    so the first question an operator asks of a report ("what did filing this cost?") was
-    unanswerable from the one row that exists to answer questions about the item. `0.0` is a real
-    answer too: a park re-file or a pre-agent refusal spent nothing, and says so."""
+    """`0.0` is a real answer: a park re-file or a pre-agent refusal spent nothing."""
     result.report["cost_usd"] = round(passes.cost_usd, 6)
     return result
 
 
 @dataclass
 class Deps:
-    """Everything `process_item` needs that it does not own. Injected rather than constructed so
-    a test can drive the whole path with a memory evidence store, a double agent and a scratch
-    repo — no monkeypatching, matching the repo's settings/seam discipline.
-
-    `agent` is the PORT (`filing_port.FilingAgent`) rather than a particular backend, and naming it
-    here is what makes the annotation load-bearing: this module is the port's only consumer, so the
-    two calls it makes on this field ARE the contract every backend owes.
-    """
+    """Injected dependencies of `process_item`. `agent` is the PORT: this module is its only
+    consumer, so the calls made on this field ARE the backend contract."""
     settings: object
     evidence: object
     agent: filing_port.FilingAgent
@@ -191,20 +105,14 @@ class Deps:
 
 
 def _material(deps: Deps, item: dict) -> str:
-    """The archived material for this submission, from the evidence plane.
-
-    Read from the blob rather than from `payload->>'text'` on purpose: the blob is what retention
-    does NOT purge, so a filed page and the submitter's "resubmit the material that supports it"
-    refer to the same bytes for as long as the page exists.
-    """
+    """The archived material: the blob, not `payload->>'text'` — retention does not purge blobs."""
     for key in item.get("blob_refs") or []:
         return deps.evidence.get(key).decode("utf-8", errors="replace")
     return (item.get("payload") or {}).get("text", "")
 
 
 def _injection_categories(outcome) -> list[str]:
-    """The categories the agent reported, filtered to the fixed set. Anything the agent invented
-    is dropped rather than echoed — the report may name a category and nothing else."""
+    """The categories the agent reported, filtered to the fixed set; an invented one is dropped."""
     found = []
     for finding in getattr(outcome, "findings", ()) or ():
         category = str((finding or {}).get("category", ""))
@@ -214,43 +122,12 @@ def _injection_categories(outcome) -> list[str]:
 
 
 def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "") -> dict:
-    """Rewrite every NEW page's server-owned frontmatter, and return the values written.
-
-    **The source attachment (`cite_stem`)**: pages in `ctx.provenance_pages` are skipped —
-    `_stamp_attached_sources` already stamped them under the provenance group, and this group is
-    labelled "(fast-lane pages)" for the same reason `stamp_source_fields`'s docstring gives in
-    the other direction. Every page this loop DOES stamp additionally gains the `sources:`
-    citation of `[[<cite_stem>]]` (`page.add_source_citation` — code guarantees the synthesis
-    cites its verbatim source), a per-page declaration in `ctx.page_declared` (the outcome's
-    own type and anchoring — required because populating `page_declared` for the source pages
-    switches `gate_anchoring` to per-page mode, and the synthesis must keep being asked the
-    anchoring question there), and a per-page stamped record in `ctx.stamped_by_path` including
-    the merged `sources:` list, so `gate_frontmatter`'s output-equality check covers the citation
-    like every stamped field. With `cite_stem` empty — every ordinary capture — none of that
-    runs.
-
-    Runs before the gates, so what the contract linter and the field checks see is the FINAL page
-    — the one that would be committed — not the agent's draft. The returned dict is what
-    `gate_frontmatter` re-reads the page against: the check and the write share one source of
-    truth, so they cannot disagree about what the server said.
-
-    `entity` is computed by `gates.resolve_entity_ids` from the anchoring outcome `gate_anchoring`
-    is about to verify against the SAME call. **This is exactly two call sites
-    (`resolve_entity_ids` here, and `report.filed`'s own, independent `_anchor_phrase`
-    resolution) staying in sync by hand, NOT a single-source guarantee** — see
-    `resolve_entity_ids`'s own docstring for what IS shared (the veto and the stamp) and what is
-    not (the report's rendering).
-
-    **Refuses to stamp a partial or empty-looking resolution for an `entity`-kind outcome.**
-    `unresolved` non-empty, or `kind == "entity"` with nothing resolved at all, means
-    `gate_anchoring` is about to veto this pass on the SAME call's own finding — this page will
-    never reach a commit. Stamping `[]` here regardless (rather than the partially-resolved
-    `ids`, which could be a plausible-looking non-empty list) is defence in depth: no reachable
-    path lets that value survive to a committed page (first pass, corrective retry, final pass,
-    `needs_input` reply and the cross-checks were all traced), but that invariant
-    used to be held ENTIRELY by `gate_anchoring` running after this function and vetoing correctly
-    — a fact this function had no way to check about itself. This line makes it true here too, so
-    it survives the gate list being reordered or a bug in the other half.
+    """Rewrite every NEW page's server-owned frontmatter, and return the values written. Must run
+    BEFORE the gates: the returned dict is what `gate_frontmatter` re-reads the page against. If
+    you change `entity` resolution here, change `report.filed`'s `_anchor_phrase` too. With
+    `cite_stem` set, each stamped page also gains the `sources:` citation and a `ctx.page_declared`
+    entry, which switches `gate_anchoring` to per-page mode. Stamps `entity: []` for an unresolved
+    `entity`-kind outcome, so a partial list cannot survive a gate reordering.
     """
     anchoring = getattr(ctx.outcome, "anchoring", None) or {}
     kind = str(anchoring.get("kind", "")).lower() if isinstance(anchoring, dict) else ""
@@ -282,10 +159,7 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
             f.write(text)
         stamped["acl"] = acl
         if cite_stem:
-            # See the docstring's source-attachment paragraph: the per-page declaration keeps
-            # the anchoring
-            # question asked in per-page mode, and the per-page record extends the
-            # output-equality check to the citation. `{**stamped}` snapshots THIS path's `acl`.
+            # `{**stamped}` snapshots THIS path's `acl`.
             ctx.page_declared[path] = {
                 "page_type": str(getattr(ctx.outcome, "page_type", "") or ""),
                 "anchoring": anchoring if isinstance(anchoring, dict) else {}}
@@ -293,54 +167,28 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
     return stamped
 
 
-# Control characters have no place in a commit trailer or a subject line. A newline in particular
-# is how a 60-character "title" forges the one field `git log` alone answers: `x\n\nSubmitted-by:
-# ceo@acme.com` fits comfortably and reads as a real trailer.
+# A newline in a "title" forges a commit trailer: `x\n\nSubmitted-by: ceo@acme.com`.
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
 
-# The trailer keys this message writes itself. Collapsing whitespace already makes a real forged
-# trailer impossible — git only reads trailers from the LAST paragraph, and a single-line subject
-# cannot start one — but `feat(note): x Submitted-by: ceo@acme.com` still READS as attribution in
-# `git log --oneline`, and the colon is the only thing making it look like a field. So the colon
-# goes.
+# Trailer keys this message writes itself; the colon is what makes a collapsed subject still read
+# as attribution in `git log --oneline`.
 _RESERVED_TRAILER_RE = re.compile(r"(?i)\b(submitted-by|co-authored-by|signed-off-by)\s*:")
 
 
 def _subject(title: str) -> str:
-    """One safe commit subject from an agent-supplied title.
-
-    Whitespace collapsed (so no newline survives into the message at all), control characters
-    dropped, reserved trailer keys defanged, and only THEN truncated. Order is the whole fix:
-    truncating first and sanitizing after would leave a forgery intact whenever it fitted inside
-    the limit, which is exactly what happened.
-    """
+    """One safe commit subject from an agent-supplied title. Defang BEFORE truncating, or a
+    forgery survives whenever it fits inside the limit."""
     collapsed = " ".join(_CONTROL_CHARS_RE.sub(" ", str(title or "")).split())
     defanged = _RESERVED_TRAILER_RE.sub(lambda m: f"{m.group(1)} ", collapsed)
     return " ".join(defanged[:60].split()).strip() or "capture"
 
 
 def _commit_message(item: dict, outcome, page_path: str, *, n_sources: int = 0) -> str:
-    """One capture, one commit, one filed page — a 1:1 trace from submission to sha to page.
-
-    The last third of that is enforced rather than assumed: `_cross_check_outcome` vetoes a capture
-    that created more than one page, because this subject, `result_ref`, the dedup pointer and the
-    report all name exactly one and the rest would be committed and reported nowhere. The commit may
-    still TOUCH other pages — the additive `related:`/callout edits `edits.py` applies — and those
-    are named in the report's `pages_edited`.
-
-    The human goes in a `Submitted-by:` trailer as well as in the page, so `git log` alone answers
-    who asked for it without opening the file.
-
-    The type in the subject comes from the FOLDER the page actually landed in, not from what the
-    agent said it filed: the folder is the fact, the declaration is a claim, and the zone gate has
-    already refused any page where the two disagree.
-    """
+    """One capture, one commit, one filed page — enforced by `_cross_check_outcome`. The type in
+    the subject comes from the FOLDER the page landed in: the folder is the fact."""
     page_type = page_policy.type_for_folder(page_path) or "note"
     body = f"Filed by the librarian from capture #{item['id']}."
     if n_sources:
-        # The attached source part(s) ride in this same commit; the subject and `result_ref`
-        # keep naming the ONE synthesis page (the human's door into the set, `_file_meeting`'s
-        # own precedent), so the body is where the commit stops under-reporting what it carries.
         body += f" {n_sources} source page(s) — the captured thread, verbatim — ride in it too."
     return (f"feat({page_type}): {_subject(getattr(outcome, 'title', ''))}\n\n"
             f"{body}\n\n"
@@ -349,23 +197,14 @@ def _commit_message(item: dict, outcome, page_path: str, *, n_sources: int = 0) 
 
 def _pre_agent(conn, item: dict, deps: Deps, *, material: "str | None" = None) -> tuple:
     """Everything BEFORE any flow's agent runs: dedup (levels 1-2) and the material-level
-    secrets/PII scan. Shared by `process_item`, `process_meeting_item` and — through
-    `process_item` — the drive flow: reused rather than duplicated, since a transcript, an ordinary
-    capture and an extracted document collapse/dedup/scan on exactly the same terms; nothing about
-    these four checks is per-flow.
-
-    `material`: the drive flow CONVERTS before anything else and hands the extracted text
-    in — dedup still keys on the payload's own sha256 (the manifest, content identity), and the
-    scan runs over exactly the text that could reach a page. Every other caller passes nothing
-    and reads the archived material as always.
-
-    Returns `(material, None)` to continue, or `(material, Result)` when one of the checks already
-    reached a terminal state.
+    secrets/PII scan. Levels 1-2 match only rows with status='filed', so a rejected, parked or
+    failed twin never collapses a live capture. Returns `(material, None)` to continue, or
+    `(material, Result)` on a terminal state.
     """
     settings = deps.settings
     material = _material(deps, item) if material is None else material
 
-    # ── level 1: retry collapse (before the agent; no semantics at all) ──────────────────
+    # level 1: retry collapse — no semantics at all
     retry = dedup.find_retry(conn, item, window_s=settings.dedup_window_s)
     if retry:
         return material, Result(schema.FILED, retry.result_ref,
@@ -373,20 +212,18 @@ def _pre_agent(conn, item: dict, deps: Deps, *, material: "str | None" = None) -
                                                    page_path=retry.page_path,
                                                    commit=retry.commit))
 
-    # ── level 2: already in the graph ───────────────────────────────────────────────────
+    # level 2: already in the graph
     already = dedup.find_already_filed(conn, item)
     if already:
         return material, Result(schema.REJECTED, "",
                                 report.rejected_duplicate(page_path=already.page_path,
                                                           as_of=already.as_of))
 
-    # ── secrets and PII over the MATERIAL: bounce the whole capture ─────────────────────
+    # secrets and PII over the MATERIAL: bounce the whole capture
     secret_hits = gates.scan_secrets(material, gitleaks_bin=settings.gitleaks_bin,
                                      label="your material")
     if secret_hits:
-        # Read from `values`, never re-parsed out of `message`/`locator` — those are for humans,
-        # and a hit that was only visible after adjacent lines were rejoined has no line number
-        # in the submitter's own file to report.
+        # From `values`, never re-parsed out of `message`/`locator` — those are for humans.
         line, rule = secret_hits[0].values
         return material, Result(schema.REJECTED, "",
                                 report.rejected_secret(line=line, rule_id=rule))
@@ -403,34 +240,16 @@ def _pre_agent(conn, item: dict, deps: Deps, *, material: "str | None" = None) -
 
 
 def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None) -> Result:
-    """Take one claimed queue row all the way to a terminal state. Never raises for an ordinary
-    refusal — every outcome is a `Result`. Only a genuinely unexpected error propagates, and the
-    worker turns that into `failed` with the attempt count.
-
-    `material`: see `_pre_agent` — the drive flow's pre-converted text; every other caller
-    omits it."""
+    """Take one claimed queue row to a terminal state. Never raises for an ordinary refusal —
+    every outcome is a `Result`; only an unexpected error propagates."""
     material, early = _pre_agent(conn, item, deps, material=material)
     if early is not None:
         return early
     settings = deps.settings
 
-    # ── the agent, in a throwaway worktree ──────────────────────────────────────────────
-    # The ref is resolved and NAMED rather than left implicit. A service filing from the canonical
-    # remote is correct; one silently diverging from the operator's local branch is not, and that
-    # divergence cost a walk — see `gitcmd.BaseRef`.
     base = gitcmd.base_ref(deps.repo, settings.branch)
-    # Deployed only: a base that did not come from the remote is a FAULT here, not a fallback.
-    # `base_ref` answers a failed fetch with a `log.warning` and the local branch, which is right for
-    # a laptop (a guard must not refuse the machine it was written for) and wrong
-    # for a container: `bootstrap.verify_checkout_at_base` refuses exactly this state before the
-    # first claim, and without this line a credential that expires an hour later silently walks the
-    # deployed worker back into it for the rest of its life — judging captures against the ACL
-    # config, registry and linter of a commit the remote moved past, while the governance flow
-    # (`approve` -> push -> requeue) depends on that fetch working.
-    #
-    # Raising rather than returning a `Result` is the point: nothing about this capture caused it, so
-    # the item is released rather than filed or refused (`StaleBaseError` carries the whole argument
-    # for why it is the one config fault that stops the loop instead of failing the row).
+    # Deployed only: a non-remote base is a FAULT, not a fallback. Raising rather than returning
+    # a `Result` releases the item instead of failing the row.
     if settings.require_remote_base and not base.remote:
         raise StaleBaseError(
             f"the base resolved to the local {base.describe()} instead of origin/{settings.branch} "
@@ -441,56 +260,27 @@ def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None)
             f"left in the queue")
     log.info("filing submission %s against %s", item["id"], base.describe())
 
-    # ── the registry AND the ACL config, read at THIS item's base commit ─────────────────────
-    # `base_ref` fetched a moment ago, so `base` is the remote's tip: this is the read that makes
-    # fetch-before-claim mean something. `worker.startup_checks` resolves both ONCE and that was
-    # correct while nothing could rewrite either mid-run — but a steward's `stigmergy-entities approve`
-    # now pushes a new entity between two polls, and a capture requeued by that same command would
-    # otherwise be judged against the registry this worker read at startup, park again, and prove the
-    # full circle broken for a reason that has nothing to do with the circle.
-    #
-    # **The ACL config is read here for the same reason and one worse consequence.** Reading it
-    # once at startup looks safe — nothing in the PLATFORM rewrites it mid-run — but a steward
-    # pushing a tightened `acl.json` to `main` does, and a long-running worker would then keep
-    # stamping pages with the audience labels of the commit it booted from, for its whole lifetime.
-    # That fails in the silently-OPEN direction: a rule made NARROWER on the remote is ignored, and
-    # the page lands in a commit whose `acl.json` disagrees with the labels stamped on it. Both
-    # inputs are pure functions of a commit, read at the commit being filed against, exactly like
-    # the linter (`base_inputs`).
-    #
-    # `replace` rather than mutating `deps`: the per-item values are scoped to this item, and the
-    # startup ones stay exactly what they were — which is what keeps the startup check an early
-    # fail-closed refusal rather than a cache this line silently invalidates.
+    # Re-read per item at THIS item's base commit: a cached ACL config fails silently OPEN.
     deps = dataclasses.replace(deps,
                                registry=base_inputs.load_registry(deps.repo, base),
                                acl_config=base_inputs.load_acl(deps.repo, base))
     passes = AgentPasses()
-    # The contract linter comes out of THIS item's base commit, not off the operator's disk
-    # (`base_inputs`). Materialized here rather than once per run because `base` is resolved here:
-    # the script that judges the diff is always the one in the commit the diff was built from, and
-    # a linter fix pushed between two polls takes effect without a restart.
+    # The contract linter is materialized from THIS item's base commit, not the operator's disk.
     with base_inputs.linter_at(deps.repo, base) as linter_path, \
             gitcmd.ephemeral_worktree(deps.repo, base.sha, settings.worktree_root) as worktree:
         try:
             return _run_in_worktree(conn, item, deps, material, worktree, passes,
                                     linter_path=linter_path)
         except LibrarianError as ex:
-            # Annotate, then re-raise unchanged: the worker owns the decision to turn this into a
-            # `failed` Result, and it needs to know how many agent passes were spent to say so
-            # honestly. A bare `raise` keeps the original traceback.
+            # Annotate, then re-raise unchanged: the worker owns the `failed` decision.
             ex.at_agent_attempt(passes.count, cost_usd=passes.cost_usd)
             raise
 
 
 def _run_in_worktree(conn, item: dict, deps: Deps, material: str, worktree: str,
                      passes: "AgentPasses | None" = None, *, linter_path: str = "") -> Result:
-    """The retry POLICY: one pass, one corrective pass, then refuse.
-
-    The pass itself is `_one_pass`. Keeping the two apart is what lets an outcome whose SHAPE the
-    boundary refused reach the corrective retry by the same road a gate veto takes — it used to
-    escape the loop as an exception, so the agent was never told and both attempts were spent
-    identically (`errors.OutcomeShapeError` carries the account).
-    """
+    """The retry POLICY: one pass, one corrective pass, then refuse. `OutcomeShapeError` reaches
+    the corrective retry by the same road a gate veto takes."""
     settings = deps.settings
     corrective, findings, outcome, diagnostics = "", [], None, ""
     passes = passes if passes is not None else AgentPasses()
@@ -501,66 +291,40 @@ def _run_in_worktree(conn, item: dict, deps: Deps, material: str, worktree: str,
             result, findings, outcome = _one_pass(conn, item, deps, material, worktree, corrective,
                                                   passes=passes, linter_path=linter_path)
         except OutcomeShapeError as ex:
-            # Unlike every other `AgentError`, SAYING SO can fix this one. The file itself is
-            # already gone (`read_outcome` deletes before it parses), but a backend that parses its
-            # own dict — the offline double does — may have left one behind.
+            # A backend that parses its own dict may leave an outcome file behind.
             result, findings, outcome = None, list(ex.findings), None
             agent_module.discard_outcome_file(worktree)
         if result is not None:
             return _stamp_cost(result, passes)
 
-        # A veto naming no repair the agent can perform does not spend the retry (`gates.
-        # unrepairable`). The second pass could not clear it, so it would
-        # reach this same terminal state one agent run later — and for the body-rewrite pair it
-        # would hand the agent an instruction to repair work it did not do.
+        # A veto naming no repair the agent can perform does not spend the retry.
         blocked = gates.unrepairable(findings)
         if attempt < MAX_AGENT_ATTEMPTS:
             if not blocked:
                 corrective = gates.corrective_brief(findings)
                 _reset_for_retry(worktree)
                 continue
-            # Logged where the retry is SKIPPED, not wherever a blocking veto is seen: on the last
-            # pass there is no retry to withhold, and saying "no corrective retry" about a run that
-            # had already spent one would be the same counter confusion one level down.
             log.warning("item %s: skipping the corrective retry after agent pass %s — %s name(s) "
                         "no repair the agent can perform", item.get("id"), attempt,
                         ", ".join(sorted({f"{f.gate}/{f.code}" for f in blocked})))
 
-        # Refused for good, and the worktree is about to be reaped — which is where the offending
-        # diff used to go: the report said THAT a body was rewritten and never WHAT changed.
         diagnostics = preserve_refused_diff(worktree, item, findings,
                                             root=settings.refused_diff_root)
         break
 
-    # `passes.count`, not `MAX_AGENT_ATTEMPTS`: the loop can now end after one pass, and a report
-    # claiming two agent attempts when one ran is the ambiguity `report.failed_system` was fixed to
-    # remove — reintroduced from the other side.
+    # `passes.count`, not `MAX_AGENT_ATTEMPTS`: the loop can end after one pass.
     return _stamp_cost(_refuse(item, findings, outcome, agent_attempts=passes.count,
                                diagnostics_path=diagnostics), passes)
 
 
 def _reset_for_retry(worktree: str) -> None:
-    """Put the worktree back to the commit it branched from before the corrective pass.
-
-    `reset --hard` restores the tracked tree and `clean -fdq` removes what the refused pass wrote —
-    including any outcome file a backend left behind, whatever shape it was in.
-    """
+    """Put the worktree back to the commit it branched from, untracked leftovers included."""
     gitcmd.run("reset", "--hard", "HEAD", cwd=worktree)
     gitcmd.run("clean", "-fdq", cwd=worktree)
 
 
-# ── the two sentences of the gathered block that depend on WHAT ITS READER CAN DO ─────────────
-# `agent.render_gathered` defaults to the TOOL-LESS wording ("this is your context and you have no
-# tool to go looking for more"), which is what a `structured_ordinary = True` backend is owed: the
-# port says such a backend holds no tool, so the default is true of it by contract and the
-# structured branch below passes nothing, keeping its block byte-identical to ADR 033's.
-#
-# An EXPLORING backend that asked for the same block is a different reader (ADR 034): it was seeded
-# rather than bounded, and telling it otherwise would buy a measurement of iteration that never
-# iterated. These sentences deliberately do NOT name individual tools — which tools exist is the
-# BACKEND's fact and belongs in its own environment preamble (`pydantic_backend.
-# ORDINARY_AGENTIC_ENVIRONMENT` names all five), while what is true at the FLOW's level is that the
-# block was assembled before the call and the reader's own tools reach the same checkout.
+# The gathered block's wording for an EXPLORING backend. Name no individual tools — which tools
+# exist is the BACKEND's fact.
 _SEEDED_GATHERED_SENTENCES = {
     "preface": (
         "\nWhat this brain already holds, gathered from the checkout by the worker before this "
@@ -573,19 +337,8 @@ _SEEDED_GATHERED_SENTENCES = {
 
 
 def _wants_gathered(agent) -> bool:
-    """Does this backend want the deterministic gatherer's block? DECLARED, never assumed.
-
-    Asked on the branch that uses it rather than at the top of `_one_pass`, because it is only the
-    LEGACY branch's question: a structured backend is gathered for by definition (it holds no tool
-    and could do nothing otherwise), so refusing one for a member its own road never reads would
-    refuse a conforming backend over bookkeeping.
-
-    The refusal itself is `structured_ordinary`'s, one member over, and it is a refusal for the
-    same measured reason: the likeliest producer of a missing declaration is a WRAPPER around a
-    real backend — the eval rig's `CountingAgent`, the signal suite's `DelayedAgent`, a stub in a
-    test file — and a `getattr(..., False)` default would hand the shipped backend an empty seed,
-    silently, on a road whose whole output is a filing-quality score.
-    """
+    """Does this backend want the gatherer's block? DECLARED, never defaulted: a
+    `getattr(..., False)` would silently hand a wrapper's backend an empty seed."""
     if not hasattr(agent, "wants_gathered"):
         raise AgentError(
             f"the configured agent ({type(agent).__name__}) declares no `wants_gathered`, which is "
@@ -598,28 +351,12 @@ def _wants_gathered(agent) -> bool:
 def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
               corrective: str, *, passes: "AgentPasses | None" = None,
               linter_path: str = "") -> tuple:
-    """ONE agent pass: run it, apply its declared edits, stamp, and run every gate.
-
-    Returns `(result, findings, outcome)`. A non-`None` `result` is TERMINAL — the caller returns it
-    untouched — and otherwise `findings` is what the corrective brief (or the final refusal) is built
-    from. Extracted from the loop above so the loop holds the policy and nothing else, and so the
-    reset-and-retry tail exists once rather than once per way a pass can be refused.
+    """ONE agent pass: run it, apply its declared edits, stamp, and run every gate. Returns
+    `(result, findings, outcome)`; a non-`None` `result` is TERMINAL, otherwise `findings` is what
+    the corrective brief (or the final refusal) is built from.
     """
     settings = deps.settings
-    # **Which SHAPE of the ordinary flow this backend answers** (ADR 033) — DECLARED by the
-    # backend (`filing_port.FilingAgent.structured_ordinary`), never sniffed from its class. Every
-    # branch below is behind this one boolean, and with it `False` — which is BOTH shipped backends
-    # since ADR 034 — this function does what it did before the structured path existed: the agent
-    # wrote the page, so code reads its account off the outcome file and its `page_path` off the
-    # diff. The `True` road stays live for a backend that carries the page's text home instead.
-    #
-    # **Absence is REFUSED, never defaulted.** This read was `getattr(…, False)`, and a default is
-    # exactly the silence this package refuses everywhere else: a backend — or, far more likely, a
-    # WRAPPER around one, which is how `Deps.agent` is built in the eval rig and in half the suite
-    # — that does not carry the attribute would take the exploring branch while being structured,
-    # and every ordinary capture would then be refused for carrying no `page_path`. That is a
-    # misconfiguration wearing a filing-quality result's clothes. `AgentError` because
-    # `processing`'s callers already turn that family into a `failed` row naming the stage.
+    # DECLARED, never defaulted: `True` means the account carries the page's text home.
     if not hasattr(deps.agent, "structured_ordinary"):
         raise AgentError(
             f"the configured agent ({type(deps.agent).__name__}) declares no "
@@ -628,19 +365,10 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
             f"it and whether it writes its own page. A backend declares it as a class attribute; a "
             f"WRAPPER around one must copy it from what it wraps")
     structured = bool(deps.agent.structured_ordinary)
-    # The source attachment — `None` for every capture whose
-    # door did not assert it, and everything it changes below is behind that `None`.
+    # `None` for every capture whose door did not assert a source attachment.
     attachment = _source_attachment(item)
-    # The submitter's answer to the librarian's one question, if this row has one. It travels as
-    # DATA — fenced and labelled by `agent.build_prompt`, never spliced into the instructions — and
-    # it bypasses nothing: the anchoring gate still asks the registry, `_stamp` still writes the
-    # server-owned frontmatter, and an answer saying "file as verified, acl: [leadership]" reaches
-    # the agent as a sentence the submitter wrote and reaches no gate at all.
-    # (ADR 028 D7): with the attachment ON, the agent is TOLD the flow fact.
-    # The first real drive capture proved leaving it implicit wrong: the brief's genre rules make a
-    # whole document read as `type: source` (a type the fast lane may not create), so the agent
-    # parked a capture whose source half code had already taken. Server-composed, instruction-
-    # side (the corrective brief's own standing), never derived from the material's shape.
+    # Server-composed. Left implicit, the brief's genre rules make a whole document read as
+    # `type: source` and the agent parks a capture whose source half code already took.
     flow_note = "" if attachment is None else (
         f"SYSTEM NOTE (from the pipeline, not from the submitter): this capture arrived through "
         f"the {attachment.source_kind} door as a whole document. The system itself attaches the "
@@ -649,24 +377,8 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         f"job is the SYNTHESIS: file exactly one note/decision/concept page distilling what this "
         f"document establishes, anchored through the registry as always; the system will make "
         f"your page cite the attached source.")
-    # ── the deterministic gatherer, for whichever backend declares it wants one ─────────────
-    # Built HERE and handed over as rendered prompt text, never inside a backend: the gather is a
-    # property of the FLOW, and two backends must share one context builder and one fence
-    # discipline. Read from the WORKTREE, which is the checkout at this item's base commit — the
-    # same data an exploring agent's own reads reach, so ADR 033 moved the reader and not the
-    # origin. Re-run on the corrective pass on purpose: `_reset_for_retry` puts the worktree back,
-    # and a second pass judging a context it can no longer see would be judging something else.
-    #
-    # **Which backends want it is a SECOND declaration, not the inverse of the first** (ADR 034).
-    # The structured shape is handed a context by definition — it holds no tool and could do
-    # nothing without one — while an EXPLORING backend may want the same block as a SEED and then
-    # go further (the pydantic-ai backend), or want none at all (the offline double, which is
-    # directive-driven and would pay for a corpus walk nothing reads).
-    #
-    # Absence is REFUSED on the branch that needs it, exactly like `structured_ordinary` above and
-    # for the same reason: the likeliest producer of a missing declaration is a WRAPPER, and a
-    # `getattr(..., False)` default would silently starve a real backend of its seeded context —
-    # a measurably worse filing run wearing a working one's clothes.
+    # Built HERE, never inside a backend: both must share one context builder and one fence
+    # discipline. Re-run on the corrective pass, because `_reset_for_retry` resets the tree.
     gathered = ""
     if structured or _wants_gathered(deps.agent):
         gathered = agent_module.render_gathered(
@@ -681,28 +393,19 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
                              reply=item.get("reply") or "", flow_note=flow_note,
                              gathered=gathered)
     except AgentError as ex:
-        # A pass that died mid-run still spent real money — `filing_port.priced` attached the backend's
-        # figure to the fault (0.0 for a timeout, honestly: no ResultMessage ever arrived).
+        # A pass that died mid-run still spent real money.
         if passes is not None:
             passes.cost_usd += getattr(ex, "run_cost_usd", 0.0)
         raise
-    # The returning road's bank — the except arm above is the same bank for the fault road, so
-    # the spend is recorded whatever shape this pass ends in.
     if passes is not None:
         passes.cost_usd += run.cost_usd
     outcome = run.outcome
-    # The outcome file is the agent's channel, not part of its work: consume it before the
-    # diff is taken so it can never reach a commit or trip the zone gate.
+    # Consume the outcome file before the diff is taken: it must never reach a commit.
     agent_module.discard_outcome_file(worktree)
     if outcome is None:
         raise AgentError("the agent produced no usable account of what it did")
 
-    # The agent decided it cannot place this. It is SUPPOSED to have written nothing — but
-    # "supposed to" is not a check, and this branch used to assert it without looking. A triage
-    # outcome with a diff behind it is an agent that wrote and then said it did not, so the
-    # diff decides here as everywhere else: park it only if the worktree really is clean.
-    # The attachment's source pages are not written until AFTER this check, on purpose: a parked
-    # capture files nothing, so nothing may be in the worktree when the agent parks.
+    # The diff decides: park only if the worktree is clean. Source pages are written AFTER this.
     if outcome.decision == "triage":
         stray = gitcmd.diff_entries(worktree)
         if stray:
@@ -711,40 +414,20 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
                 f"worktree; nothing was filed and nothing was committed")
         return _triage(item, deps, outcome), [], outcome
 
-    # ── CODE writes the page, on the structured path (ADR 033) ──────────────────────────────
-    # The meeting flow's division of labour, one entry point over: the agent decided and drafted,
-    # everything about a PAGE — the filename, the folder, the frontmatter, the H1 — is built here.
-    # Placed BEFORE the `GateContext` is built and before `edits.apply_declared`, which is the same
-    # position the agent's own write occupied on the exploring path: from here down, every line of
-    # this function is unaware of which shape produced the page, and the stamp, the eight gates and
-    # the cross-check judge code's construction exactly as they judged the agent's.
+    # CODE writes the page on the structured path. Must stay BEFORE the `GateContext` and
+    # `edits.apply_declared`, so the stamp and gates judge it as they judge the agent's.
     if structured:
         page_findings = _require_page_content(outcome)
         if page_findings:
-            # RETURNED, not raised — the same road `_write_ordinary_page`'s own refusals take three
-            # lines below, and the road this function's docstring already promised ("a non-`None`
-            # result is TERMINAL... otherwise `findings` is what the corrective brief is built
-            # from"). Raising `OutcomeShapeError` reached the retry too, but through
-            # `_run_in_worktree`'s `except`, which sets `outcome = None` — so a capture whose
-            # material had tried to steer the librarian AND whose account was shape-refused lost
-            # the recorded steering attempt entirely: `_refuse` composes its notes from
-            # `_injection_categories(outcome)`, and `None` has no findings. Two refusals from the
-            # same function, three lines apart, must not disagree about how they travel.
+            # RETURNED, not raised: `OutcomeShapeError` reaches the retry with `outcome = None`,
+            # which would lose a recorded steering attempt.
             return None, page_findings, outcome
         written_page = _write_ordinary_page(worktree, outcome, created=deps.as_of())
         if isinstance(written_page, list):
-            # A collision, an uncreatable type or an unnameable title: nothing was written, so this
-            # takes the SAME corrective-retry road every other finding takes
-            # (`_write_meeting_pages`' precedent).
             return None, written_page, outcome
-        # The plan's own `path` is deliberately NOT carried forward. `_file` reads `page_path` off
-        # the DIFF and never off an account (its docstring carries the argument), and code's own
-        # plan is an account like any other from that check's point of view — taking the path the
-        # diff proves is what keeps the two honest if this writer ever has a bug.
+        # The plan's own `path` is NOT carried forward: `_file` reads `page_path` off the DIFF.
 
-    # With the attachment ON, the lane widens by exactly the attachment's own folder — the
-    # same per-flow, on-the-context widening the meeting flow does (`GateContext.write_prefixes`'s
-    # own comment), so every ordinary capture keeps the unwidened defaults.
+    # With the attachment ON, the lane widens by exactly the attachment's own folder.
     lane_kwargs = {}
     if attachment is not None:
         lane_kwargs = dict(
@@ -756,41 +439,27 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         entries=gitcmd.diff_entries(worktree),
         added=gitcmd.added_lines(worktree),
         material=material, outcome=outcome, registry=deps.registry,
-        # The linter materialized from this item's base commit, handed down from `process_item` —
-        # NOT `settings.linter_path`, which is where the script sits in somebody's working tree.
+        # The linter materialized from this item's base commit — NOT `settings.linter_path`.
         linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin, **lane_kwargs)
 
     if not ctx.entries:
-        # Unreachable on the structured path — code has just written a page — so the sentence names
-        # the right actor for the path where it CAN fire, rather than sending an operator after a
-        # model for a fault in `_write_ordinary_page`.
         raise AgentError("code wrote nothing for a capture the agent decided to file"
                          if structured else
                          "the agent wrote nothing and did not park the capture")
 
-    # ── code's own additive edits, from the agent's DECLARATION ──────────────────────
-    # The agent wrote only new files; the reciprocal links and callouts it asked for on
-    # existing pages are validated against the real graph and applied here, before the diff
-    # the gates judge is taken. Nothing is exempted by this: the edits land in the same diff
-    # and `gate_body_rewrite` reads them like anything else.
+    # Code's own additive edits, from the agent's DECLARATION.
+    # Applied before the diff the gates judge is taken, so the edits land in the same diff.
     edited, edit_findings = edits.apply_declared(
         worktree, outcome.edits, new_pages=ctx.in_lane_new_pages())
 
-    # ── the attached source page(s), written by CODE after the agent's own work ─────────
-    # After `apply_declared` so the agent's declared edits were validated against ITS pages
-    # only, and before `_stamp` so the whole set is stamped and judged as one diff. A collision
-    # takes the same road every finding takes; `_reset_for_retry` wipes these pages with the
-    # rest of the pass, so the corrective pass re-writes them against its own outcome.
+    # After `apply_declared` (its edits validated against the agent's own pages only) and before
+    # `_stamp` (the whole set stamped and judged as one diff).
     written_sources = None
     if attachment is not None:
         written_sources = _write_attached_sources(worktree, attachment, outcome, material)
         if isinstance(written_sources, list):
             return None, written_sources, outcome
         ctx.provenance_pages = frozenset(written_sources["paths"])
-        # With per-page declarations in play (`ctx.page_declared`, populated by the two stamp
-        # calls below), `gate_anchoring` switches to per-page mode — so the synthesis page(s)
-        # must carry the outcome's own declaration there or the anchoring question would
-        # silently stop being asked of them. `_stamp` writes it (see its `cite_stem` half).
     ctx.entries = gitcmd.diff_entries(worktree)
     ctx.added = gitcmd.added_lines(worktree)
 
@@ -800,7 +469,7 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
     else:
         ctx.stamped = _stamp(ctx, deps, item)
 
-    # Re-read the diff: stamping changed the pages the gates are about to judge.
+    # Stamping changed the pages the gates are about to judge.
     ctx.entries = gitcmd.diff_entries(worktree)
     ctx.added = gitcmd.added_lines(worktree)
     findings = gates.run_gates(ctx) + edit_findings + _cross_check_outcome(ctx)
@@ -811,27 +480,13 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
     return None, findings, outcome
 
 
-# ═══════════════════════════════════════════════════════════════════════════════════════════════
-# CODE writes the ordinary flow's ONE page, when the account carried its content home (ADR 033).
-#
-# The meeting flow's writers (`_write_meeting_pages`, `_build_decision_page`) applied to the
-# entry point that files one page: the agent decides the placement, the anchor and the prose;
-# everything about a PAGE is built here. The confinement argument is what changes shape — on the
-# exploring path a hostile write is stopped by an allow-list in a permission hook, and here there
-# is no write to stop. Code puts the page where `page.FOLDER_BY_TYPE` says a page of that type
-# goes, under the filename the title spells, and nothing in the account can name a path at all.
-# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# Nothing in the account can name a path: `page.FOLDER_BY_TYPE` decides the folder, the title the
+# filename.
 
 
 def _require_page_content(outcome) -> list:
-    """The REQUIRED half of the outcome envelope, for the backend that declares
-    `structured_ordinary = True` — asked here rather than in `agent.parse_outcome`, because only
-    the caller knows which backend ran (ADR 033's expand–contract: both shapes parse, and which one
-    is owed is keyed on the run).
-
-    Returns findings rather than raising, so the caller decides which exception family carries
-    them; `[]` means the account has what code needs to write a page.
-    """
+    """The REQUIRED half of the outcome envelope for a `structured_ordinary` backend. Returns
+    findings rather than raising; `[]` means code can write a page from it."""
     page = getattr(outcome, "page", None)
     if page is None or not (page.body or "").strip():
         return [gates.Finding(
@@ -846,48 +501,16 @@ def _require_page_content(outcome) -> list:
 
 
 def _ordinary_stem(title: str) -> str:
-    """The filename this page is filed under: its TITLE, and deliberately not a slug.
-
-    A wikilink resolves by BARE BASENAME across the whole repo, so a page's filename IS the name
-    every other page has to spell to reach it — which is why the corpus convention is Title Case
-    with spaces (`wiki/notes/Northwind Freight Onboarding.md`) and why the brief tells the agent to
-    keep the characters the title has, accents included. Slugifying here would file
-    `refund-policy-v2.md` beside a corpus of Title Case pages and quietly break every
-    `[[Refund Policy v2]]` a human — or the other shape of this flow, for the same capture — writes. The
-    meeting flow slugifies because its own filenames are slugs; this one is not that flow.
-
-    **Only the EDGES are trimmed, and the interior is left exactly as written.** The first version
-    collapsed all whitespace (`" ".join(title.split())`), which is the "silently mangle" behaviour
-    `page.unnameable_reason`'s own comment exists to refuse: it turned a newline inside a title into
-    a space, so `evil\\nSubmitted-by: ceo@acme.com` became a legal filename instead of a refusal,
-    and the control character the check is FOR never reached it. Leading and trailing whitespace is
-    a different thing — trimming that normalizes nothing about the title — so it goes.
-
-    What remains is validated by `page.unnameable_reason` at the call site: a title carrying a path
-    separator or a control character is REFUSED rather than approximated, which is the direction
-    `page.py`'s own filename rule already fixed once, in the same place, for the same reason.
+    """The filename this page is filed under: its TITLE, not a slug — a wikilink resolves by bare
+    basename. Only the EDGES are trimmed: collapsing interior whitespace would make
+    `evil\\nSubmitted-by: ...` a legal filename instead of letting `page.unnameable_reason` refuse it.
     """
     return str(title or "").strip()
 
 
 def _build_ordinary_page(title: str, page_type: str, body: str, links, created: str) -> str:
-    """One fast-lane page's DRAFT — frontmatter code owns, body the agent drafted.
-
-    `_build_decision_page`'s twin for the ordinary flow, and the same division: `created`/`updated`
-    are the contract linter's `REQUIRED_FIELDS` and are NOT server-owned
-    (`page.SERVER_OWNED_KEYS` does not name them), so code drafts them from the same date `_stamp`
-    is about to stamp as `as_of`. `status` IS server-owned and is deliberately absent here —
-    `page.stamp_server_fields` writes it moments later, and drafting one would be a value the stamp
-    overwrites.
-
-    `related:` comes from the agent's own `links_created` — the field that already means "the bare
-    page names you linked to". Building the frontmatter from it rather than asking the agent to
-    write the same list twice is what makes the two agree by construction; a name that resolves to
-    no page is still the contract linter's dead-link veto, repairable on the one corrective pass.
-    Surrounding brackets are stripped before they are re-added: the brief asks for bare names, and
-    a model that helpfully writes `[[Northwind]]` would otherwise produce `[[[[Northwind]]]]` — a
-    dead link earning a veto for a defect nobody could read off the finding.
-    """
+    """One fast-lane page's DRAFT. `status` is server-owned and deliberately absent: `_stamp`
+    writes it. Brackets are stripped before being re-added, or `[[X]]` would become `[[[[X]]]]`."""
     related = [f"[[{str(name).strip().strip('[]').strip()}]]"
                for name in (links or ()) if str(name).strip().strip("[]").strip()]
     front = [
@@ -905,50 +528,22 @@ def _build_ordinary_page(title: str, page_type: str, body: str, links, created: 
 
 def _write_ordinary_page(worktree: str, outcome, *, created: str) -> "dict | list":
     """Write the one page this capture files, or hand back one veto finding having written nothing.
-
-    Four refusals, in the order that spends the least: a type the fast lane may not create, a title
-    no filename can carry, a page that already exists, and a path that does not resolve inside this
-    checkout. Each returns a `list` of findings the caller routes onto the ordinary
-    corrective-retry road — the same all-or-nothing shape `_write_meeting_pages` and
-    `_write_attached_sources` use, for the same reason: a half-written worktree is one nobody can
-    reason about.
-
-    **The folder is DERIVED, never declared.** `page.folder_for` reads the one placement table
-    (`page.PAGE_TYPES`), which is what makes "the structured path writes nothing outside the lane"
-    a property of construction rather than a check: there is no field in the account that could
-    name a folder, so there is nothing for a gate to catch. `gate_zone` still judges the resulting
-    diff, which is defence in depth against a bug in this function rather than against the model.
-
-    **Deriving a path is not the same as resolving one**, though, and conflating the two is how the
-    write confinement this flow replaced was wrong three times over. `wiki/notes/X.md` is inside
-    the lane by its spelling and outside the checkout by its resolution, if `wiki/notes` is a
-    symlink somebody merged into the repo — so the last check resolves it (`page.is_inside`), and
-    `_write_new` refuses the same thing again at the moment of writing, for every writer.
+    Four refusals, cheapest first: uncreatable type, unnameable title, existing page, path outside
+    the checkout. The folder is DERIVED, never declared, so lane confinement is construction; the
+    last check RESOLVES the path, since one inside the lane by spelling can be outside by resolution.
     """
     declared_type = str(outcome.page_type or "")
     policy = page_policy.classify_page_type(declared_type)
     if not policy.creatable:
-        # Routed to the STEWARD, not to `failed`: a capture the librarian judges to be a governed
-        # type belongs in `triage` with the reason, and `_uncreatable_type` reads the type off
-        # `values` (the verbatim identifier this finding is about) because there is no folder to
-        # derive it from — code never made one.
-        #
-        # **`locator` is EMPTY, and that is the fix rather than an omission.** `Finding.locator`
-        # means "the PATH this finding is about" everywhere else in this module, and `_refuse`'s
-        # steering branch renders `zone.locator` straight into `report.rejected_steering(path=…)`
-        # — so putting the TYPE there showed a submitter `'entity'` where a page path belongs, in
-        # the one sentence that tells them what in their capture caused a refusal. There IS no
-        # path: this refusal happens before anything is written, precisely so none exists.
+        # Routed to the STEWARD, not `failed`. `locator` is EMPTY because nothing was written yet,
+        # so `_refuse`'s steering branch must skip it.
         return [gates.Finding(
             "zone", gates.TYPE_NOT_CREATABLE,
             f"the account asks for a {policy.page_type or 'typeless'!r} page, which the fast lane "
             f"cannot create: {policy.reason}",
             locator="", values=(policy.page_type,))]
 
-    # `outcome.title`, never `outcome.page.title` — the RESOLVED single field `parse_outcome`
-    # already reconciled the two declaration sites into. Reading the sub-object here would let an
-    # account that declared both file a page whose FILENAME and whose commit subject
-    # (`_commit_message`, which reads `outcome.title`) name two different things.
+    # `outcome.title`, never `outcome.page.title`, or filename and commit subject could disagree.
     stem = _ordinary_stem(outcome.title)
     unnameable = page_policy.unnameable_reason(stem)
     if unnameable:
@@ -959,9 +554,8 @@ def _write_ordinary_page(worktree: str, outcome, *, created: str) -> "dict | lis
 
     path = f"{policy.folder}/{stem}.md"
     if page_policy.path_key(path) in page_policy.path_keys(gitcmd.tracked_paths(worktree)):
-        # `path_key`, not `==`: the deployment filesystem folds case and Unicode normalization, so
-        # a re-spelled title names an EXISTING page — the exact bypass `agent.confined_write`'s own
-        # docstring records, closed here for the writer that replaced it.
+        # `path_key`, not `==`: the filesystem folds case and Unicode, so a re-spelled title
+        # names an EXISTING page.
         return [gates.Finding(
             agent_module._OUTCOME_GATE, "existing-page-collision",
             f"a page already exists at {path} — this material may already be filed, or the title "
@@ -973,15 +567,7 @@ def _write_ordinary_page(worktree: str, outcome, *, created: str) -> "dict | lis
                   f"the capture instead of filing a second copy.")]
 
     if not page_policy.is_inside(worktree, path):
-        # `_write_new` refuses this too, and would RAISE — but a raise here would finish the item
-        # as a system fault over a path built from an agent-supplied TITLE, which is the one input
-        # on this road a corrective pass could change at all. So the readable refusal comes first,
-        # and the exception stays as the guard covering every OTHER writer.
-        #
-        # `repairable=False` even so: the escape is a symlinked DIRECTORY component somebody merged
-        # into the repo (`wiki/notes` itself linked elsewhere), not anything about this title —
-        # every page of that type would land the same way, so spending the retry buys the same
-        # refusal one agent run later (`gates.unrepairable`'s own rule).
+        # `repairable=False`: the escape is a symlinked directory component, not this title.
         return [gates.Finding(
             agent_module._OUTCOME_GATE, "outside-worktree",
             f"{path} does not resolve inside this capture's own checkout — a directory on that "
@@ -994,20 +580,9 @@ def _write_ordinary_page(worktree: str, outcome, *, created: str) -> "dict | lis
     return {"path": path, "stem": stem}
 
 
-# ── the refused diff, preserved ───────────────────────────────────────────────────────────────
-# A veto reaps the worktree, so until now the offending diff was gone the moment it was refused:
-# the report said THAT the agent rewrote a body and never WHAT it changed, and for a defect that
-# will recur that is a debugging dead end.
-#
-# What is preserved is deliberately asymmetric, and the asymmetry is the safety property:
-#
-#  * REMOVED lines are kept verbatim. They are content already committed in this repo — the thing
-#    that was about to be destroyed, and the only thing that answers "what did it change".
-#  * ADDED lines are withheld entirely. They are the librarian's draft of untrusted captured
-#    material, so writing them to a file beside the queue would be the same mistake as putting a
-#    secret in a log. Their COUNT is kept, which is what a reader actually needs from them.
-#
-# Bounded twice (lines and bytes) because a diff is attacker-influenced in size.
+# The refused diff, preserved. The asymmetry IS the safety property: REMOVED lines are kept
+# verbatim (already-committed content), ADDED lines are only counted (untrusted captured material
+# must never be written beside the queue). Bounded twice, because a diff is attacker-sized.
 REFUSED_DIFF_MAX_LINES = 200
 REFUSED_DIFF_MAX_BYTES = 32 * 1024
 
@@ -1052,10 +627,8 @@ def refused_diff_digest(worktree: str, item: dict, findings) -> str:
 
 
 def preserve_refused_diff(worktree: str, item: dict, findings, *, root: str) -> str:
-    """Write the digest beside the queue and return its path (`""` when it could not be written).
-
-    Never raises: this is diagnostics, and losing them must not change an item's outcome.
-    """
+    """Write the digest beside the queue and return its path, `""` when it could not be written.
+    Never raises: losing diagnostics must not change an item's outcome."""
     try:
         directory = config.refused_diff_dir(root)
         os.makedirs(directory, exist_ok=True)
@@ -1067,41 +640,17 @@ def preserve_refused_diff(worktree: str, item: dict, findings, *, root: str) -> 
         log.warning("could not preserve the refused diff for item %s (%s)",
                     item.get("id"), ex.__class__.__name__)
         return ""
-    # The PATH only. Everything inside it that could carry captured material was already withheld,
-    # and this line names a file rather than quoting one.
+    # The PATH only — this line names a file rather than quoting one.
     log.error("item %s was refused; the refused diff is preserved at %s", item.get("id"), path)
     return path
 
 
 def _cross_check_outcome(ctx: gates.GateContext) -> list:
-    """The agent's account must AGREE with the diff — the diff decides.
-
-    `page_path` used to be taken from the outcome with the diff as a mere fallback, and that
-    string becomes `result_ref`, the submitter's report, the audit row and the pointer a future
-    retry is collapsed onto. So an agent could report a page it never created — a whitespace-only
-    edit to an existing page passes the body-rewrite gate, and the anchoring gate returns nothing
-    when no page was created — and the row reached `filed` naming a path that does not exist.
-
-    Three checks, all cheap: the outcome's `page_path` must be empty or a page the diff really
-    created, any non-`triage` outcome must have created at least one page in the lane (filing is
-    what `filed` means; an edit to somebody else's page is not a filing), and it must have created
-    EXACTLY one.
-
-    **Why exactly one.** `_file` takes `in_lane_new_pages()[0]` — the alphabetically first entry of
-    `git diff --raw` — for `page_path`, `result_ref`, the commit subject, the dedup pointer and the
-    whole report. A second page created in the same run would be committed, stamped and pushed while
-    appearing on no surface a human reads, and `gate_anchoring` unions wikilinks across ALL new
-    pages and requires only that one resolve, so a page with no anchor of its own would ride in on
-    the first page's coat-tails past the anchoring check. "One capture, one commit" was true of
-    commits and 1:N in pages. If multi-page filing is ever wanted, `report.filed` has to carry the
-    list and `result_ref` has to name the set — a contract change, not a code change, and until it
-    is made the veto is the honest position.
-
-    **"Exactly one" means one AGENT page.** `ctx.provenance_pages` — the source attachment's
-    code-written part(s), empty for every ordinary capture — is excluded from the count: those
-    pages are named by the report's own `source_pages` list and cited from the synthesis, so the
-    "committed and reported nowhere" argument does not apply to them, and counting them would
-    veto every attached capture by construction.
+    """The agent's account must AGREE with the diff — the diff decides. `page_path` must be empty
+    or a page the diff created, and a non-`triage` outcome must have created EXACTLY one page in
+    the lane: `_file` takes `in_lane_new_pages()[0]` for `page_path`, `result_ref`, the commit
+    subject and the dedup pointer, so a second page lands on no surface a human reads and can ride
+    past `gate_anchoring`. `ctx.provenance_pages` is excluded, or attached captures are all vetoed.
     """
     new_pages = [p for p in ctx.in_lane_new_pages() if p not in ctx.provenance_pages]
     out = []
@@ -1127,28 +676,9 @@ def _cross_check_outcome(ctx: gates.GateContext) -> list:
 
 
 def _triage(item: dict, deps: Deps, outcome) -> Result:
-    """Which parked report the agent's declaration earns — and WHICH HUMAN it is parked on.
-
-    `agent.parse_outcome` refuses a parked outcome whose `kind` is neither documented one, and
-    one missing the field its report has to name — so a `triage` reaching here carries both. The
-    fallbacks stay as defence in depth (an `Outcome` can be constructed directly), the same posture
-    `report._as_list` takes behind the same boundary; what they no longer do is quietly become the
-    report an agent's silence used to earn: "unresolved-entity", about
-    `schema.UNNAMED_ENTITY_PLACEHOLDER`.
-
-    **The routing is CODE's, from the agent's DECLARED outcome.** The agent's job is to say "I
-    cannot place this, and here is the name". What that costs the submitter is this function's
-    decision, and it is a testable contract rather than a judgment: an `unresolved-entity` outcome
-    on a capture that still has its question asks it; every other park, and the same one on a
-    capture whose question is already spent, goes to the steward.
-
-    **The injection findings travel on this road too.** They used to be composed only where a
-    capture was FILED or REFUSED, so a capture whose material tried to steer the librarian AND
-    which the agent then parked recorded the attempt nowhere: `triage` is a terminal state like any
-    other, and two roads reach the same parked sentence (`_unanchorable` is the other) — a finding
-    recorded on one and not the other is how two paths to one destination come to disagree about
-    what happened. They go into the REPORT, which is the surface `queue.finish` persists and
-    `brain_submissions` returns, as well as onto the `Result`.
+    """Which parked report the agent's declaration earns — and WHICH HUMAN it is parked on. An
+    `unresolved-entity` outcome on a capture that still has its question asks it; every other park
+    goes to the steward. Injection findings go into the REPORT as well as onto the `Result`.
     """
     parked = outcome.triage or {}
     rationale = getattr(outcome, "summary", "")
@@ -1164,19 +694,9 @@ def _triage(item: dict, deps: Deps, outcome) -> Result:
 
 def _ask_or_park(item: dict, deps: Deps, *, name: str, agent_rationale: str,
                  notes: list) -> Result:
-    """The one-ask budget, spent or not — the whole routing rule, in one place.
-
-    **`asked_at` is the budget and the database holds it.** It is stamped by `queue.finish` on the
-    FIRST transition into `needs_input` and never cleared: not by the reply that returns the row to
-    `queued`, not by a steward's requeue, not by a lease redelivery. So a capture that has been
-    asked cannot be asked again by any road — including the two where a second question would be
-    most tempting and most wrong: the submitter answered and the answer named something the registry
-    still does not know, and a worker died mid-item and the row came back for another delivery.
-    Holding the budget in code (a flag on the run, a count of passes) would survive neither.
-
-    A capture whose question is spent parks in `triage` as an ENTITY situation — the steward's own
-    queue, where an unregistered name belongs once the submitter has had their say. It is not a
-    failure and the report does not read like one.
+    """The one-ask budget, spent or not. `asked_at` is the budget and the DATABASE holds it:
+    stamped on the first transition into `needs_input` and never cleared — not by the reply, not by
+    a requeue, not by a lease redelivery. A spent capture parks in `triage` on the steward.
     """
     if item.get("asked_at"):
         return Result(schema.TRIAGE, "",
@@ -1194,41 +714,17 @@ def _ask_or_park(item: dict, deps: Deps, *, name: str, agent_rationale: str,
 
 def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
           source_pages=()) -> Result:
-    """The gates passed: commit, push, and say what happened.
-
-    `page_path` comes from the DIFF, never from the outcome — `_cross_check_outcome` has already
-    refused any disagreement, so by here they are the same page, and taking the one the diff
-    proves keeps it that way if that check is ever loosened.
-
-    **`source_pages`**: the attachment's code-written part(s), in part order, from
-    `_write_attached_sources`' own plan — never re-derived from the diff, where `sorted()` puts
-    `-p2` before the bare stem (`_file_meeting`'s exact precedent). They are excluded when
-    PICKING `page_path`: `sources/` sorts before `wiki/`, so the plain `[0]` would name the
-    thread copy instead of the synthesis on every attached capture.
-
-    `edited` is what `edits.apply` actually changed, and it goes into the report as `pages_edited`.
-    It used to be bound in `_run_in_worktree` and dropped on the floor, which left the submitter's
-    report unable to answer "what did this capture change besides its own page" — the commit touched
-    a colleague's page and no surface a human reads said so.
-
-    `outcome.summary` goes in as `agent_rationale` for the neighbouring reason: it is the agent's own
-    account of WHY this page went where it went, and every other field in the report is code's
-    observation of WHAT happened. It is the agent's claim, which is why it travels under a name that
-    says so — the gates have already refused any disagreement between the claim and the diff.
+    """The gates passed: commit, push, and say what happened. `page_path` comes from the DIFF,
+    never the outcome. `source_pages` arrives in PART order from the writer's own plan, and is
+    excluded when picking `page_path` because `sources/` sorts before `wiki/`.
     """
     from stigmergy.librarian import githubapp
 
     page_path = [p for p in ctx.in_lane_new_pages() if p not in ctx.provenance_pages][0]
     message = _commit_message(item, outcome, page_path, n_sources=len(source_pages))
     author_name, author_email = githubapp.identity()
-    # The LOCAL sha. Deliberately not used for `result_ref`: `push` may rebase, which rewrites the
-    # commit, and the sha that matters to a submitter is the one that landed on the branch.
-    #
-    # `gated_entries`: the diff the gates approved is the diff that lands, BYTES included.
-    # `ctx` holds the entries `run_gates` was actually handed — each carrying the content
-    # hash read before any gate subprocess ran — so this passes THOSE rather than re-deriving
-    # them; a second derivation would be taken after the window it exists to check. See
-    # `gitcmd.commit`.
+    # `gated_entries`: the diff the gates approved is the diff that lands, BYTES included. Pass
+    # the entries `run_gates` was handed — re-deriving samples after the window being checked.
     gitcmd.commit(worktree, message=message, author_name=author_name, author_email=author_email,
                   gated_entries=ctx.entries)
 
@@ -1239,17 +735,14 @@ def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
         # Minted as late as possible and handed over in the ENVIRONMENT, never in argv.
         config_env = githubapp.push_config(githubapp.installation_token(), slug)
 
-    # The last thing before the only irreversible step. A lease lost while we worked means the row
-    # was redelivered and somebody else owns this capture; pushing anyway is how one capture gets
-    # filed twice, with the second page referenced by no queue row. `finish` would refuse the row
-    # afterwards — correctly, and far too late, because the commit is already on `main`.
+    # Re-assert the lease immediately before the push, the only irreversible step: a lost lease
+    # means the row was redelivered, and `finish` would refuse it only after the commit landed.
     if not queue.holds_lease(conn, item["id"], expected_attempts=item["attempts"]):
         raise LeaseLostError(
             f"the lease on submission {item['id']} (delivery {item['attempts']}) was lost while "
             f"this item was being processed; nothing was pushed")
-    # THE sha, from the push: `page_path@sha` has to name a commit a human can `git show`, and
-    # after a rebase-and-retry the pre-push sha names nothing reachable. Found by the docker e2e
-    # with two workers racing — see `gitcmd.push`.
+    # THE sha from the push, not the local commit: after a rebase-and-retry the pre-push sha
+    # names nothing reachable.
     sha = gitcmd.push(worktree, branch=deps.settings.branch, remote_url=remote_url,
                       config_env=config_env, author_name=author_name, author_email=author_email)
 
@@ -1269,7 +762,6 @@ def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
 
 
 def _repo_slug(repo: str) -> str:
-    """`owner/name` from the checkout's `origin`, for the App's push URL."""
     url = gitcmd.origin_url(repo)
     slug = url.rsplit(":", 1)[-1] if url.startswith("git@") else url.split("github.com/")[-1]
     return slug.removesuffix(".git")
@@ -1281,34 +773,18 @@ def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
     veto = gates.vetoes(findings)
     notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
 
-    # Selected by CODE and not by gate ALONE. The secrets and PII gates also emit `unscanned-diff`
-    # — "the diff produced no readable added lines, so I refused rather than pass unscanned" —
-    # which is a SYSTEM fault, not a finding about the submitter's material. Routing it through
-    # `rejected_secret` would tell a person gitleaks matched a secret in their capture when it
-    # matched nothing at all, and send them hunting for a credential that is not there.
-    #
-    # The gate is named too, because `code` alone is not this repo's namespace to promise:
-    # `gate_contract` builds its code VERBATIM from the knowledge repo's linter JSON, so a linter
-    # check named `secret` would land here carrying the default empty `values` and take the read
-    # below from a clean refusal to a `ValueError` — and `worker._finish` keys the immediate purge
-    # on the reason code, so the one capture that must never linger would be the one that did.
+    # GATE AND CODE, never code alone: `gate_contract` builds its codes verbatim from the
+    # knowledge repo's linter JSON, so a check named `secret` would land here with no values.
     secret = next((f for f in veto if f.gate == "secrets" and f.code == "secret"), None)
     if secret:
-        # Read from `values`, never re-parsed out of `message`/`locator` — same contract as
-        # `_pre_agent` above. A hit visible only once adjacent lines were rejoined carries an
-        # EMPTY line and a locator with no `:<line>` in it, so recovering the line by splitting
-        # the locator handed `rejected_secret` the page path and reported it as a line number.
+        # From `values`: a hit visible only after adjacent lines were rejoined has no locator line.
         line, rule = secret.values
         return Result(schema.REJECTED, "",
                       report.rejected_secret(line=line, rule_id=rule,
                                              where="the drafted page"),
                       diagnostics_path=diagnostics_path)
-    # Gate AND code, for the reason the secrets selector above records — and this one is
-    # worse if it is wrong: `reason_code=pii` is in `schema.WITHHELD_REASONS`, so
-    # `worker._finish` calls `purge_secret_capture_immediately` and the submitter's
-    # payload and hints are DESTROYED. A knowledge-repo linter check named `pii` would
-    # have reached this branch through `gate_contract`, which builds its code verbatim
-    # from that repo's JSON, and thrown away someone's material over a lint finding.
+    # Gate AND code, and irreversible if wrong: `reason_code=pii` is in `schema.WITHHELD_REASONS`,
+    # so `worker._finish` purges the submitter's payload and hints outright.
     pii = next((f for f in veto if f.gate == "pii" and f.code == "pii"), None)
     if pii:
         label = pii.message.split("what looks like ", 1)[-1].split(" near line")[0]
@@ -1317,47 +793,26 @@ def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
                                           pattern_label=label, where="the drafted page"),
                       diagnostics_path=diagnostics_path)
 
-    # `f.repairable`, exactly as `_refuse_meeting` already does it. `gate_body_rewrite`'s
-    # findings (`body-rewrite`, `unparseable`, `unreadable-edit`) are all
-    # `repairable=False`, and its own docstring says why: on the fast lane a modified
-    # page came from `edits.apply_declared` or from nothing, so the agent "did not do
-    # and cannot reach" that work. Routed as steering, they told the SUBMITTER their
-    # material had tried to write outside the lane — naming a colleague's page — for
-    # a fault this module's own docstring classifies as a system fault.
-    # `f.locator` too, not only `f.repairable`: this selector's output goes straight into
-    # `report.rejected_steering(path=…)`, so a zone finding that names no PATH has nothing
-    # for that sentence to be about. `_write_ordinary_page`'s `type-not-creatable` is the
-    # producer that has none — it refuses BEFORE writing, so no path exists — and it carries
-    # its type in `values` instead. Skipping it here is what keeps it on its own road
-    # (`_uncreatable_type`, a steward park) rather than being rendered to a submitter as a
-    # page path spelled `'entity'`.
+    # `repairable` AND `locator`: this feeds `report.rejected_steering(path=…)`, so a finding
+    # naming no path belongs on `_uncreatable_type`'s road.
     zone = next((f for f in veto if f.gate == "zone" and f.repairable and f.locator), None)
     categories = _injection_categories(outcome)
     if zone and categories:
-        # The veto fired AND the material carries a traceable steering attempt: content-
-        # actionable, so the submitter is told what in their capture caused it.
+        # The veto fired AND the material carries a traceable steering attempt: content-actionable.
         return Result(schema.REJECTED, "",
                       report.rejected_steering(path=zone.locator, category=categories[0],
                                                findings=notes),
                       diagnostics_path=diagnostics_path)
 
     if _frontmatter_only(veto):
-        # Content-caused, not the librarian failing at its job — see `_frontmatter_only`'s own
-        # docstring. This decides only the DESTINATION; the refusal itself already failed CLOSED
-        # (nothing ambiguous was committed). `unparseable` alone keeps its own sentence (the
-        # shape-repair instruction);
-        # `forged-field`/`forbidden-field` (with or without `unparseable` alongside) get the
-        # "you declared a field the server owns" sentence instead — same reason code, because a
-        # read path may only branch on that, not on prose.
+        # Two sentences, ONE reason code either way — a read path may branch on the code, not prose.
         codes = {f.code for f in veto}
         builder = (report.rejected_malformed_frontmatter if codes == {"unparseable"}
                   else report.rejected_forged_field)
         return Result(schema.REJECTED, "", builder(findings=notes),
                       diagnostics_path=diagnostics_path)
 
-    # ── the two parks: a refusal whose honest destination is the steward's queue ────────
-    # Each requires its veto to be the WHOLE story, so they are mutually exclusive by construction
-    # and their order here decides nothing.
+    # The two parks. Each requires its veto to be the WHOLE story, so their order decides nothing.
     uncreatable = _uncreatable_type(veto)
     if uncreatable:
         return Result(schema.TRIAGE, "",
@@ -1368,166 +823,50 @@ def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
 
     unanchorable = _unanchorable(veto)
     if unanchorable:
-        # **A veto that survived the last pass goes to the STEWARD, not to the submitter.** The
-        # question is routed from the agent's DECLARED outcome (`_triage`) and from nothing else:
-        # an anchor the agent attempted and could not land is a gate's verdict about a page, and
-        # turning a gate's verdict into a question to a non-technical person would be
-        # `anchoring_brief`'s audience confusion in the other direction. The two roads still
-        # converge on one destination and one sentence — `triage`, `report.triage_entity`; only
-        # WHICH human is waited on differs, and only for the road the agent named.
+        # A veto that survived the last pass goes to the STEWARD; only `_triage` may ask.
         return Result(schema.TRIAGE, "",
                       report.triage_entity(name=unanchorable.locator,
                                            agent_rationale=getattr(outcome, "summary", ""),
                                            findings=notes, asked=bool(item.get("asked_at"))),
                       findings=notes, diagnostics_path=diagnostics_path)
 
-    # Anything else — a zone veto on ordinary material, a binary page, a linter error, an
-    # anchoring outcome the agent never declared, an outcome that disagrees with the diff — is the
-    # librarian failing at its job, not the submitter's problem.
+    # Anything else is the librarian failing at its job, not the submitter's problem.
     worst = veto[0] if veto else None
     return Result(schema.FAILED, "",
                   report.failed_system(attempts=item.get("attempts", 1),
                                        agent_attempts=agent_attempts,
                                        stage=worst.gate if worst else "gates",
                                        reason=worst.message if worst else "unknown",
-                                       # Into the REPORT, not only onto the `Result` — the report
-                                       # is what `queue.finish` persists and `brain_submissions`
-                                       # returns, and this was the one road of the four in this
-                                       # function that dropped them (see `report.failed_system`).
+                                       # Into the REPORT: that is what `queue.finish` persists.
                                        findings=notes),
                   findings=notes, diagnostics_path=diagnostics_path)
 
 
 def _uncreatable_type(veto) -> str:
-    """Is "the fast lane cannot create that type" the WHOLE story — and which type is it?
-
-    Then the item is parked, not failed. Criterion 4 already says where a governed type belongs:
-    *"a capture the librarian judges to be an `entity`, `meeting`, `metric`, `dataset`, `person`,
-    `team`, `product`, `customer`, `policy` or `source` lands in `triage` with the reason — never
-    silently downgraded to `note` and never filed"*. The agent that RECOGNISES the type parks the
-    capture and lands exactly there (`_triage`, `unsupported-type`); the one that writes the page
-    anyway was told the librarian broke. Same capture, same news, two destinations, with the worse
-    one reached by the agent trying harder — the identical asymmetry `_unanchorable` closed for
-    anchoring, and it needed no measurement to settle because **the destination is mechanically
-    derivable**: the folder the page landed in supplies `judged_type`, so nothing here is judged.
-
-    Returns the TYPE rather than the finding, because that is the whole of what the routing needs
-    and it comes from the path — `page.type_for_folder` is the same inverse lookup `gate_zone` used
-    to decide the veto in the first place. `""` when the veto is not the whole story or the folder
-    names nothing, which is `failed`: a park about a type nobody can name tells a steward less than
-    an honest system fault does.
-
-    **Only when it is the whole story**, for the reason `_unanchorable` gives at greater length: a
-    park says "this material is fine, it just belongs elsewhere", and it must not bury a second,
-    real fault. Nothing co-occurs with this veto by construction — `_check_created_type` returns at
-    the first refusal, so it is the only finding that page produces — so unlike the anchoring park
-    there is no companion veto to admit, and any second veto forces `failed`.
-
-    Today this cannot fire: `gate_zone._check_created_type` documents why (both derived views of
-    `page.PAGE_TYPES` currently agree, so `ensure_creatable` cannot raise for a type
-    `type_for_folder` returned). It is the routing that belongs beside the guard, written while the
-    argument is in front of us rather than the day the table grows a governed foldered type.
-    """
+    """Is "the fast lane cannot create that type" the WHOLE story, and which type? Then it parks
+    on the steward. `""` — not the whole story, or no nameable folder — stays `failed`: a park
+    must not bury a second, real fault."""
     uncreatable = ("zone", gates.TYPE_NOT_CREATABLE)
     kinds = {(f.gate, f.code) for f in veto}
     if kinds != {uncreatable}:
         return ""
     finding = next(f for f in veto if (f.gate, f.code) == uncreatable)
-    # TWO producers now, and they know the type by different routes. `gate_zone` judges a page the
-    # agent already WROTE, so the folder it landed in supplies the type and nothing is judged
-    # (below). `_write_ordinary_page` refuses BEFORE writing anything, so there is no folder to
-    # invert — it carries the declared type verbatim in `values`, the field that exists for a
-    # reader comparing identity rather than displaying it. Reading `values` first keeps that
-    # producer from having to invent a folder for a page it deliberately did not create.
+    # `_write_ordinary_page` carries the type in `values`; `gate_zone` derives it from the folder.
     judged = (finding.values[0] if finding.values
               else page_policy.type_for_folder(finding.locator))
-    # And the derived type must still be one the fast lane may not create. The gate's contract
-    # already says so, and asking the shared table again is what keeps this routing from inventing
-    # a park the moment the two disagree: "this reads like a note page, and note needs a steward's
-    # review" is the sentence a silent disagreement would produce.
+    # Ask the shared table again, so a disagreement between the two views cannot invent a park.
     return "" if page_policy.classify_page_type(judged).creatable else judged
 
 
 def _unanchorable(veto) -> "gates.Finding | None":
     """Is "nothing on this page anchors" the WHOLE story of this refusal, and does it name what?
 
-    Then the item is parked, not failed. After two passes that is the honest outcome — the
-    submission goes to `triage` with the unresolved name as its open question — and it is the
-    destination the cooperative half already reaches — an agent that SEES resolution will fail
-    parks itself and lands in `triage`, while one
-    that attempts an anchor and cannot land it used to be told the librarian could not finish. That
-    was untrue, it was the worse of two available destinations, and it was reached by the agent
-    trying HARDER. The two paths now converge.
-
-    **Only when that is the WHOLE story**, which is why this is a set membership test and not a
-    search for one finding. Parking says "a steward registers an entity and this material is fine";
-    if the librarian also rewrote somebody's body, wrote a page git calls binary or produced an
-    outcome that disagrees with its own diff, that sentence would bury a real fault under a routine
-    one. `failed` stays correct there — and either way nothing is committed and the refused-diff
-    digest names every gate that fired.
-
-    **A `dead_links` finding does not automatically ride along, and the rule for when it may is
-    narrow.** This used to admit the linter's `dead_links` finding alongside the anchoring veto
-    unconditionally, justified by an implication that held only under an older mechanism:
-    `gate_anchoring` used to refuse after finding that NO wikilink on the page resolves, so every
-    link on it named something unregistered, and a dead one named something with no page either —
-    the two findings were the same fact in two vocabularies, for a page this capture created.
-
-    That mechanism is gone. `gate_anchoring` checks the DECLARED `anchoring.entities` list against
-    the registry and never reads the page's links at all — so an unresolved declared id says
-    nothing about whether the page's own wikilinks are healthy, IN GENERAL. But the librarian
-    skill still instructs the agent to carry a wikilink to the entity it declares, so the ORDINARY
-    case is still an agent that writes
-    `[[Acme Ventures Inc]]` and declares `"entities": ["Acme Ventures Inc"]` in the same breath: one
-    unresolved id, one dead link, the SAME name, on a page created for the sole purpose of being
-    about that entity. Routing that combination to `failed` — "the librarian broke" — for the
-    exact case a park exists for would be wrong. But an unrelated dead link elsewhere on the page
-    (a stray link in prose about something else entirely) is a SEPARATE content defect that has
-    nothing to do with the missing registry entry, and admitting THAT would tell a steward "a
-    steward registers an entity and this material is fine" about a page that also carries a real,
-    unrelated fault.
-
-    So the rule is narrower than "any dead_links finding is fine" and narrower than "no dead_links
-    finding is ever fine": every OTHER veto finding alongside the anchoring one must be a
-    `("contract", "dead_links")` finding whose target (`gates.dead_link_target`) names ONE OF the
-    values this anchoring veto could not resolve (`Finding.values`, matched via
-    `gates.normalize_identifier` — the agent that writes the wikilink and the outcome from the
-    same judgment need not spell it identically down to case, accent composition or incidental
-    spacing). Anything else — an unrelated dead link, a binary-page veto, more than one kind of
-    companion finding — means this anchoring veto is not provably the whole story, and the refusal
-    falls through to `failed` (the librarian's job, surfaced rather than glossed over), exactly as
-    it did before this fix for every combination that fails this test.
-
-    **A SET test over `Finding.values` (verbatim), not a single-string equality over
-    `Finding.locator` (a DISPLAY string).** `anchor.locator` comes from
-    `gates._unresolved_name`, built for a human/prompt to read: it returns only the FIRST
-    unresolved value, sanitized, whitespace-collapsed and clamped to `MAX_BRIEF_NAME_LEN` (80)
-    characters with an ellipsis. Comparing THAT against a dead-link target broke three ways, all
-    of them routing a legitimate park to `failed`:
-    - **Plural anchors** — `entity:` is plural (one to three is the expected shape).
-      Two unregistered entities produce one anchoring veto and TWO `dead_links`
-      vetoes; the second always failed the single-locator equality. `values` carries every
-      unresolved id, not just the one `_unresolved_name` happened to pick for display.
-    - **NFC vs NFD** — the old comparison casefolded without normalizing. `[[Nestlé]]` in NFD
-      against a declared NFC `Nestlé` differ byte-for-byte despite being the same name — exactly
-      the accent-composition question `page.path_key` already exists to answer for a path, and
-      `gates.normalize_identifier` now answers the same way for an identifier.
-    - **The 80-char clamp** — any declared name longer than `MAX_BRIEF_NAME_LEN` (`agent`'s own
-      `MAX_IDENTIFIER_LEN` allows up to 400) never matched its own un-clamped dead-link target.
-
-    **And only when there is something to match.** `values` is empty exactly when NOTHING was
-    declared at all (`kind: "entity"` with an empty `entities` list) — `gates._unresolved_name`
-    still gives that case a non-empty display `locator` (`"something unnamed"`, for the steward
-    park), but there is no real value for a companion dead link to name. A LONE anchoring veto
-    (no companion findings at all) still parks regardless of `values` — that guard only matters
-    once there is something else in `veto` this function must decide whether to admit, and an
-    empty `values` there means nothing here matches, the conservative direction (falls through to
-    `failed`) rather than the old bug's opposite mistake of a literal `[[something unnamed]]`
-    wikilink coincidentally matching the placeholder string.
-
-    The two other anchoring codes are deliberately NOT routed here. `undeclared` and `no-reason`
-    are malformed outcomes — the agent declared no anchoring judgment at all — so there is no
-    unresolved name and nothing for a steward to resolve; they remain a system fault.
+    Then it parks on the steward. Set-membership, not a search: a second, real fault alongside must
+    force `failed`. The one companion admitted is a `("contract", "dead_links")` finding whose
+    target names one of the values this veto could not resolve. Match over `Finding.values` with
+    `gates.normalize_identifier`, never `Finding.locator`, a DISPLAY string (first value only,
+    clamped) that misses plural anchors, NFC/NFD spellings and long names. `undeclared`/`no-reason`
+    name nothing for a steward to act on and stay system faults.
     """
     unresolved = ("anchoring", gates.ANCHORING_UNRESOLVED)
     dead_link = ("contract", gates.DEAD_LINKS_CHECK)
@@ -1550,76 +889,29 @@ def _unanchorable(veto) -> "gates.Finding | None":
 
 
 def _frontmatter_only(veto) -> bool:
-    """Is "the frontmatter gate refused this page" the WHOLE story of this refusal?
-
-    Findings cycle 1, 4.7 established the reasoning for `("frontmatter", "unparseable")` alone:
-    `page._strip_keys` drops a dropped key's TOP-LEVEL line correctly but, for a value spanning
-    multiple lines whose continuation is not indented under its key (`entity: [` / `"acme"` / `]`,
-    each on its own unindented line — legal-looking but not the shape this repo's line-based
-    dialect expects), the continuation lines are not recognized as part of what is being dropped
-    and survive as a stray fragment. `stamp_server_fields` then appends its own well-formed lines
-    around that fragment, and the result is frontmatter a real YAML parser cannot read at all.
-    Every swallow attempt there already failed CLOSED (nothing ambiguous is ever committed); what
-    was wrong was the DESTINATION — routing to `failed` ("the librarian broke") for content the
-    capture itself supplied in a shape this parser was never going to represent.
-
-    **Findings cycle 2, B5: that reasoning is not specific to `unparseable` — it is a property of
-    the GATE.** `gate_frontmatter` also produces `forged-field` (a server-owned field declared with
-    the wrong value, declared twice, or via a construct this dialect refuses outright — a BOM, YAML
-    explicit-key syntax) and `forbidden-field` (`owner`/`id`/`content_hash`, never legitimate on a
-    fast-lane page). Both are exactly as content-caused as `unparseable`: the material tried to
-    assert something the server computes itself, and the librarian did its job correctly by
-    refusing it. Routing THOSE to `failed` — while `unparseable` from the very same gate routes to
-    `rejected` — was the asymmetry 4.7 closed for one code and left standing for its two siblings,
-    and it gets more likely to matter now that B1 moved some of that catch INTO this gate. This is
-    still a set-membership test, same posture as `_uncreatable_type`/`_unanchorable`: only when
-    every finding in the veto comes from the `frontmatter` gate (whatever the mix of its three
-    codes) is it provably content-caused rather than a symptom riding beside a real system fault —
-    a `binary-page` veto (or any other gate) alongside it still falls through to `failed`.
-    """
+    """Is "the frontmatter gate refused this page" the WHOLE story? Every code it emits is
+    content-caused, so the destination is `rejected`; any other gate alongside forces `failed`."""
     return bool(veto) and all(f.gate == "frontmatter" for f in veto)
 
 
 def failure_result(item: dict, stage: str, reason: str, *, agent_attempts: int = 0,
                    cost_usd: float = 0.0) -> Result:
-    """The worker's own wrapper for an unexpected error — a dead worktree, a git failure, an
-    agent that never produced an outcome. Always a system fault, never the submitter's.
-
-    `agent_attempts` defaults to 0 because these faults are raised from anywhere in the path,
-    including before the agent ever ran; the report then omits the agent counter rather than
-    guessing at it, and still names the queue delivery. `cost_usd` rides the same road from the
-    same exception (`LibrarianError.agent_cost_usd`): a failed item is still a paid item.
-    """
+    """The worker's wrapper for an unexpected error; always a system fault. `agent_attempts`
+    defaults to 0 because these can be raised before the agent ran, and the report then omits it."""
     return Result(schema.FAILED, "",
                   report.failed_system(attempts=item.get("attempts", 1), stage=stage,
                                        reason=reason, agent_attempts=agent_attempts,
                                        cost_usd=cost_usd))
 
 
-# The failures that are KNOWN ways processing can fail, so the report can name the stage
-# instead of shrugging "unexpected". `CaptureError` is in here for `EvidenceError` above all:
-# a row whose evidence blob is gone (retention purged it, or the row was written against a
-# different evidence store) is an ordinary, diagnosable fault — the material cannot be read, so
-# nothing can be verified against it — and calling that "unexpected" would send an operator
-# looking for a bug that is not there.
+# The KNOWN ways processing can fail, so the report names a stage instead of "unexpected".
+# `CaptureError` is here for `EvidenceError`: a purged blob is diagnosable, not a bug.
 PROCESSING_ERRORS = (AgentError, GitError, WorktreeError, LeaseLostError, CaptureError)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════════════════════
-# The fast lane's source ATTACHMENT: a parameter, never a third flow.
-#
-# The door rule: material with independent documentary existence files a `sources/` page beside
-# the synthesis; a conversational capture leaves none. The Slack door was the first on the
-# "documentary" side of that line, and the shape it fixed is reused by every door since: the
-# source page is a fast-lane PARAMETER built from the meeting flow's own pieces —
-# `_build_source_parts` writes the verbatim part(s), `page.stamp_source_fields` stamps the
-# provenance group, `GateContext.provenance_pages` tells the gates which pages carry it — and the
-# synthesis cites the source in `sources:` (`page.add_source_citation`, applied by `_stamp`).
-# The drive flow reuses the same writer.
-#
-# With the parameter OFF (`_source_attachment` returns None — every MCP capture, and every door
-# until it opts in), the fast lane builds exactly the ctx it would without any of this.
-# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# The fast lane's source ATTACHMENT: a parameter, never a third flow. The door rule: material with
+# independent documentary existence files a `sources/` page beside the synthesis; a conversational
+# capture leaves none. With the parameter OFF the fast lane builds the ctx it always would.
 
 SLACK_SOURCE_PREFIX = "sources/slack/"
 DRIVE_SOURCE_PREFIX = "sources/drive/"
@@ -1627,29 +919,22 @@ DRIVE_SOURCE_PREFIX = "sources/drive/"
 
 @dataclass(frozen=True)
 class SourceAttachment:
-    """Which `sources/` page set one fast-lane capture attaches, and the provenance it carries.
-
-    Built ONLY from facts a DOOR asserted server-side: `source_client`/`source_permalink` are
-    refused at the client seam for every door but Slack's own
-    (`capture.schema.reject_source_provenance_hints`, `BrainService.door`), which is what makes
-    keying a FLOW decision on a hint sound — the hint stopped being client-writable the moment it
-    became load-bearing."""
-    prefix: str          # the zone folder, with its trailing slash ("sources/slack/")
-    source_kind: str     # the contract's `source_kind:` enum value ("slack")
-    tags: tuple          # the source page's frontmatter tags
-    url: str             # `url:` on every part — the Slack permalink; "" when the door sent none
-    suffix: str          # "thread": titles read "<title> — thread", stems "<slug>-thread"
+    """Which `sources/` page set one fast-lane capture attaches. Built ONLY from facts a DOOR
+    asserted server-side: `capture.schema.reject_source_provenance_hints` refuses these hints at
+    the client seam, which is what makes keying a FLOW decision on a hint sound.
+    """
+    prefix: str          # the zone folder, trailing slash included ("sources/slack/")
+    source_kind: str     # the contract's `source_kind:` enum value
+    tags: tuple
+    url: str             # `url:` on every part; "" when the door sent none
+    suffix: str          # titles read "<title> — <suffix>", stems "<slug>-<suffix>"
 
 
 def _source_attachment(item: dict) -> "SourceAttachment | None":
-    """The parameter's ON/OFF switch, decided per item from facts a DOOR asserted server-side.
-    `None` — the OFF position — for every ordinary capture (an MCP snippet files a synthesis and
-    nothing else). Two ON positions today: the Slack door (keyed on the `source_client` hint,
-    refused at the client seam for every other door) and the drive flow (ADR 028), keyed on the
-    ROW'S OWN
-    `kind`: `"drive"` is only ever written by the `stigmergy-drive` operator CLI
-    (`schema.MCP_SUBMIT_KINDS` keeps it unreachable through `brain_submit`), which makes the
-    kind itself the strongest server-asserted fact available — no hint consulted to decide."""
+    """The parameter's ON/OFF switch, decided per item from facts a DOOR asserted server-side;
+    `None` for every ordinary capture. Two ON positions: the Slack door (the `source_client` hint)
+    and the drive flow (the row's own `kind`, unreachable through `brain_submit`).
+    """
     client = (item.get("hints") or {}).get("client") or {}
     if item.get("kind") == schema.DRIVE:
         return SourceAttachment(prefix=DRIVE_SOURCE_PREFIX, source_kind="google-drive",
@@ -1664,20 +949,9 @@ def _source_attachment(item: dict) -> "SourceAttachment | None":
 
 def _write_attached_sources(worktree: str, attachment: SourceAttachment, outcome,
                             material: str) -> "dict | list":
-    """CODE writes the attached source page(s), verbatim from the archived material — the fast
-    lane's half of what `_write_meeting_pages` does for the meeting set, through the same writer
-    (`_build_source_parts`) and the same collision discipline: paths are checked against the
-    repo's existing pages first, and a collision returns one veto finding (the corrective-retry
-    road) with nothing written.
-
-    The stem comes from the agent's own `outcome.title` — the one judgment call in here, and it is
-    the SAME judgment the agent already makes for the synthesis page's filename; slugified, so it
-    carries the same trust. A recaptured thread whose title slugifies to an existing source stem
-    is refused rather than suffixed: the brief tells the agent the path exists, and a different
-    title is its own repair.
-
-    Returns `{"stems": [...], "paths": [...]}` in part order (1, 2, ...), the order
-    `_file`'s report and the `sources:` citation both rely on.
+    """CODE writes the attached source page(s), verbatim, through the shared `_build_source_parts`
+    writer. All-or-nothing: a collision returns one veto finding with nothing written. Returns the
+    plan in PART order, which `_file`'s report and the `sources:` citation rely on.
     """
     title = str(getattr(outcome, "title", "") or "").strip() or "Capture"
     stem = f"{slugify(title) or 'capture'}-{attachment.suffix}"
@@ -1703,17 +977,10 @@ def _write_attached_sources(worktree: str, attachment: SourceAttachment, outcome
 
 def _stamp_attached_sources(ctx: gates.GateContext, deps: Deps, item: dict,
                             ids_by_path: dict) -> None:
-    """`_stamp_meeting`'s source-page loop, for the fast lane's attachment: per-page `source`
-    declarations, `page.stamp_source_fields` over each part (the provenance group, never the
-    fast-lane group `_stamp` writes), and the per-page stamped record `gate_frontmatter` checks
-    output-equality against. `tier` stays the default `"1"`: a captured thread is a direct
-    recording of the conversation itself — primary, exactly like the meeting flow's transcript.
-
-    Iterates `ctx.provenance_pages`, which the caller populated from what
-    `_write_attached_sources` just wrote — the same told-not-inferred posture as
-    `_stamp_meeting`. `ids_by_path` is the producer's own explicit
-    chain identity per part, stamped as `id:` and recorded so the gate's output-equality check
-    covers it like every other stamped field."""
+    """Stamp the attachment's source pages with the PROVENANCE group (never the fast-lane group
+    `_stamp` writes) and record each page's stamped fields for `gate_frontmatter`'s output-equality
+    check. `tier` stays `"1"`: a captured thread is a primary recording.
+    """
     digest = hashlib.sha256((ctx.material or "").encode("utf-8")).hexdigest()
     extracted_at = datetime.datetime.now(datetime.UTC).isoformat()
     for path in sorted(ctx.provenance_pages):
@@ -1730,28 +997,21 @@ def _stamp_attached_sources(ctx: gates.GateContext, deps: Deps, item: dict,
             **({"id": page_id} if page_id else {})}
 
 
-# ═══════════════════════════════════════════════════════════════════════════════════════════════
-# The drive flow (ADR 028): conversion at the worker, then the fast lane with the source
-# attachment ON. NOT a third flow: everything from `_pre_agent` onward is `process_item` itself,
-# byte for byte — the drive-specific code is exactly the bytes→text step below and the
-# `_source_attachment` drive branch above. Kernel hands do the extraction (deterministic,
-# text-layer first); `vision_extract` is the code-decided, once-per-document fallback for
-# scanned PDFs; a conversion fault is a NAMED stage (`conversion`), never an exception loop and
-# never a submitter-blaming report.
-# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# The drive flow: conversion at the worker, then the fast lane with the attachment ON. The
+# drive-specific code is the bytes→text step below plus the `_source_attachment` drive branch. A
+# conversion fault is a NAMED stage (`conversion`), never a submitter-blaming report.
 
-# A text-layer PDF yields well over this per page; a scanned one yields almost nothing. The
-# form-feed count is pdftotext's own page marker, so the heuristic needs no second parse.
+# A text-layer PDF yields well over this per page; a scanned one almost nothing. The form-feed
+# count is pdftotext's own page marker, so the heuristic needs no second parse.
 DRIVE_VISION_MIN_CHARS_PER_PAGE = 200
-# Below this many characters TOTAL the extraction is unusable outright — with no vision
-# capability the honest answer is a refusal, not an agent pass over empty text.
+# Below this many characters TOTAL the extraction is unusable: refuse rather than run an agent
+# pass over empty text.
 DRIVE_MIN_TEXT_CHARS = 50
 
 
 class _ConversionRefused(Exception):
-    """A drive conversion that cannot proceed. `str(self)` is the WIRE sentence (reaches the
-    submitter through `Result.report` — no paths, no `str(exception)`, the R5 rule);
-    `log_detail` is the operator's, logged where it is raised or caught."""
+    """A drive conversion that cannot proceed. `str(self)` is the WIRE sentence and reaches the
+    submitter — no paths, no `str(exception)`; `log_detail` is the operator's."""
 
     def __init__(self, wire: str, log_detail: str = ""):
         super().__init__(wire)
@@ -1759,9 +1019,8 @@ class _ConversionRefused(Exception):
 
 
 def process_drive_item(conn, item: dict, deps: Deps) -> Result:
-    """`process_item`'s sibling for `kind == "drive"` rows (ADR 028 D4): convert FIRST —
-    the original bytes from the evidence plane through the kernel hands — then delegate to the
-    SAME fast-lane path over the extracted text. Never raises for an ordinary refusal."""
+    """`process_item`'s sibling for `kind == "drive"`: convert first, then delegate to the SAME
+    fast-lane path over the extracted text. Never raises for a refusal."""
     try:
         material = _drive_material(deps, item)
     except _ConversionRefused as ex:
@@ -1771,11 +1030,8 @@ def process_drive_item(conn, item: dict, deps: Deps) -> Result:
 
 
 def _drive_material(deps: Deps, item: dict) -> str:
-    """The extracted text of a drive capture's original bytes (`blob_refs[1]` — the manifest is
-    `blob_refs[0]`, ADR 028 D3's stated-by-design layout; the first multi-blob capture in this
-    codebase). Deterministic hands first, vision as the bounded fallback, three honest refusals:
-    no bytes blob, an extraction the hands cannot produce, an extraction over the material cap.
-    """
+    """The extracted text of a drive capture's original bytes — `blob_refs[1]`; `blob_refs[0]` is
+    the manifest. Deterministic converters first, vision as the bounded fallback."""
     refs = item.get("blob_refs") or []
     if len(refs) < 2:
         raise _ConversionRefused(
@@ -1813,12 +1069,8 @@ def _drive_material(deps: Deps, item: dict) -> str:
 
 
 def _with_vision_fallback(path: str, method: str, text: str, name: str) -> str:
-    """ONE bounded OCR pass for a PDF whose text layer came back thin (a scanned deck), decided
-    by CODE — ADR 028 D4 rejected agent-orchestrated extraction. The env read mirrors
-    `converters.vision_extract`'s own call-time read of the same variable: this function only
-    asks "is the capability configured at all" to choose between falling back and refusing
-    honestly. Keeps whichever extraction is LONGER — vision output degrading below the text
-    layer must never lose real text."""
+    """ONE bounded OCR pass for a PDF whose text layer came back thin, decided by CODE. Keeps
+    whichever extraction is LONGER, so degraded vision output cannot lose real text."""
     if method != "pdf":
         return text
     stripped = text.strip()
@@ -1853,48 +1105,14 @@ def _with_vision_fallback(path: str, method: str, text: str, name: str) -> str:
     return text
 
 
-# ═══════════════════════════════════════════════════════════════════════════════════════════════
-# The meeting flow: a page SET (source + meeting + N decisions), atomically, or nothing.
-#
-# A SEPARATE entry point (`process_meeting_item`) rather than a branch inside `process_item`,
-# because the two flows disagree about the one invariant `process_item`'s own machinery is built
-# on: exactly one new page per capture. `_pre_agent` (dedup, the material scan) is the one piece
-# genuinely shared — reused, not duplicated. Everything from the agent call onward is code that
-# knows it is filing a SET: the agent invocation
-# (`deps.agent.run_meeting`, the meeting brief instead of the librarian skill), the gate context
-# (a widened, flow-scoped lane — `gates.GateContext.write_prefixes`/`creatable_types`, never the
-# global `page.FOLDER_BY_TYPE`, so an ordinary capture claiming `type: meeting` still parks), the
-# cross-check (`_cross_check_meeting_outcome`, the
-# SET's own atomicity contract — `_cross_check_outcome`'s "exactly one page" rule is UNCHANGED and
-# still governs every ordinary capture), and the commit/report (`_file_meeting`,
-# `report.filed_meeting`).
-# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# The meeting flow: a page SET (source + meeting + N decisions), atomically or nothing. A SEPARATE
+# entry point because it contradicts `process_item`'s invariant of exactly one new page per
+# capture. The lane is flow-scoped on the `GateContext`, never the global `page.FOLDER_BY_TYPE`,
+# so an ordinary capture claiming `type: meeting` still parks.
 
-# The meeting flow's write prefixes and creatable types — computed once, module level, because
-# they are a property of the FLOW, not of any one item.
-#
-# **These are THREE folders, not the ordinary fast-lane set plus two.** Writing this as
-# `gates.ALLOWED_WRITE_PREFIXES + (the two meeting folders)` widened the gate-side lane to include
-# `wiki/notes/` and `wiki/concepts/`, which no meeting contract mentions: the knowledge-repo brief
-# (`MEETING_SYSTEM_PROMPT_HEADER`/`SKILL.md`: "writes are confined to NEW .md pages under
-# `sources/meetings/`, `wiki/meetings/` and `wiki/decisions/`") and
-# `agent.MEETING_ALLOWED_WRITE_RE` both say THREE. The widening made the injected prompt's claim
-# FALSE: a steered meeting agent writing `wiki/notes/evil.md` was denied at tool time (the
-# agent-side hook was correctly narrow) but would have been ADMITTED by this context had it
-# reached the gate any other way, routing a steering attempt through the terminal cross-check as
-# `report.failed_system` — a system fault, not `rejected_steering`. Three folders, matching the
-# brief exactly, closes both: the hook denies at tool time AND `gate_zone` vetoes with
-# `outside-lane` if anything ever reaches it anyway — defence in depth rather than one and only
-# defence.
-#
-# **What these three folders BIND is code, not the agent.** They used to be the AGENT's own lane
-# (mirrored by `agent.MEETING_ALLOWED_WRITE_RE`) — what a Write/Edit tool call was permitted to
-# touch. The agent now has no page-writing tool at all (its one allowed write is its own outcome
-# file — `agent.confine_outcome_write`), and CODE is the sole author of every page in the set
-# (`_write_meeting_pages`). So these are the FLOW's own placement contract — where code itself may
-# create a page for this capture — and `gate_zone` judges the diff against them as a defence
-# against a bug in code's own construction, where it used to be a defence against a steered
-# agent.
+# EXACTLY these three folders, not the fast-lane set plus two: the knowledge-repo meeting brief and
+# `agent.MEETING_ALLOWED_WRITE_RE` both name three, and widening this would make the injected
+# prompt's claim false. If you change these, change both of those too.
 MEETING_SOURCE_PREFIX = "sources/meetings/"
 MEETING_MEETING_PREFIX = "wiki/meetings/"
 MEETING_DECISION_PREFIX = "wiki/decisions/"
@@ -1904,8 +1122,7 @@ MEETING_EXTRA_FOLDER_TYPES = {"sources/meetings": "source", "wiki/meetings": "me
 
 
 def process_meeting_item(conn, item: dict, deps: Deps) -> Result:
-    """`process_item`'s sibling for `kind == "meeting"` rows. Never raises for an ordinary
-    refusal, same contract as `process_item`."""
+    """`process_item`'s sibling for `kind == "meeting"` rows; same never-raises contract."""
     material, early = _pre_agent(conn, item, deps)
     if early is not None:
         return early
@@ -1935,45 +1152,16 @@ def process_meeting_item(conn, item: dict, deps: Deps) -> Result:
 
 
 def _meeting_meta(item: dict) -> dict:
-    """The drop CLI's own hints (title, meeting_date, attendees, source_label) — the agent's
-    HINTS, never instructions: they never bind a decision's placement or anchor."""
+    """The drop CLI's hints — the agent's HINTS, never instructions: they bind no placement."""
     client = (item.get("hints") or {}).get("client", {})
     return {k: client.get(k, "") for k in ("title", "meeting_date", "attendees", "source_label")}
 
 
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-# A re-file after a park REUSES the prior outcome. **A park must not cost knowledge.**
-#
-# **The failure this exists for**, measured on a real long transcript:
-#
-#   1. A pass distilled six decisions and was refused `anchoring/unresolved`. Nothing was wrong
-#      with the distillation — one entity simply did not exist in the registry yet.
-#   2. A steward minted the entity and requeued.
-#   3. The next pass threw that distillation away, re-read the material from scratch, and produced
-#      THREE. Two of the lost decisions were ones an attendee confirmed were really taken.
-#
-# The result was faithful and incomplete: the system discarded a good distillation because of an
-# anchoring failure that had nothing to do with its content, on the park->resolve->re-file loop
-# built for the normal case. It gets worse with meeting size — the longer the transcript, the more
-# a fresh read can drop, and the more likely a park is in the first place (more names, more
-# chances one is unregistered).
-#
-# **The fix, and why it is not merely a cache.** The anchoring resolution is a REGISTRY LOOKUP over
-# the prior outcome's entity names, not a judgment that needs the model again — and the outcome is
-# already a structured object. So a re-file re-runs the existing pipeline (`_write_meeting_pages`
-# + every gate) over the STORED outcome against the FRESH registry: if the steward's mint resolved
-# the name, the same decisions file. No new mechanism decides anchoring; the gates do, exactly as
-# they always did, over content that no longer changes underneath them.
-#
-# **The model still runs when it should.** A stored outcome is reused only when the material and
-# the submitter's reply are byte-identical to what produced it — a new reply is new information for
-# the distillation, and the refused pass above came *after* a `brain_reply`, so that is a real case
-# and not a hypothetical. Anything else, and the model re-reads.
-#
-# **And when a genuine re-distillation does happen, the report DIFFS the two outcomes** — that is
-# the only reason the original loss was ever caught, and anyone taking this work must diff rather
-# than read the second result, because a fresh distillation looks perfectly plausible on its own.
-# ══════════════════════════════════════════════════════════════════════════════════════════════
+# A re-file after a park REUSES the prior outcome: A PARK MUST NOT COST KNOWLEDGE. A fresh model
+# read can distil fewer decisions, so a re-file re-runs the existing pipeline over the STORED
+# outcome against the FRESH registry — no new mechanism decides anchoring. Reuse is allowed only
+# when the material AND the reply are byte-identical to what produced it; on a genuine
+# re-distillation the report DIFFS the two, which is what makes a silent loss visible.
 OUTCOME_REUSE_VERSION = 1
 
 
@@ -1982,13 +1170,9 @@ def _sha(text: str) -> str:
 
 
 def _outcome_to_raw(outcome) -> dict:
-    """The stored shape: plain JSON, built field by field rather than by `dataclasses.asdict`.
-
-    Explicit on purpose. `asdict` would silently carry any field added to `MeetingOutcome` later
-    into a column a future pass re-parses, and the round trip has to be something a reader can
-    check by eye against `agent.parse_meeting_outcome`'s own field list. Tuples become lists
-    because that is what JSON does to them anyway, and what `_list` requires on the way back.
-    """
+    """The stored shape: plain JSON, field by field, never `dataclasses.asdict`, which would carry
+    a later-added field into a column a future pass re-parses. Keep it matched to
+    `agent.parse_meeting_outcome`'s."""
     return {
         "decision": outcome.decision,
         "meeting_title": outcome.meeting_title,
@@ -2008,12 +1192,8 @@ def _decision_titles(outcome) -> tuple:
 
 
 def _first_park_titles(item: dict) -> tuple:
-    """The decision titles the FIRST park of this row ever carried.
-
-    Read from the stored dict and carried forward untouched on every subsequent park, so the diff
-    instrument survives a chain of parks AND a process restart. `_Reuse.prior_titles` is per-run and
-    cannot: it is gone the moment the worker moves to the next item.
-    """
+    """The decision titles the FIRST park of this row carried, carried forward untouched so the
+    diff instrument survives a chain of parks and a restart."""
     stored = item.get("outcome")
     if not isinstance(stored, dict):
         return ()
@@ -2028,31 +1208,11 @@ def _first_park_titles(item: dict) -> tuple:
 
 
 def _with_park_outcome(result: Result, outcome, *, material: str, item: dict) -> Result:
-    """Attach the outcome to a PARKED result so `queue.finish` stores it. The one funnel — every
-    meeting result, filed or refused, passes through here, so there is a single answer to "when is
-    a distillation kept".
-
-    Kept only when all three hold, and each exclusion is a real case:
-
-    * the row is PARKED (`needs_input`/`triage`) — a terminal row can never re-file, and
-      `queue.finish` clears the column on those anyway;
-    * the agent decided to FILE — a `triage` outcome carries no distillation to preserve;
-    * it carries at least one decision — an empty distillation is not worth a reuse, and reusing
-      one would skip the model on a pass that has nothing to lose by running it.
-
-    **A SECOND park must not silently overwrite a richer first one** — the same knowledge loss
-    this whole mechanism exists to stop, reproduced one step earlier. `queue.finish`'s `COALESCE`
-    REPLACES on a non-None value, so this sequence lost knowledge with nothing reporting it:
-    park stores 6 decisions → a steward requeues after minting the wrong name → the reuse is vetoed
-    → the fresh model run yields 3 → **the 3 overwrite the 6** → a later requeue reuses those 3 and
-    the filing report says *"3 decision(s) preserved"* — true of the last park and false of the
-    history, reassuring about exactly the loss it was built to surface.
-
-    Two things close it, and neither is "keep the bigger one": `first_park_titles` carries the
-    original set forward so the diff outlives the chain, and a park that drops a decision **says so
-    at the pass that caused it** rather than waiting for a filing that may never come. Choosing the
-    richer outcome instead would be this function silently overruling the gates about which
-    distillation is fileable, which is not its job.
+    """Attach the outcome to a PARKED result so `queue.finish` stores it. The ONE funnel: kept when
+    the row is parked, the agent decided to FILE, and there is at least one decision. A second park
+    DOES overwrite the stored outcome, so `first_park_titles` carries the original set forward and
+    a park that drops a decision says so at the pass that caused it — deliberately not "keep the
+    bigger one", which would overrule the gates about what is fileable.
     """
     if result.status not in schema.PARKED_STATUSES or outcome is None:
         return result
@@ -2062,9 +1222,8 @@ def _with_park_outcome(result: Result, outcome, *, material: str, item: dict) ->
     first = _first_park_titles(item) or titles
     stored = {
         "version": OUTCOME_REUSE_VERSION,
-        # Both digests are the REUSE PRECONDITION, not provenance decoration: the stored
-        # distillation is a function of the material AND the reply it was produced from, so a
-        # change to either invalidates it. See `_reusable_outcome`.
+        # Both digests are the REUSE PRECONDITION: a change to either invalidates the stored
+        # distillation. See `_reusable_outcome`.
         "material_sha256": _sha(material),
         "reply_sha256": _sha(item.get("reply") or ""),
         # Never overwritten once set — the whole point is that it outlives every later park.
@@ -2086,18 +1245,8 @@ def _with_park_outcome(result: Result, outcome, *, material: str, item: dict) ->
 
 
 def _with_park_loss(report: dict, dropped: list, kept: tuple) -> dict:
-    """The park report's own account of a distillation that shrank, for the human reading it.
-
-    Reported at the pass that CAUSED the loss, not only at a filing that may never happen: a row
-    can sit parked indefinitely, and "we lost two decisions three passes ago" is not something to
-    learn from a report that only exists if somebody eventually resolves the entity.
-
-    Appended to `summary` rather than added as a sibling key, deliberately: `summary` is the field
-    `Result.error` returns and therefore the one sentence that reaches `capture_queue.error`,
-    `stigmergy-queue show` and `brain_submissions`. A new key would have been invisible on every
-    surface a human actually reads. The structured sibling is there too, for a caller that
-    branches rather than reads (`report.base_report`'s own doctrine).
-    """
+    """The park report's account of a distillation that shrank. Appended to `summary`, the one
+    sentence that reaches `capture_queue.error` and every surface a human reads."""
     if not dropped:
         return report
     notice = (
@@ -2111,14 +1260,8 @@ def _with_park_loss(report: dict, dropped: list, kept: tuple) -> dict:
 
 
 def _reusable_outcome(item: dict, material: str) -> tuple:
-    """`(MeetingOutcome | None, why_not: str)` for the outcome stored on this row, if any.
-
-    **Re-parsed through `agent.parse_meeting_outcome`, never trusted as stored.** The row is a
-    mutable surface — an operator can edit it, a migration can touch it, and a future version of
-    this code will read rows an older one wrote — so the stored value goes through exactly the
-    validator a fresh agent outcome goes through. A shape problem means "no reusable outcome", not
-    a refusal: the honest fallback is the model, which is what would have happened anyway.
-    """
+    """The outcome stored on this row, re-parsed through `agent.parse_meeting_outcome` and never
+    trusted as stored. A shape problem means "no reusable outcome", not a refusal."""
     stored = item.get("outcome")
     if not isinstance(stored, dict) or not stored:
         return None, ""
@@ -2127,9 +1270,7 @@ def _reusable_outcome(item: dict, material: str) -> tuple:
     if stored.get("material_sha256") != _sha(material):
         return None, "the archived material is not the one it was distilled from"
     if stored.get("reply_sha256") != _sha(item.get("reply") or ""):
-        # The submitter answered (or answered again) since the distillation was made. That answer
-        # is INPUT to the distillation — `agent.build_prompt` hands the reply to the model — so
-        # reusing an outcome produced without it would silently ignore what the human just said.
+        # The reply is INPUT to the distillation.
         return None, "the submitter's reply changed since it was distilled"
     try:
         outcome = agent_module.parse_meeting_outcome(stored.get("raw"))
@@ -2142,39 +1283,22 @@ def _reusable_outcome(item: dict, material: str) -> tuple:
 
 @dataclass
 class _Reuse:
-    """What happened to a stored outcome on this item, for the filing report.
-
-    `prior_titles` is what the parked pass had distilled. `reused` says this pass filed exactly
-    that, with no model call. When `prior_titles` is non-empty and `reused` is False, a genuine
-    re-distillation happened and the report owes the DIFF — the instrument that caught the loss.
-    """
+    """What happened to a stored outcome. `prior_titles` non-empty with `reused` False means a
+    genuine re-distillation happened and the report owes the DIFF."""
     prior_titles: tuple = ()
     reused: bool = False
 
 
 def _run_meeting_in_worktree(conn, item, deps, material, meeting_meta, worktree, passes,
                              *, linter_path: str = "") -> Result:
-    """`_run_in_worktree`'s meeting sibling: same retry POLICY (one pass, one corrective pass,
-    then refuse), a different pass function.
-
-    **One attempt in front of the loop, with no agent in it.** A stored outcome from a
-    previous park is re-filed first, through the same `_one_meeting_pass` — same page builders,
-    same stamp, same eight gates, same registry read at this item's base commit. If the steward's
-    mint resolved the name that parked it, the SAME decisions file and no model runs. If it still
-    does not pass, the loop below runs exactly as it always did and the report diffs the outcomes.
-
-    The reuse attempt deliberately does NOT consume `passes.count` (it starts no agent pass, and
-    that counter is what the failure report means by "agent attempts") and does not consume the
-    corrective-retry budget: it cost no model call, so it may not spend one.
-    """
+    """`_run_in_worktree`'s meeting sibling. One attempt runs in front of the loop with NO agent in
+    it — a previous park's outcome — and spends neither `passes.count` nor the retry budget."""
     settings = deps.settings
     corrective, findings, outcome, diagnostics = "", [], None, ""
 
     prior, why_not = _reusable_outcome(item, material)
-    # **The FIRST park's titles, not the stored outcome's.** If an intermediate pass
-    # re-distilled and parked again, the stored outcome is already the smaller set — diffing this
-    # filing against it would compare a loss to itself and report "nothing dropped". The original
-    # is carried forward in `first_park_titles` precisely so the instrument outlives the chain.
+    # The FIRST park's titles, not the stored outcome's: an intermediate re-distillation already
+    # shrank the stored set, and diffing against it would report "nothing dropped".
     reuse = _Reuse(prior_titles=_first_park_titles(item))
     if prior is None and why_not:
         log.info("meeting item %s: not reusing the stored distillation — %s",
@@ -2189,8 +1313,7 @@ def _run_meeting_in_worktree(conn, item, deps, material, meeting_meta, worktree,
         if result is not None:
             return _with_park_outcome(_stamp_cost(result, passes), outcome,
                                       material=material, item=item)
-        # The stored outcome still does not pass the gates. Fall through to a real agent pass —
-        # a genuine re-distillation, which the report will diff against `reuse.prior_titles`.
+        # Still vetoed: fall through to a real agent pass, which the report will diff.
         log.warning("meeting item %s: the parked distillation did not pass the gates (%s); "
                     "re-distilling, and the report will diff what changed", item.get("id"),
                     ", ".join(sorted({f"{f.gate}/{f.code}" for f in gates.vetoes(findings)})))
@@ -2229,52 +1352,33 @@ def _run_meeting_in_worktree(conn, item, deps, material, meeting_meta, worktree,
         outcome, material=material, item=item)
 
 
-# ── code writes every page in the set ────────────────────────────────────────────────────────
-# The agent's job is to decide the decisions, anchor each, and DRAFT the meeting page's
-# notes and each decision page's body — as data. Everything about a PAGE (frontmatter, filename,
-# the source page's verbatim body, the meeting page's Attendees/Action Items/Decisions sections) is
-# built here, by code, from that data. Nothing here is untrusted-material-shaped except the two
-# free-text fields the agent actually drafts (`outcome.meeting_notes`, a decision's own `body`) —
-# both still pass through `gates.gate_secrets`/`gate_pii` exactly like an ordinary capture's body
-# does, because code writing the CONTAINER does not make the model's own prose trusted.
+# Code writes every page in the set; the agent drafts free text as DATA. Its two free-text fields
+# still pass through `gate_secrets`/`gate_pii`: code writing the container does not make the
+# model's prose trusted.
 def _yaml_str(value: str) -> str:
-    """One frontmatter scalar, safely quoted (JSON scalars are valid YAML — the same escaper
-    `page_policy._yaml_list` already relies on, reused here rather than a second bare
-    `f'"{v}"'` that a title containing a `"` would turn into invalid YAML)."""
+    """One frontmatter scalar, safely quoted — JSON scalars are valid YAML. A bare `f'"{v}"'`
+    breaks on a title containing a `"`."""
     return json.dumps(str(value or ""))
 
 
 def _source_stem(meeting_meta: dict) -> str:
-    """The source page's stem, decided by CODE from the operator's own drop-CLI hint — BEFORE the
-    agent runs, so the path can be handed to it in the prompt rather than invented by it.
-    Content-only, no date prefix (the flow's own convention: only the MEETING page's filename
-    carries a date; source and decision stems never do — the gardener's `date-bearing-body-link`
-    check flags the convention over the corpus, with no veto)."""
+    """Decided by CODE before the agent runs, so the path can be handed to it. No date prefix:
+    only the MEETING page's filename carries one."""
     return f"{slugify(meeting_meta.get('title') or 'meeting')}-transcript"
 
 
 def _meeting_stem(meeting_date: str, title: str) -> str:
-    """The meeting page's own stem — the one filename in this set that DOES carry a date
-    (`YYYY-MM-DD-<slug>`), computed after the call from the agent's own `meeting_title` (a hint may
-    not be what the material turned out to be about) and the operator's `--date`."""
+    """The meeting page's stem — the one filename in this set that DOES carry a date
+    (`YYYY-MM-DD-<slug>`), from the agent's own `meeting_title` and the operator's `--date`."""
     base = f"{meeting_date}-{title}" if meeting_date else title
     return slugify(base)
 
 
 def _decision_stems(titles: list) -> list:
-    """One filesystem-safe stem per decision title, collision-safe within this one capture: two
-    decisions that slugify to the same stem get `-2`, `-3`, ... suffixes rather than silently
-    colliding onto one file (`page_policy.open_for_new`'s `O_EXCL` would otherwise turn a same-slug
-    second decision into a crash rather than a routed refusal).
-
-    The SUFFIXED stem is registered too, not just the base. Counting bases alone meant the `-2`
-    minted for a duplicate could collide with a title that slugifies to `<base>-2` on its own:
-    `["Pricing", "Pricing", "Pricing (2)"]` produced `["pricing", "pricing-2", "pricing-2"]`, and
-    `O_EXCL` then raised `FileExistsError` — which is not a `LibrarianError`, so it escaped every
-    handler in the meeting flow and landed in `worker.process_next`'s generic catch as stage
-    `unexpected`, on the FIRST pass, with the worktree already half-written. Exactly the "the
-    librarian broke" outcome this function exists to prevent.
-    """
+    """One filesystem-safe stem per decision title; same-slug titles get `-2`, `-3`, ... The
+    SUFFIXED stem is registered too: counting bases alone lets `["Pricing", "Pricing",
+    "Pricing (2)"]` mint `pricing-2` twice, and `O_EXCL` then raises `FileExistsError`, which is
+    not a `LibrarianError` and escapes every handler in this flow."""
     taken: set = set()
     stems = []
     for title in titles:
@@ -2288,15 +1392,12 @@ def _decision_stems(titles: list) -> list:
     return stems
 
 
-# The split-and-cross-link BOUNDARY, up to `_SOURCE_SPLIT_LOOKBACK` lines,
-# reimplemented here rather than shared — see the import comment above `MAX_BODY_LINES` for why.
 _SOURCE_SPLIT_LOOKBACK = 30
 
 
 def _chunk_source_body(lines: list, budget: int) -> list:
-    """Greedy and budget-bounded, preferring a
-    blank-line boundary up to `_SOURCE_SPLIT_LOOKBACK` lines back (never breaking inside a fenced
-    code block) so a split does not land mid-paragraph when a nearby blank line is available."""
+    """Greedy, preferring a blank-line boundary within `_SOURCE_SPLIT_LOOKBACK` and never
+    breaking inside a fenced code block."""
     chunks, start = [], 0
     while start < len(lines):
         end = min(start + budget, len(lines))
@@ -2318,38 +1419,14 @@ def _source_part_stem(stem: str, n: int) -> str:
 
 def _build_source_parts(stem: str, title: str, material: str, *, source_kind: str,
                         tags: tuple, url: str = "") -> list:
-    """The source page(s), verbatim from the archived material — code writes this,
-    never the agent. The transcript already lives in the agent's prompt; having it write the same
-    text back out as a page body is pure waste (the largest cost/latency item the first real walk
-    found) and a correctness risk besides — a model copying 863 lines can drop, reorder or
-    normalise one, and the "ground truth" page would then be a lossy copy of the transcript
-    rather than the transcript.
+    """The source page(s), verbatim from the archived material — CODE writes this, never the agent:
+    a model copying the transcript back out can drop, reorder or normalise a line. THE source-page
+    writer for every flow that needs one.
 
-    **THE extracted source-page writer, for every flow that needs one.** `source_kind`/`tags`/`url`
-    are parameters — explicit at every call site, with no caller-favouring defaults — so the
-    meeting flow, the fast lane's attachment (`_write_attached_sources`) and the Drive door share
-    one writer rather than growing a third.
-
-    A body over `MAX_BODY_LINES` is split into cross-linked parts — `Continues in [[...]]` /
-    `Continued from [[...]]` — the corpus-wide convention, written for this flow's page shape. The
-    FILENAME stem carries the `-p<n>` suffix (a wikilink target must be a filename), and (ADR 028
-    D6) every part ALSO carries its explicit chain identity, computed here BY THE PRODUCER and
-    stamped by the server: `page_id = <stem>` for part 1, `<stem>#p<n>` after — the `#p`
-    sub-identity convention, declared instead of inferred. `index.corpus` prefers the declared
-    `id:` over the stem, so the chain collapse keys on a fact; the older `-p<n>` filename
-    inference stays only as belt-and-braces for pages filed before this existed.
-
-    **The set's arity is not "exactly one source page"** —
-    `_cross_check_meeting_outcome` accepts N >= 1 parts. "Exactly one meeting page" and the
-    decision 1:1 link rule are unchanged.
-
-    Returns `[(part_stem, page_id, full_page_text), ...]` — a DRAFT, server-owned fields and
-    all: every part still passes through `_stamp_meeting`/`page_policy.stamp_source_fields`
-    afterwards exactly as the one-part case always has, so what is written here for
-    `content_hash`/`tier`/`status`/`as_of`/`submitted_by` is immediately overwritten and never
-    trusted as drafted (a drafted `id` is stripped the same way — `SERVER_OWNED_KEYS` names it).
-    A drafted `verification` is STRIPPED rather than overwritten — nothing computes a
-    replacement.
+    A body over `MAX_BODY_LINES` is split into cross-linked parts: the filename stem carries the
+    `-p<n>` suffix and every part declares a chain identity, `<stem>` then `<stem>#p<n>`. If you
+    change that convention, change `index.corpus`, which prefers the declared `id:` over the stem.
+    Returns a DRAFT whose server-owned fields `page_policy.stamp_source_fields` overwrites.
     """
     body_lines = (material or "").splitlines()
     chunks = (_chunk_source_body(body_lines, SPLIT_CHUNK_LINES)
@@ -2380,19 +1457,9 @@ def _build_source_parts(stem: str, title: str, material: str, *, source_kind: st
 
 
 def _build_decision_page(title: str, body: str, source_stem: str, created: str) -> str:
-    """A decision page's DRAFT — frontmatter code owns, body the agent drafted (Context/Options/
-    Decision/Why/Consequences, per `ops/templates/decision.md`). `sources:` names the transcript
-    page directly, so the meeting's own evidence is one hop away without a body-prose wikilink to
-    a page whose stem might carry the meeting's date — a convention
-    `gardener.checks.check_date_bearing_body_links` reports on, and no longer a veto here.
-
-    `created`/`updated` (the contract linter's `REQUIRED_FIELDS`, knowledge repo's own
-    `stigmergy_lint.py`) are NOT server-owned (`page_policy.SERVER_OWNED_KEYS` does not name them,
-    unlike `status`/`as_of`) — they are ordinary drafted fields, so code drafts them itself here,
-    from the same date `_stamp_meeting` stamps as `as_of` (the meeting's own date, or today's if
-    the operator's `--date` hint is somehow absent). `sources/meetings/` pages are exempt from
-    this requirement (`MACHINE_REQUIRED_FIELDS`), which is why `_build_source_parts` does not draft
-    either field at all.
+    """A decision page's DRAFT — frontmatter code owns, body the agent drafted. `created`/`updated`
+    are contract-required but NOT server-owned, so code drafts them from the date `_stamp_meeting`
+    stamps as `as_of`; `sources/meetings/` pages are exempt, hence `_build_source_parts` omits them.
     """
     front = [
         "type: decision",
@@ -2411,15 +1478,8 @@ def _build_decision_page(title: str, body: str, source_stem: str, created: str) 
 
 def _build_meeting_page(outcome, title: str, source_stem: str, decision_stems: list,
                         created: str) -> str:
-    """The meeting (provenance) page, built entirely by CODE from the agent's structured account —
-    Attendees, Action Items and the "## Decisions" section are STRUCTURE code owns; only "## Notes"
-    is the agent's own drafting. This is what makes a links/decisions mismatch structurally
-    impossible rather than merely checked: code cannot declare
-    a decision it did not also link, because the link list IS the decision list it just wrote.
-
-    `created`/`updated`: see `_build_decision_page`'s own comment — the same contract requirement,
-    the same source date.
-    """
+    """The meeting (provenance) page, built entirely by CODE; only "## Notes" is the agent's. A
+    links/decisions mismatch is impossible: the link list IS the decision list code just wrote."""
     front = [
         "type: meeting",
         f"title: {_yaml_str(title)}",
@@ -2448,27 +1508,10 @@ def _build_meeting_page(outcome, title: str, source_stem: str, decision_stems: l
 
 
 def _write_new(worktree: str, rel_path: str, text: str) -> None:
-    """Create one brand-new page inside `worktree`, or raise `WorktreeError` naming the stage.
-
-    **THE write every page-building flow goes through** — `_write_ordinary_page`,
-    `_write_meeting_pages` and `_write_attached_sources` — which is why both guards live here
-    rather than at three call sites that could come to disagree:
-
-    * **containment.** `page.is_inside` RESOLVES the path before the write, so a directory
-      component that is a symlink out of the checkout (a `wiki/playbooks` link merged into the
-      repo) is refused rather than written through, as the worker. `open_for_new`'s `O_NOFOLLOW`
-      only ever sees the leaf, which is the same blind spot `edits.validate`'s own docstring
-      records — the two halves are not redundant, and neither implies the other.
-    * **`OSError` becomes a NAMED stage.** `os.makedirs` and `open_for_new` raise the ordinary
-      filesystem family (`ENAMETOOLONG` for an over-long stem, `EEXIST` from `O_EXCL`, `ENOSPC`),
-      and none of those is a `LibrarianError` — so one escaped every handler in these flows and
-      landed in `worker.process_next`'s generic catch as stage `unexpected`, with the item's spend
-      already banked and the worktree half-written. `_decision_stems`' own docstring records that
-      exact escape happening once. A named stage is the difference between "the librarian broke"
-      and a fault an operator can read.
-
-    Neither raise carries a repair the agent could perform, which is why this is an exception
-    rather than a `Finding`: the path a page lands on is CODE's, on every one of these flows.
+    """Create one brand-new page inside `worktree`, or raise `WorktreeError` naming the stage. THE
+    write every page-building flow goes through, so both guards live here: `page.is_inside` RESOLVES
+    the path (`O_NOFOLLOW` only sees the leaf, so a symlinked directory component would be written
+    through), and every `OSError` becomes a NAMED stage rather than an `unexpected` fault.
     """
     if not page_policy.is_inside(worktree, rel_path):
         raise WorktreeError(
@@ -2480,24 +1523,16 @@ def _write_new(worktree: str, rel_path: str, text: str) -> None:
         with page_policy.open_for_new(full) as f:
             f.write(text)
     except OSError as ex:
-        # The class name and the path only — never `str(ex)`, which on some platforms carries a
-        # filesystem path this package does not put on the wire (`worker.process_next`'s own rule).
+        # The class name and the path only — never `str(ex)`, which can carry a filesystem path
+        # this package does not put on the wire.
         raise WorktreeError(
             f"could not write {rel_path} ({ex.__class__.__name__}); nothing was committed") from ex
 
 
 def _write_meeting_pages(worktree: str, outcome, meeting_meta: dict, material: str, *,
                          source_stem: str, created: str):
-    """CODE writes every page in the set. All-or-nothing: paths are computed
-    first, checked against the repo's existing pages, and only written once none collide — the
-    same atomicity the set has always had, now enforced before the first byte is written rather
-    than discovered mid-write.
-
-    Returns a plan dict — `{"source_stems", "meeting_stem", "decision_stems",
-    "decisions_by_path"}` — on success, or a `list[gates.Finding]` (one veto) when a computed path
-    already exists, so the caller can hand it back to the SAME corrective-retry road every other
-    finding takes.
-    """
+    """CODE writes every page in the set. All-or-nothing: every path is checked against the repo's
+    existing pages before the first byte is written. Returns the plan, or one veto `Finding`."""
     meeting_date = meeting_meta.get("meeting_date") or ""
     meeting_title = outcome.meeting_title or meeting_meta.get("title") or "Meeting"
     meeting_stem = _meeting_stem(meeting_date, meeting_title)
@@ -2533,8 +1568,7 @@ def _write_meeting_pages(worktree: str, outcome, meeting_meta: dict, material: s
 
     return {
         "source_stems": [stem for stem, _pid, _text in source_parts],
-        # The producer's explicit chain identity per part path — `_stamp_meeting`
-        # stamps it as `id:` and records it for the gate's output-equality check.
+        # Chain identity per part path; `_stamp_meeting` stamps it as `id:`.
         "source_ids_by_path": {path: pid for path, (_stem, pid, _text)
                                in zip(source_paths, source_parts, strict=True)},
         "meeting_stem": meeting_stem,
@@ -2546,28 +1580,14 @@ def _write_meeting_pages(worktree: str, outcome, meeting_meta: dict, material: s
 def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, corrective, *,
                       passes: "AgentPasses | None" = None,
                       linter_path: str = "", reused=None, reuse=None) -> tuple:
-    """One meeting pass: call the (now structured, tool-less) meeting agent, have CODE write every
-    page of the set, stamp, and run every gate over the whole diff. Returns `(result, findings,
-    outcome)` — same contract as `_one_pass`.
-
-    **The agent's only write, ever, is its own outcome file.** It reads the transcript (already in
-    its prompt), the resolved entity registry and the meeting metadata, decides the decisions and
-    their anchors, and drafts the meeting page's notes and each decision page's body — as DATA,
-    returned in `.librarian-outcome.json`, never as files it creates itself. Code builds every page
-    (source verbatim, meeting and decision pages from the structured content) and writes it. This
-    is what collapses the older exploratory Write/Edit/Read/Glob/Grep
-    loop into one structured call plus its corrective retry: there is nothing left in this repo
-    for the agent to explore, because everything it needs was handed to it up front.
-    """
+    """One meeting pass: call the tool-less meeting agent, have CODE write every page of the set,
+    stamp, gate. Same return contract as `_one_pass`; the agent's only write is its outcome file."""
     settings = deps.settings
     source_stem = _source_stem(meeting_meta)
     source_page_path = f"{MEETING_SOURCE_PREFIX}{source_stem}.md"
     if reused is not None:
-        # The stored distillation from a previous park, re-filed with NO agent call.
-        # Everything below this line is the ordinary path, unchanged and unaware — the page
-        # builders, the stamp and all eight gates run over the reused content exactly as they run
-        # over a fresh outcome, and `deps.registry` was loaded at THIS item's base commit, which is
-        # the whole mechanism: the steward's newly minted entity is what changed, not the content.
+        # A previous park's distillation, re-filed with NO agent call: `deps.registry` was loaded
+        # at THIS item's base commit, so the minted entity changed, not the content.
         outcome = reused
     else:
         try:
@@ -2577,11 +1597,9 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
                                          corrective=corrective,
                                          reply=item.get("reply") or "")
         except AgentError as ex:
-            # Same fault-road bank as `_one_pass` — the backend priced the run before most faults.
             if passes is not None:
                 passes.cost_usd += getattr(ex, "run_cost_usd", 0.0)
             raise
-        # Same banking as `_one_pass`: the spend is real whatever the outcome turns out to be.
         # The `reused` branch above deliberately never reaches this line — a re-file costs $0.
         if passes is not None:
             passes.cost_usd += run.cost_usd
@@ -2591,19 +1609,13 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
             raise AgentError("the meeting agent produced no usable account of what it did")
 
     if outcome.decision == "triage":
-        # The meeting agent holds no tool at all — this flow is one structured call, and its
-        # account comes home in the envelope — so a triage outcome cannot leave a stray page
-        # behind the way the ordinary flow's cooperative-agent check still guards against
-        # (`_one_pass`'s `stray` check). Nothing to check here that is not already structural.
+        # No `stray` check as in `_one_pass`: this agent holds no tool, so it cannot have written.
         return _triage_meeting(item, deps, outcome), [], outcome
 
     written = _write_meeting_pages(worktree, outcome, meeting_meta, material,
                                    source_stem=source_stem,
                                    created=meeting_meta.get("meeting_date") or deps.as_of())
     if isinstance(written, list):
-        # `_write_meeting_pages` returns findings instead of a plan when a computed path collides
-        # with a page that already exists in the repo — nothing was written, so this is exactly
-        # like any other veto: the corrective retry (or the final refusal) reads it.
         return None, written, outcome
 
     ctx = gates.GateContext(
@@ -2618,17 +1630,9 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
     if not ctx.entries:
         raise AgentError("the meeting flow wrote nothing and did not park the capture")
 
-    # The meeting flow files only NEW pages — no additive edits to pages that already exist (the
-    # page-set contract names no such mechanism for this flow, and the meeting page's own
-    # Decisions section is what links the set together). `edits.apply_declared` is therefore not
-    # invoked here — but that is
-    # no longer the ONLY thing standing in the way. `edits_allowed=False` above is what makes
-    # `gates.gate_zone` refuse a status-M entry outright (`meeting-edit-refused`) if one ever
-    # reached this diff by any other route than `edits.apply_declared`, so the no-edit-mechanism
-    # contract is enforced rather than merely true because this call is absent. See
-    # `gates.GateContext.edits_allowed` and `gate_zone`'s own comment for why that finding is
-    # terminal rather than a corrective brief.
-
+    # The meeting flow files only NEW pages: `edits.apply_declared` is not invoked, and
+    # `edits_allowed=False` above makes `gate_zone` refuse a status-M entry that arrived any other
+    # way — enforced, not merely true because a call is absent.
     _stamp_meeting(ctx, deps, item, outcome, meeting_meta, written)
 
     ctx.entries = gitcmd.diff_entries(worktree)
@@ -2654,39 +1658,12 @@ def _meeting_pages(ctx: gates.GateContext) -> list[str]:
 
 
 def _cross_check_meeting_outcome(ctx: gates.GateContext, outcome) -> list:
-    """The page-SET's own atomicity contract: N >= 1 source
-    pages, exactly one meeting page, N >= 0 decision pages, no page outside that set, and the
-    date-in-wikilink convention.
+    """The page-SET's atomicity contract: N >= 1 source pages, exactly one meeting page, N >= 0
+    decision pages, nothing else. Thin because CODE authors every page from this same `outcome`.
 
-    `_cross_check_outcome` (the ordinary flow's "exactly one page" veto) does not run here — a
-    page SET is exactly the case that rule cannot express.
-
-    **The source-page arity is N >= 1, not "exactly one".** CODE is the sole author of the source
-    page, verbatim from the material, and splits it into N >= 1 cross-linked parts when it is over
-    the contract's line cap (`_build_source_parts`) — so `source-page-count` vetoes only `< 1`
-    (which cannot happen by construction; kept as a self-check, not a live path). "Exactly one
-    meeting page" and the decision 1:1 link rule are unconditional.
-
-    **Most of the checks an ADVERSARIAL author would need are gone, because that author is gone.**
-    The agent used to write every page via its own Write/Edit tool calls and separately DECLARE
-    what it wrote in its outcome JSON — two independent claims that could disagree (a declared
-    decision the diff never created, a meeting page whose own "## Decisions" section linked
-    something else, a claimed `source_page_path` that did not match the file on disk). CODE is now
-    the sole author of every page in the set, from the SAME structured `outcome` this function
-    reads — `_write_meeting_pages` cannot declare a
-    decision it did not also write, or link one from the meeting page it did not also file, because
-    the link list and the written-page list share one source. `duplicate-decision-declared`,
-    `decision-set-mismatch`, `source-path-mismatch`, `meeting-path-mismatch` and
-    `meeting-links-mismatch` are therefore absent: the disagreement they checked for is not
-    reachable. Code writes the meeting page's "## Decisions" from the SAME `decision_stems` list it
-    names the decision pages with (`_build_meeting_page`), so the two cannot disagree without
-    `decision-count-mismatch` above catching the construction bug first.
-
-    **The date-bearing body-link convention is not vetoed here either** — that a date-bearing page
-    name belongs in `sources:`/`related:` frontmatter rather than body prose is style, not safety.
-    The gardener's `date-bearing-body-link` check flags it as a finding over the committed
-    corpus.
-    """
+    The date-bearing body-link convention is deliberately NOT vetoed here: only the meeting page's
+    filename carries a date, and a date-bearing name in body prose is style rather than safety, so
+    the gardener's `date-bearing-body-link` check flags it over the committed corpus instead."""
     out = []
     new_pages = set(ctx.in_lane_new_pages())
     source_pages, meeting_pages, decision_pages = (set(_source_pages(ctx)), set(_meeting_pages(ctx)),
@@ -2724,19 +1701,7 @@ def _cross_check_meeting_outcome(ctx: gates.GateContext, outcome) -> list:
 def _stamp_meeting(ctx: gates.GateContext, deps: Deps, item: dict, outcome,
                    meeting_meta: dict, written: dict) -> None:
     """Stamp every page this pass created — PER PAGE, because a decision page's `entity:` differs
-    from its siblings'. Populates `ctx.page_declared`, `ctx.stamped_by_path` and
-    `ctx.provenance_pages`, the three per-page facts `gate_zone`/`gate_anchoring`/
-    `gate_frontmatter` read instead of the ordinary single-outcome fields (see each field's own
-    comment on `GateContext`).
-
-    `as_of` is the meeting's OWN date (`--date`), never today's date — the one
-    place this flow's stamp differs from the ordinary fast lane's, which always uses "today".
-
-    `written["decisions_by_path"]` replaces an older `{d["page_path"]: d}` lookup built
-    from the outcome directly: decision paths are now code-computed (`_write_meeting_pages`), not
-    agent-declared, so the map from a written page's path back to its anchoring comes from what
-    code itself just wrote, not from a field the outcome no longer carries.
-    """
+    from its siblings'. `as_of` is the meeting's OWN date, never today's."""
     as_of = meeting_meta.get("meeting_date") or deps.as_of()
     source_pages, meeting_pages, decision_pages = (_source_pages(ctx), _meeting_pages(ctx),
                                                     _decision_pages(ctx))
@@ -2753,16 +1718,9 @@ def _stamp_meeting(ctx: gates.GateContext, deps: Deps, item: dict, outcome,
                  page_policy.stamp_source_fields(text, submitted_by=item["submitted_by"],
                                                  as_of=as_of, content_hash=d, extracted_at=e,
                                                  page_id=pid))
-        # Findings cycle 1, C1: the provenance group used to be ABSENT from `stamped_by_path`, so
-        # `gate_frontmatter`'s output-equality post-condition — the check every OTHER stamped field
-        # goes through, and the principle the gate's own docstring states ("a gate that checks the
-        # OUTPUT cannot be defeated by a new way of spelling the input") — never ran over the one
-        # field group whose forgery re-anchors the entire provenance chain. `content_hash` and
-        # `extracted_at` are rendered exactly as `page.stamp_source_fields` writes them
-        # (`f'"sha256:{digest}"'`/`f'"{extracted_at}"'` parse to the bare string `_as_text` expects
-        # once YAML strips the quotes); `tier` is always `"1"` here — the meeting flow's only
-        # source, a Granola transcript, is always a primary recording (`stamp_source_fields`'s own
-        # default).
+        # The provenance group MUST appear here — `gate_frontmatter`'s output-equality check covers
+        # only what `stamped_by_path` records, and forging this group re-anchors the whole chain.
+        # Render each value exactly as `page.stamp_source_fields` writes it.
         ctx.stamped_by_path[path] = {
             "status": page_policy.FILED_STATUS, "as_of": as_of,
             "submitted_by": item["submitted_by"],
@@ -2782,7 +1740,7 @@ def _stamp_meeting(ctx: gates.GateContext, deps: Deps, item: dict, outcome,
         ctx.page_declared[path] = {"page_type": "decision", "anchoring": anchoring}
         entity_ids, unresolved = gates.resolve_entity_ids(anchoring, deps.registry)
         if str(anchoring.get("kind", "")).lower() == "entity" and (unresolved or not entity_ids):
-            entity_ids = []   # same defence-in-depth `processing._stamp` takes for the ordinary flow
+            entity_ids = []   # same defence in depth `_stamp` takes for the ordinary flow
         acl = acl_rules.resolve(deps.acl_config, path)
         _rewrite(ctx.worktree, path, lambda text, e=entity_ids, a=acl: page_policy.stamp_server_fields(
             text, submitted_by=item["submitted_by"], acl=a, as_of=as_of, entity=e))
@@ -2803,8 +1761,7 @@ def _rewrite(worktree: str, path: str, transform) -> None:
 
 
 def _meeting_commit_message(item: dict, outcome, n_decisions: int) -> str:
-    """One capture, one commit, one page SET. `Submitted-by:` names the operator who
-    dropped the transcript, exactly like the ordinary flow's trailer."""
+    """One capture, one commit, one page SET."""
     return (f"feat(meeting): {_subject(outcome.meeting_title)}\n\n"
             f"Filed by the librarian's meeting distiller from capture #{item['id']}: 1 source "
             f"page, 1 meeting page, {n_decisions} decision page(s).\n\n"
@@ -2813,27 +1770,17 @@ def _meeting_commit_message(item: dict, outcome, n_decisions: int) -> str:
 
 def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
                   *, reuse=None) -> Result:
-    """The gates passed over the whole SET: commit every page in one App-bot commit, push, and
-    report the set. `written` carries the code-computed source parts and decision-path-to-anchoring
-    map — the outcome declares no page paths at all.
-
-    `reuse` is what happened to a stored distillation on this item, and it exists so the report can
-    say it. Two cases, and the second is the load-bearing one: a REUSE says the parked pass's
-    decisions filed unchanged, and a RE-DISTILLATION owes the diff between what was parked and what
-    is being filed now — because a fresh distillation looks perfectly plausible on its own, and
-    diffing is the only way the loss is ever noticed at all."""
+    """The gates passed over the whole SET: one commit, push, report. `written` carries the
+    code-computed source parts and the decision-path-to-anchoring map."""
     from stigmergy.librarian import githubapp
 
     meeting_pages, decision_pages = _meeting_pages(ctx), sorted(_decision_pages(ctx))
-    # In PART order (1, 2, 3, ...), not alphabetical — `-p2` sorts before the bare stem's `.md`,
-    # so a plain `sorted()` over `ctx.in_lane_new_pages()` would list part 2 before part 1.
-    # `written["source_stems"]` already carries the real order `_build_source_parts` produced it in.
+    # In PART order, not alphabetical — `-p2` sorts before the bare stem's `.md`.
     source_pages = [f"{MEETING_SOURCE_PREFIX}{stem}.md" for stem in written["source_stems"]]
     meeting_page = meeting_pages[0]
     message = _meeting_commit_message(item, outcome, len(decision_pages))
     author_name, author_email = githubapp.identity()
-    # Same TOCTOU close as `_file`'s — and this lane is where it bites hardest,
-    # because the page SET makes the window longer: more pages, more gate work, more time on disk.
+    # Same TOCTOU close as `_file`'s, and the window is longer here: more pages, more gate work.
     gitcmd.commit(worktree, message=message, author_name=author_name, author_email=author_email,
                   gated_entries=ctx.entries)
 
@@ -2856,33 +1803,15 @@ def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
     notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
     notes += [f.message for f in findings if f.severity == gates.SEVERITY_NOTE]
 
-    # Regenerate the touched entities' views, in the SAME run, right
-    # after the meeting's own push — the `worktree` already sits at the sha that just landed, so
-    # no second checkout is needed. Touched ids come from `ctx.stamped_by_path`, the SAME
-    # server-resolved values `_stamp_meeting` wrote into each decision page's `entity:` field
-    # (never `outcome.decisions[i]["anchoring"]["entities"]`, which is the agent's DECLARED
-    # names, not the resolved ids — using it here would let an agent's own account decide which
-    # views regenerate).
-    #
-    # Deliberately best-effort: the meeting page set is already committed and pushed by this
-    # point — an irreversible, successful outcome — so a view-regeneration fault must never
-    # turn a filed meeting into a `failed` capture. Flagged here rather than assumed.
-    #
-    # **CONTRACT NOTE, stated here for a future reader**: `branch` on `deps.settings.branch` does
-    # NOT reliably tip at the meeting's own commit after `_file_meeting` returns — a successful
-    # run of this block
-    # pushes a SECOND commit (the view's) on top of the meeting's. `sha` above (captured before
-    # this block runs) and `result_ref` below (`f"{meeting_page}@{sha}"`) still name the meeting's
-    # OWN commit and remain the correct, stable handle for "what this capture filed" — but code
-    # anywhere that reads "the branch tip" to learn what a capture just filed (rather than reading
-    # `result_ref`/`sha` directly) is now wrong. See `views/index.md`'s own note.
+    # Touched ids come from `ctx.stamped_by_path` — the server-RESOLVED values, never the agent's
+    # declared names. Best-effort: the set is already pushed, so a regeneration fault must not turn
+    # a filed meeting into a `failed` capture. It pushes a SECOND commit on top, so the branch tip
+    # does NOT name what this capture filed — `result_ref`/`sha` do.
     touched_ids = sorted({eid for path in decision_pages
                           for eid in (ctx.stamped_by_path.get(path, {}).get("entity") or [])})
     if touched_ids:
         try:
-            # `views_regenerate.run` writes its own `job_runs` row (ok or error) via
-            # `capture.ops.job_run`, which re-raises after recording — so the row already exists
-            # by the time this `except` runs; nothing more to record here.
+            # `views_regenerate.run` writes its own `job_runs` row before re-raising.
             asyncio.run(views_regenerate.run(
                 worktree, conn, touched_ids, registry=deps.registry, branch=deps.settings.branch,
                 guarded=False,
@@ -2890,10 +1819,7 @@ def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
         except Exception:  # noqa: BLE001 — a best-effort post-step, see the comment above
             log.error("view regeneration failed after meeting %s filed (entities: %s)",
                       item.get("id"), touched_ids, exc_info=True)
-    # `result_ref` names the MEETING PAGE (see `report.filed_meeting`'s own docstring): the
-    # human's one door into the set, and what keeps
-    # `dedup.Match.page_path`'s existing `rsplit("@")` contract working unchanged. The full page
-    # list lives in the report (`report["filed_meeting"]`), not in `result_ref`.
+    # `result_ref` names the MEETING PAGE, keeping `dedup.Match.page_path`'s `rsplit("@")` contract.
     return Result(
         schema.FILED, f"{meeting_page}@{sha}",
         report.filed_meeting(source_pages=source_pages, meeting_page=meeting_page,
@@ -2905,24 +1831,8 @@ def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
 
 
 def _reuse_note(reuse, outcome) -> dict:
-    """The report's account of what happened to a parked distillation on this item.
-
-    `{}` when no stored outcome was involved at all, which is every first pass — so the ordinary
-    report carries no reuse block at all and no reader has to learn a new field for the
-    common case.
-
-    **The comparison is against the FIRST park, and it runs on BOTH branches.** A
-    reuse that re-files a distillation an intermediate pass had already shrunk is not "preserved" —
-    it preserves the *last* park and hides the loss before it. So `reused` is reported only when
-    what actually filed still matches what the first park carried; otherwise the diff is reported
-    even though no model ran on this pass, because the reader's question is "did this capture lose
-    anything", not "did this pass call a model".
-
-    `dropped`/`added` are exact-title comparisons: a decision whose title was merely REWORDED
-    between passes reads as one dropped plus one added. That direction is deliberate — it
-    over-reports rather than under-reports, and under-reporting is the failure this exists to
-    prevent.
-    """
+    """What happened to a parked distillation; `{}` on a first pass. Compared against the FIRST
+    park on BOTH branches: the question is "did this capture lose anything"."""
     if reuse is None or not reuse.prior_titles:
         return {}
     now = _decision_titles(outcome)
@@ -2936,9 +1846,7 @@ def _reuse_note(reuse, outcome) -> dict:
 
 
 def _triage_meeting(item: dict, deps: Deps, outcome) -> Result:
-    """The meeting agent's own park (`decision: "triage"`) — one or several unresolved names, per
-    `_ask_or_park_multi`'s routing rule (the same one-ask budget `_ask_or_park` enforces for the
-    ordinary flow)."""
+    """The meeting agent's own park, routed by `_ask_or_park_multi` under the one-ask budget."""
     parked = outcome.triage or {}
     rationale = getattr(outcome, "summary", "")
     notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
@@ -2948,10 +1856,8 @@ def _triage_meeting(item: dict, deps: Deps, outcome) -> Result:
 
 def _ask_or_park_multi(item: dict, deps: Deps, *, names: list, agent_rationale: str,
                        notes: list) -> Result:
-    """`_ask_or_park`'s plural sibling: the SAME one-ask budget (`asked_at`), naming every
-    unresolved name at once. A single unresolved name still goes through the SINGULAR builders
-    (`needs_input`/`triage_entity`) — byte-identical to the ordinary flow's own ask-back for the
-    one-name case."""
+    """`_ask_or_park`'s plural sibling: the SAME one-ask budget, naming every unresolved name at
+    once. A single name still goes through the SINGULAR builders."""
     if item.get("asked_at"):
         rep = (report.triage_entity_multi(names=names, agent_rationale=agent_rationale,
                                           findings=notes, asked=True) if len(names) > 1 else
@@ -2973,29 +1879,21 @@ def _ask_or_park_multi(item: dict, deps: Deps, *, names: list, agent_rationale: 
 
 def _refuse_meeting(item, findings, outcome, *, agent_attempts: int = 0,
                     diagnostics_path: str = "") -> Result:
-    """Both meeting-agent passes vetoed. Reuses the ordinary flow's cause-based routing helpers
-    (`_uncreatable_type`, `_frontmatter_only` — pure functions of the veto LIST, unaware of which
-    flow produced it) wherever they still apply unmodified; the anchoring park is meeting-specific
-    because a page SET can carry several unresolved anchors at once, one per decision page."""
+    """Both meeting-agent passes vetoed. Reuses the ordinary flow's routing helpers; the anchoring
+    park is meeting-specific because a page SET can carry one unresolved anchor per decision."""
     veto = gates.vetoes(findings)
     notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
 
     secret = next((f for f in veto if f.gate == "secrets" and f.code == "secret"), None)
     if secret:
-        # From `values`, for the reason `_refuse` records: the rejoined shape has no line number.
-        # Gate AND code, for the reason it records too: `code` is a namespace the knowledge repo's
-        # linter also writes into.
+        # From `values`, and matched on gate AND code — see `_refuse`.
         line, rule = secret.values
         return Result(schema.REJECTED, "",
                       report.rejected_secret(line=line, rule_id=rule,
                                              where="the drafted page"),
                       diagnostics_path=diagnostics_path)
-    # Gate AND code, for the reason the secrets selector above records — and this one is
-    # worse if it is wrong: `reason_code=pii` is in `schema.WITHHELD_REASONS`, so
-    # `worker._finish` calls `purge_secret_capture_immediately` and the submitter's
-    # payload and hints are DESTROYED. A knowledge-repo linter check named `pii` would
-    # have reached this branch through `gate_contract`, which builds its code verbatim
-    # from that repo's JSON, and thrown away someone's material over a lint finding.
+    # Gate AND code, and irreversible if wrong: `reason_code=pii` is in `schema.WITHHELD_REASONS`,
+    # so `worker._finish` purges the submitter's payload and hints immediately.
     pii = next((f for f in veto if f.gate == "pii" and f.code == "pii"), None)
     if pii:
         label = pii.message.split("what looks like ", 1)[-1].split(" near line")[0]
@@ -3004,25 +1902,9 @@ def _refuse_meeting(item, findings, outcome, *, agent_attempts: int = 0,
                                           pattern_label=label, where="the drafted page"),
                       diagnostics_path=diagnostics_path)
 
-    # `f.repairable` excludes an UNREPAIRABLE zone finding from this branch, even
-    # when the agent declared an injection category alongside it. `meeting-edit-refused`'s own
-    # documented meaning is "no producer inside this flow — a worker defect or worktree
-    # interference", i.e. a SYSTEM fault; routing it here on the mere coincidence of a declared
-    # category would name the submitter's (possibly unrelated) capture as the cause of a fault
-    # that has nothing to do with it, and would bury the real signal — an unexplained write into
-    # an existing page inside an ephemeral worktree — under a steering report the operator then
-    # investigates for the wrong reason. This also corrects `zone/body-rewrite` and
-    # `zone/unreadable-edit`, which share the same class (`repairable=False`, no producer this
-    # flow's agent could have been). A repairable zone finding — `outside-lane`,
-    # `type-not-creatable` — still routes here, because there the diff really could be the agent
-    # acting on injected text.
-    # `f.locator` too, not only `f.repairable`: this selector's output goes straight into
-    # `report.rejected_steering(path=…)`, so a zone finding that names no PATH has nothing
-    # for that sentence to be about. `_write_ordinary_page`'s `type-not-creatable` is the
-    # producer that has none — it refuses BEFORE writing, so no path exists — and it carries
-    # its type in `values` instead. Skipping it here is what keeps it on its own road
-    # (`_uncreatable_type`, a steward park) rather than being rendered to a submitter as a
-    # page path spelled `'entity'`.
+    # `repairable` excludes the UNREPAIRABLE zone findings: no agent in this flow could have
+    # produced them, so they are system faults and must not read as steering just because a
+    # category was declared alongside. `locator` too — see `_refuse`.
     zone = next((f for f in veto if f.gate == "zone" and f.repairable and f.locator), None)
     categories = _injection_categories(outcome)
     if zone and categories:
@@ -3046,12 +1928,8 @@ def _refuse_meeting(item, findings, outcome, *, agent_attempts: int = 0,
                                          findings=notes),
                       findings=notes, diagnostics_path=diagnostics_path)
 
-    # The meeting-specific park: is EVERY veto an anchoring-unresolved finding (one per decision
-    # page that could not anchor)? Then this is the honest destination: the whole capture parked,
-    # atomically — zero pages committed. Anything ELSE mixed in
-    # (a binary-page veto, an unrelated dead link, a zone veto with no traceable steering) means
-    # this is not provably the whole story, and it falls through to `failed`, exactly like
-    # `_unanchorable`'s own posture for the ordinary flow.
+    # The meeting-specific park: only when EVERY veto is anchoring-unresolved does the whole
+    # capture park atomically. Anything else mixed in falls through to `failed`.
     anchoring_vetoes = [f for f in veto
                        if f.gate == "anchoring" and f.code == gates.ANCHORING_UNRESOLVED]
     if anchoring_vetoes and len(anchoring_vetoes) == len(veto):
@@ -3075,9 +1953,7 @@ def _refuse_meeting(item, findings, outcome, *, agent_attempts: int = 0,
                                        agent_attempts=agent_attempts,
                                        stage=worst.gate if worst else "gates",
                                        reason=worst.message if worst else "unknown",
-                                       # Into the REPORT, not only onto the `Result` — the report
-                                       # is what `queue.finish` persists and `brain_submissions`
-                                       # returns, and this was the one road of the four in this
-                                       # function that dropped them (see `report.failed_system`).
+                                       # Into the REPORT, not only onto the `Result`: the report is
+                                       # what `queue.finish` persists.
                                        findings=notes),
                   findings=notes, diagnostics_path=diagnostics_path)

@@ -1,11 +1,8 @@
 """`BoltSlackGateway` — the real `SlackGateway`, wrapping `slack_sdk`'s `AsyncWebClient`.
 
-Kept in its own module and imported lazily, so every other module in this package — and every test
-in `tests/slack/` except the two that exercise this gateway and the process wiring themselves —
-needs no `slack_sdk` import at all, matching the offline-first posture the rest of `stigmergy.slack`
-takes (package docstring). Every `slack_sdk` failure — the SDK's own `SlackApiError`, a timeout, a
-connection reset — is collapsed to this package's own `SlackApiError`, so no caller anywhere in
-`stigmergy.slack` needs to know `slack_sdk`'s exception shape.
+In its own module, imported lazily, so nothing else in this package needs `slack_sdk` at all.
+Every SDK failure — the SDK's own `SlackApiError`, a timeout, a connection reset — collapses to
+this package's own `SlackApiError`, so no caller needs to know `slack_sdk`'s exception shape.
 """
 from stigmergy.slack.gateway import SlackApiError
 
@@ -55,12 +52,9 @@ class BoltSlackGateway:
                                 text=text, blocks=blocks, thread_ts=thread_ts)
 
     async def reactions_add(self, channel_id: str, message_ts: str, name: str) -> dict:
-        """`already_reacted` is Slack's own answer when the reaction is already there — an event
-        redelivery reaches this — an honest "already in the state we wanted", not a failure, so it
-        is translated to a successful response here rather than let `SlackGateway.reactions_add`'s
-        contract be broken by a caller having to special-case it. Same posture
-        `users_lookup_by_email` takes for `users_not_found`. Every OTHER failure (a missing
-        `reactions:write` scope, a timeout, a rate limit) still becomes `SlackApiError`."""
+        """`already_reacted` (an event redelivery reaches this) is Slack saying "already in the
+        state we wanted" — translated to success; every OTHER failure still becomes
+        `SlackApiError`."""
         from slack_sdk.errors import SlackApiError as SdkSlackApiError
         try:
             return await self._client.reactions_add(channel=channel_id, timestamp=message_ts,
@@ -73,9 +67,8 @@ class BoltSlackGateway:
             raise SlackApiError(f"{ex.__class__.__name__}: {ex}") from ex
 
     async def reactions_remove(self, channel_id: str, message_ts: str, name: str) -> dict:
-        """`no_reaction` is Slack's own answer when the reaction is already gone — a previous
-        cleanup attempt, or a redelivery — translated to success the same way `reactions_add`
-        translates `already_reacted`."""
+        """`no_reaction` (the reaction already gone — a previous cleanup, or a redelivery) is
+        translated to success the same way `reactions_add` translates `already_reacted`."""
         from slack_sdk.errors import SlackApiError as SdkSlackApiError
         try:
             return await self._client.reactions_remove(channel=channel_id, timestamp=message_ts,
@@ -88,12 +81,9 @@ class BoltSlackGateway:
             raise SlackApiError(f"{ex.__class__.__name__}: {ex}") from ex
 
     async def users_lookup_by_email(self, email: str) -> dict | None:
-        """`users_not_found` is Slack's OWN documented error code for "no workspace member has
-        this email" — an honest negative answer, not an API failure, so it is translated to `None`
-        here rather than let `_call`'s blanket `SlackApiError` collapse hide the distinction
-        `SlackGateway.users_lookup_by_email`'s own contract requires. Every OTHER SDK failure (a
-        timeout, a rate limit, a malformed response) still becomes `SlackApiError` exactly like
-        every other method on this class."""
+        """`users_not_found` is Slack's honest "no workspace member has this email" — translated
+        to `None`, the distinction `SlackGateway.users_lookup_by_email`'s contract requires; every
+        OTHER SDK failure still becomes `SlackApiError`."""
         from slack_sdk.errors import SlackApiError as SdkSlackApiError
         try:
             return await self._client.users_lookupByEmail(email=email)
@@ -109,14 +99,8 @@ class BoltSlackGateway:
 
 
 def build_gateway(bot_token: str) -> BoltSlackGateway:
-    """The real gateway from just a bot token — the one seam a caller OUTSIDE this package needs
-    when it only ever posts (never listens for events, so it needs none of `SlackSettings`'s other
-    three secrets). `stigmergy.gardener.cli`, `stigmergy.digest.cli` and `stigmergy.admin.service` are
-    such callers. This exists so those modules can reach a real, working gateway without importing
-    the web-client SDK themselves, which would put this package's own identifier vocabulary and its
-    only SDK dependency outside its own boundary (`tests/test_architecture.py::
-    test_no_slack_identifiers_below_the_slack_package`). `stigmergy.slack.app.build_context` stays
-    the fuller constructor for the long-running Socket Mode process; this is its one-secret sibling
-    for an on-demand poster."""
+    """The real gateway from just a bot token — for callers outside this package that only post
+    (`gardener.cli`, `digest.cli`, `admin.service`) and must not import the SDK themselves.
+    `stigmergy.slack.app.build_context` stays the full constructor for the Socket Mode process."""
     from slack_sdk.web.async_client import AsyncWebClient
     return BoltSlackGateway(AsyncWebClient(token=bot_token))

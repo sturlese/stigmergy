@@ -1,18 +1,8 @@
 """The entity registry — curated identity the automatic canonicalization defers to.
 
-`normalize.py` merges names mechanically (case, accents, legal suffixes). Real corpora need more:
-"Globex" and "GX Industries" may be the same company, and no string rule should ever decide that.
-The registry is the human-owned identity file:
-
-    {"entities": {
-        "globex": {"name": "Globex", "type": "organization",
-                   "aliases": ["Globex Corp", "GX Industries"]}}}
-
-- Every anchoring decision consults it FIRST: a capture anchors to a registered id or one of its
-  aliases, or it asks, or it parks — a string rule never mints identity.
-- It is a plain, diffable JSON file: identity you can read, edit and revert in git. It has exactly
-  ONE writer — `stigmergy-entities`, the governed birth door. Nothing proposes a merge into it
-  automatically.
+On-disk shape: `{"entities": {"<id>": {"name", "type", "aliases": []}}}`. Every anchoring
+decision consults it FIRST — a string rule never mints identity. Plain, diffable JSON with
+exactly ONE writer: `stigmergy-entities`, the governed birth door.
 """
 import json
 import os

@@ -1,38 +1,17 @@
-"""Orchestration: resolve the window, gather the two sections, assemble the body, post (or
-preview), record `job_runs` + the watermark — the one function `cli.py` calls, mirroring
-`gardener.run.run_gardener`'s own "the library is what's tested, the CLI is a thin wrapper"
-posture.
+"""Orchestration: resolve the window, gather the sections, build the body, post (or preview),
+record `job_runs` + the watermark — the one function `cli.py` calls.
 
-**Watermark.** `job_runs.stats` is already how `gardener` records a run's own bookkeeping (a
-dedicated tiny table would buy nothing the JSONB blob does not already give); the digest reuses
-the SAME shape, one job name over (`JOB_NAME = "digest"`). The window start, resolved in this
-priority order (`_resolve_since`): an explicit `--since` override; else the latest COMPLETED
-(`status='ok'`) `job='digest'` run's own `stats['until']` (the existing `(job, started_at DESC)`
-index finds the ROW; the WATERMARK VALUE itself comes from its `stats`, not the row's own
-`started_at` — see the next paragraph for why); else `now - settings.window_days`, a genuine
-first-ever run.
+Window start (`_resolve_since`): `--since` override, else the latest completed `job='digest'`
+run's `stats['until']`, else `now - window_days`. The watermark is `stats['until']`, never
+`job_runs.started_at`: `started_at` is written at INSERT time, after the queries AND the post, so
+an event landing between the two would fall into no window at all — `stats['until']` is the
+boundary the queries were actually bounded by, keeping consecutive windows exactly contiguous.
 
-**`stats['until']`, never `job_runs.started_at`, is the watermark.**
-`capture.ops.record_job_run`'s own `_INSERT_JOB_RUN` writes `started_at = now()` at INSERT time —
-after every section query below AND the Slack post that follows them. An event landing between
-"the queries ran" (bounded at THIS run's own `now`, captured at the top of this function, before
-any query) and "the row committed" would, under a `started_at`-based watermark, fall into no
-digest window at all: this run's own queries were already bounded above `now`, and the NEXT run's
-`since` would start from a strictly LATER instant (`started_at`, always > `now`). `stats['until']`
-is `now` itself, persisted below — the honest boundary every section query was ACTUALLY bounded
-by — so consecutive windows are exactly contiguous rather than approximately so.
+A `--dry-run` writes its own row under `job='digest-dry-run'`; `_watermark_since` reads only
+`job='digest'`, so a preview can never consume a window a real post has not covered.
 
-**A `--dry-run` never advances the watermark.** It writes its OWN `job_runs` row, under
-`job='digest-dry-run'` — the same `job`/`job-dry-run` naming convention `capture.retention.purge`
-uses, for the exact same reason: `_watermark_since` below reads ONLY `job='digest'`, so previewing
-a window and later actually posting it stay two independent acts, and a preview can never silently
-consume a window a real post has not covered yet.
-
-**Post, then record — in that order.** The interrupt copy in `cli.py` depends on this exact
-sequence: the message reaches Slack BEFORE the `job_runs` row commits, so an interrupt landing
-between the two leaves a posted message with no recorded watermark. That is a real, accepted,
-and NAMED risk (the honest alternative to a distributed transaction this system does not have),
-never silently assumed away — see `cli.py`'s own interrupted-message handling.
+Post, then record — in that order. An interrupt between the two leaves a posted message with no
+recorded watermark: an accepted, NAMED risk `cli.py`'s interrupt copy warns about.
 """
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -63,9 +42,8 @@ class DigestResult:
 
 
 def parse_since(value: str) -> datetime:
-    """`--since YYYY-MM-DD` -> midnight UTC that day. Fail-closed: unlike `server.pilot_report`'s
-    own UNGUARDED `datetime.strptime`, a malformed value raises a named, actionable `DigestError`
-    rather than a raw traceback reaching the operator."""
+    """`--since YYYY-MM-DD` -> midnight UTC that day; a malformed value raises a named
+    `DigestError`, never a raw traceback."""
     try:
         return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=UTC)
     except ValueError:
@@ -75,12 +53,8 @@ def parse_since(value: str) -> datetime:
 
 
 def _watermark_since(conn) -> datetime | None:
-    """The last completed run's own `stats['until']`, parsed back from the JSON string
-    `stats ->> 'until'` extracts. `None` when no completed run exists yet, OR when one exists but
-    its `stats` carries no `until` at all (defensive only — every 'ok' `job='digest'` row this
-    package writes stores `until`, see `run_digest` below; a plain `None` here safely falls through
-    to `_resolve_since`'s own default-window branch, the same posture
-    `gardener.sweep.previous_run_watermark` takes for a row with no `sweep` stats at all)."""
+    """The last completed run's `stats['until']`; `None` when no completed run exists or its
+    `stats` carries no `until` (defensive — falls through to the default-window branch)."""
     with conn.cursor() as cur:
         cur.execute(_WATERMARK_SQL, (JOB_NAME,))
         row = cur.fetchone()
@@ -100,9 +74,8 @@ def _resolve_since(conn, *, since_override: datetime | None, window_days: int,
 
 
 def _require_channel(digest_channel_id: str) -> str:
-    """Fail-closed, mirroring `gardener.notice.require_channel`'s exact "name the var, name the
-    consequence, name the fix" shape — checked ONLY when a REAL post is about to happen, so a dry
-    run, whose whole point is to preview the body without posting, never needs it."""
+    """Fail closed — checked only when a REAL post is about to happen; a dry run never needs
+    it."""
     if not digest_channel_id:
         raise DigestError(
             f"${DIGEST_CHANNEL_ID_ENV} is not set — there is nowhere configured to post this "
@@ -117,15 +90,10 @@ async def run_digest(conn, *, settings: DigestSettings, channels_path: str,
                      now: datetime | None = None) -> DigestResult:
     """Gather, render, and either post (recording the watermark) or preview (never advancing it).
 
-    `now`/`since_override` are injectable so a test drives a seeded window without ever touching
-    the wall clock — that determinism is what this function's testability rests on, and `cli.py`
-    never passes `now`, letting it default to the real clock exactly once, at the top of a real
-    run.
-
-    Any failure — a query error, a missing channel/token on a real run, a `SlackApiError` while
-    posting — records an honest `status='error'` `job_runs` row (the exception's CLASS NAME only,
-    never `str(ex)`, which could echo back a fragment of page content) before re-raising, the same
-    posture `gardener.run.run_gardener` already takes for its own run-level failures."""
+    `now`/`since_override` are injectable so a test drives a seeded window without the wall
+    clock; the real clock is read exactly once, at the top of a real run. Any failure records an
+    honest `status='error'` row — the exception's CLASS NAME only, never `str(ex)`, which could
+    echo page content — before re-raising."""
     now = now or datetime.now(UTC)
     job = JOB_NAME_DRY_RUN if dry_run else JOB_NAME
     stats: dict = {"dry_run": dry_run}

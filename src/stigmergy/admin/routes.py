@@ -1,22 +1,13 @@
 """The `/admin` branch — composition, gate, and the HTTP skin over `AdminService`.
 
-`compose(inner, ...)` is the ONE function `transport_http` calls. It returns the inner app
-untouched-in-behavior with an outermost branch in front of it:
+`compose(inner, ...)` is the ONE function `transport_http` calls. Unconfigured
+(`$STIGMERGY_ADMIN_TOKEN_HASH` unset), every `/admin*` path answers a plain 404 and no admin
+object exists — no routes, no service, no DDL. Configured, `/admin*` routes into the admin app as
+a sibling BRANCH in front of `_BearerAuthMiddleware`, never an exemption inside it; everything
+else (lifespan included) flows to the inner app untouched.
 
-- not configured (`$STIGMERGY_ADMIN_TOKEN_HASH` unset) → every `/admin*` path answers a plain 404
-  and NO admin object exists: no routes, no service, no DDL. The MCP surface cannot tell this
-  module is installed.
-- configured → `/admin*` routes into the admin app; everything else (lifespan included — the MCP
-  session manager lives on it) flows to the inner app exactly as before.
-
-This is deliberately NOT an exemption inside `_BearerAuthMiddleware`: the webhook's "ONE
-exemption, exact path match" doctrine stays intact because the admin surface never reaches that
-middleware at all — it is a sibling branch with its own fail-closed gate (ADR 029).
-
-The gate, outermost-in on the admin side: foreign `Host` → 421 (when `$STIGMERGY_PUBLIC_HOST` is
-configured — the transport's own allowlist, mirrored); `/admin/api/*` without the admin bearer
-token → the generic 401; every response carries the CSP and its sibling headers, static assets
-included.
+Gate order on the admin side: foreign `Host` -> 421, `/admin/api/*` without the admin bearer
+token -> generic 401, security headers on every response, static assets included.
 """
 import json
 import logging
@@ -48,8 +39,7 @@ API_PREFIX = "/admin/api/"
 
 STATIC_DIR = pathlib.Path(__file__).parent / "static"
 
-# Everything self, nothing inline, nothing remote — the SPA is plain files served by this same
-# process, so `'self'` covers all of it and any external fetch is a bug by definition.
+# Everything self, nothing inline, nothing remote — any external fetch is a bug by definition.
 _CSP = ("default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:; "
         "connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; "
         "frame-ancestors 'none'")
@@ -61,17 +51,16 @@ _MISDIRECTED = {"error": "misdirected request"}
 
 def compose(inner, *, conn, server_settings, admin_settings: AdminSettings | None = None,
             gateway=None):
-    """Build the branch. `admin_settings`/`gateway` are injectable for tests; production resolves
-    both from the environment (a malformed token hash raises `StartupError` here, at startup —
-    fail closed and loudly, the token store's own posture)."""
+    """Build the branch. `admin_settings`/`gateway` are injectable for tests; production
+    resolves both from the environment (a malformed token hash raises `StartupError` at startup —
+    fail closed and loudly)."""
     settings = admin_settings if admin_settings is not None else AdminSettings.from_env()
     if not settings.configured():
         return _Branch(inner, None)
 
-    # The console's own table, plus the two schemas its read paths depend on and would otherwise
-    # meet as a bare UndefinedTable on a fresh database (the gardener CLI's own lesson):
-    # `gardener_findings` for the findings tab, `review_decisions` for the digest's own reads.
-    # `ensure_capture_schema`/`ensure_audit_table` already ran in `build_http_app`.
+    # The console's own table, plus the two schemas its read paths would otherwise meet as a bare
+    # UndefinedTable on a fresh database. `ensure_capture_schema`/`ensure_audit_table` already
+    # ran in `build_http_app`.
     ensure_admin_schema(conn)
     ensure_gardener_schema(conn)
     review.ensure_review_schema(conn)
@@ -87,21 +76,17 @@ def compose(inner, *, conn, server_settings, admin_settings: AdminSettings | Non
 
 def _public_hosts_from_env() -> list[str]:
     """`$STIGMERGY_PUBLIC_HOST`, comma-separated, trimmed — a deliberate local copy of
-    `transport_http._public_hosts_from_env`: importing it would make this module import the very
-    module that imports this one (the composition point), and two lines of parsing do not earn a
-    cycle."""
+    `transport_http._public_hosts_from_env`: importing it would close a cycle through the
+    composition point."""
     raw = os.environ.get("STIGMERGY_PUBLIC_HOST", "")
     return [h.strip() for h in raw.split(",") if h.strip()]
 
 
 class _Branch:
-    """Outermost ASGI: `/admin*` HTTP requests go right (404 when unconfigured), everything else
-    — lifespan, websockets, every other path — flows to the inner app untouched.
-
-    Attribute access is DELEGATED to the inner app: `tests/server/conftest.rate_limiter_of` /
-    `evidence_store_of` introspect `app.user_middleware` on what `build_http_app` returns, and
-    wrapping the app must not break that seam (or any other Starlette attribute a caller relies
-    on) — the branch is a router, not a new application object."""
+    """Outermost ASGI: `/admin*` HTTP requests go right (404 when unconfigured); everything else
+    — lifespan, websockets, every other path — flows to the inner app untouched. Attribute access
+    DELEGATES to the inner app: test conftests introspect `app.user_middleware`, and wrapping
+    must not break that seam — the branch is a router, not a new application object."""
 
     def __init__(self, inner, admin_app):
         self._inner = inner
@@ -125,9 +110,9 @@ def _is_admin_path(path: str) -> bool:
 
 
 class _AdminGate:
-    """Host check → API token check → security headers on every response. Raw ASGI for the same
-    reason `_BearerAuthMiddleware` is: the check and the downstream app run in one coroutine,
-    and the header injection wraps `send` with no task hand-off."""
+    """Host check -> API token check -> security headers on every response. Raw ASGI: the check
+    and the downstream app run in one coroutine, the header injection wraps `send` with no task
+    hand-off."""
 
     def __init__(self, app, settings: AdminSettings, public_hosts: list[str]):
         self._app = app
@@ -161,9 +146,9 @@ class _AdminGate:
                 headers.append((b"content-security-policy", _CSP.encode("ascii")))
                 headers.append((b"x-content-type-options", b"nosniff"))
                 headers.append((b"referrer-policy", b"no-referrer"))
-                # The admin token is TYPED INTO A FORM on this origin. Fly's `force_https` only
-                # redirects, which means the first request of a session can still leave the browser
-                # over http; HSTS is what stops there being a first time.
+                # The admin token is typed into a form on this origin, and `force_https` only
+                # redirects — the first request of a session can still leave over http; HSTS is
+                # what stops there being a first time.
                 headers.append((b"strict-transport-security",
                                 b"max-age=31536000; includeSubDomains"))
                 if api:
@@ -177,8 +162,8 @@ class _AdminGate:
 # ── the HTTP skin ─────────────────────────────────────────────────────────────────────────────
 def _json_endpoint(fn):
     """Wrap one service call: domain exceptions become their status codes with the library's own
-    sentence; anything unexpected becomes a 500 naming the CLASS only — a raised message can carry
-    captured content, so it never crosses this boundary."""
+    sentence; anything unexpected becomes a 500 naming the CLASS only — a raised message can
+    carry captured content, so it never crosses this boundary."""
 
     async def handler(request):
         try:

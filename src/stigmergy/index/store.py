@@ -1,15 +1,10 @@
-"""Postgres storage for the derived index. The one module that owns SQL DDL and writes.
+"""Postgres storage for the derived index — the one module that owns SQL DDL and writes.
 
-`pages_index` is NEVER migrated: it is dropped and recreated on every rebuild — wipe and rebuild
-is the upgrade path, because the index is a CACHE, and the end-to-end idempotency proof keeps that
-honest. The only surviving table is `embedding_cache`, keyed by (model, content_hash), so a
-rebuild re-embeds ONLY pages whose content changed — which is why a native content_hash is
-computed before anything is embedded.
+`pages_index` is never migrated: dropped and recreated per rebuild; `embedding_cache` and
+`index_meta` survive, so a rebuild re-embeds only content whose hash changed.
 
-**This layer knows no identity.** `acl` is stored here and enforced ABOVE, by
-`stigmergy.server.acl.visible()` at `BrainService`'s read paths — one place decides access, and it
-is not the storage layer. `tests/test_architecture.py` lists this module as a named exception to
-"every reader of `pages_index` names an ACL predicate" for exactly that reason.
+This layer knows no identity: `acl` is stored here and enforced ABOVE by
+`stigmergy.server.acl.visible()` — a named exception in `tests/test_architecture.py`.
 """
 import json
 import os
@@ -93,13 +88,9 @@ CREATE TABLE IF NOT EXISTS index_meta (
 )
 """
 
-# The searchable text: title, body, tags, entity, mentions.
-# `entity` is a list — folded into the tsvector text the same way `tags` is, via
-# `array_to_string`, so a page anchored to several entities is findable by any of them exactly as
-# a multi-tag page already is.
-# `entity_meta` (an entity page's own `role`/`aliases` frontmatter, empty for every other page
-# type — `corpus._entity_meta_text`) joins the same tsv-only channel `tags`/`mentions` are: never
-# a stored column, only a source `to_tsvector` reads once here.
+# The searchable text: title, tags, entity (folded via array_to_string so any anchor matches),
+# mentions, entity_meta and body. `tags`/`mentions`/`entity_meta` are tsv-only — never stored
+# columns, only sources `to_tsvector` reads once here.
 _TSV_SQL = ("to_tsvector(%(fts_config)s, %(title)s || ' ' || %(tags)s || ' ' || "
             "array_to_string(%(entity)s::text[], ' ') || ' ' || %(mentions)s || ' ' || "
             "%(entity_meta)s || ' ' || %(body)s)")
@@ -111,15 +102,9 @@ def dsn() -> str:
 
 def host_of_dsn(conninfo: str | None) -> str:
     """The DSN's host, credential-free — `""` when it names none (a unix socket, PG* defaults, or
-    a string libpq cannot read).
-
-    Through libpq's OWN parser, because the keyword form (`host=h port=5432 password=…`) is a DSN
-    too and string surgery on it returns the whole connstring, password included. That is not a
-    hypothetical: this repo already legislated the rule twice — `tests/testdb.describe` ("never
-    the DSN itself. A DSN carries a password") and `mcp_server._dsn_location` — and a third
-    hand-rolled parser is how a credential reaches a terminal. Callers that merely need to say
-    WHERE the queue is get this; nobody outside this module needs to parse a DSN at all.
-    """
+    a string libpq cannot read). Through libpq's OWN parser: the keyword form
+    (`host=h password=…`) is a DSN too, and string surgery on it returns the whole connstring,
+    password included. Nobody outside this module needs to parse a DSN at all."""
     try:
         host = str(conninfo_to_dict(conninfo or "").get("host") or "")
     except psycopg.Error:
@@ -137,25 +122,22 @@ def connect(conninfo: str | None = None) -> psycopg.Connection:
 def init_schema(conn: psycopg.Connection, dim: int, model: str, fts_config: str) -> None:
     with conn.transaction(), conn.cursor() as cur:
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
-        # TARGETED BY NAME, and it must stay that way. This database also holds the DURABLE half
-        # of the system — `capture_queue`, `audit_log`, `job_runs`, `ingest_errors`
-        # (`stigmergy.capture.schema.DURABLE_TABLES`) — which holds material that exists NOWHERE
-        # else until the librarian files it. A "just drop everything and rebuild" shortcut here
-        # would silently take the queue with the cache. The index is disposable; its neighbours
-        # are not.
+        # TARGETED BY NAME, and it must stay that way: this database also holds the DURABLE half
+        # of the system (`capture_queue`, `audit_log`, `job_runs`, `ingest_errors`) — material
+        # that exists nowhere else until the librarian files it. A "drop everything" shortcut
+        # would take the queue with the cache.
         cur.execute("DROP TABLE IF EXISTS pages_index")
         cur.execute(_PAGES_DDL.format(dim=dim))
         # Backlinks are a containment lookup, never a scan. Plain `CREATE INDEX` (no
-        # `IF NOT EXISTS`) is correct here and nowhere else in this codebase's DDL — every other
-        # `CREATE INDEX` guards a SURVIVING table's idempotent startup DDL; `pages_index` was just
-        # dropped and recreated two lines up, so the index cannot already exist.
+        # `IF NOT EXISTS`) is correct here and nowhere else in this codebase's DDL: the table was
+        # just dropped, so the index cannot already exist — every other `CREATE INDEX` in the repo
+        # guards a SURVIVING table.
         cur.execute("CREATE INDEX pages_index_links_gin ON pages_index USING GIN (links)")
 
         cur.execute(_CACHE_DDL)
         cur.execute(_META_DDL)
-        # index_meta is a SURVIVING table (like embedding_cache), so an older database may have it
-        # without `built_at`: add the column additively rather than force a wipe (backward
-        # compatible — the index stays rebuildable in place; `down -v` is still the clean reset).
+        # index_meta is a SURVIVING table, so an older database may lack `built_at`: add the
+        # column additively rather than force a wipe.
         cur.execute("ALTER TABLE index_meta ADD COLUMN IF NOT EXISTS built_at timestamptz"
                     " NOT NULL DEFAULT now()")
         cur.execute("INSERT INTO index_meta (model, dim, fts_config, built_at)"
@@ -166,24 +148,15 @@ def init_schema(conn: psycopg.Connection, dim: int, model: str, fts_config: str)
                     (model, dim, fts_config))
 
 
-
 def create_search_indexes(conn) -> None:
-    """The two retrieval indexes — built AFTER the bulk load, which is why they are not in
-    `init_schema` beside the links GIN.
+    """The two retrieval indexes: `pages_index_tsv_gin` serves `tsv @@ tsq`,
+    `pages_index_embedding_hnsw` serves `embedding <=>` with `halfvec_cosine_ops` — which must
+    match BOTH the column type and the operator `search._VEC_SQL` uses, or Postgres silently
+    seq-scans and the index is decoration (see `_PAGES_DDL` for why the column is `halfvec`).
 
-    `pages_index_tsv_gin` serves `tsv @@ tsq` (the lexical arm) and `pages_index_embedding_hnsw`
-    serves `embedding <=> %(embedding)s` (the vector arm, cosine — hence `halfvec_cosine_ops`,
-    which must match BOTH the column type and the operator `search.VEC_SQL` uses, or Postgres
-    plans a seq scan and the index is decoration. See `_PAGES_DDL` for why the column is
-    `halfvec`: plain `vector` caps HNSW at 2000 dimensions and production runs 3072).
-
-    **Why after the insert, and why that is not a micro-optimization.** An HNSW index maintains a
-    navigable graph per row inserted. Building it first means every one of 50-100k rows pays graph
-    maintenance during a bulk load; building it last is one bulk construction over a finished
-    table. The incremental webhook path (one page at a time) then maintains both indexes at
-    per-row cost, which is what that path is for. `pages_index` is dropped and recreated on every
-    full rebuild, so these are rebuilt with it — there is no migration to write and no `IF NOT
-    EXISTS` to guard, exactly like the links GIN above."""
+    Built AFTER the bulk load, not in `init_schema`: an HNSW index maintains a navigable graph
+    per inserted row, so building it first makes every row pay graph maintenance and building it
+    last is one bulk construction. No `IF NOT EXISTS` — the table was just dropped."""
     with conn.cursor() as cur:
         cur.execute("CREATE INDEX pages_index_tsv_gin ON pages_index USING GIN (tsv)")
         cur.execute("CREATE INDEX pages_index_embedding_hnsw ON pages_index "
@@ -199,15 +172,13 @@ def read_meta(conn: psycopg.Connection) -> dict | None:
         try:
             cur.execute("SELECT model, dim, fts_config, built_at FROM index_meta")
         except psycopg.errors.UndefinedColumn:
-            # an older index_meta predates the built_at column (added additively in
-            # init_schema): treat it as needing a rebuild rather than crashing the server with a
-            # raw error — the caller's empty-index path then surfaces the `--rebuild` hint.
+            # an older index_meta predating built_at reads as "needs a rebuild" rather than a raw
+            # crash — the caller's empty-index path surfaces the `--rebuild` hint.
             return None
         row = cur.fetchone()
     if not row:
         return None
-    # built_at ships as an ISO-8601 string: the server serializes it into JSON tool output
-    # (and read_meta consumers never need a live datetime).
+    # built_at ships as an ISO-8601 string: the server serializes it into JSON tool output.
     return {"model": row[0], "dim": row[1], "fts_config": row[2],
             "built_at": row[3].isoformat() if row[3] is not None else None}
 
@@ -229,12 +200,9 @@ def store_embeddings(conn: psycopg.Connection, model: str, by_hash: dict[str, li
                         (model, h, json.dumps(emb)))
 
 
-# The one column list `insert_pages`/`upsert_pages` both write, and the one source `_INSERT_SQL`
-# and `_UPSERT_SET` are both built from. A claim of "ONE INSERT statement between the two" was
-# once made while the column list, the VALUES clause and the params dict were each written out
-# twice — a `pages_index` column added to one copy and not the other would have diverged
-# silently. There is exactly one column list, one params builder (`_page_params`) and one INSERT
-# template (`_INSERT_SQL`) that both functions share.
+# The one column list both writers share, and the one source `_INSERT_SQL` and `_UPSERT_SET` are
+# built from — exactly one column list, one params builder (`_page_params`) and one INSERT
+# template, so a `pages_index` column added anywhere else would diverge silently.
 _PAGE_COLUMNS = ("path", "page_id", "zone", "title", "body", "type", "status", "entity",
                  "owner", "tier", "as_of", "updated",
                  "superseded_by", "supersedes", "acl", "inlinks", "links",
@@ -273,36 +241,22 @@ def insert_pages(conn: psycopg.Connection, rows: list, embeddings: dict[str, lis
                        _page_params(r, fts_config=fts_config, embeddings=embeddings))
 
 
-# `inlinks` is excluded here exactly like `path` already is — `path` because it is the conflict
-# key, `inlinks` because the incoming row's value (the incremental webhook's `PageRow`, always
-# 0 — a single changed file cannot resolve the whole-corpus wikilink
-# graph, `corpus.page_row`'s own docstring) is not a fact about the row at all, merely a default
-# a single-file parse cannot compute. `EXCLUDED.inlinks` used to clobber whatever the last FULL
-# rebuild had computed, demoting every incrementally-edited page in `search.py`'s ranking until
-# the next nightly rebuild recomputed it — a retrieval regression the golden set cannot see
-# (the golden run does a full rebuild, never an upsert). Excluding it from the SET list means an
-# UPDATE simply leaves the column at its current value; a fresh INSERT (no existing row to
-# conflict with) still gets the incoming row's own default (0) via the VALUES list, which is the
-# honest answer for a page nothing has ever resolved the graph for yet.
-#
-# `links` is the OPPOSITE case from `inlinks`, and stays IN `_UPSERT_SET` (not
-# excluded). A single changed file's own OUTBOUND wikilinks ARE fully resolvable from its own
-# text plus `pages_index`'s EXISTING paths — unlike the whole-corpus INBOUND graph `inlinks`
-# counts, no single file can compute its own inbound count, but it CAN compute its own outbound
-# targets (`server.webhook`'s own one-query resolution, mirroring `corpus.load_pages`'s in-memory
-# one — a parity test pins that the two agree). So an UPDATE's incoming `links` value is
-# not a stale default to protect against; it is the freshest fact this row can state about its
-# own outbound edges, and excluding it would leave a webhook-edited page's `links` frozen at
-# whatever the last full rebuild saw.
+# `inlinks` is excluded like `path` (the conflict key): the webhook's incoming row always carries
+# 0 — a single changed file cannot resolve the whole-corpus INBOUND graph — and letting
+# `EXCLUDED.inlinks` clobber the last full rebuild's count demotes every incrementally-edited
+# page until the next nightly rebuild. A fresh INSERT still gets 0 via VALUES, the honest answer
+# for a page nothing has resolved the graph for yet. `links` is the OPPOSITE case and stays IN
+# the SET list: a file CAN compute its own outbound targets from its text plus existing paths, so
+# the incoming value is the freshest fact available — excluding it would freeze a webhook-edited
+# page's `links` at whatever the last full rebuild saw.
 _UPSERT_SET = ", ".join(f"{col} = EXCLUDED.{col}"
                         for col in _PAGE_COLUMNS if col not in ("path", "inlinks"))
 
 
 def current_content_hashes(conn: psycopg.Connection, paths: list[str]) -> dict[str, str]:
-    """`path -> content_hash` for whichever of `paths` are already indexed — the incremental
-    webhook's idempotency check, so that the same content pushed twice embeds once. A path absent
-    from the return value is not indexed yet at all (a genuine new page, or one outside the built
-    corpus)."""
+    """`path -> content_hash` for whichever of `paths` are already indexed — the webhook's
+    idempotency check, so the same content pushed twice embeds once. An absent path is simply not
+    indexed yet."""
     if not paths:
         return {}
     with conn.cursor() as cur:
@@ -311,24 +265,19 @@ def current_content_hashes(conn: psycopg.Connection, paths: list[str]) -> dict[s
 
 
 def existing_paths(conn: psycopg.Connection) -> list[str]:
-    """Every path currently in `pages_index` — ONE query: the webhook resolves a single file's
-    stems against `pages_index`'s own paths. The incremental webhook builds its own
-    `corpus.by_stem_index` from this, so its outbound-link resolution shares `corpus.resolve_links`
-    with the full rebuild's in-memory one rather than growing a second algorithm that could drift
-    (a parity test pins the two agree)."""
+    """Every path currently in `pages_index`, one query — the webhook builds its
+    `corpus.by_stem_index` from this, so its link resolution shares `corpus.resolve_links` with
+    the full rebuild's in-memory one (parity-tested) instead of growing a second algorithm."""
     with conn.cursor() as cur:
         cur.execute("SELECT path FROM pages_index")
         return [row[0] for row in cur.fetchall()]
 
 
 def pages_with_page_id_prefix(conn: psycopg.Connection, prefix: str) -> list[tuple[str, str]]:
-    """`(path, page_id)` for every row whose `page_id` STARTS WITH `prefix` — a cheap SQL prefix
-    filter (`LIKE`, backslash-escaped) narrowing candidates BEFORE an exact Python-side pattern
-    decides which are real (`server.webhook`'s incremental `superseded_by`
-    propagation onto split-chain siblings, marker-gated exactly like `corpus.load_pages`'s
-    build-time rule — `corpus.chain_part_pattern` is the exact matcher this narrows for). `prefix`
-    is escaped for `%`/`_`/`\\` so a `page_id` containing those characters is never read as a
-    wildcard."""
+    """`(path, page_id)` for every row whose `page_id` starts with `prefix` — a cheap LIKE filter
+    narrowing candidates before `corpus.chain_part_pattern` decides which are real (the webhook's
+    incremental `superseded_by` propagation). Escaped for `%`/`_`/`\\` so a `page_id` containing
+    them is never read as a wildcard."""
     escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     with conn.cursor() as cur:
         cur.execute("SELECT path, page_id FROM pages_index WHERE page_id LIKE %s",
@@ -337,11 +286,9 @@ def pages_with_page_id_prefix(conn: psycopg.Connection, prefix: str) -> list[tup
 
 
 def set_superseded_by(conn: psycopg.Connection, paths: list[str], value: str) -> None:
-    """Targeted `superseded_by` UPDATE for exactly `paths` — the webhook's own supersession
-    window: once a push upserts a split
-    chain's PRIMARY, its already-indexed `#p<n>` siblings must not wait for the nightly rebuild to
-    learn the new value, stamped or cleared symmetrically (`value` is used verbatim, empty string
-    included)."""
+    """Targeted `superseded_by` UPDATE for exactly `paths` — once a push upserts a chain's
+    PRIMARY, its already-indexed siblings must not wait for the nightly rebuild. Stamped or
+    cleared symmetrically: `value` is used verbatim, empty string included."""
     if not paths:
         return
     with conn.transaction(), conn.cursor() as cur:
@@ -355,16 +302,11 @@ _UPSERT_SQL = (_INSERT_SQL + f" ON CONFLICT (path) DO UPDATE SET {_UPSERT_SET},"
 
 def upsert_pages(conn: psycopg.Connection, rows: list, embeddings: dict[str, list[float]],
                 fts_config: str) -> None:
-    """Insert-or-update, keyed on `path` (the table's own primary key) — the incremental path.
-    `_UPSERT_SQL` extends `_INSERT_SQL` with one `ON CONFLICT` clause, so an upserted
-    row and a freshly-rebuilt one can never disagree about which columns exist or how the search
-    text is derived — there is exactly one column list and one params builder
-    (`_page_params`) behind both, not two copies that could drift.
-
-    `rows`/`embeddings` are exactly `insert_pages`'s shapes (`corpus.PageRow` list;
-    content_hash -> vector map) — a caller that already has cached embeddings for an unchanged
-    row's content_hash passes them here unchanged, so a same-content upsert never re-embeds.
-    """
+    """Insert-or-update keyed on `path` — the incremental path. `_UPSERT_SQL` extends
+    `_INSERT_SQL` with one `ON CONFLICT` clause, so an upserted row and a rebuilt one can never
+    disagree about columns or search-text derivation. `rows`/`embeddings` are exactly
+    `insert_pages`'s shapes; cached embeddings pass through unchanged, so a same-content upsert
+    never re-embeds."""
     with conn.transaction(), conn.cursor() as cur:
         for r in rows:
             cur.execute(_UPSERT_SQL,
@@ -372,11 +314,9 @@ def upsert_pages(conn: psycopg.Connection, rows: list, embeddings: dict[str, lis
 
 
 def delete_pages(conn: psycopg.Connection, paths: list[str]) -> int:
-    """Remove rows by path — a deleted page's row is removed from the index. Returns how many
-    rows actually existed to delete: a path already absent (never indexed, or already removed by an
-    earlier delivery of the same event) deletes zero rows, not an error, which is what makes this
-    safe to call on a REDELIVERED push. Pushes can arrive out of order and be redelivered, and
-    neither may corrupt the index."""
+    """Remove rows by path; returns how many existed to delete. An already-absent path deletes
+    zero rows, not an error — pushes arrive out of order and get redelivered, and neither may
+    corrupt the index."""
     if not paths:
         return 0
     with conn.transaction(), conn.cursor() as cur:

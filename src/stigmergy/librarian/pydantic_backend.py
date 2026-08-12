@@ -1,44 +1,18 @@
-"""BOTH flows on pydantic-ai: an ITERATING ordinary run with five tools, one structured meeting call.
+"""BOTH flows on pydantic-ai: an ITERATING ordinary run with five tools, one structured meeting
+call.
 
-The third `FilingAgent` implementation, and the first one that is not Claude's. It started with the
-meeting flow because that flow was ALREADY portable and nothing had noticed: the agent holds no
-page-writing tool (code is the sole author of every page in the set), it explores nothing (the
-transcript, the registry and the metadata are all handed to it), and its whole answer is one
-structured account. A flow shaped like that does not need an agent harness at all — it needs a
-model that can return a typed object. ADR 032 records that half; ADR 020 is why the meeting flow
-had the shape in the first place.
+Deterministic code may SEED context and IMPLEMENT tools; it must not replace the judgment that
+decides when the context is not enough. The gatherer is therefore NOT here — `processing` gathers
+and renders, so two backends share one context builder and one fence discipline. What IS here is
+`FilingToolbox`, whose confinement rules are asked inside each call rather than in a hook.
 
-**ADR 033 gave the ORDINARY flow the same shape; ADR 034 gave it back its ability to look.** The
-gatherer stays and the one-shot call went: `processing` still reads the checkout deterministically
-and hands the result over as rendered prompt text, but that block is now the SEED of a run that
-holds `search_pages`, `read_page`, `list_page_names`, `resolve_entities` and `write_page` over the
-same checkout, writes its own page inside `agent.confined_write`'s allow-list, and returns its
-account as `.librarian-outcome.json`. The reason is portability rather than nostalgia: the goal of
-moving off the Claude harness was that a provider swap should be a configuration change, never that
-the model should stop being able to search — deterministic code may SEED context and IMPLEMENT
-tools, and must not replace the judgment that decides when the context is not enough.
+`kernel.llm.build_processor` is deliberately NOT reused: routing through `resolve_backend` would
+create a SECOND offline path beside `double.DoubleAgent`, with different semantics answering to a
+different variable. `agent.*`'s reads, prompt builders and outcome parses ARE reused — the SAME
+trust boundary the file channel goes through, because a structured provider is not a trusted one.
 
-**The gatherer is deliberately NOT in here.** `processing` gathers and renders; this backend
-receives a string. Two backends must share one context builder and one fence discipline, and a
-gatherer living inside a backend is a gatherer the second one reimplements. What IS in here is the
-TOOLBOX (`FilingToolbox`) — the tools' bodies, which are `gather.py`'s own pure functions with the
-confinement rules asked inside each call rather than in a permission hook.
-
-**What is NOT reused, deliberately.** `kernel.llm.build_processor` is this repo's fake/real
-dispatch for every OTHER agent, and it is the wrong seam here: the librarian's offline path is
-`double.DoubleAgent` — a whole adversarial backend the suite is built on — and routing this module
-through `resolve_backend` would create a SECOND offline path with different semantics answering to
-a different variable (`$CLEAN_LLM` rather than `$STIGMERGY_LIBRARIAN_BACKEND`). What IS reused is
-everything each flow already owns: `agent.read_skill`/`read_meeting_brief` (the base-commit reads),
-`agent.build_prompt`/`build_meeting_prompt` (the per-item message),
-`agent.build_system_prompt`/`build_meeting_system_prompt` (the brief's body as instructions) and
-`agent.parse_outcome`/`parse_meeting_outcome` (the SAME trust boundary the file channel goes
-through — a structured provider is not a trusted one).
-
-**`pydantic_ai` is imported inside the methods**, never at module scope:
-a keyless run must not load an agent framework, and the import graph must not claim this package
-depends on one unconditionally. `pydantic` itself is module-scope — the output schemas below are
-plain data, and a test that builds one by hand must not have to reach through a backend to do it.
+`pydantic_ai` is imported inside the methods, never at module scope: a keyless run must not load
+an agent framework. `pydantic` itself is module-scope, so the schemas stay buildable by a test.
 """
 import json
 import logging
@@ -60,55 +34,21 @@ log = logging.getLogger(__name__)
 
 BACKEND_NAME = "pydantic"
 
-# RETIRED with the refusals that quoted them: `ADR` (ADR 032, cited by M1's meeting-only refusal)
-# and now `ORDINARY_ADR` (ADR 033, cited by `worker._check_brief_matches_backend`, retired in ADR
-# 034 — see that function's tombstone in `worker.py` for why the check went).
-#
-# Both are the same pruning rule applied twice: **a module constant naming a document nothing
-# quotes is a reference with no reader**, and this repo prunes those on sight. ADR 032, 033 and 034
-# are all still this module's design records and are cited in the prose above, which is where a
-# document reference with no runtime reader belongs.
-
-# How many times the FRAMEWORK may re-ask the model when its answer does not satisfy what it was
-# asked for. On the MEETING flow that is the output schema, and this constant is read twice on
-# purpose there: it is both the `Agent`'s retry budget and the request ceiling handed to
-# `UsageLimits`, and those two numbers must agree or the ceiling either strangles a legitimate
-# re-validation or stops bounding anything. One request, plus one re-ask: past that the answer is
-# not a shape problem the framework can fix by asking again, and it belongs on the WORKER's own
-# corrective retry, where the brief says what was wrong.
-#
-# On the ORDINARY flow it bounds TOOL-call validation instead (a call with arguments the tool's
-# signature refuses) and nothing else — that flow's request ceiling is `settings.max_turns`, since
-# a loop's budget cannot be a re-ask budget.
-#
-# **These re-asks are invisible to `AgentPasses.count`**, which counts the worker's passes. See
-# ADR 032's envelope semantics: `attempts` means our passes, so a framework re-validation costs
-# money that IS banked (the usage accumulator sees it) under an attempt count that does not move.
+# How many times the FRAMEWORK may re-ask the model. On the MEETING flow this is read twice on
+# purpose — retry budget AND request ceiling — and the two must agree, or the ceiling either
+# strangles a legitimate re-validation or bounds nothing.
 OUTPUT_RETRIES = 1
 
-# How much of an `UnexpectedModelBehavior`'s own message reaches the Finding a corrective retry
-# reads, as ONE bounded line — enforced by `textutil.one_line`, not `sanitize`/`clamp` separately:
-# pydantic-ai 2.13's `UnexpectedModelBehavior.__str__` is `f'{message}, body:\n{body}'`, so a
-# `sanitize`-then-`clamp` pipeline (`sanitize` deliberately keeps newlines) still let a
-# response-body newline land inside the budget, and this text reaches the corrective retry's
-# PROMPT — the same class of defect `neutralize_fence` exists for, which is why the fault text is
-# fence-neutralized before it is one-lined. 200 is the same order of magnitude as a report line
-# rather than a whole response body: enough to name the fault, not enough to smuggle a second one.
+# How much of an `UnexpectedModelBehavior` message reaches the corrective retry's Finding, as ONE
+# line: the framework's `__str__` embeds a response body, and this text reaches a PROMPT.
 MAX_FAULT_MESSAGE_LEN = 200
 
-# The WORKER LOG's own budget for the same exception text — wider than `MAX_FAULT_MESSAGE_LEN`
-# because a log line serves an operator diagnosing a fault, not a submitter reading a report, but
-# still bounded rather than raw: the framework's message and `exc.__cause__`'s `repr` (typically a
-# pydantic `ValidationError`, whose `repr` embeds the input values verbatim) can both carry
-# captured material or PII, unbounded, straight into the worker's own logs. No fence-neutralize
-# here — a log is not a prompt, and the property that matters is ONE bounded line, which
-# `textutil.one_line` alone already guarantees.
+# The WORKER LOG's budget for the same text — wider, still bounded: those messages can carry
+# captured material or PII verbatim. No fence-neutralize; a log is not a prompt.
 MAX_FAULT_LOG_LEN = 500
 
-# The provider prefixes this milestone names, and the environment variable each family
-# authenticates with. Used by `worker.startup_checks`' preflight, which refuses a missing key
-# BEFORE the first claim; an unknown prefix is not an error (a provider pydantic-ai supports and
-# this table has not heard of is a legitimate configuration), it simply gets no preflight.
+# Read by the preflight that refuses a missing key BEFORE the first claim; an unknown prefix
+# simply gets no preflight.
 PROVIDER_KEY_ENV = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
@@ -123,26 +63,11 @@ def provider_of(model: str) -> str:
 
 
 def prompt_cache_settings(model: str, prompt_cache: str) -> dict | None:
-    """The `model_settings` dict for the ORDINARY run's `Agent(...)` (ADR 036), or `None` to pass
-    nothing — a PURE function of the two strings `config.Settings` already resolved, so it needs no
-    `pydantic_ai` import at all: `ModelSettings` is a `TypedDict`, and pydantic-ai accepts any plain
-    mapping carrying the right keys.
-
-    **Why messages-caching matters here, specifically.** The ordinary flow ITERATES — up to
-    `max_turns` model requests for one capture — and every one of those requests
-    resends the whole growing prefix: the system prompt (the knowledge-repo skill), the five tool
-    schemas and the gathered seed are BYTE-IDENTICAL from the first turn to the last, and only the
-    tool results and the model's own replies grow underneath them. Anthropic prices a cache READ at
-    roughly 0.1x the ordinary input rate, so past the first turn that identical prefix — not the
-    part that changes — is where the bill actually lives. `anthropic_cache_messages` is what makes
-    the growing conversation itself cacheable turn over turn; `anthropic_cache_instructions` and
-    `anthropic_cache_tool_definitions` cover the two other blocks that never change at all.
-
-    `None` for `"off"` (the escape hatch `config.Settings.prompt_cache` documents) and for any
-    non-Anthropic model id: a Gemini or OpenAI model has no `anthropic_cache_*` field to set, and
-    `provider_of` is the SAME prefix check `PROVIDER_KEY_ENV` already reads, so this does not grow a
-    second answer to "is this model Anthropic's".
-    """
+    """The `model_settings` dict for the ORDINARY run's `Agent(...)`, or `None`. A PURE function
+    of two resolved strings, needing no `pydantic_ai` import. The ordinary flow ITERATES and every
+    request resends a byte-identical growing prefix, so a cache READ at ~0.1x the input rate is
+    where the bill lives. Asked through `provider_of`, so there is no second answer to "is this
+    model Anthropic's"."""
     if provider_of(model) != "anthropic" or prompt_cache not in config.PROMPT_CACHE_TTLS:
         return None
     return {
@@ -153,44 +78,18 @@ def prompt_cache_settings(model: str, prompt_cache: str) -> dict | None:
 
 
 # ── the accounts, as schemas instead of a file ────────────────────────────────────────────────
-# Field-for-field mirrors of the JSON `agent.parse_outcome` / `parse_meeting_outcome` already read,
-# so the two channels carry the SAME shape and the boundary parse is shared rather than forked.
-#
-# **BOUNDS are deliberately not restated here; REQUIREDNESS is, and the distinction was paid for.**
-# `parse_*_outcome` owns the bounds — identifiers refused over `MAX_IDENTIFIER_LEN`, prose
-# truncated, a page body refused, lists capped — and a second set of limits in a schema would be a
-# second answer to one question, drifting from the one the file channel is judged by.
-#
-# Requiredness is the opposite case, and the first PAID run of the structured ordinary flow is what
-# established it. Every field carried a default, including `decision`, on the reasoning that a
-# provider omitting something should produce an account the boundary can judge and refuse on its
-# own terms rather than a validation error inside the framework. That reasoning had the mechanism
-# backwards. A default does not make an omission visible — it makes it INVISIBLE: the framework's
-# output validation passed a half-empty account, so its own `OUTPUT_RETRIES` never fired, and
-# `parse_outcome` then refused downstream with `unknown-decision` or a missing `title`. Five of the
-# golden's ordinary captures died that way, two passes each: the WORKER's one corrective retry was
-# spent re-asking a model to repair a shape a brief cannot reliably teach, when the framework
-# would have re-asked for free and with the exact field named.
-#
-# So the schema demands what the boundary demands, and the two enforcement points are declared
-# duplication rather than an accident:
-#
-#   * the SCHEMA (here) is the cheap, early road — the framework re-asks the model with the
-#     validator's own message, before a single byte reaches this package;
-#   * the BOUNDARY (`agent.parse_*_outcome`) keeps every check regardless, because it also judges
-#     the FILE channel and because a typed provider response is not a trusted one.
-#
-# Nothing is hardcoded twice: `decision` derives its enum from `agent.DECISIONS`, and the parked
-# kinds and their required fields from `agent.TRIAGE_KINDS` / `agent.TRIAGE_REQUIRED_FIELD`.
+# Field-for-field mirrors of the JSON `agent.parse_*_outcome` reads, so both channels carry the
+# SAME shape and the boundary parse is shared. BOUNDS are deliberately NOT restated — a second set
+# would drift from the one the file channel is judged by. REQUIREDNESS is: a defaulted field makes
+# an omission INVISIBLE, so the framework accepts a half-empty account, its `OUTPUT_RETRIES` never
+# fire, and the boundary refuses downstream having spent the WORKER's one corrective retry. The
+# BOUNDARY still keeps every check, because it also judges the FILE channel.
 
 
 def _needed(field: str, instead: str) -> str:
-    """One completeness refusal, addressed to the MODEL rather than to an operator.
-
-    These strings are not diagnostics: pydantic-ai hands a validator's `ValueError` back to the
-    model as its retry prompt, so this is the only text that gets a chance to repair the account.
-    Same shape as `gates.Finding.brief` for that reason — name the field, then name the repair.
-    """
+    """One completeness refusal addressed to the MODEL: pydantic-ai hands a validator's
+    `ValueError` back as the retry prompt, so this is the only text that can repair the
+    account."""
     return f"`{field}` is required and came back empty. {instead}"
 class MeetingAnchoring(BaseModel):
     """One decision's own anchor. `kind` is `entity` (with `entities`) or `company` (with a written
@@ -250,8 +149,8 @@ class MeetingAccount(BaseModel):
 
     @model_validator(mode="after")
     def _complete_for_its_decision(self):
-        """`FilingAccount._complete_for_its_decision`'s twin, over what a MEETING decision obliges
-        — mirroring `agent.parse_meeting_outcome`'s own required-field rules and no others."""
+        """`FilingAccount._complete_for_its_decision`'s twin, mirroring
+        `agent.parse_meeting_outcome`'s required-field rules and no others."""
         if self.decision == "file":
             if not (self.meeting_title or "").strip():
                 raise ValueError(_needed(
@@ -272,9 +171,8 @@ class MeetingAccount(BaseModel):
             raise ValueError(_needed(
                 "triage.kind",
                 f"Parking says WHY: one of {', '.join(agent_module.TRIAGE_KINDS)}."))
-        # The plural field, and the ONE place this flow's rule differs from the ordinary one: a
-        # meeting can fail to anchor on several names at once, so `parse_meeting_outcome` asks for
-        # `names` where `parse_outcome` asks for `name`.
+        # The ONE place this flow differs: a meeting can fail to anchor on several names at once,
+        # so it asks for `names` where the ordinary flow asks for `name`.
         if kind == agent_module.TRIAGE_UNRESOLVED_ENTITY and not [
                 n for n in self.triage.names if (n or "").strip()]:
             raise ValueError(_needed(
@@ -284,19 +182,10 @@ class MeetingAccount(BaseModel):
         return self
 
 
-# ── the ORDINARY account, as a schema instead of a file (ADR 033) ─────────────────────────────
-# The same field-for-field mirror discipline the meeting schema above follows, over the shape
-# `agent.parse_outcome` reads — and with THREE deliberate omissions, each one a field this backend
-# must not be able to declare:
-#
-#  * `page_path` — code decides every path here (`processing._write_ordinary_page`), from the
-#    title and from `page.FOLDER_BY_TYPE`. A field the model could fill is a path the model could
-#    steer, and `_cross_check_outcome` would then be defending against a claim nothing needed to
-#    make. `parse_outcome` still ACCEPTS one (the offline double declares it), which is the whole
-#    of the expand–contract: one parser, two shapes, and each backend emitting only its own.
-#  * top-level `title`/`page_type` — they live in `page` for this backend, and `parse_outcome`
-#    fills the single fields every downstream reader uses from there. Declaring both would let one
-#    account carry two answers to one question.
+# ── the ORDINARY account, as a schema instead of a file ───────────────────────────────────────
+# Same mirror discipline, minus fields this backend must not declare: `page_path` (a field the
+# model could fill is a path the model could steer) and top-level `title`/`page_type` (two
+# declaration sites would let one account carry two answers).
 class OrdinaryAnchoring(BaseModel):
     """This page's anchor. `kind` is `entity` (with `entities`) or `company` (with a written
     `reason`); the registry, not this schema, decides whether a name resolves."""
@@ -359,12 +248,9 @@ class FilingAccount(BaseModel):
     @model_validator(mode="after")
     def _complete_for_its_decision(self):
         """What THIS decision obliges — the conditional half a field-by-field schema cannot say.
-
         `OrdinaryPage`'s own fields stay optional on purpose: a `triage` account legitimately
-        carries no page at all, so requiring them individually would refuse the correct outcome for
-        a capture this brain cannot place. The obligation is on the PAIRING, which is exactly what a
-        model validator is for.
-        """
+        carries no page, so requiring them individually would refuse the correct outcome for a
+        capture this brain cannot place. The obligation is on the PAIRING."""
         if self.decision == "file":
             if not (self.page.title or "").strip():
                 raise ValueError(_needed(
@@ -398,29 +284,9 @@ class FilingAccount(BaseModel):
         return self
 
 
-# ── RETIRED with the one-shot ordinary run (ADR 034) ──────────────────────────────────────────
-# `ORDINARY_ENVIRONMENT` ("You have NO tools…"), `ORDINARY_SYSTEM_PROMPT_HEADER` and
-# `ORDINARY_OUTCOME_CHANNEL` ("You write no file and you have no tool that could") lived here.
-# Nothing composes them: this backend's ordinary run holds five tools and writes its own page and
-# outcome file, so every one of those three sentences is now false OF THE ONLY RUN THAT WOULD READ
-# THEM — the exact defect `agent.build_filing_header`'s split exists to prevent, which is why they
-# are removed rather than left as plausible-looking defaults for the next backend to inherit.
-#
-# **The SHAPE they described is not retired**, and that is the distinction worth keeping: a backend
-# declaring `structured_ordinary = True` still takes `processing._one_pass`'s content-carrying
-# branch, `FilingAccount` above is still its account's schema, and the meeting flow below still
-# runs exactly that way. What went is one backend's PREAMBLE, not the road.
-
-# This backend's own ordinary environment — the ONE part of the preamble that differs per backend.
-# TWO numbered points, because the shared point after it is numbered `3.`; the opening, that shared
-# point and the separator come from `agent.build_filing_header`, where they are written once.
-#
-# **Every capability sentence here is a promise the tool list has to keep.** The five names below
-# are the five tools `_register_tools` registers and nothing else — a preamble that named a sixth
-# would have the model spend a request discovering it does not exist, and one that omitted a real
-# tool would leave a capability the run paid for unused. Written as what each one is FOR rather than
-# as a signature list: the signatures are in the tool docstrings, which the framework sends as the
-# schema, and repeating them here is how the two come to disagree.
+# The ONE per-backend part of the preamble. TWO numbered points, because the shared point after
+# it is numbered `3.`. Every capability sentence is a promise the tool list must keep: these five
+# names are exactly the five `_register_tools` registers, written as what each is FOR.
 ORDINARY_AGENTIC_ENVIRONMENT = (
     "1. You hold five tools over this repo checkout, and nothing else — no shell, no network, no "
     "subagents:\n"
@@ -453,9 +319,7 @@ ORDINARY_AGENTIC_ENVIRONMENT = (
 ORDINARY_AGENTIC_SYSTEM_PROMPT_HEADER = agent_module.build_filing_header(
     ORDINARY_AGENTIC_ENVIRONMENT)
 
-# The one line of the per-item prompt that says how the account travels home. `agent`'s own default
-# (`OUTCOME_CHANNEL_FILE`) says the file but not the TOOL, which is the one thing a run holding
-# exactly one write tool needs told: "write your account to X" with no route named is how a model
+# Names the TOOL, not just the file: "write your account to X" with no route named is how a model
 # reaches for a `Write` it does not have and reports having filed nothing.
 ORDINARY_AGENTIC_OUTCOME_CHANNEL = (
     f"\nWhen you are done, write your account to `{agent_module.OUTCOME_FILENAME}` at the repo "
@@ -464,9 +328,7 @@ ORDINARY_AGENTIC_OUTCOME_CHANNEL = (
     f"outcome file is the whole of what the worker receives from you.")
 
 
-# This backend's own MEETING environment paragraph.
-# The opening, the shared points and the separator come from `agent.build_meeting_header`, which is
-# where they are written once.
+# This backend's MEETING environment paragraph; the rest comes from `agent.build_meeting_header`.
 MEETING_ENVIRONMENT = (
     "Your environment:\n"
     "\n"
@@ -476,19 +338,9 @@ MEETING_ENVIRONMENT = (
     "need is in the worker's own message below: the transcript, the entity registry (every entity "
     "this brain already knows), the meeting metadata, and the source page's own path.\n")
 
-# **The one place this run contradicts the brief, said out loud and immediately before it.**
-#
-# The brief is the knowledge repo's text and this milestone changes not one word of it — which
-# means it still tells its reader, in its own voice, that it holds a `Write` tool and returns its
-# account by writing `.librarian-outcome.json`. Injecting that under a preamble saying "you have NO
-# tools" hands the model a flat contradiction and leaves it to guess which half is operative: a
-# model that resolves it the other way describes writing a file it cannot write, and the run comes
-# back with an account that is about the wrong thing. That is not a cosmetic prompt defect — it is
-# noise on the exact measurement M3's retire-or-keep decision reads.
-#
-# So the override is NAMED, positioned last (a reader meets the correction before the text being
-# corrected), and scoped as narrowly as it can honestly be: the tool and the file describe the SHAPE
-# of the account, and every other word of the procedure applies unchanged.
+# The one place this run contradicts the brief, said out loud immediately before it: the brief
+# tells its reader it holds a `Write` tool, and injecting that under "you have NO tools" hands the
+# model a contradiction to resolve either way.
 OVERRIDE_NOTE = (
     f"One override, and it is the only place this run departs from the skill below. The skill was "
     f"written for a run that holds a `Write` tool and returns its account by writing "
@@ -500,45 +352,25 @@ OVERRIDE_NOTE = (
 MEETING_SYSTEM_PROMPT_HEADER = agent_module.build_meeting_header(
     MEETING_ENVIRONMENT, override_note=OVERRIDE_NOTE)
 
-# The one line of the per-item prompt that differs between the two channels — see
-# `agent.build_meeting_prompt`, whose default is the file channel's own sentence.
+# The one line of the per-item prompt that differs between the two channels.
 OUTCOME_CHANNEL = (
     "\nReturn your account as the structured object this run's output schema declares, in the "
     "shape the skill documents. You write no file and you have no tool that could.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-# THE TOOLS (ADR 034) — bodies here, registration in `_register_tools`, confinement inside each one
+# THE TOOLS — bodies here, registration in `_register_tools`, confinement inside each one
 # ══════════════════════════════════════════════════════════════════════════════════════════════
-# What one tool call may carry in and out. The bounds that matter are REUSED rather than invented,
-# and that is the point: a tool that bounded page text differently from the boundary, or offered
-# more page names than the seeded block does, would be a second answer to a question this package
-# has already answered once.
-#
-#   * a read is bounded by `agent.MAX_PAGE_BODY_LEN` — the repo's own "how long may a whole page
-#     body be" constant, the same one `parse_outcome` refuses a drafted body over. A page too long
-#     to hand back is a page too long to have been filed;
-#   * one LINE is clamped by `gather.MAX_EXCERPT_LINE`, because a page is line-bounded by the
-#     contract linter and not character-bounded, so one pathological line can carry a whole body;
-#   * the name list is bounded by `gather.MAX_LINK_NAMES` and reports its own total, for the reason
-#     that constant records: a truncated vocabulary read as complete makes "not in the list" look
-#     like proof a page does not exist;
-#   * a WRITE is bounded by `agent.MAX_OUTCOME_BYTES` — the most bytes this agent may hand the
-#     worker in one blob on any channel, page or account. This is a RESOURCE bound (a runaway write
-#     into a prompt or a commit), deliberately generous at 256 KiB and NOT the same question as
-#     "how long may a filed page be": the structured shape's own 20k-character body ceiling
-#     (`agent.MAX_PAGE_BODY_LEN`) and the contract linter's 150-line cap are the EFFECTIVE bounds on
-#     what actually lands in the repo, checked over the diff after the write. One tool call may
-#     carry more bytes than one page may keep; the gates, not this ceiling, decide the second.
-#
-# Only the two genuinely new bounds are declared here.
+# Bounds are REUSED, never invented: reads by `agent.MAX_PAGE_BODY_LEN` and
+# `gather.MAX_EXCERPT_LINE`; the name list by `gather.MAX_LINK_NAMES`, reporting its own total
+# since a truncated vocabulary read as complete makes "not in the list" look like proof; a WRITE
+# by `agent.MAX_OUTCOME_BYTES`, a RESOURCE bound and NOT "how long may a filed page be".
 MAX_TOOL_QUERY_CHARS = 2_000        # a search query is a phrase, not a document to re-embed
 MAX_TOOL_NAMES = 50                 # names per `resolve_entities` call; the registry is small
 
 
-# The reserved key a tool result carries its PAGE-DERIVED content half under. `_tool_payload` pulls
-# it out and fences it; everything beside it is the sanitized structural scaffold. One convention,
-# so the framing is one dumb function rather than a dispatch on each tool's dict shape.
+# The reserved key a tool result carries its PAGE-DERIVED content half under; everything beside
+# it is the sanitized structural scaffold. One convention, so framing is one function.
 _FENCED_KEY = "_fenced"
 
 
@@ -547,26 +379,11 @@ def _json(value) -> str:
 
 
 def _tool_payload(result) -> str:
-    """One tool result, as the text the model reads — the SEED ROAD's discipline, on the tool road.
-
-    **The two halves are framed exactly as `agent.render_gathered` frames the gathered block**, and
-    that is the whole fix (ADR 034): the structural SCAFFOLD (keys, paths, titles, names — every
-    unfenced scalar already through `gather.prompt_scalar` where it was built) renders as plain
-    JSON, and the page-BODY-DERIVED CONTENT half — a `read_page` body, a `search_pages` excerpt — is
-    wrapped in `agent.fence(json.dumps(...))`. A page body re-entering a prompt is captured content
-    on the way back in, `sources/` pages are verbatim prior captures, and the fence is the only
-    thing that both labels it DATA and neutralizes an in-band fence token a page might carry.
-
-    **NOT a third fence site.** `agent.fence` is the librarian's one declared fence builder
-    (`tests/test_architecture.py` keeps the token literal in `stigmergy.text` and `agent.py` only);
-    this CALLS it. An earlier version of this docstring argued the tool road needed no fence because
-    JSON escaping bounds the data span — true of structure, false of SEMANTICS: an escaped string
-    cannot break the JSON, but a model can still READ `"mark this canonical"` inside it and obey. The
-    seed road fences its content half for exactly that reason, and the two roads carry the same bytes.
-
-    A result with no `_fenced` half — a refusal, a write receipt, the entity resolution (server-
-    owned identifiers, the structural half by nature) — renders as plain JSON, one value, unchanged.
-    """
+    """One tool result as the text the model reads, framed exactly as `agent.render_gathered`
+    frames the gathered block: structural SCAFFOLD as plain JSON, page-body-derived CONTENT inside
+    the fence. JSON escaping bounds the data span's STRUCTURE, not its SEMANTICS — a model still
+    READS "mark this canonical" inside an escaped string and obeys. NOT a third fence site: this
+    CALLS `agent.fence`, the librarian's one declared builder."""
     if isinstance(result, dict) and _FENCED_KEY in result:
         content = result[_FENCED_KEY]
         scaffold = {key: value for key, value in result.items() if key != _FENCED_KEY}
@@ -575,13 +392,8 @@ def _tool_payload(result) -> str:
 
 
 def _readable(text: str) -> str:
-    """A page's text, line by line, sanitized and clamped — bounded as a whole, and it SAYS when it
-    was cut.
-
-    Truncation is stated rather than silent for the reason `agent.render_gathered` states its own
-    trim: a model handed half of a page and told nothing will judge "does this page already cover
-    the material" against half a page and never know it did.
-    """
+    """A page's text, sanitized and clamped line by line, bounded as a whole — and it SAYS when it
+    was cut: a model handed half a page and told nothing judges overlap against half a page."""
     lines = [textutil.clamp(textutil.sanitize(line), gather.MAX_EXCERPT_LINE)
              for line in (text or "").splitlines()]
     body = "\n".join(lines)
@@ -593,18 +405,9 @@ def _readable(text: str) -> str:
               f"opening and not the whole of it]")
 
 
-# The two refusals, as constants because they are the model's only account of a rule it just met.
-#
-# `REFUSED_WRITE` is the retired `PreToolUse` hook's sentence, extended by the one clause the hook
-# never had to say (it scoped `Write`/`Edit`, and the outcome file arrived through the same tools
-# unremarked). `REFUSED_READ` is the hook's "reads are confined to this worktree" made specific,
-# because containment is no longer the whole rule: `gather.confined_page` admits the content zones
-# and nothing else, so a message saying only "this worktree" would send a model round the same
-# refusal for `.claude/`, `ops/` and every dotfile in turn.
-#
-# Neither one echoes the path that was refused. A refusal is prompt text, and a path the material
-# chose is attacker-reachable text — this is the same rule `report.py` follows about a rejected
-# capture's payload, applied to the one surface a model reads mid-run.
+# The model's only account of a rule it just met, so each names what IS permitted: "confined to
+# this worktree" sends a model round the same refusal for every dotfile in turn. Neither echoes
+# the refused path — a refusal is prompt text, and a path the material chose is attacker-reachable.
 REFUSED_WRITE = (
     "writes are confined to a NEW .md page in one of this repo's fast-lane knowledge folders; an "
     "edit to a page that already exists is declared in the outcome's `edits` and performed by the "
@@ -618,43 +421,26 @@ REFUSED_READ = (
 
 
 class FilingToolbox:
-    """What the five tools DO, with no agent framework anywhere near it.
+    """What the five tools DO, with no agent framework anywhere near it — a plain object rather
+    than five closures inside `_run`, so every refusal is reachable with a temporary directory.
 
-    A plain object rather than five closures inside `_run`, for exactly the reason
-    `agent.confined_write` is a module-level function rather than a hook body: the first version of
-    that rule lived inside the run where nothing could reach it, and it was wrong in three ways at
-    once — including one that denied every legitimate write on macOS. Every refusal below is
-    reachable with a temporary directory and no model, and `tests/librarian/test_filing_toolbox_unit
-    .py` is where each one fires against a real checkout — a rule nobody can call directly is a rule
-    nobody has tried to break.
-
-    **The tools run in THREADS.** pydantic-ai drives a sync tool through `run_in_executor`, so two
-    `search_pages` calls the model batched in one turn can enter `corpus()` at once. `_corpus` and
-    `_registry` cache the checkout's parse for the life of ONE run — `search_pages` is the tool a
-    model calls most, and re-walking the whole knowledge repo per call would make the model's
-    curiosity quadratic in the size of the corpus, on the one per-item cost that already scales with
-    it (`config.GATE_BUDGET_S`). `_lock` is what makes "parsed at most once" true under that
-    concurrency rather than "once if the calls happen to be serial": without it, two threads that
-    both see `None` both walk the corpus, and the whole point of the cache is lost on exactly the
-    turn a model searches hardest.
+    The tools run in THREADS (pydantic-ai drives a sync tool through `run_in_executor`), so two
+    batched `search_pages` calls can enter `corpus()` at once. `_lock` is what makes "parsed at
+    most once" true under that concurrency rather than "once if the calls happen to be serial".
     """
 
     def __init__(self, worktree: str, *, top_k: int, excerpt_lines: int):
         self.worktree = os.path.realpath(worktree)
         self.top_k = max(int(top_k), 1)
         self.excerpt_lines = max(int(excerpt_lines), 0)
-        # Read ONCE, before the model runs: the paths that already exist at the base commit. The
-        # retired write hook read them at the same moment and said why — recomputing per call would
-        # let a page the agent itself just wrote start counting as "existing", so its second write
-        # of its own draft would be denied as an edit to somebody else's page.
+        # ONCE, before the model runs: recomputing per call would let a page the agent just wrote
+        # count as "existing", denying it a second write of its own draft.
         self.existing = gitcmd.tracked_paths(self.worktree)
         self._corpus = None
         self._registry = None
         self._lock = threading.Lock()
 
-    # ── the parses, once per run — guarded because the tools run in threads ───────────────────
-    # Double-checked: the fast path reads the cached value with no lock, and only a miss takes it,
-    # re-checking inside so the loser of a race returns the winner's parse rather than a second one.
+    # Double-checked because the tools run in threads: a race's loser returns the winner's parse.
     def corpus(self) -> gather.Corpus:
         if self._corpus is None:
             with self._lock:
@@ -663,10 +449,8 @@ class FilingToolbox:
         return self._corpus
 
     def registry(self):
-        """The entity registry AT THIS ITEM'S BASE COMMIT, and it needs no new port parameter to be
-        that: the worktree IS the checkout at that commit, so the file inside it is the base-commit
-        file — the same reasoning `agent.read_skill` makes about the brief. Read through
-        `config.REGISTRY_RELPATH`, this package's one spelling of where the registry lives."""
+        """The entity registry AT THIS ITEM'S BASE COMMIT — the worktree IS that checkout. Read
+        through `config.REGISTRY_RELPATH`, this package's one spelling of where it lives."""
         if self._registry is None:
             with self._lock:
                 if self._registry is None:
@@ -675,10 +459,8 @@ class FilingToolbox:
         return self._registry
 
     # ── the five bodies ───────────────────────────────────────────────────────────────────────
-    # Every UNFENCED scalar that re-enters the prompt goes through `gather.prompt_scalar` — the SAME
-    # sanitizer the seed road's structural half uses (`gather.structural_payload`), never a second
-    # one. The page-BODY-derived free text (a read body, a search excerpt) is the CONTENT half and
-    # is FENCED instead, by `_tool_payload`, exactly as `render_gathered` fences the gathered block.
+    # Every UNFENCED scalar re-entering the prompt goes through `gather.prompt_scalar`, the SAME
+    # sanitizer as the seed road; page-body-derived text is the CONTENT half and is fenced.
     def search_pages(self, query: str) -> dict:
         """Rank the checkout's pages against `query`, through the gatherer's own scorer."""
         text = (query or "").strip()[:MAX_TOOL_QUERY_CHARS]
@@ -689,8 +471,7 @@ class FilingToolbox:
         ps = gather.prompt_scalar
         found = gather.candidates_payload(gather.search_candidates(
             self.corpus(), text, top_k=self.top_k, excerpt_lines=self.excerpt_lines))
-        # The identifiers (path/title/type/links_to) sanitized into the scaffold; the page-derived
-        # EXCERPT fenced, keyed by the same sanitized path so the model can correlate the two.
+        # Identifiers into the scaffold; the EXCERPT fenced, keyed by the same sanitized path.
         matches = [{"path": ps(c["path"]), "title": ps(c["title"]), "type": ps(c["type"]),
                     "links_to": [ps(name) for name in c["links_to"]]} for c in found]
         excerpts = [{"path": ps(c["path"]), "excerpt": c["excerpt"]} for c in found]
@@ -698,54 +479,37 @@ class FilingToolbox:
                 _FENCED_KEY: {"excerpts": excerpts}}
 
     def read_page(self, path: str) -> dict:
-        """One page in full — refused unless `gather.confined_page` allows it.
-
-        **That rule admits the content zones AND `ops/templates/*.md`, on evidence rather than
-        symmetry.** This run writes the page's own container, and the template is what says what a
-        container of that type owes: the knowledge repo's contract linter names those files as the
-        per-type schema reference, the retired tool-holding harness read them before drafting (its
-        brief said so in as many words), and the alternative — copy the shape from an existing page
-        of the same type — has no source in a young brain, nor in the golden fixture, which carries
-        no `wiki/concepts` page at all. Everything else outside the zones stays refused, `ops/`'s
-        own `acl.json` and `entity-registry.json` first among them.
-
-        The refusal names what IS readable rather than what went wrong with this path: a model that
-        asked for `../../ops/acl.json` needs to know the shape of the permission, and a message
-        echoing the path it asked for would put an attacker-chosen string back in the prompt for
-        nothing.
-        """
+        """One page in full — refused unless `gather.confined_page` allows it. That rule admits
+        the content zones AND `ops/templates/*.md`, since this run writes a page's own container.
+        Everything else stays refused, `ops/`'s `acl.json` and `entity-registry.json` first. The
+        refusal names what IS readable, never the path asked."""
         resolved_rel = gather.confined_page(self.worktree, path or "")
         if not resolved_rel:
             return {"refused": REFUSED_READ}
-        # `confined_page` returns the CANONICAL resolved relpath it judged; open and echo THAT, not
-        # the asked string, so the file read is the file the rule approved (no symlink re-follow, no
-        # NFD spelling that names another page).
+        # The CANONICAL relpath the rule judged, never the asked string: no symlink re-follow,
+        # no NFD spelling that names another page.
         full = os.path.join(self.worktree, *resolved_rel.split("/"))
         try:
             with open(full, encoding="utf-8") as f:
                 text = f.read()
         except (OSError, UnicodeDecodeError) as ex:
-            # The class name only, never the message: an OS error carries a filesystem path.
+            # The class name only: an OS error's message carries a filesystem path.
             return {"refused": f"that page could not be read ({ex.__class__.__name__})"}
-        # The path is a sanitized scaffold scalar; the BODY is the content half and is fenced.
+        # The path is a sanitized scaffold scalar; the BODY is the content half, fenced.
         return {"path": gather.prompt_scalar(resolved_rel),
                 _FENCED_KEY: {"content": _readable(text)}}
 
     def list_page_names(self) -> dict:
-        """The wikilink vocabulary, through `edits.page_names` — the SAME reading `edits.validate`
-        answers "does this link resolve" with, so a name offered here cannot be one the edit
-        validator then refuses."""
+        """The wikilink vocabulary through `edits.page_names` — the SAME reading `edits.validate`
+        answers "does this link resolve" with, so a name offered here cannot be refused later."""
         ps = gather.prompt_scalar
         names = sorted(edits.page_names(self.worktree, confined=True))
         return {"names": [ps(name) for name in names[:gather.MAX_LINK_NAMES]], "total": len(names)}
 
     def resolve_entities(self, names) -> dict:
-        """The registry's own answer for each name: resolved or not, and its page when it has one.
-
-        `resolved: false` is a REAL answer and the brief's third anchoring outcome depends on it —
-        a name the registry does not know is a park, never an invention — so an unresolved name is
-        returned as itself rather than dropped from the list.
-        """
+        """The registry's own answer for each name. `resolved: false` is a REAL answer the brief's
+        third anchoring outcome depends on — a name the registry does not know is a park, never an
+        invention — so an unresolved name is returned as itself rather than dropped."""
         ps = gather.prompt_scalar
         registry = self.registry()
         asked = [str(n).strip() for n in (names or []) if str(n).strip()][:MAX_TOOL_NAMES]
@@ -769,23 +533,12 @@ class FilingToolbox:
 
     def write_page(self, path: str, content: str) -> dict:
         """The ONE write, gated by `agent.confined_write_target` — the same allow-list the offline
-        double writes through and the retired harness's hook called.
+        double writes through.
 
-        **It writes through `page.open_for_new` / `open_for_rewrite`, never a bare `open`** — the
-        rule `page.py` wrote for this exact call site: `confined_write` allow-lists paths that do
-        NOT exist yet, and the hardened opener (`O_EXCL` + `O_NOFOLLOW`) is what makes that
-        invariant hold at the moment of writing rather than a moment before it. A bare `open(p, "w")`
-        truncates through a symlink and past any race. The one path that legitimately EXISTS when
-        written is the draft the run is iterating on (write, then fix a heading) — untracked, so
-        `confined_write` still allows it — and that takes `open_for_rewrite`.
-
-        `full` is built from the RESOLVED relpath `confined_write_target` judged, not the asked
-        string, so `wiki/notes/sub/../x.md` writes `wiki/notes/x.md` rather than making a stray
-        `sub/` directory the rule never approved.
-
-        The refusal is the SDK hook's own sentence, kept deliberately: it is the wording two live
-        runs of a tool-holding agent were corrected by, and a rule whose message changes with its
-        enforcement mechanism teaches the next reader that the rule changed too.
+        Never a bare `open`: `confined_write` allow-lists paths that do NOT exist yet, and the
+        hardened opener (`O_EXCL` + `O_NOFOLLOW`) makes that hold at the moment of writing, where
+        `open(p, "w")` truncates through a symlink and past any race. `full` is built from the
+        RESOLVED relpath, so `wiki/notes/sub/../x.md` writes `wiki/notes/x.md`.
         """
         target = (path or "").strip()
         rel = agent_module.confined_write_target(self.worktree, target, existing=self.existing)
@@ -803,75 +556,40 @@ class FilingToolbox:
             with opener(full) as f:
                 f.write(blob)
         except OSError as ex:
-            # Same posture as the read: the class name, never the path in the message.
+            # Same posture as the read: the class name, never the path.
             return {"refused": f"that page could not be written ({ex.__class__.__name__})"}
-        # The RESOLVED relpath, which is the file actually written — for a clean lane path it equals
-        # the asked target, and for `sub/../x.md` it is the page the rule approved.
         log.info("the filing agent wrote %s (%d bytes)", rel, size)
         return {"written": rel, "bytes": size}
 
 
 class PydanticFilingAgent:
-    """The pydantic-ai backend, for BOTH flows. Conforms to `filing_port.FilingAgent` structurally —
-    never by inheritance, so a backend is a class that answers the two calls and nothing more.
+    """The pydantic-ai backend for BOTH flows, conforming to `filing_port.FilingAgent`
+    structurally and never by inheritance. `model_factory` is the ONLY offline seam here, so the
+    whole path is exercisable keylessly; the price is always looked up by the CONFIGURED model id,
+    so an injected double can never make a run look free."""
 
-    `model_factory` is the offline seam, and it is the ONLY one this module has. It is a zero-arg
-    callable returning anything pydantic-ai accepts as a model — a `TestModel`, a `FunctionModel`,
-    or a model object built by hand — so the whole distillation path can be exercised keylessly by
-    constructing this backend directly and injecting it as `processing.Deps.agent`, which is where
-    every librarian test already injects an agent. Absent (every production path,
-    `agent.build_agent` included), the run resolves `settings.model` through pydantic-ai itself.
-
-    **The price is always looked up by the CONFIGURED model id**, never by whatever the seam
-    injected: an offline test therefore prices exactly the arithmetic a live run would, and an
-    injected double can never make a run look free.
-    """
-
-    # The EXPLORING shape of the ordinary flow, declared rather than inferred (see
-    # `filing_port.FilingAgent.structured_ordinary`). `processing` reads THIS, never
-    # `isinstance(agent, PydanticFilingAgent)`: a fourth backend, or a test double standing in for
-    # one, must be able to take the other branch by declaring it rather than by being the right
-    # class.
-    #
-    # **It flipped `True` -> `False` in ADR 034**, and the flip is the whole milestone at the seam:
-    # this backend holds a confined `write_page` tool again, writes its own page, and returns its
-    # account through the outcome FILE — so `processing._one_pass` takes the legacy branch, the one
-    # the double has kept exercised offline since the Claude-Code harness retired.
+    # Declared, not inferred: `processing` reads THIS and never `isinstance`, so a test double
+    # standing in for a backend takes a branch by declaring it.
     structured_ordinary = False
 
-    # ...and it still wants the gathered context, which is why that is a SECOND declaration rather
-    # than the inverse of the first (see `filing_port.FilingAgent.wants_gathered`). The gather is
-    # this run's SEED: the tools go further than it, they do not replace it. A run that started
-    # from nothing would spend its first requests rediscovering what code can hand it for free.
+    # NOT the inverse of the first: the gather is this run's SEED, which the tools go further
+    # than rather than replace.
     wants_gathered = True
 
     def __init__(self, settings, *, model_factory=None):
         self.settings = settings
         self.model_factory = model_factory
-        # A BACKSTOP, not the loud road. `worker.startup_checks` is where an unpriced model is
-        # meant to be refused — before a single item is claimed, with the whole configuration in
-        # front of the operator — and this repeats the question at the one point that cannot be
-        # reached around: constructing the thing that will spend the money. The alternative is a
-        # backend that runs, pays, and only then discovers it cannot say what the run cost, which
-        # is precisely the `$0.00`-reads-as-free failure this milestone exists to close.
+        # A BACKSTOP at the one point that cannot be reached around: constructing the thing that
+        # will spend the money.
         pricing.require_priced(settings.model)
 
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
             corrective: str = "", reply: str = "", flow_note: str = "",
             gathered: str = "") -> AgentRun:
-        """The ordinary flow: file ONE capture, ITERATING over the checkout (ADR 034).
-
-        Deliberately NOT structurally parallel to `run_meeting` below any more, and the asymmetry
-        is the decision rather than drift: a meeting transcript is handed everything it could
-        possibly need (the whole registry, the metadata, the source path) and has nothing to go
-        looking for, while an ordinary capture is one paragraph about a brain of unknown shape —
-        "what does this already say about X" is a question no gatherer answers completely, because
-        the words the material uses need not be the words the pages use. So this flow gets tools
-        and that one keeps its single call.
-
-        `gathered` is the deterministic gatherer's context, already rendered by `processing` — the
-        SEED, not the boundary.
-        """
+        """The ordinary flow: file ONE capture, ITERATING over the checkout. Deliberately NOT
+        parallel to `run_meeting` — a meeting is handed everything it could need, while an
+        ordinary capture is one paragraph about a brain of unknown shape whose pages need not use
+        the material's words. `gathered` is the SEED, not the boundary."""
         import asyncio
         return asyncio.run(self._run(
             worktree=worktree, material=material, hints=hints, submitted_by=submitted_by,
@@ -880,14 +598,9 @@ class PydanticFilingAgent:
     def _register_tools(self, filer, toolbox: "FilingToolbox") -> None:
         """Register the five tools on one `Agent`, binding each to `toolbox`'s own body.
 
-        **These docstrings are prompt text.** pydantic-ai sends a tool's docstring and signature to
-        the model as the tool's schema, so they are the model's usage guide and not developer
-        notes: each says what the tool ANSWERS, what it refuses, and what to do with the answer.
-        The engineering rationale for each rule lives on `FilingToolbox`'s own methods, where the
-        next developer will look for it — two audiences, two texts, one behaviour.
-
-        Every wrapper is thin on purpose: the body is `toolbox`'s, so the confinement rules are
-        testable with no framework, and this function's only job is the framing.
+        THE DOCSTRINGS BELOW ARE PROMPT TEXT: pydantic-ai sends a tool's docstring and signature
+        to the model as its schema, so they are the model's usage guide, never developer notes.
+        The engineering rationale lives on `FilingToolbox`'s methods.
         """
         @filer.tool_plain
         def search_pages(query: str) -> str:
@@ -982,19 +695,14 @@ class PydanticFilingAgent:
 
         from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
 
-        # The framework's own usage extraction silently reports ZERO tokens for any OpenAI model
-        # that carries reasoning details, and this backend exists to turn tokens into dollars. It
-        # matters MORE on an iterating run than on a single call: an unrepaired extraction under-
-        # prices every request in the loop, not one. Idempotent; deferring to the framework the day
-        # it is fixed.
+        # The framework's usage extraction reports ZERO tokens for any OpenAI model carrying
+        # reasoning details, which on an iterating run under-prices every request. Idempotent.
         ensure_usage_extraction_repaired()
 
         run = AgentRun()
         worktree_root = os.path.realpath(worktree)
 
-        # The skill comes out of the WORKTREE, which is the checkout at this item's base commit —
-        # `agent.read_skill`, deliberately not a second reader of the same file. A missing skill
-        # raises `LibrarianConfigError` here, before any model call is spent.
+        # Out of the WORKTREE, this item's base commit; a missing skill raises before any spend.
         instructions = agent_module.build_system_prompt(
             agent_module.read_skill(worktree_root),
             header=ORDINARY_AGENTIC_SYSTEM_PROMPT_HEADER)
@@ -1003,19 +711,12 @@ class PydanticFilingAgent:
             outcome_channel=ORDINARY_AGENTIC_OUTCOME_CHANNEL, corrective=corrective, reply=reply,
             flow_note=flow_note)
 
-        # Model resolution gets its OWN narrow try, for the reason `_run_meeting` records: the
-        # blanket handler below would report a configuration fault as "the run failed".
-        #
-        # **No `output_type`.** The account does not come home in the envelope on this flow — it
-        # comes home as `.librarian-outcome.json`, written through `write_page` and read back
-        # below. A structured output_type here would ask the model for the account TWICE, in two
-        # shapes, and leave `_cross_check_outcome` two claims to reconcile.
+        # Its OWN narrow try: the blanket handler below would report a configuration fault as
+        # "the run failed". No `output_type` — the account comes home as a file, and a structured
+        # one would ask for it TWICE, in two shapes.
         try:
             model = self.model_factory() if self.model_factory else self.settings.model
-            # The cache settings are keyed by the CONFIGURED model id — the same rule `_cost`
-            # follows for the price — never by whatever `model_factory` injected, so an offline
-            # test exercises the exact settings dict a live run would build, and an injected
-            # double can never make caching look like it fired when it did not.
+            # Keyed by the CONFIGURED model id, the same rule `_cost` follows.
             filer = Agent(model, instructions=instructions, retries=OUTPUT_RETRIES,
                           model_settings=prompt_cache_settings(self.settings.model,
                                                                self.settings.prompt_cache))
@@ -1024,84 +725,39 @@ class PydanticFilingAgent:
                 f"could not resolve the configured model ({ex.__class__.__name__}); "
                 f"$STIGMERGY_LIBRARIAN_MODEL is {self.settings.model!r}")) from ex
 
-        # The tools are built and registered OUTSIDE that try, and after it, deliberately.
-        #
-        # AFTER, because model resolution is the cheap, common configuration fault and it should
-        # still be the first thing a misconfigured worker meets. OUTSIDE, because these two lines
-        # have failure modes that are not the operator's model: `FilingToolbox` reads the checkout
-        # (`git ls-files`), whose fault is a `GitError` that `processing.PROCESSING_ERRORS` already
-        # names as its own stage, and a tool whose signature the framework cannot turn into a
-        # schema is OUR defect, whose honest destination is the traceback `worker.process_next`
-        # prints for an unexpected exception. Wrapping either as "could not resolve the configured
-        # model" is the exact mislabelling the narrow try above exists to prevent, one fault over.
+        # AFTER that try, so model resolution stays the first thing a misconfigured worker meets;
+        # OUTSIDE it, because a tool signature the framework cannot schema is OUR defect.
         toolbox = FilingToolbox(worktree_root, top_k=self.settings.gather_top_k,
                                 excerpt_lines=self.settings.gather_excerpt_lines)
         self._register_tools(filer, toolbox)
-        # OUR usage accumulator, handed in rather than read off the result: pydantic-ai fills this
-        # object as the run proceeds, so a run that dies mid-flight still leaves its real counts
-        # here — which on a LOOP is the difference between pricing eleven requests and pricing none.
+        # OURS, handed in rather than read off the result: a run that dies mid-flight still
+        # leaves its real counts here.
         usage = RunUsage()
-        # The iteration budget. `settings.max_turns` is the retired backend's conversational bound
-        # under a new mechanism and the SAME semantic — how many times this agent may go round —
-        # so it is un-deprecated rather than replaced by a second number an operator would have to
-        # learn (see `config.DEFAULT_MAX_TURNS`). `max_tool_calls` stays deprecated: the framework
-        # already accumulates `RunUsage.tool_calls`, the request ceiling bounds the loop that makes
-        # them, and a second hand-counted ceiling needs a defect behind it rather than a symmetry.
-        #
-        # Passed straight through — NOT `max(..., 1)`. A tool run needs at least two requests (one to
-        # call a tool, one to write its account), so a `max_turns` below 2 fails every capture at
-        # full cost; silently clamping it to 1 would rewrite an operator's number, which this
-        # package refuses on principle. `worker.startup_checks` refuses `< 2` BY NAME before the
-        # first claim, so a run that reaches here has a usable ceiling.
+        # Passed straight through, NOT `max(..., 1)`: silently clamping would rewrite an
+        # operator's number. `worker.startup_checks` refuses `< 2` BY NAME before the first claim.
         limits = UsageLimits(request_limit=int(self.settings.max_turns))
         try:
-            # The wall clock is a bound WE own — pydantic-ai has none — and the worker's visibility
-            # lease is derived from it (`config.minimum_visibility_timeout_s`). It bounds ONE agent
-            # pass; the lease covers `MAX_AGENT_ATTEMPTS` passes plus the gate/commit/push budget, so
-            # a single pass that runs its full `timeout_s` still fits inside the lease. The guarantee
-            # is that no ONE pass runs unbounded, not an absolute promise no capture is ever
-            # redelivered — a sync tool that itself hangs past the timeout is interrupted between
-            # awaits, and the headroom (`VISIBILITY_HEADROOM_S`) is what the estimate leans on.
+            # A bound WE own — pydantic-ai has none — and the lease derives from it. It bounds
+            # ONE pass, not redelivery: a sync tool hangs until the next await.
             async with asyncio.timeout(self.settings.timeout_s):
                 result = await filer.run(prompt, usage=usage, usage_limits=limits)
-        # **The fault arms do NOT record `turns`/`tool_calls`.** They fire by raising, so the local
-        # `run` never returns — `priced()` attaches `run_cost_usd` to the exception (which
-        # `report.failed_system` reads) and nothing else off `run` is consumed. Counting the loop
-        # onto an envelope that is discarded is a dead assignment; the numbers live on the RETURNING
-        # road, where the envelope self-describes (see `_counted` below).
+        # The fault arms record no `turns`/`tool_calls`: they raise, the envelope is discarded,
+        # and the spend travels on the exception instead.
         except TimeoutError as ex:
             run.cost_usd = self._fault_cost(usage, flow="filing")
             raise priced(run, AgentError(
                 f"the filing agent exceeded its {self.settings.timeout_s}s budget")) from ex
         except UsageLimitExceeded as ex:
-            # CAUGHT BY NAME, above the blanket arm below, because this fault has an operator's
-            # answer in it and the blanket one would report it as "the run failed
-            # (UsageLimitExceeded)" — a class name, at somebody who can fix this in one variable.
-            # A capture whose filing genuinely needs more looking than the ceiling allows is a
-            # legitimate reason to raise it; a model looping is a reason not to.
+            # BY NAME above the blanket arm: this fault has an operator's answer in one variable.
             run.cost_usd = self._fault_cost(usage, flow="filing")
             raise priced(run, AgentError(
                 f"the filing agent used all "
                 f"{self.settings.max_turns} of its model requests for one capture without "
                 f"finishing (the iteration budget, $STIGMERGY_LIBRARIAN_MAX_TURNS)")) from ex
         except UnexpectedModelBehavior as ex:
-            # A SHAPE problem — the class the worker's corrective retry exists for. Travels as an
-            # `OutcomeShapeError` carrying a finding, exactly as a refused account from the file
-            # channel does; see `_run_meeting`'s own arm for the full argument.
-            #
-            # **Logged AND named in the Finding, not just logged.** `str(ex)` was reaching only the
-            # log before this — every real UMB fault reported to the corrective retry and to the
-            # submitter as bare "UnexpectedModelBehavior", indistinguishable from every other one.
-            # `exc.__cause__` is logged too, because pydantic-ai wraps a provider or validation
-            # fault underneath, and that is usually the more informative of the two. No `exc_info`
-            # — this is a KNOWN, handled family, the same rule `worker.process_next`'s own
-            # known-family branch follows.
-            #
-            # **Both the log line and the Finding are bounded through `textutil.one_line`, not raw
-            # `str`/`repr`.** See `MAX_FAULT_LOG_LEN`/`MAX_FAULT_MESSAGE_LEN` above for why: the
-            # framework's own message and its cause's `repr` are unbounded and can carry captured
-            # material verbatim, on a surface (the log, then the corrective retry's prompt) that
-            # must stay one line. The Finding's copy is fence-neutralized first; the log's is not.
+            # A SHAPE problem, so it travels as an `OutcomeShapeError` carrying a finding, like a
+            # refused account from the file channel. Named in the Finding too, since a bare class
+            # name is indistinguishable from every other UMB fault.
             log.warning("filing agent: %s: %s (cause=%s)", ex.__class__.__name__,
                        textutil.one_line(str(ex), MAX_FAULT_LOG_LEN),
                        textutil.one_line(repr(ex.__cause__), MAX_FAULT_LOG_LEN))
@@ -1113,10 +769,8 @@ class PydanticFilingAgent:
                 f"this run declares, with the arguments they declare, and write your account to "
                 f"{agent_module.OUTCOME_FILENAME} with `write_page`")])) from ex
         except Exception as ex:  # noqa: BLE001 — class name only: provider errors carry prompt text
-            # Logged for the same reason the UMB arm above logs: the wire message here stays
-            # class-only on purpose (a provider fault can carry prompt text), so the real message is
-            # otherwise lost the moment this exception is wrapped. No `exc_info` — handled family.
-            # Bounded through `textutil.one_line` the same way — see the UMB arm above.
+            # Class-only on the wire (a provider fault carries prompt text), so it is logged here
+            # or lost.
             log.warning("filing agent: %s: %s (cause=%s)", ex.__class__.__name__,
                        textutil.one_line(str(ex), MAX_FAULT_LOG_LEN),
                        textutil.one_line(repr(ex.__cause__), MAX_FAULT_LOG_LEN))
@@ -1127,16 +781,9 @@ class PydanticFilingAgent:
         run.cost_usd = self._cost(usage, flow="filing")
         self._counted(run, usage)
         run.stop_reason = str(getattr(result.response, "finish_reason", "") or "")
-        # The account is the FILE, not the final message. `result.output` is plain text on this
-        # flow and is deliberately ignored: a model that says "I filed it" in prose and wrote no
-        # outcome file has filed nothing, and reading the prose would invent an account.
-        #
-        # Read HERE rather than in `processing`, mirroring the double: the backend that owns the
-        # channel is the backend that drains it. `read_outcome` deletes the file as it parses, so
-        # `processing`'s own `discard_outcome_file` a moment later is a harmless no-op — and the
-        # ceiling, the JSON parse and every bound in `parse_outcome` are the SAME ones the double's
-        # account goes through, because a model that has just read untrusted material is not a
-        # trusted writer whichever framework carried it.
+        # The account is the FILE, not the final message: a model that says "I filed it" in prose
+        # and wrote no outcome file has filed nothing. Through the SAME bounds the double's
+        # account goes through — a model that just read untrusted material is not a trusted writer.
         try:
             run.outcome = agent_module.read_outcome(worktree_root)
         except AgentError as ex:
@@ -1146,34 +793,17 @@ class PydanticFilingAgent:
 
     @staticmethod
     def _counted(run: AgentRun, usage) -> None:
-        """Put the framework's own loop counters on the envelope — on the RETURNING road only.
-
-        `RunUsage` accumulates `requests` and `tool_calls` as the run proceeds and pydantic-ai
-        mutates it in place, so the returned envelope self-describes: a run reports the real number
-        of requests it made and tools it called. Counting them a second time in the tool wrappers
-        was the alternative and is exactly the second answer to one question this package refuses.
-
-        **Not called on the fault road.** A fault raises rather than returns, so its envelope is
-        discarded — the spend travels on the exception (`priced` → `run_cost_usd`, which
-        `report.failed_system` reads), and putting loop counters on an object nobody holds is a dead
-        assignment. Nothing downstream reads `turns`/`tool_calls` off a fault anyway.
-
-        Read defensively (`getattr`), for the reason `_cost` is: the framework's usage object has
-        grown fields before, and an injected offline model may hand back a simpler one.
-        """
+        """Put the framework's own loop counters on the envelope, on the RETURNING road only:
+        `RunUsage` is mutated in place, so counting again in the wrappers would be a second answer
+        to one question. Read defensively; an injected offline model may hand back less."""
         run.turns = int(getattr(usage, "requests", 0) or 0)
         run.tool_calls = int(getattr(usage, "tool_calls", 0) or 0)
 
     def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
                     source_page_path: str, corrective: str = "", reply: str = "") -> AgentRun:
         """One structured call: the brief as instructions, the item as the prompt, a typed account
-        back — and UNCHANGED by ADR 034, deliberately.
-
-        Giving this flow tools is a separate decision with its own evidence, and there is nothing
-        here for a tool to fetch: the transcript, the whole entity registry, the drop's metadata
-        and the source page's path are all in the prompt, and code writes every page in the set. A
-        `read_page` here would be a capability with no question to answer.
-        """
+        back. Deliberately tool-less — everything it could fetch is already in the prompt, and code
+        writes every page in the set."""
         import asyncio
         return asyncio.run(self._run_meeting(
             worktree=worktree, material=material, meeting_meta=meeting_meta, registry=registry,
@@ -1183,32 +813,23 @@ class PydanticFilingAgent:
                            corrective, reply="") -> AgentRun:
         import asyncio
 
-        # Imported HERE, never at module scope — the rule `agent.py`'s own docstring records, and
-        # `tests/test_architecture.py` enforces: an offline run must not load an agent
-        # framework, and the import graph must not claim this package depends on one unconditionally.
+        # Imported HERE, never at module scope — see the module docstring.
         from pydantic_ai import Agent
         from pydantic_ai.exceptions import UnexpectedModelBehavior
         from pydantic_ai.usage import RunUsage, UsageLimits
 
         from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
 
-        # The framework's own usage extraction silently reports ZERO tokens for any OpenAI model
-        # that carries reasoning details — which is every response from a reasoning model, and the
-        # first paid run of this backend priced at $0.0000 because of it. This whole module exists
-        # to turn tokens into dollars, so a shim that gets the tokens back is load-bearing rather
-        # than defensive. Idempotent; deferring to the framework the day it is fixed.
+        # The framework reports ZERO tokens for any OpenAI model carrying reasoning details.
+        # Load-bearing, not defensive; idempotent.
         ensure_usage_extraction_repaired()
 
-        # `turns` and `tool_calls` stay at the envelope's own zero and are never assigned: there is
-        # no conversational loop here and no tool to call, so a `1` would be a number invented to
-        # look like a tool-using loop's. The port documents zero as a legitimate answer, and nothing
-        # downstream branches on either counter.
+        # `turns`/`tool_calls` stay at the envelope's own zero: no loop and no tool here, so a `1`
+        # would be invented. The port documents zero as a legitimate answer.
         run = AgentRun()
         worktree_root = os.path.realpath(worktree)
 
-        # The brief comes out of the WORKTREE, which is the checkout at this item's base commit —
-        # `agent.read_meeting_brief`, deliberately not a second reader of it. A missing
-        # brief raises `LibrarianConfigError` here, before any model call is spent.
+        # Out of the WORKTREE, this item's base commit; a missing brief raises before any spend.
         instructions = agent_module.build_meeting_system_prompt(
             agent_module.read_meeting_brief(worktree_root),
             header=MEETING_SYSTEM_PROMPT_HEADER)
@@ -1217,12 +838,8 @@ class PydanticFilingAgent:
             source_page_path=source_page_path, corrective=corrective, reply=reply,
             outcome_channel=OUTCOME_CHANNEL)
 
-        # Model resolution and construction get their OWN narrow try. They can fail — an id
-        # pydantic-ai cannot resolve, a provider package that is not installed, a factory that
-        # raises — and the blanket handler below would report those as "the meeting agent run
-        # failed", which sends an operator looking at the transcript for a fault in their
-        # configuration. `read_meeting_brief`'s `LibrarianConfigError` deliberately stays outside
-        # both: it is the worker's own config road, and `process_next` already names it.
+        # Their OWN narrow try: the blanket handler below would report a configuration fault as
+        # "the meeting agent run failed". `read_meeting_brief`'s error stays outside both.
         try:
             model = self.model_factory() if self.model_factory else self.settings.model
             distiller = Agent(model, output_type=MeetingAccount, instructions=instructions,
@@ -1231,22 +848,15 @@ class PydanticFilingAgent:
             raise priced(run, AgentError(
                 f"could not resolve the configured model ({ex.__class__.__name__}); "
                 f"$STIGMERGY_LIBRARIAN_MODEL is {self.settings.model!r}")) from ex
-        # OUR usage accumulator, handed in rather than read off the result: pydantic-ai fills this
-        # object as the run proceeds, so a run that dies mid-flight still leaves its real counts
-        # here — which is what lets a fault carry `run_cost_usd` instead of the honest-but-useless
-        # 0.0 a result-only read would force.
+        # OURS, handed in rather than read off the result, so a fault carries a real
+        # `run_cost_usd` instead of a forced 0.0.
         usage = RunUsage()
-        # The request ceiling, from the SAME constant as the retry budget above: this flow makes one
-        # model call and only output re-validation can add more, so the ceiling is exactly what the
-        # framework is allowed to spend. `settings.max_turns` is deliberately NOT reused — it is the
-        # retired backend's conversational bound (30 turns of an agent loop), and borrowing it here
-        # would license thirty full requests for a flow that must make one.
+        # From the SAME constant as the retry budget: one call plus re-validation is all this flow
+        # may spend, where `settings.max_turns` would license thirty.
         limits = UsageLimits(request_limit=1 + OUTPUT_RETRIES)
         try:
-            # The wall clock is a bound WE own — pydantic-ai has none, exactly like the harness before it,
-            # and the worker's visibility lease is derived from this number
-            # (`config.minimum_visibility_timeout_s`). A pass that could outlive it is a capture two
-            # workers file.
+            # A bound WE own; the lease derives from it, and a pass outliving the lease is a
+            # capture two workers file.
             async with asyncio.timeout(self.settings.timeout_s):
                 result = await distiller.run(prompt, usage=usage, usage_limits=limits)
         except TimeoutError as ex:
@@ -1254,39 +864,22 @@ class PydanticFilingAgent:
             raise priced(run, AgentError(
                 f"the meeting agent exceeded its {self.settings.timeout_s}s budget")) from ex
         except UnexpectedModelBehavior as ex:
-            # The framework exhausted its own output re-validations: the model kept answering with
-            # something the schema refuses. That is a SHAPE problem — the one class the worker's
-            # corrective retry exists for — so it travels as an `OutcomeShapeError` carrying a
-            # finding, exactly as a refused account from the file channel does. Wrapped as a bare
-            # `AgentError` (the branch below) it would finish the item with a class name and no
-            # brief, which is the defect `errors.OutcomeShapeError` was split out to fix.
-            #
-            # **Logged AND named in the Finding, not just logged** — same argument as `_run`'s own
-            # UMB arm: a bare class name is indistinguishable from every other re-validation
-            # failure, on both the log line and the brief the retry reads. `exc.__cause__` is logged
-            # too because pydantic-ai usually wraps the real validation or provider fault underneath
-            # it. No `exc_info` — a KNOWN, handled family.
-            #
-            # Bounded through `textutil.one_line` the same way `_run`'s own UMB arm is — see
-            # `MAX_FAULT_LOG_LEN`/`MAX_FAULT_MESSAGE_LEN` above.
+            # The framework exhausted its re-validations — a SHAPE problem, so it travels as an
+            # `OutcomeShapeError`; a bare `AgentError` would finish the item with no brief.
             log.warning("meeting agent: %s: %s (cause=%s)", ex.__class__.__name__,
                        textutil.one_line(str(ex), MAX_FAULT_LOG_LEN),
                        textutil.one_line(repr(ex.__cause__), MAX_FAULT_LOG_LEN))
             run.cost_usd = self._fault_cost(usage)
             fault = textutil.one_line(textutil.neutralize_fence(str(ex)), MAX_FAULT_MESSAGE_LEN)
             raise priced(run, OutcomeShapeError([gates.Finding(
-                # The same gate name the file channel's own shape findings carry, so
-                # `corrective_brief` and `processing._refuse_meeting` cannot tell the two channels
-                # apart — one vocabulary for one class of problem.
+                # The file channel's gate name: one vocabulary for one class of problem.
                 agent_module._OUTCOME_GATE, "framework-rejected",
                 f"the account did not satisfy this run's output schema after "
                 f"{OUTPUT_RETRIES} re-validation attempt(s) ({ex.__class__.__name__}: {fault}); "
                 f"return every field the schema declares, in the shape the skill documents")])) from ex
         except Exception as ex:  # noqa: BLE001 — class name only: provider errors carry prompt text
-            # Logged for the same reason the UMB arm above logs: the wire message here stays
-            # class-only on purpose (a provider fault can carry prompt text), so the real message is
-            # otherwise lost the moment this exception is wrapped. No `exc_info` — handled family.
-            # Bounded through `textutil.one_line` the same way — see the UMB arm above.
+            # Class-only on the wire (a provider fault carries prompt text), so it is logged here
+            # or lost.
             log.warning("meeting agent: %s: %s (cause=%s)", ex.__class__.__name__,
                        textutil.one_line(str(ex), MAX_FAULT_LOG_LEN),
                        textutil.one_line(repr(ex.__cause__), MAX_FAULT_LOG_LEN))
@@ -1296,23 +889,11 @@ class PydanticFilingAgent:
 
         run.cost_usd = self._cost(usage)
         run.stop_reason = str(getattr(result.response, "finish_reason", "") or "")
-        # The SAME boundary the file channel goes through. A typed provider response is not a
-        # trusted one: it was written by a model that has just read an untrusted transcript, and
-        # every bound, every coercion and every correctable shape finding lives in that parser.
-        #
-        # Deliberately OUTSIDE the try above: `OutcomeShapeError` must reach the corrective retry
-        # carrying its findings, and the blanket `except Exception` would have turned it into a
-        # bare `AgentError` with a class name — the exact defect `errors.OutcomeShapeError` was
-        # split out to fix, reintroduced one backend over. It is still PRICED, on the same road
-        # the ordinary flow's own outcome read takes: the run was paid for whether or not its
-        # account parses.
+        # The SAME boundary the file channel goes through: a typed provider response is not a
+        # trusted one. OUTSIDE the try above, so `OutcomeShapeError` keeps its findings.
         raw = result.output.model_dump()
-        # The SAME ceiling the file channel applies to `.librarian-outcome.json`, on the channel
-        # that has no file to stat. A structured output is bounded by the schema's SHAPE and by
-        # nothing else — every string field is unbounded, and a model that repeats a transcript
-        # into `meeting_notes` produces an account that is parsed, truncated field by field, and
-        # only then found to have cost a lot of memory on the way. One constant, two channels.
-        # Dumped ONCE: `parse_meeting_outcome` reads the dict, not these bytes.
+        # The SAME ceiling on a channel with no file to stat: a structured output is bounded by
+        # the schema's SHAPE alone, so every string field is unbounded.
         size = len(json.dumps(raw, ensure_ascii=False, default=str).encode("utf-8"))
         if size > agent_module.MAX_OUTCOME_BYTES:
             raise priced(run, AgentError(
@@ -1326,14 +907,8 @@ class PydanticFilingAgent:
         return run
 
     def _fault_cost(self, usage, *, flow: str = "meeting") -> float:
-        """`_cost`, on a road where it must never raise.
-
-        Every caller of this is already handling a fault, and `_cost` can itself refuse — an
-        unpriced model raises `LibrarianConfigError`. Letting that escape from an `except` block
-        would replace the fault being reported with a configuration complaint about the annotation,
-        and the operator would never see what actually went wrong. `0.0` is the honest figure when
-        the price cannot be resolved: nothing was computed, and the fault keeps its own message.
-        """
+        """`_cost` on a road where it must never raise: a `LibrarianConfigError` escaping an
+        `except` block would replace the fault being reported."""
         try:
             return self._cost(usage, flow=flow)
         except LibrarianConfigError:
@@ -1343,15 +918,7 @@ class PydanticFilingAgent:
 
     def _cost(self, usage, *, flow: str = "meeting") -> float:
         """This attempt's dollars, computed from tokens because no provider here prices itself.
-
-        ONE arithmetic for both flows — `flow` names the pass in the log line and nothing else. A
-        second `_cost` per flow would be a second multiplication at a second call site, which is
-        the one thing `pricing.compute_cost_usd`'s own docstring says never to grow.
-
-        Read defensively (`getattr`) for the same reason `answer.service._usage_facts` is: the
-        framework's usage object has grown fields before, and an injected offline model may hand
-        back a simpler one.
-        """
+        ONE arithmetic for both flows; `flow` names the pass in the log line and nothing else."""
         counts = {name: getattr(usage, name, 0) or 0
                   for name in ("input_tokens", "cache_read_tokens", "cache_write_tokens",
                                "output_tokens")}
@@ -1368,14 +935,5 @@ class PydanticFilingAgent:
         return cost
 
 
-# ── the name this class had while it served one flow ──────────────────────────────────────────
-# `PydanticMeetingAgent` was accurate for exactly one milestone and is now a lie: this backend
-# serves both flows (ADR 033). Renaming it outright would have broken four test modules in the
-# same commit that changed the behaviour they cover, which is the one thing the breaking-change
-# doctrine here refuses — so the rename EXPANDS first and the old spelling stays importable.
-#
-# **Removal criterion, and it is an adoption signal rather than a date**: the alias goes when no
-# module outside this file imports it. The consumers are fully enumerable — they are all in this
-# repository's own `tests/librarian/` — so this is a transition with a known end, not an
-# indefinite compatibility surface.
+# Compatibility alias; it goes when no module outside this file imports it.
 PydanticMeetingAgent = PydanticFilingAgent

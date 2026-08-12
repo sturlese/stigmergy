@@ -1,54 +1,36 @@
-"""The answer renderer — a PURE function `(answer_dict, link_resolver) -> blocks`. Purity is what
-makes it testable with no Slack: every test in `tests/slack/test_render.py` calls these functions
-directly on a hand-built `answer` dict and asserts on the returned Block Kit list — no gateway, no
-event, no network.
+"""The answer renderer — a PURE function `(answer_dict, link_resolver) -> blocks`, testable with
+no gateway, no event, no network. `link_resolver` maps a page path to a URL or `None`; injected as
+configuration (`settings.no_link_resolver` today), never imported.
 
-`link_resolver` is a `Callable[[str], str | None]`: given a page path, the URL a browsable read
-surface serves it at, or `None` when there is no such URL. Injected as configuration, never
-imported — `stigmergy.slack.settings.no_link_resolver` is what is wired today, and a browsable
-surface replaces that VALUE, not this module.
+Two guarantees, both security-class:
 
-**Two properties this module exists to guarantee, both security-class:**
+1. **A `partial` verdict can never render as `verified`** — `copy.verdict_line` is a literal dict
+   lookup that raises on an unrecognized verdict rather than silently falling through.
+2. **`answer['confidence']` is never rendered** — `render_answer` does not read that key under
+   any circumstance.
 
-1. **A `partial` verdict can never render as `verified`.** `copy.verdict_line` is a literal dict
-   keyed on the verdict string — a verdict it does not recognize raises `KeyError` rather than
-   silently falling through to nothing, which is what makes "no rendering path can present a
-   non-verified verdict as verified" testable rather than merely "the happy path looks right".
-2. **`answer['confidence']` is never rendered at all** — `render_answer` does not read that key
-   under any circumstance.
-
-`escape_mrkdwn` runs on every piece of MODEL- or PAGE-derived free text (the answer body, a
-citation quote/title, a refusal reason) BEFORE `to_mrkdwn`'s structural conversion — order matters:
-escaping first protects any literal `&`/`<`/`>` the source text itself contained, and running it
-AFTER `to_mrkdwn` would corrupt the `<url|text>` link syntax that conversion deliberately
-introduces.
+`escape_mrkdwn` runs on every piece of MODEL- or PAGE-derived free text BEFORE `to_mrkdwn` —
+running it after would corrupt the `<url|text>` link syntax the conversion introduces.
 """
 import re
 import uuid
 
-# These constants deliberately do NOT come from the server module: a "pure Block Kit renderer"
-# (this module's own job) importing the world (`stigmergy.librarian.*`, `stigmergy.entities.*`,
-# `stigmergy.index.*`, `subprocess`, PyYAML) for a few string literals is exactly the coupling this
-# module exists without. `stigmergy.review_kinds` is a dependency-free module at the bottom of the
-# stack beside `stigmergy.text`, which both this module and `server.review` import with no
-# import-graph cost either way.
+# From `stigmergy.review_kinds`, deliberately not the server module: a pure Block Kit renderer
+# must not drag `stigmergy.server.review`'s whole import graph in for a few string literals.
 from stigmergy.review_kinds import ENTITY_TYPES, KIND_ENTITY_PROPOSAL, KIND_PARKED_CAPTURE
 from stigmergy.slack import copy
 from stigmergy.slack.mrkdwn import escape_mrkdwn, to_mrkdwn
 
-# The `action_id` every "Show it here" button carries — `stigmergy.slack.app`'s own `@app.action`
-# listener matches on this exact string to know which block_actions payload is this affordance and
-# not some future one.
+# The `action_id` every "Show it here" button carries — `app`'s `@app.action` listener matches on
+# this exact string.
 SHOW_IT_HERE_ACTION_ID = "slack_show_page"
 
 
 def _unbound_token(path: str, asker_slack_user_id: str) -> str:
-    """The default `mint_token` — production ALWAYS passes `SlackContext.mint_show_it_here_token`
-    instead (`stigmergy.slack.mention`'s two call sites); this exists only so a caller (chiefly a
-    test exercising some OTHER property of `render_answer`, not the button itself) does not have to
-    wire a real token store just to render an answer with a citation. Deterministically unusable: a
-    random token with no server-side entry behind it looks up to nothing, so a caller that actually
-    needs the button to be clickable must pass a real `mint_token`."""
+    """The default `mint_token` — production always passes `SlackContext.mint_show_it_here_token`.
+    Exists so a test exercising some other property of `render_answer` need not wire a token
+    store; deterministically unusable (no server-side entry behind it), so a caller that needs a
+    clickable button must pass a real `mint_token`."""
     return uuid.uuid4().hex
 
 
@@ -66,22 +48,12 @@ TRUNCATION_MARKER = "\n\n_[…truncated to fit Slack's block limit]_"
 
 
 def clamp_section_text(text: str, limit: int = SECTION_TEXT_MAX) -> str:
-    """Hold one section's text to Slack's ceiling.
-
-    Callers that clamp their own input BEFORE `escape_mrkdwn` are not clamping what Slack sees:
-    escaping expands (`&` -> `&amp;` is 5x), so an entity-heavy page excerpt cut to 2800 characters
-    arrived here at over 14000 and Slack rejected the WHOLE `blocks` payload with `invalid_blocks`
-    — which the caller logs and swallows, so the person who clicked got nothing at all: no page, no
-    refusal, no sign anything had happened.
-
-    **A cut says so.** Without the marker this traded a loud failure for a silent one — which is
-    the wrong trade, and specifically so here: the old `invalid_blocks` path degraded to
-    `mention._edit_or_fallback`'s text-only post, which carries the answer body COMPLETE. So the
-    old behaviour lost the chrome and kept every word; clamping silently keeps the chrome and drops
-    the tail — exactly where a model puts its caveats ("figures are unaudited", "as of Q2"). A
-    reader cannot tell a clamped answer from a short one, and the missing sentence is the one that
-    changes what they do. The marker costs its own length out of the budget so the result still
-    fits.
+    """Hold one section's text to Slack's ceiling, measured AFTER escaping — escaping expands
+    (`&` -> `&amp;` is 5x), and an over-limit section makes Slack reject the WHOLE payload with
+    `invalid_blocks`, which callers swallow: the person who clicked gets nothing at all. **A cut
+    says so**: the dropped tail is exactly where a model puts its caveats, and a silently clamped
+    answer is indistinguishable from a short one. The marker pays its own length out of the
+    budget.
     """
     if len(text) <= limit:
         return text
@@ -89,41 +61,23 @@ def clamp_section_text(text: str, limit: int = SECTION_TEXT_MAX) -> str:
 
 
 def _section(text: str) -> dict:
-    """Every section, clamped HERE — not at each caller.
-
-    The clamp first landed on `render_show_it_here_success` alone, and the answer body (the
-    biggest section this module builds, straight from unbounded model output) kept going out
-    unclamped: `"&" * 2800` rendered to 14000 characters against a 3000 ceiling. Slack answers
-    `invalid_blocks` for the whole payload, and `mention._edit_or_fallback` then degrades to a
-    text-only post — which costs the citation links, the "Show it here" buttons, and the
-    `context`-block verdict line this module's own docstring calls trust chrome "a prompt-injected
-    body cannot imitate". Everything collapses into one plain blob a forged `*Sources*` header is
-    indistinguishable from, and a page author who can make an answer entity-dense can force it.
-
-    Putting the rule in the ONE builder every section already goes through is what stops the next
-    caller from being the one that forgot.
+    """Every section, clamped HERE — the ONE builder every section goes through, so the next
+    caller cannot be the one that forgot. An unclamped section (the answer body is unbounded
+    model output) fails the whole payload, and the text-only degrade that follows loses the
+    citations, the buttons and the `context`-block trust chrome — a collapse a page author who
+    can make an answer entity-dense can force.
     """
     return {"type": "section", "text": {"type": "mrkdwn", "text": clamp_section_text(text)}}
 
 
 def _context(text: str) -> dict:
-    """`escape_mrkdwn` only escapes `&`/`<`/`>` — asterisks, headers, newlines and `to_mrkdwn`'s own
-    link syntax all survive in MODEL-derived text, so a prompt-injected page can steer the agent
-    into emitting, inside the answer body, a forged `*Sources*` header and a literal verdict
-    sentence — visually indistinguishable from the real ones if everything renders as `section`
-    blocks. Rendering the REAL Sources block and verdict line as `context` blocks instead gives
-    them Slack's own smaller, grey chrome: a channel the answer body (always a `section`) cannot
-    reach into, no matter what it contains. Structural, not string-scrubbing — a scrubber here
-    would be exactly the proxy defense this project rejects.
-
-    **Clamped too, and for the same reason `_section` is.** Putting the rule in "the ONE builder
-    every section goes through" closed the hole for sections and left it open one block type over:
-    `_citation_blocks` builds the Sources context from citation QUOTES, which are verbatim page
-    text at up to `Citation.quote`'s 200 characters each and up to `MAX_CITATIONS` of them —
-    measured at 21459 characters against a 3000 ceiling, and 3225 with only three citations. Slack
-    rejects the whole payload the same way, so the `invalid_blocks` degrade this clamp exists to
-    prevent was still reachable, by a page AUTHOR rather than by the answering model. That is the
-    threat model `_section`'s own docstring names.
+    """The trust chrome. `escape_mrkdwn` leaves asterisks, headers and newlines intact, so a
+    prompt-injected answer body can emit a forged `*Sources*` header and verdict sentence —
+    indistinguishable from the real ones if everything rendered as `section`s. The REAL Sources
+    and verdict render as `context` blocks: Slack's smaller grey chrome, a channel the body
+    (always a `section`) cannot reach into no matter what it contains. Structural, not
+    string-scrubbing. Clamped like `_section`, because citation QUOTES are verbatim page text —
+    a page AUTHOR can blow the ceiling even when the model does not.
     """
     return {"type": "context",
             "elements": [{"type": "mrkdwn", "text": clamp_section_text(text)}]}
@@ -137,22 +91,13 @@ def _render_markdown(raw: str) -> str:
 
 
 def _show_it_here_button(path: str, asker_slack_user_id: str, mint_token) -> dict:
-    """The button is on a message everyone in the channel can see — Slack has no notion of a button
-    only one viewer may press — so "this affordance must not act for another channel member" is
-    enforced SERVER-SIDE, at click time (`stigmergy.slack.replies.handle_show_it_here`). `mint_token`
-    is injected exactly like `link_resolver` — this module never touches `SlackContext` itself —
-    and returns an OPAQUE token. The value carries neither the path nor an email: anything put in a
-    button value is retrievable by any workspace member via `conversations.history`, so an asker's
-    email in cleartext here would be a disclosure.
-
-    `block_id` is opaque for a DIFFERENT reason than the value token: Slack rejects an entire
-    `blocks` payload outright when two blocks share one explicit `block_id`
-    (`gateway._raise_if_invalid_blocks` mirrors this), and the old path-derived id
-    (`f"show_it_here:{path}"`) collided the moment one page was cited twice — a recorded
-    production failure. A random suffix can never collide, no matter how many buttons one render
-    builds, so `_citation_blocks` dedupes buttons by path only to avoid showing the same affordance
-    twice — not to keep block_id unique. Only `action_id` and the `value` token are ever read back
-    (`replies.handle_show_it_here`), so nothing downstream depends on this string's shape."""
+    """Slack has no per-viewer buttons, so "must not act for another channel member" is enforced
+    SERVER-SIDE at click time (`replies.handle_show_it_here`). The value is an OPAQUE token
+    (`mint_token`, injected like `link_resolver`): anything in a button value is retrievable by
+    any workspace member via `conversations.history`, so an email in cleartext would be a
+    disclosure. `block_id` carries a random suffix because Slack rejects a whole payload when two
+    blocks share an explicit `block_id`, and a path-derived id collides the moment one page is
+    cited twice; only `action_id` and the value token are ever read back."""
     token = mint_token(path, asker_slack_user_id)
     return {
         "type": "actions",
@@ -168,12 +113,9 @@ def _show_it_here_button(path: str, asker_slack_user_id: str, mint_token) -> dic
 
 def _citation_blocks(citations: list[dict], link_resolver, asker_slack_user_id: str,
                      mint_token) -> list[dict]:
-    """One Sources LINE per citation — every quote stays visible, even two of the same page — but
-    at most one "Show it here" BUTTON per DISTINCT page, in first-occurrence order.
-    `stigmergy.answer.synthesize.Citation` carries no uniqueness constraint on `path`, so a model may
-    legally cite one page twice with two different quotes (observed live on staging); a
-    button per citation would mint the identical page's affordance twice in one message — both
-    buttons open the same page — for no reason a user could act on."""
+    """One Sources LINE per citation — every quote stays visible — but at most one "Show it here"
+    BUTTON per DISTINCT page, in first-occurrence order: a model may legally cite one page twice
+    with two different quotes, and both buttons would open the same page."""
     if not citations:
         return []
     lines = []
@@ -198,15 +140,11 @@ def _citation_blocks(citations: list[dict], link_resolver, asker_slack_user_id: 
 
 def render_answer(answer: dict, link_resolver, *, asker_slack_user_id: str = "",
                   mint_token=_unbound_token) -> list[dict]:
-    """`answer` is the dict `AnswerService.ask()` (or the MCP `ask` tool) returns — the SAME shape
-    on every transport, in-process, one seam. `asker_slack_user_id` is who this render is FOR;
-    `mint_token` (injected the same way as `link_resolver`) turns `(path, asker_slack_user_id)`
-    into the opaque token a "Show it here" button's value carries — only invoked when a button is
-    actually built (an unlinked citation).
-
+    """`answer` is the dict `AnswerService.ask()` returns — the SAME shape on every transport.
+    `mint_token` (injected like `link_resolver`) is only invoked when a button is actually built.
     The answer BODY is the only `section` block here: the Sources block and the verdict line are
-    `context` blocks behind a `divider`, so the bot's own trust chrome renders in a channel a
-    prompt-injected body cannot imitate, no matter what it contains."""
+    `context` blocks behind a `divider` — trust chrome a prompt-injected body cannot imitate, no
+    matter what it contains."""
     if answer.get("refused"):
         reason = escape_mrkdwn(answer.get("reason") or "")
         return [_section(copy.refusal(reason))]
@@ -222,8 +160,8 @@ def render_answer(answer: dict, link_resolver, *, asker_slack_user_id: str = "",
 def render_dm_fuller_answer(*, channel_name: str, question: str, answer: dict, link_resolver,
                             asker_slack_user_id: str = "",
                             mint_token=_unbound_token) -> list[dict]:
-    """The ONE place a fuller answer is ever acknowledged: the DM. A header block, then
-    `render_answer` reused unchanged — the DM is a wider scope, not a different dialect."""
+    """The DM's fuller answer: a header block, then `render_answer` reused unchanged — the DM is
+    a wider scope, not a different dialect."""
     header = _section(escape_mrkdwn(copy.dm_fuller_answer_header(channel_name, question)))
     return [header, *render_answer(answer, link_resolver, asker_slack_user_id=asker_slack_user_id,
                                    mint_token=mint_token)]
@@ -272,34 +210,20 @@ def render_filed(*, page_path: str, commit: str, anchor: str, source_page: str =
 
 
 def render_needs_input(*, situation_prose: str, slack_user_id: str) -> list[dict]:
-    """`situation_prose` is `report['summary']` with the trailing MCP invocation stripped —
-    code-composed by `librarian.report.needs_input`, but embedding the AGENT's own reading of
-    captured material (the entity name candidate it could not resolve). Unescaped, a raw
-    Slack-native `<https://evil.example|text>` in the submitted material's judged name renders as a
-    REAL live link. Escaped BEFORE composition, not after: `copy.needs_input_body` composes a real
-    `<@slack_user_id>` mention around this text, and escaping the WHOLE result afterward would
-    corrupt that code-composed mention syntax the same way escaping after `to_mrkdwn` would corrupt
-    a real link (this module's own docstring's ordering rule, applied to a second composed-markup
-    case)."""
+    """`situation_prose` embeds the AGENT's own reading of captured material: unescaped, a raw
+    `<https://evil.example|text>` in the judged name renders as a REAL live link. Escaped BEFORE
+    composition — `copy.needs_input_body` composes a real `<@slack_user_id>` mention around this
+    text, which escaping the whole result afterward would corrupt."""
     return [_section(copy.needs_input_body(escape_mrkdwn(situation_prose),
                                            slack_user_id=slack_user_id))]
 
 
 def render_generic_report(status: str, raw_summary: str) -> list[dict]:
-    """`triage`/`rejected`/`resolved`/`failed`: the enum-first prefix BOLDED, the rest of
-    `report['summary']` reused verbatim. `raw_summary` is `report['summary']` as
-    `librarian.report`/`capture.dispositions` composed it — already starting with the literal
-    `"{status} — "` prefix (`librarian.report`'s own hard rule); this function replaces exactly
-    that prefix with its bolded form rather than composing a new sentence.
-
-    **`escape_mrkdwn` alone, never `_render_markdown`.** `raw_summary` carries agent-classified
-    `judged_type`/entity-name text (`librarian.report.triage_type`/`triage_entity`), so a
-    `to_mrkdwn`-converting call here would turn attacker-chosen `[text](url)` in that text into a
-    REAL live link — the same exposure as the doorbell's parked-capture card, just delivered to the
-    SUBMITTER's own thread instead of the steward's DM. None of this surface's real summaries
-    (`triage`/`rejected`/`resolved`/`failed` — never `needs_input`, which has its own render
-    function above) use bold or link markdown deliberately; only backticks for code spans, which
-    Slack's OWN mrkdwn already renders natively with no conversion needed."""
+    """`triage`/`rejected`/`resolved`/`failed`: the status prefix bolded, the rest of
+    `report['summary']` reused verbatim (it already starts with the literal `"{status} — "`
+    prefix). **`escape_mrkdwn` alone, never `_render_markdown`** — the summary carries
+    agent-classified text, and `to_mrkdwn` would turn attacker-chosen `[text](url)` in it into a
+    REAL live link. Real summaries use only backticks, which Slack renders natively."""
     prefix = f"{status} — "
     body = raw_summary[len(prefix):] if raw_summary.startswith(prefix) else raw_summary
     return [_section(f"*{status}* — {escape_mrkdwn(body)}")]
@@ -314,7 +238,7 @@ def render_reply_already_answered() -> list[dict]:
 
 
 def render_show_it_here_success(*, page_title: str, excerpt: str) -> list[dict]:
-    # No clamp here any more: `_section` applies it to every section, this one included.
+    # `_section` clamps every section, this one included.
     return [_section(copy.show_it_here_success(escape_mrkdwn(page_title), escape_mrkdwn(excerpt)))]
 
 
@@ -323,11 +247,10 @@ def render_show_it_here_refusal(path: str) -> list[dict]:
 
 
 # ── the steward doorbell, and the review surface's Block Kit cards ───────────────────────────────
-# Action-id convention (`stigmergy.slack.review` matches on these exact prefixes): `review:<kind>:
-# <verdict>` fires `review_decide` immediately with no note; `review-modal:<kind>:<verdict>` opens
-# a short modal collecting the one piece of free text that verdict requires (a note, or a reason)
-# BEFORE calling it. `value` is always the bare item id — our own generated identifier, never
-# untrusted text: nothing a caller typed ever becomes part of an action_id or a button value.
+# Action-id convention (`stigmergy.slack.review` matches these exact prefixes):
+# `review:<kind>:<verdict>` fires `review_decide` immediately; `review-modal:<kind>:<verdict>`
+# opens a modal collecting the one piece of free text that verdict requires first. `value` is
+# always the bare item id — our own generated identifier, never text a caller typed.
 DIRECT_ACTION_PREFIX = "review:"
 MODAL_ACTION_PREFIX = "review-modal:"
 REVIEW_NOTE_MODAL_CALLBACK_ID = "review_note_modal"
@@ -360,14 +283,9 @@ def _link_button(text: str, url: str) -> dict:
 
 
 def render_doorbell_parked_capture(*, item_id: str, summary: str) -> tuple[list[dict], str]:
-    """`escape_mrkdwn` alone, never `_render_markdown` (`to_mrkdwn(escape_mrkdwn(...))`) — matching
-    its sibling below. `to_mrkdwn` turns `[text](url)` into a REAL Slack hyperlink, and `text` here
-    is `report['summary']`, which `server.service._neutralize_report`'s own docstring calls
-    "DERIVED from captured material... untrusted text". Reproduced: a `judged_type` of
-    `[Approve now](https://attacker.example/steal)` renders two live attacker-controlled links in a
-    DM whose whole copy doctrine is "the single next action". The doorbell renders code-composed
-    copy with one untrusted slot and never renders CommonMark on purpose, so no card here may call
-    `to_mrkdwn`."""
+    """`escape_mrkdwn` alone, never `_render_markdown`: `summary` derives from captured material,
+    and `to_mrkdwn` would turn a `judged_type` of `[Approve now](https://attacker.example/steal)`
+    into live attacker-controlled links in a steward's DM. No card here may call `to_mrkdwn`."""
     text = copy.doorbell_triage(item_id=item_id, summary=summary)
     blocks = [_section(escape_mrkdwn(text)),
              _actions([
@@ -383,13 +301,9 @@ def render_doorbell_parked_capture(*, item_id: str, summary: str) -> tuple[list[
 
 def render_doorbell_entity_proposal(*, item_id: str, submitter: str, name: str) -> tuple[list[dict], str]:
     """`name` is the proposed entity's short name — lifted by the agent from PRIVATE captured
-    material and published nowhere, so it is escaped like any other untrusted slot.
-
-    **Approve opens a modal (ADR 030 D5)** — it used to fire directly (`direct_action_id`) and the
-    DM echoed the CLI's `stigmergy-entities approve` command (`mint_command`, deleted server-side);
-    now it mints on submit, so it needs the SAME metadata a mint needs first. Reject is unchanged:
-    there is nothing to mint, so its modal still collects only a reason
-    (`render_entity_mint_modal` below is Approve's own, distinct modal)."""
+    material and published nowhere, so it is escaped like any other untrusted slot. Approve mints
+    on submit, so it opens the mint-metadata modal (`render_entity_mint_modal`); Reject has
+    nothing to mint, so its modal collects only a reason."""
     text = copy.doorbell_entity_proposal(item_id=item_id, submitter=submitter, name=name)
     blocks = [_section(escape_mrkdwn(text)),
              _actions([
@@ -404,10 +318,9 @@ def render_doorbell_entity_proposal(*, item_id: str, submitter: str, name: str) 
 def render_note_modal(*, trigger_id: str, private_metadata: str, title: str, label: str,
                       placeholder: str = "", initial_context: str = "") -> dict:
     """One modal shape for every free-text collection this surface needs (a note, or a reason) —
-    what is being recorded is a judgment, not a state transition, so the control is a composed
-    sentence, never a checkbox. `private_metadata` carries which (item_kind, item_id, verdict) this
-    submission is for — Slack's own mechanism for round-tripping state through a modal with no
-    server-side store needed."""
+    what is being recorded is a judgment, so the control is a composed sentence, never a checkbox.
+    `private_metadata` carries which (item_kind, item_id, verdict) the submission is for — Slack's
+    own round-trip mechanism, no server-side store needed."""
     blocks = []
     if initial_context:
         blocks.append(_section(escape_mrkdwn(initial_context)))
@@ -432,12 +345,11 @@ def render_note_modal(*, trigger_id: str, private_metadata: str, title: str, lab
     }
 
 
-# ── the entity-proposal mint modal (ADR 030 D5) ───────────────────────────────────────────────────
-# A second, distinct modal shape from `render_note_modal` above: that one collects ONE piece of
-# free text (a note, a reason); this one collects the identity metadata a mint needs — a name, a
-# closed-vocabulary type, two optional fields and a checkbox — so it cannot reuse `_MODAL_FIELD`'s
-# `(field, label, placeholder)` shape. `stigmergy.slack.review` opens it in place of the generic note
-# modal for exactly one (kind, verdict) pair: `(entity-proposal, approve)`.
+# ── the entity-proposal mint modal ───────────────────────────────────────────────────────────────
+# A second, distinct modal shape: the identity metadata a mint needs — a name, a closed-vocabulary
+# type, two optional fields and a checkbox — so it cannot reuse `_MODAL_FIELD`'s
+# `(field, label, placeholder)` shape. `stigmergy.slack.review` opens it for exactly one
+# (kind, verdict) pair: `(entity-proposal, approve)`.
 ENTITY_MINT_MODAL_CALLBACK_ID = "entity_mint_modal"
 ENTITY_MINT_NAME_BLOCK_ID = "entity_name"
 ENTITY_MINT_NAME_ACTION_ID = "entity_name_text"
@@ -455,11 +367,9 @@ ENTITY_MINT_REQUEUE_OPTION_VALUE = "requeue"
 
 
 def _entity_type_options() -> list[dict]:
-    """One option per `stigmergy.review_kinds.ENTITY_TYPES` entry, label and value both the bare
-    string — the same spelling `entities.generator`/every error message on this lane already uses,
-    so nothing here can disagree with the closed vocabulary `entities.mint` actually enforces
-    (`tests/test_architecture.py::test_review_kinds_entity_types_matches_the_generators_closed_list`
-    is what keeps the restatement honest)."""
+    """One option per `review_kinds.ENTITY_TYPES` entry, label and value both the bare string —
+    the same spelling `entities.mint` enforces; the architecture drift test keeps the restatement
+    honest."""
     return [{"text": {"type": "plain_text", "text": t}, "value": t} for t in ENTITY_TYPES]
 
 
@@ -470,28 +380,17 @@ def _requeue_option() -> dict:
 
 def render_entity_mint_modal(*, trigger_id: str, private_metadata: str,
                              proposed_name: str = "") -> dict:
-    """The entity-proposal Approve modal: the metadata a mint needs, collected once, submitted
-    once (ADR 030 D5). `proposed_name` prefills `name` from the proposal's own unresolved subject —
-    the SAME text the doorbell card itself already showed (`doorbell._render_for_item` ->
-    `item["subject"]`; `stigmergy.slack.review._proposed_name_for` is the re-fetch this modal's own
-    caller does at click time) — never a default a steward cannot see or override: the `name` field
-    stays a plain, editable text input, exactly like an UNPREFILLED one would.
-
-    `entity_type` is a `static_select` over the closed six (`_entity_type_options`) — never free
-    text, so a submission can never carry a type `entities.mint` would refuse anyway. `aliases` is
-    ONE comma-separated text field, not a repeating field — `server.review._alias_list` is what
-    splits it, the same shape an MCP caller's own one comma-separated string already takes; `role`
-    is one short free-text field. Both are optional.
-    `requeue` is a single checkbox, PRE-CHECKED (`_requeue_option` in both `options` and
-    `initial_options`) because approve-then-requeue is the ordinary flow — a steward who wants the
-    capture left parked unchecks it. Both optional blocks are marked `optional: True` so an empty
-    submission (no aliases/role typed, the checkbox unchecked) is valid Slack input, not a modal
-    validation error.
-
-    `entity_id` is deliberately NOT a field here — ADR 030 D5's own "one less field to mistype":
-    the server prefills it from `name`'s own slug (`review._decide_entity_proposal`), and a steward
-    who needs a different one uses `stigmergy-entities`/MCP directly, where `birth.prepare` validates
-    it against a real collision check this form cannot run itself."""
+    """The entity-proposal Approve modal: the metadata a mint needs, collected once.
+    `proposed_name` prefills `name` with the proposal's own unresolved subject — the same text the
+    doorbell card showed, in a plain editable input, never a default a steward cannot see or
+    override. `entity_type` is a `static_select` over the closed list, so a submission can never
+    carry a type `entities.mint` would refuse. `aliases` is ONE comma-separated field
+    (`server.review._alias_list` splits it); `role` is one short field; both optional. `requeue`
+    is PRE-CHECKED — approve-then-requeue is the ordinary flow — and its block is `optional: True`
+    so an unchecked submit is valid Slack input. `entity_id` is deliberately NOT a field: the
+    server prefills it from `name`'s own slug, and a steward who needs a different one uses
+    `stigmergy-entities`/MCP, where `birth.prepare` runs a real collision check this form
+    cannot."""
     name_element = {"type": "plain_text_input", "action_id": ENTITY_MINT_NAME_ACTION_ID,
                     **({"initial_value": proposed_name} if proposed_name else {})}
     return {

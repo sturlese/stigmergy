@@ -1,13 +1,9 @@
 """views.regenerate — orchestration: staleness, force, removal, and the batch entry points both
 the CLI and the librarian worker call.
 
-**One commit per entity.** `regenerate_entity` performs its own commit-and-push per call, so a
-batch (`--stale`/`--all`, or the worker's touched-entity set) is N independent commits, not one
-commit for the whole run. A run that fails halfway leaves a coherent repo — the entities already
-regenerated are genuinely done — and Ctrl-C is statable ("N entities regenerated, the rest
-untouched"). This differs deliberately from the meeting flow's atomicity rule (ADR 020 D4: one
-meeting capture is one indivisible page set); here each entity's view is independent of every
-other entity's, so there is no shared invariant a partial batch could violate.
+One commit per entity: a batch is N independent commits, so a run that fails halfway leaves a
+coherent repo and a statable Ctrl-C. Deliberately unlike the meeting flow's one-indivisible-
+page-set rule — each entity's view is independent, so no shared invariant spans a batch.
 """
 import os
 from dataclasses import dataclass, field
@@ -28,17 +24,9 @@ from stigmergy.views.staleness import (
 
 JOB_NAME = "views"
 
-# `view_relpath`/`view_path`/`existing_member_hash`/`existing_view_ids`/
-# `list_stale_entities`/`list_all_anchored_entities` live in `views.staleness` — the READ-ONLY
-# half of view regeneration, kept separate so `gardener.checks` can reuse the staleness reads
-# without loading THIS module's write path (`writer.commit_and_push` — see `staleness.py`'s own
-# docstring for the full reasoning). They are imported here so every call site in this package
-# (`views/cli.py`, `regenerate_entity` below) reaches them as `regenerate.X`: this file
-# orchestrates the write, `staleness.py` only reads.
-# `existing_view_ids`/`list_stale_entities`/`list_all_anchored_entities` are not called from THIS
-# module's own code below (only `view_relpath`/`view_path`/`existing_member_hash` are) —
-# `__all__` states plainly that they are re-exported on purpose, the same convention
-# `digest.settings` uses for its own re-export of `gardener.settings`'s two env names.
+# The staleness reads live in `views.staleness` (the read-only half, importable by
+# `gardener.checks` without this module's write path) and are re-exported here on purpose —
+# `__all__` says so — so every call site reaches them as `regenerate.X`.
 __all__ = ["view_relpath", "existing_view_ids", "list_all_anchored_entities",
           "list_stale_entities", "regenerate_entity", "run", "RegenOutcome", "RunResult"]
 
@@ -72,14 +60,9 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
             return RegenOutcome(entity_id=entity_id, entity_name=entity_id,
                                 action="refused-unknown-entity",
                                 message=f'"{entity_id}" is not a registered entity')
-        # A view ORPHANED BY DE-REGISTRATION: it once had a registry entry — that is the only
-        # way it could have been written at all — and now has none. Without this branch it would
-        # be stuck against the refusal above forever: `--entity` would refuse it every time and
-        # `--stale` would list it stale every run (its member set cannot even be checked without
-        # a live registry entry) with no way to ever act on it. A de-registered entity has, by
-        # definition, no governed member set left to evaluate, so this is unconditionally a
-        # removal — the same outcome the "last member vanishes" case below reaches, by a
-        # different route.
+        # A view orphaned by de-registration: without this branch `--entity` would refuse it and
+        # `--stale` would list it forever, with no way to act. No governed member set remains, so
+        # this is unconditionally a removal.
         if guarded:
             writer.ensure_on_branch(repo, branch)
             writer.ensure_clean(repo)
@@ -113,9 +96,8 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
         return RegenOutcome(entity_id=entity_id, entity_name=entity_name, action="unchanged",
                             member_count=len(members), path=view_relpath(entity_id))
 
-    # The dirty-tree/wrong-branch guards run BEFORE any per-write work: refusing after the
-    # synthesis below would cost a full agent run to reach a refusal that was already knowable
-    # from a dirty clone or a detached HEAD.
+    # The guards run BEFORE any per-write work — refusing after the synthesis would cost a full
+    # agent run to reach a refusal already knowable from a dirty clone or a detached HEAD.
     if guarded:
         writer.ensure_on_branch(repo, branch)
         writer.ensure_clean(repo)
@@ -124,11 +106,8 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
     title = entity_page.title if entity_page else entity_name
     timeline_ordered = skeleton.timeline_order(members)
     timeline_md = skeleton.render_timeline(members)
-    # The view's own audience, computed ONCE from members only (never widened by what follows)
-    # and threaded into every feed drawing on GOVERNED BUT NON-MEMBER sources — `render.render`
-    # recomputes the same, pure value again below for the frontmatter; duplicating a cheap,
-    # deterministic computation costs nothing and keeps `render`'s own tested contract (it
-    # computes `acl` internally) intact.
+    # The view's audience, computed once from MEMBERS only and threaded into every governed but
+    # non-member feed; `render.render` recomputes the same pure value for the frontmatter.
     view_audience = view_acl([m.acl for m in members])
     backlink_rows = skeleton.backlinks_of(repo, entity_page, view_acl=view_audience,
                                           exclude_path=view_relpath(entity_id))
@@ -141,14 +120,11 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
                          timeline_md=timeline_md, backlinks_md=backlinks_md,
                          synthesis_body=result.body_markdown, shipped=result.shipped)
 
-    # Decided from `existing_hash`, read above BEFORE anything was written — never from a fresh
-    # `existing_member_hash` call, which after the write below would read back the content this
-    # very call just produced and report "regenerate" for what is actually a first write.
+    # Decided from `existing_hash`, read BEFORE anything was written — a fresh call here would
+    # read back this call's own write and report "regenerate" for a first write.
     verb = "regenerate" if existing_hash is not None else "write"
-    # Local name deliberately NOT `view_path` — that name is the imported `staleness.
-    # view_path` FUNCTION this whole file calls above; shadowing it with a local variable would
-    # make every earlier call in this function resolve to the (not-yet-assigned) local instead,
-    # an UnboundLocalError waiting to happen the next time this function is reordered.
+    # Deliberately NOT named `view_path`: shadowing the imported function would turn every
+    # earlier call in this function into an UnboundLocalError on the next reorder.
     view_file_path = view_path(repo, entity_id)
     write_text_atomic(view_file_path, page)  # atomic replace, never a truncating open()
     sha = writer.commit_and_push(
@@ -189,21 +165,13 @@ class RunResult:
 async def run(repo: str, conn, entity_ids: list[str], *, registry: Registry, branch: str = "main",
               force: bool = False, guarded: bool = True,
               job: str = JOB_NAME) -> RunResult:
-    """The shared base every caller (the CLI's three flags, the worker's touched-entity trigger)
-    funnels through: one `job_runs` row for the WHOLE batch, one commit per entity inside it.
+    """The shared base every caller funnels through: one `job_runs` row for the WHOLE batch, one
+    commit per entity inside it.
 
-    **Stats are updated INCREMENTALLY, after every entity** — not once after the whole loop.
-    `ops.job_run`'s own `except Exception` records whatever `stats` holds at the moment of a
-    fault, so updating it only at the end would write an EMPTY stats row for an exception at
-    entity k of n even though k-1 commits had already landed: a `job_runs` audit trail lying by
-    omission about real, already-pushed work.
-
-    **A `KeyboardInterrupt` gets its own explicit record.** `job_run`'s `except Exception` cannot
-    see a `KeyboardInterrupt` — deliberately, so an operator's Ctrl-C is never mistaken for an
-    ordinary job fault by anything that catches broadly — so it propagates straight past that
-    bookkeeping without a row at all. The `except KeyboardInterrupt` below writes the same
-    error-shaped row `job_run` would have written for an ordinary exception, using whatever
-    `result.stats` already holds, before re-raising."""
+    Stats are updated incrementally, after every entity — updating only at the end would write an
+    empty stats row for a fault at entity k of n, lying by omission about k-1 pushed commits. A
+    `KeyboardInterrupt` gets its own explicit error row below, because `job_run`'s
+    `except Exception` cannot see one."""
     result = RunResult()
     try:
         with ops.job_run(conn, job) as stats:

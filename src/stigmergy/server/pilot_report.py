@@ -1,25 +1,11 @@
-"""`stigmergy-pilot-report`: the measurement table, produced by a command rather than assembled by
-hand.
+"""`stigmergy-pilot-report`: the measurement table — answer shape (answered-with-citation vs
+honest refusal), capture->filed and capture->searchable latency percentiles, and questions per
+identity per week (a per-scope signal, never an adoption metric).
 
-Three parts:
-
-  * **the answer-shape split** — % answered-with-citation vs honest refusal. Both are healthy
-    numbers: a system that never refuses is the failure, not the success. This is the honesty
-    figure every golden run is compared against.
-  * **capture -> filed latency percentiles**, and capture -> searchable latency, which is a
-    different number because the incremental webhook exists.
-  * **questions per identity per week** — a per-scope signal, not an adoption metric. Read it as
-    "which credential is spending the budget", never as "how many people use this".
-
-**Reads. Writes nothing, including no DDL** — no flag here mutates anything, and unlike every
-other CLI in this repo this one does NOT run the idempotent `ensure_*_schema` at startup either,
-so it works under a read-only database role. See `main` for what a missing table looks like.
-
-Every number here comes from a column something else already wrote for a different reason —
-`audit_log.result` (written at the SAME `_call`/`call_async` seam every row already goes through),
-`capture_queue.created_at`/`finished_at`/`result_ref`, and `job_runs` (the webhook's own
-bookkeeping). Nothing here is a new measurement channel; it is the first thing that reads the ones
-that already exist and puts them next to each other.
+Reads. Writes NOTHING, including no DDL — unlike every other CLI here it skips the idempotent
+`ensure_*_schema`, so it works under a read-only database role. Every number comes from a column
+something else already wrote (`audit_log.result`, `capture_queue`, `job_runs`) — no new
+measurement channel.
 """
 import argparse
 import json
@@ -38,8 +24,7 @@ _PERCENTILES = latency_mod.PERCENTILES
 
 
 def _week_bucket(ts: datetime) -> str:
-    """ISO year-week (`2026-W30`) — stable, sortable, and the same bucket a human reading a report
-    would draw by hand from a calendar."""
+    """ISO year-week (`2026-W30`) — stable and sortable."""
     iso = ts.isocalendar()
     return f"{iso.year}-W{iso.week:02d}"
 
@@ -61,10 +46,8 @@ def questions_per_identity_per_week(conn, *, since: datetime | None = None) -> d
 
 
 def answer_shape(conn, *, since: datetime | None = None) -> dict:
-    """% answered-with-citation vs honest refusal, from `ask`'s `audit_log.result` — the per-tool
-    outcome summary `answer.service.audit_summary` writes, never the question or answer text
-    itself. Only successful `ask` calls with a recorded result count towards the percentages — an
-    errored call answered nothing, in either sense."""
+    """% answered-with-citation vs honest refusal, from `ask`'s `audit_log.result` summary —
+    never the question or answer text. Only successful calls with a recorded result count."""
     with conn.cursor() as cur:
         query = ("SELECT result FROM audit_log WHERE tool = 'ask' AND outcome = 'ok'"
                 " AND result IS NOT NULL")
@@ -89,8 +72,8 @@ def answer_shape(conn, *, since: datetime | None = None) -> dict:
 
 
 def build_report(conn, *, since: datetime | None = None) -> dict:
-    """The whole table, as one JSON-able dict — the shape both `render` (a human) and
-    `--json` (the record) work from, so the two can never disagree about what was measured."""
+    """The whole table as one JSON-able dict — `render` and `--json` both work from it, so the
+    two can never disagree about what was measured."""
     filed = latency_mod.summarize(capture_queue.filed_latencies_ms(conn))
     searchable = latency_mod.summarize(
         capture_queue.searchable_latencies_ms(conn, job_name=WEBHOOK_JOB_NAME))
@@ -160,10 +143,8 @@ def main(argv=None) -> int:
     ap.add_argument("--json", action="store_true", help="machine-readable output for the record")
     args = ap.parse_args(argv)
 
-    # Refused before any I/O, and as a return code rather than a traceback: this module's package
-    # promises "the console entry point maps them to a clean stderr line and a non-zero exit code —
-    # no traceback ever reaches an operator's terminal" (`server/errors.py`), and every sibling CLI
-    # honours it. `--since not-a-date` used to raise a bare `ValueError` out of `strptime`.
+    # Refused before any I/O, as a return code rather than a traceback — the package's
+    # console-entry posture (`server/errors.py`).
     try:
         since = datetime.strptime(args.since, "%Y-%m-%d") if args.since else None
     except ValueError:
@@ -176,15 +157,8 @@ def main(argv=None) -> int:
         print(f"cannot reach the database: {ex.__class__.__name__}", file=sys.stderr)
         return 1
     try:
-        # No DDL here. "It reads; it writes nothing" rules out `ensure_audit_table`/
-        # `ensure_capture_schema` too, because a read-only database role cannot execute
-        # `CREATE TABLE`/`ALTER TABLE` even when it is a no-op against a table that already
-        # exists — so this command never silently provisions schema on a read-only reporting run.
-        #
-        # The consequence is that a not-yet-provisioned database is a REFUSAL here, not an empty
-        # report: a clean stderr line and a non-zero exit, the posture `server/errors.py` states
-        # for every console entry point in this package. It used to be a raw `UndefinedTable`
-        # traceback, which is the one thing that posture rules out.
+        # No DDL: a read-only role cannot execute CREATE/ALTER even as a no-op, so a
+        # not-yet-provisioned database is a clean refusal below, never an empty report.
         report = build_report(conn, since=since)
     except psycopg.errors.UndefinedTable:
         print("this database has no stigmergy tables yet — run the server once to provision "

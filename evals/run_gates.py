@@ -1,26 +1,18 @@
 #!/usr/bin/env python3
 """The release gates — armed thresholds over the three instruments, one verdict, one exit code.
 
-  * retrieval golden — `final` R@5 >= 0.80  (`evals/run_retrieval.py`)
-  * QA golden        — honesty >= 0.90 · groundedness >= 0.84 · refutation REPORTED, not gated
-  * adversarial suite — categories 1 (injection via content), 2 (ACL leakage/existence) and
-                        7 (forged frontmatter), collected by name; the collection floor is itself
-                        a CI test (`tests/test_adversarial_gate.py`), so `-k` cannot fail open.
+  * retrieval golden — `final` R@k vs `bars.BAR_RECALL` (`evals/run_retrieval.py`)
+  * QA golden        — honesty and groundedness vs their bars; refutation REPORTED, not gated
+  * adversarial suite — the injection, ACL-leakage and forged-frontmatter categories, collected by
+                        name; the collection floor is itself a CI test, so `-k` cannot fail open.
 
-**The noise rule.** A real model over a real corpus is not deterministic: the same code, corpus
-and model have flipped a single QA case between two runs. An instrument whose bar fails is
-therefore re-run ONCE — but only when every failing bar sits within ONE question's weight of
-passing (the report's own denominators decide the weight). A bar missed by more than one case is
-a regression and fails on the FIRST attempt, and a runner that exits non-zero is an infra failure
-that fails immediately. The re-run must never mask either.
+The noise rule: a real model over a real corpus is not deterministic, so an instrument whose bar
+fails is re-run ONCE — but only when every failing bar sits within ONE question's weight of passing
+(the report's own denominators set the weight). A wider miss is a regression and fails on the first
+attempt; a runner exiting non-zero is an infra failure and fails immediately.
 
 Both golden halves are REAL measurements, so this needs the docker postgres and OPENAI_API_KEY and
 never runs in CI — it is the operator's release gate, `make gates`.
-
-The bars above were calibrated against a larger, live corpus. They are kept as the intended
-thresholds, but a first run against `evals/corpus/` should be treated as a calibration run rather
-than as a verdict: record what the frozen corpus actually scores, then decide whether the bar or
-the instrument moves.
 """
 import argparse
 import json
@@ -59,9 +51,8 @@ _EPS = 1e-9
 
 
 def within_noise_band(report: dict, kind: str) -> bool:
-    """True iff EVERY failing bar is within one question's weight of its bar — the only shape
-    the re-run is for (G1: an unconditional re-run masks flake and lets an intermittent
-    regression squeak through on attempt 2)."""
+    """True iff EVERY failing bar is within one question's weight of its bar — the only shape the
+    re-run is for. An unconditional re-run would let an intermittent regression through."""
     if kind == "retrieval":
         weight = 1.0 / max(1, report.get("questions", 1))
         return report["summary"]["final"]["recall_at_k"] >= BAR_RECALL - weight - _EPS

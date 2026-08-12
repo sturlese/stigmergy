@@ -1,27 +1,15 @@
 """Numeric token matching for the answer verifier.
 
-Two behaviours here were paid for in observed failures, and both are worth keeping straight:
+`x` is a DIMENSION, never a magnitude: `2.3x` pools as 2.3 and scales nothing — a tokenizer
+without it reads `2.3x` as a bare `2` and withholds a correct, page-backed answer.
 
-1. **The `x` multiplier.** A token regex that knows `k/m/b/bn` but not `x` tokenizes `2.3x` as the
-   bare `2` — the `.3x` tail fails the trailing boundary. That was measured, not theorized: a page
-   said `2.3x`, the model's draft wrote `2,3` with a decimal comma, the figure did not trace, and a correct
-   page-backed answer was withheld with `unverified_figures: ['2,3']`. `x` is a DIMENSION, never a
-   magnitude: `2.3x` means 2.3 (times), so it pools as 2.3 and scales nothing.
-
-2. **Magnitude/percent laundering, closed one-sided.** `interpretations` returns both the bare
-   mantissa and the scaled value for a suffixed token. An answer-side check that accepts ANY
-   overlap lets `$2M` in an answer verify against a bare `2` anywhere in the evidence. So the
-   ANSWER side claims the dimensioned value only (`claimed`): a magnitude-suffixed figure must
-   trace to its scaled value, a percent to a percent. The EVIDENCE side stays generous (both
-   readings pooled), because prose writes magnitudes out ("2,3 millones") where no tokenizer
-   reaches — tightening that side would manufacture false refusals.
-
-   **Named accepted residual**: the prose direction regressed with this fix — an answer's `$2M` no
-   longer traces to evidence saying "2 millones", where the bare mantissa used to launder it
-   through, which is the very hole this closes. The agent is told to quote figures as the page
-   states them, so the shape of any future fix — if a real answer ever hits this — is
-   EVIDENCE-side word-magnitude parsing (millones/mil/million/…), never a wider answer-side
-   claim. Pinned as a named test in `tests/answer/test_numbers.py`.
+The matching is asymmetric by design: the ANSWER side claims the dimensioned value only
+(`claimed`: `$2M` must trace to 2,000,000, `40%` to a percent — any-overlap lets `$2M` verify
+against a bare `2` anywhere in the evidence), while the EVIDENCE side pools both readings
+(`interpretations`), because prose writes magnitudes out ("2,3 millones") where no tokenizer
+reaches. Accepted residual: an answer's `$2M` does not trace to evidence saying "2 millones";
+any future fix is EVIDENCE-side word-magnitude parsing, never a wider answer-side claim —
+pinned as a named test in `tests/answer/test_numbers.py`.
 """
 import re
 
@@ -79,10 +67,9 @@ def interpretations(num: str, suffix: str | None, pct: str | None = None) -> set
 
 
 def claimed(num: str, suffix: str | None, pct: str | None) -> set[str]:
-    """What one ANSWER token actually asserts — the STRICT, dimensioned reading (item 2 of
-    the module docstring): `$2M` claims 2,000,000 and nothing else; `40%` claims forty PERCENT;
-    a bare or `x`-suffixed token claims its plain value. This is the set that must intersect
-    the evidence pool for the figure to ship."""
+    """What one ANSWER token asserts — the STRICT, dimensioned reading: `$2M` claims 2,000,000
+    and nothing else, `40%` claims forty PERCENT, a bare or `x`-suffixed token its plain value.
+    This set must intersect the evidence pool for the figure to ship."""
     mag = _MAGNITUDE.get((suffix or "").lower())
     if mag:
         return {_canon(v * mag) for v in _values(num)}

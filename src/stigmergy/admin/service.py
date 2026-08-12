@@ -1,20 +1,14 @@
 """The console's use-cases — every route handler is a thin skin over one method here.
 
-The dividing line this module holds: everything operational lands on a seam another package
-already owns — `capture.dispositions` (the steward drain), `capture.retention` (purge),
-`queue.release_expired` (reclaim), `gardener.store` (findings), `digest.run` (the digest),
-`index.check` (the substrate lint), `server.pilot_report` (the measurement table). The ONLY SQL
-this module owns is read-side plumbing no library exposes: `job_runs` / `ingest_errors` reads,
-`audit_log` aggregates for the activity tab, the `pages_index` zone AGGREGATE (a declared reader
-exception — counts only, never content), and `admin_actions` via `admin.schema`.
+Everything operational lands on a seam another package owns; the ONLY SQL this module owns is
+read-side plumbing no library exposes: `job_runs`/`ingest_errors` reads, `audit_log` aggregates,
+the `pages_index` zone AGGREGATE (a declared reader exception — counts only, never content), and
+`admin_actions` via `admin.schema`.
 
-Untrusted text (captured excerpts, agent rationales, steward notes, error strings) is passed
-through `text.sanitize` on the way out — control characters die at the server, HTML-escaping is
-the client's non-negotiable half.
-
-Errors: `AdminBadRequest` (the caller's input), `AdminNotFound`, `AdminRefused` (a domain seam
-said no — the message is the library's own sentence, already written for humans and content-free).
-Anything else bubbles to the routes' 500 handler, which names the CLASS only.
+Untrusted text passes `text.sanitize` on the way out — control characters die at the server,
+HTML-escaping is the client's non-negotiable half. Errors: `AdminBadRequest` / `AdminNotFound` /
+`AdminRefused` cross with the library's own sentence; anything else becomes the routes' 500,
+class name only.
 """
 import logging
 import os
@@ -50,11 +44,9 @@ log = logging.getLogger(__name__)
 PURGE_JOB, PURGE_DRY_RUN_JOB = "capture-purge", "capture-purge-dry-run"
 DIGEST_JOB, DIGEST_DRY_RUN_JOB = "digest", "digest-dry-run"
 
-# The crons tab's own table: file, human title, the schedule as the workflow declares it, and
-# WHERE the database truth for "did it run" lives — `job_runs` for the two that write one,
-# `index_meta.built_at` for the rebuild, which writes none.
-# `tests/admin/test_service_pg.py` pins `schedule_utc` against the parsed workflow YAML, so this
-# table cannot drift from the files it describes.
+# The crons tab's table: file, title, schedule, and WHERE the database truth for "did it run"
+# lives — `job_runs` for the two that write one, `index_meta.built_at` for the rebuild, which
+# writes none. `schedule_utc` is pinned against the parsed workflow YAML by test.
 CRON_WORKFLOWS = (
     {"file": "index-rebuild.yml", "title": "Index rebuild", "schedule_utc": "17 4 * * *",
      "truth": "index_meta.built_at", "dispatch_inputs": ()},
@@ -65,39 +57,25 @@ CRON_WORKFLOWS = (
 )
 DISPATCHABLE = tuple(w["file"] for w in CRON_WORKFLOWS)
 
-# The worker's OWN lease and attempts budget, not the queue CLI's shorter flagless default — a
-# console that compared a 700s-old claim against 300s would call every long agent item dead
-# (`query_in_flight`'s docstring names this exact mistake). The one declared reach into
-# `stigmergy.librarian`, config module only, webhook-style (tests/test_architecture.py).
-#
-# The lease is a FUNCTION, not a constant, and that is the correction a live mismatch paid for. The
-# worker's real lease is derived from its resolved agent budget
-# (`config.resolved_visibility_timeout_s`, 2xtimeout + gates + headroom), so a deployment that
-# raises `$STIGMERGY_LIBRARIAN_TIMEOUT_S` moves it — staging's 600s budget derives 1500s while this
-# module's class-default import read 900s. The meter then called a healthy 1000s-old item
-# "expired" and the Reclaim button swept it out from under the worker still filing it: safe (the
-# attempts fence makes the loser discard) but wasteful, and a caveat in a code map is not a
-# defense — the person pressing the button reads the meter. Resolved per CALL, because
-# `fly.toml`'s `[env]` is app-wide: the env this process reads IS the env the worker resolved.
+# The worker's OWN attempts budget, never the queue CLI's shorter flagless default — comparing a
+# long agent item against the CLI's lease calls it dead while its worker is still on it. The one
+# declared reach into `stigmergy.librarian` is the config module alone.
 WORKER_MAX_ATTEMPTS = queue.DEFAULT_MAX_ATTEMPTS
 
-# The knowledge repo's default branch — every mint through this door targets it, the same
-# constant `server.review`'s own `_MINT_BRANCH` names (ADR 030). No per-deployment override
-# exists (nothing asks for one); a future need is one constant to change, not a new concept.
+# The knowledge repo's default branch — the same constant `server.review._MINT_BRANCH` names.
 _MINT_BRANCH = "main"
 
 
 def worker_visibility_timeout_s() -> int:
-    """The lease the deployed worker actually holds, resolved fresh — the meter, the three
-    verdicts and Reclaim's default horizon all read THIS, so the number the operator sees and the
-    number the button acts on can never be two different numbers.
+    """The lease the deployed worker actually holds, resolved fresh PER CALL — it derives from
+    `$STIGMERGY_LIBRARIAN_TIMEOUT_S`, and `fly.toml`'s `[env]` is app-wide, so this process's env
+    is the worker's. The meter, the verdicts and Reclaim's default horizon all read THIS, so the
+    number the operator sees and the number the button acts on are one number.
 
-    A refused `$STIGMERGY_LIBRARIAN_TIMEOUT_S` falls back to the class default here rather than
-    failing the request: `meta()` is the console's own boot call, so raising would answer a
-    config typo with a login screen — the one screen that reads as "your token is wrong" — on the
-    exact tool an operator would reach for to diagnose it. The fallback is honest because the
-    same refusal stops the WORKER from booting at all: there is no live lease for the meter to
-    misreport, and the log line below is what says why."""
+    A refused env value falls back to the class default rather than failing the request: `meta()`
+    is the console's boot call, and raising would answer a config typo with a login screen. The
+    fallback is honest because the same refusal stops the WORKER from booting — there is no live
+    lease to misreport."""
     try:
         return librarian_config.resolved_visibility_timeout_s()
     except librarian_config.LibrarianConfigError as ex:   # attribute, never a second import edge
@@ -120,8 +98,8 @@ class AdminRefused(Exception):
 
 
 def _clean(value) -> str:
-    """Control characters stripped, newlines KEPT — the web renders multi-line questions whole
-    (the CLI's own rule for `show`), and HTML escaping is the client's job, not flattening."""
+    """Control characters stripped, newlines KEPT — the web renders multi-line questions whole;
+    HTML escaping is the client's job, not flattening."""
     return textutil.sanitize(str(value or ""))
 
 
@@ -130,10 +108,9 @@ def _iso(value) -> str | None:
 
 
 class AdminService:
-    """One instance per process, sharing the process-wide autocommit connection the MCP transport
-    already holds. Same concurrency invariant as `AuditWriter`: every DB statement here runs to
-    completion synchronously — no cursor is ever held across an `await` (the two async digest
-    methods do their awaiting inside `digest.run`, between statements, never mid-cursor)."""
+    """One instance per process, sharing the process-wide autocommit connection. Concurrency
+    invariant: no cursor is ever held across an `await` — the two async digest methods await
+    inside `digest.run`, between statements, never mid-cursor."""
 
     def __init__(self, conn, *, server_settings, admin_settings: AdminSettings, gateway=None):
         self._conn = conn
@@ -150,9 +127,8 @@ class AdminService:
             "workflows": [dict(w) for w in CRON_WORKFLOWS],
             "worker": {"visibility_timeout_s": worker_visibility_timeout_s(),
                        "max_attempts": WORKER_MAX_ATTEMPTS},
-            # The closed list the Entities tab's Approve form renders as a <select> — shipped from
-            # here so the frontend never hardcodes a second copy of `generator.ENTITY_TYPES` that
-            # could drift from it (ADR 030 D5).
+            # Shipped from here so the frontend never hardcodes a second copy of
+            # `generator.ENTITY_TYPES` that could drift.
             "entity_types": list(ENTITY_TYPES),
         }
 
@@ -207,21 +183,18 @@ class AdminService:
                               {"id": submission_id, "page": page, "commit": commit},
                               lambda by: dispositions.resolve(self._conn, submission_id, actor=by,
                                                               note=note, page=page, commit=commit))
-        # The CLI's own missing-pointer warning, verbatim in spirit: `resolve` is the one state
-        # whose entire point is that the material WAS used, so a resolve with no pointer leaves
-        # the submitter's report permanently silent about where it went.
+        # `resolve` means the material WAS used — a resolve with no pointer leaves the
+        # submitter's report permanently silent about where it went.
         warning = ("" if (page or commit) else
                    f"resolved #{submission_id} with no page and no commit — the submitter's report "
                    f"will say only what your note said, with no pointer to where the material went")
         return {**result, "warning": warning}
 
     def queue_reject(self, submission_id: int, *, actor: str, reason: str) -> dict:
-        # An entity situation rejected here is a GOVERNANCE decision, and the governance ledger is
-        # `review_decisions` — the same one MCP and Slack write for the same verdict on the same
-        # row. Without this, "who decided this identity" answered from one table for approve and
-        # from another for reject, on the one door that has both (audit S1). The Entities tab
-        # deliberately routes its Reject here rather than growing a second button, so this is where
-        # the row has to be written; `_mutate` keeps recording `admin_actions` either way.
+        # A rejected entity situation is a GOVERNANCE decision, so it also writes
+        # `review_decisions` — the same ledger MCP and Slack write — or "who decided this
+        # identity" would answer from different tables per verdict. The Entities tab routes its
+        # Reject here rather than growing a second button.
         situation = situations.get_situation(self._conn, submission_id)
         is_entity_proposal = bool(situation and situations.classify(situation))
         result = self._mutate("queue.reject", actor, {"id": submission_id},
@@ -235,17 +208,11 @@ class AdminService:
 
     def queue_reclaim(self, *, actor: str, visibility_timeout_s: int | None = None,
                       max_attempts: int = WORKER_MAX_ATTEMPTS) -> dict:
-        # The WORKER's lease, not the queue CLI's shorter one — the same rule the read path obeys
-        # (`query_in_flight`, below). An unqualified Reclaim means "recover whatever the worker
-        # abandoned"; measured against 300s it means "requeue whatever has been running longer
-        # than a fifth of its allowed time", which is every long agent item, while its worker is
-        # still on it. The console renders "held 400s of <the worker's derived lease> · within its
-        # lease" beside this button, so the two numbers have to be the same number.
-        # The clamp wraps BOTH branches, not just the caller's. The default branch now carries
-        # operator-controlled data ($STIGMERGY_LIBRARIAN_TIMEOUT_S), and a negative horizon inverts
-        # `make_interval` in `release_expired`'s predicate — every claimed row, including one
-        # claimed a millisecond ago, reads expired. That would make the ORDINARY Reclaim button
-        # strictly more destructive than the deliberate "release everything now" checkbox.
+        # The WORKER's lease, never the queue CLI's shorter one: an unqualified Reclaim means
+        # "recover whatever the worker abandoned", and the meter beside this button renders the
+        # same number. The clamp wraps BOTH branches — the default carries operator-controlled
+        # env data, and a negative horizon inverts `release_expired`'s predicate, reading EVERY
+        # claimed row as expired.
         timeout = max(0, int(worker_visibility_timeout_s() if visibility_timeout_s is None
                              else visibility_timeout_s))
         return self._mutate("queue.reclaim", actor, {"visibility_timeout_s": timeout},
@@ -292,8 +259,7 @@ class AdminService:
                               f"without the bot token")):
             if not pieces[key]:
                 raise AdminRefused(sentence)
-        # The SDK stays behind `stigmergy.slack.bolt_gateway` and is loaded only at the moment a
-        # real post is about to happen — `digest.cli._gateway`'s own posture, mirrored.
+        # The Slack SDK is loaded only at the moment a real post is about to happen.
         from stigmergy.slack.bolt_gateway import build_gateway
 
         gateway = build_gateway(os.environ[SLACK_BOT_TOKEN_ENV])

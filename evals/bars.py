@@ -1,29 +1,21 @@
-"""The armed release bars — ONE home. `run_qa.py`'s `honesty_pass` and the gate itself used to
-carry the same 0.90 as two separate literals, which is the classic drift pair: changing one here
-changes what every reader of a QA report and the gate itself mean by PASS, and that is exactly
-the point of a single home."""
+"""The armed release bars — ONE home. Every reader of a report and the release gate itself must
+mean the same thing by PASS, so no bar is ever spelled as a literal anywhere else."""
 
 BAR_RECALL = 0.80
 BAR_HONESTY = 0.90
 BAR_GROUNDEDNESS = 0.84          # 4.2/5, expressed on this rig's 0..1 scale
 
 # ── the filing golden's per-facet bars (`run_filing.py`) ──────────────────────────────────────
-# FIXED FROM THE FIRST SONNET-5 BASELINE (2026-08-10, sha 2b6964f, `evals/history.ndjson` — the
-# run and its noise twin scored facet-identical; the full account is `evals/README.md`'s baseline
-# section). A bar is the baseline's own score, with the one fractional pair floored a point
-# (8/9 = 0.888… must satisfy its own bar, and a two-decimal 0.89 would refuse the very run that
-# set it). The 0.88 pair tolerates exactly one type/folder disagreement — the baseline's own:
-# F03 filed as a decision where the yardstick says note, a defensible reading of material that
-# records a settled practice. The per-capture misses list, not the bar, is the diagnosis surface.
+# Each bar is a recorded baseline's own score, with a fractional value FLOORED a point (8/9 =
+# 0.888… must satisfy its own bar; a two-decimal 0.89 would refuse the run that set it). The 0.88
+# pair therefore tolerates exactly one type/folder disagreement. Diagnosis is the per-capture
+# misses list, never the bar.
 #
-# There is no bar for `attempts` or `bounces` on purpose: those are the COST axes, the same
-# posture `run_qa.py` takes with retry rate and seconds/question. A backend that reaches the same
-# page in two agent passes is more expensive, not worse, and folding that into a quality bar would
-# measure two things through one number.
+# `attempts` and `bounces` have no bar on purpose: they are COST axes, and a backend that reaches
+# the same page in two passes is more expensive, not worse.
 #
-# `run_gates.py` does NOT read these. The filing golden files into a real git repo through a real
-# agent, which makes it far more expensive than the two instruments the release gate arms; wiring
-# it in is a separate decision with its own cost argument.
+# `run_gates.py` does NOT read these — the filing golden costs a real agent and a real git repo,
+# so arming it in the release gate is a separate decision.
 BAR_FILING_STATUS = 1.00         # the terminal state each capture reached
 BAR_FILING_REASON = 1.00         # a refusal's own reason_code
 BAR_FILING_TYPE = 0.88           # the `type:` of the page that landed (baseline 8/9, floored)
@@ -34,7 +26,6 @@ BAR_FILING_PARK_QUESTION = 1.00  # the unresolved name a park actually captured
 BAR_FILING_DECISIONS = 1.00      # a meeting's decision pages and their independent anchors
 BAR_FILING_REUSE = 1.00          # a park did not cost the capture a decision
 
-# One home, and a lookup so `run_filing.aggregate` does not restate the facet names a third time.
 FILING_BARS = {
     "status": BAR_FILING_STATUS,
     "reason": BAR_FILING_REASON,

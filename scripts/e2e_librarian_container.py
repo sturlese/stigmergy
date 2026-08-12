@@ -1,14 +1,10 @@
 #!/usr/bin/env python
 """Containerized-librarian e2e driver — the DEPLOYED artifact, exercised locally.
 
-The host e2e (`e2e_librarian.py`) drains the queue with a worker running on the HOST, out of the
-venv. That proves the filing path. What it cannot prove is that the artifact staging deploys — one
-image, the `stigmergy-librarian-boot` entry point, a clone the worker makes itself — actually works.
-An artifact nothing exercises locally is an artifact whose first real run is on staging, in front
-of testers.
-
-So this driver runs the SAME image `fly.toml`'s `worker` process group runs, through the SAME
-entry point, and asserts three properties:
+The host e2e (`e2e_librarian.py`) drains the queue with a worker on the HOST, which proves the
+filing path but not the deployed ARTIFACT — one image, the `stigmergy-librarian-boot` entry point,
+a clone the worker makes itself. This driver runs the SAME image `fly.toml`'s `worker` process
+group runs, through the SAME entry point, and asserts three properties:
 
     * from EMPTY VOLUMES, the container clones the bare remote, files N captures, and the
       commits land ON THE REMOTE (read back through a fresh clone that never saw the container);
@@ -22,10 +18,9 @@ Keyless and offline by construction: the composition's `librarian` service runs 
 double and carries no OPENAI_API_KEY and no Anthropic key. `scripts/e2e_librarian_container.sh`
 owns the compose lifecycle (empty volumes in, empty volumes out) and the environment hygiene.
 
-**What is reused rather than rebuilt.** The bare remote, the fixture knowledge-repo skeleton, the
-seed/clone/read-back helpers and the console-script resolver all come from `e2e_librarian.py` —
-imported, not copied, so the two drivers file against the same graph shape and a change to one is
-visible in the other.
+The bare remote, the fixture repo skeleton, the seed/clone/read-back helpers and the console-script
+resolver are IMPORTED from `e2e_librarian.py`, never copied, so a change to one is visible in the
+other.
 """
 import contextlib
 import json
@@ -51,8 +46,7 @@ SERVICE = "librarian"
 SUBMITTER = "e2e.container@stigmergy.test"
 
 # Enough work that the drain lasts several seconds, which is what makes "kill it mid-item"
-# reachable without a synthetic delay: each item runs a real gitleaks pass, two whole-repo linter
-# passes, a worktree add/remove, a commit and a push.
+# reachable without a synthetic delay.
 FIRST_BATCH = 6
 SECOND_BATCH = 4
 
@@ -136,9 +130,8 @@ def main() -> int:
     conn = store.connect(dsn)
     try:
         schema.ensure_capture_schema(conn)
-        # FATAL, not recorded, for the reason the host driver's own precondition is fatal: everything
-        # below submits and drains fixture captures, so a non-empty queue means this is not the
-        # disposable database it was pointed at. Pinned OR refuse, never proceed.
+        # FATAL, not recorded via `check()`: everything below submits and drains fixture captures,
+        # so a non-empty queue means this is not the disposable database it was pointed at.
         starting = counts(conn)
         if sum(starting.values()) != 0:
             raise SystemExit(
@@ -156,9 +149,7 @@ def main() -> int:
         print("\n-- phase 2: submit, then start the WORKER CONTAINER --", flush=True)
         evidence_store = evidence.store_from_env()
         acks = submit_batch(conn, evidence_store, "ordinary", FIRST_BATCH)
-        # `stigmergy-meeting drop`'s own enqueue seam, in the SAME batch — the container's worker
-        # dispatches by `kind` already (`worker.process_next`), so this rides the same drain
-        # rather than a second one.
+        # In the SAME batch: the worker dispatches by `kind`, so this rides the same drain.
         acks["meeting"] = base.submit_meeting(conn, evidence_store, base.MEETING_MATERIAL)
         check(f"{FIRST_BATCH + 1} captures queued", len(acks) == FIRST_BATCH + 1, str(len(acks)))
         start_worker()
@@ -178,9 +169,8 @@ def main() -> int:
         head = base.remote_head()
         commits = base.remote_commits(verify)
         rows = filed_rows(conn, acks)
-        # "meeting" excluded from the ordinary-flow accounting below — its commit shape differs
-        # (a multi-file page SET, a different subject phrase) exactly as `e2e_librarian.py`'s own
-        # phase 5 excludes it, for the same reason (see that script's comment).
+        # "meeting" excluded from the ordinary-flow accounting: its commit is a multi-file page SET
+        # with a different subject phrase. Phase 3b covers it.
         filed = [r for label, r in rows.items()
                 if label != "meeting" and r["status"] == schema.FILED and r["result_ref"]]
         pages = {r["result_ref"] for r in filed}
@@ -211,9 +201,8 @@ def main() -> int:
         filed_meeting = meeting_row["report"].get("filed_meeting") or {}
         meeting_page_path, meeting_sha = meeting_row["result_ref"].rsplit("@", 1)
         decision_paths = [d.get("path", "") for d in filed_meeting.get("decisions", [])]
-        # `source_pages` is a LIST — a long transcript splits into cross-linked parts,
-        # so the arity is N>=1. This read the pre-split singular key and got `""`. The exactness of
-        # the set comparison is unchanged: every part must be in the commit and nothing else may be.
+        # `source_pages` is a LIST: a long transcript splits into cross-linked parts, so the arity
+        # is N>=1. The set comparison stays exact — every part in the commit, nothing else.
         source_pages = filed_meeting.get("source_pages") or []
         expected_paths = {*source_pages, meeting_page_path, *decision_paths}
         committed_paths = set(gitcmd.run("show", "--name-only", "--format=", meeting_sha,
@@ -234,11 +223,8 @@ def main() -> int:
         check("...saying what it was doing, in its own words",
               "received SIGTERM" in stopped_log and "stopped after" in stopped_log,
               next((line for line in stopped_log.splitlines() if "SIGTERM" in line), "(no line)"))
-        # The detail is not decoration: its two siblings above quote what they found, and this one
-        # failed once naming nothing, which left "there is a traceback somewhere in the container
-        # log" as the entire diagnosis after the stack had already been torn down.
-        # The FINAL line of a traceback is the one that says what went wrong, so the window runs
-        # FORWARD from the marker, not backward around it.
+        # Quote the traceback: the stack is torn down before anyone can go looking for it. The
+        # window runs FORWARD from the marker — the final line is the one that says what went wrong.
         log_lines = stopped_log.splitlines()
         first_tb = next((i for i, line in enumerate(log_lines) if "Traceback" in line), None)
         tb_context = "\n".join(log_lines[first_tb:first_tb + 40]) if first_tb is not None else ""
@@ -249,9 +235,8 @@ def main() -> int:
               flush=True)
         second = submit_batch(conn, evidence_store, "killed", SECOND_BATCH)
         start_worker()
-        # Kill on the FIRST observation of a claimed row: with the double an item takes a second or
-        # two (real gitleaks, two real linter passes, a real push), so a tight poll lands the signal
-        # while one is genuinely in flight rather than between items.
+        # Kill on the FIRST observation of a claimed row, so the signal lands while an item is
+        # genuinely in flight rather than between items.
         deadline, killed_mid_item = time.monotonic() + DRAIN_TIMEOUT_S, False
         while time.monotonic() < deadline:
             if counts(conn)[schema.CLAIMED] >= 1:
@@ -267,11 +252,9 @@ def main() -> int:
               f"exit code {container_state('.State.ExitCode')!r}")
 
         stranded = counts(conn)[schema.CLAIMED]
-        # The LEASE is what returns it, through `release_expired` — the same function the worker's
-        # own sweep calls on every pass. What is forced here is the CLOCK, not the mechanism: the
-        # deployed lease is 900s and an e2e cannot wait for it, so the sweep is asked to treat the
-        # claim as expired now. This is exactly `stigmergy-queue reclaim --visibility-timeout 0`, the
-        # recovery the runbook documents for a worker that died mid-item.
+        # The LEASE returns it, through the same `release_expired` the worker's own sweep calls.
+        # What is forced here is the CLOCK, not the mechanism: the deployed lease is minutes long
+        # and an e2e cannot wait for it. Equivalent to `stigmergy-queue reclaim -v 0`.
         released = queue.release_expired(conn, visibility_timeout_s=0,
                                          max_attempts=queue.DEFAULT_MAX_ATTEMPTS)
         check("the abandoned claim was returned to the queue by the lease sweep",

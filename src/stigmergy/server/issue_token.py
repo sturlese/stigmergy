@@ -1,17 +1,7 @@
-"""Operator token issuance: a tiny CLI that generates one long random per-user bearer token,
-prints the PLAINTEXT once — the operator pastes it straight into the client config
-(`docs/reference/server.md`, "HTTP transport") — and the sha256 hex hash the operator adds to the
-server-side token store (`$STIGMERGY_TOKEN_STORE` / `$STIGMERGY_TOKEN_STORE_FILE`, shape
-`{"<sha256hex>": "<email>"}`).
-
-This command never writes the plaintext to disk, a log, or a repo — after it exits, the
-operator's terminal scrollback is the only place it exists, and `git grep` must never find a token
-or a hash in any repo. Rotation and revocation are both ops steps over the SAME store: rotate =
-issue a new token for the email and drop the old hash; revoke = drop the hash with no replacement
-(`docs/reference/operator-runbook.md`).
-
-Run:
-    stigmergy-issue-token ana@example.com
+"""`stigmergy-issue-token <email>`: generate one random per-user bearer token, print the
+PLAINTEXT once, plus the sha256 hash for the server-side token store (`$STIGMERGY_TOKEN_STORE` /
+`$STIGMERGY_TOKEN_STORE_FILE`, `{"<sha256hex>": "<email>"}`). The plaintext is never written to
+disk, a log or a repo; rotate/revoke are ops steps over the same store.
 """
 import argparse
 import secrets
@@ -23,8 +13,7 @@ TOKEN_BYTES = 32   # 256 bits of entropy; secrets.token_urlsafe base64-encodes i
 
 
 def issue(email: str) -> tuple[str, str]:
-    """A fresh (plaintext, sha256hex) pair. Pure and side-effect-free — the CLI below is the only
-    place the plaintext is ever printed."""
+    """A fresh (plaintext, sha256hex) pair; side-effect-free."""
     token = secrets.token_urlsafe(TOKEN_BYTES)
     return token, hash_token(token)
 

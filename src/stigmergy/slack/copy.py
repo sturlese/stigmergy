@@ -1,18 +1,12 @@
-"""Every user-facing string this transport ships.
-
-Nothing here is composed ad hoc at a call site: `stigmergy.slack.render` calls these functions, it
-does not format its own copy. That is what makes a wording change a one-file change, and what
-makes the strings pinnable by a test.
-
-Three states get their own string rather than being folded into a neighbour, because collapsing
-them would tell a user something untrue: a transient identity-lookup failure is not an unmapped
-user, a placeholder that could not be edited is not a lost answer, and a capture that failed to
-queue is not a capture the librarian declined.
+"""Every user-facing string this transport ships. `render` calls these functions and never
+formats its own copy — a wording change is a one-file change, and the strings are pinnable by a
+test. Distinct states keep distinct strings: a transient identity failure is not an unmapped
+user, and a capture that failed to queue is not one the librarian declined.
 """
 import os
 
-# Who a user is told to go to when they need a human. A deployment with a named steward can set
-# `STIGMERGY_STEWARD_NAME` (e.g. "Dana"); the default keeps the copy true for any deployment.
+# Who a user is told to go to when they need a human; the default keeps the copy true for a
+# deployment with no named steward.
 STEWARD_NAME = os.environ.get("STIGMERGY_STEWARD_NAME", "your steward")
 
 
@@ -47,9 +41,8 @@ VERDICT_LINES = {
 
 
 def verdict_line(verdict: str) -> str:
-    """Chosen by a literal lookup keyed on the verdict string: a verdict this dict does not carry
-    — `failed`, or anything else — is a rendering bug, not a silent flattening, so it raises
-    rather than falling through to a default."""
+    """A literal lookup keyed on the verdict string: a verdict this dict does not carry is a
+    rendering bug and raises, never silently flattens to a default."""
     return VERDICT_LINES[verdict]
 
 
@@ -74,9 +67,9 @@ def show_it_here_success(page_title: str, excerpt: str) -> str:
 
 
 def show_it_here_refusal(path: str) -> str:
-    """The exact string `read_page` already returns for both a nonexistent and an out-of-scope
-    path — reused, not rephrased: a different sentence for the two would make this affordance an
-    oracle for which restricted pages exist."""
+    """The exact string `read_page` returns for both a nonexistent and an out-of-scope path —
+    reused, not rephrased: two different sentences would make this affordance an oracle for which
+    restricted pages exist."""
     return f"unknown page: {path}"
 
 
@@ -87,11 +80,9 @@ def dm_fuller_answer_header(channel_name: str, question: str) -> str:
 
 # ── the degrade leg — every blocks-carrying send refused, text-only is all that's left ──────────
 def degraded_sources_line(titles: list[str]) -> str:
-    """`mention._answer_fallback_text`'s own compact citation mention: titles only, no link, no
-    per-citation quote, no button — `render.py`'s full Sources `context` block and its "Show it
-    here" buttons need Block Kit, and this text-only lane exists precisely because Slack refused
-    every `blocks` payload the render attempt tried. `titles` is already escaped by the caller, the
-    same convention `citation_unlinked`'s own `title` argument follows."""
+    """The text-only lane's compact citation line: titles only, no link, no quote, no button —
+    this lane exists because Slack refused every `blocks` payload. `titles` arrive already
+    escaped by the caller."""
     return "Sources: " + ", ".join(titles)
 
 
@@ -116,9 +107,8 @@ PRIVATE_CHANNEL_REFUSAL = ("🧠 doesn't work here — a private channel's mater
 
 # ── the push channel ────────────────────────────────────────────────────────────────────────────
 def filed(*, page_path: str, commit: str, anchor: str, source_page: str = "") -> str:
-    # `source_page` is the thread's own verbatim copy, filed beside the synthesis — named on the
-    # card so the person who reacted knows BOTH pages exist, not only the summary. Empty for every
-    # capture without the attachment, and the card is unchanged.
+    # `source_page` names the thread's own verbatim archive filed beside the synthesis; empty for
+    # captures without one, and the card is unchanged.
     source_line = (f"Your thread is also archived word-for-word at `{source_page}`.\n\n"
                    if source_page else "")
     return (f"*filed* — this became a page: `{page_path}` @ `{commit}`\n\n"
@@ -134,8 +124,8 @@ NEEDS_INPUT_INSTRUCTION = "Just reply in this thread with your answer."
 
 def needs_input_body(situation_prose: str, *, slack_user_id: str) -> str:
     """`situation_prose` is `report['summary']` with its trailing MCP invocation clause already
-    stripped: reuse the situation-describing prose verbatim, swap only the closing instruction.
-    Addressed to the submitter by @-mention since the thread may have other participants."""
+    stripped — the situation prose verbatim, only the closing instruction swapped. @-mentions the
+    submitter since the thread may have other participants."""
     return f"<@{slack_user_id}> — {situation_prose}\n\n{NEEDS_INPUT_INSTRUCTION}"
 
 
@@ -156,18 +146,15 @@ def server_error(short_id: str = "") -> str:
            f"it keeps happening, tell {STEWARD_NAME}{ref}.")
 
 
-# Questions spend the `ask` bucket, which is stricter than the shared per-tool one and is what a
-# person actually hits first. Each transport constructs its own limiter, so this budget is per
-# surface rather than pooled across all of them — the copy must not promise otherwise.
+# Questions spend the `ask` bucket, stricter than the shared per-tool one. Each transport
+# constructs its own limiter, so the budget is per surface — the copy must not promise otherwise.
 RATE_LIMIT = ("You've hit the question limit — 10 questions a minute. Try again in a moment.")
 
 
 # ── the steward doorbell ────────────────────────────────────────────────────────────────────────
-# One shape (headline, one-line reason, one concrete next action), two fillings — parked capture
-# and entity proposal: a steward who has learned to read the first line of this message type never
-# has to re-learn a second layout for a different event. Every filling ends with a link or a
-# copy-pasteable command — never "check the inbox", which would just relocate the question the
-# doorbell exists to answer.
+# One shape (headline, one-line reason, one concrete next action), two fillings. Every filling
+# ends with a link or a copy-pasteable command — never "check the inbox", which would relocate the
+# question the doorbell exists to answer.
 def doorbell_triage(*, item_id, summary: str) -> str:
     return (f"🔔 A capture is parked and needs you — #{item_id}\n"
             f"{summary}\n\n"
@@ -183,9 +170,8 @@ def doorbell_entity_proposal(*, item_id, submitter: str, name: str) -> str:
             f"approve or reject it.")
 
 
-# The undeliverable case — read cold, later, by an operator debugging why a doorbell never rang.
-# Same two-clause shape as the transient-failure and no-access strings (name WHY, name what could
-# not happen) rather than collapsing to "delivery failed".
+# Read cold, later, by an operator debugging why a doorbell never rang: name WHY, and what could
+# not happen — never a bare "delivery failed".
 def doorbell_undeliverable_no_steward(*, scope: str, event: str, item_ref: str) -> str:
     return (f'steward-doorbell: no steward resolves for scope "{scope}" in ops/stewards.json — '
             f"the {event} for {item_ref} rang for nobody")
@@ -197,9 +183,8 @@ def doorbell_undeliverable_no_slack_identity(*, email: str, scope: str, event: s
             f"this workspace — the {event} for {item_ref} could not be delivered")
 
 
-# The CLOSE button of `render.render_note_modal`, the single modal shape every free-text
-# collection on this surface uses. `status: developing` is the maturity axis a steward declines
-# to move by pressing it.
+# The CLOSE button of `render.render_note_modal`; `status: developing` is the maturity axis a
+# steward declines to move by pressing it.
 NOT_YET_LEAVE_AS_DEVELOPING = "Not yet — leave it as developing"
 
 # A button on a doorbell card rendered by an OLDER deploy, whose (kind, verdict) this build no
@@ -210,8 +195,8 @@ STALE_REVIEW_ACTION = (
 
 
 # ── the review surface's own labels ─────────────────────────────────────────────────────────────
-# Exactly what `render.py` renders. An entity proposal takes approve or reject only —
-# `review._decide_entity_proposal` enforces that by raising on anything else.
+# Exactly what `render.py` renders; an entity proposal takes approve or reject only
+# (`review._decide_entity_proposal` raises on anything else).
 APPROVE_LABEL = "Approve"
 REJECT_LABEL = "Reject"
 REQUEUE_LABEL = "Requeue"
@@ -222,7 +207,7 @@ REASON_LABEL = "Reason"
 NOTE_LABEL = "Note"
 
 
-# ── the entity-mint modal (ADR 030 D5) — Approve's own metadata form, and its confirmation ────────
+# ── the entity-mint modal — Approve's own metadata form, and its confirmation ───────────────────
 ENTITY_MINT_MODAL_TITLE = "Mint this entity"
 ENTITY_MINT_NAME_LABEL = "Name"
 ENTITY_MINT_TYPE_LABEL = "Entity type"
@@ -236,13 +221,10 @@ ENTITY_MINT_REQUEUE_OPTION_LABEL = "Requeue the originating capture so it re-fil
 
 
 def entity_minted(*, entity_id: str, name: str, commit: str, requeued: bool) -> str:
-    """A minted approve's own confirmation — `_confirmation_text`'s new branch, replacing the
-    generic `recorded: approve on entity-proposal #<id> — <actor>` fallback that fires when
-    `result["message"]` is absent (which it always is for a mint: `review._decide_entity_proposal`
-    composes no `message` key on that path, unlike reject and every parked-capture verdict).
-    `commit` is the SHORT form (`entities.cli`'s own convention, `commit[:12]`, callers here pass
-    the full 40-char sha and this function truncates) — a steward reads a commit to recognize it,
-    never to paste it somewhere exact."""
+    """A minted approve's own confirmation — `review._decide_entity_proposal` composes no
+    `message` key for a mint, so the generic fallback would name neither the entity nor the
+    commit. Callers pass the full sha; truncated to the short form here — a steward reads a
+    commit to recognize it, never to paste it somewhere exact."""
     requeue_line = ("The originating capture was requeued — the librarian will file it against "
                     "this entity next." if requeued else
                     "The originating capture stays parked, as asked — requeue it by hand when "

@@ -77,8 +77,8 @@ gateway's own sentence (status code, never the token, never an echoed body) show
   not the librarian's class default: the console resolves
   `$STIGMERGY_LIBRARIAN_TIMEOUT_S` through the same derivation the worker does (2× the agent budget
   + 120 s gates + 180 s headroom), per request, so staging's 600 s budget reads 1500 s here
-  exactly as it does on the worker. The meter and this button therefore state one number, and an
-  ordinary Reclaim no longer redelivers an item a long-budget worker legitimately holds. That
+  exactly as it does on the worker. The meter and this button therefore state one number, so an
+  ordinary Reclaim cannot redeliver an item a long-budget worker legitimately holds. That
   works because `fly.toml`'s `[env]` is app-wide — the console's environment IS the worker's; an
   operator who splits them by hand fools the meter. The form's "release everything now" checkbox is what sends a
   horizon of 0, and it is only safe with no live worker mid-item. Status chips and a submitter filter; the three disposition buttons are disabled on any

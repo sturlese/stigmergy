@@ -1,7 +1,5 @@
-"""The two index CLIs: `stigmergy-index` (builder) and `stigmergy-search` (query).
-
-Operator tools: thin argument parsing over the library — the MCP server consumes the same
-`build.rebuild` / `search.search` seams, and nothing here is CLI-only.
+"""The two index CLIs: `stigmergy-index` (builder/lint) and `stigmergy-search` (query) — thin
+argument parsing over the library; the server consumes the same seams, nothing here is CLI-only.
 """
 import argparse
 import json
@@ -78,8 +76,8 @@ def index_main(argv=None) -> None:
 
 
 def _render_hit(i: int, h: dict) -> str:
-    # titles/snippets are untrusted corpus content headed for a terminal: control characters
-    # are stripped (snippets already arrive sanitized from rank._snippet; belt and braces).
+    # titles/snippets are untrusted corpus content headed for a terminal: control characters are
+    # stripped (snippets already arrive sanitized from rank._snippet; belt and braces)
     factors = ", ".join(h["factors"]) if h["factors"] else "none"
     lines = [f"{i}. {sanitize(h['title'])}  ({sanitize(h['path'])})",
              f"   zone={h['zone']} score={h['score']:.5f} arms={'+'.join(h['arms'])} "

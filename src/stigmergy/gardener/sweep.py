@@ -1,39 +1,14 @@
-"""The model editorial sweep — "only what the tool can't see": unflagged cross-page
-contradictions, anchor-fit doubts, unlinked mentions beyond `check_company_page_names_entity`'s
-exact-text match, and pages substantively superseded by a newer one. The eight deterministic
-checks (`checks.py`) stay exact and model-free; this module is the judgment half, built on the
-codebase's shared PydanticAI structured-extraction shape: one prompt, one structured call through
-`stigmergy.kernel.llm.build_processor`, one retry carrying the validation error, then log-and-skip —
-never insert unvalidated.
+"""The model editorial sweep — the judgment half the deterministic checks cannot do: one prompt,
+one structured call through `kernel.llm.build_processor`, one retry carrying the validation
+error, then log-and-skip — never insert unvalidated.
 
-**No repo checkout, no tools, no write path.** `SWEEP_LIMITS.tool_calls_limit=0` is a STRUCTURAL
-property of the agent's own usage limits, never a request made IN a prompt: the sweep only ever
-returns a validated Pydantic object, and the model has no way to call anything at all.
-
-**Two independent failure modes:**
-
-- A **hard model-call failure** (`pydantic_ai.exceptions.AgentRunError` and every subclass) is
-  caught NOWHERE in `run_sweep` — it propagates out of this module. It is NOT left to reach the
-  CLI, though: `gardener.run.run_gardener` catches it (together with `SweepGarbage`, below)
-  because a sweep outage must not cost the operator the deterministic findings from the SAME run
-  — see that module's own comment for the reasoning. The exception class is still preserved, by
-  name only, into `job_runs.stats["sweep"]["error"]` and `RunResult.sweep_error`.
-- A **validated-but-unusable response** (well-formed `SweepBatchOutput`, but a finding fails this
-  module's OWN application checks — a subject page not in this batch, an oversized excerpt) gets
-  exactly ONE retry, prompt carrying the validation error as its brief. Still-invalid findings are
-  skip-logged; if NOTHING survives even the retry, the whole batch raises `SweepGarbage` — caught
-  by `run_gardener` the same way as an `AgentRunError`, not by this module or its own caller.
-
-**Every page body reaches the model only inside `stigmergy.text.fence`**: page content is untrusted
-input, and `sources/` holds verbatim third-party material. `SWEEP_SYS` tells the model that a
-fenced page is DATA, never instructions, however it reads.
-
-**`suggested_action` for a model finding is NEVER model-generated text** — a security requirement,
-not a style one. The model's own output schema has no such field at all: only `check`, `subject`,
-`rationale`, `excerpt`. `MODEL_SUGGESTED_ACTIONS` is a plain, static `dict[str, str]` keyed by the
-FOUR fixed check slugs below; `to_finding` looks a value up by slug and never formats, joins or
-otherwise derives it from anything the model returned. An injected page cannot make this module
-choose, let alone compose, a different string.
+Zero tools is STRUCTURAL (`SWEEP_LIMITS.tool_calls_limit=0`), never a request made in a prompt.
+A hard model-call failure propagates out of `run_sweep`; a batch where nothing survives even the
+retry raises `SweepGarbage` — both are caught in `run.run_gardener`, never here. Every page body
+reaches the model only inside `stigmergy.text.fence` (page content is untrusted; `sources/` is
+verbatim third-party material). `suggested_action` for a model finding is NEVER model-generated:
+`MODEL_SUGGESTED_ACTIONS` is a code-owned dict looked up by slug — an injected page cannot make
+this module compose a different string.
 """
 import logging
 import re
@@ -54,8 +29,7 @@ JOB_NAME = schema.JOB_NAME
 
 SWEEP_LIMITS = UsageLimits(request_limit=3, tool_calls_limit=0)   # no tools, structurally
 
-# ── the four model-check slugs — code, with the reason beside each, never silent (the same
-# posture `checks.py`'s own slug block takes) ─────────────────────────────────────────────────
+# ── the four model-check slugs ───────────────────────────────────────────────────────────────
 CHECK_MODEL_CONTRADICTION = "model-contradiction"
 CHECK_MODEL_ANCHOR_FIT = "model-anchor-fit"
 CHECK_MODEL_UNLINKED_MENTION = "model-unlinked-mention"
@@ -66,15 +40,13 @@ ALL_MODEL_CHECK_SLUGS = (
     CHECK_MODEL_SUPERSEDED_CANON,
 )
 
-# None of the four is `sla`: none of them carries a time-bound clock — no deadline elapses, no
-# obligation goes unmet — so a manufactured urgency would be dishonest. `warn` is what an
-# editorial judgment worth a human's attention actually is.
+# None of the four is `sla`: none carries a time-bound clock, so manufactured urgency would be
+# dishonest.
 MODEL_CHECK_SEVERITY = {slug: schema.SEVERITY_WARN for slug in ALL_MODEL_CHECK_SLUGS}
 
-# Fixed, code-owned, chosen by slug ALONE — never interpolated with anything, including the
-# (trusted, corpus-derived) subject path: the bright line is "zero interpolation for any
-# model-sourced action", not "only trust the untrusted parts", because the latter is exactly the
-# judgment call that is easy to get wrong under injection pressure.
+# Code-owned, chosen by slug ALONE — zero interpolation for any model-sourced action, including
+# the trusted subject path: "only trust the untrusted parts" is the judgment call that fails
+# under injection pressure.
 MODEL_SUGGESTED_ACTIONS = {
     CHECK_MODEL_CONTRADICTION: (
         "no command — read the pages named and judge whether they genuinely disagree; if they "
@@ -97,15 +69,12 @@ MODEL_SUGGESTED_ACTIONS = {
         "mechanism to invoke — nothing promotes a page; maturity is a field, not a lane"),
 }
 
-# The excerpt cap and the composed `detail` cap are the SAME figure, and it is owned once, in
-# `gardener.schema` (that module's own comment explains why it lives there, beside the
-# deterministic checks' `MAX_DETAIL_CHARS`).
+# The excerpt cap and the composed `detail` cap are the same figure, owned once in
+# `gardener.schema`.
 MAX_SWEEP_EXCERPT_CHARS = schema.MAX_MODEL_DETAIL_CHARS
 MAX_SWEEP_RATIONALE_CHARS = schema.MAX_MODEL_DETAIL_CHARS
-# A defensive count bound: a finding naming an unbounded number of subject pages is exactly the
-# shape a runaway or adversarial output would take, and there is no legitimate reason for this
-# sweep's four categories (a pairwise contradiction, one page's own anchor fit, a two-page
-# mention, a two-page supersede) to ever need more than a handful.
+# A finding naming unbounded subject pages is the shape a runaway or adversarial output takes;
+# none of the four categories legitimately needs more than a handful.
 MAX_SWEEP_SUBJECT_PAGES = 5
 
 
@@ -156,17 +125,10 @@ changes of any kind; you only report findings."""
 
 
 def build_prompt(pages: list[dict]) -> str:
-    """ONE prompt section per page, each page's own BODY fenced via `stigmergy.text.fence` (page
-    content is untrusted input) — nothing about a page's own text reaches the model outside the
-    fence. `pages` are `{"path", "entity", "body", "changed"}` dicts (`tag_selected_pages` below is
-    how a caller builds this shape from `select_pages`'s two separate lists); a page with no body
-    at all (should not happen, but a library function must not crash on it) fences an explicit
-    placeholder rather than an empty block a reader might mistake for a rendering bug.
-
-    `changed=true|false` in the header is a real structural fact the model is never asked to use —
-    it judges every page the same way. It exists so `FakeGardenerSweep`, and a test asserting on
-    the batch the double received, can tell the two halves apart from the prompt text alone: a
-    STRUCTURAL fact read without ever reading prose as an instruction."""
+    """One section per page (`{"path", "entity", "body", "changed"}` dicts), each body fenced —
+    nothing of a page's text reaches the model outside the fence. The `changed=true|false` header
+    is a structural fact the model is never asked to use; it exists so `FakeGardenerSweep` and
+    tests can tell the two halves apart from the prompt alone."""
     sections = []
     for page in pages:
         entities = ",".join(page.get("entity") or []) or "(none)"
@@ -178,17 +140,15 @@ def build_prompt(pages: list[dict]) -> str:
 
 
 def tag_selected_pages(changed: list[dict], sampled: list[dict]) -> list[dict]:
-    """`changed`/`sampled` (`select_pages`'s two return lists) combined into the ONE list
-    `build_prompt`/`run_sweep` take, each page stamped with which half it came from. A separate,
-    tiny function rather than inlining the two list comprehensions at every call site — `run.py`
-    and this module's own tests both need the identical combined shape."""
+    """`select_pages`'s two lists combined into the one list `build_prompt`/`run_sweep` take,
+    each page stamped with which half it came from."""
     return ([dict(p, changed=True) for p in changed]
             + [dict(p, changed=False) for p in sampled])
 
 
 def _retry_prompt(original: str, rejected: list[dict]) -> str:
-    """The retry's brief IS the validation error: the model is told exactly what it got wrong,
-    rather than being asked the same question again and expected to answer differently."""
+    """The retry's brief IS the validation error — the model is told exactly what it got
+    wrong."""
     lines = ["", "--- VALIDATION ERROR (your previous answer had these problems) ---"]
     for entry in rejected:
         lines.append(f"- {'; '.join(entry['reasons'])}")
@@ -201,14 +161,10 @@ def _retry_prompt(original: str, rejected: list[dict]) -> str:
 
 
 def _validate(output: SweepBatchOutput, pages: list[dict]) -> tuple[list[dict], list[dict]]:
-    """`(accepted, rejected)` — pydantic's own schema validation has already run by the time this
-    sees `output` at all; this is the APPLICATION-level check on top of it: real subject paths
-    from THIS batch, the excerpt/rationale caps, a non-empty rationale. `accepted` entries are
-    plain dicts, already shaped for `to_finding`. The check-slug ENUM itself is not
-    re-validated here — `SweepFindingSpec.check` is unconstrained at the pydantic level (a bare
-    `str`, not a `Literal`) precisely so an out-of-vocabulary slug is a NAMED rejection reason a
-    reader can see in `skip_reasons`, the same as every other bound here, rather than a schema
-    error the model might not recover from cleanly on retry."""
+    """`(accepted, rejected)` — the application-level check on top of pydantic's: real subject
+    paths from THIS batch, the caps, a non-empty rationale. `SweepFindingSpec.check` is a bare
+    `str`, not a `Literal`, precisely so an out-of-vocabulary slug is a NAMED rejection reason
+    rather than a schema error the model may not recover from on retry."""
     batch_paths = {p["path"] for p in pages}
     accepted: list[dict] = []
     rejected: list[dict] = []
@@ -241,10 +197,9 @@ def _validate(output: SweepBatchOutput, pages: list[dict]) -> tuple[list[dict], 
 
 
 async def run_sweep(judge, pages: list[dict]) -> tuple[list[dict], list[str]]:
-    """`(accepted_specs, skip_reasons)` for ONE sweep batch. Raises `SweepGarbage` when nothing
-    survives even after the one retry; lets any `AgentRunError` from `judge.run` propagate
-    uncaught (the bounded-agent discipline — see the module docstring). An empty `pages` list
-    short-circuits to `([], [])` without ever calling the judge — there is nothing to sweep."""
+    """`(accepted_specs, skip_reasons)` for ONE batch. Raises `SweepGarbage` when nothing
+    survives the one retry; lets any `AgentRunError` propagate. An empty `pages` short-circuits
+    to `([], [])` without calling the judge."""
     if not pages:
         return [], []
     prompt = build_prompt(pages)
@@ -259,35 +214,24 @@ async def run_sweep(judge, pages: list[dict]) -> tuple[list[dict], list[str]]:
 
 
 def build_judge(model_name: str | None = None):
-    """CLEAN_LLM dispatch (`kernel.llm.build_processor`, the same seam every agent-building module
-    in this codebase uses): a PydanticAI agent, or the offline `FakeGardenerSweep`. `model_name` is
-    `STIGMERGY_GARDENER_MODEL` (`GardenerSettings.model`), threaded through so this subsystem's model
-    choice never rides the shared `CLEAN_MODEL`."""
+    """CLEAN_LLM dispatch via `kernel.llm.build_processor`: a PydanticAI agent, or the offline
+    `FakeGardenerSweep`. `model_name` is `GardenerSettings.model`."""
     return build_processor(SweepBatchOutput, SWEEP_SYS,
                            fake=lambda flawed: FakeGardenerSweep(flawed), model_name=model_name)
 
 
 def to_finding(spec: dict, *, model_name: str) -> dict:
-    """One validated sweep spec -> one `gardener_findings`-shaped dict, through the SAME
-    `checks.build_finding` every deterministic check already builds through (it is public for
-    exactly this reuse — see that function's own docstring).
+    """One validated sweep spec -> one finding dict, through `checks.build_finding`.
 
-    `rationale`/`excerpt` are sanitized (`stigmergy.text.sanitize` strips control characters) before
-    they are ever composed into `detail` — a risk the deterministic checks do not carry: their
-    `detail` is entirely CODE-composed (dates, shares, registry names), but a model finding's
-    `detail` echoes text the model read from a page, which may be `sources/` verbatim third-party
-    material. The composed string is then hard-clamped to `MAX_MODEL_DETAIL_CHARS`
-    (`stigmergy.text.clamp`, word-safe) regardless of how `rationale`/`excerpt` individually sized —
-    the clamp is what actually GUARANTEES the column-level bound, independent of validation.
-
-    `suggested_action` is `MODEL_SUGGESTED_ACTIONS[spec["check"]]` — a pure dict lookup by slug,
-    nothing else; see the module docstring for why that is a security property, not a style one.
+    `rationale`/`excerpt` are sanitized before composition — a model's `detail` echoes text it
+    read from a page, including `sources/` verbatim material — and the composed string is
+    hard-clamped regardless: the clamp is what guarantees the column bound. `suggested_action`
+    is a pure dict lookup by slug — a security property, not a style one (module docstring).
     """
     rationale = sanitize(spec["rationale"])
     excerpt = sanitize(spec["excerpt"])
-    # `clamp` appends an ellipsis when it actually cuts (its own docstring), so the true worst-
-    # case length of its RESULT is `width + 1`, not `width` — clamping to one LESS than the bound
-    # is what makes the STORED value never exceed `MAX_MODEL_DETAIL_CHARS`, ellipsis included.
+    # `clamp` appends an ellipsis when it cuts, so its worst-case result is `width + 1` —
+    # clamping to one LESS keeps the stored value within `MAX_MODEL_DETAIL_CHARS`.
     detail = clamp(f'{rationale} — excerpt: "{excerpt}"', schema.MAX_MODEL_DETAIL_CHARS - 1)
     return checks.build_finding(
         check=spec["check"],
@@ -305,29 +249,11 @@ _SECTION_RE = re.compile(
 
 
 class FakeGardenerSweep:
-    """Offline judge — deterministic, driven ENTIRELY by the prompt's own STRUCTURE (which page
-    paths appear in the fenced sections and which half, `changed`/`sampled`, each came from — the
-    SAME `changed=true|false` header field `build_prompt` composes, never the page's own body
-    text), never by reading page text as instructions: immunity by construction, not by prompt.
-
-    **Fires only when the batch's `changed` half is non-empty.** One heuristic, not a claim about
-    real sweep quality: the FIRST `changed=true` page in the prompt becomes one
-    `{CHECK_MODEL_UNLINKED_MENTION}` finding naming that page as its own subject, with a fixed
-    rationale and an excerpt copied from the page's own fenced body (proving the double actually
-    reads the STRUCTURE it is handed, never the page's semantic content). A batch with pages ONLY
-    in the `sampled` (unchanged) half — or no pages at all — yields zero findings.
-
-    This is a deliberate, structural design choice, not an arbitrary restriction: "sampled" exists
-    for periodic re-coverage of pages nothing recently touched, so a fake standing in for genuine
-    editorial judgment reacting to what is actually NEW is at least as honest a default as reacting
-    to anything indexed at all — and it is what keeps this double driven by a real, inspectable
-    fact (which capture_queue rows a test seeded) rather than by the ambient size of whatever
-    corpus a given test happens to have built for an unrelated check.
-
-    `flawed=True` (the SAME `CLEAN_LLM=fake-flawed` switch every other offline double in this
-    codebase answers to) makes every call return one deliberately-invalid finding — a subject page
-    that does not exist in the batch — UNCONDITIONALLY, so the retry-then-skip path is testable
-    without needing a `changed` page seeded first.
+    """Offline judge — driven entirely by the prompt's STRUCTURE (the `changed=true|false`
+    headers and fenced sections), never by reading page text as instructions. Fires one
+    unlinked-mention finding on the FIRST `changed=true` page; a batch with only sampled pages,
+    or none, yields zero findings. `flawed=True` (`CLEAN_LLM=fake-flawed`) unconditionally
+    returns one deliberately-invalid finding so the retry-then-skip path is testable.
     """
 
     def __init__(self, flawed: bool = False):
@@ -341,10 +267,6 @@ class FakeGardenerSweep:
                 excerpt="x" * (MAX_SWEEP_EXCERPT_CHARS + 50))
             return fake_result(SweepBatchOutput(findings=[garbage]))
 
-        # `(path, changed, body)` per section — parsed from `build_prompt`'s own structure (the
-        # `### path=... changed=true|false` header plus its OWN fenced block), never from reading
-        # a page's body as instructions. One compiled pattern, `re.S` so a multi-line body is
-        # captured whole.
         sections = _SECTION_RE.findall(prompt)
         changed_sections = [(path, body) for path, changed, body in sections if changed == "true"]
         if not changed_sections:
@@ -367,29 +289,17 @@ ORDER BY finished_at DESC
 
 
 def previous_run_watermark(conn):
-    """`(since, sample_offset)` for THIS run's page selection, read from the previous COMPLETED
-    gardener run's own `job_runs` row via the existing `(job, started_at DESC)` index — no new
-    table, no duplicated timestamp column, because `job_runs.stats` already fits the shape.
-    `since=None` on a genuine first run (or after every prior run failed before reaching the
-    deterministic commit): `select_pages` reads that as "since the beginning", so a first run
-    treats every currently-filed page as unswept rather than reporting a false "nothing changed"
-    for a sweep that has never once looked at this corpus. `sample_offset` defaults to 0 the same
-    way — the rotation simply starts from the top.
+    """`(since, sample_offset)` for this run's page selection, read from the previous completed
+    run's `job_runs` row. `since=None` on a genuine first run — `select_pages` reads that as
+    "since the beginning", so every currently-filed page counts as unswept; `sample_offset`
+    defaults to 0.
 
-    **`since` prefers `stats.sweep.selected_at` over `started_at`.** `started_at` is written at
-    `job_runs` INSERT time — after `select_pages` ran, after the model call, after the
-    deterministic checks' own findings committed too. `selected_at` (`run._run_sweep_pass`,
-    captured immediately before `select_pages` runs) is the honest boundary that run actually read
-    up to; a page filed between the two would otherwise fall in NO sweep window ever (THIS run's
-    `since` was already resolved before it existed; a `started_at`-based NEXT run's `since` would
-    start strictly after it existed too). Falls back to `started_at` for a row with no
-    `selected_at` in its `stats.sweep` at all — the same posture the `next_sample_offset` fallback
-    immediately below takes."""
-    # `status = 'ok'` only — deliberately narrower than `gardener.store.latest_completed_run`'s
-    # `IN ('ok', 'partial')`. A `'partial'` run is one where THIS SAME sub-pass (the sweep) is the
-    # thing that failed, so its own `stats.sweep` never advanced the rotation and must never be
-    # read as a baseline for the NEXT sweep either — see `capture.ops`'s module docstring for why
-    # the two readers of `job_runs.status` disagree on purpose.
+    `since` prefers `stats.sweep.selected_at` over `started_at`: `started_at` is written at
+    INSERT time, after selection and the model call, and a page filed between the two would fall
+    in NO sweep window ever. Falls back to `started_at` for a row with no `selected_at`."""
+    # `status = 'ok'` only — deliberately narrower than `store.latest_completed_run`. A
+    # `'partial'` run is one where the sweep itself failed, so its `stats.sweep` never advanced
+    # the rotation and must not be the next sweep's baseline.
     with conn.cursor() as cur:
         cur.execute(
             "SELECT started_at, stats FROM job_runs WHERE job = %s AND status = 'ok' "
@@ -407,26 +317,16 @@ def previous_run_watermark(conn):
 
 def select_pages(conn, *, since, sample_size: int, sample_offset: int
                  ) -> tuple[list[dict], list[dict], dict]:
-    """`(changed, sampled, stats)` — the sweep's whole page bound: `changed` is every
-    currently-indexed page resolved from a `capture_queue` row filed at or after `since` (`None`
-    means unbounded — see `previous_run_watermark`); `sampled` is up to `sample_size` pages drawn
-    from the REMAINING, unchanged population, ROTATING through a stable path ordering by
-    `sample_offset` so consecutive runs cover different pages rather than sampling the same
-    alphabetical prefix forever (a real "rotating sample", not a re-read of the same N pages).
+    """`(changed, sampled, stats)`: `changed` is every indexed page resolved from a
+    `capture_queue` row filed at or after `since` (`None` = unbounded); `sampled` is up to
+    `sample_size` pages from the remaining population, rotating through a stable path ordering by
+    `sample_offset` so consecutive runs cover different pages.
 
-    **Parses `result_ref` via `stigmergy.text.parse_result_ref`** — the same shared function
-    `checks._recent_filed_pages` uses (`'<page_path>@<sha>'`, over the queue's real filing clock)
-    — but does NOT share `_recent_filed_pages` directly and does NOT apply its provenance
-    exclusion. That exclusion exists so a provenance page's `entity: []` is never miscounted as a
-    CHECKED company-wide declaration in a numeric fraction; it is irrelevant here, where the
-    sweep's whole purpose is reading CONTENT, explicitly including `sources/` verbatim material. A
-    provenance page that changed is exactly as "changed" as any other.
-
-    Every exclusion is counted, never silently dropped (`stats`): `unparsed_result_ref` (a
-    `result_ref` that does not parse), `changed_page_not_indexed` (resolved to a path no longer in
-    `pages_index` — superseded or removed since it was filed). `stats["next_sample_offset"]` is
-    what THIS run's own `job_runs.stats["sweep"]` must persist for the NEXT run to continue the
-    rotation from."""
+    Deliberately does NOT apply `_recent_filed_pages`'s provenance exclusion: that exists so
+    `entity: []` is never miscounted in a numeric fraction, and the sweep reads CONTENT —
+    a provenance page that changed is exactly as changed as any other. Every exclusion is counted
+    into `stats`; `stats["next_sample_offset"]` is what the next run continues the rotation
+    from."""
     with conn.cursor() as cur:
         cur.execute("SELECT path, entity, body FROM pages_index ORDER BY path")
         all_rows = cur.fetchall()

@@ -24,11 +24,8 @@ from stigmergy.index import rank
 log = logging.getLogger(__name__)
 
 # The content zones, and the ONLY list that governs: a directory absent here is not indexed,
-# which is why `ops/` (the registry, identities, templates) never reaches retrieval. There used
-# to be an `EXCLUDED_ZONES` beside this naming `ops`, `meta` and `datasets` — it had ZERO readers
-# anywhere in the codebase, named two directories that no longer exist, and its own comment
-# claimed it was "asserted by the zone tests" when nothing asserted it. An include-list needs no
-# exclude-list.
+# which is why `ops/` (the registry, identities, templates) never reaches retrieval. An
+# include-list needs no exclude-list.
 ZONES = ("wiki", "sources", "views")
 
 # Wikilink shape shared with the knowledge repo's linter (hand-mirrored, not imported: the
@@ -64,73 +61,47 @@ class PageRow:
     inlinks: int = 0
     generated_at: str = ""       # a view's own `generated_at` frontmatter (ISO-8601)
     content_hash: str = ""       # sha256 of the embedded text — the embedding-cache key
-    # Outbound wikilink targets. `page_row` alone (a single-file parse) can only produce
-    # the raw STEMS `link_targets` finds in the text; `load_pages` (whole-corpus) and the
-    # incremental webhook (`server.webhook`, one query against `pages_index`'s existing paths)
-    # both overwrite this with RESOLVED repo-relative paths afterward (`resolve_links`) — the same
-    # two-stage shape `inlinks` already has (0 from `page_row` alone, a real count from
-    # `load_pages`), now shared by a second field.
+    # Outbound wikilink targets — two-stage like `inlinks`: `page_row` alone yields raw STEMS;
+    # `load_pages` (whole corpus) and the incremental webhook (one query against existing paths)
+    # overwrite with RESOLVED repo-relative paths via `resolve_links`.
     links: list[str] = field(default_factory=list)
 
     @property
     def embed_text(self) -> str:
-        # contextual retrieval: the title is prepended to the chunk, because the page IS the
-        # chunk — the same shape that was benchmarked.
+        # contextual retrieval: title prepended, because the page IS the chunk
         return f"{self.title}\n{self.body}"
 
 
-# `\r?\n` throughout: a CRLF checkout is not a malformed page. Anchoring on `\n` alone meant a
-# page written on Windows (or normalized by a `.gitattributes` rule) matched NOTHING here, so its
-# whole frontmatter — `acl:` included — was silently invisible and it indexed as body-only. That is
-# the same silent leak as an unparseable block below, applied to an entire checkout at once.
-# A BOM is TOLERATED — an editor that writes one wrote a page whose frontmatter is perfectly
-# readable, and refusing to see it is how `acl:` went missing. So is horizontal whitespace after
-# either fence, which is invisible in every editor and cost a well-formed, CLOSED page its entire
-# `acl:` line for one trailing space.
+# CRLF (`\r?\n`), a BOM, and horizontal whitespace after either fence are all TOLERATED: each once
+# cost a well-formed page its entire frontmatter — `acl:` included — and a frontmatter this cannot
+# see indexes the page as body-only, silently.
 _FRONTMATTER_RE = re.compile(r"^﻿?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n?(.*)$", re.S)
 
-# The frontmatter block a page contract declares starts at byte zero — after a BOM an editor may
-# have written, and nothing else. Widening this to `\s*---` or to a `...` closer was tried and is
-# the reason both are spelled out here: both LOST pages that had been indexing correctly.
-# `\s*` claimed a leading thematic break (`\n---\n\n# Notes`) as an unterminated block, so an
-# ordinary page indexed `acl=[]` — visible to NOBODY — and, when a second `---` appeared further
-# down, everything above it vanished from the body, the content hash and the embedding. A `...`
-# closer is worse still, because it fails in the direction this whole rule exists to prevent: the
-# lazy group stops at the FIRST `...`, so `---\ntitle: Q3\n...\nacl: [finance]\n---` parsed as a
-# title, dropped `acl:` into the body and indexed the page OPEN.
+# The block starts at byte zero (after an optional BOM) and nothing else. Do NOT widen to `\s*---`
+# (claims a leading thematic break as an unterminated block: an ordinary page indexes `acl=[]`,
+# visible to NOBODY, and body above a later `---` vanishes) and do NOT accept a `...` closer (the
+# lazy group stops at the FIRST `...`, dropping `acl:` into the body and indexing the page OPEN).
 #
-# `malformed` is not "the regex did not match" for the same reason. It is the narrower, actual
-# question — did this page ASK for restriction in a block that cannot be read. A page that opens
-# `---` and closes nothing but declares no audience is not restricted; failing it closed trades a
-# silent leak for a retrieval gap, which is only an improvement if it is LOUD (`page_row` logs it).
+# `malformed` is not "the regex did not match" — it is the narrower question: did this page ASK
+# for restriction in a block that cannot be read. Failing that closed trades a silent leak for a
+# retrieval gap, an improvement only if it is LOUD (`page_row` logs it).
 _OPENS_FRONTMATTER_RE = re.compile(r"^﻿?---[ \t]*\r?\n")
 
-# The last-resort probe, used only when the candidate region will not parse at all. It looks for a
-# TOP-LEVEL key, which is the only kind that is a restriction request: at column zero, or after the
-# `{`/`,` of a flow mapping. Quoted spellings count — `"acl": [finance]` is the same declaration
-# YAML-wise, and a net that catches one and not the other is a net with a documented hole in it.
-# What it must NOT match is an INDENTED `acl:`, nested under some other key: `^\s*` allowed that,
-# and turned `meta:\n  acl: [x]` into a page visible to nobody.
+# Last-resort probe for a region that will not parse at all: a TOP-LEVEL `acl` key only — column
+# zero or after `{`/`,` of a flow mapping, quoted spellings included. It must NOT match an
+# INDENTED `acl:` nested under another key (`^\s*` once turned `meta:\n  acl: [x]` into a page
+# visible to nobody).
 _DECLARES_ACL_RE = re.compile(r"""(?m)(?:^|[,{][ \t]*)['"]?acl['"]?[ \t]*:""")
 
 
 def _asked_for_an_audience(after_opener: str) -> bool:
     """Whether the unreadable region below an unclosed `---` declares an audience.
 
-    Reading it, not grepping the file. `re.search` over the WHOLE text was the first attempt and it
-    was wrong in both directions at once. Too generous: a page starting with a thematic break
-    (`---` at byte zero, never closed) plus one line-initial `acl:` ANYWHERE below — inside a
-    fenced ```yaml example, in prose explaining how restriction works, or nested two levels under
-    another key where it was never a top-level request — indexed `acl=[]`, invisible to every
-    client. Too narrow: `"acl": [finance]` and the flow form `{title: Q3, acl: [finance]}` are the
-    same declaration and matched nothing.
-
-    So the region is bounded the way YAML bounds it — a frontmatter block is contiguous, and the
-    first blank line ends it — and then PARSED. A top-level `acl` key in what parses is the
-    request; anything nested under another key is not. The regex survives only for the region that
-    will not parse at all, which is the shape the original defect had
-    (`title: Q3\\nacl: [finance]\\nbody with no closing fence`: a mapping and a bare scalar, which
-    YAML refuses outright).
+    The region is bounded the way YAML bounds a block (contiguous, first blank line ends it) and
+    then PARSED: a top-level `acl` key is the request, anything nested under another key is not —
+    a whole-file grep is too generous (an `acl:` inside a fenced example or prose makes the page
+    invisible to everyone) and too narrow (quoted and flow spellings match nothing). The regex
+    probe survives only for a region that will not parse at all.
     """
     block = after_opener.replace("\r\n", "\n").partition("\n\n")[0]
     try:
@@ -143,19 +114,11 @@ def _asked_for_an_audience(after_opener: str) -> bool:
 def split_frontmatter_checked(text: str) -> tuple[dict, str, bool]:
     """(frontmatter dict, body, malformed).
 
-    `malformed` is True when the page MEANT to carry frontmatter and this could not read it. It is
-    the signal `page_row` needs to tell "this page carries no frontmatter" apart from "this page's
-    frontmatter could not be read", which the dict alone cannot express: both arrive as `{}`.
-
-    **A YAML syntax error is not the only unreadable shape.** That distinction was drawn too
-    narrowly once already: this was reached only when the block regex MATCHED and `yaml.safe_load`
-    then raised, so a page whose block was never CLOSED still indexed `acl: [finance]` as open to
-    everyone. A BOM had the same effect for a different reason — the block was well-formed and the
-    regex simply refused to see it — and that one is fixed by reading it, not by failing it closed:
-    an editor that writes a BOM has not authored a malformed page.
-
-    What `malformed` must NOT become is "the regex did not match", which is where the second
-    attempt at this landed. See `_OPENS_FRONTMATTER_RE` for the two pages that cost.
+    `malformed` is True when the page MEANT to carry frontmatter and this could not read it — the
+    signal that tells "carries no frontmatter" apart from "frontmatter unreadable", which the dict
+    alone cannot express (both arrive as `{}`). A YAML syntax error is not the only unreadable
+    shape: an unclosed block that declares an audience counts too. `malformed` must NOT become
+    "the regex did not match" — see `_OPENS_FRONTMATTER_RE` for what that costs.
     """
     m = _FRONTMATTER_RE.match(text)
     if m:
@@ -168,9 +131,8 @@ def split_frontmatter_checked(text: str) -> tuple[dict, str, bool]:
         if not isinstance(fm, dict):
             return {}, m.group(2), True
         return fm, m.group(2), False
-    # No block extracted. A page that opened one and declared an audience inside it asked for
-    # restriction in text nothing here can read: that, and only that, is unreadable rather than
-    # absent.
+    # No block extracted: only a page that opened one and declared an audience inside it is
+    # unreadable rather than absent.
     opener = _OPENS_FRONTMATTER_RE.match(text)
     unreadable = bool(opener) and _asked_for_an_audience(text[opener.end():])
     return {}, text, unreadable
@@ -187,26 +149,12 @@ def split_frontmatter(text: str) -> tuple[dict, str]:
 
 
 def entity_list(value) -> list[str]:
-    """`entity:` normalized to a list of ids — matching `_acl_labels`'s own fail-CLOSED doctrine,
-    not a fail-open normalizer that stringifies whatever YAML happened to produce.
-
-    A naive normalizer gets four things wrong, and all four have real consequences. Keeping list
-    elements UNSTRIPPED (`entity: ["initech "]`) stores the trailing space, so the membership
-    filter and the rank boost both miss it, so the page loses the promotion that would
-    have put it first for a query naming its own entity. Stringifying `None` (a YAML block
-    list with an empty dash item) produces the
-    literal text `"None"`. A YAML 1.1 boolean becomes a plausible-looking id (`entity: no` ->
-    `["False"]`), which is a SCORING change for any query containing the token "false". A nested
-    list/dict element becomes its Python `repr`. None of those are real entity declarations, and
-    every one of them reaches the boost carrying a label no human ever wrote.
-
-    So: bools are rejected explicitly (a bool is a YAML 1.1 truthy/falsy word, never a plausible
-    entity id), any element that is not a string/int/float is DROPPED rather than stringified (a
-    nested list/dict has no `str()` that is a real id), and every string element is stripped. A
-    bare STRING at the top level (`entity: initech`) is a valid dialect and is read as a
-    one-element list; `0` (an int, not a bool) is a legal, if odd, id spelling, exactly as
-    `_acl_labels` treats it. `""` normalizes to `[]`, never to `[""]`: an empty declaration is an
-    empty list of entities, not a list holding one empty one.
+    """`entity:` normalized to a list of ids — fail CLOSED, like `_acl_labels`: a malformed
+    element is DROPPED, never stringified into a label no human wrote. Bools are rejected (YAML
+    1.1 truthy/falsy words, never ids), nested list/dict elements are dropped rather than
+    repr'd, string elements are stripped (an unstripped id misses the membership filter and the
+    rank boost). A bare top-level scalar (`entity: initech`) is a valid dialect read as a
+    one-element list; `""` normalizes to `[]`, never `[""]`.
     """
     if value is None or isinstance(value, bool):
         return []
@@ -219,8 +167,7 @@ def entity_list(value) -> list[str]:
                 s = str(v).strip()
                 if s:
                     out.append(s)
-            # else: a nested list/dict — not a plausible entity id, dropped rather than
-            # stringified into its repr.
+            # else: a nested list/dict — dropped, not stringified into its repr
         return out
     if isinstance(value, str | int | float):
         text = str(value).strip()
@@ -236,10 +183,9 @@ def _mentions_text(fm: dict) -> str:
 
 
 def _entity_meta_text(fm: dict, page_type: str) -> str:
-    """An entity page's own `role`/`aliases` frontmatter, folded into the tsv source text so
-    steward-authored metadata is lexically findable. This changes what MATCHES, never how a match
-    is scored — no ranking factor is added or altered. Only `type: entity` pages contribute
-    anything here; the fields carry no meaning on any other page type."""
+    """An entity page's own `role`/`aliases`, folded into the tsv source so steward-authored
+    metadata is lexically findable. Changes what MATCHES, never how a match is scored; only
+    `type: entity` pages contribute."""
     if page_type != "entity":
         return ""
     role = str(fm.get("role", "") or "")
@@ -257,13 +203,9 @@ def link_targets(text: str) -> list[str]:
     targets = []
     for m in WIKILINK_RE.finditer(_strip_code(text)):
         t = m.group(1).split("|")[0].split("#")[0].strip()
-        # Only a trailing `.md` comes off — NOT `Path(t).stem`, which strips the last dotted
-        # suffix of whatever it is given. On a FILE PATH that suffix is the extension, which is
-        # what `by_stem_index` wants; on LINK TEXT, which carries no extension by convention, it
-        # amputates part of the name: `[[Booking.com]]` became the key `booking` while the page
-        # indexed under `booking.com`. The link then died — or, with a `Booking.md` in the corpus,
-        # silently resolved to that OTHER page, and the wrong edge landed in `links`, in `inlinks`
-        # and in the backlinks `read_page` serves.
+        # Only a trailing `.md` comes off — NOT `Path(t).stem`, which amputates a dotted name:
+        # `[[Booking.com]]` must key `booking.com`, not `booking`, or the link dies — or silently
+        # resolves to a different page and the wrong edge lands in links/inlinks/backlinks.
         if t.lower().endswith(".md"):
             t = t[:-3]
         if t:
@@ -276,13 +218,10 @@ def content_hash(text: str) -> str:
 
 
 def _acl_labels(fm: dict) -> list[str] | None:
-    """None = the page carries no acl (open); [] = it carries an EMPTY one (nobody) — a
-    distinction the enforcement layer above depends on.
-
-    FAIL CLOSED on malformed shapes: a page that ASKED for restriction must never index as
-    open because its author mistyped the YAML. A non-empty scalar (`acl: sales`) is read as
-    the one-label list it obviously meant; anything else non-null and unrecognized becomes
-    [] (visible to nobody) — a loud retrieval gap beats a silent leak."""
+    """None = no acl (open); [] = an EMPTY one (nobody) — a distinction the enforcement layer
+    above depends on. FAIL CLOSED on malformed shapes: a non-empty scalar (`acl: sales`) is the
+    one-label list it meant; anything else non-null and unrecognized becomes [] (visible to
+    nobody) — a loud retrieval gap beats a silent leak."""
     if "acl" not in fm:
         return None
     value = fm.get("acl")
@@ -296,29 +235,15 @@ def _acl_labels(fm: dict) -> list[str] | None:
 
 
 def page_row(rel_path: str, zone: str, text: str) -> PageRow:
-    """One page's raw text -> its `PageRow`. THE parser — `load_pages` (a full directory walk)
-    and the incremental webhook (one changed file at a time) both call this and only this, so
-    there is provably one parser rather than two that can drift into an incremental rebuild and a
-    full rebuild disagreeing. `inlinks` is left at its default (0): resolving it needs the WHOLE
-    corpus's wikilink graph, which is exactly what a single changed file does not have — the
-    nightly full rebuild is the reconciler for this field.
-
-    **That default only ever reaches storage on a fresh INSERT.**
-    `store.upsert_pages`'s `_UPSERT_SET` excludes `inlinks` from its `ON CONFLICT DO UPDATE SET`
-    list (same as `path`, the conflict key) precisely so that an UPDATE (an edited page the
-    webhook already knew about) leaves the last full rebuild's computed count alone instead of
-    resetting it to this function's honest-but-uninformed 0 — a retrieval regression `search.py`'s
-    ranking would otherwise take on every incrementally-edited page until the next nightly
-    rebuild. A genuinely NEW page (no existing row to conflict with) still lands at 0 here, which
-    is the correct answer for a page nothing has ever resolved the graph for yet."""
+    """One page's raw text -> its `PageRow`. THE parser — `load_pages` (full walk) and the
+    incremental webhook both call this and only this, so there is provably one parser, not two
+    that can drift. `inlinks` stays at 0: resolving it needs the whole corpus's wikilink graph,
+    which a single changed file does not have — and `store._UPSERT_SET` excludes it so the
+    default only ever reaches storage on a fresh INSERT, never over a rebuild's computed count."""
     fm, body, malformed = split_frontmatter_checked(text)
     if malformed:
-        # THE operator signal, and the sentence below depends on it: "a loud retrieval gap beats a
-        # silent leak" is only true if the gap is loud. Nothing else says this anywhere — not the
-        # rebuild's stats, not a gardener check — so without this line a page flipping from
-        # visible-to-everyone to visible-to-NOBODY produced no output at all, and the fix for one
-        # silent failure was another. Per page, at WARNING, naming the path, because the fix is a
-        # one-line edit to that file and the reader needs to know which.
+        # THE operator signal that makes the fail-closed gap LOUD — nothing else says it anywhere.
+        # Per page, at WARNING, naming the path: the fix is a one-line edit to that file.
         log.warning("%s: frontmatter could not be read and the page declares an audience — "
                     "indexing it visible to nobody rather than to everyone; fix the block and "
                     "the next rebuild restores it", rel_path)
@@ -340,13 +265,9 @@ def page_row(rel_path: str, zone: str, text: str) -> PageRow:
         updated=str(fm.get("updated", "") or fm.get("extracted_at", "") or "")[:10],
         superseded_by=str(fm.get("superseded_by", "") or ""),
         supersedes=str(fm.get("supersedes", "") or ""),
-        # A page whose frontmatter could not be READ is the one case `_acl_labels` cannot judge:
-        # every key is gone, so `"acl" not in fm` is true and it answers `None` — the OPEN value —
-        # for a page that may well have asked to be restricted. That is precisely the leak its own
-        # docstring refuses ("a page that ASKED for restriction must never index as open because
-        # its author mistyped the YAML"), reached by the one route that skips the shape checks: a
-        # syntax error rather than a wrong shape. `[]` (visible to nobody) is the same fail-closed
-        # answer a malformed SHAPE already gets — a loud retrieval gap beats a silent leak.
+        # Unreadable frontmatter is the one case `_acl_labels` cannot judge (`"acl" not in fm`
+        # answers None — OPEN — for a page that may have asked to be restricted), so `malformed`
+        # fails it closed to [] like a malformed shape: a loud retrieval gap beats a silent leak.
         acl=[] if malformed else _acl_labels(fm),
         tags=" ".join(str(t) for t in tags if t) if isinstance(tags, list) else "",
         mentions=_mentions_text(fm),
@@ -358,18 +279,13 @@ def page_row(rel_path: str, zone: str, text: str) -> PageRow:
 
 
 def by_stem_index(paths: list[str]) -> dict[str, list[str]]:
-    """`stem -> [matching paths]` — the wikilink-resolution index both `load_pages` (built from
-    its own in-memory walk) and the incremental webhook (built from `store.existing_paths`'s
-    one-query snapshot of the indexed table) key off. Centralizing the stem computation here is
-    the shared half of `resolve_links`'s one algorithm over two snapshots. This module stays
-    pure/DB-less itself (module docstring) — `store.existing_paths` is where the query lives.
+    """`stem -> [matching paths]` — the wikilink-resolution index both `load_pages` (in-memory
+    walk) and the webhook (`store.existing_paths` snapshot) key off: one algorithm, two snapshots.
 
-    `views/` paths are never link TARGETS: a view is derived — nobody authors it, nobody
-    wikilinks it, `describe_entity` serves it by path — and its filename is the entity ID, which
-    for any single-word entity collides case-insensitively with the Title-Case entity page's stem
-    (views/vantage.md vs wiki/entities/Vantage.md, the first real regeneration). Excluding the zone
-    here keeps `[[Entity]]` resolving to exactly the entity page; the knowledge repo's linter
-    states the same rule at its end (the duplicate-basename and orphan checks skip views/)."""
+    `views/` paths are never link TARGETS: a view is derived — nobody authors or wikilinks it —
+    and its filename is the entity ID, which collides case-insensitively with the Title-Case
+    entity page's stem. Excluding the zone keeps `[[Entity]]` resolving to exactly the entity
+    page; the knowledge repo's linter states the same rule at its end."""
     index: dict[str, list[str]] = {}
     for path in paths:
         if path.split("/", 1)[0] == "views":
@@ -379,34 +295,25 @@ def by_stem_index(paths: list[str]) -> dict[str, list[str]]:
 
 
 def is_chain_primary(page_id: str) -> bool:
-    """True iff `page_id` carries no trailing continuation marker (`#p<n>` historical, `-p<n>`
-    live — see `rank._PART_MARKER_RE`) — the only shape the `superseded_by` propagation
-    (build-time here, incremental in `server.webhook`) will ever treat as a DONOR. A `page_id`
-    that already IS its own `chain_base` is, by definition, not itself a continuation part."""
+    """True iff `page_id` carries no trailing continuation marker — the only shape the
+    `superseded_by` propagation (build-time here, incremental in `server.webhook`) treats as a
+    DONOR."""
     return page_id == rank.chain_base(page_id)
 
 
 def chain_part_pattern(base: str) -> re.Pattern:
-    """The exact `^{base}(#|-)p<n>$` continuation-marker pattern a row's `page_id` must match to
-    RECEIVE `base`'s propagated `superseded_by` (both the historical `#p<n>` and the live `-p<n>`
-    convention the meeting flow's splitter writes) — shared by `load_pages`'s
-    build-time propagation and `server.webhook`'s incremental one, so "what counts as a sibling"
-    is decided in exactly one place rather than two regexes that could drift."""
+    """The exact `^{base}(#|-)p<n>$` pattern a row's `page_id` must match to RECEIVE `base`'s
+    propagated `superseded_by` — shared by the build-time and the webhook's incremental
+    propagation, so "what counts as a sibling" is decided in exactly one place."""
     return re.compile(rf"^{re.escape(base)}(?:#p|-p)\d+$")
 
 
 def resolve_links(own_path: str, stems: list[str], by_stem: dict[str, list[str]]) -> list[str]:
-    """Outbound wikilink stems (`link_targets`'s output) -> resolved repo-relative paths, via a
-    `stem -> [paths]` index (`by_stem_index`). A stem resolving to several pages stores every
-    match (ambiguous stems get full credit — the same semantics `inlinks` already counts); a stem
-    resolving to no page stores nothing (a dead link is the linter's finding, not the index's).
-    `own_path` is excluded from its own result (a page is never its own outbound neighbour,
-    mirroring the inbound side's pre-existing self-exclusion below).
-
-    THE one resolution step both `load_pages` (whole-corpus, in memory) and
-    `server.webhook.process_push` (one file at a time, one query against `pages_index`'s existing
-    paths) call. Two resolution code paths cannot drift if there is only one; a parity test guards
-    the sharing rather than the drift."""
+    """Outbound wikilink stems -> resolved repo-relative paths, via `by_stem_index`. An ambiguous
+    stem stores every match (the same semantics `inlinks` counts); a dead link stores nothing (the
+    linter's finding, not the index's); `own_path` is excluded from its own result. THE one
+    resolution step both `load_pages` and `server.webhook.process_push` call — a parity test
+    guards the sharing."""
     resolved: dict[str, None] = {}
     for stem in dict.fromkeys(stems):
         for path in by_stem.get(stem, ()):
@@ -416,20 +323,13 @@ def resolve_links(own_path: str, stems: list[str], by_stem: dict[str, list[str]]
 
 
 def is_indexable_page(rel_path: str) -> bool:
-    """Whether a repo-relative path inside a zone becomes a `pages_index` row.
+    """Whether a repo-relative path inside a zone becomes a `pages_index` row — THE predicate for
+    both walkers (`load_pages` and `server.webhook.in_zone_changes`): a path one admits and the
+    other does not is a row that flickers between rebuilds, or one a deletion never reaches.
 
-    THE predicate, in one place, because the two callers had already drifted: `load_pages` walks
-    the checkout and `server.webhook.in_zone_changes` walks a push's changed-file list, and every
-    path one admits and the other does not is a row that exists between rebuilds and vanishes at
-    the next one — or, worse, one the rebuild keeps and a deletion never reaches. Both are stated
-    as the same population; asserting that in a test is not enough while each spells it out
-    separately.
-
-    Note what is NOT excluded: a `.md` page inside a DOT-DIRECTORY. `rglob("*.md")` descends into
-    one, and only the file's own name is checked — so `wiki/.obsidian/note.md` is a page and
-    `wiki/.hidden.md` is not. That asymmetry looks like an oversight and is left alone deliberately:
-    changing it would silently drop rows the corpus has, which is a retrieval question, not the
-    access-control one being fixed here. What matters is that both walkers answer it identically.
+    NOT excluded, deliberately: a `.md` page inside a dot-directory (only the file's own name is
+    checked, so `wiki/.obsidian/note.md` is a page and `wiki/.hidden.md` is not) — changing that
+    would silently drop rows the corpus has. What matters is both walkers answer identically.
     """
     return rel_path.endswith(".md") and not rel_path.rsplit("/", 1)[-1].startswith(".")
 
@@ -449,9 +349,8 @@ def load_pages(repo_dir: str) -> list[PageRow]:
             rows.append(page_row(rel, zone, path.read_text(encoding="utf-8", errors="replace")))
     rows.sort(key=lambda r: r.path)
 
-    # wikilink graph: one resolution (`resolve_links`, keyed off `by_stem_index`) feeds BOTH
-    # directions — outbound `links` (resolved repo-relative paths, kept on the row) and inbound
-    # `inlinks` (a bare count, not currently a ranking factor).
+    # wikilink graph: one resolution feeds BOTH directions — outbound `links` (resolved paths,
+    # kept on the row) and inbound `inlinks` (a bare count, not a ranking factor).
     by_stem = by_stem_index([r.path for r in rows])
     inbound: dict[str, set[str]] = {}
     for r in rows:
@@ -461,28 +360,16 @@ def load_pages(repo_dir: str) -> list[PageRow]:
     for r in rows:
         r.inlinks = len(inbound.get(r.path, ()))
 
-    # A split document's continuation parts ("<id>#p2", "#p3", …) carry an EMPTY `superseded_by`
-    # in their own frontmatter — `versions.py` stamps the field on the PRIMARY page only.
-    # Propagate the primary's value onto every sibling sharing the same `rank.chain_base`, here,
-    # at build time, so the field is TRUE on every row that reaches storage. That removes the need
-    # for any rank-time reconstruction: `contract_factors` already turns a truthy `superseded_by`
-    # into the "superseded" penalty+label for any row, part or primary, once the column itself
-    # carries the right value.
-    #
-    # Grouping by `chain_base(page_id)` ALONE is not enough to decide who may give and who may
-    # receive. Two ID-LESS pages sharing a file STEM in different directories (`page_id` falls
-    # back to the stem) both reduce to the SAME base with no `#p<n>` marker at all, and a "first
-    # non-empty value found in the group" rule copies one's `superseded_by` onto the other even
-    # though neither is a real continuation part. So the propagation is marker-gated AND
-    # directional: a row may only RECEIVE via a genuine `^{base}#p\d+$` continuation marker
-    # (`chain_part_pattern`), and the donor is exactly the row whose `page_id` equals the base
-    # (`is_chain_primary`) — never "whichever came first".
-    #
-    # The chain key carries the page's DIRECTORY beside the base, exactly like rank's collapse
-    # key: two ID-LESS `-p<n>`-stemmed pages in different folders must never exchange
-    # supersession. That matters specifically because the live `-p` convention is matched, and
-    # while `#p` could essentially never appear in a human filename stem, `report-p2.md` plausibly
-    # can. A real chain's parts sit beside their primary, so the gate never splits one.
+    # A split document's continuation parts carry an EMPTY `superseded_by`; the field is stamped
+    # on the PRIMARY page only. Propagating the primary's value onto every chain sibling HERE, at
+    # build time, makes the column true on every stored row — `contract_factors` then needs no
+    # rank-time reconstruction. The propagation is marker-gated AND directional: a row RECEIVES
+    # only via a genuine continuation marker (`chain_part_pattern`) and the donor is exactly the
+    # row whose `page_id` equals the base (`is_chain_primary`) — never "whichever came first",
+    # which would let two ID-less same-stem pages copy values between themselves. The chain key
+    # carries the DIRECTORY beside the base, like rank's collapse key: `report-p2.md` is a
+    # plausible human filename, and two such pages in different folders must never exchange
+    # supersession; a real chain's parts sit beside their primary, so the gate never splits one.
     by_chain: dict[tuple[str, str], list[PageRow]] = {}
     for r in rows:
         key = (str(Path(r.path).parent.as_posix()), rank.chain_base(r.page_id))

@@ -1,39 +1,20 @@
-"""The operational spine: `job_runs` and `ingest_errors` writers.
+"""The operational spine: `job_runs` and `ingest_errors` writers. One place that knows how a
+run is recorded; the DDL lives in `schema.py`.
 
-Split out of `queue.py` and `retention.py` because both write it and so does the librarian
-worker — one place that knows how a run is recorded, rather than three hand-rolled INSERTs that
-drift. The tables' DDL lives with the rest of the write path in `schema.py`.
+`job_run` is a context manager so the finished/failed bookkeeping cannot be forgotten, and a
+failure to WRITE the bookkeeping never fails the work it was recording.
 
-`job_run` is a context manager so the finished/failed bookkeeping cannot be forgotten: the row is
-written when the block exits, whichever way it exits, and the exception still propagates. A
-failure to WRITE the bookkeeping never fails the work it was recording (same posture as
-`server.audit.AuditWriter`: observability must not take down the thing it observes).
+**`job_runs.status` vocabulary — convention only (plain TEXT, no CHECK), and this docstring is
+the shared spec: update it before adding a fourth value or reusing one.**
 
-**`job_runs.status` vocabulary — enforced by convention, not by the database: this column is
-plain TEXT with no CHECK constraint, unlike `capture_queue.status`.** Three values are in use
-across this codebase's callers:
-
-- `'ok'` — the run completed; everything it computed is trustworthy end to end, including as a
-  baseline for the NEXT run (a watermark, a "latest completed run" read).
-- `'error'` — the run aborted before its own work could be trusted. Whatever `stats` holds is
-  partial by accident, not by design, and no reader may treat an `'error'` row as a completed
-  baseline for anything.
-- `'partial'` (the one live user is `stigmergy.gardener`) — the run's PRIMARY work completed and
-  committed (findings persisted, a report renderable), but an independent AUXILIARY sub-pass
-  inside the SAME run failed and produced nothing this time. Safe to read for the primary work
-  (`gardener.store.latest_completed_run` widens to `'ok'`/`'partial'` for exactly this reason);
-  never safe as a baseline for whatever the failed sub-pass was measuring
-  (`gardener.sweep.previous_run_watermark` stays `'ok'`-only on purpose — see that function's own
-  docstring, and `gardener.run.run_gardener`'s module docstring for the failure this status exists
-  to stop: a sweep-failed run committing `'ok'` silently advanced the sweep's own watermark past
-  pages nothing had actually judged, so a week of model outage meant a week of pages permanently
-  excluded from the "changed" set while `job_runs WHERE status='error'` said nothing had failed).
-
-Most jobs in this codebase are all-or-nothing and should keep using `'ok'`/`'error'` only —
-`'partial'` exists for a run with a genuinely independent, separately-failable sub-pass, not as a
-generic "mostly fine" escape hatch. `job_runs.status` semantics are per-caller convention, and
-this docstring is where that convention is written down; before inventing a fourth value, or
-reusing `'partial'` for an unrelated meaning, read this paragraph and update it.
+- `'ok'` — the run completed; trustworthy end to end, including as a baseline for the next run.
+- `'error'` — the run aborted; `stats` is partial by accident, and no reader may treat the row
+  as a completed baseline.
+- `'partial'` — the run's PRIMARY work completed and committed, but an independent AUXILIARY
+  sub-pass inside the same run failed. Safe to read for the primary work; never safe as a
+  baseline for what the failed sub-pass was measuring (a sweep-failed run committing `'ok'` once
+  advanced a watermark past pages nothing had judged). `stigmergy.gardener` is the one live
+  user; it is not a generic "mostly fine" escape hatch.
 """
 import contextlib
 import logging

@@ -1,9 +1,6 @@
-"""Full rebuild: a knowledge-repo checkout -> a fresh `pages_index`.
-
-This is the FULL rebuild; incremental-on-merge lives in `stigmergy.server.webhook`. The only
-incrementality here is the embedding cache: pages whose content_hash is already cached for the
-chosen model are not re-embedded, which is what keeps a rebuild's API spend proportional to what
-actually changed.
+"""Full rebuild: a knowledge-repo checkout -> a fresh `pages_index`. Incremental-on-merge lives
+in `stigmergy.server.webhook`; the only incrementality here is the embedding cache, which keeps a
+rebuild's API spend proportional to what actually changed.
 """
 from stigmergy.index import corpus, store
 from stigmergy.index.errors import EmptyCorpusError

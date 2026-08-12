@@ -1,14 +1,7 @@
 """The offline double — the agent step, without an API key.
 
-A test double whose whole job is adversarial: the suite must prove the gates **catch**, not
-that the happy path is happy. So this double deliberately misbehaves on demand — hallucinates a
-figure, copies a seeded secret onto the page, follows an injection out of its lane, escapes the
-path, deletes a file, rewrites a body, declares itself canonical — **and behaves perfectly on
-ordinary material**. A defense tested only against attacks measures its sensitivity and never
-its specificity, and every one of these gates can bounce someone's real work.
-
-**Behavior is driven by explicit directives in the material**, one per line, so a test is
-deterministic and a reader of the test can see exactly which attack is being staged:
+It MUST behave on ordinary material: a defense tested only against attacks measures its
+sensitivity and never its specificity. Behaviour comes from directives in the material:
 
     DOUBLE:type=<t>          file as this page type instead of `note`
     DOUBLE:company           anchor with company-wide scope instead of an entity
@@ -24,41 +17,19 @@ deterministic and a reader of the test can see exactly which attack is being sta
     DOUBLE:overlap=<path>    file, and DECLARE an overlap cross-link on an existing page
     DOUBLE:backlink=<path>   file, and DECLARE a reciprocal `related:` link on an existing page
     DOUBLE:contradict=<path> file, and DECLARE a contradiction callout on an existing page
-    DOUBLE:bad-edit[=<path>] declare an edit code must refuse (a path outside the creatable folders,
-                             or one that does not exist)
+    DOUBLE:bad-edit[=<path>] declare an edit code must refuse (outside the creatable folders, or
+                             a page that does not exist)
     DOUBLE:no-outcome        write no outcome file at all
     DOUBLE:bad-shape         write an outcome whose SHAPE the boundary refuses, on EVERY attempt
     DOUBLE:bad-shape-once    write it on the first attempt and a good one on the corrective retry
-    DOUBLE:long-summary      write a summary far past the prose ceiling — the benign twin: it must
-                             be TRUNCATED and the capture filed, not refused
+    DOUBLE:long-summary      a summary past the prose ceiling — the benign twin: TRUNCATED and
+                             filed, never refused
 
-**`DOUBLE:triage-entity` is the one directive a REPLY can override.** With no reply it
-parks, as it always did; with a reply naming something the worktree's registry resolves, it files
-the capture anchored to the registry's own spelling of that entity; with a reply naming anything
-else, it parks again with the reply's name — which is what worker code then routes to `triage`
-rather than to a second question. Nothing else about the double reads the reply, and nothing in it
-lets a reply set a field, name a path or change a page type: those are the properties the ask-back
-channel's adversarial criteria assert, and a double that honoured them would prove them of itself.
-
-The three declaring directives write NOTHING to the other page: `edits.apply` does, from the
-declaration — the agent declares, code performs. `DOUBLE:rewrite` still
-edits an existing page directly — that is the misbehaviour the zone gate exists to refuse, and a
-double that could not do it would leave the gate untested.
-
-**Every write the double makes as a well-behaved agent goes through `agent.confined_write`**
-(`_write`) — the same rule the real backend's own `write_page` tool asks — and a denial raises. The
-deliberate misbehaviours take `_write_unconfined` instead, so each bypass is visible at its call
-site. Before that split the double wrote with a bare `open(path, "w")` and never consulted the rule
-at all — which meant the whole offline suite proved nothing about it, and a byte-comparison defect
-in it (a page re-spelled in another case, or an accented title in NFD, counting as "does not exist
-yet") survived a green run.
-
-With no directive it writes one well-formed, lint-clean, entity-anchored page — which is what
-most of the suite runs, because that is the case every gate must NOT fire on.
-
-The material's own text is always copied into the page body. That is not laziness: it is how a
-seeded secret in a capture naturally reaches the diff, which is exactly the path the secrets
-gate exists to veto.
+`DOUBLE:triage-entity` is the one directive a REPLY can override; no reply may set a field, name a
+path or change a page type. The declaring directives write NOTHING to the other page —
+`edits.apply` does. Well-behaved writes go through `_write`/`agent.confined_write` and raise on
+denial; the misbehaviours take `_write_unconfined`, so each bypass is visible at its call site.
+The material's own text is copied into the page body, which is how a seeded secret reaches diff.
 """
 import json
 import os
@@ -78,14 +49,10 @@ from stigmergy.librarian.filing_port import AgentRun, priced
 
 DIRECTIVE_RE = re.compile(r"^DOUBLE:([a-z-]+)(?:=(.*))?$", re.M)
 
-# What a page title may NOT carry: the two characters a filename cannot represent (a path separator
-# and a control byte), plus the wikilink/frontmatter punctuation that would make a title read as
-# syntax. Everything else survives, accents first among them — see `DoubleAgent._title`.
+# What a filename cannot represent, plus punctuation that would make a title read as syntax.
 _UNSAFE_IN_TITLE = re.compile(r"[\x00-\x1f\x7f/\\\[\]\"'`|#:*?<>]+")
 
-# Phrases the double treats as an attempt to steer it. A real agent judges this; the double
-# pattern-matches, because its job is to produce the finding deterministically so the report's
-# never-quote-the-payload rule can be asserted.
+# Steering phrases. A real agent judges; this pattern-matches, so the finding is deterministic.
 _INJECTION_SIGNALS = (
     ("declare-canonical", ("status: canonical", "mark this canonical", "file this as canonical",
                            "set status to canonical")),
@@ -94,9 +61,7 @@ _INJECTION_SIGNALS = (
                             "echo $anthropic")),
 )
 
-# A body long enough to clear the contract linter's 30-line minimum. The double is not trying to
-# write well; it is trying to produce a page that passes for a well-formed one so the gates are
-# tested against a realistic diff rather than against an obvious reject.
+# Long enough to clear the contract linter's 30-line minimum, so gates see a realistic diff.
 _FILLER = [
     "This page was filed from a captured note by the librarian.",
     "It records what the capture carried, in the brain's own vocabulary.",
@@ -116,27 +81,14 @@ def _findings(material: str) -> list[str]:
 
 
 class DoubleAgent:
-    """The same port surface as the real backend, with no network, no key, no framework import.
+    """`filing_port.FilingAgent`'s surface, satisfied structurally, with no network, key or
+    framework import. `cost_usd` stays `0.0`: an offline pass really does spend nothing."""
 
-    "Same surface" is `filing_port.FilingAgent` now, and satisfying it structurally is what makes
-    the offline suite prove something about the production path: `processing.py` is written against
-    the port, so a double that answers it is exercising the same contract a live backend does. Its
-    `cost_usd` stays `0.0` on every run — an offline pass spends nothing, and `0.0` is a real
-    answer rather than a missing one.
-    """
-
-    # The EXPLORING shape of the ordinary flow (see `filing_port.FilingAgent.structured_ordinary`).
-    # The double WRITES the page — through `agent.confined_write`, the same rule the real backend's
-    # `write_page` tool asks — which is exactly what makes the offline suite prove something about
-    # the production write path. A second, structured double is a decision to take when the
-    # structured path needs adversarial coverage of its own, not a flag on this one.
+    # The EXPLORING shape: the double WRITES the page through `agent.confined_write`, which is what
+    # makes the offline suite prove something about the production write path.
     structured_ordinary = False
 
-    # ...and it is handed no gathered context (see `filing_port.FilingAgent.wants_gathered`).
-    # Declared `False` rather than inherited: this double's behaviour is DIRECTIVE-driven, so the
-    # gather would be a corpus walk per pass whose rendered string nothing reads. It stays a real
-    # declaration so `processing`'s legacy branch is exercised offline in BOTH of its states — the
-    # gathered one the shipped backend takes and the ungathered one this takes.
+    # No gathered context. A real declaration, so `processing`'s branch runs in BOTH states.
     wants_gathered = False
 
     def __init__(self, settings):
@@ -145,10 +97,7 @@ class DoubleAgent:
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
             corrective: str = "", reply: str = "", flow_note: str = "",
             gathered: str = "") -> AgentRun:
-        # `flow_note` and `gathered` are accepted and unused: the double's behaviour is
-        # directive-driven, and both are prompt facts for a REAL agent (`gathered` is never even
-        # built for a backend declaring `structured_ordinary = False`). Accepting them keeps the
-        # double's signature honest against the PORT rather than against one caller.
+        # `flow_note`/`gathered` are accepted and unused: the signature answers the PORT.
         directives = _directives(material)
         findings = [f for f in _findings(material)]
         run = AgentRun(turns=1, tool_calls=3)
@@ -156,17 +105,8 @@ class DoubleAgent:
 
         # ── the two parking paths: nothing is written at all ──────────────────────────────
         if "triage-entity" in directives:
-            # **The reply is consulted here and nowhere else**, which is the whole of what the
-            # double has to model about the ask-back loop: a real agent that parked a capture
-            # for an unresolvable name, and is then handed the submitter's answer, either finds a
-            # registered entity in it or parks again. Both roads have to be reachable offline —
-            # ask -> answer -> filed-and-anchored, and an answer naming something unregistered
-            # parking in `triage` rather than asking a second question.
-            #
-            # It resolves the answer through the REAL registry in the worktree, exactly as
-            # `_registry_entity` does, rather than pattern-matching the directive: a double that
-            # accepted any reply would prove the loop turns and nothing about the gate at the end
-            # of it.
+            # The reply is consulted here and nowhere else, through the REAL registry: a double
+            # that accepted any reply would prove nothing about the gate at the end of the loop.
             answered = self._resolve_reply(worktree, reply)
             if not answered:
                 return self._park(worktree, run, {
@@ -178,9 +118,7 @@ class DoubleAgent:
                                "judged_type": ""},
                     "findings": [{"category": c} for c in findings],
                     "summary": "the material is about something the registry does not know"})
-            # The reply named something the registry resolves: fall through and file, anchored to
-            # the entity the REGISTRY names — never to the submitter's spelling of it, and never to
-            # anything else the reply asked for.
+            # Resolved: file, anchored to the REGISTRY's spelling, never the submitter's.
         if "triage-type" in directives:
             return self._park(worktree, run, {
                 "decision": "triage",
@@ -215,10 +153,7 @@ class DoubleAgent:
                          canonical="canonical" in directives, forge="forge" in directives)
 
         # ── the overlap case: DECLARED, never performed ──────────────────────────────────
-        # The double writes only new files, exactly like the real agent: the reciprocal link and
-        # the callout on the OTHER page are named in `edits` and `edits.apply` performs them. That
-        # is the whole point of the 2026-07-26 amendment, and it is why the double must not append
-        # to the other page here — a double that still edited would leave the applier untested.
+        # Only new files, like the real agent; a double that edited leaves `edits.apply` untested.
         overlaps, declared_edits = [], []
         if "overlap" in directives and directives["overlap"]:
             other = directives["overlap"]
@@ -232,15 +167,13 @@ class DoubleAgent:
             declared_edits.append({
                 "path": directives["contradict"], "kind": "contradiction", "link": title,
                 "note": "the capture states the opposite of what this page records"})
-        # The adversarial declaration: an edit to a page that is not there at all, so
-        # `edits.validate` is exercised rather than only its happy path.
+        # An edit to a page that is not there, so `edits.validate` is exercised.
         if "bad-edit" in directives:
             declared_edits.append({"path": directives["bad-edit"] or "ops/acl.json",
                                    "kind": "backlink", "link": title, "note": ""})
 
         if "escape" in directives:
-            # Deliberately unconfined: writing outside the lane is the misbehaviour the zone gate
-            # exists to refuse, so the double has to be able to perform it.
+            # Deliberately unconfined: writing outside the lane is what the zone gate refuses.
             self._write_unconfined(worktree, "ops/acl.json", '{"version": 1, "rules": []}\n')
         if "delete" in directives:
             self._delete_some_page(worktree, keep=page_path)
@@ -260,88 +193,50 @@ class DoubleAgent:
             "summary": f"filed the capture as a {page_type}",
         }
         if "long-summary" in directives:
-            # Digit-free on purpose, like `_FILLER`: the summary never reaches the page, and a
-            # numeral anywhere in this double's output would read as a figure it had asserted.
+            # Digit-free on purpose, like `_FILLER`: a numeral reads as an asserted figure.
             outcome["summary"] = ("a very long account of what was filed and why it went there, "
                                  * 200)
         if "bad-shape" in directives or ("bad-shape-once" in directives and not corrective):
-            # A shape `agent.parse_outcome` refuses and a corrective retry can fix — an unknown
-            # `decision`. `_park` writes the file and then parses it through the REAL boundary, so
-            # this raises `OutcomeShapeError` at exactly the point a real backend would, with the
-            # page already drafted in the worktree for the retry's reset to clear.
+            # `_park` parses through the REAL boundary, so this raises where a backend would.
             outcome["decision"] = "publish"
         if "no-outcome" in directives:
             return run
         return self._park(worktree, run, outcome)
 
     # ── the meeting flow's own directives — CONTENT only, never a page write ─────────────────
-    # New, meeting-specific directives, on top of the shared `DOUBLE:` vocabulary above (`type=`,
-    # `hallucinate` etc are not reused here — the meeting outcome describes a page SET's CONTENT,
-    # not a page, so its own directives name what that shape needs).
-    #
-    # **Why there are no declared-vs-written mismatch directives here.** In the meeting flow the
-    # agent has no page-writing tool at all — its one legal write, ever, is its own outcome file,
-    # permitted by `agent.confined_write`'s unconditional exception — and code is the sole author of every page
-    # (`processing._write_meeting_pages`), built directly from the SAME structured account this
-    # double returns. There is therefore no way for what the agent WROTE and what it DECLARED to
-    # disagree, and a directive staging that disagreement would be testing a mechanism that does
-    # not exist. See `processing._cross_check_meeting_outcome`'s own docstring.
+    # No declared-vs-written mismatch directives: the agent's one legal write here is its outcome
+    # file, and code authors every page.
     #
     #   DOUBLE:decisions=<n>              how many decisions to distil (default 2)
-    #   DOUBLE:meeting-hallucinate        plant a figure the transcript does not support, in the
-    #                                     first decision's BODY, on EVERY pass
-    #   DOUBLE:meeting-hallucinate-once   plant it on the first pass only, and hand back an honest
-    #                                     body (the figure dropped) on the corrective retry
-    #   DOUBLE:meeting-hallucinate-last   plant the figure in the LAST decision's body instead of
-    #                                     the first, so a check that only looks at the first page
-    #                                     of the set is distinguishable from one that looks at all
-    #   DOUBLE:meeting-hallucinate-meeting-page  plant it in the MEETING page's own notes prose
-    #                                     (`meeting_notes`) instead of a decision's body
+    #   DOUBLE:meeting-hallucinate        unsupported figure in the first decision BODY, every pass
+    #   DOUBLE:meeting-hallucinate-once   the same, first pass only; an honest body on the retry
+    #   DOUBLE:meeting-hallucinate-last   the figure in the LAST decision, so a check that reads
+    #                                     only the first page is distinguishable
+    #   DOUBLE:meeting-hallucinate-meeting-page  the figure in `meeting_notes` instead
     #   DOUBLE:meeting-triage=a,b,c       park: several unresolved entity names in one ask
-    #   DOUBLE:meeting-anchor=<name>      distil normally, but DECLARE this entity name on every
-    #                                     decision — a complete, correct outcome the registry
-    #                                     cannot resolve, so `gate_anchoring` vetoes it
-    #   DOUBLE:meeting-company[=n]        the nth decision (1-indexed, default 1) anchors
-    #                                     company-wide with a written reason instead of to an
-    #                                     entity — `gate_anchoring` judges each decision page
-    #                                     independently, so one page in the set can take
-    #                                     either scope while its siblings take the other
-    #   DOUBLE:meeting-body-date-link     a decision's own BODY prose links a date-bearing stem
-    #                                     (`[[2026-01-01-...]]`), against the brief's own
-    #                                     body-stays-digit-free convention — still live under FIX 4:
-    #                                     the AGENT still drafts this prose, code only owns the
-    #                                     container it lands in
-    #   DOUBLE:meeting-collide            the first decision's title is chosen to slugify onto an
-    #                                     EXISTING page's own path (the fixture repo's
-    #                                     `wiki/decisions/a-decision-from-a-previous-meeting.md`)
-    #                                     — exercises `_write_meeting_pages`'s existing-page-
-    #                                     collision precheck, the atomic all-or-nothing guard FIX 4
-    #                                     needed once code became the sole, deterministic author of
-    #                                     every path in the set
+    #   DOUBLE:meeting-anchor=<name>      declare this entity on every decision — a complete
+    #                                     outcome the registry cannot resolve, so it is vetoed
+    #   DOUBLE:meeting-company[=n]        the nth decision (1-indexed) anchors company-wide, so a
+    #                                     set carries both scopes at once
+    #   DOUBLE:meeting-body-date-link     a decision BODY links a date-bearing stem, against the
+    #                                     brief's body-stays-digit-free convention
+    #   DOUBLE:meeting-collide            the first decision's title slugifies onto an EXISTING
+    #                                     fixture page, exercising the collision precheck
     #
-    # A planted secret needs no directive of its own: the transcript text reaches the SOURCE page
-    # verbatim through CODE (`processing._build_source_parts`, not this double at all — FIX 1), so
-    # a fixture that plants a gitleaks-detectable string in the MATERIAL is caught by the
-    # pre-agent material scan (`gates.scan_secrets`, `processing._pre_agent`) before the double
-    # (or the real agent) is ever invoked. Decision/meeting content this double returns never
-    # carries the raw material text at all, so the pre-agent scan is the only path a meeting
-    # secret can be caught on — there is nothing decision-body-shaped to assert about it.
+    # A planted secret needs no directive: the transcript reaches the SOURCE page verbatim, so the
+    # pre-agent scan catches it before any agent runs.
     def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
                     source_page_path: str, corrective: str = "", reply: str = "") -> AgentRun:
         directives = _directives(material)
         findings = _findings(material)
-        run = AgentRun(turns=1, tool_calls=1)   # FIX 4: one Write call, its own outcome file
+        run = AgentRun(turns=1, tool_calls=1)   # one Write call: its own outcome file
 
         entities_for_decisions = None    # None -> cycle the registry; set -> a resolved reply
         if "meeting-triage" in directives:
             names = [n.strip() for n in directives["meeting-triage"].split(",") if n.strip()] \
                 or ["an unregistered thing"]
-            # **The reply is consulted positionally**, mirroring the ordinary double's single-name
-            # `_resolve_reply` loop: a reply is a comma-separated list, ONE slot per unresolved
-            # name, in the SAME order the ask named them (the deterministic fixture contract a
-            # scripted double needs — a real agent reads free text; this one does not have to, to
-            # prove the SAME thing the ordinary flow's ask-back loop proves: a resolving reply
-            # files, a non-resolving one parks again, naming only what is STILL unresolved).
+            # POSITIONAL: one comma-separated slot per unresolved name, in the ask's order. A
+            # non-resolving reply parks again naming only what is STILL unresolved.
             reply_slots = [p.strip() for p in reply.split(",")] if reply.strip() else []
             resolved, still_unresolved = [], []
             for index, name in enumerate(names):
@@ -364,25 +259,9 @@ class DoubleAgent:
             entities_for_decisions = [registry_entities[i % len(registry_entities)]
                                       if registry_entities else "Stigmergy"
                                       for i in range(n_decisions)]
-        # `DOUBLE:meeting-anchor=<name>` — every decision DECLARES this entity name instead of one
-        # the registry already holds. Distinct from `meeting-triage`, and the distinction is the
-        # whole point: `meeting-triage` makes the AGENT park (`decision: "triage"`, carrying no
-        # distillation), whereas this produces a complete, correct `file` outcome that
-        # `gate_anchoring` then vetoes for a reason that has nothing to do with its content — the
-        # real shape a transcript takes when it distils six good decisions and is refused because
-        # one entity is not registered yet. Reading it BEFORE `_registry_entities` would be wrong:
-        # the point is that the model's answer is good and the registry is behind.
-        #
-        # The body keeps wikilinking a REGISTERED entity (`link_entity` below) while the
-        # DECLARATION names the unregistered one. That separation is deliberate and it is what
-        # isolates the veto under test: `gate_anchoring` resolves the declared names against the
-        # registry, while the contract linter's `dead_links` rule judges the body's wikilinks, so a
-        # body linking `[[Ledgerly]]` before any Ledgerly page exists earns a SECOND, unrelated
-        # veto — and `processing._refuse_meeting` only routes to the park when EVERY veto is
-        # `anchoring/unresolved`. Reproducing the walk's park therefore means declaring an
-        # unresolvable anchor without also writing a dead link, which is an entirely ordinary agent
-        # output: the prose discusses a page that exists, the declared aboutness names something
-        # the registry has not caught up with.
+        # Every decision DECLARES a name the registry lacks — a complete `file` outcome
+        # `gate_anchoring` vetoes. The BODY still wikilinks a REGISTERED entity, or a second
+        # `dead_links` veto stops `processing._refuse_meeting` from parking.
         anchor_link = None
         if "meeting-anchor" in directives:
             declared = (directives.get("meeting-anchor") or "").strip() or "An Unregistered Thing"
@@ -390,23 +269,17 @@ class DoubleAgent:
             entities_for_decisions = [declared] * len(entities_for_decisions)
         hallucinate_first = "meeting-hallucinate" in directives or (
             "meeting-hallucinate-once" in directives and not corrective)
-        # Every pass, like `meeting-hallucinate` itself (no `not corrective` guard) — this
-        # directive's whole point is a veto that SURVIVES the corrective retry, positioned on the
-        # last decision instead of the first, so a test can assert both "the whole diff is
-        # scanned" and "the veto still commits nothing" against a page late in the set.
+        # Every pass: the point is a veto that SURVIVES the retry, on a late page.
         hallucinate_last = "meeting-hallucinate-last" in directives
-        # 1-indexed position of the decision that anchors company-wide instead of to an entity —
-        # `gate_anchoring` judges every decision page on the SAME diff independently, so this
-        # and an entity-anchored sibling coexist in one set on purpose.
+        # 1-indexed. `gate_anchoring` judges each decision page independently, so a company-wide
+        # one coexists with entity-anchored siblings on purpose.
         company_at = None
         if "meeting-company" in directives:
             raw_index = directives.get("meeting-company") or "1"
             company_at = int(raw_index) if raw_index.strip() else 1
 
-        # The SAME stem `processing._meeting_stem` will compute for this capture's own meeting
-        # page — matched here (not an arbitrary date) so `meeting-body-date-link`'s wikilink
-        # resolves against a page genuinely being created in this diff, not a dead link the
-        # contract linter's OWN `dead_links` rule would refuse for an unrelated reason.
+        # The SAME stem `processing._meeting_stem` computes, or `meeting-body-date-link` is a dead
+        # link the linter refuses for an unrelated reason.
         date = meeting_meta.get("meeting_date") or "2026-07-29"
         meeting_stem = self._slug(f"{date}-{title}")
 
@@ -416,9 +289,7 @@ class DoubleAgent:
             page_hallucinate = (hallucinate_first and i == 0) or (hallucinate_last and i == n - 1)
             company_here = company_at is not None and (i + 1) == company_at
             if i == 0 and "meeting-collide" in directives:
-                # A title chosen to slugify onto an EXISTING fixture page's own path
-                # (`wiki/decisions/a-decision-from-a-previous-meeting.md`) — the point of
-                # this directive is the COLLISION, not the content.
+                # Slugifies onto an EXISTING fixture page: the COLLISION is the point.
                 d_title = "A decision from a previous meeting"
             else:
                 d_title = f"{title} — decision {i + 1}"
@@ -450,26 +321,15 @@ class DoubleAgent:
         return self._park_meeting(worktree, run, outcome)
 
     def _park_meeting(self, worktree, run, outcome):
-        """`_park`'s meeting sibling — writes ONLY the outcome file, exactly what the real
-        tool-less agent's one legal write is: `confined_write`'s own unconditional outcome-file
-        exception is what permits it, for both flows."""
+        """`_park`'s meeting sibling — writes ONLY the outcome file, the agent's one legal write."""
         self._write(worktree, OUTCOME_FILENAME, json.dumps(outcome, indent=2) + "\n")
         run.outcome = self._priced_parse(run, parse_meeting_outcome, outcome)
         return run
 
     @staticmethod
     def _slug(text: str) -> str:
-        """`processing._meeting_stem`'s slug, by calling the same function it calls.
-
-        Its one caller says it computes "the SAME stem `processing._meeting_stem` will compute" —
-        and it did not. This was a second, hand-written slugifier: it dropped non-ASCII instead of
-        transliterating it and capped at 80 instead of 60, so "Zürich Review" predicted
-        `z-rich-review` while the real flow filed `zurich-review`. The double then wrote a
-        `[[wikilink]]` at the predicted path, the meeting page landed at the real one, and the
-        `meeting-body-date-link` scenario failed on the contract linter's `dead_links` rule — the
-        exact unrelated reason its caller's comment exists to rule out. A test double that predicts
-        production's filename must not own its own idea of what that filename is.
-        """
+        """`processing._meeting_stem`'s slug, by calling the same function it calls: a double that
+        predicts production's filename must not own its own idea of it."""
         return normalize.slugify(text or "")
 
     @classmethod
@@ -478,10 +338,8 @@ class DoubleAgent:
 
     @staticmethod
     def _decision_body(*, entity, company, hallucinate, body_date_link, meeting_stem):
-        """CONTENT only — no frontmatter, no filename, no wikilink to the meeting's own
-        source (code builds all of that, `processing._build_decision_page`). Digit-free padding,
-        like the ordinary double's own `_FILLER`: any numeral here would read as a figure the
-        transcript asserted, and this text is not part of what the capture archived."""
+        """CONTENT only — code builds frontmatter, filename and source wikilink. Padding is
+        digit-free: any numeral reads as a figure the transcript asserted."""
         opening = ("This decision applies company-wide, not to one customer in this meeting."
                   if company else f"Decided about [[{entity}]] in this meeting.")
         lines = ["## Context", "", opening, "", "## Decision", ""]
@@ -489,33 +347,17 @@ class DoubleAgent:
         if hallucinate:
             lines += ["", "The meeting implies a figure of 9142 units, worth recording."]
         if body_date_link:
-            # DELIBERATE convention violation (spec Notes for Tester / the developer's own known
-            # risk): the brief and every well-behaved fixture keep a date-bearing stem out of page
-            # BODIES on purpose, because `gates.prose_written`'s numeric matcher does not respect
-            # `[[...]]` brackets — a wikilink target's own digits read as figures like any other.
-            # This directive reproduces the violation ON PURPOSE so a test can observe what the
-            # real gate does with it, rather than trusting the convention holds.
-            #
-            # `meeting_stem` is THIS capture's own meeting page's stem (matched exactly —
-            # `run_meeting`'s own comment), not an arbitrary date: the link must resolve against a
-            # page genuinely being created in the SAME diff, or the contract linter's own
-            # `dead_links` rule refuses it for an unrelated reason before the check under test
-            # ever runs — the same confound the date-link proof's own fix closed once already.
+            # DELIBERATE violation: `gates.prose_written`'s numeric matcher ignores `[[...]]`.
+            # `meeting_stem` must be THIS capture's meeting page or `dead_links` fires first.
             lines += ["", f"See the minutes at [[{meeting_stem}]] for the full discussion."]
-        # `len(lines)`, not the non-blank count: the contract linter's own line counter
-        # (`body_line_count`) trims only LEADING/TRAILING blanks, so a blank line in the middle —
-        # the spacing between sections here — still counts toward the 30-line minimum, and a
-        # padding loop that ignored them under-padded a page that then read as "thin" anyway.
+        # `len(lines)`: the linter trims only leading/trailing blanks, so mid-body blanks count.
         while len(lines) < 32:
             lines.append("Additional context recorded from the meeting for future readers.")
         return "\n".join(lines)
 
     @staticmethod
     def _meeting_notes(*, hallucinate):
-        """FIX 4: the meeting page's own "## Notes" content — the only free text on that page the
-        agent still drafts; Attendees/Action Items/Decisions are all code's own structure. Padded
-        past the linter's 30-line minimum for the same reason `_decision_body` is — see its own
-        comment on `len(lines)` vs the non-blank count."""
+        """The meeting page's "## Notes" content — the only free text on it the agent drafts."""
         lines = list(_FILLER)
         if hallucinate:
             lines += ["", "The minutes record a figure of 4173 units nobody in the transcript "
@@ -526,28 +368,16 @@ class DoubleAgent:
 
     # ── helpers ──────────────────────────────────────────────────────────────────────────
     def _park(self, worktree, run, outcome):
-        """Write the outcome file AND hand back the parsed object — through the same
-        `parse_outcome` the real backend goes through, so the double cannot accidentally produce a
-        shape a real backend would have refused."""
+        """Write the outcome file AND hand back the parsed object, through the same `parse_outcome`
+        a real backend uses, so the double cannot produce a shape it would have refused."""
         self._write(worktree, OUTCOME_FILENAME, json.dumps(outcome, indent=2) + "\n")
         run.outcome = self._priced_parse(run, parse_outcome, outcome)
         return run
 
     @staticmethod
     def _priced_parse(run, parse, outcome):
-        """The parse, on the same outcome-read road every backend takes: a refusal leaves the pass PRICED.
-
-        Both backends read their account through a parser that can refuse it, and both owe the port
-        the same thing on the way out — `filing_port.priced` attaching `run_cost_usd`, because
-        `processing` banks a fault's spend off the exception and cannot tell "nothing was spent"
-        from "nobody attached it". `DOUBLE:bad-shape` is the directive that drives exactly this
-        road, so a double that skipped the attach would be exercising a SHORTER contract than the
-        backend it stands in for — which is the one thing this whole file exists not to do.
-
-        The figure is `0.0` and that is the honest one: an offline pass spends nothing. What
-        matters is that the FIELD is there, so the shape-retry road looks identical from
-        `processing`'s side whichever backend produced it.
-        """
+        """The parse, priced like every backend's: a refusal must leave `run_cost_usd` attached, or
+        `processing` cannot tell "nothing was spent" from "nobody attached it"."""
         try:
             return parse(outcome)
         except AgentError as ex:
@@ -555,26 +385,8 @@ class DoubleAgent:
             raise
 
     def _write(self, worktree: str, rel: str, text: str) -> None:
-        """A write the REAL agent would be permitted — **through the very rule that permits it**.
-
-        This used to be a bare `open(path, "w")`, which made `agent.confined_write` unreachable from
-        the double: the rule could only ever be unit-tested against hand-written path strings, and
-        the whole offline suite — every processing test, every adversarial case, the docker e2e —
-        exercised a write path production does not take. That gap hid a STOP-class defect.
-        `confined_write` compared paths byte-for-byte against `git ls-files`, so on macOS a page
-        named `EXISTING NOTE.md`, or an accented title in its NFD spelling, was "a page that does
-        not exist yet" and the write landed on the human's page. A double routed through the rule
-        would have failed the instant a fixture used either spelling.
-
-        Loud on denial, and deliberately not a silent skip: a double that quietly wrote nothing
-        would surface three gates downstream as "the agent wrote nothing", which is a different
-        fault with a different fix.
-
-        There was an `allowed_re` pass-through here, for the meeting flow's narrowed lane. It went
-        with the tool-holding backend that was the only caller ever to pass one — every call from
-        this class passed `None`, so the behaviour is unchanged and the parameter was a seam with
-        nothing on the other side of it.
-        """
+        """A write the REAL agent would be permitted, through the very rule that permits it. Loud
+        on denial: a silent skip would surface three gates later as "the agent wrote nothing"."""
         if not confined_write(worktree, rel, existing=gitcmd.tracked_paths(worktree)):
             raise WorktreeError(
                 f"the offline double tried to write {rel}, which agent.confined_write denies — the "
@@ -585,12 +397,7 @@ class DoubleAgent:
 
     @staticmethod
     def _write_unconfined(worktree: str, rel: str, text: str) -> None:
-        """A write the confinement rule DENIES — i.e. the misbehaviour a gate exists to refuse.
-
-        Named so the bypass is visible at every call site. Only the deliberate directives use it
-        (`DOUBLE:escape` writing outside the lane, `DOUBLE:rewrite` editing an existing page); a
-        double that could not perform them would leave the zone and body-rewrite gates untested.
-        """
+        """A write the confinement rule DENIES. Named so the bypass is visible at its call site."""
         path = os.path.join(worktree, rel)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
@@ -598,20 +405,8 @@ class DoubleAgent:
 
     @staticmethod
     def _title(material: str) -> str:
-        """A filename-safe title from the material's first real line — **accents intact**.
-
-        This was `re.sub(r"[^A-Za-z0-9 ]+", " ", text)`, an ASCII whitelist, and it destroyed every
-        non-ASCII title it ever saw: "Zürich Review with Meridian Partners" became "Z rich Review
-        with Meridian Partners" — in the filename, the H1, the `title` frontmatter and the commit subject, on the
-        real `main`, permanently. The body was byte-correct throughout, so nothing about the
-        encoding was broken; the sanitizer was.
-
-        What is removed now is only what a filename genuinely cannot carry
-        (`page.unnameable_reason` names the same set for the gate), plus the markdown punctuation
-        that would make a title read as syntax. Everything else — accents, ñ, ideographs — is a
-        title, not a hazard. If nothing survives, the double falls back to a generic name rather
-        than filing an approximation of somebody's words.
-        """
+        """A filename-safe title from the material's first real line, accents intact. If nothing
+        survives, a generic name rather than an approximation of somebody's words."""
         for line in (material or "").splitlines():
             text = line.strip().lstrip("#").strip()
             if text and not text.startswith("DOUBLE:") and not text.startswith("---"):
@@ -627,26 +422,16 @@ class DoubleAgent:
 
     @classmethod
     def _registry_entity(cls, worktree: str) -> str:
-        """A name the registry actually resolves, read from the worktree — so the double anchors
-        correctly against whatever spine the repo has, not against a hardcoded fixture."""
+        """A name the registry resolves, read from the worktree rather than hardcoded."""
         for entity in cls._load_registry(worktree).entities.values():
             return entity["name"]
         return "Stigmergy"
 
     @classmethod
     def _resolve_reply(cls, worktree: str, reply: str) -> str:
-        """The registry's own name for whatever a submitter's reply names, or `""`.
-
-        Longest candidate first, so "Acme Corporation" is preferred over a registered "Acme" that
-        happens to be a prefix of it — a shorter alias winning would anchor the capture to the wrong
-        entity while looking like a successful resolution.
-
-        Deliberately generous about surrounding words ("I think it's about Acme Corp") and
-        deliberately NOT generous about anything else: the answer resolves through
-        `Registry.canonical_id` like every other name in this system, and what it returns is the
-        REGISTRY's spelling. A reply cannot introduce a name, cannot set a field, and cannot make an
-        unregistered thing resolve — which is what the offline suite has to be able to demonstrate.
-        """
+        """The registry's own name for whatever a reply names, or `""`. Longest candidate first, or
+        a shorter alias that is a prefix anchors the capture to the wrong entity while looking like
+        a success. A reply cannot introduce a name, set a field, or make a stranger resolve."""
         text = (reply or "").strip().lower()
         if not text:
             return ""
@@ -674,8 +459,7 @@ class DoubleAgent:
             "sources: []",
         ]
         if forge:
-            # A pre-drafted page asserting what only the server may compute. Every one of these
-            # must be gone or replaced on the filed page.
+            # Asserts what only the server may compute; every one must be gone on the filed page.
             front += ['submitted_by: someone.else@example.com', "verification: verified",
                       'acl: ["leadership"]', 'content_hash: "sha256:deadbeef"',
                       "owner: someone.else"]
@@ -704,9 +488,8 @@ class DoubleAgent:
         body.append("")
         body.append(f"- [[{anchor}]] — the entity this material belongs to" if anchor
                     else "- applies across the company; no single entity owns it")
-        # Pad to clear the linter's 30-line minimum without changing meaning. Deliberately
-        # DIGIT-FREE: any numeral here would be a figure the material does not support, which
-        # would make the double misbehave on ordinary content — the benign twin it exists to be.
+        # Pads to the linter's 30-line minimum, DIGIT-FREE: a numeral would be an unsupported
+        # figure, making the double misbehave on ordinary content.
         while len([line for line in body if line.strip()]) < 32:
             body.append("Additional context recorded from the capture for future readers.")
         self._write(worktree, page_path,
@@ -739,7 +522,5 @@ class DoubleAgent:
             if line.strip() and not line.startswith(("---", "#", "type:", "title:")):
                 del lines[index]
                 break
-        # Unconfined by design: rewriting a page that already exists is precisely what
-        # `confined_write` denies and `gate_body_rewrite` refuses, and it is what the agent did on
-        # both of its live runs. A double that could not do it would leave both untested.
+        # Unconfined by design: `confined_write` denies this and `gate_body_rewrite` refuses it.
         self._write_unconfined(worktree, rel, "\n".join(lines) + "\n")

@@ -1,19 +1,8 @@
-"""MCP adapter — a thin skin over BrainService, shared by BOTH transports: stdio (local clients —
-Claude Code/Desktop, IDEs) and streamable HTTP (`stigmergy.server.transport_http`, for remote
-multi-user access). All contract, ACL, rate-limit and audit enforcement lives in the service; this
-file only shapes tools and maps startup failures to a clean exit. `build_mcp` itself has no notion
-of which transport is serving it — the SAME tool closures run either way, which is how HTTP
-inherits rate limiting and auditing for free, and how stdio stays unaffected by anything the HTTP
-transport needs: for stdio, `service` is one fixed `BrainService`.
-
-No error message any tool here returns may leak a DSN fragment, a filesystem path, or any other
-internal detail. Each closure echoes only messages proven safe by construction and collapses
-everything unanticipated to a class name; the per-tool comments below say which is which.
-
-Run:
-    stigmergy-server --identity steward --repo ../stigmergy-brain                # stdio
-    stigmergy-server --transport http --port 8080 --repo ../stigmergy-brain      # HTTP, per-token identity
-    python -m stigmergy.server.mcp_server --identity steward --repo ../stigmergy-brain
+"""MCP adapter — a thin skin over BrainService, shared by BOTH transports (stdio and streamable
+HTTP); the SAME tool closures run either way, so all enforcement lives in the service. No error a
+tool returns may leak a DSN fragment, a filesystem path or any other internal detail: each closure
+echoes only messages proven safe by construction and collapses everything unanticipated to a class
+name.
 """
 import argparse
 import json
@@ -48,28 +37,13 @@ log = logging.getLogger(__name__)
 
 def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_security=None,
               json_response: bool = False):
-    """`stateless_http` defaults to False (stdio never touches it — `mcp.run()` is a different
-    code path from `streamable_http_app()`/`StreamableHTTPSessionManager` entirely, so this flag
-    is inert for stdio callers). `transport_http.build_http_app` passes `True` explicitly: it is
-    NOT a style choice there — see that module's docstring for why FastMCP's default STATEFUL
-    mode is unsafe for a multi-identity HTTP server.
-
-    `transport_security` (a `mcp.server.transport_security.TransportSecuritySettings`, or `None`)
-    is a plain passthrough to `FastMCP(...)` — stdio never sets it (`None`, FastMCP's own default,
-    so its localhost-only DNS-rebinding auto-default fires exactly as before). `transport_http.py`
-    passes one built from `$STIGMERGY_PUBLIC_HOST` so the real deployed host is allowlisted too
-    (see that module for the full explanation).
-
-    `json_response` defaults to False (stdio: inert, same reasoning as `stateless_http`).
-    `build_http_app` passes `True`: without it, `is_json_response_enabled` is False deep in the
-    SDK's `StreamableHTTPServerTransport`, and EVERY POST response — regardless of what the
-    client's `Accept` header offers — is SSE-framed (`event: message\\ndata: {...}`), never plain
-    JSON; there is no per-request negotiation, only this server-wide flag. The real MCP client SDK
-    (`streamablehttp_client`) parses either transparently, so this is unobservable to every
-    passing test/consumer that uses it; a plain `httpx.post(...).json()` caller (a raw health
-    probe, `curl`, `tests/server/test_host_header.py`) needs this to get a body it can decode
-    directly. It is an independent, second precondition (alongside `transport_security` above) for
-    such a caller to reach `r.json()` at all."""
+    """All three keyword flags are inert for stdio (`mcp.run()` never touches them) and set by
+    `transport_http.build_http_app` for HTTP: `stateless_http=True` is MANDATORY there, not a
+    style choice (see that module for why FastMCP's stateful mode is unsafe multi-identity);
+    `transport_security` allowlists `$STIGMERGY_PUBLIC_HOST` (None keeps FastMCP's localhost-only
+    auto-default); `json_response=True` because the SDK otherwise SSE-frames EVERY POST response
+    regardless of the client's `Accept` header — there is no per-request negotiation, and a plain
+    `httpx.post(...).json()` caller needs it to decode a body at all."""
     from mcp.server.fastmcp import FastMCP
 
     mcp = FastMCP("stigmergy-brain", stateless_http=stateless_http,
@@ -90,16 +64,12 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             return json.dumps(result, **_DUMP)
         except (ValueError, StigmergyIndexError, RateLimitError,
                 CapabilityUnavailableError) as ex:
-            # `CapabilityUnavailableError` is echoed VERBATIM and that is the whole point of the
-            # keyless split: a keyless server starts, and the tool that cannot work says which
-            # capability is missing and that capture still works. Collapsed to a class name (which
-            # is what the generic branch below would do) it would read as an unexplained failure
-            # and send an operator looking for an outage. Its text is server-authored, so it is
-            # safe over HTTP by construction.
+            # All server-authored and safe to echo verbatim; `CapabilityUnavailableError`
+            # especially — collapsed to a class name it would read as an unexplained outage
+            # instead of naming the missing capability.
             return json.dumps({"error": str(ex)}, **_DUMP)
-        except Exception as ex:  # noqa: BLE001 — no HTTP-reachable error may leak a DSN
-            # fragment, a path, or any other internal detail an UNANTICIPATED exception (a DB
-            # blip, e.g.) might carry in str(ex); class name only, same posture as `ask` below.
+        except Exception as ex:  # noqa: BLE001 — class name only: an unanticipated str(ex) may
+            # carry a DSN fragment, a path or another internal detail.
             return json.dumps({"error": f"search_brain failed ({ex.__class__.__name__})"}, **_DUMP)
 
     @mcp.tool()
@@ -111,14 +81,10 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             return json.dumps(service.read_page(path), **_DUMP)
         except RateLimitError as ex:
             return json.dumps({"error": str(ex)}, **_DUMP)
-        except Exception as ex:  # noqa: BLE001 — a bare `ValueError`
-            # catch here would ALSO catch a stray `pydantic_core.ValidationError` (a ValueError
-            # subclass) and echo its message, which can carry untrusted LLM output or internal
-            # field paths. Only `check_arg_length`'s own rejection — marked `is_arg_length_error`,
-            # never set by anything else — is known-safe to echo verbatim; everything else,
-            # ValueError or not, gets the class-name-only fallback (same posture as search_brain's
-            # unanticipated-exception branch above, which needs no such narrowing: its ValueError
-            # catch is scoped to its own safe unknown-filter errors only).
+        except Exception as ex:  # noqa: BLE001 — no bare `except ValueError`: it would also catch
+            # a `pydantic_core.ValidationError` (a ValueError subclass) whose message can carry
+            # untrusted LLM output or internal field paths. Only `check_arg_length`'s own marked
+            # rejection is known-safe to echo; everything else is class name only.
             if getattr(ex, "is_arg_length_error", False):
                 return json.dumps({"error": str(ex)}, **_DUMP)
             return json.dumps({"error": f"read_page failed ({ex.__class__.__name__})"}, **_DUMP)
@@ -134,9 +100,8 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             return json.dumps(service.list_entities(), **_DUMP)
         except RateLimitError as ex:
             return json.dumps({"error": str(ex)}, **_DUMP)
-        except Exception as ex:  # noqa: BLE001 — class name only for anything unanticipated
-            # (a malformed entity registry raises ValueError here — str(ex) can carry a filesystem
-            # path, so it is never echoed, same posture as every other unanticipated exception).
+        except Exception as ex:  # noqa: BLE001 — class name only: a malformed entity registry
+            # raises ValueError here and its str(ex) can carry a filesystem path.
             return json.dumps({"error": f"list_entities failed ({ex.__class__.__name__})"}, **_DUMP)
 
     @mcp.tool()
@@ -154,9 +119,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             return json.dumps(service.describe_entity(entity), **_DUMP)
         except RateLimitError as ex:
             return json.dumps({"error": str(ex)}, **_DUMP)
-        except Exception as ex:  # noqa: BLE001 — same narrowing as read_page above: only
-            # check_arg_length's own rejection (marked `is_arg_length_error`) is known-safe to
-            # echo verbatim.
+        except Exception as ex:  # noqa: BLE001 — same narrowing as read_page above
             if getattr(ex, "is_arg_length_error", False):
                 return json.dumps({"error": str(ex)}, **_DUMP)
             return json.dumps({"error": f"describe_entity failed ({ex.__class__.__name__})"}, **_DUMP)
@@ -184,9 +147,8 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
                                              submitted_by=submitted_by, verification=verification,
                                              acl=acl, content_hash=content_hash), **_DUMP)
         except (CaptureError, RateLimitError) as ex:
-            # Safe to echo verbatim: every message in this family names the CALLER's own
-            # field/hint keys or a static limit — the evidence store's failures are reduced to a
-            # class name inside `EvidenceError` itself, before they get here.
+            # Safe to echo verbatim: this family names the caller's own field/hint keys or a
+            # static limit; the evidence store's failures are reduced to a class name upstream.
             return json.dumps({"error": str(ex)}, **_DUMP)
         except Exception as ex:  # noqa: BLE001 — class name only for anything unanticipated
             return json.dumps({"error": f"brain_submit failed ({ex.__class__.__name__})"}, **_DUMP)
@@ -208,9 +170,8 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         try:
             return json.dumps(service.submissions(limit=limit, status=status or None), **_DUMP)
         except (ValueError, CaptureError, RateLimitError) as ex:
-            # ValueError here is the unknown-status rejection: it echoes the caller's own value
-            # plus the static status list, same shape and same safety as search_brain's
-            # unknown-filter error.
+            # ValueError here is the unknown-status rejection — the caller's own value plus a
+            # static status list, safe to echo.
             return json.dumps({"error": str(ex)}, **_DUMP)
         except Exception as ex:  # noqa: BLE001 — class name only
             return json.dumps({"error": f"brain_submissions failed ({ex.__class__.__name__})"},
@@ -265,12 +226,9 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             return json.dumps({"error": f"review_decide failed ({ex.__class__.__name__})"},
                               **_DUMP)
 
-    # The tool's name comes from `capture.schema`, not from this function's name, and that is the
-    # mechanical half of a promise: the ask-back question a submitter reads states
-    # `brain_reply(submission_id=…, answer="…")` verbatim, built from `schema.REPLY_TOOL` in a
-    # package that cannot see this one. Deriving the mounted name from the same constant is what
-    # stops a rename here from turning that message into an instruction to run something that does
-    # not exist — a message containing a command is an executable promise.
+    # Mounted under `capture_schema.REPLY_TOOL`, never this function's name: the ask-back question
+    # a submitter reads states `brain_reply(...)` verbatim from that same constant, so a rename
+    # here cannot turn that message into an instruction to run something that does not exist.
     @mcp.tool(name=capture_schema.REPLY_TOOL)
     def brain_reply(submission_id: int, answer: str) -> str:
         """Answer the librarian's question about a capture that is waiting on you (status
@@ -284,9 +242,8 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         try:
             return json.dumps(service.reply(submission_id, answer), **_DUMP)
         except (CaptureError, RateLimitError) as ex:
-            # Safe to echo verbatim, and `ReplyRejected`'s own docstring carries the argument:
-            # the identity refusal is a fixed sentence that names nothing, and the state refusal is
-            # only ever raised for a caller already authorized to read the row it describes.
+            # Safe to echo verbatim: the identity refusal is a fixed sentence naming nothing, and
+            # the state refusal is only raised for a caller already authorized to read the row.
             return json.dumps({"error": str(ex)}, **_DUMP)
         except Exception as ex:  # noqa: BLE001 — class name only for anything unanticipated
             return json.dumps({"error": f"brain_reply failed ({ex.__class__.__name__})"}, **_DUMP)
@@ -305,38 +262,28 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         from stigmergy.answer.service import AnswerService, audit_summary
 
         async def run():
-            # length-checked INSIDE the rate-limited/audited call, same ordering as the
-            # read tools: after the rate-limit check, before the expensive work (here: the
-            # evidence-gathering agent + the LLM call) it would otherwise trigger.
+            # Length-checked inside the rate-limited/audited call, before the expensive work.
             check_arg_length("question", question)
-            # `ask` searches, so it needs the same capability `search_brain` does — asserted HERE
-            # rather than inside `BrainService` because `ask` lives one layer up (`stigmergy.answer`)
-            # and `service.py` may never import it. Before the agent, so a keyless server refuses
-            # in milliseconds instead of after an evidence-gathering run that cannot succeed.
+            # `ask` searches, so it needs `search_brain`'s capability — asserted HERE because
+            # `ask` lives one layer up and `service.py` may never import `stigmergy.answer`;
+            # before the agent, so a keyless server refuses in milliseconds.
             service.require_embedder()
             return await AnswerService(service).ask(question)
 
         try:
-            # `summarize=audit_summary`: the same per-tool outcome summary
-            # `slack.mention._run_ask` writes for the Slack transport, so `audit_log.result` means
-            # one thing for `ask` regardless of which transport called it.
+            # `summarize=audit_summary`: the same summary the Slack transport writes, so
+            # `audit_log.result` means one thing for `ask` whichever transport called it.
             result = await service.call_async("ask", {"question": question}, run,
                                               summarize=audit_summary)
-            # `usage` is operator telemetry: `audit_summary` (inside `call_async`, above) has
-            # already recorded the counts, and the tool's documented response shape does not grow
-            # a field for them — the wire contract stays exactly what the docstring promises.
+            # `usage` is operator telemetry, already recorded by `audit_summary` — the tool's
+            # documented response shape does not grow a field for it.
             result.pop("usage", None)
             return json.dumps(result, **_DUMP)
         except (RateLimitError, CapabilityUnavailableError) as ex:
             return json.dumps({"error": str(ex)}, **_DUMP)
-        except Exception as ex:  # noqa: BLE001 — the tool must never leak a traceback (or a raw
-            # message, which can echo untrusted content) to the client: class name + a fixed
-            # actionable hint only, same posture as _dsn_location. The ONE exception:
-            # check_arg_length's own rejection, marked
-            # `is_arg_length_error`, is known-safe to echo — everything else, including any other
-            # ValueError (a stray pydantic_core.ValidationError from the agent/verifier stack,
-            # e.g., which could otherwise echo untrusted LLM output or an internal field path),
-            # collapses to the class-name-only fallback below.
+        except Exception as ex:  # noqa: BLE001 — never a traceback or a raw message (which can
+            # echo untrusted content): class name + a fixed actionable hint only. The one
+            # exception is check_arg_length's own marked rejection, same narrowing as read_page.
             if getattr(ex, "is_arg_length_error", False):
                 return json.dumps({"error": str(ex)}, **_DUMP)
             return json.dumps({"error": f"ask failed ({ex.__class__.__name__}); check ANSWER_LLM / "
@@ -400,12 +347,10 @@ def main(argv=None) -> int:
     try:
         settings = Settings.from_args(args)
         # fail fast on an ANSWER_LLM typo — a bad value must never reach a live `ask` call
-        # (mirrors build_synthesizer's guard).
         if settings.llm not in ("openai", "fake"):
             raise StartupError(f"invalid ANSWER_LLM: {settings.llm!r} (use 'openai' or 'fake')")
         if args.transport == "http":
-            # identity resolves PER REQUEST for HTTP (transport_http's own fail-closed chain:
-            # token -> email -> audiences), never at startup — settings.identity is unused here.
+            # identity resolves PER REQUEST for HTTP, never at startup — settings.identity unused
             from stigmergy.server.transport_http import serve_http
             serve_http(settings, args.host, args.port)
             return 0
@@ -415,9 +360,8 @@ def main(argv=None) -> int:
         print(f"stigmergy-server: {ex}", file=sys.stderr)
         return 2
     except psycopg.Error as ex:
-        # DB-side startup failure (Postgres down, or an index_meta this build cannot read): keep
-        # the no-traceback posture — name WHERE the index lives and the fix, never the raw DSN (a
-        # DSN commonly embeds a password and this line is persisted to MCP-client/cron log files).
+        # DB-side startup failure: no traceback, name WHERE the index lives and the fix — never
+        # the raw DSN (it commonly embeds a password and this line lands in client/cron logs).
         print(f"stigmergy-server: cannot read the index at {_dsn_location(settings.dsn)} "
               f"({ex.__class__.__name__}); is Postgres up and the index built? "
               f"run `stigmergy-index --rebuild --repo <dir>`", file=sys.stderr)

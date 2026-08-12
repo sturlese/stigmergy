@@ -10,10 +10,8 @@ produces). The pages a view's timeline is made of come from
 [the meeting distiller](./meeting-distiller.md).
 Code map: [`../../src/stigmergy/views/index.md`](../../src/stigmergy/views/index.md).
 
-`stigmergy.views` is the **only** view generator in this codebase. The feature was called
-"dossiers" while it was being built, which is why one test file still carries that word
-(`tests/gardener/test_checks_dossiers.py`, the three file-based gardener checks); there is no
-`stigmergy.dossiers` package and no `docs/reference/dossiers.md` — every live name is `views`.
+`stigmergy.views` is the **only** view generator in this codebase, and every live name is `views`
+(`tests/gardener/test_checks_dossiers.py` keeps an older word in its filename only).
 
 ```
 a meeting files ────────┐                       stigmergy-views regenerate --entity/--stale/--all

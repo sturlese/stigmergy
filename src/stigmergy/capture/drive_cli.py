@@ -1,35 +1,25 @@
-"""`stigmergy-drive` — the Drive drop CLI (ADR 028): the only door onto the drive flow.
+"""`stigmergy-drive` — the Drive drop CLI: the only door onto the drive flow.
 
     stigmergy-drive drop <file-id-or-url> [--submitted-by email]
 
-An operator CLI in the `stigmergy-meeting` mold (direct DB and bucket access, no MCP transport,
-run by the operator from their own terminal): it fetches ONE Drive file with the operator's own
-Google auth (`drive_client.GogDriveClient`), uploads the ORIGINAL BYTES to evidence, and enqueues
-exactly one `capture_queue` row with `kind="drive"` — and nothing else. **The door runs no model
-and no conversion**: extraction is the worker's
-(`librarian.processing.process_drive_item`), filing is the librarian's, and the ack says so.
+An operator CLI in the `stigmergy-meeting` mold: fetches ONE Drive file with the operator's own
+Google auth, uploads the ORIGINAL BYTES to evidence, and enqueues exactly one `kind="drive"` row.
+The door runs no model and no conversion — extraction is the worker's, filing the librarian's.
 
-**Validate → fetch → upload → insert, in that order, for every refusal** (the meeting CLI's own
-discipline): the format policy, the size cap and the identity check all run BEFORE any byte is
-uploaded, so "no row and no object" holds for every named refusal. The one asymmetry with the
-meeting CLI is that the material must be FETCHED before its true size is known — Drive's own
-metadata carries a size claim, so the cap is enforced twice: on the claim (before the download)
-and on the actual bytes (after it, still before any upload).
+Validate → fetch → upload → insert, so "no row and no object" holds for every named refusal.
+The material must be FETCHED before its true size is known, so the cap is enforced twice: on
+Drive's own size claim (before the download) and on the actual bytes (after, before any upload).
 
-**The format policy.** Everything the kernel can convert without a new container passes (pdf ·
-txt/md/json · xlsx/xls/csv/tsv · docx); a NATIVE Google file is exported to PDF by Drive itself
-at fetch time; an office binary (pptx/ppt/doc/odt/odp/ods/rtf — `converters.EXT_METHOD`'s
-`office` method) is refused NAMING its wake condition, because the Gotenberg container it needs
-lands when the first real pptx matters, not speculatively.
+Format policy: what the kernel converts passes; a NATIVE Google file is exported to PDF by Drive
+itself at fetch time; an office binary is refused naming its wake condition (the Gotenberg
+container lands when the first real deck matters, not speculatively).
 
-**The row's material is a deterministic MANIFEST, not the bytes** (ADR 028 D3): name, file id,
-url, mime and the bytes' own sha256 — so dedup's existing levels key on content identity (the
-same file re-dropped collapses; a file EDITED in Drive is honestly new), while `blob_refs[1]`
-carries the original bytes for the worker. `drive_modified` rides in hints, deliberately OUT of
-the manifest: Drive bumps it on metadata-only touches, and a re-drop of identical bytes must
-dedup. (A native file's export is NOT byte-stable — PDF export embeds timestamps — so a native
-re-drop may produce a fresh capture; the agent's own level-3 overlap judgment is the net there,
-accepted in the ADR.)
+The row's material is a deterministic MANIFEST, not the bytes, so dedup keys on content identity
+(a re-drop collapses; a file edited in Drive is honestly new). `drive_modified` rides in hints,
+deliberately OUT of the manifest: Drive bumps it on metadata-only touches, and a re-drop of
+identical bytes must dedup. A native file's PDF export is not byte-stable (embedded timestamps),
+so a native re-drop may produce a fresh capture — accepted; the agent's overlap judgment is the
+net.
 """
 import argparse
 import hashlib
@@ -44,17 +34,14 @@ from stigmergy.kernel.converters import method_for_ext
 
 OPERATOR_EMAIL_ENV = "STIGMERGY_MEETING_OPERATOR_EMAIL"   # one operator identity, every drop CLI
 
-# The door's own cap on a fetched file. Distinct from `schema.MAX_MATERIAL_BYTES` (the cap on
-# TEXT material, which here bounds only the manifest): original bytes go to the evidence bucket,
-# not a JSONB row, and the real bound is what the worker can convert and what vision OCR accepts
-# (Gemini takes ≤~20 MB inline; `vision_extract` switches to the Files API above 14 MB). 25 MB
-# covers every real deck by an order of magnitude while refusing the videos-and-archives class.
+# The door's own cap on a fetched file. Distinct from `schema.MAX_MATERIAL_BYTES` (text
+# material, here only the manifest): the real bound is what the worker can convert and what
+# vision OCR accepts. 25 MB covers every real deck while refusing the videos-and-archives class.
 MAX_DRIVE_FILE_BYTES = 25 * 1024 * 1024
 
 EXIT_INTERRUPTED = 130
 
-# The wake-condition sentence, composed once. `EXT_METHOD`'s `office` method is the Gotenberg
-# path, and this door ships the refusal rather than the container (ADR 028 D4).
+# The wake-condition sentence, composed once; this door ships the refusal, not the container.
 _OFFICE_REFUSAL = (
     "office formats (pptx/ppt/doc/odt/odp/ods/rtf) wait on their wake condition — the first "
     "real deck that needs the Gotenberg container ships it. Today: export it to PDF in Drive "
@@ -140,7 +127,6 @@ def _manifest(meta: "drive_client.DriveFile", name: str, digest: str, n_bytes: i
     return "\n".join(lines) + "\n"
 
 
-
 def _cmd_drop(args) -> int:
     ev = evidence.store_from_env()
     refused = cli.refuse_split_stores(args, "stigmergy-drive", ev)
@@ -183,10 +169,8 @@ def _cmd_drop(args) -> int:
 
     exported = " (exported to PDF by Drive)" if drive_client.is_native(meta.mime) else ""
     print(f"fetched {meta.name!r}{exported} — {len(data):,} bytes, sha256 {digest[:12]}")
-    # The store is NAMED, not merely acknowledged. "uploaded the original bytes as evidence
-    # bbf1d8f94915" was true and useless: an operator reading it could not tell that the bytes had
-    # gone to their own laptop while the row went to Fly. Operator-CLI posture — local and
-    # specific, the deliberate opposite of the wire's, which names no bucket or endpoint ever.
+    # The store is NAMED, so the operator can tell the bytes did not go to their own laptop
+    # while the row went to the deployment. Operator-CLI posture: local and specific.
     print(f"uploaded the original bytes as evidence {bytes_key.rsplit('/', 1)[-1][:12]} to "
           f"{ev.bucket} at {evidence.host_of(ev.endpoint_url)}; the "
           f"binary itself stays in Drive ({meta.url})")

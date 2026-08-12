@@ -1,38 +1,12 @@
-"""Runtime configuration for `stigmergy-gardener`: the corpus-health thresholds, env-tunable per
-the `Settings.from_args` convention — modules never read the environment at import time;
-`GardenerSettings.from_args` is the ONE place env fallbacks are consulted. All thresholds are
-settings, never CLI flags, so no flag overrides any of these — `from_args` still takes `args` for
-the same reason `server.settings.Settings.from_args` does even though several of its own fields
-never read one: the convention is the seam, not a promise every field uses it.
+"""Runtime configuration for `stigmergy-gardener` — env-tunable settings, never CLI flags.
+`GardenerSettings.from_args` is the ONE place the environment is consulted; modules never read it
+at import time. `dsn`/`repo` are deliberately not here — connection/location arguments, not
+tunable behaviour.
 
-Deliberately does NOT carry `dsn`/`repo` — those are connection/location arguments `cli.py` reads
-directly off `args` (mirroring `views/cli.py`'s own posture: a plain `args.repo`, never folded
-into a settings object), not tunable behaviour. `GardenerSettings` is exactly the tunable surface:
-five corpus-health thresholds, the digest channel, and the model sweep's own model and sample size.
-
-`model` (`STIGMERGY_GARDENER_MODEL`) is a plain string, read like `digest_channel_id` — no format to
-validate, just a name threaded to `stigmergy.kernel.llm.build_processor`'s own `model_name`
-parameter. Unlike `views.synthesis`, which passes no `model_name` at all and therefore rides the
-shared `CLEAN_MODEL`, the gardener's sweep gets its OWN concrete cheap-class default
-(`DEFAULT_GARDENER_MODEL`) so it never silently follows whatever the shared model happens to be
-configured to: for this subsystem, the model is configuration. `sweep_sample`
-(`STIGMERGY_GARDENER_SWEEP_SAMPLE`) is one more int threshold, validated by the SAME `_int_setting`
-every other count-shaped threshold already uses, and is therefore folded into
-`tests/test_architecture.py`'s threshold-literal-ban scan alongside the other five.
-`schema.MAX_MODEL_DETAIL_CHARS` and `sweep.MAX_SWEEP_SUBJECT_PAGES` are NOT: those are fixed
-bounds, never tunable, the same non-settings posture `schema.MAX_DETAIL_CHARS` already has.
-
-**The threshold-literal ban is grep-asserted** (`tests/test_architecture.py`, mirroring the
-fence-literal ban): no threshold literal may appear outside this module's own constants/defaults,
-so a hardcoded comparison that silently bypasses `GardenerSettings` — and is therefore unreachable
-by any env override — fails the suite. Every env var name is owned here next to its `DEFAULT_*`,
-the same shape `digest.settings.WINDOW_DAYS_ENV`/`DEFAULT_WINDOW_DAYS` takes one package over.
-
-**The digest channel is shared with `stigmergy.digest`, deliberately.** The SLA notice this package
-posts and the digest's own broadcast go to the SAME place: one channel, one place to look. So
-`STIGMERGY_DIGEST_CHANNEL_ID` is declared here and `digest.settings` imports the constant rather
-than re-declaring the literal — each side imports the name, never a second independently-spelled
-copy of it.
+The threshold-literal ban is grep-asserted (`tests/test_architecture.py`): no threshold literal
+may appear outside this module, so a hardcoded comparison unreachable by any env override fails
+the suite. The digest channel is declared HERE and `digest.settings` imports the constant —
+one channel, one spelling.
 """
 import os
 from dataclasses import dataclass
@@ -62,22 +36,15 @@ DIGEST_CHANNEL_ID_ENV = "STIGMERGY_DIGEST_CHANNEL_ID"
 
 # ── the model sweep's own configuration ───────────────────────────────────────────────────────
 MODEL_ENV = "STIGMERGY_GARDENER_MODEL"
-# A cheap-class default: the budget tier of the same generation as
-# `stigmergy.kernel.llm.DEFAULT_MODEL` ("gpt-5.6-terra"). The sweep is a bounded editorial pass
-# over a batch of pages, not a synthesis task, so the cheaper tier is the honest starting point
-# rather than a claim that no heavier model would ever be worth it — `$STIGMERGY_GARDENER_MODEL`
-# is how an operator disagrees.
+# A cheap-class default of its own, so the sweep never silently rides the shared `CLEAN_MODEL`;
+# `$STIGMERGY_GARDENER_MODEL` is how an operator disagrees.
 DEFAULT_GARDENER_MODEL = "gpt-5.6-luna"
 
 SWEEP_SAMPLE_ENV = "STIGMERGY_GARDENER_SWEEP_SAMPLE"
 DEFAULT_SWEEP_SAMPLE = 10
 
-# ── the Slack bot token — hand-mirrored, not imported. `stigmergy.slack.settings.BOT_TOKEN_ENV`
-# carries the identical value, but that module also pulls in the whole `server.settings` surface
-# to reach it (`SlackSettings.server: Settings`) — gardener's own declared Slack edge is
-# `stigmergy.slack.gateway` alone (this package's own `__init__.py`). Same trade-off
-# `capture.schema.MAX_HINT_CHARS` already makes for `server.service.MAX_ARG_CHARS`: mirrored by
-# VALUE, not by import, and if this value ever moves, this comment is the pointer to the other.
+# Hand-mirrored from `stigmergy.slack.settings.BOT_TOKEN_ENV`, not imported — importing it would
+# pull the whole `server.settings` surface in; if that value ever moves, move this with it.
 SLACK_BOT_TOKEN_ENV = "SLACK_BOT_TOKEN"
 
 
@@ -123,20 +90,16 @@ class GardenerSettings:
     concentration_share: float = DEFAULT_CONCENTRATION_SHARE
     company_window: int = DEFAULT_COMPANY_WINDOW
     company_share: float = DEFAULT_COMPANY_SHARE
-    # Empty is a real, honest state (matching `server.settings.Settings.knowledge_repo`'s own
-    # posture): most runs have no `sla` finding and never touch Slack at all. Required only at the
-    # moment a notice actually needs to post — see `notice.py::require_channel`.
+    # Empty is a real, honest state: most runs have no `sla` finding and never touch Slack.
+    # Required only when a notice actually posts (`notice.require_channel`).
     digest_channel_id: str = ""
-    # The model sweep's own model and sample size — see the module docstring for why `model` gets
-    # a concrete default rather than deferring to the shared `CLEAN_MODEL`.
     model: str = DEFAULT_GARDENER_MODEL
     sweep_sample: int = DEFAULT_SWEEP_SAMPLE
 
     @classmethod
     def from_args(cls, args=None) -> "GardenerSettings":
-        """`args` is accepted, not consulted — these are env-tunable only, and no flag overrides
-        any of them. Kept for the convention's own sake (`server.settings.Settings.from_args`'s
-        shape), and so a future flag can be added here without a rename."""
+        """`args` is accepted, not consulted — env-tunable only; kept for the convention's
+        shape."""
         return cls(
             aging_seed_days=_int_setting(AGING_SEED_DAYS_ENV, DEFAULT_AGING_SEED_DAYS),
             concentration_window=_int_setting(CONCENTRATION_WINDOW_ENV,

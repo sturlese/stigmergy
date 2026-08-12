@@ -1,24 +1,21 @@
 """The `stigmergy-librarian` GitHub App identity: app JWT -> installation token -> push URL.
 
-**Why an App and not the operator's own credentials.** The point of git as the substrate is that
-the audit is already done — *who changed what* is in the history. A librarian committing with an
-operator's disk permissions makes `git blame` lie about the one thing the substrate exists to
-record. So the librarian has its own identity, with `contents: write` on the knowledge repo and
-nothing else, and every filed page carries the human in a `Submitted-by:` trailer and in the
-page's `submitted_by`.
+An App and not the operator's own credentials, because the substrate's point is that *who
+changed what* is in the history — a librarian committing with an operator's disk permissions
+makes `git blame` lie. So the librarian has its own identity, with `contents: write` on the
+knowledge repo and nothing else; the human travels in a `Submitted-by:` trailer and the page's
+`submitted_by`.
 
-**Credentials come from the environment, the token is minted per push, and neither is ever
-logged.** The App's private key is a credential that can rewrite the company's knowledge; it is
-read, used to sign a 9-minute JWT, and dropped. The installation token it buys lives ~1 hour at
-GitHub but is used once, here, and never written to disk, never into the worktree's git config,
-and never into a command line either (that is what `push_config` is for): argv is readable by
-every process on the box through `ps` and `/proc/<pid>/cmdline`.
+Credentials come from the environment, the token is minted per push, and neither is ever
+logged: the key signs a 9-minute JWT and is dropped; the token is used once, never written to
+disk, never into git config, and never into a command line (argv is readable by every process
+on the box — that is what `push_config` is for).
 
-**Absent configuration is not an error here.** `configured()` answers whether the App is set up;
-a run without it pushes to `origin` as whoever the process is — which is exactly what the
-tests and the docker e2e do against a bare local remote that needs no credentials at all. What
-is deliberately NOT built is a "commit without pushing" fallback: it would become the silent
-default and the push path would never get exercised.
+Absent configuration is not an error here: `configured()` answers whether the App is set up,
+and a run without it pushes to `origin` as whoever the process is — what the tests and the
+docker e2e do against a bare local remote. What is deliberately NOT built is a
+"commit without pushing" fallback: it would become the silent default and the push path would
+never get exercised.
 """
 import base64
 import json
@@ -44,17 +41,12 @@ APP_LOGIN_ENV = "STIGMERGY_LIBRARIAN_APP_LOGIN"                # the App's own s
 _JWT_TTL_S = 540
 _JWT_BACKDATE_S = 60
 
-# The App's slug, which GitHub derives from the App's NAME and which in turn derives the identity
-# every librarian commit is authored by (`app_identity` below). It is deployment-specific, not a
-# property of this software: whoever installs their own GitHub App gets their own slug, and this
-# default is only the name of the App you would create by following the operator runbook.
-#
-# **Getting it wrong is silent and expensive.** Commits authored as a slug GitHub does not know
-# still push — they simply stop rendering as the App, and any authorship check the knowledge repo
-# runs (`.claude/tools/check_trust_authorship.py`) rejects every one of them, because such a check
-# necessarily pins one identity. So a deployment whose App is named anything else MUST set this,
-# and renaming an App that already has commits in the repo splits the history across two
-# identities — the reason to leave a working App's name alone.
+# The App's slug, from which the commit identity derives (`app_identity` below). It is
+# deployment-specific: this default is only the name of the App the operator runbook creates.
+# Getting it wrong is silent and expensive — commits authored as a slug GitHub does not know
+# still push, they simply stop rendering as the App, and the knowledge repo's authorship check
+# rejects every one. Renaming an App that already has commits splits the history across two
+# identities, which is the reason to leave a working App's name alone.
 APP_LOGIN_DEFAULT = "stigmergy-librarian"
 
 
@@ -90,13 +82,10 @@ def _private_key(env: dict) -> str:
         with open(path, encoding="utf-8") as f:
             return f.read()
     except OSError as ex:
-        # The path IS operator-sensitive — it is where the App's private key lives — and this
-        # message names it because it is a local CLI diagnostic (spec Notes for Developer: generic
-        # over HTTP, specific in the CLI). That is only true because `worker.process_next` no longer
-        # interpolates a mid-run `LibrarianConfigError` into the wire report: it did, briefly, which
-        # made this docstring's "never a wire message" false and put this path in front of every
-        # authenticated MCP identity. The guarantee lives THERE, not here — so if that handler is
-        # ever changed back, this sentence is wrong again.
+        # The path IS operator-sensitive — it is where the App's private key lives — and naming
+        # it is safe only because this is a local CLI diagnostic: `worker.process_next` never
+        # interpolates a mid-run `LibrarianConfigError` into the wire report. The guarantee
+        # lives THERE — if that handler is ever changed, this message puts the path on the wire.
         raise LibrarianConfigError(
             f"cannot read the librarian App private key at {path!r}: {ex.__class__.__name__}") from ex
 
@@ -145,13 +134,9 @@ def installation_token(env: dict | None = None, *, opener=None) -> str:
 
 
 def push_url(repo_slug: str) -> str:
-    """The push URL — **credential-free on purpose**.
-
-    The token used to be interpolated here and handed to `git push` as an argument. argv is world
-    readable (`ps`, `/proc/<pid>/cmdline`), so that published the credential to every process on
-    the machine for the lifetime of the push. The URL is now plain and the token travels in the
-    environment instead; see `push_config`.
-    """
+    """The push URL — **credential-free on purpose**: a token in the URL is a token in argv,
+    world-readable through `ps` and `/proc/<pid>/cmdline`. The token travels in the environment
+    instead; see `push_config`."""
     return f"https://github.com/{repo_slug}.git"
 
 
@@ -160,12 +145,9 @@ def push_config(token: str, repo_slug: str) -> dict[str, str]:
 
     `GIT_CONFIG_COUNT`/`KEY_0`/`VALUE_0` is git's own way to pass configuration for a single
     invocation without touching any config FILE, so the token lands neither on disk nor in argv.
-    The setting is an `http.<url>.extraheader` carrying a Basic credential, which is the same
-    mechanism GitHub's own Actions checkout uses.
-
-    Scoped to the one URL rather than set globally (`http.extraheader`): a header attached to
-    every https request would be sent to whatever other host a redirect or a misconfigured remote
-    pointed at.
+    The setting is an `http.<url>.extraheader` carrying a Basic credential — the same mechanism
+    GitHub's own Actions checkout uses. Scoped to the one URL rather than set globally: a header
+    attached to every https request would be sent to whatever host a redirect pointed at.
     """
     basic = base64.b64encode(f"x-access-token:{token}".encode()).decode("ascii")
     return {

@@ -1,26 +1,15 @@
-"""The mint orchestration: from a validated proposal to one pushed commit.
-
-Extracted from `entities.cli`'s own `_mint` (ADR 030 D4) so the CLI and a server-driven mint
-(`entities.remote.mint_via_clone`) share EXACTLY the same discipline instead of two doors into one
-registry slowly drifting apart: resolve-before-mint against the registry the commit will PUBLISH,
-drift refusal, the template render, `generator.regenerate`, the gitleaks scan over exactly the
-files the commit carries, ONE commit, bounded rebase-and-retry against a concurrent push, never a
+"""The mint orchestration: from a validated proposal to one pushed commit — the ONE function
+`entities.cli._mint` and `entities.remote.mint_via_clone` both call, so the two doors into one
+registry cannot drift apart. The discipline, in order: drift refusal; resolve-before-mint against
+the registry the commit will PUBLISH; the template render; `generator.regenerate`; the gitleaks
+scan over exactly the files the commit carries; ONE commit; bounded rebase-and-retry; never a
 force-push.
 
-**`author` is supplied by the caller, never derived here from `repo`'s git config.** The CLI's
-thin adapter (`entities.cli._mint`) still calls `clone.preflight`, which is where "your clone has
-no git identity configured" is refused — that refusal is meaningful only for a STEWARD's own
-checkout. A server-driven mint runs in a throwaway clone that carries no steward at all; it
-resolves the librarian App's identity itself (`librarian.githubapp.identity`) and hands it here
-directly. This function still runs the branch/clean/in-sync checks itself
-(`clone.ensure_on_branch`/`ensure_clean`/`ensure_in_sync` — `preflight`'s own disciplines, minus
-the identity read), so a caller that skipped them gets no less protection than one that ran
-`preflight` first; the CLI running both costs three cheap git reads, never git writes.
-
-**`trailer`** lands in the commit MESSAGE, appended as its own paragraph, when non-empty — the
-`Approved-by: <resolved identity>` line ADR 030 D1 requires of a server-driven (App-authored)
-mint. Empty by default, which is what keeps a steward's own `stigmergy-entities approve`/`create`
-commit byte-identical to what it always was.
+`author` is supplied by the caller, never derived here from git config: a server-driven mint runs
+in a throwaway clone with no steward and resolves the App's identity itself. `mint()` still runs
+the branch/clean/in-sync checks, so a caller that skipped `preflight` gets no less protection.
+`trailer` (`Approved-by: ...` for an App-authored mint) is appended to the commit message when
+non-empty; the empty default keeps a steward's own commit byte-identical.
 """
 import os
 
@@ -29,13 +18,12 @@ from stigmergy.entities.errors import CollisionError, EntityError
 from stigmergy.librarian import config as librarian_config
 from stigmergy.librarian import gates
 
-# Repo-relative, slash-separated — the same spelling discipline `librarian.config`'s RELPATHs use.
+# Repo-relative, slash-separated.
 TEMPLATE_RELPATH = "ops/templates/entity.md"
 
-# The env var `librarian.config.Settings.gitleaks_bin`'s own binary reads for the same binary.
-# Spelled twice because `stigmergy.entities` must not import a worker's `Settings` object to ask one
-# question (`entities/index.md`'s own documented edge); the duplication is declared here rather
-# than left to be discovered.
+# The same env var `librarian.config.Settings.gitleaks_bin` reads. Spelled twice because
+# `stigmergy.entities` must not import a worker's `Settings` to ask one question; the duplication
+# is declared here rather than left to be discovered.
 GITLEAKS_BIN_ENV = "STIGMERGY_GITLEAKS_BIN"
 
 
@@ -44,20 +32,13 @@ def mint(repo: str, *, entity_id: str, name: str, entity_type: str, aliases=(), 
          trailer: str = "", on_output=None) -> dict:
     """Everything between "this identity is allowed to exist" and "it is on the remote".
 
-    Shared by every mint path — `stigmergy-entities approve`, `stigmergy-entities create` and a
-    server-driven mint through `entities.remote.mint_via_clone` (ADR 030) — in full: they differ
-    only in where `repo`/`author` come from and whether a queue row (`submission_id`) prompted it,
-    and letting one of them skip a check, or acquire a different one, is how two doors into one
-    registry come to enforce two different contracts.
-
-    **The gate is asked about the registry this commit will PUBLISH, not the one on disk.** Those
-    are the same object only when the repo has no drift, and the whole reason `--check` exists is
-    that it sometimes does. Hand `birth.prepare` the `committed_registry` — the FILE — while
-    `regenerate` derives the published registry from the PAGES, and an unregistered `Acme Corp.md`
-    sitting in the clone is invisible to the collision gate and present in the commit:
-    `approve --name Acme` passes both checks and publishes two entries whose matcher keys collapse
-    onto one. Hence the two steps below, in this order: refuse on drift at all, then check against
-    the derived view.
+    Shared in full by every mint path — the paths differ only in where `repo`/`author` come from
+    and whether a queue row prompted it; letting one skip a check, or acquire a different one, is
+    how two doors into one registry come to enforce two contracts. The collision gate is asked
+    about the registry this commit will PUBLISH (derived from the pages), never the file on disk:
+    with drift, an unregistered `Acme Corp.md` in the clone is invisible to the file and present
+    in the commit. Hence the order below — refuse on drift at all, then gate against the derived
+    view.
     """
     action = "approve" if submission_id else "create"
     clone.ensure_on_branch(repo, branch, action=action)
@@ -88,10 +69,9 @@ def mint(repo: str, *, entity_id: str, name: str, entity_type: str, aliases=(), 
         generator.regenerate(repo)
         _refuse_secrets(repo, [proposal.relpath, generator.REGISTRY_RELPATH], action=action)
     except Exception:
-        # Roll back to EXACTLY what was on disk, by bytes we captured ourselves — never with `git
-        # checkout` or `git clean`. This is (for the CLI path) a human's clone, and a rollback that
-        # runs a destructive git command is one bad predicate away from discarding work this tool
-        # never saw; a server-driven mint's throwaway clone gets no less care, on the same code.
+        # Roll back by bytes we captured ourselves — never `git checkout` or `git clean`: the CLI
+        # path is a human's clone, and a destructive git rollback is one bad predicate away from
+        # discarding work this tool never saw.
         _restore(page_path, registry_path, snapshot)
         raise
 
@@ -99,11 +79,9 @@ def mint(repo: str, *, entity_id: str, name: str, entity_type: str, aliases=(), 
         repo, branch=branch,
         message=birth.commit_message(proposal, submission_id=submission_id, trailer=trailer),
         author=author,
-        # The retry's regeneration AND the retry's gate: after a rebase the tree underneath this
-        # commit has moved, so the derived file is re-derived and amended in — and the identity is
-        # re-asked of what actually landed, because the tree moving is the tree the gate's answer
-        # was about. Returns whether the file changed, so a race that touched nothing relevant does
-        # not rewrite the commit for nothing.
+        # The retry's regeneration AND the retry's gate: after a rebase the derived file is
+        # re-derived and the identity re-asked of what actually landed. Returns whether the file
+        # changed, so an irrelevant race does not rewrite the commit for nothing.
         regenerate=lambda: _recheck_and_regenerate(repo, proposal, branch=branch),
         on_retry=on_output)
     return {"entity_id": proposal.canonical_id, "name": proposal.name,
@@ -115,13 +93,10 @@ def mint(repo: str, *, entity_id: str, name: str, entity_type: str, aliases=(), 
 def _refuse_drift(repo: str, *, action: str) -> None:
     """Refuse to mint into a clone whose registry and pages already disagree.
 
-    The alternative is not "proceed harmlessly": `regenerate` would silently resolve somebody
-    else's drift and publish the resolution inside a commit whose message says it created ONE
-    entity. That is `ensure_clean`'s argument one layer up — anything already lying around lands in
-    this commit, signed by this steward (or, for a server-driven mint, by the App) — applied to the
-    derived file instead of the working tree. It is also what makes the collision gate below
-    trustworthy: `--check` passing is the statement that the pages and the file describe the same
-    registry, which is the premise the gate's answer is only meaningful under.
+    `regenerate` would otherwise silently resolve somebody else's drift and publish the resolution
+    inside a commit whose message says it created ONE entity — `ensure_clean`'s argument, applied
+    to the derived file. Drift also invalidates the collision gate's premise: the pages and the
+    file describing the same registry.
     """
     outcome = generator.check(repo)
     if not outcome.divergences:
@@ -139,21 +114,12 @@ def _refuse_drift(repo: str, *, action: str) -> None:
 def _recheck_and_regenerate(repo: str, proposal: birth.Proposal, *, branch: str) -> bool:
     """The rebase hook: re-ask the collision gate, then re-derive. Raises to abandon the push.
 
-    Re-deriving the moved DERIVED FILE is only half of what a rebase invalidates. The other half is
-    the question that moved with it: two callers minting `Acme` and
-    `Zenith Systems (alias: Acme)` in the same minute pass their own gates against a registry
-    neither has published yet, auto-merge cleanly (the two entries sort far apart, so git sees no
-    conflict at all), and leave one matcher key claimed by two entities, resolved last-wins. The
-    gate ran; it simply ran against a registry that no longer exists by the time the commit lands.
-    So it runs again here, against what actually landed.
-
-    **The proposal's own entity is excluded from what it is checked against**, which is the whole
-    subtlety: by this point our page IS in the tree, so an unfiltered derived registry would report
-    every proposal as colliding with itself. `generator.registry_of` exists to build that
-    minus-one view through the same indexing code as the full one.
-
-    Order matters: the check runs BEFORE the regeneration, so a refusal leaves the working tree
-    exactly as the rebase left it rather than with a rewritten registry nobody is going to commit.
+    A rebase invalidates the gate's answer, not only the derived file: two callers minting `Acme`
+    and `Zenith Systems (alias: Acme)` in the same minute pass their own gates, auto-merge cleanly
+    (the entries sort far apart) and leave one matcher key claimed by two entities, last-wins. So
+    the gate runs again against what actually landed — with the proposal's OWN entity excluded
+    (its page is in the tree by now; unfiltered, every proposal collides with itself). The check
+    runs BEFORE the regeneration, so a refusal leaves the tree exactly as the rebase left it.
     """
     others = [e for e in generator.read_entity_pages(repo)
               if e.canonical_id != proposal.canonical_id]
@@ -173,28 +139,19 @@ def _recheck_and_regenerate(repo: str, proposal: birth.Proposal, *, branch: str)
 def _refuse_secrets(repo: str, relpaths: list[str], *, action: str) -> None:
     """gitleaks over the exact files this commit will carry, before it is made.
 
-    `approve`/`create`/a server-driven mint are the path-scoped write paths to `ops/` on `main`,
-    committing `ops/entity-registry.json` and `wiki/entities/`; what they commit includes `--role`/
-    `--aliases` (or the MCP/Slack/console equivalents) — free text a human typed with material on
-    screen, or an agent-adjacent surface relayed. They commit `--no-verify` (so the knowledge
-    repo's own hooks do not run), so this scan is the one that runs instead: git cannot forget, so
-    `main` is the place a secret must never reach.
-
-    `gates.scan_worktree_files` rather than a second gitleaks invocation — same binary, same
-    `--redact`, same JSON report, same `Finding` whose message already names the rule id.
-
-    Refusing when the scanner is missing (`ensure_scanner`) rather than skipping: a secrets gate
-    that silently passes is worse than no gate.
+    What a mint commits includes `--role`/`--aliases` — free text typed with untrusted material on
+    screen — and the commit is `--no-verify`, so this scan is the one that runs: git cannot
+    forget, and `main` is the place a secret must never reach. `gates.scan_worktree_files`, never
+    a second gitleaks invocation. A missing scanner REFUSES (`ensure_scanner`) rather than skips —
+    a secrets gate that silently passes is worse than no gate.
     """
     gitleaks_bin = os.environ.get(GITLEAKS_BIN_ENV) or librarian_config.Settings.gitleaks_bin
     gates.ensure_scanner(gitleaks_bin)
     findings = gates.scan_worktree_files(repo, relpaths, gitleaks_bin=gitleaks_bin)
     if not findings:
         return
-    # gitleaks names the file it actually read, which is the copy inside the scratch directory
-    # `scan_worktree_files` builds. That path is true and useless: it is gone by the time anyone
-    # reads the message, and it points at nothing they can open. The relpaths handed in above are
-    # the same files under names they recognise, so the message is said in those.
+    # gitleaks names the scratch copy it actually read — true and useless, gone before anyone
+    # reads the message. Rewritten to the repo-relative names the reader knows.
     listed = "\n  ".join(_relocate(f.message, relpaths) for f in findings)
     raise EntityError(
         f"refusing to {action} — the secret scanner matched something in what this commit would "

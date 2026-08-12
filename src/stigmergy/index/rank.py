@@ -1,15 +1,9 @@
 """Contract-aware ranking over the fused arms. Pure code, explainable: every hit carries the
-factors that shaped its score, so 'why did this page rank here' is always answerable — no
-opaque similarity.
+factors that shaped its score, so 'why did this page rank here' is always answerable.
 
-The design is recorded in ADR 012. Two properties are load-bearing:
-
-- Base relevance is Reciprocal Rank Fusion of the FTS and vector rankings, not BM25 alone. RRF is
-  HIGHER-is-better, so the factor constants — penalties > 1, boosts < 1 — DIVIDE the score rather
-  than multiplying it.
-- `status: evergreen` outranks `seed` on equal relevance (maturity boost), and stale pages are
-  penalized by age — deterministically, against an INJECTED `today` and never the wall clock, so
-  ranking is testable and reproducible.
+Base relevance is Reciprocal Rank Fusion of the FTS and vector rankings. RRF is HIGHER-is-better,
+so the factor constants — penalties > 1, boosts < 1 — DIVIDE the score. Staleness is judged
+against an INJECTED `today`, never the wall clock, so ranking is testable and reproducible.
 """
 import re
 from datetime import date, timedelta
@@ -30,74 +24,48 @@ _BOOST_EVERGREEN = 0.8
 _PENALTY_STALE = 1.3
 STALE_AFTER_DAYS = 365
 
-# `inlinks` is DELIBERATELY not a factor, and this was measured rather than assumed: a candidate
-# boost (0.9^min(n,3), and a stronger 0.7) took the retrieval golden's final arm from 1.000 to
-# 0.923 both times — the highly-inlinked entity page outranked the VIEW on a broad "what do we
-# know about X" question. Link-degree rewards hubs, and hubs are exactly what broad questions must
-# NOT bury the synthesis under. The column stays data (gardener, webhook reconciliation); waking
+# `inlinks` is DELIBERATELY not a factor — measured twice (0.9^min(n,3) and 0.7), and both took
+# the golden's final arm down: link-degree rewards hubs, and hubs are exactly what a broad "what
+# do we know about X" question must not bury the synthesis under. The column stays data; waking
 # this needs a measured miss it would fix.
 
-# 'current/latest'-style words prefer fresher as_of. The set is English because the corpus and
-# the questions are: a deployment answering in another language extends it, and the boost is
-# simply not applied to a word nothing here recognizes — silently, which is why a set that has
-# stopped matching the language people ask in is worth checking before it is worth widening.
+# 'current/latest'-style words prefer fresher as_of. English because the corpus and the questions
+# are; an unrecognized word simply never fires the boost — silently — so check whether the set
+# still matches the language people ask in before widening it.
 _RECENCY_WORDS = {"current", "latest", "now", "today", "newest", "most recent"}
 
-# Matched on WORD BOUNDARIES, never as bare substrings. `"now" in "what do we know about X"` is
-# true, and that one character of slack put the boost on the single most common broad question
-# shape there is — three of the sixteen questions in `evals/retrieval_golden.json` fired it,
-# demoting every page WITHOUT an `as_of` on questions that had asked nothing about time.
-#
-# A regex rather than `query_tokens`, for two reasons it is worth not rediscovering: `\b` spans
-# the multi-word entry ("most recent") in the same pass, and `query_tokens` keeps the apostrophe
-# inside a token, so matching against it would drop "today's numbers" — a real recency question —
-# while fixing the false ones. Longest-first alternation so a future two-word entry cannot be
-# shadowed by a one-word prefix of itself.
+# Matched on WORD BOUNDARIES, never as substrings: `"now" in "what do we know about X"` is true,
+# and that slack put the boost on the most common broad-question shape there is. A regex rather
+# than `query_tokens`: `\b` spans the multi-word entry in one pass, and `query_tokens` keeps the
+# apostrophe inside a token, so matching against it would drop "today's numbers". Longest-first
+# alternation so a two-word entry cannot be shadowed by a one-word prefix of itself.
 _RECENCY_RE = re.compile(
     r"\b(?:" + "|".join(re.escape(w) for w in sorted(_RECENCY_WORDS, key=len, reverse=True)) + r")\b")
 
 
-# A split page's continuation parts carry a trailing part marker on their id. TWO conventions
-# exist and both must be recognized: `<id>#p2`, which the live producer DECLARES
-# (`librarian.processing._build_source_parts` names the FILE `<stem>-p<n>.md` and stamps
-# `id: "<stem>#p<n>"`, and a declared id wins over the stem), and the bare `<stem>-p2` stem, which
-# is what parts filed before that stamping landed still resolve to. Recognizing only one leaves
-# both the build-time `superseded_by` propagation and the rank-time chain collapse below INERT
-# over a whole generation of parts — silently.
+# A split page's continuation parts carry a trailing part marker on their id, in TWO conventions
+# both of which must be recognized: the declared `<id>#p<n>` (`librarian.processing.
+# _build_source_parts` names the FILE `<stem>-p<n>.md` and stamps `id: "<stem>#p<n>"`) and the
+# bare `<stem>-p<n>` stem fallback for parts filed without a declared id. Recognizing only one
+# leaves the `superseded_by` propagation and the chain collapse silently INERT over the other.
+# `superseded_by` is stamped on the PRIMARY page only, so `chain_base` recovers the shared
+# document id; `corpus.load_pages` propagates the value at build time.
 #
-# When a document is superseded, versions.py stamps `superseded_by` on the PRIMARY page only —
-# never on the continuation parts. So a bare per-page check demotes part 1 while parts 2..n rank
-# on as if current: the split-chain demotion bug. `chain_base` recovers the shared document id.
-#
-# This function's caller used to be `rank()` itself, reconstructing chain membership at QUERY
-# time from whichever candidates happened to be in a given search's pool — a reconstruction that
-# silently failed whenever the chain's primary page fell outside that pool. `corpus.load_pages`
-# calls it at BUILD time instead, grouping every row by its chain base and propagating the
-# primary's `superseded_by` onto every sibling BEFORE the row ever reaches storage — so by the
-# time `rank()` sees a candidate, its own `superseded_by` column already tells the whole truth,
-# and no per-query reconstruction is needed at all.
-#
-# False-positive note: an INDEPENDENT page whose id merely
-# ends in `-p<n>` merges into a base it never belonged to only when that base id also exists in
-# the SAME directory (the collapse key below carries the directory). The substrate lint flags
-# the ORPHAN complement (a part-shaped id with no base beside it) — the same-directory pair with
-# a real base present is INDISTINGUISHABLE by id shape alone and is an accepted residual. The
-# producer-side fix has shipped for everything filed since (a declared `#p<n>` id is unambiguous);
-# this residual is what the bare-stem fallback still costs on the pages that predate it.
+# Accepted residual of the bare-stem fallback: an INDEPENDENT page whose id merely ends in
+# `-p<n>` merges into a base only when that base id also exists in the SAME directory — a pair
+# indistinguishable by id shape alone. The substrate lint flags the orphan complement.
 _PART_MARKER_RE = re.compile(r"(?:#p|-p)\d+$")
 
 
 def chain_base(page_id: str) -> str:
-    """The document id shared by a split page and its continuation parts: a trailing part
-    marker stripped. BOTH spellings are handled — `#p<n>` and `-p<n>` — because the live producer
-    writes the second and matching only the first left this inert over every real split.
-    Non-split ids are returned unchanged."""
+    """The document id shared by a split page and its continuation parts: a trailing part marker
+    stripped, both `#p<n>` and `-p<n>` spellings. Non-split ids are returned unchanged."""
     return _PART_MARKER_RE.sub("", page_id or "")
 
 
 def rrf_fuse(rankings: list[list[str]], k: int = RRF_K) -> dict[str, float]:
-    """Reciprocal Rank Fusion (ported from the spike's rank_rrf): each arm contributes
-    1/(k + rank); ids missing from an arm simply don't score there."""
+    """Reciprocal Rank Fusion: each arm contributes 1/(k + rank); ids missing from an arm simply
+    don't score there."""
     scores: dict[str, float] = {}
     for ranking in rankings:
         for rank, page_id in enumerate(ranking, start=1):
@@ -124,13 +92,9 @@ def query_periods(query: str) -> set[str]:
 def _period_end(value: str) -> date | None:
     """Latest plausible day of a (possibly coarse) as_of/updated value — a page dated '2026'
     is treated as fresh through 2026, so coarse-but-recent pages are never punished."""
-    # EVERY branch is guarded, not only the full-date one. `\d{4}` matches `0000`, and `date()`
-    # rejects year 0 — so `as_of: "0000"` (or `"0000-07"`, or `"0000-Q1"`) raised `ValueError`
-    # out of three of the four branches. That escapes `contract_factors` -> `rank()` ->
-    # `search_arms`, so ONE page dated that way broke every search whose candidate pool touched
-    # it, and `search_brain` echoed the message verbatim. The suite's own name for this contract
-    # is `test_period_end_rejects_invalid_values_instead_of_crashing`; a year of zero is just
-    # another invalid value, and `None` is what the other invalid ones already get.
+    # EVERY branch is guarded, not only the full-date one: `\d{4}` matches `0000` and `date()`
+    # rejects year 0, so an unguarded branch lets ONE oddly-dated page break every search whose
+    # candidate pool touches it. Any invalid value yields None, never a raise.
     v = value.strip().strip('"')
     try:
         if m := re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", v):
@@ -160,24 +124,16 @@ def contract_factors(page: dict, query: str, today: date | None = None,
         factors.append((_PENALTY_SUPERSEDED, "superseded"))
     if page.get("status") == "evergreen":
         factors.append((_BOOST_EVERGREEN, "status-evergreen"))
-    # The boost fires on the entity id the SERVICE resolved from the registry and passed down
-    # (`entity_hint`), matched by MEMBERSHIP of the page's `entity` list — never re-inferred from
-    # query tokens here. Token inference is structurally dead for every multi-word entity (an id
-    # like `acme-capital` can never equal one token of "Acme Capital"), so it silently narrows the
-    # factor to single-word ids — a defect invisible except by eyeballing a search result, which
-    # is the class of latency `stigmergy-index check` exists to end. No hint means no entity factor:
-    # resolution is the service's job (it owns the registry and identity), and ranking only
-    # applies what it is TOLD.
-    #
-    # A SCALAR string must not be iterated — a caller handing a bare string instead of a list
-    # would otherwise be walked as characters.
+    # The boost fires on the entity id the SERVICE resolved and passed down (`entity_hint`),
+    # matched by MEMBERSHIP of the page's `entity` list — never re-inferred from query tokens,
+    # which is structurally dead for every multi-word id (`acme-capital` never equals one token of
+    # "Acme Capital"). No hint means no entity factor: ranking applies what it is TOLD.
+    # A SCALAR string must not be iterated — it would be walked as characters.
     raw_entity = page.get("entity") or ()
     entities = [raw_entity] if isinstance(raw_entity, str) else raw_entity
     if entity_hint and any(e and str(e).lower() == str(entity_hint).lower() for e in entities):
         factors.append((_BOOST_ENTITY, f"entity:{entity_hint}"))
-    # `as_of` alone: a separate `period` field was an exact duplicate of it (every page carrying
-    # one carried both, with the same value) and had no producer — no template offered it and no
-    # code stamped it. One dated field, not two.
+    # `as_of` is the ONE dated field a query period matches against — no parallel `period` column.
     page_periods = {x for x in (page.get("as_of"),) if x}
     if periods and any(pp == qp or pp.startswith(qp + "-") or qp.startswith(pp + "-")
                        for pp in page_periods for qp in periods):
@@ -208,16 +164,11 @@ def rank(candidates: dict[str, dict], fts_ranking: list[str], vec_ranking: list[
         page = candidates.get(path)
         if page is None:
             continue
-        # A split document's continuation parts ("<id>#p2", "#p3", …) carry their OWN
-        # `superseded_by`, propagated at BUILD time onto every sibling in the chain
-        # (`corpus.load_pages`, grouped by `chain_base`) — so a bare per-row check is correct on
-        # its own, whether or not the chain's primary happens to be in THIS query's candidate set.
-        # When the field lived on the primary row only, this function reconstructed chain
-        # membership from whatever candidates happened to be here, which MISSED a continuation
-        # part whose primary fell outside the candidate set — the exact case
-        # `tests/index/test_rank.py` pins. `contract_factors` already turns a truthy
-        # `superseded_by` into the "superseded" penalty+label, so no per-chain compensation
-        # belongs here.
+        # A continuation part carries its OWN `superseded_by`, propagated at BUILD time onto every
+        # chain sibling (`corpus.load_pages`) — so a bare per-row check is correct whether or not
+        # the chain's primary is in THIS query's candidate set. No per-chain reconstruction
+        # belongs here: rebuilding membership from the candidate pool misses a part whose primary
+        # fell outside it.
         in_superseded_chain = bool(page.get("superseded_by"))
         if not include_superseded and in_superseded_chain:
             continue
@@ -232,20 +183,13 @@ def rank(candidates: dict[str, dict], fts_ranking: list[str], vec_ranking: list[
                      "factors": [label for _f, label in applied],
                      "snippet": _snippet(body, q_tokens)})
     hits.sort(key=lambda h: (-h["score"], h["path"]))
-    # ONE document, ONE top-k slot. A split document's parts are one page set — without this, a
-    # broad query lets a single transcript flood four of five slots and bury the page that
-    # actually answered. That was measured, not imagined: a final top-5 of the meeting page plus
-    # ALL FOUR transcript parts, with the expected decision page sitting at vec rank 2.
-    # Best-scoring member represents the chain (the sort order above already decides it); the
-    # others stay reachable by path — collapse is a top-k presentation rule, not deletion.
-    #
-    # The key carries the page's DIRECTORY beside the chain base: two ID-LESS pages sharing a file
-    # stem in different folders both fall back to the same stem-derived page_id (the same class
-    # `corpus.load_pages` marker-gates for propagation — measured here on two unrelated
-    # `quarterly-update.md` twins), and a bare chain_base key would merge two unrelated documents.
-    # A real chain's parts sit BESIDE their primary (`_build_source_parts` writes `<stem>-p<n>.md`
-    # into the primary's own folder; the historical `#p` ids shared one file's zone path), so the
-    # directory dimension never splits a genuine chain.
+    # ONE document, ONE top-k slot: without the collapse a single split transcript floods four of
+    # five slots and buries the page that actually answered. The best-scoring member represents
+    # the chain (the sort above decides it); the others stay reachable by path — collapse is a
+    # top-k presentation rule, not deletion. The key carries the DIRECTORY beside the chain base:
+    # two ID-less pages sharing a file stem in different folders fall back to the same page_id,
+    # and a bare base key would merge unrelated documents; a real chain's parts sit BESIDE their
+    # primary, so the directory dimension never splits one.
     collapsed, seen_chains = [], set()
     for h in hits:
         base = chain_base(h.get("page_id") or "") or h["path"]
@@ -259,14 +203,8 @@ def rank(candidates: dict[str, dict], fts_ranking: list[str], vec_ranking: list[
 
 def _snippet(body: str, q_tokens: set[str], width: int = 240) -> str:
     """The region around the LONGEST query token present in the body (fallback: the head).
-
-    Ties are broken alphabetically, not by iteration order. `q_tokens` is a `set`, and `sorted` is
-    stable, so two tokens of equal length used to be ordered by however the set happened to yield
-    them — which CPython randomizes per process. The same body and query then produced a different
-    snippet from two identical processes, and the snippet is user-visible: it ships on every wire
-    hit, `stigmergy-index search` prints it, and `answer/brain.py` splices it into the prompt the
-    answering agent reads. This module promises determinism; that promise has to include this.
-    """
+    Ties break alphabetically, never by set-iteration order — CPython randomizes that per process,
+    and the snippet is user-visible on every hit, so determinism has to include it."""
     low = body.lower()
     best = 0
     for t in sorted(q_tokens, key=lambda tok: (-len(tok), tok)):

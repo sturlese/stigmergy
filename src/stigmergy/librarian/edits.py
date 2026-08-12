@@ -1,39 +1,17 @@
 """Edits to pages that already exist: **declared by the agent, performed by code**.
 
-The agent writes only NEW files. When it wants a reciprocal `related:` link or an
-overlap/contradiction callout on a page that already exists, it names it in the outcome and this
-module performs the edit.
+The agent writes only NEW files; a reciprocal `related:` link or an overlap/contradiction
+callout on an existing page is named in the outcome and this module performs it. The split
+exists because a model asked to "insert a line and change nothing else" rewrote a human page's
+body on both of its passes — naming the edit removes the failure class instead of defending
+against it, and it is a smaller surface: `agent.confined_write` admits no modification at all,
+while code's own edits land in the same diff and every gate — `gate_body_rewrite` above all —
+still judges them, additive by construction (`page.with_related_link`, `page.with_callout`).
 
-**Why the split.** The agent used to make the additive edits itself, with a gate behind it
-refusing anything that was not a pure addition. On the first real live run the agent
-rewrote the body of an existing human-authored page; the gate refused the whole capture,
-correctly; and the corrective retry, handed that finding, did it again. Two for two — and the
-mechanism explains why: for a model, "insert a line into this file and change nothing else" is a
-strictly harder and less reliable operation than "say which link you want". Cross-linking is the
-librarian's whole value — the agent is handed the graph so it *integrates* rather than merely
-places — so a mechanism that fails at linking fails at the job. Naming the edit removes the
-failure class instead of defending against it.
-
-**This is a smaller security surface, not a larger one.** The agent's write confinement became "a
-NEW `.md` page in one of the creatable folders" with no modifications at all (`agent.confined_write`),
-which is a strictly shorter allow-list than before. Code's own edits are not exempt from anything:
-they land in the same diff, and every gate — `gate_body_rewrite` above all — judges them. They
-pass because they are additive by construction (`page.with_related_link`, `page.with_callout`),
-which is a property of the code, provable by reading it, rather than of a model's good behaviour.
-
-**Validated before anything is written.** A declaration is untrusted input like the rest of the
-outcome: `agent.parse_outcome` bounds its SHAPE (the vocabulary of kinds, the path pattern, the
-text lengths), and `validate` here answers the questions that need the real graph — the target
-exists, it is one of the creatable folders, it resolves INSIDE the worktree, it is not a page this
-capture just created, and the declared link resolves to a page that exists. If ANY declaration is
-bad, nothing is applied and the findings go back to the agent as its one corrective retry: a
-half-applied set of edits is a worktree nobody can reason about.
-
-**Path questions go through `page.py`, never through `==`.** "Is this the page we just created"
-and "does this resolve inside the worktree" are the same two questions `agent.confined_write`
-asks, and answering them here with a second implementation is how the first of them came to be
-wrong in two places at once (an exact string test against a case- and normalization-insensitive
-filesystem). `page.path_key` and `page.is_inside` are that shared seam.
+A declaration is untrusted input: `agent.parse_outcome` bounds its SHAPE, and `validate` here
+answers the questions that need the real graph. If ANY declaration is bad, nothing is applied —
+a half-applied set of edits is a worktree nobody can reason about. Path questions go through
+`page.path_key` / `page.is_inside`, never `==`.
 """
 import logging
 import os
@@ -44,8 +22,8 @@ from stigmergy.librarian import page as page_policy
 
 log = logging.getLogger(__name__)
 
-# The vocabulary lives in `page.py` — the placement table every other type question reads — so the
-# outcome boundary and the applier cannot disagree about which kinds exist.
+# The vocabulary lives in `page.py` — the placement table every other type question reads — so
+# the outcome boundary and the applier cannot disagree about which kinds exist.
 EDIT_KINDS = page_policy.EDIT_KINDS
 NOTE_REQUIRED_KINDS = page_policy.NOTE_REQUIRED_KINDS
 
@@ -57,26 +35,17 @@ def _finding(code: str, message: str, locator: str = "") -> gates.Finding:
 def page_names(worktree: str, *, confined: bool = False) -> set[str]:
     """Every page basename (without `.md`) in EVERY content zone of the worktree.
 
-    A wikilink resolves by bare basename, which is what the contract linter does too — so this is
-    the same question "does `[[X]]` resolve" is answered with there, asked early enough that the
-    refusal names the DECLARATION rather than surfacing later as a dead link on somebody's page.
+    A wikilink resolves by bare basename, exactly as the contract linter resolves it — which is
+    why this walks ALL the zones the linter's own `by_name` index is built from
+    (`CONTENT_ROOTS`): a declared link to a transcript, a source or a view must not be refused
+    as dead about a page that plainly exists.
 
-    "The same question" is why this walks all three zones. It used to walk `wiki/` alone while the
-    linter's `by_name` index is built from `CONTENT_ROOTS = ("wiki", "sources", "views")`, so a
-    declared link to a meeting transcript, an attached source or a regenerated view was refused
-    here as `edits/dead-link` — "resolves to no page in the graph" — about a page that plainly
-    exists. `apply_declared` is all-or-nothing, so nothing was applied, the capture burned its one
-    corrective retry and landed `failed`.
-
-    **`confined` drops any page that does not resolve inside the worktree, or whose leaf is a
-    symlink** — the same filter `gather._confined` applies to the corpus parse, and it is a
-    PARAMETER rather than the default for a reason each caller can state. `validate` (the default,
-    `False`) is answering "would this link be dead?", and the answer must be the linter's, whose
-    own index has no containment notion; it separately refuses to WRITE through a symlink
-    (`os.path.islink(full)` below, plus `O_NOFOLLOW`), which is where containment actually bites on
-    that road. `gather` passes `True` because its answer becomes a list of names in a model's
-    prompt, and a page whose bytes come from outside the commit being filed against must not be
-    offered as something to link.
+    `confined` drops any page that does not resolve inside the worktree, or whose leaf is a
+    symlink — the same filter `gather._confined` applies — and it is a PARAMETER because the two
+    callers need different answers: `validate` (the default) is answering "would this link be
+    dead?", and the answer must be the linter's, whose index has no containment notion (the
+    WRITE road refuses symlinks separately); `gather` passes `True` because its answer becomes a
+    list of names in a model's prompt.
     """
     names = set()
     for zone in corpus.ZONES:
@@ -118,10 +87,9 @@ def validate(worktree: str, declared, *, new_pages) -> list[gates.Finding]:
             out.append(_finding("not-a-page",
                                 f"declared an edit to {path}, which is not a page", path))
             continue
-        # `path_key`, not `==`: the filesystem this runs on resolves case and Unicode
-        # normalization, so `wiki/notes/target.md` and the `Target.md` this capture just
-        # created are ONE file, and an exact string test answered "a different page" for it. Same
-        # helper `agent.confined_write` asks the same question with, so the two cannot drift.
+        # `path_key`, not `==`: on this filesystem `wiki/notes/target.md` and the `Target.md`
+        # this capture just created are ONE file. Same helper `agent.confined_write` asks the
+        # same question with, so the two cannot drift.
         if page_policy.path_key(path) in page_policy.path_keys(created):
             out.append(_finding("own-page",
                                 f"declared an edit to {path}, which this capture just created: "
@@ -129,20 +97,18 @@ def validate(worktree: str, declared, *, new_pages) -> list[gates.Finding]:
                                 f"to it", path))
             continue
         full = os.path.join(worktree, path)
-        # Containment, resolved rather than inferred from the string's shape. Everything above is a
-        # shape check; a symlinked DIRECTORY component (a `wiki/playbooks` link merged into the
-        # repo) satisfies every one of them and would be written through, outside the worktree, as
-        # the worker. `confined_write` resolves-and-contains for the agent's writes; code's own
-        # writes get the same treatment rather than relying on the folder-name equality above.
+        # Containment, RESOLVED rather than inferred from the string's shape: everything above
+        # is a shape check, and a symlinked DIRECTORY component satisfies every one of them and
+        # would be written through, outside the worktree, as the worker.
         if not page_policy.is_inside(worktree, path):
             out.append(_finding("outside-worktree",
                                 f"declared an edit to {path}, which resolves outside the "
                                 f"worktree — no page there belongs to this capture", path))
             continue
         if os.path.islink(full):
-            # `open(p, "w")` follows a symlink, so a page that is really a link somewhere else
-            # would be edited THROUGH it, as the worker. `apply` opens with `O_NOFOLLOW` as well;
-            # this is the half that produces a readable refusal instead of an OSError.
+            # `open(p, "w")` follows a symlink, so a page that is really a link would be edited
+            # THROUGH it. `apply` opens with `O_NOFOLLOW` as well; this is the half that
+            # produces a readable refusal instead of an OSError.
             out.append(_finding("symlinked-target",
                                 f"declared an edit to {path}, which is a symlink and not a page",
                                 path))

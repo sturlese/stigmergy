@@ -1,16 +1,12 @@
-"""The Drive fetch seam (ADR 028 D2): the operator's own Google auth, behind one protocol.
+"""The Drive fetch seam: the operator's own Google auth, behind one protocol.
 
-`GogDriveClient` shells out to the locally-installed, locally-authenticated `gog` CLI — the
-operator's credential, on the operator's machine, exactly like the operator's git config. No
-Google credential of any kind exists server-side: the WORKER converts from the evidence blob and
-never talks to Drive, so this stays a door and never becomes a mirror. Tests inject a fake with
-the same three methods; `tests/capture/test_drive_cli.py` proves the CLI against it, and nothing
-in the suite ever runs `gog`.
+`GogDriveClient` shells out to the locally-authenticated `gog` CLI — the operator's credential
+on the operator's machine. No Google credential exists server-side: the worker converts from the
+evidence blob and never talks to Drive, so this stays a door and never becomes a mirror. Tests
+inject a fake; nothing in the suite ever runs `gog`.
 
-A NATIVE Google file (Docs/Slides/Sheets — `application/vnd.google-apps.*`) has no original
-bytes to fetch; `gog drive download --format pdf` asks Drive itself to export it, so the
-evidence blob is a faithful PDF Drive produced and the worker sees `.pdf` — no converter of ours
-ever touches a native format. A binary upload downloads verbatim.
+A NATIVE Google file has no original bytes; `gog drive download --format pdf` asks Drive itself
+to export it, so the worker sees `.pdf` and no converter of ours touches a native format.
 """
 import json
 import os

@@ -1,45 +1,25 @@
 #!/usr/bin/env python3
-"""Golden QA runner — honesty + groundedness at the answer.
+"""Golden QA runner — on-demand, keyed instrument (not wired into CI).
 
-On-demand instrument (NOT wired into CI — CI stays keyless): drives `evals/qa_golden.json`
-(26 questions) through the full answering loop over the Postgres index and reports THREE
-quality axes — plus, beside them, the two LATENCY numbers described after the list:
+Drives `evals/qa_golden.json` through the full answering loop over the Postgres index and reports
+three quality axes, each with its own denominator:
 
-  - HONESTY    = fraction of genuinely unanswerable questions the brain correctly REFUSES (the
-                 anti-hallucination metric). >= 0.90 is the armed bar. The denominator is the
-                 `refusal` kind alone: a mixed-entity question is answerable — by cited
-                 disambiguation — so it belongs on the refutation axis, not here.
-  - GROUNDEDNESS = fraction of answerable questions answered with the expected figure/citation and
-                 a verdict that is not `failed` (the false-refusal / wrong-answer watch).
-  - REFUTATION = fraction of corrective questions — FALSE-PREMISE (`refute`) and MIXED-ENTITY
-                 (`disambiguate`) — handled correctly, where correct means EITHER an honest
-                 refusal OR a cited correction/disambiguation carrying the corpus's real figure.
-                 Scoring the refusal alone was wrong: a brain that answered "the benchmark says
-                 2.3x, not 5x" — the best behavior available — was recorded as a miss. See
-                 `_aggregate` for why these left the honesty denominator rather than staying in it.
+  - HONESTY      refusal rate over genuinely unanswerable questions (`kind: refusal` alone). The
+                 armed bar is `bars.BAR_HONESTY`.
+  - GROUNDEDNESS fraction of answerable questions answered with the expected figure/citation and a
+                 verdict that is not `failed`.
+  - REFUTATION   fraction of corrective questions — false-premise (`refute`) and mixed-entity
+                 (`disambiguate`) — handled by EITHER an honest refusal OR a cited
+                 correction/disambiguation carrying the corpus's real figure.
 
-RETRY RATE and SECONDS/QUESTION carry no bar and gate nothing — they are the instrument for
-`ask`'s wall clock. A first draft that fails the deterministic verifier earns one corrective
-retry, and that retry is a SECOND full agent run: on staging it was the difference between a 7 s
-ask and a 17 s one, on nearly half of them. Because a retried ask almost always still ends
-`verified`, the three axes above are blind to the cost by construction — it lands entirely on
-questions they score `ok`. Both numbers are per-question and both reach `evals/history.ndjson`,
-so a prompt or matcher change aimed at the retry rate is read off the series, not re-argued.
+RETRY RATE and SECONDS/QUESTION are latency axes: no bar, gate nothing. A retried ask almost always
+still ends `verified`, so the quality axes are blind to that cost by construction.
 
-`_score` is not literal: a figure expectation matches any numerically equivalent spelling
-(`1.074`/`1074`, `512k`/`512000`, `2,3x`/`2.3x`), and `cites` accepts a chain of pages where any
-one is a valid citation. Mirrors evals/run_retrieval.py (needs `make db-up`).
+`_score` is not literal: a figure matches any numerically equivalent spelling, an ISO date any
+rendering of the same day, and `cites` accepts a chain where any one page is valid. The corpus is
+`evals/corpus/`, committed and frozen so the series stays comparable.
 
-The corpus is `evals/corpus/` — committed and frozen, so the series it feeds stays comparable.
-See `evals/corpus/PROVENANCE.json`.
-
-The measured server loads `ops/entity-registry.json` by the same `--repo` convention as the
-deployed one. Without that, a QA run measures a server with entity-first resolution silently
-disabled (`Settings` built with no `entity_registry_path`) — an instrument blind to one of the
-retrieval mechanisms it exists to guard. The loader fails open, so a corpus carrying no `ops/`
-scores identically either way.
-
-  # keyless self-check (plumbing only; the fake synthesizer, not model judgment):
+  # keyless self-check (plumbing only — appends no history row)
   python evals/run_qa.py --embedder fake --llm fake --rebuild --repo evals/corpus
 
   # the real measurement (needs OPENAI_API_KEY)
@@ -88,12 +68,9 @@ def main() -> int:
     ap.add_argument("--rebuild", metavar="", nargs="?", const=True, default=False,
                     help="rebuild the index first (requires --repo)")
     ap.add_argument("--repo", default=None, help="knowledge-repo checkout (with --rebuild)")
-    # Built with no `entity_registry_path` at all, `Settings` measures a server WITHOUT
-    # entity-first resolution while the deployed server has it — which would make the claim that
-    # qa-golden "is the only instrument that can detect a regression from entity-first resolution"
-    # structurally false. Same `--repo` convention as `Settings.from_args` (explicit flag wins;
-    # harmless for a corpus that ships no ops/ — the loader's documented fail-open keeps those
-    # runs byte-identical).
+    # Without this, `Settings` measures a server with entity-first resolution silently OFF while
+    # the deployed one has it on. Same `--repo` convention as `Settings.from_args`; the loader
+    # fails open, so a corpus shipping no `ops/` scores identically either way.
     ap.add_argument("--entity-registry", default=None,
                     help="ops/entity-registry.json (default: <repo>/ops/entity-registry.json)")
     ap.add_argument("--report", default=None, help="write the full JSON report here")
@@ -110,9 +87,8 @@ def main() -> int:
 
 def _settings_for(args, identity_name: str) -> Settings:
     """The measured server's settings — one construction site, so what the instrument runs is
-    inspectable. `entity_registry_path` follows `Settings.from_args`'s own `--repo` convention;
-    left empty, entity-first resolution is silently off under measurement while being live on the
-    deployed server, and the instrument stops seeing a mechanism it exists to guard."""
+    inspectable. `entity_registry_path` must stay set or entity-first resolution is off under
+    measurement while live on the deployed server."""
     return Settings(identity=identity_name, identities_path=args.identities,
                     entity_registry_path=(args.entity_registry
                                           or entity_aliases.default_path(args.repo)),
@@ -145,12 +121,9 @@ def _run(args, golden) -> int:
         total = len(golden["questions"])
         for n, case in enumerate(golden["questions"], 1):
             svc = answerer(case.get("identity", default_identity))
-            # Progress on stderr (stdout stays the report): a real-model run is ~20 agentic
-            # loops, minutes of otherwise total silence that reads as a hang.
+            # Progress on stderr; stdout stays the report.
             print(f"[{n:2d}/{total}] {case['id']:24s} ", end="", flush=True, file=sys.stderr)
-            # Wall time per question, measured from OUTSIDE `ask` — the same thing a Slack user
-            # waits through, and the number the corrective-retry work is judged on. Recorded here
-            # rather than in `_score` because it is a property of this run, not of the answer.
+            # Wall time measured from OUTSIDE `ask` — what a Slack user actually waits through.
             started = time.perf_counter()
             res = asyncio.run(svc.ask(case["q"]))
             scored = _score(case, res)
@@ -167,10 +140,8 @@ def _run(args, golden) -> int:
         Path(args.report).parent.mkdir(parents=True, exist_ok=True)
         Path(args.report).write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
         print(f"report -> {args.report}")
-    # A real-instrument run — `--llm openai`, the actual measurement, never the
-    # keyless `--llm fake` self-check the docstring's own plumbing example uses — appends its
-    # score to the durable, git-resident series. Never fails the run (see `eval_history`'s own
-    # module docstring).
+    # Only a real-instrument run appends to the durable series; the keyless `--llm fake` self-check
+    # has no quality number worth keeping. Never fails the run.
     if args.llm == "openai":
         eval_history.append_run(
             suite="qa", git_sha=eval_history.resolve_git_sha(ROOT),
@@ -182,26 +153,19 @@ def _run(args, golden) -> int:
     return 0
 
 
-# A figure expectation is the WHOLE expectation — digits, optional grouping, an
-# optional magnitude suffix, an optional `%` or `x`. `"routing v2"` and `"Q3"` and `"2026-02-10"`
-# deliberately do NOT match: they carry digits but are prose, and letting numeric equivalence
-# loose on them would make any answer containing a 2 (or a 3) score as a hit — the scorer would
-# stop measuring anything at all.
+# A figure expectation must be the WHOLE expectation. `"routing v2"`, `"Q3"` and `"2026-02-10"`
+# deliberately do NOT match: they carry digits but are prose, and numeric equivalence loose on them
+# would score any answer containing a 2 as a hit.
 _PURE_FIGURE = re.compile(r"^\s*\d[\d.,]*\s?(?:bn|[kKmMbB])?\s?[%xX]?\s*$")
 
-# `answer/numbers.py` understands the `x` multiplier itself, so the scorer does not restate it.
-# The scorer stays DIMENSION-BLIND on purpose: `number_pool` emits `%`-dimensioned entries for the
-# verifier's anti-laundering check, but a yardstick asking "is the right NUMBER present" must not
-# start demanding that an answer write `40%` rather than `40 per cent` — so both sides
-# strip the dimension before the subset test.
+
+# Dimension-BLIND on purpose: this asks "is the right number present", so it must not demand `40%`
+# over `40 per cent`. Both sides strip the dimension before the subset test.
 def _figures(text: str) -> set[str]:
     return {canon.removesuffix("%") for canon in numbers.number_pool(text)}
 
 
-# An ISO date in an expectation must match the date HOWEVER the answering system writes it.
-# `aurora-timeline-q1` is the measured case — `expect_contains: "2026-02-10"` against a long-form
-# rendering of the same day: right page, right date, verdict `verified`, scored a MISS. Same class
-# as the numeric equivalence above (the yardstick in the wrong notation), same shape: equivalence,
+# An ISO date in an expectation must match the date HOWEVER the answer writes it — equivalence,
 # never a wider literal match.
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August",
@@ -209,11 +173,9 @@ _MONTHS = ("January", "February", "March", "April", "May", "June", "July", "Augu
 
 
 def _date_renderings(iso: str) -> list[str]:
-    """Every spelling of one calendar date this scorer accepts: the ISO form itself, both long
-    forms (day-first and month-first, with and without the leading zero), and the numeric
-    variants. Day-first AND month-first are both accepted because English writes both, and an
-    expectation that already fixes the calendar day cannot be made ambiguous by the spelling of
-    it."""
+    """Every spelling of one calendar date this scorer accepts: ISO, both long forms and the
+    numeric variants, with and without the leading zero. Day-first and month-first both, because
+    English writes both and the expectation has already fixed the day."""
     year, month, day = (int(part) for part in iso.split("-"))
     name = _MONTHS[month - 1]
     return [iso,
@@ -225,12 +187,9 @@ def _date_renderings(iso: str) -> list[str]:
 
 
 def _date_matches(iso: str, answer: str) -> bool:
-    """The renderings above, plus the YEARLESS long forms — measured: a correct, cited, verified
-    correction wrote that something was agreed "on 12 August", the year contextual, as prose
-    actually writes it, and the full-form-only matcher scored the right answer a miss. The
-    yearless form keeps year discrimination where the answer DOES state one: a negative lookahead
-    refuses "12 August 2025" (or "August 12, 2025") against an expectation of 2026-08-12 — the
-    full-form renderings above are the only way a year-bearing spelling can match."""
+    """The renderings above, plus the YEARLESS long forms prose actually writes ("on 12 August").
+    Year discrimination survives: a negative lookahead refuses a year-bearing spelling with the
+    wrong year, so the full-form renderings are the only way one can match."""
     if any(rendering in answer for rendering in _date_renderings(iso)):
         return True
     year, month, day = (int(part) for part in iso.split("-"))
@@ -240,15 +199,11 @@ def _date_matches(iso: str, answer: str) -> bool:
 
 
 def _expectation_met(case: dict, answer: str) -> bool:
-    """Literal first, then numeric equivalence for a figure, then date equivalence for an ISO
-    date.
+    """Literal first, then numeric equivalence for a figure, then date equivalence for an ISO date.
 
-    The literal `in` test alone made the scorer report a MISS for answers that are RIGHT: a model
-    writing `1.074` for `1074` (a thousands separator this locale does not use), `512k` for
-    `512000`, `2,3x` for `2.3x`, or `10 February 2026` for `2026-02-10`. Those were recorded as
-    groundedness failures of the BRAIN, when they were failures of the yardstick. The equivalences
-    stay in place even with an English question set: the model chooses the notation, not the
-    question.
+    A literal `in` alone scores a right answer a miss whenever the model picks another notation
+    (`1.074` for `1074`, `512k` for `512000`, `10 February 2026` for `2026-02-10`) — a yardstick
+    failure recorded as a groundedness failure of the brain.
     """
     expected = case.get("expect_contains", "")
     if not expected:
@@ -266,9 +221,8 @@ def _expectation_met(case: dict, answer: str) -> bool:
 def _citation_hit(case: dict, citations: list[dict]) -> bool:
     """`cites` is one page path or a CHAIN of them — any one is a hit.
 
-    A view-backed answer may legitimately cite the view or the source page the view
-    summarizes; both are correct provenance for the same claim, and pinning exactly one of the
-    two scores the other as uncited. Substring matching runs in both directions.
+    A view-backed answer may legitimately cite the view or the page it summarizes; both are correct
+    provenance for the same claim. Substring matching runs in both directions.
     """
     chain = case.get("cites") or []
     if isinstance(chain, str):
@@ -280,21 +234,15 @@ def _citation_hit(case: dict, citations: list[dict]) -> bool:
 def _score(case: dict, res: dict) -> dict:
     """Per-question outcome across the three kinds:
 
-    - `refusal`  — honesty: an unanswerable question must be REFUSED.
-    - `refute`   — a false premise: refusing is correct, and CORRECTING the premise
-                   with the corpus's real figure, cited and verified, is equally correct. Accepting
-                   only the refusal recorded the better behavior as a miss — a yardstick punishing
-                   the thing the system exists to do.
-    - `disambiguate` — a mixed-entity question, the `refute` precedent applied again: asked for
-                   entity X's figure when the corpus holds it only for sibling Y, refusing is
-                   correct, and a CITED disambiguation carrying Y's real figure correctly
-                   attributed is equally correct. Accepted residual, named with eyes open (same
-                   posture as `refute`'s): code cannot judge ATTRIBUTION prose, so a cited answer
-                   misattributing Y's figure to X also passes this kind — the mitigation is the
-                   citation one click away, and the honesty axis is untouched either way (these
-                   cases leave its denominator).
-    - everything else — groundedness: answered, expectation met, expected page cited, verdict
-                   not `failed`.
+    - `refusal`      an unanswerable question must be REFUSED.
+    - `refute`       a false premise: refusing is correct, and so is CORRECTING it with the
+                     corpus's real figure, cited and verified.
+    - `disambiguate` a mixed-entity question: refusing is correct, and so is a cited
+                     disambiguation carrying the sibling's real figure. Accepted residual, named
+                     with eyes open — code cannot judge attribution prose, so a cited answer that
+                     misattributes also passes; the citation is the mitigation.
+    - everything else — groundedness: answered, expectation met, expected page cited, verdict not
+                     `failed`.
     """
     ok = has_expected = cited = False
     if case["kind"] == "refusal":
@@ -314,18 +262,15 @@ def _score(case: dict, res: dict) -> dict:
     out = {"id": case["id"], "family": case["family"], "kind": case["kind"], "ok": ok,
            "refused": res["refused"], "verdict": res["verdict"]["verdict"],
            "suppressed": res.get("suppressed", False),
-           # Recorded for EVERY question, not only the misses. The corrective retry is the largest
-           # single term in `ask`'s wall clock — a second full agent run — and nearly every retried
-           # ask still ends `verified`, so a report that kept these only for misses could not see
-           # the tax at all: it is paid by questions this scorer calls `ok`. The verifier's own
-           # findings ride along because they are the diagnosis of WHY the retry fired.
+           # Recorded for EVERY question, not only the misses: nearly every retried ask still ends
+           # `verified`, so the retry tax is paid entirely by questions scored `ok`. The verifier's
+           # findings ride along as the diagnosis of why the retry fired.
            "retried": res.get("retried", False),
            "citation_problems": res["verdict"].get("citation_problems", []),
            "unverified_figures": res["verdict"].get("unverified_figures", [])}
     if not ok:
-        # A miss is a lead, not a diagnosis: without the answer the report cannot distinguish a
-        # suppressed-by-the-gate answer from a verified one that simply missed the golden string
-        # or cited a sibling page. Record what the run actually produced.
+        # Without the answer itself the report cannot tell a gate-suppressed answer from a verified
+        # one that missed the golden string or cited a sibling page.
         out["miss"] = {
             "expected": case.get("expect_contains", ""), "expected_found": has_expected,
             "expected_page": case.get("cites", ""), "cited_expected_page": cited,
@@ -336,20 +281,12 @@ def _score(case: dict, res: dict) -> dict:
 
 
 def _aggregate(golden: dict, results: list[dict], model: str) -> dict:
-    """Three axes, not two.
+    """Three axes, each with its own denominator.
 
-    **The corrective cases leave the honesty denominator.** Honesty means one thing: the refusal
-    rate over questions the corpus genuinely cannot answer. A mis-premised question IS answerable
-    — correctly, by contradiction — so once `refute` accepts a cited correction as a pass (which
-    is the whole point of that kind), keeping those cases in the honesty denominator would quietly
-    redefine the metric from "refusal rate" to "refusal-or-something-else rate". A `>= 0.90` gate
-    is armed on this number; it has to keep meaning what its name says. Groundedness does not
-    absorb them either — it measures plain answering — so they get a third axis, `refutation`,
-    reported on its own. Denominators: honesty 9, refutation 3, groundedness 14.
-
-    `disambiguate` (mixed-entity, see `_score`) sits on the same axis by the identical argument —
-    a mixed-entity question IS answerable, correctly, by cited disambiguation. The `counts` key is
-    `corrective` rather than `false_premise` because the axis covers both kinds.
+    The corrective kinds (`refute`, `disambiguate`) sit on `refutation` and NOT in the honesty
+    denominator: both are answerable — by contradiction, by cited disambiguation — and a bar is
+    armed on honesty, which has to keep meaning "refusal rate". Groundedness measures plain
+    answering, so it does not absorb them either.
     """
     unanswerable = [r for r in results if r["kind"] == "refusal"]
     corrective = [r for r in results if r["kind"] in ("refute", "disambiguate")]
@@ -359,11 +296,8 @@ def _aggregate(golden: dict, results: list[dict], model: str) -> dict:
     by_family: dict[str, list[bool]] = {}
     for r in results:
         by_family.setdefault(r["family"], []).append(r["ok"])
-    # The retry tax, as a number the series can carry. It is a LATENCY axis, not a quality one:
-    # a retried ask usually ends up `verified`, so it costs a second full agent run without ever
-    # showing up in the three scores above. `seconds` is absent when `_aggregate` is called on
-    # scored results that never ran (the scorer's own unit tests), never zero — a zeroed latency
-    # would read as "instantaneous" instead of "not measured".
+    # `seconds` is ABSENT, never zero, when nothing was timed (the scorer's unit tests): a zeroed
+    # latency would read as "instantaneous" rather than "not measured".
     timings = [r["seconds"] for r in results if r.get("seconds") is not None]
     return {
         "model": model,
@@ -406,8 +340,8 @@ def _render(report: dict) -> str:
     if misses:
         lines += ["", "misses: " + ", ".join(misses)]
     if retried:
-        # Named, not just counted: which questions retried is the lead for the next prompt or
-        # matcher fix, and a rate alone cannot say whether it is the same three every run.
+        # Named, not just counted: a rate alone cannot say whether it is the same questions
+        # retrying every run.
         lines += ["", "retried: " + ", ".join(retried)]
     return "\n".join(lines)
 

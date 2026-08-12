@@ -1,13 +1,10 @@
 """Manual walk of the meeting distiller, driven end to end against the real local stack.
 
-Not a test: a narrated walk of the meeting distiller the way an operator meets it — drop a
-transcript, watch the librarian's meeting flow claim it, read the filed page-set report, then
-drop a second transcript naming an unregistered entity and watch it park. Real Postgres, real
-git, real gates, the offline double standing in for the agent (no API key needed — the same
-posture every other walk script in this repo takes).
+Not a test: a narrated walk the way an operator meets it — drop a transcript, watch the meeting
+flow claim it, read the filed page-set report, then drop a transcript naming an unregistered entity
+and watch it park. Real Postgres, real git, real gates, the offline double for the agent.
 
-Run: `.venv/bin/python scripts/walk_meeting_distiller.py` (from the repo root, with `make db-up`
-already run).
+Run: `.venv/bin/python scripts/walk_meeting_distiller.py` from the repo root, after `make db-up`.
 """
 import os
 import sys
@@ -40,10 +37,8 @@ just Acme.
 """
 
 
-# The offline double has no NLP — it does not read prose for entity names, only the explicit
-# `DOUBLE:` directive (see librarian/double.py's own module docstring). This is the fixture
-# vocabulary the docker e2e and this walk both drive the "unresolved entity" outcome with; a real
-# agent would read the transcript itself and reach the same park from the prose alone.
+# The offline double has no NLP: it reads only the explicit `DOUBLE:` directive, never the prose.
+# A real agent reaches the same park from the transcript alone.
 UNRESOLVED_TRANSCRIPT = """DOUBLE:meeting-triage=Nebula Systems,Project Kestrel
 [00:00] Dana: We reviewed the Nebula Systems opportunity and the new internal codename,
 Project Kestrel, needs its own tracking going forward.
