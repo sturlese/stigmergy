@@ -296,14 +296,24 @@ could be the agent acting on injected text.
 ## Ask-back: several names, one question
 
 A transcript can name more than one unresolved entity in a single capture — a call naming two
-customers and an unregistered project code. `processing._triage_meeting` / `_ask_or_park_multi`
-still spend the SAME one-ask-per-capture budget (`capture_queue.asked_at`) the ordinary flow's
-`_ask_or_park` does, but name every unresolved name in one question rather than the first one found.
+customers and an unregistered project code. `processing._triage_meeting` routes every meeting park
+through `_ask_or_park_multi`, unconditionally (a transcript's `triage.names` is always the plural
+shape). The ORDINARY flow shares the same machinery for the same reason — a capture naming two
+unresolved entities is not a meeting-only shape — with one difference: `processing._triage` routes
+through `_ask_or_park_multi` only when `triage.names` actually carries more than one name; a single
+name, however it arrived, lands in the singular report shape either way. What DOES differ is the
+prose: `report.needs_input_multi`/`triage_entity_multi` take a `meeting` flag that names the parked
+thing as its own submitter knows it, and adds the consequence only a page set has (an unplaced name
+costs more than its own decision, because a meeting page cannot link a decision that was never
+filed). Either way the SAME one-ask-per-capture budget (`capture_queue.asked_at`) is spent once,
+naming every unresolved name in one question rather than the first one found; see
+[`librarian.md`'s own "Ask-back" section](./librarian.md#ask-back-the-one-question-a-capture-gets)
+for the ordinary flow's routing table.
 `capture.schema.SITUATION_NAMES_KEY` (a JSON list, additive beside the unchanged
-singular `SITUATION_NAME_KEY`) carries the plural case on the parked row; `entities.situations.
-subjects_of` is the per-name reader `stigmergy-entities show` uses to print one `stigmergy-entities
-approve` command PER unresolved name, each checked and runnable independently. See
-[`../../src/stigmergy/entities/index.md`](../../src/stigmergy/entities/index.md) and
+singular `SITUATION_NAME_KEY`) carries the plural case on the parked row, from EITHER flow;
+`entities.situations.subjects_of` is the per-name reader `stigmergy-entities show` uses to print one
+`stigmergy-entities approve` command PER unresolved name, each checked and runnable independently.
+See [`../../src/stigmergy/entities/index.md`](../../src/stigmergy/entities/index.md) and
 [`operator-runbook.md`](./operator-runbook.md#draining-parked-rows) for the steward-facing and
 operator-facing halves of this, respectively.
 

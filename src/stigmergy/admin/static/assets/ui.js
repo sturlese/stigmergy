@@ -221,9 +221,12 @@ function selectInput(f) {
 // ── the confirm-with-form modal — every mutation goes through one ─────────────────────────────
 // `fields`: [{name, label, hint, warnHint, kind: "text"|"textarea"|"checkbox"|"select", value,
 // required, options (select only), placeholder (select only)}]
+// `note`: an optional already-built node shown above the form — context a single hint cannot
+// carry (a list the caller must choose from, say). A NODE, never markup, like every other child.
 // Resolves with {values} on confirm, null on cancel. The consequence sentence is REQUIRED —
 // a button that spends or posts says so before it does (honest-copy discipline).
-export function confirmForm({ title, consequence, fields = [], confirmLabel = "Confirm", danger = false }) {
+export function confirmForm({ title, consequence, note = null, fields = [],
+                              confirmLabel = "Confirm", danger = false }) {
   return new Promise((resolve) => {
     const inputs = {};
     const form = el("form", {},
@@ -250,6 +253,7 @@ export function confirmForm({ title, consequence, fields = [], confirmLabel = "C
       el("div", { class: "modal", role: "dialog", "aria-modal": "true" },
         el("h3", {}, title),
         el("p", { class: "consequence" }, consequence),
+        note,
         form,
         el("div", { class: "actions" },
           el("button", { class: "btn", onclick: () => close(null) }, "Cancel"),

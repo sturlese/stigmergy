@@ -44,10 +44,10 @@ def classify(row: dict) -> str:
 def subjects_of(row: dict) -> list[str]:
     """Every unresolved name this row carries, independently actionable.
 
-    `schema.SITUATION_NAMES_KEY` (a list) is authoritative when present — a meeting park can
-    carry several names, each approvable independently; a single-name park falls back to the
-    singular `SITUATION_NAME_KEY` as a one-element list. `[]` for `unsupported-type`, which has
-    no NAME to place (see `subject_of` for its subject, the judged type).
+    `schema.SITUATION_NAMES_KEY` (a list) is authoritative when present — an ordinary or meeting
+    park can carry several names, each approvable independently; a single-name park falls back to
+    the singular `SITUATION_NAME_KEY` as a one-element list. `[]` for `unsupported-type`, which
+    has no NAME to place (see `subject_of` for its subject, the judged type).
     """
     if classify(row) != schema.SITUATION_UNRESOLVED_ENTITY:
         return []

@@ -220,6 +220,20 @@ ENTITY_MINT_REQUEUE_LABEL = "After minting"
 ENTITY_MINT_REQUEUE_OPTION_LABEL = "Requeue the originating capture so it re-files against this entity"
 
 
+def entity_mint_several_unresolved(*, names: list[str]) -> str:
+    """The Approve modal's header when the proposal carries MORE THAN ONE unresolved name.
+
+    The `Name` field is left EMPTY in that case and this says why. A prefill cannot be right here:
+    one submission mints ONE entity, and the only single string covering several names is the
+    joined display form (`entities.situations.subject_of`), which is not any of their real names —
+    accepting it would push a garbled entity into the knowledge repo as a real, signed commit.
+    """
+    listed = "\n".join(f"• {name}" for name in names)
+    return (f"This capture names {len(names)} entities the registry doesn't recognize:\n{listed}\n"
+            f"They are minted one at a time. Type the single name you are approving now — the "
+            f"others stay unresolved on this capture until each gets its own decision.")
+
+
 def entity_minted(*, entity_id: str, name: str, commit: str, requeued: bool) -> str:
     """A minted approve's own confirmation — `review._decide_entity_proposal` composes no
     `message` key for a mint, so the generic fallback would name neither the entity nor the

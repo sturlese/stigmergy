@@ -22,9 +22,11 @@ from unittest.mock import create_autospec
 import pytest
 
 from stigmergy.capture.errors import CaptureError, EvidenceError, ReplyRejected, SubmissionRejected
+from stigmergy.entities.errors import EntityError
 from stigmergy.index.errors import StigmergyIndexError
 from stigmergy.server.errors import CapabilityUnavailableError, RateLimitError, RegistryError
 from stigmergy.server.mcp_server import build_mcp
+from stigmergy.server.review import ReviewError
 from stigmergy.server.service import BrainService
 from stigmergy.server.settings import Settings
 
@@ -515,6 +517,66 @@ def test_review_decide_maps_an_unanticipated_exception_to_class_name_only(fake_s
 
     assert out == {"error": "review_decide failed (RuntimeError)"}
     assert "AKIA123" not in json.dumps(out)
+
+
+def test_review_decide_collapses_a_raw_entities_error_to_its_class_name_never_its_text(
+        fake_service):
+    """Issue #41 part 1 (MCP half), pinned as the SAFE property rather than the echo.
+
+    The fix translates `EntityError` INTO this package's own `ReviewError` at the raise site
+    (`server/review.py`: the pre-mint `situations.require_situation` guard, and
+    `_mint_entity_proposal`'s own try/except) — so a steward does get the real sentence, and gets
+    it through the `CaptureError` branch the test below this one pins. `BrainService.review_decide`
+    can no longer raise `EntityError` out to this adapter at all.
+
+    What this pins is the other half of that decision, and it is the half a future change can
+    quietly undo: if an `EntityError` reaches here ANYWAY — a new call site, a re-raise, a guard
+    moved out from under its translation — it must collapse to the class name, exactly like any
+    other unanticipated fault (`test_review_decide_maps_an_unanticipated_exception_to_class_name_
+    only` above), and its text must NOT be published.
+
+    Why this cannot be left to a comment: adding `EntityError` to the verbatim-echo tuple reads
+    like a one-line usability improvement, and `entities/remote.py` raises that same class from
+    sites that SPLICE a foreign exception's text into the message (`f"the librarian GitHub App is
+    misconfigured: {ex}"`, `f"could not mint a GitHub credential to push this entity: {ex}"`) —
+    git and configuration faults naming this host's paths, which the same module's own
+    `MINT_FAULT_MESSAGE` comment says must be logged and never echoed. This test goes red the
+    moment anybody widens the tuple to that class.
+    """
+    fake_service.review_decide.side_effect = EntityError(
+        "the librarian GitHub App is misconfigured: no key at /srv/secrets/librarian.pem")
+    mcp = build_mcp(fake_service)
+
+    out = _call(mcp, "review_decide", item_kind="entity-proposal", item_id="42",
+               verdict="approve", name="Globex Robotics", entity_type="organization")
+
+    assert out == {"error": "review_decide failed (EntityError)"}
+    assert "/srv/secrets/librarian.pem" not in json.dumps(out)
+    # The structural reason the safe branch is the one that runs, stated where it can go stale:
+    # `EntityError` is not in this tool's verbatim-echo vocabulary, in either direction.
+    assert not issubclass(EntityError, (CaptureError, RateLimitError, CapabilityUnavailableError))
+
+
+def test_review_decide_maps_a_git_level_collision_inside_the_mint_correctly_already(fake_service):
+    """Benign twin / no-regression: the OTHER race the issue names, tripped INSIDE the mint itself
+    (`server/review.py::_mint_entity_proposal`'s own try/except, which maps every `EntityError`
+    from `entities.remote.mint_via_clone` into THIS package's own `ReviewError` — a `CaptureError`
+    subclass), already reaches this surface correctly through the EXISTING
+    `except (CaptureError, ...)` branch, with no change needed. Uses the REAL `ReviewError`, not a
+    stand-in, so this pins the actual production type. Kept here so a fix for the pre-mint case
+    above cannot accidentally narrow or duplicate this already-correct path — and it is now the
+    transport BOTH races share, since the pre-mint guard translates into `ReviewError` too
+    (`tests/server/test_review.py::test_a_stale_entity_proposal_decision_refuses_in_this_packages_
+    own_vocabulary` proves that translation against a real Postgres race).
+    """
+    fake_service.review_decide.side_effect = ReviewError(
+        "a collision the registry already knows about")
+    mcp = build_mcp(fake_service)
+
+    out = _call(mcp, "review_decide", item_kind="entity-proposal", item_id="42",
+               verdict="approve", name="Globex Robotics", entity_type="organization")
+
+    assert out == {"error": "a collision the registry already knows about"}
 
 
 

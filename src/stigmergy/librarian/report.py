@@ -361,30 +361,54 @@ def needs_input(*, submission_id, name: str, candidates=(), total_candidates: in
 
 
 # ── needs_input_multi: several unresolved names, ONE ask ──────────────────────────────────────
-# A SIBLING, used only when a capture has more than one unresolved name.
+# A SIBLING, used by BOTH flows whenever a capture has more than one unresolved name — so the
+# base clause names no transcript. What is at stake IS flow-specific, and that half lives in
+# `MEETING_CONSEQUENCE_MULTI`: telling an ordinary submitter his note's decisions cannot be
+# linked describes something that does not exist, and instructions a reader knows are not about
+# him are instructions he stops reading.
 ONE_ASK_CLAUSE_MULTI = (
     "This is the only question this capture gets, for all {n} at once: if even one of them is "
-    "still unplaced after your reply, the whole meeting parks for a steward — not just the "
-    "decision that names it, because a meeting page can never link a decision that was never "
-    "filed.")
+    "still unplaced after your reply, the whole {noun} parks for a steward.")
+
+MEETING_CONSEQUENCE_MULTI = (
+    " Not just the decision that names it — a meeting page can never link a decision that was "
+    "never filed.")
+
+
+def _parked_noun(meeting: bool) -> str:
+    """What the submitter's own material IS, in his words. A transcript became a whole page set,
+    and "capture" would hide from him how much is stuck behind one unplaced name."""
+    return "meeting" if meeting else "capture"
 
 
 def _numbered_names(names: list[str]) -> str:
     return "\n".join(f'  {i}. "{_clean(name, 120)}"' for i, name in enumerate(names, start=1))
 
 
+def _named_only(values, clean) -> list[str]:
+    """The values that are ACTUALLY a name, normalised. Surrounding whitespace is not part of a
+    name: the same string is quoted back at the submitter AND offered to a steward as
+    `birth.prepare --name`, where `" Jack "` and `"Jack"` mint two registry entities that will
+    never match each other. `entities.birth._prepare` refuses a whitespace-only name outright,
+    so a blank is not a name here either — `_clean` alone cannot see this, because `sanitize`
+    and `clamp` never strip."""
+    return [name for name in (clean(v, 120).strip() for v in _as_list(values)) if name]
+
+
 def needs_input_multi(*, submission_id, names: list[str], candidates=(),
                       total_candidates: int | None = None, agent_rationale: str = "",
-                      findings: list = ()) -> dict:
+                      findings: list = (), meeting: bool = False) -> dict:
     """`needs_input`'s plural sibling. The unresolved names are listed numbered and UNCAPPED —
-    every one is something the reply is REQUIRED to place."""
-    names = [_clean(n, 120) for n in _as_list(names) if _clean(n, 120)] or ["something unnamed"]
+    every one is something the reply is REQUIRED to place. `meeting` selects the flow's own noun
+    and consequence; it changes no structure, only what the sentence claims is at stake."""
+    names = _named_only(names, _clean) or ["something unnamed"]
     n = len(names)
     invocation = schema.reply_invocation(submission_id)
     lines = _candidate_lines(candidates)
     total = len(_as_list(candidates)) if total_candidates is None else int(total_candidates)
     numbered = _numbered_names(names)
-    clause = ONE_ASK_CLAUSE_MULTI.format(n=n)
+    clause = (ONE_ASK_CLAUSE_MULTI.format(n=n, noun=_parked_noun(meeting))
+              + (MEETING_CONSEQUENCE_MULTI if meeting else ""))
 
     head = (f"{schema.NEEDS_INPUT} — capture #{submission_id} is parked on one question before it "
             f"can be filed: your material names {n} things the entity registry doesn't "
@@ -415,11 +439,11 @@ def needs_input_multi(*, submission_id, names: list[str], candidates=(),
 
 
 def triage_entity_multi(*, names: list[str], agent_rationale: str = "", findings: list = (),
-                        asked: bool = False) -> dict:
+                        asked: bool = False, meeting: bool = False) -> dict:
     """`triage_entity`'s plural sibling. Writes `schema.SITUATION_NAMES_KEY`, NOT the singular key:
-    steward tooling reads it per name, so approving one is never blocked by another."""
-    clean_names = [_clean_identity(n, 120) for n in _as_list(names) if _clean_identity(n, 120)] \
-        or ["something unnamed"]
+    steward tooling reads it per name, so approving one is never blocked by another. `meeting`
+    only names the parked thing as its submitter knows it — see `_parked_noun`."""
+    clean_names = _named_only(names, _clean_identity) or ["something unnamed"]
     n = len(clean_names)
     quoted = [f'"{name}"' for name in clean_names]
     numbered = quoted[0] if n == 1 else ", ".join(quoted[:-1]) + f" and {quoted[-1]}"
@@ -432,7 +456,8 @@ def triage_entity_multi(*, names: list[str], agent_rationale: str = "", findings
     summary = (f"{schema.TRIAGE} — parked, not filed. Your material named {n} things the entity "
                f"registry doesn't recognize — {numbered} — and at least one of them still "
                f"doesn't match a registered entity. A steward will register whichever of these "
-               f"are new, or place this meeting where it actually belongs. {tail}")
+               f"are new, or place this {_parked_noun(meeting)} where it actually belongs. "
+               f"{tail}")
     return base_report(status=schema.TRIAGE, summary=summary,
                        agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
                        findings=list(_as_list(findings)), asked=bool(asked),

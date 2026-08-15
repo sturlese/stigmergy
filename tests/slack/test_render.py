@@ -556,3 +556,119 @@ def test_the_sources_context_block_is_clamped_too():
     for block in contexts:
         for element in block["elements"]:
             assert len(element["text"]) <= render.SECTION_TEXT_MAX, len(element["text"])
+
+
+# ── the entity-mint modal's `Name` prefill: what a steward's accepted default MINTS ─────────────
+# Submitting this modal is the one Slack action that writes to the knowledge repo — one entity,
+# one signed commit through the governed door. The prefill is therefore not a convenience: it is
+# the value most stewards will submit unchanged, so whatever this function puts in `initial_value`
+# is, in practice, what gets minted.
+def _mint_view(names) -> dict:
+    return render.render_entity_mint_modal(trigger_id="T1", private_metadata="{}",
+                                           unresolved_names=names)
+
+
+def _name_element(view: dict) -> dict:
+    return {b["block_id"]: b for b in view["blocks"]
+            if "block_id" in b}[render.ENTITY_MINT_NAME_BLOCK_ID]["element"]
+
+
+def _sections(view: dict) -> list[str]:
+    return [b["text"]["text"] for b in view["blocks"] if b.get("type") == "section"]
+
+
+def test_a_two_name_proposal_prefills_no_name_and_lists_both_above_the_field():
+    """**The C-3 regression test.** A park naming two unresolved entities used to reach this modal
+    as the JOINED display string (`situations.subject_of`'s `"Jack, Acme Capital"`), prefilled into
+    `Name` — and a steward who accepted the prefill, which is what a prefill is for, minted a real
+    entity called "Jack, Acme Capital" and pushed a real signed commit for it. It is neither of the
+    two names, no registry lookup will ever match it, and undoing it is a second commit.
+
+    The contract: with more than one unresolved name there is no single string that is the right
+    answer, so the field stays EMPTY and the names are listed above it for the steward to choose
+    from. An empty required field cannot be submitted by accident; a wrong prefilled one can.
+    """
+    view = _mint_view(["Jack", "Acme Capital"])
+
+    assert "initial_value" not in _name_element(view), (
+        "no prefill can be correct for a multi-name proposal — one submission mints ONE entity")
+    listed = "\n".join(_sections(view))
+    assert "Jack" in listed and "Acme Capital" in listed, (
+        "the steward has to be able to see WHICH names are waiting, or the empty field is a riddle")
+    # ABOVE the field, not below it: Slack renders blocks in order, and an explanation under an
+    # empty required input is read after the confusion it exists to prevent.
+    assert view["blocks"][0]["type"] == "section"
+    assert view["blocks"][1]["block_id"] == render.ENTITY_MINT_NAME_BLOCK_ID
+    assert "Jack, Acme Capital" not in json.dumps(view), (
+        "the joined display compound must not appear anywhere in this view — it is not any of the "
+        "names, and this is the payload a steward submits from")
+
+
+def test_a_one_name_proposal_still_prefills_that_name_and_adds_no_extra_block():
+    """The benign twin, and the specificity half of the fix: the common case — one unresolved
+    name, the overwhelming majority of parks — must keep its prefill and its unchanged layout.
+    A fix that blanked every prefill would trade a rare garbled mint for a retyped name on every
+    single approval, and a steward who retypes learns to stop reading the field."""
+    view = _mint_view(["Jack"])
+
+    assert _name_element(view)["initial_value"] == "Jack"
+    assert _sections(view) == [], (
+        "one name needs no explanation block — the several-names copy must not fire here")
+
+
+def test_no_names_at_all_prefills_nothing_and_explains_nothing():
+    """The third case, which is not an error: the item was decided or disposed of between the
+    doorbell DM and this click, so `_unresolved_names_for` finds nothing. The modal still opens
+    with an empty field a steward can fill by hand — `review_decide`'s own validation is what
+    enforces the field, exactly as it would for a steward who never saw a card."""
+    view = _mint_view([])
+
+    assert "initial_value" not in _name_element(view)
+    assert _sections(view) == []
+    # The default argument is the same case, and it is what an un-updated caller would hit.
+    bare = render.render_entity_mint_modal(trigger_id="T1", private_metadata="{}")
+    assert "initial_value" not in _name_element(bare)
+
+
+def test_a_blank_entry_among_the_names_is_dropped_rather_than_offered():
+    """A list carrying one real name and one blank is a ONE-name proposal: the blank is dropped,
+    so the real name is still prefilled and the several-names copy does not fire. The alternative
+    — counting the blank — would show a steward a bullet for a name nobody wrote and blank the
+    field for the one name that was actually there."""
+    view = _mint_view(["Jack", "   "])
+
+    assert _name_element(view)["initial_value"] == "Jack"
+    assert _sections(view) == []
+
+
+def test_the_names_listed_in_the_modal_are_escaped_for_mrkdwn():
+    """These strings come off captured material — a submitter's note, a transcript — and this
+    change is what first puts them inside a mrkdwn `section` block. Slack's own three characters
+    (`&`, `<`, `>`) have to arrive as entities, or a name containing `<https://evil.example|click
+    me>` renders as a link the bot appears to be offering, in a modal whose whole purpose is to
+    ask a steward to trust one of these strings enough to mint it.
+
+    The escaping already exists in `render.escape_mrkdwn`; this pins that the NEW block goes
+    through it, which is the part a later edit can drop without any other test noticing."""
+    view = _mint_view(["R&D <Group>", "Acme Capital"])
+
+    listed = "\n".join(_sections(view))
+    assert "R&amp;D &lt;Group&gt;" in listed
+    assert "<Group>" not in listed and "R&D" not in listed
+
+
+def test_the_mint_modals_own_structure_is_unchanged_by_the_several_names_block():
+    """The heading is ADDITIVE: every field the mint needs is still there, in order, with the same
+    block ids `_mint_state_values`/`views_submission` read — a modal that gained a block and lost a
+    field would still open, and fail only at submit time."""
+    plural = _mint_view(["Jack", "Acme Capital"])
+    singular = _mint_view(["Jack"])
+
+    def ids(view):
+        return [b["block_id"] for b in view["blocks"] if "block_id" in b]
+
+    assert ids(plural) == ids(singular) == [
+        render.ENTITY_MINT_NAME_BLOCK_ID, render.ENTITY_MINT_TYPE_BLOCK_ID,
+        render.ENTITY_MINT_ALIASES_BLOCK_ID, render.ENTITY_MINT_ROLE_BLOCK_ID,
+        render.ENTITY_MINT_REQUEUE_BLOCK_ID]
+    assert plural["callback_id"] == render.ENTITY_MINT_MODAL_CALLBACK_ID

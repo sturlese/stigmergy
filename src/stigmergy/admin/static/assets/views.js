@@ -653,15 +653,32 @@ export async function entityDetailView(host, id) {
 
 // `entity_id` is deliberately NOT a field here, the same call `slack.render`'s entity-mint modal
 // makes (ADR 030 D5, "one less field to mistype") — it defaults server-side to the slug of `name`.
+//
+// `Name` prefills from `subjects`, the per-name list, and NEVER from the joined `subject` display
+// string (`entities.situations.subject_of`): a park naming two unresolved entities joins them into
+// "Jack, Acme Capital", which is neither name, and one submission here mints ONE entity with ONE
+// commit nothing can cancel afterwards. So the prefill exists only when exactly one name could be
+// meant; with several the field stays empty and the names are listed for the steward to pick from
+// — the rule `slack.render.render_entity_mint_modal` applies to the same data on the other door.
 async function entityApproveFlow(row) {
+  const names = (row.subjects || []).map((n) => String(n)).filter((n) => n.trim());
+  const proposed = names.length === 1 ? names[0] : "";
   const answer = await confirmForm({
     title: `Approve #${row.id} — mint a new entity`,
     consequence: "mints a real entity: pushes ONE commit to the knowledge repo (authored by the "
       + "librarian App, Approved-by you) and regenerates the registry. Not something cancelling "
       + "after this point can undo.",
+    note: names.length > 1
+      ? banner("warn",
+          el("div", {}, `this capture names ${names.length} entities the registry does not `
+            + "recognize:"),
+          el("ul", { class: "names" }, names.map((name) => el("li", {}, name))),
+          el("div", {}, "they are minted one at a time — type the single name you are approving "
+            + "now; the others stay unresolved on this capture until each gets its own decision."))
+      : null,
     fields: [
       actorField(),
-      { name: "name", label: "Name", value: row.subject || "", required: true,
+      { name: "name", label: "Name", value: proposed, required: true,
         hint: "the entity's page title" },
       { name: "entity_type", label: "Type", kind: "select", options: META.entity_types, required: true },
       { name: "aliases", label: "Aliases (optional, comma-separated)" },

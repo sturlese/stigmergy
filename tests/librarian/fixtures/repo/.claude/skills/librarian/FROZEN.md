@@ -7,10 +7,10 @@ reasoning, as its sibling one directory over (`../meeting-distiller/FROZEN.md`).
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/skills/librarian/SKILL.md` |
-| **Copied at commit** | `03aab8799f9778087ab78cc23fbbf9a809d52d5b` |
+| **Copied at commit** | `c6068fff232e12f4c452a9999c4b905654a5d07c` |
 | **Drift guard** | `tests/librarian/test_librarian_brief_contract.py` — the rule table runs against THIS copy in CI, and a separate test asserts the copy is byte-identical to the knowledge repo's own whenever that checkout is present |
 
-> **This copy has moved three times, and the row above always names the CURRENT bytes.** ADR 033
+> **This copy has moved four times, and the row above always names the CURRENT bytes.** ADR 033
 > rewrote the brief tool-neutral and the `sdk` retirement closed that rewrite's last debt (the
 > environment paragraph that still described tool-holding runs); both landed in the knowledge repo's
 > `c1e0996ed497e70a9df82661c367294b48207a16`. ADR 034 then gave the ordinary run its tools back, so
@@ -19,9 +19,13 @@ reasoning, as its sibling one directory over (`../meeting-distiller/FROZEN.md`).
 > section's opening was rewritten to state both page-authorship shapes symmetrically instead of
 > favoring the container-building one (the imbalance measured 8 of 13 first-pass drafts missing
 > frontmatter entirely, against 0 of 12 after) — that touch is
-> `03aab8799f9778087ab78cc23fbbf9a809d52d5b`, the sha the row above records. These three shas are
-> not interchangeable: the first two are history, the third is what these bytes are now. A future
-> resync re-reads the third the same way:
+> `03aab8799f9778087ab78cc23fbbf9a809d52d5b`. Most recently again, the park section learned that a
+> capture can leave SEVERAL things unregistered and must name every one of them in `triage.names`
+> rather than fold them into one string — the brief half of issue #32, whose platform half is the
+> `entity_names` port this fixture's suite exercises. That touch is
+> `c6068fff232e12f4c452a9999c4b905654a5d07c`, the sha the row above records. These four shas are
+> not interchangeable: the first three are history, the fourth is what these bytes are now. A future
+> resync re-reads the fourth the same way:
 >
 > ```sh
 > git -C "$STIGMERGY_REPO" log -1 --format=%H -- .claude/skills/librarian/SKILL.md

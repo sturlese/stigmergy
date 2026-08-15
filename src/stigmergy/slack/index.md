@@ -71,6 +71,11 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
   size cap with oldest-first eviction, not just a TTL.
 - Recording WHO decides in a modal's `private_metadata`. It carries only WHAT the decision is
   about; the decider is re-resolved from the submission event's own body.
+- Prefilling a mint field from a review item's `subject`. That is the DISPLAY string, which joins
+  several unresolved names with `", "`; `review._unresolved_names_for` reads `subjects`, the
+  per-name list, and `render.render_entity_mint_modal` prefills `Name` only when there is exactly
+  ONE of them — several are listed above a field left empty. Submitting that modal mints: an
+  accepted default is one click from a garbled entity in the knowledge repo, as a signed commit.
 - Importing `stigmergy.server.review`'s `KIND_*`/`ENTITY_TYPES` from a renderer — use
   `stigmergy.review_kinds`, which keeps `render.py` free of `librarian`/`entities`/PyYAML.
 - Caching `ops/stewards.json` on the authorization path.

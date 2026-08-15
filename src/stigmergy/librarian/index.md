@@ -67,7 +67,15 @@ repo parser — nothing here touches `pages_index`); `stigmergy.index.store` is 
   bounds by default.
 - **Wording for humans lives in `report.py` only**; a read path branches on `reason_code`
   (`capture.schema.REJECTION_REASONS`), never on prose and never on `stage`, which is
-  `failed_system`'s alone.
+  `failed_system`'s alone. A capture naming several unresolved entities gets ONE pair of builders
+  for both flows (`needs_input_multi` / `triage_entity_multi`); what an ordinary capture and a
+  meeting differ in is their `meeting` flag — the noun the submitter's own material is called and
+  what is at stake — never a second builder telling one of them about the other's flow.
+- **An unresolved-entity park's names are normalised ONCE, in `processing._unresolved_names`** —
+  the account carries them as `triage.name` or `triage.names`, both flows read them through that
+  one function, and `_triage` routes more than one name into `_ask_or_park_multi`, the plural
+  machinery `_triage_meeting` uses. A second reader that strips differently makes one name mint two
+  registry entities that never match each other.
 - **Do not put a filesystem path — or any `str(exception)` — on the wire for a mid-run fault**:
   `worker.process_next`'s config branch logs the real exception and returns a fixed sentence
   naming only the stage.

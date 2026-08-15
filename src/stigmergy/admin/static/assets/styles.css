@@ -208,6 +208,8 @@ textarea { resize: vertical; min-height: 64px; }
 .banner.warn { background: rgba(236, 131, 90, 0.13); }
 .banner.error { background: rgba(208, 59, 59, 0.12); }
 .banner svg { width: 16px; height: 16px; flex: none; margin-top: 2px; }
+.names { margin: 6px 0; padding-left: 20px; overflow-wrap: anywhere; }
+.names li { margin: 2px 0; }
 
 .empty { color: var(--muted); padding: 22px 0; text-align: center; font-size: 13px; }
 .pre {

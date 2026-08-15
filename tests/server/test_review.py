@@ -20,6 +20,7 @@ from stigmergy.capture import dispositions
 from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.evidence import MemoryEvidenceStore
 from stigmergy.entities import generator as entities_generator
+from stigmergy.entities.errors import EntityError
 from stigmergy.librarian import gitcmd
 from stigmergy.server import review
 from tests import adversarial_payloads
@@ -54,12 +55,19 @@ def drift_free_env(env):
 
 
 # ── review_queue / review_decide ───────────────────────────────────────────────────────────────
-def _park_capture(conn, evidence, *, submitted_by=ALICE, situation=None) -> int:
+def _park_capture(conn, evidence, *, submitted_by=ALICE, situation=None, names=None) -> int:
+    """`names` writes the PLURAL `SITUATION_NAMES_KEY` and NOTHING else — the exact row shape
+    `report.triage_entity_multi` produces for a multi-entity park (issue #32); it never writes the
+    singular key beside it, so neither does this. The default single-name row is unchanged, so
+    every existing caller keeps the row it always had."""
     key = evidence.put(b"some material")
     report = {"summary": "parked for a look", "status": capture_schema.TRIAGE}
     if situation:
         report[capture_schema.SITUATION_KEY] = situation
-        report[capture_schema.SITUATION_NAME_KEY] = "Globex Robotics"
+        if names is None:
+            report[capture_schema.SITUATION_NAME_KEY] = "Globex Robotics"
+        else:
+            report[capture_schema.SITUATION_NAMES_KEY] = list(names)
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO capture_queue (kind, payload, blob_refs, submitted_by, status, report) "
@@ -516,6 +524,148 @@ def test_review_decide_entity_proposal_reject_never_writes_to_git(env, conn):
 
     after = gitcmd.run("rev-parse", "main", cwd=env.bare).stdout
     assert before == after
+
+
+# ── issue #41 part 1: the pre-mint guard's refusal is translated where it is raised ────────────
+def test_a_stale_entity_proposal_decision_refuses_in_this_packages_own_vocabulary(env, conn):
+    """The race two decision surfaces make possible — an admin console (or CLI, or a second Slack
+    card) decides the row FIRST, and this decision arrives after it has left `triage`.
+    `situations.require_situation` catches it BEFORE anything is written, and `_decide_entity_
+    proposal` translates its `EntityError` into `ReviewError` at that raise site.
+
+    Both halves are the contract, and this asserts both:
+
+    - the TYPE. `ReviewError` is a `CaptureError`, which is the vocabulary every transport already
+      knows how to echo — MCP's `except (CaptureError, ...)` tuple, and `slack/review.py`'s own
+      handler, which is BARRED from importing `stigmergy.entities` at all (`tests/test_
+      architecture.py`) and could therefore only catch an `EntityError` as an unanticipated fault
+      and post the generic "try again in a minute". An `EntityError` leaving this function is the
+      defect, not a detail.
+    - the SENTENCE. `require_situation`'s own text survives the translation intact, naming the
+      row's real status and the command that explains it. A translation that replaced the message
+      with a generic one would satisfy the type check and still leave the steward with nothing.
+
+    Real Postgres, real transition: `dispositions.resolve` is exactly what the admin console
+    calls. No raised stand-in anywhere on this path.
+    """
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    service = make_service(env, conn, identity_name=STEWARD, audiences=None, evidence=evidence)
+    dispositions.resolve(conn, proposal_id, actor="someone-else@example.com",
+                         note="handled on the admin console")
+    before = gitcmd.run("rev-parse", "main", cwd=env.bare).stdout
+
+    with pytest.raises(review.ReviewError) as caught:
+        review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
+                            item_id=str(proposal_id), verdict="approve",
+                            name="Globex Robotics", entity_type="organization")
+
+    assert not isinstance(caught.value, EntityError), (
+        "the `entities` exception type must be translated where it is raised — a caller barred "
+        "from importing it can only treat it as an unanticipated fault")
+    message = str(caught.value)
+    assert f"submission {proposal_id} is 'resolved'" in message
+    assert "parked in 'triage'" in message
+    assert f"stigmergy-queue show {proposal_id}" in message
+
+    assert gitcmd.run("rev-parse", "main", cwd=env.bare).stdout == before
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM review_decisions WHERE item_id = %s", (str(proposal_id),))
+        assert cur.fetchone()[0] == 0, "a refusal before the guard records nothing either"
+
+
+def test_a_still_parked_entity_proposal_is_not_refused_by_that_guard(drift_free_env, conn):
+    """Benign twin: the guard bounces a row that LEFT `triage`, never one still sitting in it. The
+    same call, on the same shape of row, with the only difference being that nobody decided it
+    first — mints, exactly as it did before the translation was added."""
+    env = drift_free_env
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    service = make_service(env, conn, identity_name=STEWARD, audiences=None, evidence=evidence)
+
+    result = review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
+                                  item_id=str(proposal_id), verdict="approve",
+                                  name="Globex Robotics", entity_type="organization")
+
+    assert result["minted"] is True
+
+
+# ── the review item's two reads of the same subject: one to DISPLAY, one to ACT on ─────────────
+def test_a_multi_name_entity_proposal_item_carries_the_per_name_list_beside_the_display_string(
+        env, conn):
+    """A parked row naming two unresolved entities produces ONE review item carrying BOTH reads,
+    and they must not collapse into each other:
+
+    - `subject` is the DISPLAY string, and `situations.subject_of` deliberately joins several
+      names with `", "` so a single-string consumer (the doorbell card) renders something true.
+    - `subjects` is the OPERATIONAL list, one entry per name, because every consumer that ACTS on
+      a name — prefilling the Slack mint modal, printing one `birth.prepare` block per name —
+      mints exactly one entity per decision. Acting on the joined compound is how a steward ends
+      up pushing a signed commit for an entity called "Jack, Acme Capital" (the C-3 finding); the
+      empty `subjects` key this test would have caught is what left the modal no choice but to
+      read `subject`.
+    """
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY,
+                                names=["Jack", "Acme Capital"])
+    service = make_service(env, conn, identity_name=None, audiences=None, evidence=evidence)
+
+    item = {i["id"]: i for i in review.review_queue(service)["items"]}[str(proposal_id)]
+
+    assert item["kind"] == review.KIND_ENTITY_PROPOSAL
+    assert item["subjects"] == ["Jack", "Acme Capital"]
+    assert item["subject"] == "Jack, Acme Capital"       # the joined DISPLAY form, unchanged
+    assert item["subject"] not in item["subjects"], (
+        "the joined display string is not one of the names — a consumer that finds it in "
+        "`subjects` would mint it")
+    # The doorbell reads the same base (`_collect_open_items`), unscoped — the Slack mint modal's
+    # own source, so this key has to be there on that road too.
+    doorbell = {i["id"]: i for i in review.items_for_doorbell(conn)}[str(proposal_id)]
+    assert doorbell["subjects"] == ["Jack", "Acme Capital"]
+
+
+def test_a_single_name_entity_proposal_item_carries_a_one_element_subjects_list(env, conn):
+    """Benign twin: the common case keeps `subject` and `subjects` saying the same thing, so the
+    plural key is never a signal that a park is multi-name — a consumer branches on `len`, and a
+    single-name park must not start rendering the several-names copy."""
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    service = make_service(env, conn, identity_name=None, audiences=None, evidence=evidence)
+
+    item = {i["id"]: i for i in review.review_queue(service)["items"]}[str(proposal_id)]
+
+    assert item["subject"] == "Globex Robotics"
+    assert item["subjects"] == ["Globex Robotics"]
+
+
+def test_an_unsupported_type_item_carries_an_empty_subjects_list(env, conn):
+    """The edge the plural key must answer honestly. An `unsupported-type` park has no NAME to
+    place at all — its `subject` is the judged TYPE, which is not something anybody mints — so
+    `subjects` is `[]` rather than a one-element list holding the type. A consumer that fed
+    `subjects` into a mint form would otherwise offer a steward "a page about one specific
+    person" as an entity name."""
+    evidence = MemoryEvidenceStore()
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO capture_queue (kind, payload, blob_refs, submitted_by, status, report) "
+            "VALUES ('raw', '{}', %s, %s, %s, %s) RETURNING id",
+            ([evidence.put(b"m")], ALICE, capture_schema.TRIAGE,
+             __import__("psycopg").types.json.Jsonb({
+                 "summary": "parked for a look",
+                 capture_schema.SITUATION_KEY: capture_schema.SITUATION_UNSUPPORTED_TYPE,
+                 capture_schema.SITUATION_TYPE_KEY: "a page about one specific person"})))
+        proposal_id = cur.fetchone()[0]
+    service = make_service(env, conn, identity_name=None, audiences=None, evidence=evidence)
+
+    item = {i["id"]: i for i in review.review_queue(service)["items"]}[str(proposal_id)]
+
+    assert item["situation"] == capture_schema.SITUATION_UNSUPPORTED_TYPE
+    assert item["subject"] == "a page about one specific person"
+    assert item["subjects"] == []
 
 
 def test_review_decide_refuses_a_secret_in_a_note(env, conn, require_gitleaks):

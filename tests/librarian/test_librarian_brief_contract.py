@@ -181,7 +181,7 @@ def test_the_contract_table_is_not_vacuous():
     # The floor is what makes shrinking the table a deliberate act, and it is RAISED with the
     # table rather than left at the skeleton's number: a floor that lags the table lets rows be
     # dropped silently down to it, which is the exact failure the floor exists to prevent.
-    assert len(RULE_TABLE) >= 24, "the brief<->code contract table has gone thin"
+    assert len(RULE_TABLE) >= 28, "the brief<->code contract table has gone thin"
     # ...and no row may be a duplicate of another, which is the cheap way a table grows without
     # covering anything new.
     assert len({phrase for phrase, _ in RULE_TABLE}) == len(RULE_TABLE)
@@ -259,11 +259,42 @@ RULE_TABLE = [
     # ...and an entity page is not editable, whatever it was anchored to.
     ("So do not declare an edit on the", "outside-lane"),
     # The one-ask budget: the brief promises at most one question ever, and `_ask_or_park` is the
-    # single place that decides whether this park spends it.
-    ("**The submitter is asked at most once, ever.**", "_ask_or_park"),
-    # The two park kinds and the field each one's report cannot be written without.
-    ('`kind` is `"unresolved-entity"` (with `name`) or `"unsupported-type"` (with `judged_type`) '
-     "— both", "TRIAGE_KINDS"),
+    # single place that decides whether this park spends it. The marker is the DEFINITION, not the
+    # bare name: `_ask_or_park` is a prefix of `_ask_or_park_multi`, so a bare-name marker would
+    # have stayed green with the singular decider deleted outright.
+    ("**The submitter is asked at most once, ever.**", "def _ask_or_park("),
+    # The two park kinds and the field each one's report cannot be written without — now TWO rows,
+    # because issue #32 rewrote the sentence that used to state both on one line. The
+    # `unresolved-entity` half grew `names` beside `name` and the `unsupported-type` half moved onto
+    # the next line of the real file; a phrase cannot cross that break (see this table's header), so
+    # re-aiming the surviving row at only the first line would have DROPPED the second kind from the
+    # contract while the row went green. Each half keeps its own live marker: the fixed set of kinds
+    # this flow accepts, and the map that says which field each kind's report cannot be written
+    # without (`TRIAGE_REQUIRED_FIELD[triage["kind"]]`, the lookup `parse_outcome` performs).
+    ('`kind` is `"unresolved-entity"` (with `name`, or `names` when the material leaves more than '
+     "one)", "TRIAGE_KINDS"),
+    ('or `"unsupported-type"` (with `judged_type`) — both the kind and its field are required, '
+     "because", "TRIAGE_REQUIRED_FIELD"),
+    # ── issue #32: EVERY unresolved name, and never joined into one ───────────────────────────
+    # The rule the brief change exists for, pinned on both of the places the brief now states it.
+    #
+    # 1. The plural park itself. `_unresolved_names` is the ONE reader of a park's declaration, and
+    #    it returns every name the account declared from EITHER shape — which is precisely "name
+    #    every one of them in `names`" on the code side. A brief that kept promising the plural
+    #    field while that reader went back to `parked.get("name")` is issue #32 reopening.
+    ("When the material leaves MORE THAN ONE thing unregistered, name **every** one of them in "
+     "`names` —", "_unresolved_names"),
+    # 2. The `## Never` bullet, which is the same rule stated as a prohibition ("park only SOME, or
+    #    join several into one"). Its marker is the ORDINARY flow's own call into the plural ask —
+    #    the full call line, not the bare function name: `_ask_or_park_multi` already existed for
+    #    the meeting flow, so a bare-name marker would have been green throughout the entire bug.
+    #    What was missing, and what this pins, is `_triage` ROUTING a multi-name park into it.
+    #    Shape borrowed from `test_meeting_brief_contract.py`'s ("## Parking a meeting — atomic,
+    #    whole capture, one ask", "_ask_or_park_multi") row; that table has no row of its own for
+    #    the meeting brief's equivalent "Park only SOME" bullet.
+    ("- Park only SOME of a capture's unresolved names, or join several into one — one ask names "
+     "every",
+     "_ask_or_park_multi(item, deps, names=names, agent_rationale=rationale, notes=notes)"),
 
     # ── what the worker HANDS the agent: four fields, four producers ──────────────────────────
     # The brief promises a context the agent no longer has a tool to go and get. Each promise is

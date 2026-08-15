@@ -9,6 +9,7 @@ import json
 import pytest
 from psycopg.types.json import Jsonb
 
+from stigmergy.capture import dispositions
 from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.evidence import MemoryEvidenceStore
 from stigmergy.entities import generator as entities_generator
@@ -188,12 +189,19 @@ class _RecordingReviewDecide:
         return self.result
 
 
-def _park_capture(conn, evidence, *, submitted_by=ALICE, situation=None) -> int:
+def _park_capture(conn, evidence, *, submitted_by=ALICE, situation=None, names=None) -> int:
+    """`names` writes the PLURAL `SITUATION_NAMES_KEY` and NOTHING else — the exact row shape
+    `report.triage_entity_multi` produces for a capture naming more than one unresolved entity
+    (issue #32); it never writes the singular key beside it, so neither does this. Omitted, the
+    row is the single-name one every existing caller here already relied on."""
     key = evidence.put(b"material")
     report = {"summary": "parked", "status": capture_schema.TRIAGE}
     if situation:
         report[capture_schema.SITUATION_KEY] = situation
-        report[capture_schema.SITUATION_NAME_KEY] = "Globex Robotics"
+        if names is None:
+            report[capture_schema.SITUATION_NAME_KEY] = "Globex Robotics"
+        else:
+            report[capture_schema.SITUATION_NAMES_KEY] = list(names)
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO capture_queue (kind, payload, blob_refs, submitted_by, status, report) "
@@ -306,7 +314,7 @@ def test_entity_proposal_approve_button_opens_the_mint_modal_with_the_name_prefi
 def test_entity_proposal_approve_modal_prefill_is_empty_when_the_item_is_no_longer_open(
         env, conn):
     """The doorbell-card scenario where the proposal was decided or disposed of between the DM and
-    this click (see `_proposed_name_for`'s own docstring): the modal still opens, just with an
+    this click (see `_unresolved_names_for`'s own docstring): the modal still opens, just with an
     empty name field a steward can fill by hand — never a crash, never a stale name."""
     gw = FakeSlackGateway()
     ctx = make_ctx(env, conn, gateway=gw)
@@ -320,6 +328,70 @@ def test_entity_proposal_approve_modal_prefill_is_empty_when_the_item_is_no_long
     view = gw.opened_views[0]["view"]
     blocks_by_id = {b["block_id"]: b for b in view["blocks"]}
     assert "initial_value" not in blocks_by_id[render.ENTITY_MINT_NAME_BLOCK_ID]["element"]
+
+
+def test_approving_a_two_name_proposal_opens_a_modal_with_no_prefill_and_no_joined_compound(
+        env, conn):
+    """**C-3, end to end through the door a steward actually uses.** The unit twins in
+    `tests/slack/test_render.py` pin the renderer's rule; this pins that the DOORBELL feeds it the
+    right value, which is the half that was broken: the click read the item's `subject` — the
+    single DISPLAY string `situations.subject_of` builds by joining names with `", "` — and
+    prefilled `Name` with `"Jack, Acme Capital"`. Submitting a modal whose fields a steward
+    accepted as offered then minted that compound as a real entity and pushed a real signed commit
+    for it, through the same governed door
+    `test_entity_mint_modal_submission_mints_for_real_end_to_end` below exercises.
+
+    Real Postgres row, real `_unresolved_names_for` read, real renderer, `FakeSlackGateway` in
+    Slack's place — nothing between the parked row and the opened view is doubled, because the
+    defect lived exactly there.
+    """
+    gw = FakeSlackGateway()
+    ctx = make_ctx(env, conn, gateway=gw)
+    item_id = _park_capture(conn, MemoryEvidenceStore(),
+                            situation=capture_schema.SITUATION_UNRESOLVED_ENTITY,
+                            names=["Jack", "Acme Capital"])
+
+    _run(review.handle_block_action(
+        ctx, action_id="review-modal:entity-proposal:approve", value=str(item_id),
+        trigger_id="T1", channel_id=STEWARD_SLACK_ID, slack_user_id=STEWARD_SLACK_ID,
+        event_team_id=TEAM_ID))
+
+    assert len(gw.opened_views) == 1
+    view = gw.opened_views[0]["view"]
+    blocks_by_id = {b["block_id"]: b for b in view["blocks"] if "block_id" in b}
+    assert "initial_value" not in blocks_by_id[render.ENTITY_MINT_NAME_BLOCK_ID]["element"], (
+        "a steward who accepts this prefill mints it — there is no correct single name here")
+    # Not merely absent from the input: absent as a VALUE anywhere in the payload. A compound in a
+    # placeholder, an initial_option or a metadata field is one copy-paste from being minted.
+    for block in view["blocks"]:
+        assert "Jack, Acme Capital" not in json.dumps(block.get("element", {}))
+    assert "Jack, Acme Capital" not in view["private_metadata"]
+    # Both names are still SHOWN, or the empty required field is a riddle the steward cannot solve.
+    sections = "\n".join(b["text"]["text"] for b in view["blocks"] if b.get("type") == "section")
+    assert "Jack" in sections and "Acme Capital" in sections
+    assert gw.posted == []          # nothing decided, nothing minted — the modal is still open
+
+
+def test_approving_a_single_name_proposal_still_prefills_it_through_the_same_door(env, conn):
+    """The benign twin of the test above, on the same real road: a one-name proposal keeps the
+    prefill it always had. `test_entity_proposal_approve_button_opens_the_mint_modal_with_the_name_
+    prefilled` above asserts the same thing as part of the modal's whole shape; this states it as
+    the specificity half of the C-3 fix, so deleting or narrowing that test cannot silently take
+    the guarantee with it."""
+    gw = FakeSlackGateway()
+    ctx = make_ctx(env, conn, gateway=gw)
+    item_id = _park_capture(conn, MemoryEvidenceStore(),
+                            situation=capture_schema.SITUATION_UNRESOLVED_ENTITY,
+                            names=["Jack"])
+
+    _run(review.handle_block_action(
+        ctx, action_id="review-modal:entity-proposal:approve", value=str(item_id),
+        trigger_id="T1", channel_id=STEWARD_SLACK_ID, slack_user_id=STEWARD_SLACK_ID,
+        event_team_id=TEAM_ID))
+
+    view = gw.opened_views[0]["view"]
+    blocks_by_id = {b["block_id"]: b for b in view["blocks"] if "block_id" in b}
+    assert blocks_by_id[render.ENTITY_MINT_NAME_BLOCK_ID]["element"]["initial_value"] == "Jack"
 
 
 def test_entity_mint_modal_submission_calls_review_decide_safe_with_the_collected_metadata(
@@ -498,6 +570,60 @@ def test_a_refused_mint_reports_through_the_existing_error_shape_and_strands_not
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM review_decisions WHERE item_id = %s", (str(item_id),))
         assert cur.fetchone()[0] == 0   # a refused mint records nothing — nothing stranded
+
+
+# ── issue #41 part 1: a stale doorbell click, decided elsewhere BEFORE the mint is attempted ─────
+def test_a_stale_entity_mint_after_the_row_left_triage_names_the_real_status_not_a_generic_failure(
+        env, conn):
+    """Two decision surfaces (here: the admin console, and this Slack doorbell card) can point at
+    the SAME entity proposal. If the admin console decides it FIRST, `situations.require_situation`
+    (`entities/situations.py`) correctly refuses the second decision BEFORE any mint is attempted
+    — `EntityError`, naming the row's real current status — the moment this Slack click reaches
+    `review_decide` -> `_decide_entity_proposal`. No double anywhere on this path: the race is a
+    REAL Postgres state change (`dispositions.resolve`, exactly what the admin console itself
+    calls), not a raised stand-in.
+
+    This is the DIFFERENT race from the sibling test above
+    (`test_a_refused_mint_reports_through_the_existing_error_shape_and_strands_nothing`, a
+    git-level collision INSIDE `_mint_entity_proposal`'s own try/except) — that one already
+    surfaces correctly; this PRE-mint check raises OUTSIDE it and is what issue #41 part 1 is
+    about.
+
+    OLD (current) BEHAVIOUR being pinned here as a bug, not a spec: `_decide_and_confirm`'s bare
+    `except Exception:` (`slack/review.py`) catches this `EntityError` — it is not a
+    `CaptureError` — and posts the GENERIC `copy.server_error()` text: "Something went wrong on my
+    end… Try again in a minute." That is a false promise: clicking Approve again can never
+    succeed, because the row has already left `triage`.
+    """
+    gw = FakeSlackGateway()
+    ctx = make_ctx(env, conn, gateway=gw)
+    item_id = _park_capture(conn, MemoryEvidenceStore(),
+                            situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    # The race: the admin console decides first, moving the row out of `triage` before this
+    # doorbell card is clicked — the real transition `require_situation` must catch.
+    dispositions.resolve(conn, item_id, actor="someone-else@example.com",
+                         note="handled via the admin console")
+    metadata = json.dumps({"item_kind": "entity-proposal", "item_id": str(item_id),
+                          "channel_id": STEWARD_SLACK_ID})
+    state_values = _mint_state_values(name="Globex Robotics", entity_type="organization")
+
+    _run(review.handle_entity_mint_modal_submission(
+        ctx, private_metadata=metadata, state_values=state_values,
+        slack_user_id=STEWARD_SLACK_ID, event_team_id=TEAM_ID))
+
+    assert len(gw.posted) == 1
+    text = gw.posted[0].text
+    assert text != copy.server_error(), (
+        "a stale doorbell click must not be told to 'try again in a minute' for a request that "
+        "can never succeed — it must name the real status, the way admin/CLI already do"
+    )
+    assert "resolved" in text and "triage" in text   # require_situation's own real sentence
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM review_decisions WHERE item_id = %s", (str(item_id),))
+        # `dispositions.resolve` (the admin console's own primitive here) writes only
+        # `capture_queue`, never `review_decisions` — and this stale click must record NOTHING
+        # either: the refusal happens before any write this surface owns.
+        assert cur.fetchone()[0] == 0
 
 
 # ── the authorization guard, proven on THIS door too ─────────────────────────────────────────────

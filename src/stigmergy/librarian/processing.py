@@ -675,10 +675,31 @@ def _cross_check_outcome(ctx: gates.GateContext) -> list:
     return out
 
 
+def _unresolved_names(parked: dict) -> list[str]:
+    """Every name an `unresolved-entity` park actually declares — from EITHER shape, normalised
+    ONCE for both.
+
+    Surrounding whitespace is not part of a name, and a blank is not a name at all
+    (`entities.birth._prepare` refuses a whitespace-only one, so a blank subject can only ever
+    cost a steward a line of attention it can never resolve). Normalising here rather than per
+    shape is the point: a padded name that rendered one way through `triage.name` and another
+    through `triage.names` would be exactly the singular/plural asymmetry issue #32 exists to
+    close. `[]` when nothing was declared — the caller decides what a nameless park is called.
+    """
+    names = [name for name in (str(n).strip() for n in (parked.get("names") or [])) if name]
+    single = str(parked.get("name") or "").strip()
+    return names or ([single] if single else [])
+
+
 def _triage(item: dict, deps: Deps, outcome) -> Result:
     """Which parked report the agent's declaration earns — and WHICH HUMAN it is parked on. An
     `unresolved-entity` outcome on a capture that still has its question asks it; every other park
     goes to the steward. Injection findings go into the REPORT as well as onto the `Result`.
+
+    A capture naming MORE THAN ONE unresolved entity (`triage.names`, issue #32) routes through
+    `_ask_or_park_multi` — the same plural machinery `_triage_meeting` already uses — so a second
+    name has somewhere to go instead of being dropped or garbled into the first. A single name,
+    however it arrived, still lands in the singular report shape.
     """
     parked = outcome.triage or {}
     rationale = getattr(outcome, "summary", "")
@@ -688,8 +709,11 @@ def _triage(item: dict, deps: Deps, outcome) -> Result:
                       report.triage_type(judged_type=parked.get("judged_type") or "unknown",
                                          agent_rationale=rationale, findings=notes),
                       findings=notes)
-    return _ask_or_park(item, deps, name=parked.get("name") or schema.UNNAMED_ENTITY_PLACEHOLDER,
-                        agent_rationale=rationale, notes=notes)
+    names = _unresolved_names(parked)
+    if len(names) > 1:
+        return _ask_or_park_multi(item, deps, names=names, agent_rationale=rationale, notes=notes)
+    name = names[0] if names else schema.UNNAMED_ENTITY_PLACEHOLDER
+    return _ask_or_park(item, deps, name=name, agent_rationale=rationale, notes=notes)
 
 
 def _ask_or_park(item: dict, deps: Deps, *, name: str, agent_rationale: str,
@@ -1850,17 +1874,21 @@ def _triage_meeting(item: dict, deps: Deps, outcome) -> Result:
     parked = outcome.triage or {}
     rationale = getattr(outcome, "summary", "")
     notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
-    names = [n for n in (parked.get("names") or []) if n] or [schema.UNNAMED_ENTITY_PLACEHOLDER]
-    return _ask_or_park_multi(item, deps, names=names, agent_rationale=rationale, notes=notes)
+    names = _unresolved_names(parked) or [schema.UNNAMED_ENTITY_PLACEHOLDER]
+    return _ask_or_park_multi(item, deps, names=names, agent_rationale=rationale, notes=notes,
+                              meeting=True)
 
 
 def _ask_or_park_multi(item: dict, deps: Deps, *, names: list, agent_rationale: str,
-                       notes: list) -> Result:
+                       notes: list, meeting: bool = False) -> Result:
     """`_ask_or_park`'s plural sibling: the SAME one-ask budget, naming every unresolved name at
-    once. A single name still goes through the SINGULAR builders."""
+    once. A single name still goes through the SINGULAR builders. `meeting` reaches the report
+    builders only to name what parked — a transcript's submitter is told his MEETING is stuck, an
+    ordinary submitter his capture, and neither is told about the other's consequences."""
     if item.get("asked_at"):
         rep = (report.triage_entity_multi(names=names, agent_rationale=agent_rationale,
-                                          findings=notes, asked=True) if len(names) > 1 else
+                                          findings=notes, asked=True, meeting=meeting)
+              if len(names) > 1 else
               report.triage_entity(name=names[0], agent_rationale=agent_rationale,
                                    findings=notes, asked=True))
         return Result(schema.TRIAGE, "", rep, findings=notes)
@@ -1869,7 +1897,8 @@ def _ask_or_park_multi(item: dict, deps: Deps, *, names: list, agent_rationale: 
     if len(names) > 1:
         rep = report.needs_input_multi(submission_id=item["id"], names=names, candidates=shown,
                                        total_candidates=len(candidates),
-                                       agent_rationale=agent_rationale, findings=notes)
+                                       agent_rationale=agent_rationale, findings=notes,
+                                       meeting=meeting)
     else:
         rep = report.needs_input(submission_id=item["id"], name=names[0], candidates=shown,
                                  total_candidates=len(candidates),
@@ -1942,7 +1971,8 @@ def _refuse_meeting(item, findings, outcome, *, agent_attempts: int = 0,
         rationale = getattr(outcome, "summary", "")
         asked = bool(item.get("asked_at"))
         rep = (report.triage_entity_multi(names=names, agent_rationale=rationale,
-                                          findings=notes, asked=asked) if len(names) > 1 else
+                                          findings=notes, asked=asked, meeting=True)
+              if len(names) > 1 else
               report.triage_entity(name=names[0], agent_rationale=rationale, findings=notes,
                                    asked=asked))
         return Result(schema.TRIAGE, "", rep, findings=notes, diagnostics_path=diagnostics_path)
