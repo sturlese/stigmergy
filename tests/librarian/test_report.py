@@ -593,3 +593,72 @@ def test_needs_input_multi_and_triage_entity_multi_agree_with_render_prose():
                                    total_candidates=0)
     prose = report.render_prose(out)
     assert prose.startswith(out["summary"])
+
+
+# ── the plural siblings serve BOTH flows, so the prose has to know which one it is talking to ──
+# `needs_input_multi`/`triage_entity_multi` were written for the meeting flow and said so in every
+# copy of the sentence. Issue #32 routes ORDINARY captures through them too, and an ordinary
+# submitter told "the whole meeting parks" and "a meeting page can never link a decision that was
+# never filed" is being told about consequences that do not exist for anything he sent — inside the
+# ONE question his capture ever gets. Instructions a reader can see are not about him are
+# instructions he stops reading.
+def test_needs_input_multi_for_an_ordinary_capture_never_mentions_a_meeting():
+    """The ordinary side. `meeting=False` is also the DEFAULT, and that direction matters more than
+    the flag: an un-threaded call site gets the ordinary copy, so a forgotten argument degrades to
+    "generic", never to "claims to be a meeting"."""
+    out = report.needs_input_multi(submission_id=42, names=["Jack", "Acme Capital"],
+                                   candidates=[{"name": "Acme Corp"}], total_candidates=1,
+                                   meeting=False)
+
+    assert "meeting" not in out["summary"]
+    assert "decision that names it" not in out["summary"]
+    assert "the whole capture parks for a steward" in out["summary"]
+    # The default is the ordinary flow, asserted byte-for-byte rather than described.
+    assert report.needs_input_multi(submission_id=42, names=["Jack", "Acme Capital"],
+                                    candidates=[{"name": "Acme Corp"}],
+                                    total_candidates=1)["summary"] == out["summary"]
+
+
+def test_needs_input_multi_for_a_meeting_still_names_the_meeting_and_what_it_costs():
+    """The specificity twin: the meeting flow must NOT lose the sentence that was written for it.
+    A transcript becomes a whole page set, and one unplaced name parks all of it — telling that
+    submitter only "the whole capture parks" would understate what is stuck by a page set."""
+    out = report.needs_input_multi(submission_id=42, names=["Jack", "Acme Capital"],
+                                   candidates=[{"name": "Acme Corp"}], total_candidates=1,
+                                   meeting=True)
+
+    assert "the whole meeting parks for a steward" in out["summary"]
+    assert "decision that names it" in out["summary"]
+    assert "a meeting page can never link a decision that was never filed" in out["summary"]
+
+
+def test_triage_entity_multi_for_an_ordinary_capture_never_mentions_a_meeting():
+    """The same split on the STEWARD-facing park — the report that says what a steward will do
+    with the material. `meeting=False` by default here too."""
+    out = report.triage_entity_multi(names=["Jack", "Acme Capital"], meeting=False)
+
+    assert "meeting" not in out["summary"]
+    assert "place this capture where it actually belongs" in out["summary"]
+    assert report.triage_entity_multi(
+        names=["Jack", "Acme Capital"])["summary"] == out["summary"]
+
+
+def test_triage_entity_multi_for_a_meeting_says_meeting():
+    """Specificity twin for the park report: the flag has to actually change the noun, or the two
+    tests above pass for a flag that is read and discarded."""
+    out = report.triage_entity_multi(names=["Jack", "Acme Capital"], meeting=True)
+
+    assert "place this meeting where it actually belongs" in out["summary"]
+
+
+def test_the_flow_flag_changes_the_prose_and_nothing_else():
+    """The flag is copy, not structure. Every fact a consumer reads — the status, the per-name
+    list, the open question, the report's own shape — is identical between the two flows, so
+    `entities.cli` and the doorbell cannot start behaving differently because a submitter happened
+    to send a transcript."""
+    ordinary = report.triage_entity_multi(names=["Jack", "Acme Capital"], asked=True)
+    meeting = report.triage_entity_multi(names=["Jack", "Acme Capital"], asked=True, meeting=True)
+
+    assert {k: v for k, v in ordinary.items() if k != "summary"} == \
+           {k: v for k, v in meeting.items() if k != "summary"}
+    assert ordinary["summary"] != meeting["summary"]

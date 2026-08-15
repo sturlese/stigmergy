@@ -207,6 +207,12 @@ def _collect_open_items(conn, *, submitted_by: str | None, limit: int) -> list[d
                 "kind": KIND_ENTITY_PROPOSAL, "id": str(row["id"]),
                 "submitted_by": row["submitted_by"], "situation": situation,
                 "subject": situations.subject_of(row),
+                # BOTH, exactly as `situations._situation_view` emits both, and for the same
+                # reason: `subject` is ONE display string that joins several names with ", ",
+                # so a consumer acting on a name — prefilling a mint form, running one command
+                # per name — must read `subjects` or it will act on a joined compound that is
+                # not any of them.
+                "subjects": situations.subjects_of(row),
                 "parked_age_ms": row.get("parked_age_ms"), "created_at": row.get("created_at"),
                 # the doorbell's change token: a requeue re-parking into the SAME situation is
                 # still a state change, not silence
@@ -395,7 +401,14 @@ def _decide_entity_proposal(service, item_id: str, verdict: str, notes: str, act
             f"'request changes' to: either the name resolves to an identity worth minting or it "
             f"does not")
     _refuse_secret_note(notes)
-    situations.require_situation(service.conn, submission_id, action=verdict)
+    # Mapped HERE, like every other `EntityError` this module lets through: an exception type
+    # from `stigmergy.entities` must never reach a caller, because `stigmergy.slack` is barred
+    # from importing it and could only catch it generically — as an unanticipated fault whose
+    # text may not be shown. `ReviewError` is a `CaptureError`, so both surfaces already echo it.
+    try:
+        situations.require_situation(service.conn, submission_id, action=verdict)
+    except EntityError as ex:
+        raise ReviewError(str(ex)) from ex
     if verdict == REJECT:
         if not notes:
             raise ReviewError("reject requires a reason")
@@ -470,9 +483,10 @@ def _mint_entity_proposal(service, *, submission_id: int, entity_id: str, name: 
                           entity_type: str, aliases: list[str], role: str,
                           approved_by: str) -> dict:
     """The one call into the governed door: clone with the librarian App's credential, mint, push,
-    clean up. `mint_via_clone` is reached as a MODULE ATTRIBUTE so it stays monkeypatchable. Every
-    `EntityError` is mapped into this package's vocabulary here, the one place both are in
-    scope."""
+    clean up. `mint_via_clone` is reached as a MODULE ATTRIBUTE so it stays monkeypatchable. The
+    mint's own `EntityError` is mapped into this package's vocabulary here, under the rule this
+    whole module holds: an `entities` exception type is translated where it is raised, never
+    allowed to leave — `_decide_entity_proposal`'s pre-mint guard does the same for its own."""
     try:
         return entities_remote.mint_via_clone(
             service.settings.librarian_repo_url, _MINT_BRANCH, os.environ,

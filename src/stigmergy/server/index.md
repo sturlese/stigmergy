@@ -72,6 +72,15 @@ path, authenticated by HMAC instead.
   door-gated (`SLACK_DOOR`).
 - `review_decide` is Postgres-only for `reject` and every `parked-capture` verdict; the ONE git
   path is an entity-proposal `approve`, through `_mint_entity_proposal` and nothing else.
+- An `entities` exception type never leaves this package: `review.py` translates it into
+  `ReviewError` (or `CapabilityUnavailableError`) at the raise site — the pre-mint guard
+  `situations.require_situation` exactly as much as the mint. `stigmergy.slack` may not import
+  `stigmergy.entities`, so anything untranslated reaches a caller that can only catch it as an
+  unanticipated fault whose text it must not show.
+- An `entity-proposal` item carries the unresolved identity TWICE, as `situations` emits it:
+  `subject`, one display string joining several names with `", "`, and `subjects`, the per-name
+  list. A consumer that ACTS on a name — prefilling a mint form, running one command per name —
+  reads `subjects`; the joined `subject` is not any of the real names.
 - Steward resolution fails closed: `_is_steward` returns False without a checkout or a baked
   snapshot; `load_stewards` reads `origin/main`'s fresh tip wherever a checkout exists, and the
   same read decides both doorbell delivery and decision authority.

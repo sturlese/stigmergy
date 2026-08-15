@@ -266,7 +266,7 @@ Three properties, each enforced structurally rather than left to discipline:
 | Item kind | Buttons | Notes |
 |---|---|---|
 | `parked-capture` | Requeue (direct) · Resolve (modal, note required) · Reject (modal, reason required) | `capture.dispositions`' own three verbs, not the generic approve/reject/request_changes |
-| `entity-proposal` | Approve (modal, mints on submit) · Reject (modal, reason required) | approving opens a metadata modal — name (prefilled from the proposal's own unresolved subject), entity type (a `static_select` over the closed six), optional aliases/role, and a pre-checked requeue checkbox — and mints through the SAME governed door an MCP `review_decide` approve does (ADR 030 D5); submitting it is one action, not a copy-pasted command |
+| `entity-proposal` | Approve (modal, mints on submit) · Reject (modal, reason required) | approving opens a metadata modal — name (prefilled ONLY when the proposal has exactly one unresolved name; several are listed above the field, which stays empty, because one submission mints one entity and no single string is the right answer), entity type (a `static_select` over the closed six), optional aliases/role, and a pre-checked requeue checkbox — and mints through the SAME governed door an MCP `review_decide` approve does (ADR 030 D5); submitting it is one action, not a copy-pasted command |
 
 A click (`review.handle_block_action`) or a modal submission (`review.handle_note_modal_submission`
 for a note/reason, `review.handle_entity_mint_modal_submission` for an entity-proposal approve's own

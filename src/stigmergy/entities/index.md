@@ -24,13 +24,14 @@ plus an `Approved-by:` trailer naming the human.
 | `clone.py` | the working copy's checks and push: `preflight` (branch/identity/clean/in-sync), `commit_and_push` with fetch-regenerate-retry, `write_page` / `discard_untracked`. Never repairs, never force-pushes |
 | `mint.py` | the ONE mint orchestration `cli._mint` and `remote.mint_via_clone` both call: drift refusal, the gate against the registry the commit will PUBLISH, the template render, `generator.regenerate`, the gitleaks scan, ONE commit, bounded rebase-and-retry |
 | `remote.py` | the server-driven mint door: `mint_via_clone` — a throwaway clone with the librarian App's credential, `mint.mint` with an `Approved-by:` trailer, cleanup in a `finally`. `credential` is needed only for `https://` remotes; raises only this package's own error types |
-| `errors.py` | `EntityError` (base), `CollisionError` (the governance verdict), `CloneStateError`, `PushRaceError`, `CapabilityUnavailableError` (mapped by `stigmergy.server.review` to the server's equivalent — this package may not import `stigmergy.server`) |
+| `errors.py` | `EntityError` (base), `CollisionError` (the governance verdict), `CloneStateError`, `PushRaceError`, `CapabilityUnavailableError`. Neither inbound consumer lets one of these out: `stigmergy.server.review` translates at every raise site (the mint and the pre-mint `require_situation` guard alike) into `ReviewError`/its own `CapabilityUnavailableError`, `stigmergy.admin` into `AdminRefused` at its own boundary — a surface barred from importing this package could catch one only as an unanticipated fault, whose text it must not show |
 
 ## Use these
 
 - `situations.classify` / `subject_of` / `subjects_of` — the ONE reading of "is this parked row an
-  entity situation, and about what". `subjects_of` is the per-name list (a meeting park carries
-  several, each independently approvable); `subject_of` the single display string it collapses to.
+  entity situation, and about what". `subjects_of` is the per-name list (an ordinary or meeting
+  park can carry several, each independently approvable); `subject_of` the single display string
+  it collapses to.
 - `situations.require_situation` — the write guard before anything is validated or written; being
   able to read a row is not permission to mint from it.
 - `birth.prepare` / `birth.recheck` — resolve-before-mint, pure (a `Registry` in, a `Proposal` or

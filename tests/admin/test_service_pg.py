@@ -419,6 +419,35 @@ def test_entities_list_and_show_cover_multiple_situations_and_404_on_nothing(con
         service.entities_show(999_999)
 
 
+def test_a_multi_name_situation_reaches_the_console_as_a_per_name_list_not_only_the_joined_string(
+        conn, service):
+    """The backend half of the mint-prefill contract, unpinned until now on this surface.
+
+    A park can name SEVERAL unresolved entities (`SITUATION_NAMES_KEY`). `subject` is one display
+    string — the names joined with `", "` — and it is the only thing a single-string consumer can
+    render, but it is not a value anything may act on: minting it produces one entity called
+    "Jack, Acme Capital". `subjects` is the per-name list the console's Approve form has to read
+    to tell one unresolved name from several, so it must survive `_situation`'s sanitizing pass
+    on BOTH read paths a steward reaches (the list and the detail), not just exist in
+    `entities.situations`."""
+    row = submit_one(conn)
+    park(conn, row["id"], report={
+        capture_schema.SITUATION_KEY: capture_schema.SITUATION_UNRESOLVED_ENTITY,
+        capture_schema.SITUATION_NAMES_KEY: ["Jack", "Acme Capital"]})
+
+    shown = service.entities_show(row["id"])
+    assert shown["subjects"] == ["Jack", "Acme Capital"], (
+        "the detail read must carry every unresolved name separately — the form that mints reads "
+        "this, and nothing can recover two names from the joined string without guessing whether "
+        "a comma is a separator or part of a name")
+    assert shown["subject"] == "Jack, Acme Capital", (
+        "the joined display string stays too — it is what the read-only context renders")
+    listed = {r["id"]: r for r in service.entities_list()}[row["id"]]
+    assert listed["subjects"] == ["Jack", "Acme Capital"], (
+        "the list read must carry it as well: the console navigates list → detail, and a key "
+        "present on one path only is a key the next caller will find missing")
+
+
 def test_entities_show_no_longer_carries_a_command_template(conn, service):
     """OLD BEHAVIOUR (ADR 029): `entities_show` returned a `commands` key — the exact
     `stigmergy-entities approve`/`reject` command, filled only when the name passed the shared

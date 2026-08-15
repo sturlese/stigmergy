@@ -167,10 +167,11 @@ def _print_next_commands(submission_id: int, situation: str, subjects: list) -> 
     A message containing a command is a promise: the flags printed are the flags `birth.prepare`
     accepts, including the derived `--id`, and running the line must do what it reads as doing.
     A name that cannot carry that promise is printed on its own inert line and the command becomes
-    a template with `--name` left for the steward. `subjects` is a LIST (several for a meeting
-    park): each name gets its own block, checked against `_suggestable` INDEPENDENTLY, so a
-    sibling unsafe name never blocks the others; only the last call passes `--requeue`, since
-    `approve` requeues the whole submission (one row, not one per name).
+    a template with `--name` left for the steward. `subjects` is a LIST (several, for an ordinary
+    or meeting park naming more than one unresolved entity): each name gets its own block, checked
+    against `_suggestable` INDEPENDENTLY, so a sibling unsafe name never blocks the others; only
+    the last call passes `--requeue`, since `approve` requeues the whole submission (one row, not
+    one per name).
     """
     unresolved = situation == schema.SITUATION_UNRESOLVED_ENTITY
     types = f"--type <{'|'.join(birth.ENTITY_TYPES)}>"

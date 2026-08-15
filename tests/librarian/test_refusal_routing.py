@@ -670,3 +670,35 @@ def test_a_repairable_zone_finding_beside_a_category_still_reaches_the_submitter
 
     assert result.status == schema.REJECTED
     assert result.report[schema.REASON_CODE_KEY] == schema.REASON_STEERING
+
+
+# ── the flow flag on the THIRD call site of the plural park builder ────────────────────────────
+# `report.triage_entity_multi(meeting=...)` is called from three places: `_ask_or_park_multi` (both
+# flows, via its own `meeting` parameter — pinned in `test_ordinary_multi_entity_park_unit.py`) and
+# here, from `_refuse_meeting`'s anchoring branch, which is meeting-only and passes `meeting=True`
+# literally. That literal is the kind of argument a refactor drops without any other test noticing:
+# every assertion this file already makes is about which STATE a veto earns, and none reads the
+# sentence a submitter is handed.
+def test_a_meeting_refused_on_two_unresolved_anchors_parks_it_as_a_MEETING():
+    """A transcript whose page set could not anchor two of its entities parks the whole thing, and
+    the submitter is told what that costs HIM — a meeting, not "a capture". A page set is what is
+    stuck, and the ordinary noun would understate it."""
+    veto = [_anchor_veto("Jack", "Acme Capital")]
+
+    result = processing._refuse_meeting(MEETING_ITEM, veto, OUTCOME, agent_attempts=2)
+
+    assert result.status == schema.TRIAGE
+    assert "place this meeting where it actually belongs" in result.report["summary"]
+    assert result.report[schema.SITUATION_NAMES_KEY] == ["Jack", "Acme Capital"]
+
+
+def test_a_meeting_refused_on_ONE_unresolved_anchor_still_uses_the_singular_report():
+    """The branch's own `len(names) > 1` twin: one name goes through `report.triage_entity`, which
+    has no `meeting` flag at all and never had one. Asserted so the plural flag's arrival cannot be
+    read as a change to the single-name park, which is the common shape."""
+    result = processing._refuse_meeting(MEETING_ITEM, [_anchor_veto("Jack")], OUTCOME,
+                                        agent_attempts=2)
+
+    assert result.status == schema.TRIAGE
+    assert result.report[schema.SITUATION_NAME_KEY] == "Jack"
+    assert schema.SITUATION_NAMES_KEY not in result.report

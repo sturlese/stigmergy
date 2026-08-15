@@ -379,20 +379,30 @@ def _requeue_option() -> dict:
 
 
 def render_entity_mint_modal(*, trigger_id: str, private_metadata: str,
-                             proposed_name: str = "") -> dict:
+                             unresolved_names: list[str] = ()) -> dict:
     """The entity-proposal Approve modal: the metadata a mint needs, collected once.
-    `proposed_name` prefills `name` with the proposal's own unresolved subject — the same text the
-    doorbell card showed, in a plain editable input, never a default a steward cannot see or
-    override. `entity_type` is a `static_select` over the closed list, so a submission can never
-    carry a type `entities.mint` would refuse. `aliases` is ONE comma-separated field
+
+    `unresolved_names` is the proposal's own unresolved names (`situations.subjects_of`, NOT the
+    joined `subject_of` display string). Submitting this modal MINTS — one entity, one signed
+    commit — so `name` prefills only when there is exactly ONE name to mean; several are listed
+    above the field instead and the field stays empty, because no single string is the right
+    answer and a prefilled compound is one accepted default away from a garbled entity in the
+    knowledge repo.
+
+    `entity_type` is a `static_select` over the closed list, so a submission can never carry a
+    type `entities.mint` would refuse. `aliases` is ONE comma-separated field
     (`server.review._alias_list` splits it); `role` is one short field; both optional. `requeue`
     is PRE-CHECKED — approve-then-requeue is the ordinary flow — and its block is `optional: True`
     so an unchecked submit is valid Slack input. `entity_id` is deliberately NOT a field: the
     server prefills it from `name`'s own slug, and a steward who needs a different one uses
     `stigmergy-entities`/MCP, where `birth.prepare` runs a real collision check this form
     cannot."""
+    names = [str(n) for n in (unresolved_names or []) if str(n).strip()]
+    proposed_name = names[0] if len(names) == 1 else ""
     name_element = {"type": "plain_text_input", "action_id": ENTITY_MINT_NAME_ACTION_ID,
                     **({"initial_value": proposed_name} if proposed_name else {})}
+    heading = ([_section(escape_mrkdwn(copy.entity_mint_several_unresolved(names=names)))]
+               if len(names) > 1 else [])
     return {
         "type": "modal",
         "callback_id": ENTITY_MINT_MODAL_CALLBACK_ID,
@@ -401,6 +411,7 @@ def render_entity_mint_modal(*, trigger_id: str, private_metadata: str,
         "submit": {"type": "plain_text", "text": copy.APPROVE_LABEL[:24]},
         "close": {"type": "plain_text", "text": copy.NOT_YET_LEAVE_AS_DEVELOPING[:24]},
         "blocks": [
+            *heading,
             {
                 "type": "input",
                 "block_id": ENTITY_MINT_NAME_BLOCK_ID,

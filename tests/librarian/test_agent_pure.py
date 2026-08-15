@@ -558,6 +558,99 @@ def test_a_well_formed_park_of_either_kind_passes(kind, field):
     assert outcome.triage[field] == "Globex Corp"
 
 
+# ── issue #32: the ordinary path has no slot for more than one unresolved entity name ─────────
+# `parse_meeting_outcome` already accepts a PLURAL `triage.names` list (`SITUATION_NAMES_KEY`) for
+# exactly the case of a capture naming several distinct unresolved entities at once — see
+# `test_a_parked_meeting_naming_its_unresolved_entities_validates` in
+# `test_structured_schema_unit.py`. `parse_outcome` has never grown the same field: it still only
+# ever reads the singular `triage.name` (`SITUATION_NAME_KEY`).
+def test_parse_outcome_accepts_the_plural_triage_names_field_like_the_meeting_flow_does():
+    """Issue #32 reproduction, at `agent.parse_outcome` — the tightest layer the defect is visible
+    at with no LLM involved. A capture naming two distinct unresolved entities ("Jack" the person,
+    "Acme Capital" the org) should be able to declare `triage.names` (the meeting flow's own
+    shape) and have BOTH tracked, exactly as `parse_meeting_outcome` already does.
+
+    OLD (current) BEHAVIOUR being pinned here as a bug, not a spec: `parse_outcome` has no `names`
+    slot at all, so this well-formed plural declaration is REFUSED outright as a missing
+    `triage.name` — the code has nowhere to put a second name, which is the root cause behind the
+    filing agent's observed workaround of concatenating both into one garbled string
+    ("Jack Acme Capital").
+    """
+    outcome = agent.parse_outcome({
+        "decision": "triage",
+        "triage": {"kind": "unresolved-entity", "names": ["Jack", "Acme Capital"]},
+    })
+    assert outcome.triage.get("names") == ["Jack", "Acme Capital"]
+
+
+# ── the new field's own blank check: `names` must be no weaker than `name` ─────────────────────
+# The table above refuses a park whose `triage.name` is absent or blank — `_declared` asks the RAW
+# value and a string of spaces answers no. The plural branch added for issue #32 asks a DIFFERENT
+# question of `triage.names`: list truthiness. A list of blanks is a non-empty list, so it passes a
+# check its singular twin fails, and the emptiness the refusal exists to catch travels on.
+def test_a_plural_declaration_of_blank_names_is_refused_like_a_blank_singular_one():
+    """A `triage.names` carrying no actual name declares exactly what a blank `triage.name`
+    declares — nothing — and must be refused the same way, so the model spends its one corrective
+    retry naming the entity instead of shipping a park nobody can act on.
+
+    OLD BEHAVIOUR (on `main`, before issue #32): there was no `names` field, so this object was
+    refused outright as a park with no `triage.name`. NEW BEHAVIOUR being pinned here as the bug:
+    the branch's `elif triage["kind"] == TRIAGE_UNRESOLVED_ENTITY and triage["names"]` tests the
+    LIST, not the names in it, so `["   ", ""]` satisfies the completeness check and the capture
+    parks on nothing. The blank-name refusal got weaker, not stronger, by gaining a second shape.
+    """
+    with pytest.raises(OutcomeShapeError):
+        agent.parse_outcome({"decision": "triage",
+                             "triage": {"kind": "unresolved-entity", "names": ["   ", ""]}})
+
+
+def test_a_plural_declaration_keeps_a_name_that_merely_CONTAINS_whitespace():
+    """Specificity twin for the refusal above: the check is "is there a name here", never "does
+    this name contain a space". An org's name has spaces in it — including a double one somebody
+    typed — and a name that arrived padded is still a name. Both are ACCEPTED, so the fix cannot be
+    satisfied by refusing whatever does not equal its own `.strip()`.
+
+    The boundary keeps names VERBATIM (`_identifier` does not strip, exactly as it does not for the
+    singular `triage.name`); what the submitter and the steward are shown is normalised further
+    down, and `test_ordinary_multi_entity_park_unit.py` pins that half.
+    """
+    outcome = agent.parse_outcome({
+        "decision": "triage",
+        "triage": {"kind": "unresolved-entity", "names": ["Acme  Capital", " Jack "]},
+    })
+    assert outcome.triage["names"] == ["Acme  Capital", " Jack "]
+
+
+# ── the same hole on the MEETING flow, where it is older than this change ─────────────────────
+@pytest.mark.parametrize("names", [
+    pytest.param([], id="an empty names list"),
+    pytest.param(["   "], id="a names list holding only blanks"),
+])
+def test_a_meeting_park_of_blank_names_is_refused_like_one_with_no_names_at_all(names):
+    """PRE-EXISTING on the meeting flow — NOT a regression introduced by issue #32. `main` behaves
+    exactly as this branch does here: `parse_meeting_outcome` has always refused on `not names`,
+    which is list emptiness, so `["   "]` has always passed. It is landed beside the ordinary case
+    because the two are one defect: fixing only the ordinary side would re-open the very asymmetry
+    between the flows that issue #32 closed, and `_triage_meeting`'s `[n for n in names if n]`
+    filter keeps the blank alive all the way to the submitter's question.
+
+    The empty-list case is the reference the blank case must match, and nothing pinned it either.
+    """
+    with pytest.raises(OutcomeShapeError):
+        agent.parse_meeting_outcome({"decision": "triage",
+                                     "triage": {"kind": "unresolved-entity", "names": names}})
+
+
+def test_a_meeting_park_keeps_a_name_that_merely_CONTAINS_whitespace():
+    """The meeting flow's copy of the specificity twin — same reason, and the flow where a
+    multi-word attendee or project name is the NORMAL case rather than the exception."""
+    outcome = agent.parse_meeting_outcome({
+        "decision": "triage",
+        "triage": {"kind": "unresolved-entity", "names": ["Acme  Capital", " Jack "]},
+    })
+    assert outcome.triage["names"] == ["Acme  Capital", " Jack "]
+
+
 def test_nesting_past_the_depth_ceiling_stays_a_plain_agent_error():
     """No amount of telling makes a resource bound negotiable, so it does NOT become a finding."""
     deep = {"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": {"i": 1}}}}}}}}}

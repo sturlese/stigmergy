@@ -171,8 +171,9 @@ class MeetingAccount(BaseModel):
             raise ValueError(_needed(
                 "triage.kind",
                 f"Parking says WHY: one of {', '.join(agent_module.TRIAGE_KINDS)}."))
-        # The ONE place this flow differs: a meeting can fail to anchor on several names at once,
-        # so it asks for `names` where the ordinary flow asks for `name`.
+        # A meeting always collects the PLURAL shape (a transcript can fail to anchor on several
+        # names at once) — `names` is required outright, never optional the way the ordinary
+        # flow's `FilingAccount` treats it beside the singular `name`.
         if kind == agent_module.TRIAGE_UNRESOLVED_ENTITY and not [
                 n for n in self.triage.names if (n or "").strip()]:
             raise ValueError(_needed(
@@ -221,10 +222,18 @@ class OrdinaryFinding(BaseModel):
     category: str = ""
 
 
+# This docstring is the JSON-schema DESCRIPTION the structured model reads, not a note to a
+# reader here — which is why `names` has to be named in it. A field described nowhere is a field
+# the model will not reach for, and the whole of issue #32 was a model with nowhere to put a
+# second name.
 class OrdinaryTriage(BaseModel):
-    """Why the capture was parked, when `decision` is `triage`."""
+    """Why the capture was parked, when `decision` is `triage`. For an `unresolved-entity` park:
+    `name` for the ONE entity the material is about, or `names` — every unresolved entity, each
+    on its own — when it is about more than one. Use `names` rather than crowding several into
+    `name`: a steward registers them one at a time, and a joined string is not any of them."""
     kind: str = ""
     name: str = ""
+    names: list[str] = Field(default_factory=list)
     judged_type: str = ""
 
 
@@ -276,6 +285,12 @@ class FilingAccount(BaseModel):
             raise ValueError(_needed(
                 "triage.kind",
                 f"Parking says WHY: one of {', '.join(agent_module.TRIAGE_KINDS)}."))
+        # A capture can name MORE THAN ONE unresolved entity too (issue #32): `triage.names`
+        # satisfies the same requirement `triage.name` would, exactly as `MeetingAccount` already
+        # accepts for its own (always-plural) `triage.names`.
+        if kind == agent_module.TRIAGE_UNRESOLVED_ENTITY and [
+                n for n in self.triage.names if (n or "").strip()]:
+            return self
         required = agent_module.TRIAGE_REQUIRED_FIELD[kind]
         if not (getattr(self.triage, required, "") or "").strip():
             raise ValueError(_needed(

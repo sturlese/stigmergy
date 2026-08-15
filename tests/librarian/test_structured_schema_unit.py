@@ -212,6 +212,54 @@ def test_a_park_with_no_usable_kind_is_refused_and_told_the_vocabulary():
         assert known in message
 
 
+# ── the ordinary flow's PLURAL park (issue #32) ───────────────────────────────────────────────
+# `OrdinaryTriage.names` and the validator branch that honours it are dormant on the shipped
+# ordinary backend: ADR 034 left `structured_ordinary` False, so today's runs validate through
+# `agent.parse_outcome` and never construct a `FilingAccount`. Untested, that branch would be
+# unreachable code that reads as coverage — and the day the flag flips, the first thing anyone
+# would learn about it is a paid run. Same reason LEG 4's three framework cases are kept for the
+# meeting flow: the schema is tested as a contract, not as whichever road happens to be wired.
+def test_a_parked_ordinary_capture_may_name_SEVERAL_unresolved_entities():
+    """The ordinary flow's half of the plural shape: a capture naming two unresolved entities
+    declares `triage.names`, and the completeness validator treats that as satisfying exactly what
+    the singular `triage.name` would. Before issue #32 this account was REFUSED for a missing
+    `triage.name` — the model's only repair instruction was to put two names in a one-name field,
+    which is how "Jack Acme Capital" got written."""
+    account = FilingAccount(
+        decision="triage",
+        triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
+                              names=["Jack", "Acme Capital"]))
+
+    assert account.triage.names == ["Jack", "Acme Capital"]
+    assert account.triage.name == ""     # the singular slot stays empty; it is not a fallback
+
+
+def test_a_plural_park_of_BLANK_names_is_still_refused_and_still_names_the_singular_field():
+    """Specificity twin for the acceptance above — the branch must not become a hole. A `names`
+    list that carries no actual name satisfies nothing, and the repair instruction the model gets
+    back is the unchanged one: `triage.name`. (The empty-list case is covered by
+    `test_a_park_that_omits_the_field_its_kind_obliges_is_refused` above, off the same table.)"""
+    with pytest.raises(ValidationError) as exc_info:
+        FilingAccount(decision="triage",
+                      triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
+                                            names=["   ", ""]))
+
+    assert "`triage.name`" in _message(exc_info)
+
+
+def test_the_plural_shape_buys_the_OTHER_park_kind_nothing():
+    """Second specificity twin: `names` answers the `unresolved-entity` question and no other. An
+    `unsupported-type` park still owes `triage.judged_type`, and a model that pads it with names
+    is told so rather than let through — the risk any early-return branch in a completeness
+    validator carries."""
+    with pytest.raises(ValidationError) as exc_info:
+        FilingAccount(decision="triage",
+                      triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNSUPPORTED_TYPE,
+                                            names=["Jack", "Acme Capital"]))
+
+    assert "`triage.judged_type`" in _message(exc_info)
+
+
 # ── LEG 2b: the MEETING twins, on a flow where the mechanism had not fired yet ─────────────────
 # Identical mechanism, no observed failure — the meeting flow has real passing runs (the terra
 # trial, the golden's two meeting captures). Closing it on two samples' worth of evidence is what
@@ -247,10 +295,15 @@ def test_every_decision_in_a_meeting_filing_must_carry_its_own_title():
 
 
 def test_a_parked_meeting_must_carry_the_PLURAL_names_field():
-    """**The one place this flow's rule differs from the ordinary one**, and it is a difference the
-    boundary already has: a meeting can fail to anchor on several names at once, so
-    `parse_meeting_outcome` asks for `names` where `parse_outcome` asks for `name`. A schema that
-    copied the ordinary validator would demand a field this account does not have."""
+    """**Both flows now know the plural shape; what still differs is whether it is OBLIGATORY.**
+    A meeting park is always plural — `parse_meeting_outcome` REQUIRES `names` outright, with no
+    singular fallback, so an account carrying only a `name` is refused here. The ordinary flow
+    ACCEPTS `names` as one of TWO shapes (issue #32): `FilingAccount` takes either the singular
+    `triage.name` or a non-empty `triage.names`, and refuses only when NEITHER is there — see
+    `test_a_park_that_omits_the_field_its_kind_obliges_is_refused` and
+    `test_a_parked_ordinary_capture_may_name_SEVERAL_unresolved_entities` for that pair. A meeting
+    schema that copied the ordinary validator would therefore accept a `name`-only park this flow
+    has no reader for."""
     with pytest.raises(ValidationError) as exc_info:
         MeetingAccount(decision="triage",
                        triage=MeetingTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY))
@@ -302,6 +355,22 @@ def test_a_complete_account_parses_through_the_BOUNDARY_unchanged():
     assert outcome.title == "Acme Corp Renewal Window"      # mirrored up from `page`
     assert outcome.page_type == "note"
     assert outcome.page.body == _page_body()
+
+
+def test_a_PLURAL_park_parses_through_the_BOUNDARY_unchanged_too():
+    """The same agreement, on the shape issue #32 added: what the schema accepts, `parse_outcome`
+    accepts, and both names survive into `outcome.triage["names"]` — which is the field
+    `processing._triage` routes on. Two enforcement points that disagreed here would send a model
+    round a repair loop for an account the other half had already blessed."""
+    account = FilingAccount(
+        decision="triage",
+        triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
+                              names=["Jack", "Acme Capital"]))
+
+    outcome = agent_module.parse_outcome(account.model_dump())
+
+    assert outcome.decision == "triage"
+    assert outcome.triage["names"] == ["Jack", "Acme Capital"]
 
 
 # ── LEG 4: through the FRAMEWORK — the two roads an incomplete account can now take ────────────

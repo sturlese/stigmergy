@@ -123,23 +123,26 @@ async def _open_modal(ctx, *, trigger_id: str, view: dict, what: str) -> None:
         log.error("slack review: could not open %s", what, exc_info=True)
 
 
-def _proposed_name_for(conn, item_id: str) -> str:
-    """The entity proposal's own unresolved name, for the mint modal's `name` prefill — the SAME
-    field the doorbell card itself already showed (`doorbell._render_for_item` ->
-    `render_doorbell_entity_proposal(name=item["subject"], ...)`). `items_for_doorbell` is the
-    management-shaped, unscoped read this needs: a steward approving someone else's proposal must
-    see ITS name, not their own ACL-scoped `review_queue` (which would hide it — a steward may be
-    scoped, and self-approval is refused, so the row the steward is about to act on was never
-    theirs to begin with).
+def _unresolved_names_for(conn, item_id: str) -> list[str]:
+    """The entity proposal's own unresolved names, for the mint modal — `subjects`, the per-name
+    list, never the `subject` display string the doorbell card shows: `situations.subject_of`
+    joins several names with ", ", and this value decides what a steward MINTS. `render` applies
+    the one-name rule; this only reads.
 
-    `""` when the item can no longer be found among the OPEN items (already decided, or disposed of
-    between the doorbell DM and this click) — the modal still opens, with an empty field a steward
-    can fill by hand; `review_decide`'s own validation is what actually enforces the field is
-    non-empty on submit, exactly as it would for a steward who never saw a doorbell card at all."""
+    `items_for_doorbell` is the management-shaped, unscoped read this needs: a steward approving
+    someone else's proposal must see ITS names, not their own ACL-scoped `review_queue` (which
+    would hide it — a steward may be scoped, and self-approval is refused, so the row the steward
+    is about to act on was never theirs to begin with).
+
+    `[]` when the item can no longer be found among the OPEN items (already decided, or disposed
+    of between the doorbell DM and this click) — the modal still opens, with an empty field a
+    steward can fill by hand; `review_decide`'s own validation is what actually enforces the field
+    is non-empty on submit, exactly as it would for a steward who never saw a doorbell card at
+    all."""
     for item in review.items_for_doorbell(conn):
         if item["kind"] == "entity-proposal" and item["id"] == item_id:
-            return item.get("subject", "")
-    return ""
+            return list(item.get("subjects") or [])
+    return []
 
 
 def _text_value(state_values: dict, block_id: str, action_id: str) -> str:
@@ -201,7 +204,7 @@ async def handle_block_action(ctx, *, action_id: str, value: str, trigger_id: st
                                    "channel_id": channel_id})
             view = render.render_entity_mint_modal(
                 trigger_id=trigger_id, private_metadata=metadata,
-                proposed_name=_proposed_name_for(ctx.conn, item_id))
+                unresolved_names=_unresolved_names_for(ctx.conn, item_id))
             await _open_modal(ctx, trigger_id=trigger_id, view=view,
                               what=f"the entity-mint modal for {item_id}")
             return
