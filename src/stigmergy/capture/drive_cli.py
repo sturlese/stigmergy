@@ -98,10 +98,16 @@ def _check_size(meta: "drive_client.DriveFile", *, claimed: bool, n_bytes: int) 
 
 def _manifest(meta: "drive_client.DriveFile", name: str, digest: str, n_bytes: int) -> str:
     """The row's text material: deterministic, content-identifying, volatile-field-free (the
-    module docstring says why `drive_modified` stays out). What dedup keys on."""
+    module docstring says why `drive_modified` stays out). What dedup keys on.
+
+    The record is LINE-ORIENTED, so the one attacker-shaped field in it — Drive's display name,
+    which anyone who can share a file chooses — is collapsed onto a single line. A raw `\\n` in a
+    name forges a second `key: value` line in the material every downstream reader parses, and
+    the material is the dedup key, so a forged line is a forged capture identity.
+    """
     lines = [
         "Drive capture manifest",
-        f"file: {name}",
+        f"file: {' '.join(str(name).split())}",
         f"drive_file_id: {meta.file_id}",
         f"url: {meta.url}",
         f"mime: {meta.mime}",

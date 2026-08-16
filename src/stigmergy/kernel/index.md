@@ -72,7 +72,8 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 - `converters.vision_extract` reads `VISION_MODEL`, requires `GEMINI_API_KEY`. PDFs ≤14 MB go
   inline as bytes (the Files API's ASCII header encoding breaks on non-ASCII filenames); larger
   ones upload through an ASCII-named temp copy. The model id is returned as provenance.
-- `normalize.py` and `frontmatter.py` have no dedicated suite — they are exercised transitively.
+- `normalize.py` has no dedicated suite — it is exercised transitively; `frontmatter.py`'s lives
+  in `tests/kernel/test_frontmatter.py`.
   `normalize` carries the legal-suffix table entity identity depends on; a change there needs a
   suite added with it. `server.entity_aliases` deliberately does NOT use it (its own looser
   `_norm`, no suffix stripping — a retrieval nicety, not an identity decision).

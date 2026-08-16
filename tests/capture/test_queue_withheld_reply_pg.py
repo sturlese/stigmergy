@@ -130,6 +130,36 @@ def test_a_stewards_rejection_reply_is_not_withheld_on_either_path(clean_queue):
 
 
 
+@pytest.mark.parametrize("read_path", ["query_submissions", "get_submission_trace"])
+def test_a_parked_row_whose_report_is_a_json_scalar_is_still_served(clean_queue, read_path):
+    """OLD BEHAVIOUR: `AttributeError: 'str' object has no attribute 'get'` — BOTH read paths
+    500ed on the row instead of serving it.
+
+    `report` is JSONB, and JSONB holds scalars as happily as objects. `schema._reason_flagged`
+    guarded only the falsy case (`(report or {}).get(...)`), so a truthy scalar sailed past it and
+    blew up in the one function both paths route their sentence through. A single row written in
+    an unexpected shape therefore took out `stigmergy-queue show`, `brain_submissions` and the
+    admin console's list — the SQL mirror (`report ->> 'reason_code'`) had no such problem, so the
+    two halves of one rule disagreed exactly where a row was hardest to look at.
+
+    Walking both paths over the SAME row is this file's own shape: a fix to one and not the other
+    fails here.
+    """
+    ack = _submit_and_ask(clean_queue)
+    with clean_queue.cursor() as cur:
+        cur.execute("UPDATE capture_queue SET status = %s, report = %s WHERE id = %s",
+                    (schema.TRIAGE, Jsonb("a report stored as a bare string"), ack["id"]))
+
+    if read_path == "query_submissions":
+        [row] = queue.query_submissions(clean_queue, submitter=ALICE, statuses=[schema.TRIAGE])
+    else:
+        row = queue.get_submission_trace(clean_queue, ack["id"])
+
+    assert row["id"] == ack["id"]
+    assert row["status"] == schema.TRIAGE
+    assert row["withheld_reason"] == ""      # a scalar report names no reason code
+
+
 # ── the full state matrix ───────────────────────────────────────────────────────────────────────
 # Withhold in `queued` and `claimed`; show in `needs_input`, `triage`, `filed`, `rejected`,
 # `resolved`. `failed` stays withheld too, as an accepted residual (a run that failed before the

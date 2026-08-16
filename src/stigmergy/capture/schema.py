@@ -118,17 +118,26 @@ WITHHELD_UNSCANNED_NOTE = (
 GATE_NOT_YET_RUN_STATUSES = frozenset({QUEUED, CLAIMED})
 
 
-def _reason_flagged(status: str, report: dict | None) -> bool:
-    """A secret/PII match, or a `rejected` row with no `reason_code` at all (fail-closed)."""
-    reason_code = (report or {}).get(REASON_CODE_KEY)
+def _reason_flagged(status: str, report) -> bool:
+    """A secret/PII match, or a `rejected` row with no `reason_code` at all (fail-closed).
+
+    `report` is whatever the JSONB column holds, which includes scalars and lists — only a dict
+    can carry a reason code, and anything else carries none. Reading it unguarded crashed both
+    queue read paths on such a row, where the SQL mirror (`report ->> 'reason_code'`, NULL on a
+    non-object) had always answered calmly; the fail-closed branch below is what still withholds
+    a `rejected` row whose report says nothing.
+    """
+    reason_code = report.get(REASON_CODE_KEY) if isinstance(report, dict) else None
     if reason_code in WITHHELD_REASONS:
         return True
     return status == REJECTED and reason_code is None
 
 
-def withheld_reason(status: str, report: dict | None) -> str:
+def withheld_reason(status: str, report) -> str:
     """THE sentence every read surface renders for withheld material. Priority: gate not yet run,
-    then the `failed` residual, then a flagged match; every other state returns `""`."""
+    then the `failed` residual, then a flagged match; every other state returns `""`.
+
+    `report` is the raw JSONB value, not necessarily a dict — see `_reason_flagged`."""
     if status in GATE_NOT_YET_RUN_STATUSES:
         return WITHHELD_PENDING_NOTE
     if status == FAILED:

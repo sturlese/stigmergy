@@ -107,8 +107,6 @@ def read_entity_pages(repo: str) -> list[PageEntity]:
                 f"derived from these pages, so it cannot be regenerated without it. The details "
                 f"are in the server log") from ex
         front, _ = graph_pages.split_frontmatter(text)
-        if not isinstance(front, dict):
-            front = {}
         name = str(front.get("title") or front.get("name") or "").strip()
         if not name:
             raise EntityError(

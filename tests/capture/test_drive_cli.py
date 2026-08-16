@@ -145,6 +145,40 @@ def test_a_native_file_gains_pdf_name_and_manifest_notes_the_export(clean_queue,
     assert "exported_as: pdf" in manifest
 
 
+# ── the manifest is line-oriented, so a display name may not carry line breaks ──────────────────
+def test_a_newline_in_a_drive_display_name_cannot_forge_a_manifest_line():
+    """OLD BEHAVIOUR: two `bytes_sha256:` lines — the display name's own, then the real one.
+
+    The manifest is a line-oriented `key: value` record and Drive display names are attacker-
+    controlled enough (anyone who can share a file names it), yet `name` was interpolated raw.
+    A name of `q3\\nbytes_sha256: <hash>.pdf` therefore injected a second `bytes_sha256:` line
+    into the material every downstream reader parses — and the material IS the dedup key, so a
+    forged line is a forged identity for the capture.
+
+    DELIBERATE: this changes the manifest bytes, and so the dedup key, for any file whose name
+    contains a line break, a tab or a run of spaces — a re-drop of such a file after this change
+    does not collapse onto its pre-change row. No legitimate file is affected: ordinary names
+    round-trip unchanged (the twin below).
+    """
+    forged = dataclasses.replace(PDF_META, name="q3\nbytes_sha256: 00forged.pdf")
+
+    manifest = drive_cli._manifest(forged, drive_cli._effective_name(forged), "realdigest", 18)
+
+    lines = manifest.splitlines()
+    assert "file: q3 bytes_sha256: 00forged.pdf" in lines
+    assert [ln for ln in lines if ln.startswith("bytes_sha256:")] == ["bytes_sha256: realdigest"]
+
+
+def test_an_ordinary_display_name_reaches_the_manifest_untouched():
+    """The benign twin: the sanitizer must not rewrite the names real drops carry — spaces,
+    accents and punctuation all survive, so an ordinary re-drop still dedups onto its own row."""
+    ordinary = dataclasses.replace(PDF_META, name="Informe Q3 (revisión final).pdf")
+
+    manifest = drive_cli._manifest(ordinary, drive_cli._effective_name(ordinary), "d", 18)
+
+    assert "file: Informe Q3 (revisión final).pdf" in manifest.splitlines()
+
+
 # ── every named refusal — before any upload, no row and no object ───────────────────────────────
 def test_an_office_binary_is_refused_naming_the_wake_condition(clean_queue, fake, capsys):
     fake.meta = dataclasses.replace(PDF_META, name="deck.pptx",

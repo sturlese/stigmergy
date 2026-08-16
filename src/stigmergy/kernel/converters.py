@@ -69,13 +69,20 @@ def _docx_to_md(path: str) -> str:
 
 
 def _render_table(rs) -> str:
+    """Every row padded to the WIDEST row, not to row 0: a sheet that opens with a one-cell title
+    above the grid would otherwise render as a one-column table with full-width rows hanging off
+    it. A rectangular grid is unaffected (max width IS row 0's) — and it has to be, because this
+    text is what `librarian.gates` scans for secrets, line by line."""
     def cell(c):
         return c.replace("|", "\\|").replace("\n", " ").strip()
-    out = ["| " + " | ".join(cell(c) for c in rs[0]) + " |",
-           "| " + " | ".join("---" for _ in rs[0]) + " |"]
-    for r in rs[1:]:
-        out.append("| " + " | ".join(cell(c) for c in r) + " |")
-    return "\n".join(out)
+
+    width = max(len(r) for r in rs)
+
+    def row(r):
+        return "| " + " | ".join([cell(c) for c in r] + [""] * (width - len(r))) + " |"
+
+    return "\n".join([row(rs[0]), "| " + " | ".join(["---"] * width) + " |"]
+                     + [row(r) for r in rs[1:]])
 
 
 def _xls_rows(path: str) -> list:
@@ -85,7 +92,10 @@ def _xls_rows(path: str) -> list:
     out = []
     for sh in book.sheets():
         rows = []
-        for ri in range(min(sh.nrows, SHEET_MAX_ROWS)):
+        # The cap counts rows KEPT, not rows scanned — the shape `_xlsx_rows` and `_csv_rows` use.
+        # Capping the scan instead loses every real row of a sparse sheet whose grid starts below
+        # the cap, which is judgment about the data in the module that promises none.
+        for ri in range(sh.nrows):
             cells = []
             for v in sh.row_values(ri):
                 if v is None or v == "":
@@ -96,6 +106,8 @@ def _xls_rows(path: str) -> list:
                     cells.append(str(v))
             if any(c.strip() for c in cells):
                 rows.append(cells)
+            if len(rows) >= SHEET_MAX_ROWS:
+                break
         out.append((sh.name, rows))
     return out
 
@@ -150,7 +162,7 @@ def _sheet_profile(path: str) -> str:
             continue
         sample = rows[: SHEET_SAMPLE_ROWS + 1]
         parts.append(
-            f"### {name} ({len(rows)} rows, {len(rows[0])} cols)\n\n{_render_table(sample)}"
+            f"### {name} ({len(rows)} rows, {max(len(r) for r in rows)} cols)\n\n{_render_table(sample)}"
             + (f"\n\n_(+{len(rows) - len(sample)} more rows in the original file)_" if len(rows) > len(sample) else "")
         )
     return "\n\n".join(parts)

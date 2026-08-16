@@ -548,3 +548,40 @@ def test_ordinary_unicode_material_is_still_accepted():
     astral-plane emoji are ordinary capture material."""
     for material in ["café con leche", "会議のメモ", "shipped it 🚀", "naïve façade"]:
         assert schema.prepare_submission("raw", material, None).material == material
+
+
+# ── withheld_reason: the report column is JSONB, so a scalar is a shape it can hold ──────────────
+@pytest.mark.parametrize("status", [schema.TRIAGE, schema.FILED])
+def test_withheld_reason_treats_a_scalar_report_as_carrying_no_reason_code(status):
+    """OLD BEHAVIOUR: `AttributeError: 'str' object has no attribute 'get'` out of
+    `_reason_flagged` — `(report or {}).get(...)` assumes the falsy case is the only non-dict one.
+
+    `report` is a JSONB column, and JSONB holds scalars: `"oops"`, `42`, `true` are all valid
+    stored values, and a truthy scalar sails straight past the `or {}`. This is the reachable
+    sibling of the guard `server.service` already carries — the crash lands inside
+    `queue.get_submission_trace`, so `stigmergy-queue show`, `brain_submissions` and the admin
+    console all 500 on a row whose report was written in a shape nobody expected, BEFORE any
+    admin-side guard gets a turn.
+
+    A scalar carries no reason code, so it flags nothing: neither status is withheld.
+    """
+    assert schema.withheld_reason(status, "oops") == ""
+    assert schema.withheld_reason(status, 42) == ""
+    assert schema.withheld_reason(status, ["reason_code"]) == ""
+
+
+def test_withheld_reason_still_fails_closed_on_a_rejected_row_with_a_scalar_report():
+    """The benign twin for the fail-closed half: refusing to read a scalar must not become
+    refusing to withhold. A `rejected` row whose report names no reason code is withheld exactly
+    as it was when the report was `None` — a scalar report is no better evidence than no report."""
+    assert schema.withheld_reason(schema.REJECTED, "oops") == schema.WITHHELD_MATERIAL_NOTE
+    assert schema.withheld_reason(schema.REJECTED, None) == schema.WITHHELD_MATERIAL_NOTE
+
+
+def test_withheld_reason_still_reads_a_real_reason_code_out_of_a_dict_report():
+    """The benign twin for the reading half: a proper dict report is unaffected."""
+    assert schema.withheld_reason(
+        schema.REJECTED, {schema.REASON_CODE_KEY: schema.REASON_SECRET}
+    ) == schema.WITHHELD_MATERIAL_NOTE
+    assert schema.withheld_reason(
+        schema.REJECTED, {schema.REASON_CODE_KEY: schema.REASON_STEWARD}) == ""

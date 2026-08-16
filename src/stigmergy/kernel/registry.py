@@ -39,6 +39,8 @@ def load_registry(path: str | None) -> Registry:
         return reg
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"registry {path}: top level must be an object")
     entities = data.get("entities")
     if not isinstance(entities, dict):
         raise ValueError(f"registry {path}: top-level 'entities' object is required")

@@ -64,3 +64,13 @@ def test_save_registry_round_trips_and_sorts(tmp_path):
     assert list(written["entities"]) == ["acme", "globex"]
     assert written["entities"]["globex"]["aliases"] == ["GX Industries", "Globex Corp"]
     assert load_registry(path).canonical_id("globex corp") == "globex"
+
+
+def test_a_top_level_array_registry_is_refused_loudly_not_an_attribute_error(tmp_path):
+    """Malformed means LOUD, and loud means the module's own sentence.
+    OLD BEHAVIOUR: a top-level JSON array raised AttributeError from `data.get`,
+    a traceback instead of the named refusal every other malformed shape gets."""
+    p = tmp_path / "entity-registry.json"
+    p.write_text('[{"name": "Acme"}]', encoding="utf-8")
+    with pytest.raises(ValueError, match="top level must be an object"):
+        load_registry(str(p))

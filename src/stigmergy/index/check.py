@@ -8,16 +8,17 @@ document), missing embedding / empty tsv (a page invisible to one arm is a silen
 hole). WARN: dangling `superseded_by` (may be legitimately historical), anchored-but-unregistered
 entity (resolves for navigation but gets no aliases, no entity-first search, no TOLD boost).
 
-The registry is read as a FILE (id set only), never through `stigmergy.server` — the index sits
-below the server, and packages talk through files. The lint sees the WHOLE index by design: it is
-an operator tool with no caller identity to scope to, a named ACL exception in
-`tests/test_architecture.py`.
+The registry is read as a FILE (id set only) through `kernel.registry.load_registry`, never
+through `stigmergy.server` — the index sits below the server, and packages talk through files.
+The shared loader rather than a local parse, so the lint accepts exactly what the server loads.
+The lint sees the WHOLE index by design: it is an operator tool with no caller identity to scope
+to, a named ACL exception in `tests/test_architecture.py`.
 """
-import json
 import os
 import posixpath
 
 from stigmergy.index.rank import chain_base
+from stigmergy.kernel.registry import load_registry
 
 FINDING_SEVERITIES = ("error", "warn")
 
@@ -28,15 +29,17 @@ def _finding(severity: str, check: str, detail: str) -> dict:
 
 def registry_ids(path: str | None) -> set[str] | None:
     """The registry's id set, or None when there is no registry to check against (missing path or
-    file — the coverage check is then skipped). Malformed JSON raises: a broken registry is an
-    operator-visible fault."""
+    file — the coverage check is then skipped, so None and an empty set mean different things).
+    A malformed registry raises: a broken registry is an operator-visible fault.
+
+    Read through `kernel.registry.load_registry`, the one reader, and not by hand: a second parse
+    validates whatever it happens to check, which here was strictly less than the loader — a
+    nameless entity passed this lint and then made every real consumer refuse the file. A lint
+    that blesses a substrate the server will not load is worse than no lint.
+    """
     if not path or not os.path.exists(path):
         return None
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-    if not isinstance(data, dict) or not isinstance(data.get("entities"), dict):
-        raise ValueError(f"malformed entity registry at {path}: expected {{'entities': {{...}}}}")
-    return set(data["entities"])
+    return set(load_registry(path).entities)
 
 
 def run_checks(conn, registry_path: str | None = None) -> list[dict]:

@@ -27,6 +27,47 @@ def test_render_table_escapes_pipes_and_newlines():
     assert md.splitlines()[1] == "| --- | --- |"
 
 
+def _md_width(line: str) -> int:
+    """Cells in one rendered markdown row. `| a | b |` splits into 4 pipe-separated parts, two of
+    them the empty ends."""
+    return len(line.split("|")) - 2
+
+
+def test_a_ragged_grid_renders_every_row_at_the_widest_row(tmp_path):
+    """OLD BEHAVIOUR: header and separator were 1 cell wide while the data rows were 3 — a table
+    whose whole width came from `rs[0]`.
+
+    Real sheets open with a one-cell title row above the grid, so a 20-column export rendered as a
+    1-column table with 20-column rows hanging off it: not valid markdown, and unreadable to the
+    agent that is handed this text as the whole of a dropped spreadsheet.
+    """
+    p = tmp_path / "ragged.csv"
+    p.write_text("Quarterly report\nmetric,q1,q2\narr,1000,1200\n")
+
+    text = extract(str(p), "sheet")["text"]
+
+    table = [ln for ln in text.splitlines() if ln.startswith("|")]
+    assert [_md_width(ln) for ln in table] == [3, 3, 3, 3]
+    assert table[1] == "| --- | --- | --- |"
+    assert "| arr | 1000 | 1200 |" in table
+
+
+def test_a_rectangular_grid_renders_exactly_as_it_always_did(tmp_path):
+    """The benign twin, pinned as a golden string. This text feeds `librarian.gates`' secrets
+    scan, which matches within a line — so a change to what these converters emit changes what
+    that gate can see. A rectangular grid (every real sheet that has no title row) must come out
+    byte-identical to before the ragged-row fix."""
+    p = tmp_path / "rect.csv"
+    p.write_text("metric,value\narr,1000\n")
+
+    text = extract(str(p), "sheet")["text"]
+
+    assert text == ("### Sheet1 (2 rows, 2 cols)\n\n"
+                    "| metric | value |\n"
+                    "| --- | --- |\n"
+                    "| arr | 1000 |")
+
+
 def test_csv_rows_skips_blank_lines(tmp_path):
     p = tmp_path / "d.csv"
     p.write_text("h1,h2\n\n1,2\n,,\n")
@@ -57,6 +98,75 @@ def test_sheet_profile_xlsx(tmp_path):
     profile = _sheet_profile(str(p))
     assert "### KPIs (2 rows, 2 cols)" in profile
     assert "| arr | 1000 |" in profile
+
+
+# ── .xls: the cap counts rows KEPT, the way its xlsx/csv twins do ──────────────────────────────
+class FakeXlrdSheet:
+    """xlrd's `Sheet` seam, exactly as `_xls_rows` reaches for it: `name`, `nrows`, `ncols`,
+    `cell_value(r, c)` and the `row_values(r)` xlrd derives from them. This fake stands in for the
+    EXTERNAL library (BIFF parsing), never for our own logic — the row selection under test is
+    entirely `_xls_rows`'s."""
+
+    def __init__(self, name, grid):
+        self.name = name
+        self._grid = grid
+        self.nrows = len(grid)
+        self.ncols = max((len(r) for r in grid), default=0)
+
+    def cell_value(self, r, c):
+        row = self._grid[r]
+        return row[c] if c < len(row) else ""
+
+    def row_values(self, r):
+        return [self.cell_value(r, c) for c in range(self.ncols)]
+
+
+def _xls_book(monkeypatch, sheets):
+    import xlrd
+    monkeypatch.setattr(xlrd, "open_workbook",
+                        lambda path: types.SimpleNamespace(sheets=lambda: sheets))
+
+
+def test_xls_rows_keeps_real_rows_that_sit_past_the_first_cap_worth_of_blanks(monkeypatch):
+    """OLD BEHAVIOUR: `[]` — every real row lost, silently.
+
+    The cap was applied to rows SCANNED (`range(min(sh.nrows, SHEET_MAX_ROWS))`) while the xlsx
+    and csv readers apply it to rows KEPT. A sparse legacy .xls — a padded export, a grid pushed
+    down by leading blank rows — therefore lost real data that an identical .xlsx keeps, in the
+    module whose whole contract is faithful text with no judgment.
+    """
+    grid = [["", ""] for _ in range(converters.SHEET_MAX_ROWS)]
+    grid += [["metric", "value"], ["arr", "1000"], ["nrr", "112"]]
+    _xls_book(monkeypatch, [FakeXlrdSheet("Legacy", grid)])
+
+    (name, rows), = converters._xls_rows("/legacy.xls")
+
+    assert name == "Legacy"
+    assert rows == [["metric", "value"], ["arr", "1000"], ["nrr", "112"]]
+
+
+def test_xls_rows_still_stops_at_the_cap_on_a_dense_sheet(monkeypatch):
+    """The benign twin: the cap is still a cap. A sheet with more real rows than SHEET_MAX_ROWS
+    keeps exactly the first SHEET_MAX_ROWS of them — the fix moved what the cap counts, it did not
+    remove the bound that keeps one dropped spreadsheet from becoming the worker's whole memory."""
+    grid = [[f"r{i}", "x"] for i in range(converters.SHEET_MAX_ROWS + 10)]
+    _xls_book(monkeypatch, [FakeXlrdSheet("Dense", grid)])
+
+    (_name, rows), = converters._xls_rows("/dense.xls")
+
+    assert len(rows) == converters.SHEET_MAX_ROWS
+    assert rows[0] == ["r0", "x"]
+    assert rows[-1] == [f"r{converters.SHEET_MAX_ROWS - 1}", "x"]
+
+
+def test_xls_rows_renders_whole_floats_as_integers(monkeypatch):
+    """xlrd hands every number back as a float; `5000.0` in a cell is `5000` to a reader. Pinned
+    beside the cap tests because both live in the same loop."""
+    _xls_book(monkeypatch, [FakeXlrdSheet("Nums", [[5000.0, 1.5, None]])])
+
+    (_name, rows), = converters._xls_rows("/nums.xls")
+
+    assert rows == [["5000", "1.5", ""]]
 
 
 def test_extract_text(tmp_path):
@@ -152,3 +262,14 @@ def test_vision_extract_inline_small_pdf(monkeypatch, tmp_path):
     assert res["text"] == "ocr result"
     assert res["model"]                      # provenance present
     assert calls["contents"][0][1] == "application/pdf"   # inline part, not Files API
+
+
+def test_sheet_profile_reports_the_widest_rows_column_count(tmp_path):
+    """The profile header must count the WIDEST row, like the rendered table under it.
+    OLD BEHAVIOUR: it reported `len(rows[0])`, so a one-cell title row made a 3-column
+    grid read as "1 cols" above a correctly 3-column table."""
+    p = tmp_path / "ragged.csv"
+    p.write_text("title\na,b,c\nd,e,f\n", encoding="utf-8")
+    profile = _sheet_profile(str(p))
+    assert "3 cols" in profile
+    assert "1 cols" not in profile

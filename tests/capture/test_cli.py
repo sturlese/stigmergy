@@ -11,9 +11,11 @@ import subprocess
 import sys
 import time
 
+import psycopg
 import pytest
 
 from stigmergy.capture import cli, queue, retention, schema
+from stigmergy.capture.errors import CaptureError
 from stigmergy.capture.evidence import MemoryEvidenceStore
 from stigmergy.index import store
 from tests import childwatch
@@ -559,6 +561,51 @@ def test_cli_generic_interrupt_during_a_subcommand_exits_130_stderr_only_stdout_
     assert captured.out == ""                                    # --json stdout stays parseable
     assert "stigmergy-queue: interrupted during `list`" in captured.err
     assert "Traceback" not in captured.err
+
+
+# ── the generic fault net: the command BODY, not only the connect ────────────────────────────────
+def test_cli_a_database_fault_inside_a_subcommand_exits_2_instead_of_a_traceback(
+        clean_queue, capsys, monkeypatch):
+    """OLD BEHAVIOUR: the exception escaped `main` — Python printed a traceback and the process
+    exited 1, the code a NAMED refusal uses.
+
+    Only the connect was guarded. Everything the stack can do to a live connection happens inside
+    the command body instead: Postgres restarting, the container being stopped mid-`list`, a
+    dropped socket, an evidence store going away during `resolve`. Both drop doors already wrap
+    their whole dispatch (`drop_main`), so the same operator saw a clean sentence from
+    `stigmergy-meeting` and a stack trace from `stigmergy-queue` for the identical fault — and
+    exit 1 told a wrapper "your input was refused" when the truth was "the stack is down".
+    """
+    def boom(_conn, _args):
+        raise psycopg.OperationalError("consuming input failed: server closed the connection")
+
+    monkeypatch.setattr(cli, "_cmd_list", boom)
+
+    rc = cli.main(["--dsn", store.dsn(), "list"])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "stigmergy-queue: cannot reach the queue database" in captured.err
+    assert "server closed the connection" in captured.err          # the REAL reason, locally
+    assert "make db-up" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_cli_a_named_refusal_inside_a_subcommand_still_exits_1(clean_queue, capsys, monkeypatch):
+    """The benign twin: the new blanket net sits BELOW the named handlers, so a `CaptureError`
+    still exits 1 with its own words. A guard that turned every refusal into "the stack is down"
+    would be worse than the traceback it replaced."""
+    def refuse(_conn, _args):
+        raise CaptureError("that submission is already resolved")
+
+    monkeypatch.setattr(cli, "_cmd_list", refuse)
+
+    rc = cli.main(["--dsn", store.dsn(), "list"])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "stigmergy-queue: that submission is already resolved" in captured.err
+    assert "cannot reach the queue database" not in captured.err
 
 
 # ── reclaim ──────────────────────────────────────────────────────────────────────────────────────
