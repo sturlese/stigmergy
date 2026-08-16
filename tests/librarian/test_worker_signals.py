@@ -18,7 +18,7 @@ import time
 
 from stigmergy.capture import queue, schema
 from stigmergy.librarian import gitcmd, worker
-from tests import testdb
+from tests import childwatch, testdb
 from tests.librarian import support
 
 # The repo root: invoked with `-m` (not as a bare script path) so the subprocess's `sys.path`
@@ -69,7 +69,7 @@ def _read_until(stream, needle: str, timeout: float = 20.0):
 
 
 def _spawn(env, worktree_root: str, sleep_seconds: float = SLOW_SECONDS) -> subprocess.Popen:
-    return subprocess.Popen(
+    return childwatch.spawn(
         [sys.executable, "-m", "tests.librarian._worker_harness", "--dsn", testdb.dsn(),
          "--repo", env.repo, "--bare", env.bare, "--worktree-root", worktree_root,
          "--sleep-seconds", str(sleep_seconds)],

@@ -34,6 +34,7 @@ from stigmergy.capture.evidence import MemoryEvidenceStore
 from stigmergy.kernel import registry as registry_module
 from stigmergy.librarian import acl_rules, config, gitcmd, processing
 from stigmergy.librarian.agent import build_agent
+from tests import childwatch
 
 FIXTURE_REPO = pathlib.Path(__file__).parent / "fixtures" / "repo"
 
@@ -116,7 +117,7 @@ def dead_pid() -> int:
     deadlock in the child, and pytest's own machinery makes this process multi-threaded. `git` because
     every test in this package already requires it.
     """
-    proc = subprocess.Popen(["git", "--version"], stdout=subprocess.DEVNULL,
+    proc = childwatch.spawn(["git", "--version"], stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL)
     proc.wait()             # reaped, so the pid is genuinely free and not a zombie
     return proc.pid

@@ -18,6 +18,13 @@ it. You do **not** need an API key: `make test` is keyless by construction — a
 forces the fake model backend repo-wide, even if your `.env` has real keys in it. A test that
 silently reached a real model would be a test nobody could trust.
 
+**Run one suite at a time.** `make test` claims the `stigmergy_test` database for the whole run
+and a second one is refused on the spot, by name. That is not tidiness: the Postgres fixtures
+truncate the capture queue at setup, so two runs delete each other's rows mid-flight and the
+result is tens of `LeaseLostError` failures scattered across suites that have nothing to do with
+your change. If you see that refusal, another run — yours or an agent's — is still going; nothing
+was harmed on either side.
+
 `make help` lists every target. The ones that cost money or touch a real deployment say so.
 
 To watch the real thing work without a key or a knowledge repo, run the three narrated walks the

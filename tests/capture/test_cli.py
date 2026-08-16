@@ -16,6 +16,7 @@ import pytest
 from stigmergy.capture import cli, queue, retention, schema
 from stigmergy.capture.evidence import MemoryEvidenceStore
 from stigmergy.index import store
+from tests import childwatch
 from tests.capture.conftest import unique_material
 
 ALICE = "alice@example.com"
@@ -438,7 +439,7 @@ def test_cli_claim_hold_interrupted_leaves_the_row_genuinely_claimed_with_its_le
 # is actually 130. ──────────────────────────────────────────────────────────────────────────────
 def test_cli_claim_real_sigint_during_hold_exits_130_no_traceback_row_stays_claimed(clean_queue):
     ack = _submit(clean_queue)
-    proc = subprocess.Popen(
+    proc = childwatch.spawn(
         [*_queue_cli_command(), "--dsn", store.dsn(), "claim", "--hold", "10",
          "--visibility-timeout", "300"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -469,7 +470,7 @@ def test_cli_claim_real_sigint_json_recovery_string_is_visibility_timeout_zero(c
     recovery command names `--visibility-timeout 0`, never the `--visibility-timeout 300` this
     run was actually configured with."""
     ack = _submit(clean_queue)
-    proc = subprocess.Popen(
+    proc = childwatch.spawn(
         [*_queue_cli_command(), "--dsn", store.dsn(), "--json", "claim", "--hold", "10",
          "--visibility-timeout", "300"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -499,7 +500,7 @@ def test_cli_real_sigint_while_connecting_exits_130_stderr_only_no_traceback():
     `psycopg.connect`, giving a real window to deliver SIGINT before the connection attempt could
     possibly resolve on its own."""
     bad_dsn = "postgresql://stigmergy:stigmergy@192.0.2.1:5432/stigmergy?connect_timeout=20"
-    proc = subprocess.Popen([*_queue_cli_command(), "--dsn", bad_dsn, "list"],
+    proc = childwatch.spawn([*_queue_cli_command(), "--dsn", bad_dsn, "list"],
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     time.sleep(0.5)
     if proc.poll() is not None:
