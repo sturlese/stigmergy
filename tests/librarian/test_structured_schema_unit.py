@@ -264,22 +264,70 @@ def test_a_one_name_park_validates_through_the_surviving_PLURAL_field():
     assert account.triage.names == ["Jack"]
 
 
-def test_a_park_naming_its_entity_only_in_the_RETIRED_field_does_not_silently_pass():
-    """The half that would rot in silence. `name=` is dropped by the model rather than rejected, so
-    without this the retired field could come back as a typo — or a caller could keep passing it —
-    and the account would look accepted while carrying no name at all. What must NOT happen is a
-    green validation; what does happen is the ordinary missing-field refusal, naming `triage.names`.
+def test_a_park_naming_its_entity_in_the_LEGACY_SINGULAR_field_is_folded_into_the_list():
+    """INVERTED (issue #53). This asserted the opposite — that a `name`-shaped park was REFUSED,
+    with a note recording that `agent.parse_outcome` was deliberately more tolerant and that the
+    two enforcement points differed on exactly this spelling.
 
-    NOTE for the reader who wonders whether this is right: `agent.parse_outcome` is deliberately
-    MORE tolerant than this — it accepts an inbound `triage.name` and folds it into `names`. The
-    two enforcement points are duplication by design, and they now differ on exactly this one
-    spelling. That asymmetry is recorded here rather than left to be discovered."""
+    That asymmetry was a trap waiting for the day `structured_ordinary` flips. Pydantic DROPS an
+    unknown keyword rather than raising, so a `name`-shaped account validated into an EMPTY
+    `names`, was refused for "no `triage.names`", and burned the single `OUTPUT_RETRIES` re-asking
+    for a field the brief that model was following never mentioned — on the expensive road, for a
+    field-name mismatch carrying no meaning.
+
+    The producer here is a model, not a program, and `name` is the spelling the world is full of.
+    The tolerance is INBOUND ONLY: nothing is added to the schema (see the assertion below), so
+    `names` stays the single field anything downstream reads.
+    """
+    account = FilingAccount(
+        decision="triage",
+        triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY, name="Jack"))
+
+    assert account.triage.names == ["Jack"]
+    assert not hasattr(account.triage, "name"), (
+        "the tolerance grew a second DECLARED field — that is how two spellings of one fact start "
+        "disagreeing, and the JSON schema would now advertise two places to put a name")
+
+
+def test_a_park_sending_BOTH_spellings_keeps_the_plural_one():
+    """The plural is never the casualty of the tolerance. `name` is what a model reaches for when
+    it has ONE thing to say, so a populated `names` beside it means the model already found the
+    field it was looking for — and quietly replacing two names with one would be issue #32 back,
+    reached through the repair path this time."""
+    account = FilingAccount(
+        decision="triage",
+        triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
+                              name="Jack", names=["Jack Reeve", "Acme Capital"]))
+
+    assert account.triage.names == ["Jack Reeve", "Acme Capital"]
+
+
+def test_a_BLANK_legacy_name_is_still_the_ordinary_missing_field_refusal():
+    """Specificity: the tolerance accepts a NAME, not the presence of a key. `name: ""` declares
+    nothing, and folding it in would manufacture a one-element list of nothing — a park that looks
+    answered and gives a steward an empty thing to register."""
     with pytest.raises(ValidationError) as exc_info:
         FilingAccount(decision="triage",
-                      triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
-                                            name="Jack"))
+                      triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY, name="  "))
 
     assert "`triage.names`" in _message(exc_info)
+
+
+def test_the_two_enforcement_points_now_agree_on_the_legacy_spelling():
+    """The point of the change, stated as an equality between the two roads.
+
+    `agent.parse_outcome` (the file channel, shipped) and `FilingAccount` (the structured road, off
+    until ADR 034's flag flips) are duplication BY DESIGN, and they used to differ on exactly this.
+    Two separate "accepts `name`" assertions would both stay green if one road started stripping,
+    de-duplicating or ordering differently; comparing them to each other is what keeps one answer.
+    """
+    raw = {"decision": "triage", "summary": "s",
+           "triage": {"kind": agent_module.TRIAGE_UNRESOLVED_ENTITY, "name": "Jack"}}
+
+    file_channel = agent_module.parse_outcome(raw)
+    structured = FilingAccount(**raw)
+
+    assert file_channel.triage["names"] == structured.triage.names == ["Jack"]
 
 
 def test_the_plural_shape_buys_the_OTHER_park_kind_nothing():

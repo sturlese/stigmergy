@@ -344,14 +344,14 @@ To park instead of filing:
 ```json
 {
   "decision": "triage",
-  "triage": {"kind": "unresolved-entity", "name": "Acme Corp", "judged_type": ""},
+  "triage": {"kind": "unresolved-entity", "names": ["Acme Corp"], "judged_type": ""},
   "findings": [],
   "summary": "what could not be resolved, in one sentence"
 }
 ```
 
-When the material leaves MORE THAN ONE thing unregistered, name **every** one of them in `names` —
-a list, never one string joining them:
+`names` is a LIST, always — one entry when one thing is unregistered, and when the material leaves
+MORE THAN ONE unregistered, name **every** one of them. Never one string joining them:
 
 ```json
 {
@@ -363,10 +363,12 @@ a list, never one string joining them:
 }
 ```
 
-`kind` is `"unresolved-entity"` (with `name`, or `names` when the material leaves more than one)
-or `"unsupported-type"` (with `judged_type`) — both the kind and its field are required, because
-they are the whole of what the submitter is told. A steward registers each new name separately, so
-two names folded into one string arrive as one entity that is neither of them.
+`kind` is `"unresolved-entity"` (with `names`, a list even for one) or `"unsupported-type"` (with
+`judged_type`) — both the kind and its field are required, because they are the whole of what the
+submitter is told. A steward registers each new name separately, so two names folded into one
+string arrive as one entity that is neither of them. A singular `"name": "Acme Corp"` is still
+accepted and read as a one-entry list, so an older account is never refused over the spelling —
+but write `names`, because it is the only one that can hold a second thing.
 When you park, **return no page content and declare no edits**.
 
 **The submitter is asked at most once, ever.** A capture parked as `unresolved-entity` may earn one

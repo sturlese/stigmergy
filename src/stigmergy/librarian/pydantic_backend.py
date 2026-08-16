@@ -247,6 +247,38 @@ class OrdinaryTriage(BaseModel):
     names: list[str] = Field(default_factory=list)
     judged_type: str = ""
 
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_a_singular_name_into_the_list(cls, data):
+        """Accept an inbound `name` and fold it into `names` — the same tolerance
+        `agent.parse_outcome` has always had on the file channel, brought to this road.
+
+        The producer here is a MODEL, not a program. `name` is the spelling the world is full of,
+        the one an older brief used, and the one a model reaches for when a prompt is even slightly
+        stale — and pydantic DROPS an unknown keyword rather than raising. So without this, a
+        `name`-shaped account validates cleanly into an EMPTY `names`, is refused for "no
+        `triage.names`", and burns the single `OUTPUT_RETRIES` re-asking for a field the brief that
+        model was following never mentioned. The most expensive road, spent on a field-name
+        mismatch that carries no meaning either way.
+
+        INBOUND ONLY, and that is the whole design: no field is added, so `names` stays the one
+        thing anything downstream reads and the JSON schema still advertises exactly one place to
+        put a name. A second DECLARED field is how two spellings of one fact start disagreeing.
+
+        Never at the plural's expense: an account sending both keeps `names` untouched. `name` is
+        what a model reaches for when it has ONE thing to say, so a populated `names` beside it
+        means the model already found the field it was looking for.
+        """
+        if not isinstance(data, dict):
+            return data
+        single = data.get("name")
+        if not isinstance(single, str) or not single.strip():
+            return data
+        existing = data.get("names")
+        if isinstance(existing, list) and any(str(n).strip() for n in existing):
+            return data
+        return {**data, "names": [single]}
+
 
 class FilingAccount(BaseModel):
     """The whole account of one ordinary capture: `decision` is `file` or `triage`, and the rest is

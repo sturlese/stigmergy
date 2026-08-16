@@ -7,10 +7,10 @@ reasoning, as its sibling one directory over (`../meeting-distiller/FROZEN.md`).
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/skills/librarian/SKILL.md` |
-| **Copied at commit** | `c6068fff232e12f4c452a9999c4b905654a5d07c` |
+| **Copied at commit** | `b4e4438a2ecee8f612ca8c3707c359273b1ffe3a` |
 | **Drift guard** | `tests/librarian/test_librarian_brief_contract.py` — the rule table runs against THIS copy in CI, and a separate test asserts the copy is byte-identical to the knowledge repo's own whenever that checkout is present |
 
-> **This copy has moved four times, and the row above always names the CURRENT bytes.** ADR 033
+> **This copy has moved five times, and the row above always names the CURRENT bytes.** ADR 033
 > rewrote the brief tool-neutral and the `sdk` retirement closed that rewrite's last debt (the
 > environment paragraph that still described tool-holding runs); both landed in the knowledge repo's
 > `c1e0996ed497e70a9df82661c367294b48207a16`. ADR 034 then gave the ordinary run its tools back, so
@@ -23,9 +23,15 @@ reasoning, as its sibling one directory over (`../meeting-distiller/FROZEN.md`).
 > capture can leave SEVERAL things unregistered and must name every one of them in `triage.names`
 > rather than fold them into one string — the brief half of issue #32, whose platform half is the
 > `entity_names` port this fixture's suite exercises. That touch is
-> `c6068fff232e12f4c452a9999c4b905654a5d07c`, the sha the row above records. These four shas are
-> not interchangeable: the first three are history, the fourth is what these bytes are now. A future
-> resync re-reads the fourth the same way:
+> `c6068fff232e12f4c452a9999c4b905654a5d07c`. Most recently of all, the same park section made
+> `triage.names` its PRIMARY worked example instead of showing the retired singular `name` first,
+> and stated `name` as accepted legacy input rather than as the ordinary shape — issue #53's brief
+> half, whose platform half gave `pydantic_backend.OrdinaryTriage` the same inbound tolerance
+> `agent.parse_outcome` already had, so the two outcome boundaries stop disagreeing about a
+> spelling on the day `structured_ordinary` flips. That touch is
+> `b4e4438a2ecee8f612ca8c3707c359273b1ffe3a`, the sha the row above records. These five shas are
+> not interchangeable: the first four are history, the fifth is what these bytes are now. A future
+> resync re-reads the fifth the same way:
 >
 > ```sh
 > git -C "$STIGMERGY_REPO" log -1 --format=%H -- .claude/skills/librarian/SKILL.md
