@@ -44,7 +44,9 @@ change both or neither.
 
 - Import edges are pinned (`tests/test_architecture.py`): never `stigmergy.views`, `.entities`,
   `.answer`, or `.librarian` beyond `config` (CLI only); `stigmergy.server` only through
-  `acl.visible` and the three named `review` symbols; no git plumbing, no `wiki/` path literal.
+  `acl.visible` and `errors.StartupError` — the governed-birth ledger is read through
+  `capture.decisions`, which sits below every door that writes it, never through the review lane;
+  no git plumbing, no `wiki/` path literal.
 - Never re-declare the channel/token env names — import them from `digest.settings`.
 - Never read the wall clock in `sections.py` or `render.py`; `run_digest` resolves `now` once.
 - Never move the dry-run marker lines into `build_body`'s returned string — they are `cli.py`'s,
@@ -61,8 +63,10 @@ change both or neither.
   window_days` (first run only).
 - `gather_corpus_health` returns one of three states (`never_run` / `stale` / `ok`, the last with
   `sweep_incomplete`); `gather_corpus_deltas` returns `pages_filed_count`/`pages_filed_titles`/
-  `entities_born_count` — an approval COUNT with no names, because not every mint has a ledger
-  row, and the copy says "approved" for that reason.
+  `entities_born_count` — an approval COUNT with no names: every minting door writes the
+  `review_decisions` row, but not all of them fill `extra`, so a list of names would read as
+  complete and would not be. The copy says "approved" for a second reason — the row records an
+  APPROVAL, and one can exist without a mint.
 - Post, then record — in that order: an interrupt between the two leaves a posted message with no
   watermark, a named risk both the interrupt copy and the `run_id is None` branch warn about.
 

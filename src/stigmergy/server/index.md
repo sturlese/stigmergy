@@ -19,7 +19,7 @@ path, authenticated by HMAC instead.
 
 | Module | What it is — what to reuse, what to avoid |
 |---|---|
-| `service.py` | `BrainService` and `_call`/`call_async`, the ONE rate-limit + audit seam every tool rides — a tool off this seam is invisible to the limiter and the audit trail. `build_service` (stdio) and `open_scoped_resources` (the shared conn+embedder build every transport wires through). Also: the audit shapers, `check_arg_length`/`MAX_ARG_CHARS`, `fetch_page_raw` (the one fetch+ACL+sanitize base), `scoped_entities` (the one entity-existence rule), the `neutralize_fence`/`fence` and `SLACK_DOOR` re-exports, `UnavailableEmbedder` |
+| `service.py` | `BrainService` and `_call`/`call_async`, the ONE rate-limit + audit seam every tool rides — a tool off this seam is invisible to the limiter and the audit trail. `build_service` (stdio) and `open_scoped_resources` (the shared conn+embedder build every transport wires through). Also: the audit shapers, `check_arg_length`/`MAX_ARG_CHARS`, `fetch_page_raw` (the one fetch+ACL+sanitize base), `scoped_entities` (the one entity-existence rule), `unrestricted` (the ONE spelling of `audiences is None`, which widens a QUEUE read to every identity's rows and is never an ACL decision — page visibility is `acl.visible()`'s alone), the `neutralize_fence`/`fence` and `SLACK_DOOR` re-exports, `UnavailableEmbedder` |
 | `mcp_server.py` | The FastMCP tool closures BOTH transports share — `search_brain` · `read_page` · `list_entities` · `describe_entity` · `brain_submit` · `brain_submissions` · `review_queue` · `review_decide` · `brain_reply` (mounted under `capture_schema.REPLY_TOOL`, never the function's own name) · `ask` — plus the `stigmergy-server` entry point and `_dsn_location`. Tool docstrings are the client-visible contract: leave them byte-identical unless the contract changes |
 | `review.py` | The review lane: `review_queue`/`review_decide`/`review_decide_safe`, the shared base `_collect_open_items`, the authorization predicates (`_is_steward`, `_guard_*`), the `review_decisions` ledger — OWNED by `capture.decisions` since issue #51 and re-exported here under the names callers already used (`ensure_review_schema`, `record_decision`), so the `stigmergy-entities` CLI can write the same row without importing this package — the governed mint sequence (`mint_and_record_approval` → `entities.remote.mint_via_clone`, reached as a module attribute — the ONE function both SERVER-SIDE minting doors run, this one through `_mint_entity_proposal`'s translation; `stigmergy-entities approve` is a third door that mints outside that sequence, though it records the same ledger row), and the doorbell's read side (`items_for_doorbell`, `load_stewards`, `resolve_stewards_for_scope`, `record_undeliverable`) |
 | `transport_http.py` | The streamable-HTTP transport: `_BearerAuthMiddleware` (raw ASGI), `_ScopedServiceProxy` + the `_current_service` contextvar, the request-body cap, the DNS-rebinding allowlist (`$STIGMERGY_PUBLIC_HOST`), `build_http_app`/`serve_http`, `token_store_from_env`, the webhook mount, and the admin console's ASGI branch |
@@ -41,8 +41,11 @@ path, authenticated by HMAC instead.
 | `answer` | `service.BrainService` (`search`, `read_page`, `describe_entity`, `fetch_page_raw`, `scoped_entities`), `service.fence`/`neutralize_fence` |
 | `slack` | `service.open_scoped_resources`/`BrainService`/`SLACK_DOOR`, `identity.resolve_audiences`, `audit`, `ratelimit`, `settings.Settings`, `errors`, `review` (the doorbell reads, `review_decide_safe`) |
 | `admin` | `review` (`record_decision`, `mint_and_record_approval`, `ensure_review_schema` and the review reads), `pilot_report`, `identity.hash_token`, `webhook.JOB_NAME`, `errors` |
-| `gardener` | `errors`, `acl.visible`/`all_visible`, `review` |
-| `digest` | `errors`, `acl.visible`, `review` (it reads the decisions ledger directly) |
+| `gardener` | `errors`, `acl.visible`/`all_visible` |
+| `digest` | `errors`, `acl.visible` |
+
+Neither `gardener` nor `digest` reaches the review lane: the `review_decisions` ledger they read
+lives in `capture.decisions`, below both packages, and this package only re-exports it.
 
 ## Invariants
 

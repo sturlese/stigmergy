@@ -1,6 +1,6 @@
-"""Every user-facing string this transport ships. `render` calls these functions and never
-formats its own copy — a wording change is a one-file change, and the strings are pinnable by a
-test. Distinct states keep distinct strings: a transient identity failure is not an unmapped
+"""Every user-facing string this transport ships. `render` and the handler modules call these
+functions and never format their own copy — a wording change is a one-file change, and the
+strings are pinnable by a test. Distinct states keep distinct strings: a transient identity failure is not an unmapped
 user, and a capture that failed to queue is not one the librarian declined.
 """
 import os

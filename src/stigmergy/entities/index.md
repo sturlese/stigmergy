@@ -149,8 +149,10 @@ be the unscanned one. It never imports `server` or `answer`; `librarian`, `captu
 never import it back. Two inbound edges exist, both named, symbol-scoped exceptions with their own
 architecture tests: `stigmergy.server.review` (the review inbox: `situations`,
 `generator.canonical_id_for`/`ENTITY_TYPES`, `remote`, the two error names) and `stigmergy.admin`
-(the console: `situations`, `remote`, `generator`, `errors`) — both walk the same governed mint
-door (`remote.mint_via_clone` -> `mint.mint`), and neither is a license for the other to widen.
+(the console: `situations`, `generator`, `errors`) — both walk the same governed mint door
+(`remote.mint_via_clone` -> `mint.mint`), the console reaching it through
+`server.review.mint_and_record_approval` rather than through `remote` itself, and neither edge is
+a license for the other to widen.
 
 ## Proofs that live elsewhere
 

@@ -105,7 +105,8 @@ capture's journey produces; it never decides what the material MEANS — that is
 
 - `capture` is a store everyone who interprets its rows imports (`server`, `librarian`,
   `entities`, `admin`, `slack.store`, `gardener`, `digest`, `views.regenerate`), never the
-  reverse. The only crossings are downward: other CLIs import `cli.py`'s pure renderings.
+  reverse. The only crossings are downward: other packages' CLIs import `render.py`'s dialect —
+  `stigmergy-entities` straight from `render`, `stigmergy-librarian` through `cli.py`'s re-export.
 - Write order is deliberate and asymmetric: validate → evidence blob → queue row. An orphan blob
   is inert and content-addressed; a row pointing at an unwritten blob is a submission nothing
   can read. A refusal writes neither.

@@ -2301,8 +2301,8 @@ def test_gardener_threshold_literals_stay_in_settings(path):
 # ── the digest's own layering edges ────────────────────────────────────────────────────────────
 # Mirrors `gardener`'s allowlist style. The load-bearing DIFFERENCE from `gardener`'s own list:
 # the digest BROADCASTS (package docstring), so it is granted `server.acl`/`slack.channels` (a
-# real ACL predicate at the destination channel's audiences) and a read edge into
-# `server.review`'s governed-birth log that `gardener` deliberately is not ─────────────────────
+# real ACL predicate at the destination channel's audiences) and a read edge into the
+# governed-birth ledger (`capture.decisions`) that `gardener` deliberately is not ──────────────
 DIGEST = pathlib.Path(__file__).resolve().parents[1] / "src" / "stigmergy" / "digest"
 DIGEST_SOURCES = sorted(p for p in DIGEST.rglob("*.py") if p.name != "__init__.py")
 

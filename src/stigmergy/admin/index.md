@@ -83,8 +83,9 @@ must not depend on a converter, so an unlisted file is a 400 naming the allowed 
   fallback, an `admin_actions` row on both outcomes, `CaptureError` → `AdminRefused`.
 - `server.review.mint_and_record_approval` — `entity_approve`'s whole seam, and the SAME function
   MCP and Slack mint through: mint via a throwaway clone, write the `review_decisions` row, then
-  requeue, strictly after the push. This package no longer reaches `entities.remote` itself. Two
-  things stay HERE by decision, not by omission: `situations.require_situation` (this door runs it
+  requeue, strictly after the push. `entities.remote` is reached by that sequence, never from this
+  package — its import allowlist grants `situations`, `generator` and `errors` only. Two things
+  stay HERE by decision, not by omission: `situations.require_situation` (this door runs it
   after its own name/type validation, the review lane before) and the exception mapping — nothing
   is caught inside `_do`, so `_mutate` records the library's OWN class name in `admin_actions`
   before the `except EntityError` outside it raises `AdminRefused` with the library's sentence.
