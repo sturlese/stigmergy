@@ -461,3 +461,95 @@ def test_dedup_key_migration_still_runs_when_the_name_is_right_but_the_columns_a
     second = store.reserve(conn, team_id="T1", channel_id="C1", message_ts="1.2",
                            thread_ts="9.1", slack_user_id="U1", submitted_by="ana@example.com")
     assert second is None
+
+
+# ── the doorbell's card pointer: which message a notification actually became ───────────────────
+# `steward_notifications` recorded WHAT a steward was told and at which state, never WHERE the
+# message landed — so a card could never be edited afterwards, and a decided item's buttons stayed
+# live in a DM forever. These three pin the storage half of that (issue #41 part 3).
+@pytest.fixture()
+def clean_notifications(conn):
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM steward_notifications")
+    return conn
+
+
+def _rows(conn):
+    return {(r["item_kind"], r["item_id"], r["steward_email"]): r
+            for r in store.open_notifications(conn)}
+
+
+def test_ensure_slack_schema_adds_the_card_columns_to_a_pre_existing_table(conn):
+    """OLD BEHAVIOUR: `steward_notifications` had no `channel_id`/`message_ts` at all.
+
+    `CREATE TABLE IF NOT EXISTS` never adds a column to a table that already exists, so every
+    database that has run this application before keeps the old shape unless an `ADD COLUMN IF NOT
+    EXISTS` runs — the same posture `gardener_findings.model_id` needed. Dropping the columns here
+    reproduces exactly that database, against the real DDL rather than a fresh one.
+    """
+    with conn.cursor() as cur:
+        cur.execute("ALTER TABLE steward_notifications DROP COLUMN IF EXISTS channel_id")
+        cur.execute("ALTER TABLE steward_notifications DROP COLUMN IF EXISTS message_ts")
+        cur.execute("INSERT INTO steward_notifications (item_kind, item_id, steward_email, state) "
+                    "VALUES ('parked-capture', '1', 'steward@example.com', 'triage')")
+
+    store.ensure_slack_schema(conn)      # and again, to pin idempotence on the migrated shape
+    store.ensure_slack_schema(conn)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT channel_id, message_ts FROM steward_notifications WHERE item_id = '1'")
+        assert cur.fetchone() == ("", ""), (
+            "a pre-existing row must read as 'no card pointer', never NULL — `open_notifications` "
+            "compares the column, and NULL <> '' is NULL, which filters the row out silently")
+
+
+def test_mark_notified_stores_the_card_pointer_and_a_state_only_upsert_preserves_it(
+        clean_notifications):
+    """The upsert is the whole point: the doorbell records a pointer ONCE, when the DM is sent,
+    and then re-marks the same (item, steward) row on every later state change and on the closing
+    pass. A `DO UPDATE SET` that wrote `EXCLUDED.channel_id` unconditionally would blank the
+    pointer on the first state-only re-mark and the card could never be closed."""
+    conn = clean_notifications
+    key = {"item_kind": "entity-proposal", "item_id": "7", "steward_email": "steward@example.com"}
+
+    store.mark_notified(conn, **key, state="parked", channel_id="D_STEWARD", message_ts="1001.1")
+    store.mark_notified(conn, **key, state="parked@2")          # a state change, no new card
+
+    row = _rows(conn)[("entity-proposal", "7", "steward@example.com")]
+    assert (row["state"], row["channel_id"], row["message_ts"]) == ("parked@2", "D_STEWARD",
+                                                                    "1001.1")
+
+
+def test_open_notifications_lists_only_live_cards_with_a_stored_pointer(clean_notifications):
+    """The reader's whole contract, over the four rows that must NOT come back: a card already
+    closed, an undeliverable outcome (which never became a message at all), a row whose post
+    failed before a pointer existed, and — the benign twin — the live one that must."""
+    conn = clean_notifications
+    store.mark_notified(conn, item_kind="parked-capture", item_id="1",
+                        steward_email="a@example.com", state="triage",
+                        channel_id="D_A", message_ts="1.1")
+    store.mark_notified(conn, item_kind="parked-capture", item_id="2",
+                        steward_email="a@example.com", state="closed:reject",
+                        channel_id="D_A", message_ts="2.1")
+    store.mark_notified(conn, item_kind="parked-capture", item_id="3",
+                        steward_email="a@example.com", state="undeliverable:not_found")
+    store.mark_notified(conn, item_kind="parked-capture", item_id="4",
+                        steward_email="a@example.com", state="triage")
+
+    assert sorted(r["item_id"] for r in store.open_notifications(conn)) == ["1"]
+
+
+def test_a_re_mark_moves_notified_at_forward(clean_notifications):
+    """`notified_at` dates the CARD, and the doorbell's closing pass compares a decision against
+    it to tell "already decided" from "decided, requeued, and parked again". That comparison is
+    only meaningful because a re-mark moves this column — pinned here, at the writer, since
+    nothing else in this module reads it and a `DO UPDATE` that dropped `notified_at = now()`
+    would leave every later card permanently older than its own item's oldest verdict."""
+    conn = clean_notifications
+    key = {"item_kind": "parked-capture", "item_id": "5", "steward_email": "a@example.com"}
+    store.mark_notified(conn, **key, state="triage", channel_id="D_A", message_ts="1.1")
+    first = _rows(conn)[("parked-capture", "5", "a@example.com")]["notified_at"]
+
+    store.mark_notified(conn, **key, state="triage@1", channel_id="D_A", message_ts="2.2")
+
+    assert _rows(conn)[("parked-capture", "5", "a@example.com")]["notified_at"] > first

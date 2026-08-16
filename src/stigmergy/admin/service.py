@@ -196,7 +196,8 @@ class AdminService:
         if is_entity_proposal:
             server_review.record_decision(
                 self._conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(submission_id),
-                verdict="reject", actor=actor or self._admin.actor, notes=reason)
+                verdict="reject", actor=actor or self._admin.actor,
+                source=server_review.SOURCE_ADMIN, notes=reason)
         return result
 
     def queue_reclaim(self, *, actor: str, visibility_timeout_s: int | None = None) -> dict:
@@ -345,7 +346,7 @@ class AdminService:
                 self._conn, repo_url=self._server.librarian_repo_url,
                 submission_id=situation_id, entity_id=resolved_id, name=clean_name,
                 entity_type=clean_type, aliases=alias_list, role=role or "", actor=by,
-                requeue=requeue)
+                source=server_review.SOURCE_ADMIN, requeue=requeue)
 
         try:
             return self._mutate("entities.approve", actor, args, _do)

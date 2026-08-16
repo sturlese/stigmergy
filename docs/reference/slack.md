@@ -26,8 +26,8 @@ on the same process, each documented below.
 | `capture.py` | the 🧠 gesture: public-channel-only, the verbatim thread material (participant display names resolved through the identity cache, in parallel over the cache misses), the provenance hints, the dedup reservation, the ack, and the instant progress-reaction lifecycle (`mark_in_progress`/`finish_progress`) |
 | `replies.py` | the submitter's ask-back reply (and nobody else's), and the "Show it here" affordance |
 | `poller.py` | the push channel: `filed`/`needs_input`/`triage`/`rejected`/`resolved`/`failed`, read-only against `capture_queue` |
-| `store.py` | this package's two tables: `slack_submissions` — the 🧠 dedup reservation and the `submission_id -> (channel, thread_ts, slack_user_id)` mapping the poller reads back — and `steward_notifications`, one row per (item, steward) carrying the state the doorbell last told them about |
-| `doorbell.py` | the steward doorbell — DMs a steward when a review item parks, over `stigmergy.server.review.items_for_doorbell`. One notification per (item, steward), re-sent only on a real state change; an undeliverable notification recorded, never swallowed. What rings the bell is `parked-capture` and `entity-proposal`, the whole of `stigmergy.review_kinds.ITEM_KINDS` |
+| `store.py` | this package's two tables: `slack_submissions` — the 🧠 dedup reservation and the `submission_id -> (channel, thread_ts, slack_user_id)` mapping the poller reads back — and `steward_notifications`, one row per (item, steward) carrying the state the doorbell last told them about plus the card's own `channel_id`/`message_ts`, so the DM can be edited once the item is decided. Owns the two `state` prefixes (`undeliverable:` / `closed:`) and `open_notifications`, the reader that skips both |
+| `doorbell.py` | the steward doorbell — DMs a steward when a review item parks, over `stigmergy.server.review.items_for_doorbell`. One notification per (item, steward), re-sent only on a real state change; an undeliverable notification recorded, never swallowed; and `close_decided_cards`, which edits a decided item's DM into a buttonless closed card at the end of every pass. What rings the bell is `parked-capture` and `entity-proposal`, the whole of `stigmergy.review_kinds.ITEM_KINDS` |
 | `review.py` | the Block Kit review surface — buttons on a doorbell DM (and a short modal for the one piece of free text some verdicts require) that call `stigmergy.server.review.review_decide_safe` |
 | `render.py` | the PURE `(answer_dict, link_resolver) -> blocks` renderer, plus every other message's blocks (including the doorbell cards and the review-note modal) |
 | `mrkdwn.py` | CommonMark -> Slack `mrkdwn` (bold, links, lists, inline/fenced code) |
@@ -245,11 +245,22 @@ mutates a queue row: every read goes through
 What rings the bell is exactly the two kinds `stigmergy.review_kinds.ITEM_KINDS` carries:
 `parked-capture` and `entity-proposal`.
 
-Three properties, each enforced structurally rather than left to discipline:
+Four properties, each enforced structurally rather than left to discipline:
 
 - **One notification per (item, steward), re-sent only on a real state change** — a small,
   stable fingerprint per item (`_state_signature`, folding in `capture_queue`'s own monotonic
   `attempts` counter so a requeue-and-reprocess back into the SAME status still rings again).
+- **A decided item's card closes itself** — `close_decided_cards` runs at the end of every pass
+  and `chat.update`s the DM into a buttonless card naming the verdict, the actor and the door
+  (`✅ reject — by ana@example.com via admin`). A card is a live control surface: left alone, its
+  buttons keep offering actions that can now only answer with a staleness refusal. What triggers
+  it is the LEDGER, not the queue state — a `requeue` verdict puts the row back in the queue, so
+  the item leaves this inbox while its card stays in the DM. Same send-then-mark order as a
+  delivery, so a Slack outage retries next pass; the card is then recorded at
+  `closed:<verdict>`, which is what stops the pass rewriting the same DM every interval. The
+  coordinates it edits by (`channel_id`/`message_ts`) are read from the `chat.postMessage`
+  response when the card is created, so rows written before this existed carry none and simply
+  age out.
 - **An undeliverable notification is recorded, never swallowed** — no steward resolves for the
   scope, or the resolved steward has no Slack identity in this workspace, writes a `job_runs` row
   (`review.record_undeliverable`) naming the event and the reason, deduped by (item, steward,
@@ -261,7 +272,8 @@ Three properties, each enforced structurally rather than left to discipline:
   module's query staying narrow.
 
 **The review cards.** Two doorbell renderers, one per item kind
-(`render.render_doorbell_parked_capture` / `render.render_doorbell_entity_proposal`):
+(`render.render_doorbell_parked_capture` / `render.render_doorbell_entity_proposal`), and a third
+the closing pass edits either of them into (`render.render_doorbell_closed`, no buttons at all):
 
 | Item kind | Buttons | Notes |
 |---|---|---|
@@ -273,8 +285,10 @@ for a note/reason, `review.handle_entity_mint_modal_submission` for an entity-pr
 metadata) re-resolves the acting identity from Slack's own authoritative event body every time —
 never from a value round-tripped through `private_metadata`, which carries only WHAT the decision is
 about (item kind, id, and — for the note modal — verdict/field), never WHO is making it. Every
-decision calls the SAME `review_decide_safe` an MCP caller calls; this package decides no ACCESS to
-knowledge and no verdict of its own. The one thing it does gate is described next — whether a
+decision calls the SAME `review_decide_safe` an MCP caller calls, with `source="slack"` stamped in
+the one place all three paths funnel through (`_decide_and_confirm`), so every ledger row this
+surface writes names the door it came from; this package decides no ACCESS to knowledge and no
+verdict of its own. The one thing it does gate is described next — whether a
 steward-only mint form opens — and even there it asks the review lane's own predicate rather than
 inventing a rule; `server.acl.visible()` remains the ONE place read access to a page is decided.
 
@@ -351,8 +365,10 @@ paid for.
 
 `tests/slack/` (offline, `FakeSlackGateway`, real Postgres with the `fake` embedder/answer
 synthesizer) plus `tests/slack/test_store_pg.py` (the mapping table's own primitives, including the
-thread-keyed dedup migration), `test_doorbell.py` (the three doorbell properties above, including
-the requeue-and-reprocess-back-into-the-same-status regression) and `test_review.py` (the Block Kit
+thread-keyed dedup migration and the card-pointer columns), `test_doorbell.py` (the four doorbell
+properties above, including the requeue-and-reprocess-back-into-the-same-status regression and the
+closing pass: closed exactly once, an undecided card untouched, a pointerless row skipped, a failed
+edit retried) and `test_review.py` (the Block Kit
 button/modal flow against `review_decide_safe`, identity re-resolved at click and at submission).
 `tests/test_architecture.py`'s slack-boundary tests pin the import list; `tests/test_deployment_config.py`
 pins the third process group. The real-workspace walk is manual and this repository keeps no

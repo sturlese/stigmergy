@@ -708,3 +708,195 @@ def test_a_baked_stewards_map_rings_the_doorbell_with_no_checkout_at_all(conn, t
     assert _run(poll_once(ctx)) == 1
     assert f"#{item_id}" in _block_text(gw.posted[0])
     assert _configuration_rows(conn) == [], "a working deployment records no configuration fault"
+
+
+# ── issue #41 part 3: a decided item's card closes itself ──────────────────────────────────────
+# A doorbell DM is a live control surface. Every button on it stayed clickable forever, including
+# long after the item had been decided somewhere else — so the steward's own inbox kept offering
+# actions that could only ever come back as a staleness refusal, and the DM never recorded what
+# actually happened. The closing pass edits the message in place.
+def _decide(conn, item_kind, item_id, *, verdict, actor, source, close):
+    """A decision landing through some OTHER door: the disposition first, then the ledger row —
+    the order every real door writes them in."""
+    close(conn, item_id, actor)
+    review.record_decision(conn, item_kind=item_kind, item_id=str(item_id), verdict=verdict,
+                           actor=actor, source=source)
+
+
+def _reject(conn, item_id, actor):
+    from stigmergy.capture import dispositions
+    dispositions.reject(conn, item_id, actor=actor, reason="not an entity after all")
+
+
+def _requeue(conn, item_id, actor):
+    from stigmergy.capture import dispositions
+    dispositions.requeue(conn, item_id, actor=actor, note="back to the librarian")
+
+
+def _ring_once(env, conn, *, situation=None):
+    """The doorbell's ordinary first pass: one item, one DM, one recorded notification."""
+    _write_stewards(env, f'{{"*": ["{STEWARD}"]}}')
+    gw = FakeSlackGateway()
+    gw.seed_email(STEWARD, STEWARD_SLACK_ID)
+    ctx = make_ctx(env, conn, gateway=gw)
+    item_id = _park_capture(conn, MemoryEvidenceStore(), situation=situation)
+    assert _run(poll_once(ctx)) == 1
+    return ctx, gw, item_id
+
+
+def test_a_decided_entity_proposals_card_is_closed_exactly_once(env, conn):
+    """OLD BEHAVIOUR: nothing ever edited a doorbell card. Approve/Reject stayed live in the DM
+    after the proposal had been decided on the console, and a steward clicking them got a
+    staleness refusal for an item their own inbox was still advertising as open.
+
+    Exactly once is the load-bearing half: the closing pass runs every poll, so a pass that
+    re-edited an already-closed card would rewrite the steward's DM every ten seconds forever.
+    `mark_notified(state="closed:<verdict>")` is what makes the second pass a no-op, and
+    `open_notifications` is what enforces it.
+    """
+    ctx, gw, item_id = _ring_once(env, conn,
+                                  situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    _decide(conn, review.KIND_ENTITY_PROPOSAL, item_id, verdict="reject",
+            actor="console-operator@example.com", source=review.SOURCE_ADMIN, close=_reject)
+
+    assert _run(doorbell_module.close_decided_cards(ctx)) == 1
+    assert _run(doorbell_module.close_decided_cards(ctx)) == 0, "the second pass must be a no-op"
+
+    assert len(gw.updated) == 1
+    assert len(gw.posted) == 1, "closing edits the card in place — it never posts a second one"
+    updated = gw.updated[0]
+    assert (updated.channel_id, updated.ts) == (gw.posted[0].channel_id, gw.posted[0].ts)
+
+
+def test_the_closed_card_names_the_verdict_the_actor_and_the_door_and_drops_its_buttons(env, conn):
+    """What the edited card has to say. The buttons are the point: a card that still renders
+    `actions` after the item is decided has closed nothing."""
+    ctx, gw, item_id = _ring_once(env, conn,
+                                  situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    _decide(conn, review.KIND_ENTITY_PROPOSAL, item_id, verdict="reject",
+            actor="console-operator@example.com", source=review.SOURCE_ADMIN, close=_reject)
+
+    _run(doorbell_module.close_decided_cards(ctx))
+
+    blocks = gw.updated[0].blocks
+    assert not [b for b in blocks if b["type"] == "actions"], (
+        "a closed card must carry no buttons — a stale click is exactly what this removes")
+    rendered = " ".join(str(b) for b in blocks)
+    assert "reject" in rendered
+    assert "console-operator@example.com" in rendered
+    assert "admin" in rendered
+    assert f"#{item_id}" in rendered, "the card must still name the item it was about"
+    assert f"#{item_id}" in gw.updated[0].text, "and so must the notification fallback"
+
+
+def test_an_undecided_items_card_is_left_alone(env, conn):
+    """The benign twin. The closing pass reads EVERY open card on every poll; a bug in its
+    decision lookup would silently disarm the whole doorbell by closing cards nobody decided."""
+    ctx, gw, _item_id = _ring_once(env, conn,
+                                   situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+
+    assert _run(doorbell_module.close_decided_cards(ctx)) == 0
+    assert gw.updated == []
+
+
+def test_a_decided_parked_captures_card_closes_too_on_the_requeue_verdict(env, conn):
+    """The other item kind, and the verdict most likely to be missed: `requeue` returns the row to
+    the queue rather than closing it, so the ITEM leaves the doorbell's inbox while its card stays
+    in the DM. The card is closed on the ledger row, not on the queue state."""
+    ctx, gw, item_id = _ring_once(env, conn)
+    _decide(conn, review.KIND_PARKED_CAPTURE, item_id, verdict="requeue", actor=STEWARD,
+            source=review.SOURCE_SLACK, close=_requeue)
+
+    assert _run(doorbell_module.close_decided_cards(ctx)) == 1
+
+    rendered = " ".join(str(b) for b in gw.updated[0].blocks)
+    assert "requeue" in rendered and "slack" in rendered
+
+
+def test_a_notification_recorded_before_the_card_pointer_existed_is_skipped(env, conn):
+    """Every row `steward_notifications` already holds was written without a channel or a ts, and
+    no API call can recover them. Those cards age out; they must never make the closing pass
+    guess a channel, and must never block the rows that DO carry a pointer."""
+    ctx, gw, item_id = _ring_once(env, conn,
+                                  situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    with conn.cursor() as cur:      # exactly what a pre-change database holds
+        cur.execute("UPDATE steward_notifications SET channel_id = '', message_ts = ''")
+    _decide(conn, review.KIND_ENTITY_PROPOSAL, item_id, verdict="reject", actor=STEWARD,
+            source=review.SOURCE_ADMIN, close=_reject)
+
+    assert _run(doorbell_module.close_decided_cards(ctx)) == 0
+    assert gw.updated == []
+
+
+def test_a_failed_chat_update_leaves_the_card_open_for_the_next_pass(env, conn):
+    """Same send-then-mark discipline `_notify_item` already keeps: a failed edit records nothing,
+    so the next pass retries it rather than leaving a live-buttoned card marked closed."""
+    ctx, gw, item_id = _ring_once(env, conn,
+                                  situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    _decide(conn, review.KIND_ENTITY_PROPOSAL, item_id, verdict="reject", actor=STEWARD,
+            source=review.SOURCE_ADMIN, close=_reject)
+    gw.fail_update_count = 1
+
+    assert _run(doorbell_module.close_decided_cards(ctx)) == 0
+    assert _run(doorbell_module.close_decided_cards(ctx)) == 1, "the next pass retries it"
+    assert len(gw.updated) == 1
+
+
+def test_poll_once_closes_decided_cards_as_part_of_an_ordinary_pass(env, conn):
+    """The wiring: nothing schedules `close_decided_cards` separately — it runs inside the pass
+    the doorbell already makes, after the notify loop, so a deployment gets it with no new task."""
+    ctx, gw, item_id = _ring_once(env, conn,
+                                  situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    _decide(conn, review.KIND_ENTITY_PROPOSAL, item_id, verdict="reject", actor=STEWARD,
+            source=review.SOURCE_ADMIN, close=_reject)
+
+    _run(poll_once(ctx))
+
+    assert len(gw.updated) == 1
+
+
+def test_a_re_parked_capture_gets_a_LIVE_card_again_not_one_the_old_decision_closes(env, conn):
+    """The requeue loop meeting the closing pass, and the trap where they cross.
+
+    `requeue` is a DECISION, so the ledger keeps a row for that item forever — but the item comes
+    BACK: requeue's whole purpose is "try again", and parking again is the ordinary outcome. A
+    closing pass that asked only "does a decision exist for this item" would close the fresh card
+    the instant it was posted, in the very same pass, and the steward would never see an
+    actionable card for a re-parked capture again — silently re-breaking exactly what
+    `test_requeue_and_reprocess_back_into_the_same_status_rings_a_second_time` above protects.
+
+    So the question is not "is there a decision" but "is there a decision NEWER than the
+    notification it would close".
+
+    Driven through the real queue primitives, like its sibling above, because the property only
+    exists end to end.
+    """
+    from stigmergy.capture import dispositions
+    from stigmergy.capture import queue as capture_queue
+
+    ctx, gw, item_id = _ring_once(env, conn)
+    _decide(conn, review.KIND_PARKED_CAPTURE, item_id, verdict="requeue", actor=STEWARD,
+            source=review.SOURCE_SLACK, close=_requeue)
+    _run(poll_once(ctx))                     # the first card is closed, correctly
+    assert len(gw.updated) == 1
+
+    # The librarian reprocesses and parks it right back in `triage`.
+    claimed = capture_queue.claim_next(conn)
+    assert claimed is not None and claimed["id"] == item_id
+    capture_queue.finish(conn, item_id, status=capture_schema.TRIAGE,
+                         expected_attempts=claimed["attempts"],
+                         report={"summary": "parked again", "status": capture_schema.TRIAGE})
+
+    assert _run(poll_once(ctx)) == 1, "the re-parked capture must ring the bell again"
+    assert len(gw.posted) == 2
+    assert len(gw.updated) == 1, (
+        "the NEW card must still be live — the only decision on this item predates it")
+
+    # and the loop closes properly the second time round too, on a decision that is genuinely new
+    dispositions.reject(conn, item_id, actor=STEWARD, reason="enough")
+    review.record_decision(conn, item_kind=review.KIND_PARKED_CAPTURE, item_id=str(item_id),
+                           verdict="reject", actor=STEWARD, source=review.SOURCE_SLACK)
+    _run(poll_once(ctx))
+    assert len(gw.updated) == 2
+    assert (gw.updated[1].channel_id, gw.updated[1].ts) == (gw.posted[1].channel_id,
+                                                            gw.posted[1].ts)

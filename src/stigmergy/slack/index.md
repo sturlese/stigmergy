@@ -18,7 +18,7 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 | `capture.py` | the 🧠 gesture: public channels only, verbatim thread material, provenance hints, reserve-then-fill dedup, progress-reaction lifecycle (`mark_in_progress`/`finish_progress`, driven from `app.py`) |
 | `replies.py` | the submitter's ask-back reply, and the "Show it here" click |
 | `poller.py` | the push channel back into the thread, over `store.REPORTABLE_STATUSES`, read-only against `capture_queue` |
-| `doorbell.py` | the steward doorbell: read-only over `review.items_for_doorbell`, one DM per (item, steward) per state change, undeliverable outcomes recorded |
+| `doorbell.py` | the steward doorbell: read-only over `review.items_for_doorbell`, one DM per (item, steward) per state change, undeliverable outcomes recorded, and `close_decided_cards` — the end of every pass, which edits a decided item's DM into a buttonless closed card off `review.latest_decisions` |
 | `review.py` | the Block Kit review surface: buttons calling `review.review_decide_safe`, the free-text note modal and the entity-mint modal (the one branch that also gates its READ on `server.review.is_steward`) |
 | `render.py` | the pure `(answer_dict, link_resolver) -> blocks` renderer plus every other message's blocks, doorbell cards and the two modals |
 | `mrkdwn.py` | CommonMark -> Slack `mrkdwn`, code spans protected |
@@ -121,7 +121,12 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
   is per (thread, reactor), so one person 🧠-ing two messages of a thread is one capture and two
   people are two.
 - `steward_notifications` — one row per (item_kind, item_id, steward_email) with the `state` last
-  notified at; an `undeliverable:<class>` state dedups a failure without a third table.
+  notified at, plus `channel_id`/`message_ts`, the card's own Slack coordinates. `state` carries
+  three namespaces separated by prefixes owned in `store.py`: a real item state (unprefixed), an
+  `undeliverable:<class>` outcome that never became a message, and a `closed:<verdict>` card the
+  doorbell has already edited shut. `mark_notified` PRESERVES the coordinates on a state-only
+  re-mark; `open_notifications` is the reader that skips both prefixed namespaces and every row
+  with no stored `message_ts` (a pre-change row — nothing can recover where its message went).
 - `stigmergy.review_kinds.ITEM_KINDS` — `entity-proposal` and `parked-capture`, the two kinds a
   human decides on directly. `ENTITY_TYPES` is the closed list the entity-mint modal offers,
   restated here and held honest by a drift test against `entities.generator`.
@@ -142,7 +147,15 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 - **Only the original submitter's reply counts** as an answer to an ask-back; `replies` scans all
   of a thread's mapped rows for the resolved replier's own email and consults `q.reply` rather than
   inferring "answered" from status.
-- `store.py` is the only module that may import `stigmergy.capture`, and only `.schema`.
+- `store.py` is the only module that may import `stigmergy.capture`, and only `.schema`. The
+  doorbell's closing pass therefore reads the `review_decisions` ledger through
+  `server.review.latest_decisions`, never `capture.decisions` directly.
+- **A doorbell card is a control surface with a lifetime.** Once the item is decided — through any
+  door, including this one — the card is edited shut rather than left clickable. The trigger is the
+  LEDGER, not the queue state: a `requeue` verdict puts the row back in the queue, so the item
+  leaves this inbox while its card stays in the DM.
+- Every decision this package records names its door: `_decide_and_confirm` passes
+  `review.SOURCE_SLACK` once, and every button and both modals funnel through it.
 
 ## Tests
 

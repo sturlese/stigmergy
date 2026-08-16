@@ -268,7 +268,7 @@ def _cmd_approve(conn, args) -> int:
     # records of one approval name one person (ADR 030 D2: attributed here, enforced on MCP).
     decisions.record_decision(
         conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(args.id), verdict=decisions.APPROVE,
-        actor=args.by or result["steward"],
+        actor=args.by or result["steward"], source=decisions.SOURCE_CLI,
         extra={"entity_id": result["entity_id"], "commit": result["commit"], "door": "cli"})
     requeued = None
     if args.requeue:
@@ -311,7 +311,8 @@ def _cmd_reject(conn, args) -> int:
     # way it went. `require_situation` above has already established this row IS an entity
     # situation.
     decisions.record_decision(conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(args.id),
-                              verdict=decisions.REJECT, actor=actor, notes=args.reason,
+                              verdict=decisions.REJECT, actor=actor,
+                              source=decisions.SOURCE_CLI, notes=args.reason,
                               extra={"door": "cli"})
     if args.json:
         print(json.dumps(result, **_DUMP))

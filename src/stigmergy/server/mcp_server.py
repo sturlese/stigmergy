@@ -12,6 +12,7 @@ import sys
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
+from stigmergy.capture import decisions
 from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.errors import CaptureError
 from stigmergy.index.errors import StigmergyIndexError
@@ -227,7 +228,8 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         slug is a convenience, never this tool's judgment."""
         try:
             return json.dumps(
-                service.review_decide(item_kind, item_id, verdict, notes=notes, name=name,
+                service.review_decide(item_kind, item_id, verdict, notes=notes,
+                                      source=decisions.SOURCE_MCP, name=name,
                                       entity_id=entity_id, entity_type=entity_type,
                                       aliases=aliases, role=role, requeue=requeue), **_DUMP)
         except (CaptureError, RateLimitError, CapabilityUnavailableError) as ex:

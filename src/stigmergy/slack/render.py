@@ -303,6 +303,21 @@ def render_doorbell_entity_proposal(*, item_id: str, submitter: str, name: str) 
     return blocks, copy.doorbell_entity_proposal_fallback(item_id=item_id)
 
 
+def render_doorbell_closed(*, kind: str, item_id: str, verdict: str, actor: str,
+                           source: str) -> tuple[list[dict], str]:
+    """The card a decided item's DM is EDITED into: what was decided, by whom, through which door
+    — and no `actions` block at all, which is the whole point. A button left on a decided item is
+    a control that can only ever answer with a staleness refusal.
+
+    `escape_mrkdwn` on the same terms as its two siblings above: `actor` is a resolved identity and
+    `verdict`/`source` come from closed vocabularies, but this is a doorbell card and no card here
+    interpolates anything unescaped — the rule is cheaper to keep than to re-audit per field.
+    """
+    headline, item_line = copy.doorbell_closed(kind=kind, item_id=item_id, verdict=verdict,
+                                               actor=actor, source=source)
+    return [_section(escape_mrkdwn(headline)), _context(escape_mrkdwn(item_line))], item_line
+
+
 def render_note_modal(*, private_metadata: str, title: str, label: str,
                       placeholder: str = "") -> dict:
     """One modal shape for every free-text collection this surface needs (a note, or a reason) —

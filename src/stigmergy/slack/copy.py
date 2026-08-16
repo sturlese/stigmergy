@@ -197,6 +197,25 @@ def doorbell_entity_proposal_fallback(*, item_id) -> str:
     return f"entity proposal #{item_id} needs a decision"
 
 
+def doorbell_closed(*, kind: str, item_id, verdict: str, actor: str, source: str) -> tuple[str, str]:
+    """`(headline, item_line)` for a card the doorbell is closing because the item was decided.
+
+    Returns BOTH lines rather than one string: they render as two different Block Kit blocks (a
+    section and the smaller grey context chrome), and a renderer splitting a joined string on a
+    newline would put the wording back in `render.py`, which is the one thing this module exists
+    to prevent.
+
+    It says WHO and WHERE, not just "decided": a steward looking at a card that changed under them
+    needs to know whether they were beaten to it by a colleague or by their own other window.
+    `source` is empty on decisions recorded before the ledger carried one, and the sentence still
+    has to read.
+    """
+    door = f" via {source}" if source else ""
+    return (f"✅ {verdict} — by {actor}{door}",
+            f"{kind} #{item_id} — decided elsewhere, so this card's buttons are gone. The full "
+            f"record is in the review ledger.")
+
+
 # Read cold, later, by an operator debugging why a doorbell never rang: name WHY, and what could
 # not happen — never a bare "delivery failed".
 def doorbell_undeliverable_no_steward(*, scope: str, event: str, item_ref: str) -> str:

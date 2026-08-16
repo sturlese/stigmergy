@@ -79,8 +79,11 @@ async def _decide_and_confirm(ctx, service, *, channel_id: str, kind: str, item_
     told they had created.
     """
     try:
+        # The ONE place this surface enters the review lane — button, note modal and mint modal all
+        # funnel here — so `source` is stamped once and no handler can forget it.
         result = review.review_decide_safe(service, item_kind=kind, item_id=item_id,
-                                           verdict=verdict, **decide_kwargs)
+                                           verdict=verdict, source=review.SOURCE_SLACK,
+                                           **decide_kwargs)
     except Exception:
         log.error("slack review: review_decide failed for %s:%s", kind, item_id, exc_info=True)
         await ctx.post_or_log(

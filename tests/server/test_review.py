@@ -14,6 +14,7 @@ import itertools
 import json
 import logging
 import os
+import re
 
 import pytest
 
@@ -185,7 +186,7 @@ def test_review_decide_records_append_only_and_a_second_decision_does_not_overwr
     service = make_service(env, conn, identity_name=STEWARD, audiences=None, evidence=evidence)
 
     first = review.review_decide(service, item_kind=review.KIND_PARKED_CAPTURE,
-                                item_id=str(generic_id), verdict="reject", notes="not useful")
+                                item_id=str(generic_id), source=review.SOURCE_MCP, verdict="reject", notes="not useful")
     assert first["recorded"] == "reject"
 
     with conn.cursor() as cur:
@@ -198,7 +199,7 @@ def test_review_decide_records_append_only_and_a_second_decision_does_not_overwr
     # asserts the ledger property directly instead of routing through the disposition a second
     # time.
     review.record_decision(conn, item_kind=review.KIND_PARKED_CAPTURE, item_id=str(generic_id),
-                          verdict="reject", actor=STEWARD, notes="repeated on purpose")
+                          source=review.SOURCE_MCP, verdict="reject", actor=STEWARD, notes="repeated on purpose")
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM review_decisions WHERE item_id = %s", (str(generic_id),))
         assert cur.fetchone()[0] == 2
@@ -228,7 +229,7 @@ def test_review_decide_never_writes_to_git(env, conn, kind, item_id, verdict):
     before = gitcmd.run("rev-parse", "main", cwd=env.bare).stdout
 
     try:
-        review.review_decide(service, item_kind=kind, item_id=real_id, verdict=verdict,
+        review.review_decide(service, item_kind=kind, item_id=real_id, source=review.SOURCE_MCP, verdict=verdict,
                             notes="a note" if verdict in ("resolve", "reject") else "")
     except review.ReviewError:
         pass  # some (kind, verdict) combinations legitimately refuse; git must stay untouched
@@ -309,7 +310,7 @@ def test_review_decide_never_writes_to_git_the_full_matrix(env, conn, item_kind,
 
     before = all_refs(env)
     try:
-        review.review_decide(steward, item_kind=item_kind, item_id=item_id, verdict=verdict,
+        review.review_decide(steward, item_kind=item_kind, item_id=item_id, source=review.SOURCE_MCP, verdict=verdict,
                             notes="a note")
     except review.ReviewError:
         pass  # several pairs legitimately refuse (a vocabulary mismatch, a missing confirmation);
@@ -339,7 +340,7 @@ def test_review_decide_entity_proposal_approve_mints_for_real(drift_free_env, co
 
     result = review.review_decide(
         service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
-        verdict="approve", name="Globex Robotics", entity_type="organization",
+        source=review.SOURCE_MCP, verdict="approve", name="Globex Robotics", entity_type="organization",
         aliases="Globex, Globex Robotics Inc", role="a robotics manufacturer")
 
     assert result["recorded"] == "approve"
@@ -367,7 +368,7 @@ def test_review_decide_entity_proposal_approve_mints_for_real(drift_free_env, co
     with conn.cursor() as cur:
         cur.execute("SELECT extra FROM review_decisions WHERE item_id = %s", (str(proposal_id),))
         extra = cur.fetchone()[0]
-    assert extra == {"entity_id": "globex-robotics", "commit": commit}
+    assert extra == {"source": "mcp", "entity_id": "globex-robotics", "commit": commit}
 
 
 def test_review_decide_entity_proposal_approve_old_shape_call_is_refused_and_mints_nothing(
@@ -383,7 +384,7 @@ def test_review_decide_entity_proposal_approve_old_shape_call_is_refused_and_min
 
     with pytest.raises(review.ReviewError, match="name") as excinfo:
         review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
-                            item_id=str(proposal_id), verdict="approve")
+                            item_id=str(proposal_id), source=review.SOURCE_MCP, verdict="approve")
     assert "entity_type" in str(excinfo.value)
 
     after = gitcmd.run("rev-parse", "main", cwd=env.bare).stdout
@@ -402,7 +403,7 @@ def test_review_decide_entity_proposal_approve_self_approval_still_refused(env, 
 
     with pytest.raises(review.ReviewError, match=review.SELF_APPROVAL_REFUSED):
         review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
-                            item_id=str(proposal_id), verdict="approve",
+                            item_id=str(proposal_id), source=review.SOURCE_MCP, verdict="approve",
                             name="Globex Robotics", entity_type="organization")
 
     after = gitcmd.run("rev-parse", "main", cwd=env.bare).stdout
@@ -422,7 +423,7 @@ def test_review_decide_entity_proposal_approve_non_steward_still_refused_byte_id
 
     with pytest.raises(review.ReviewError, match=review.NOT_YOURS_TO_DECIDE):
         review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
-                            item_id=str(proposal_id), verdict="approve",
+                            item_id=str(proposal_id), source=review.SOURCE_MCP, verdict="approve",
                             name="Globex Robotics", entity_type="organization")
 
     after = gitcmd.run("rev-parse", "main", cwd=env.bare).stdout
@@ -444,7 +445,7 @@ def test_review_decide_entity_proposal_approve_refuses_a_forbidden_character(dri
 
     with pytest.raises(review.ReviewError, match="cannot appear in an entity name"):
         review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
-                            item_id=str(proposal_id), verdict="approve",
+                            item_id=str(proposal_id), source=review.SOURCE_MCP, verdict="approve",
                             name='Globex" --aliases "Jordan Reyes', entity_type="organization")
 
     after = gitcmd.run("rev-parse", "main", cwd=env.bare).stdout
@@ -472,7 +473,7 @@ def test_review_decide_entity_proposal_approve_surfaces_drift_refusal(env, conn)
 
     with pytest.raises(review.ReviewError, match="already disagree"):
         review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
-                            item_id=str(proposal_id), verdict="approve",
+                            item_id=str(proposal_id), source=review.SOURCE_MCP, verdict="approve",
                             name="Globex Robotics", entity_type="organization")
 
     after = all_refs(env)
@@ -494,7 +495,7 @@ def test_review_decide_entity_proposal_approve_credential_missing_names_the_capa
 
     with pytest.raises(review.CapabilityUnavailableError, match="GitHub App"):
         review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
-                            item_id=str(proposal_id), verdict="approve",
+                            item_id=str(proposal_id), source=review.SOURCE_MCP, verdict="approve",
                             name="Globex Robotics", entity_type="organization")
 
     after = gitcmd.run("rev-parse", "main", cwd=env.bare).stdout
@@ -531,7 +532,7 @@ def test_review_decide_entity_proposal_approve_refuses_a_secret_note_before_it_m
 
     with pytest.raises(review.ReviewError, match="likely secret"):
         review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
-                             item_id=str(proposal_id), verdict="approve", notes=secret_note,
+                             item_id=str(proposal_id), source=review.SOURCE_MCP, verdict="approve", notes=secret_note,
                              name="Globex Robotics", entity_type="organization", requeue=True)
 
     assert all_refs(env) == before, "nothing may be pushed once the note has been refused"
@@ -561,7 +562,7 @@ def test_review_decide_entity_proposal_approve_requeues_after_the_push(drift_fre
 
     result = review.review_decide(
         service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
-        verdict="approve", name="Globex Robotics", entity_type="organization", requeue=True)
+        source=review.SOURCE_MCP, verdict="approve", name="Globex Robotics", entity_type="organization", requeue=True)
 
     assert result["requeued"] is True
     with conn.cursor() as cur:
@@ -592,7 +593,7 @@ def test_review_decide_entity_proposal_approve_without_requeue_leaves_the_captur
 
     result = review.review_decide(
         service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
-        verdict="approve", name="Globex Robotics", entity_type="organization")
+        source=review.SOURCE_MCP, verdict="approve", name="Globex Robotics", entity_type="organization")
 
     assert result["minted"] is True and len(result["commit"]) == 40
     assert result["requeued"] is False
@@ -645,7 +646,7 @@ def test_characterization_the_mcp_door_requeues_strictly_after_the_push(drift_fr
 
     result = review.review_decide(
         service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
-        verdict="approve", name="Globex Robotics", entity_type="organization", requeue=True)
+        source=review.SOURCE_MCP, verdict="approve", name="Globex Robotics", entity_type="organization", requeue=True)
 
     assert observed_heads == [result["commit"]], (
         "exactly ONE requeue, and the remote it ran against already carried the pushed commit — "
@@ -665,6 +666,10 @@ def test_characterization_one_mcp_mint_writes_exactly_one_ledger_row_carrying_th
     and_a_second_decision_does_not_overwrite` establishes that a duplicate would be a second ROW,
     not an overwrite. `notes` is part of the shape and part of the asymmetry: this door carries the
     steward's cleaned note into the row, the console door writes `''` (its twin pins that).
+
+    `extra` carries `source` beside the mint's own detail (issue #41 part 2) — which DOOR recorded
+    the verdict, from the closed `decisions.DECISION_SOURCES` set. Asserted as part of the FULL row
+    shape rather than on its own, so a door that stopped stamping it fails here.
     """
     env = drift_free_env
     evidence = MemoryEvidenceStore()
@@ -674,7 +679,7 @@ def test_characterization_one_mcp_mint_writes_exactly_one_ledger_row_carrying_th
 
     result = review.review_decide(
         service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
-        verdict="approve", name="Globex Robotics", entity_type="organization",
+        source=review.SOURCE_MCP, verdict="approve", name="Globex Robotics", entity_type="organization",
         notes="a second steward agrees", requeue=True)
 
     with conn.cursor() as cur:
@@ -684,7 +689,8 @@ def test_characterization_one_mcp_mint_writes_exactly_one_ledger_row_carrying_th
     assert len(rows) == 1, f"one mint, one governance row — got {len(rows)}"
     assert rows[0] == (review.KIND_ENTITY_PROPOSAL, str(proposal_id), "approve", STEWARD,
                        "a second steward agrees",
-                       {"entity_id": "globex-robotics", "commit": result["commit"]})
+                       {"source": "mcp", "entity_id": "globex-robotics",
+                        "commit": result["commit"]})
 
 
 def test_characterization_the_requeue_note_says_which_entity_and_which_commit_unblocked_the_row(
@@ -714,7 +720,7 @@ def test_characterization_the_requeue_note_says_which_entity_and_which_commit_un
 
     result = review.review_decide(
         service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
-        verdict="approve", name="Globex Robotics", entity_type="organization", requeue=True)
+        source=review.SOURCE_MCP, verdict="approve", name="Globex Robotics", entity_type="organization", requeue=True)
 
     with conn.cursor() as cur:
         cur.execute("SELECT trace FROM capture_queue WHERE id = %s", (proposal_id,))
@@ -779,7 +785,7 @@ def test_mint_and_record_approval_lets_the_librarys_own_exception_out_untranslat
         review.mint_and_record_approval(
             conn, repo_url=env.bare, submission_id=proposal_id, entity_id="globex-robotics",
             name="Globex Robotics", entity_type="organization", aliases=[], role="",
-            actor=STEWARD, requeue=True)
+            actor=STEWARD, source=review.SOURCE_MCP, requeue=True)
 
     assert type(caught.value) is EntityError, (
         f"the library's own class, not a subclass or a wrapper — got {type(caught.value).__name__}")
@@ -822,7 +828,7 @@ def test_the_same_mint_fault_reaches_this_door_as_a_review_error_and_slack_as_an
 
     with pytest.raises(review.ReviewError) as caught:
         review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
-                             item_id=str(proposal_id), verdict="approve",
+                             item_id=str(proposal_id), source=review.SOURCE_MCP, verdict="approve",
                              name="Globex Robotics", entity_type="organization")
     assert str(caught.value) == "the registry and the pages already disagree", (
         "the library's sentence reaches the steward verbatim — the translation changes the CLASS, "
@@ -830,7 +836,8 @@ def test_the_same_mint_fault_reaches_this_door_as_a_review_error_and_slack_as_an
 
     safe = review.review_decide_safe(
         service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
-        verdict="approve", name="Globex Robotics", entity_type="organization")
+        source=review.SOURCE_SLACK, verdict="approve", name="Globex Robotics",
+        entity_type="organization")
     assert safe == {"error": "the registry and the pages already disagree"}
 
 
@@ -854,7 +861,7 @@ def _approve_globex(service, proposal_id, **extra):
     """The one well-formed approve every case below drives, so a refusal is the only variable."""
     return review.review_decide(
         service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
-        verdict="approve", name="Globex Robotics", entity_type="organization", **extra)
+        source=review.SOURCE_MCP, verdict="approve", name="Globex Robotics", entity_type="organization", **extra)
 
 
 def _proposal_and_steward(env, conn):
@@ -1009,7 +1016,7 @@ def test_an_ordinary_collision_verdict_still_reaches_the_wire_naming_the_registe
 
     with pytest.raises(review.ReviewError) as caught:
         review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
-                             item_id=str(proposal_id), verdict="approve", name="Acme Corp",
+                             item_id=str(proposal_id), source=review.SOURCE_MCP, verdict="approve", name="Acme Corp",
                              entity_type="organization")
 
     told_the_steward = str(caught.value)
@@ -1040,7 +1047,7 @@ def test_a_birth_validation_refusal_still_reaches_the_wire_verbatim(drift_free_e
 
     with pytest.raises(review.ReviewError) as reached_the_wire:
         review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
-                             item_id=str(proposal_id), verdict="approve", name=hostile,
+                             item_id=str(proposal_id), source=review.SOURCE_MCP, verdict="approve", name=hostile,
                              entity_type="organization")
 
     assert str(reached_the_wire.value) == str(raised_by_the_library.value)
@@ -1087,7 +1094,8 @@ def test_review_decide_entity_proposal_reject_never_writes_to_git(env, conn):
     before = gitcmd.run("rev-parse", "main", cwd=env.bare).stdout
 
     result = review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
-                                 item_id=str(proposal_id), verdict="reject", notes="not a real org")
+                                 item_id=str(proposal_id), source=review.SOURCE_MCP,
+                                 verdict="reject", notes="not a real org")
     assert result["recorded"] == "reject"
 
     after = gitcmd.run("rev-parse", "main", cwd=env.bare).stdout
@@ -1126,7 +1134,7 @@ def test_a_stale_entity_proposal_decision_refuses_in_this_packages_own_vocabular
 
     with pytest.raises(review.ReviewError) as caught:
         review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
-                            item_id=str(proposal_id), verdict="approve",
+                            item_id=str(proposal_id), source=review.SOURCE_MCP, verdict="approve",
                             name="Globex Robotics", entity_type="organization")
 
     assert not isinstance(caught.value, EntityError), (
@@ -1154,10 +1162,158 @@ def test_a_still_parked_entity_proposal_is_not_refused_by_that_guard(drift_free_
     service = make_service(env, conn, identity_name=STEWARD, audiences=None, evidence=evidence)
 
     result = review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
-                                  item_id=str(proposal_id), verdict="approve",
+                                  item_id=str(proposal_id), source=review.SOURCE_MCP, verdict="approve",
                                   name="Globex Robotics", entity_type="organization")
 
     assert result["minted"] is True
+
+
+# ── issue #41 part 2: a staleness refusal names the decision that beat it ──────────────────────
+# The refusal a steward gets when a SECOND door decided first already named what happened to the
+# ROW. It never named the DECISION — who, through which door, when — which is the only thing that
+# tells a steward staring at a dead Slack card whether to chase a colleague or file a bug.
+#
+# The enrichment is composed from `review_decisions`, which is not a caller-visible surface, so it
+# may only ever be appended AFTER an authorization guard has passed. The two tests at the end of
+# this section are the security half of that sentence, and they are the reason the enrichment lives
+# at the `EntityError`/`CaptureError` translation sites rather than in a wrapper around the whole
+# decide path.
+_ALREADY_DECIDED_RE = re.compile(
+    r" — already decided: (?P<verdict>\w+) by (?P<actor>\S+) via (?P<source>\w+) "
+    r"at \d{4}-\d{2}-\d{2} \d{2}:\d{2}Z$")
+
+MALLORY = "mallory@example.com"   # neither a steward nor anybody's submitter
+
+
+def _decide_elsewhere(conn, submission_id, *, item_kind, verdict, actor, source, close):
+    """A DIFFERENT door deciding this row first: the queue disposition AND the ledger row, in the
+    order every real door writes them. `close` is the disposition that takes the row out of its
+    parked state — `dispositions.reject`/`resolve`, exactly what the console and the CLI call."""
+    close(conn, submission_id, actor=actor)
+    review.record_decision(conn, item_kind=item_kind, item_id=str(submission_id), verdict=verdict,
+                           actor=actor, source=source, notes="decided over there")
+
+
+def test_a_stale_entity_proposal_refusal_names_the_decision_that_beat_it(env, conn):
+    """OLD BEHAVIOUR: the refusal named the row's new STATUS and the command to inspect it, and
+    stopped there. A steward whose card lost the race learned that something had happened to the
+    row and nothing about who did it, through which door, or when — so the next move was to go
+    ask around, which is exactly the cost the doorbell exists to remove.
+
+    The ledger already held every one of those facts. This appends them to the sentence
+    `situations.require_situation` raises, at the ONE place this package translates that exception
+    (`_decide_entity_proposal`), and therefore only for a caller `_guard_governance_decision` has
+    already cleared.
+    """
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    _decide_elsewhere(
+        conn, proposal_id, item_kind=review.KIND_ENTITY_PROPOSAL, verdict="reject",
+        actor="console-operator@example.com", source=review.SOURCE_ADMIN,
+        close=lambda c, i, actor: dispositions.reject(c, i, actor=actor, reason="not an entity"))
+    service = make_service(env, conn, identity_name=STEWARD, audiences=None, evidence=evidence)
+
+    with pytest.raises(review.ReviewError) as caught:
+        review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
+                             item_id=str(proposal_id), source=review.SOURCE_MCP,
+                             verdict="approve", name="Globex Robotics",
+                             entity_type="organization")
+
+    message = str(caught.value)
+    # the sentence that was already there survives intact — the enrichment APPENDS, never replaces
+    assert f"submission {proposal_id} is 'rejected'" in message
+    assert f"stigmergy-queue show {proposal_id}" in message
+    found = _ALREADY_DECIDED_RE.search(message)
+    assert found, f"the refusal does not name the decision that beat it: {message!r}"
+    assert found.group("verdict") == "reject"
+    assert found.group("actor") == "console-operator@example.com"
+    assert found.group("source") == "admin"
+
+
+def test_a_stale_parked_capture_refusal_names_the_decision_that_beat_it(env, conn):
+    """The same gap on the OTHER kind, and it arrived by a different road: a parked capture's
+    staleness is caught by `capture.queue.dispose`'s SQL guard, not by a pre-flight read, so the
+    refusal came out as a bare `QueueStateError` from two layers down.
+
+    OLD BEHAVIOUR: that `QueueStateError` propagated untouched — not even a `ReviewError`, so
+    this package's own translation rule ("an exception type from below never leaves as itself")
+    was quietly broken on the busier of the two kinds, and the sentence named the status only.
+
+    The submitter's own capture, decided by a steward elsewhere first: the ordinary race, not an
+    authorization question — `_guard_parked_capture_decision` clears ALICE before any of this.
+    """
+    evidence = MemoryEvidenceStore()
+    parked = _park_capture(conn, evidence, submitted_by=ALICE)
+    _decide_elsewhere(
+        conn, parked, item_kind=review.KIND_PARKED_CAPTURE, verdict="resolve",
+        actor=STEWARD, source=review.SOURCE_SLACK,
+        close=lambda c, i, actor: dispositions.resolve(c, i, actor=actor, note="handled by hand"))
+    alice = make_service(env, conn, identity_name=ALICE, audiences=None, evidence=evidence)
+
+    with pytest.raises(review.ReviewError) as caught:
+        review.review_decide(alice, item_kind=review.KIND_PARKED_CAPTURE, item_id=str(parked),
+                             source=review.SOURCE_MCP, verdict="reject", notes="never mind")
+
+    message = str(caught.value)
+    assert f"submission {parked} is 'resolved'" in message
+    found = _ALREADY_DECIDED_RE.search(message)
+    assert found, f"the refusal does not name the decision that beat it: {message!r}"
+    assert found.group("verdict") == "resolve"
+    assert found.group("actor") == STEWARD
+    assert found.group("source") == "slack"
+
+
+def test_a_stale_item_nobody_recorded_a_decision_for_keeps_the_bare_sentence(env, conn):
+    """The benign twin, and the specificity half of the pair above: a row drained by
+    `stigmergy-queue resolve` writes NO ledger row — that CLI moves material, it decides no
+    identity — so there is nothing to name and the refusal must not invent a clause.
+    """
+    evidence = MemoryEvidenceStore()
+    parked = _park_capture(conn, evidence, submitted_by=ALICE)
+    dispositions.resolve(conn, parked, actor=STEWARD, note="drained from the queue CLI")
+    alice = make_service(env, conn, identity_name=ALICE, audiences=None, evidence=evidence)
+
+    with pytest.raises(review.ReviewError) as caught:
+        review.review_decide(alice, item_kind=review.KIND_PARKED_CAPTURE, item_id=str(parked),
+                             source=review.SOURCE_MCP, verdict="reject", notes="never mind")
+
+    message = str(caught.value)
+    assert f"submission {parked} is 'resolved'" in message
+    assert "already decided" not in message
+
+
+@pytest.mark.parametrize("item_kind,situation,verdict,close", [
+    (review.KIND_ENTITY_PROPOSAL, capture_schema.SITUATION_UNRESOLVED_ENTITY, "approve",
+     lambda c, i, actor: dispositions.reject(c, i, actor=actor, reason="not an entity")),
+    (review.KIND_PARKED_CAPTURE, None, "reject",
+     lambda c, i, actor: dispositions.resolve(c, i, actor=actor, note="handled by hand")),
+])
+def test_an_unauthorized_caller_on_a_DECIDED_item_still_gets_the_plain_sentence(
+        env, conn, item_kind, situation, verdict, close):
+    """**SECURITY.** `NOT_YOURS_TO_DECIDE` is ONE byte-identical sentence for "does not exist",
+    "somebody else's item" and "not a steward" — a caller who fails authorization must not be able
+    to tell those three apart, and a decided item is the case where the temptation to say more is
+    strongest, because the refusal has real information sitting right there.
+
+    Enriching it would turn the anonymous sentence into an oracle answering four questions at
+    once: that the id exists, that it was decided, by WHOM, and through which door. So the
+    enrichment is composed at the translation sites INSIDE each decide path, both of which run
+    strictly after their `_guard_*`, and this pins that placement rather than the wording:
+    `==`, not `in` — a suffix is exactly what would leak.
+    """
+    evidence = MemoryEvidenceStore()
+    item_id = _park_capture(conn, evidence, submitted_by=ALICE, situation=situation)
+    _decide_elsewhere(conn, item_id, item_kind=item_kind, verdict="reject", actor=STEWARD,
+                      source=review.SOURCE_ADMIN, close=close)
+    mallory = make_service(env, conn, identity_name=MALLORY, audiences=None, evidence=evidence)
+
+    with pytest.raises(review.ReviewError) as caught:
+        review.review_decide(mallory, item_kind=item_kind, item_id=str(item_id),
+                             source=review.SOURCE_MCP, verdict=verdict, notes="mine now",
+                             name="Globex Robotics", entity_type="organization")
+
+    assert str(caught.value) == review.NOT_YOURS_TO_DECIDE
 
 
 # ── the review item's two reads of the same subject: one to DISPLAY, one to ACT on ─────────────
@@ -1332,7 +1488,7 @@ def test_review_decide_refuses_a_secret_in_a_note(env, conn, require_gitleaks):
 
     with pytest.raises(review.ReviewError):
         review.review_decide(service, item_kind=review.KIND_PARKED_CAPTURE, item_id=str(generic_id),
-                            verdict="reject", notes=secret_note)
+                            source=review.SOURCE_MCP, verdict="reject", notes=secret_note)
     with conn.cursor() as cur:
         cur.execute("SELECT status, report FROM capture_queue WHERE id = %s", (generic_id,))
         status, report = cur.fetchone()
@@ -1396,7 +1552,8 @@ def test_a_steward_can_decide_on_a_server_that_holds_no_checkout(drift_free_env,
                               situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
     svc = make_service(env, conn, STEWARD, knowledge_repo="", stewards_path=baked)
 
-    out = svc.review_decide(item_kind="entity-proposal", item_id=str(item_id), verdict="approve",
+    out = svc.review_decide(item_kind="entity-proposal", item_id=str(item_id),
+                            source=review.SOURCE_MCP, verdict="approve",
                             name="Stark Industries", entity_type="organization")
 
     # The property is that the baked map made a decision LAND — not that the call returned
@@ -1422,7 +1579,8 @@ def test_a_non_steward_is_still_refused_with_the_same_sentence(env, conn, tmp_pa
     svc = make_service(env, conn, ALICE, knowledge_repo="", stewards_path=baked)
 
     with pytest.raises(review.ReviewError, match=review.NOT_YOURS_TO_DECIDE):
-        svc.review_decide(item_kind="entity-proposal", item_id=str(item_id), verdict="approve")
+        svc.review_decide(item_kind="entity-proposal", item_id=str(item_id),
+                          source=review.SOURCE_MCP, verdict="approve")
 
 
 def test_neither_a_checkout_nor_a_baked_map_still_fails_closed(env, conn):
@@ -1433,7 +1591,8 @@ def test_neither_a_checkout_nor_a_baked_map_still_fails_closed(env, conn):
     svc = make_service(env, conn, STEWARD, knowledge_repo="", stewards_path="")
 
     with pytest.raises(review.ReviewError, match=review.NOT_YOURS_TO_DECIDE):
-        svc.review_decide(item_kind="entity-proposal", item_id=str(item_id), verdict="approve")
+        svc.review_decide(item_kind="entity-proposal", item_id=str(item_id),
+                          source=review.SOURCE_MCP, verdict="approve")
 
 
 def test_the_repo_wins_where_a_checkout_exists(env, conn, tmp_path):
@@ -1446,7 +1605,8 @@ def test_the_repo_wins_where_a_checkout_exists(env, conn, tmp_path):
 
     with pytest.raises(review.ReviewError, match=review.NOT_YOURS_TO_DECIDE):
         # the baked map must not grant authority the committed one withholds
-        svc.review_decide(item_kind="entity-proposal", item_id=str(item_id), verdict="approve")
+        svc.review_decide(item_kind="entity-proposal", item_id=str(item_id),
+                          source=review.SOURCE_MCP, verdict="approve")
 
 
 def test_a_broken_steward_map_fails_closed_instead_of_raising_out_of_the_predicate(
@@ -1502,7 +1662,7 @@ def test_an_entity_proposal_cannot_be_decided_as_a_parked_capture(env, conn):
 
     with pytest.raises(review.ReviewError, match=review.NOT_YOURS_TO_DECIDE):
         review.review_decide(alice, item_kind=review.KIND_PARKED_CAPTURE, item_id=str(proposal),
-                             verdict="reject", notes="mine, I say")
+                             source=review.SOURCE_MCP, verdict="reject", notes="mine, I say")
 
     with conn.cursor() as cur:
         cur.execute("SELECT status FROM capture_queue WHERE id = %s", (proposal,))
@@ -1520,7 +1680,8 @@ def test_a_genuine_parked_capture_is_still_decidable_by_its_submitter(env, conn)
     alice = make_service(env, conn, identity_name=ALICE, audiences=None, evidence=evidence)
 
     result = review.review_decide(alice, item_kind=review.KIND_PARKED_CAPTURE,
-                                  item_id=str(parked), verdict="reject", notes="not worth filing")
+                                  item_id=str(parked), source=review.SOURCE_MCP,
+                                  verdict="reject", notes="not worth filing")
 
     assert result["recorded"] == "reject"
 
@@ -1538,7 +1699,7 @@ def test_the_ledger_records_the_canonical_id_not_the_callers_spelling(env, conn)
     alice = make_service(env, conn, identity_name=ALICE, audiences=None, evidence=evidence)
 
     result = review.review_decide(alice, item_kind=review.KIND_PARKED_CAPTURE,
-                                  item_id=f" {parked} ", verdict="reject", notes="nope")
+                                  item_id=f" {parked} ", source=review.SOURCE_MCP, verdict="reject", notes="nope")
 
     assert result["item_id"] == str(parked)
     assert f"#{parked} " in result["message"], result["message"]
@@ -1563,7 +1724,7 @@ def test_the_entity_proposal_ledger_records_the_canonical_id_too(env, conn):
     steward = make_service(env, conn, identity_name=STEWARD, audiences=None, evidence=evidence)
 
     result = review.review_decide(steward, item_kind=review.KIND_ENTITY_PROPOSAL,
-                                  item_id=f" {proposal} ", verdict="reject", notes="nope")
+                                  item_id=f" {proposal} ", source=review.SOURCE_MCP, verdict="reject", notes="nope")
 
     assert result["item_id"] == str(proposal)
     with conn.cursor() as cur:
@@ -1654,7 +1815,7 @@ def test_an_over_limit_mint_argument_comes_back_as_the_checks_own_sentence(env, 
             field: "x" * (MAX_ARG_CHARS + 1)}
 
     out = _call_mcp(_mcp_for(env, conn), "review_decide", item_kind="entity-proposal",
-                    item_id=str(item_id), verdict="approve", **args)
+                    item_id=str(item_id), source=review.SOURCE_MCP, verdict="approve", **args)
 
     assert out == {"error": f"{field} too long (max {MAX_ARG_CHARS} characters)"}
 
@@ -1666,7 +1827,7 @@ def test_one_over_limit_alias_comes_back_as_the_checks_own_sentence(env, conn, m
                             situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
 
     out = _call_mcp(_mcp_for(env, conn), "review_decide", item_kind="entity-proposal",
-                    item_id=str(item_id), verdict="approve", name="Stark Industries",
+                    item_id=str(item_id), source=review.SOURCE_MCP, verdict="approve", name="Stark Industries",
                     entity_type="organization", aliases=["x" * (MAX_ARG_CHARS + 1)])
 
     assert out == {"error": f"alias too long (max {MAX_ARG_CHARS} characters)"}
@@ -1685,7 +1846,7 @@ def test_a_long_comma_separated_alias_string_is_many_short_aliases_and_passes(en
     assert len(many) > MAX_ARG_CHARS, "the whole point: the STRING is over the bound"
 
     out = _call_mcp(_mcp_for(env, conn), "review_decide", item_kind="entity-proposal",
-                    item_id=str(item_id), verdict="approve", name="Stark Industries",
+                    item_id=str(item_id), source=review.SOURCE_MCP, verdict="approve", name="Stark Industries",
                     entity_type="organization", aliases=many)
 
     assert out == {"error": "review_decide failed (RuntimeError)"}   # the marker: reached the mint
@@ -1700,7 +1861,7 @@ def test_an_at_limit_mint_argument_reaches_the_mint(env, conn, mint_never_runs):
                             situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
 
     out = _call_mcp(_mcp_for(env, conn), "review_decide", item_kind="entity-proposal",
-                    item_id=str(item_id), verdict="approve", name="Stark Industries",
+                    item_id=str(item_id), source=review.SOURCE_MCP, verdict="approve", name="Stark Industries",
                     entity_type="organization", role="x" * MAX_ARG_CHARS)
 
     assert out == {"error": "review_decide failed (RuntimeError)"}

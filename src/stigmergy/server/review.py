@@ -10,7 +10,7 @@ the asked submitter — and a refusal never becomes more specific once a caller 
 """
 import logging
 import os
-from datetime import date
+from datetime import UTC, date
 
 from stigmergy.capture import decisions, dispositions
 from stigmergy.capture import ops as capture_ops
@@ -43,9 +43,20 @@ def _check_len(name: str, value: str) -> None:
 
 # The ledger lives in `capture.decisions`, BELOW both this package and `stigmergy.entities`, so
 # the entities CLI writes the same row without crossing the `entities` -> `server` edge.
-# Re-exported here under the names callers already use.
+# Re-exported here under the names callers already use — `latest_decisions` among them, because
+# `stigmergy.slack` may reach `stigmergy.capture` only through `slack.store`, and only for
+# `.schema` (tests/test_architecture.py): the doorbell's closing pass reads the ledger through
+# THIS module or not at all.
 ensure_review_schema = decisions.ensure_decisions_schema
 record_decision = decisions.record_decision
+latest_decisions = decisions.latest_decisions
+
+# Which door is recording — the closed set lives with the table (`capture.decisions`) and is
+# re-exported here so the two surfaces that reach the ledger through this module (`stigmergy.slack`,
+# `stigmergy.admin`) name their door with a constant rather than a literal.
+DECISION_SOURCES = decisions.DECISION_SOURCES
+SOURCE_MCP, SOURCE_SLACK = decisions.SOURCE_MCP, decisions.SOURCE_SLACK
+SOURCE_ADMIN, SOURCE_CLI = decisions.SOURCE_ADMIN, decisions.SOURCE_CLI
 
 
 # `review_decide`'s verdict vocabulary — uniform EXCEPT `parked-capture`, which keeps
@@ -302,6 +313,31 @@ def _recorded_message(kind: str, verdict: str, submission_id, actor: str, note: 
     return line
 
 
+def _already_decided_suffix(conn, item_kind: str, submission_id) -> str:
+    """`" — already decided: …"` for an item the ledger already holds a verdict on, `""` otherwise.
+
+    **Only ever composed AFTER an authorization guard has passed.** `review_decisions` is not a
+    caller-visible surface: it names WHO decided an identity and through which door. Appended to
+    `NOT_YOURS_TO_DECIDE` it would turn one anonymous sentence into an oracle answering four
+    questions a refused caller may not ask — that the id exists, that it was decided, by whom, and
+    where. That is why this is called at the two TRANSLATION sites inside the decide paths, each
+    of which runs strictly after its own `_guard_*`, and never from a wrapper around them.
+
+    The timestamp is converted to UTC before it is stamped `Z`: `created_at` comes back in the
+    session's timezone, and a local time labelled `Z` is worse than no time at all when the point
+    is to work out which of two decisions came first. `source` is `""` on every row written before
+    the column existed (the ledger is never migrated), and those rows still have to render.
+    """
+    decision = decisions.latest_decisions(conn).get((item_kind, str(submission_id)))
+    if not decision:
+        return ""
+    when = decision["created_at"]
+    if when.tzinfo is not None:
+        when = when.astimezone(UTC)
+    return (f" — already decided: {decision['verdict']} by {decision['actor']} via "
+            f"{decision['source'] or 'an unrecorded door'} at {when:%Y-%m-%d %H:%M}Z")
+
+
 def _refuse_secret_note(notes: str) -> None:
     """The secrets scan over a steward note, here at the CALL SITE because `stigmergy.capture` may
     never import `stigmergy.librarian`. Runs before `notes` reaches `clean` or a report."""
@@ -318,11 +354,16 @@ def _refuse_secret_note(notes: str) -> None:
             "the credential and try again")
 
 
-def _decide_parked_capture(service, item_id: str, verdict: str, notes: str, actor: str) -> dict:
+def _decide_parked_capture(service, item_id: str, verdict: str, notes: str, actor: str, *,
+                           source: str) -> dict:
     """Deliberately NOT the generic verdict vocabulary: `verdict` here IS one of
     `capture.dispositions.DISPOSITIONS`, stored verbatim, so a button label can never disagree
     with the recorded verdict. Authorization runs before anything else, so a nonexistent id is
-    refused by the SAME sentence an unauthorized one is."""
+    refused by the SAME sentence an unauthorized one is.
+
+    A `CaptureError` out of the disposition is this kind's staleness refusal — translated into
+    `ReviewError` and enriched with the decision that beat it, both of which may only happen after
+    `_guard_parked_capture_decision` has cleared the caller."""
     submission_id, row = _row_for_item(service, item_id)
     # An entity situation is NOT a parked capture, enforced HERE: without this the caller's
     # `item_kind` picks the authorization rule, and an entity proposal's own submitter could route
@@ -338,20 +379,29 @@ def _decide_parked_capture(service, item_id: str, verdict: str, notes: str, acto
             f"(review_decide does not reuse the generic approve/reject/request_changes "
             f"vocabulary for this item kind — see capture.dispositions)")
     _refuse_secret_note(notes)
-    if verdict == dispositions.REQUEUE:
-        result = dispositions.requeue(service.conn, submission_id, actor=actor, note=notes)
-    elif verdict == dispositions.RESOLVE:
-        if not notes:
-            raise ReviewError("resolve requires a note — what did you do with the material?")
-        result = dispositions.resolve(service.conn, submission_id, actor=actor, note=notes)
-    else:
-        if not notes:
-            raise ReviewError("reject requires a reason")
-        result = dispositions.reject(service.conn, submission_id, actor=actor, reason=notes)
+    if verdict in (dispositions.RESOLVE, dispositions.REJECT) and not notes:
+        raise ReviewError("resolve requires a note — what did you do with the material?"
+                          if verdict == dispositions.RESOLVE else "reject requires a reason")
+    try:
+        # The disposition's own SQL state guard, which is the ONLY place a lost race is caught for
+        # this kind — there is no pre-flight read here, unlike the entity path's
+        # `require_situation`. Its `QueueStateError` used to leave this function untranslated,
+        # which broke this module's own rule that an exception type from below never escapes as
+        # itself, and told a steward nothing about WHO had already decided the row.
+        if verdict == dispositions.REQUEUE:
+            result = dispositions.requeue(service.conn, submission_id, actor=actor, note=notes)
+        elif verdict == dispositions.RESOLVE:
+            result = dispositions.resolve(service.conn, submission_id, actor=actor, note=notes)
+        else:
+            result = dispositions.reject(service.conn, submission_id, actor=actor, reason=notes)
+    except CaptureError as ex:
+        raise ReviewError(
+            f"{ex}{_already_decided_suffix(service.conn, KIND_PARKED_CAPTURE, submission_id)}"
+        ) from ex
     # `str(submission_id)`, never the raw `item_id`: `_parse_id` accepts " 204 "/"007", and a
     # raw-spelling ledger row could never join back to the item it decided.
     record_decision(service.conn, item_kind=KIND_PARKED_CAPTURE, item_id=str(submission_id),
-                    verdict=verdict, actor=actor, notes=notes)
+                    verdict=verdict, actor=actor, source=source, notes=notes)
     message = _recorded_message(KIND_PARKED_CAPTURE, verdict, submission_id, actor,
                                 note=notes if verdict == dispositions.RESOLVE else "")
     return {"recorded": verdict, "item_kind": KIND_PARKED_CAPTURE, "item_id": str(submission_id),
@@ -359,8 +409,9 @@ def _decide_parked_capture(service, item_id: str, verdict: str, notes: str, acto
 
 
 def _decide_entity_proposal(service, item_id: str, verdict: str, notes: str, actor: str, *,
-                            name: str = "", entity_id: str = "", entity_type: str = "",
-                            aliases=None, role: str = "", requeue: bool = False) -> dict:
+                            source: str, name: str = "", entity_id: str = "",
+                            entity_type: str = "", aliases=None, role: str = "",
+                            requeue: bool = False) -> dict:
     """Authorized before anything else runs: steward required, self-approval refused. `approve`
     mints. `name`/`entity_type` are validated only AFTER authorization, so a refused caller learns
     nothing about what a mint would need. `entity_id` prefills to `name`'s slug, and
@@ -380,17 +431,21 @@ def _decide_entity_proposal(service, item_id: str, verdict: str, notes: str, act
     # from `stigmergy.entities` must never reach a caller, because `stigmergy.slack` is barred
     # from importing it and could only catch it generically — as an unanticipated fault whose
     # text may not be shown. `ReviewError` is a `CaptureError`, so both surfaces already echo it.
+    # The translation is also where the "a second door got here first" clause is appended, because
+    # this is the first point in this path at which the caller is known to be authorized.
     try:
         situations.require_situation(service.conn, submission_id, action=verdict)
     except EntityError as ex:
-        raise ReviewError(str(ex)) from ex
+        raise ReviewError(
+            f"{ex}{_already_decided_suffix(service.conn, KIND_ENTITY_PROPOSAL, submission_id)}"
+        ) from ex
     if verdict == REJECT:
         if not notes:
             raise ReviewError("reject requires a reason")
         dispositions.reject(service.conn, submission_id, actor=actor, reason=notes)
         message = _recorded_message(KIND_ENTITY_PROPOSAL, verdict, submission_id, actor)
         record_decision(service.conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(submission_id),
-                        verdict=verdict, actor=actor, notes=notes)
+                        verdict=verdict, actor=actor, source=source, notes=notes)
         return {"recorded": verdict, "item_kind": KIND_ENTITY_PROPOSAL,
                "item_id": str(submission_id),
                "actor": actor, "message": message}
@@ -418,7 +473,7 @@ def _decide_entity_proposal(service, item_id: str, verdict: str, notes: str, act
     minted = _mint_entity_proposal(
         service, submission_id=submission_id, entity_id=resolved_id, name=clean_name,
         entity_type=clean_type, aliases=alias_list, role=role or "", notes=notes,
-        approved_by=actor, requeue=requeue)
+        approved_by=actor, source=source, requeue=requeue)
 
     return {"recorded": verdict, "item_kind": KIND_ENTITY_PROPOSAL,
                "item_id": str(submission_id),
@@ -444,7 +499,8 @@ _MINT_BRANCH = "main"
 
 def mint_and_record_approval(conn, *, repo_url: str, submission_id: int, entity_id: str,
                              name: str, entity_type: str, aliases: list[str], role: str,
-                             actor: str, notes: str = "", requeue: bool = False) -> dict:
+                             actor: str, source: str, notes: str = "",
+                             requeue: bool = False) -> dict:
     """The mint sequence itself, in the ONE order that is correct — mint through the governed
     door, write the governance ledger row, then (only if asked) requeue the capture.
 
@@ -469,6 +525,10 @@ def mint_and_record_approval(conn, *, repo_url: str, submission_id: int, entity_
     records that class name in `admin_actions` before turning it into an `AdminRefused`. A
     translation here would rename what the console's bookkeeping captures precisely.
 
+    `source` is a parameter for the same reason authorization is not one: this sequence is shared
+    by doors that are not each other, and each has to name itself. It is passed straight to
+    `record_decision`, which refuses any spelling outside `DECISION_SOURCES`.
+
     `notes` is the doors' other asymmetry, and a parameter for that reason: the review lane
     carries the steward's cleaned note into the ledger row, the console has no note field and
     writes `''`. It goes VERBATIM into an append-only table that cannot be migrated afterwards,
@@ -483,7 +543,7 @@ def mint_and_record_approval(conn, *, repo_url: str, submission_id: int, entity_
         entity_id=entity_id, name=name, entity_type=entity_type, aliases=aliases, role=role,
         today=date.today().isoformat(), submission_id=submission_id, approved_by=actor)
     record_decision(conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(submission_id),
-                    verdict=APPROVE, actor=actor, notes=notes,
+                    verdict=APPROVE, actor=actor, source=source, notes=notes,
                     extra={"entity_id": mint_result["entity_id"], "commit": mint_result["commit"]})
     requeued = None
     if requeue:
@@ -501,7 +561,7 @@ def mint_and_record_approval(conn, *, repo_url: str, submission_id: int, entity_
 
 def _mint_entity_proposal(service, *, submission_id: int, entity_id: str, name: str,
                           entity_type: str, aliases: list[str], role: str, notes: str,
-                          approved_by: str, requeue: bool) -> dict:
+                          approved_by: str, source: str, requeue: bool) -> dict:
     """This door's half of `mint_and_record_approval`: the shared sequence with THIS package's
     translation wrapped around it, under the rule this whole module holds — an `entities`
     exception type is translated where this package meets it, never allowed to leave
@@ -515,16 +575,17 @@ def _mint_entity_proposal(service, *, submission_id: int, entity_id: str, name: 
         return mint_and_record_approval(
             service.conn, repo_url=service.settings.librarian_repo_url,
             submission_id=submission_id, entity_id=entity_id, name=name, entity_type=entity_type,
-            aliases=aliases, role=role, actor=approved_by, notes=notes, requeue=requeue)
+            aliases=aliases, role=role, actor=approved_by, source=source, notes=notes,
+            requeue=requeue)
     except EntityCapabilityUnavailableError as ex:
         raise CapabilityUnavailableError(str(ex)) from ex
     except EntityError as ex:
         raise ReviewError(str(ex)) from ex
 
 
-def review_decide(service, *, item_kind: str, item_id: str, verdict: str, notes: str = "",
-                  name: str = "", entity_id: str = "", entity_type: str = "", aliases=None,
-                  role: str = "", requeue: bool = False) -> dict:
+def review_decide(service, *, item_kind: str, item_id: str, verdict: str, source: str,
+                  notes: str = "", name: str = "", entity_id: str = "", entity_type: str = "",
+                  aliases=None, role: str = "", requeue: bool = False) -> dict:
     """Record a verdict, attributed to the caller's RESOLVED identity — never an argument.
 
     `reject` and every `parked-capture` verdict are Postgres only. Approving an `entity-proposal`
@@ -534,6 +595,11 @@ def review_decide(service, *, item_kind: str, item_id: str, verdict: str, notes:
 
     `entity-proposal` requires a STEWARD and refuses self-approval; `parked-capture` accepts the
     row's own submitter OR a steward. "Not authorized" and "does not exist" are the SAME sentence.
+
+    `source` names the DOOR, not the caller — the caller is `service.identity`. It is required and
+    undefaulted all the way down: this function serves two transports (an MCP client and a Slack
+    card), and a default would silently attribute one of them to the other on the day a third
+    arrives.
     """
     identity = service.identity
     if not identity:
@@ -544,21 +610,22 @@ def review_decide(service, *, item_kind: str, item_id: str, verdict: str, notes:
     clean_notes = dispositions.clean(notes)
 
     if item_kind == KIND_PARKED_CAPTURE:
-        return _decide_parked_capture(service, item_id, verdict, clean_notes, identity)
-    return _decide_entity_proposal(service, item_id, verdict, clean_notes, identity, name=name,
-                                   entity_id=entity_id, entity_type=entity_type, aliases=aliases,
-                                   role=role, requeue=requeue)
+        return _decide_parked_capture(service, item_id, verdict, clean_notes, identity,
+                                      source=source)
+    return _decide_entity_proposal(service, item_id, verdict, clean_notes, identity, source=source,
+                                   name=name, entity_id=entity_id, entity_type=entity_type,
+                                   aliases=aliases, role=role, requeue=requeue)
 
 
-def review_decide_safe(service, *, item_kind: str, item_id: str, verdict: str, notes: str = "",
-                       name: str = "", entity_id: str = "", entity_type: str = "",
+def review_decide_safe(service, *, item_kind: str, item_id: str, verdict: str, source: str,
+                       notes: str = "", name: str = "", entity_id: str = "", entity_type: str = "",
                        aliases=None, role: str = "", requeue: bool = False) -> dict:
     """`BrainService.review_decide` with a CLEAN refusal returned as `{"error": str}` rather than
     raised — for `stigmergy.slack`, barred from importing the exception types. An UNANTICIPATED
     exception still propagates, and its `str(ex)` must never be shown."""
     try:
-        return service.review_decide(item_kind, item_id, verdict, notes=notes, name=name,
-                                     entity_id=entity_id, entity_type=entity_type,
+        return service.review_decide(item_kind, item_id, verdict, source=source, notes=notes,
+                                     name=name, entity_id=entity_id, entity_type=entity_type,
                                      aliases=aliases, role=role, requeue=requeue)
     except (CaptureError, CapabilityUnavailableError) as ex:
         return {"error": str(ex)}

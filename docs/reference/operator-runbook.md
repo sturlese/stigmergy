@@ -577,6 +577,11 @@ roads approves it ([ADR 030](../decisions/030-server-side-entity-minting.md)):
 | Slack's doorbell card | the doorbell already DMed you | the deployed Slack app, nothing extra |
 | MCP's `review_decide` | an agent session is already open | a caller token with steward status |
 
+Whichever road you take, the ledger row records it (`review_decisions.extra->>'source'` is one of
+`cli`/`admin`/`slack`/`mcp`), a doorbell card already DMed for that item closes itself on the next
+poll pass, and anyone who reaches the item too late is told who got there first, on which road and
+when — instead of only that the row has moved on.
+
 `stigmergy-entities` needs no server at all — it commits from YOUR OWN clone with YOUR OWN git
 identity:
 

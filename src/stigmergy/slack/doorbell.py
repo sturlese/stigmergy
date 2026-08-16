@@ -3,11 +3,16 @@ steward's Slack DM. A second `asyncio` background task in the SAME `slack` proce
 never a fourth process group. It never claims, leases or mutates a queue row: every read goes
 through `stigmergy.server.review.items_for_doorbell`.
 
-Three properties, each load-bearing:
+Four properties, each load-bearing:
 
 - **One notification per (item, steward), re-sent only on a state change** — `_state_signature`
   compared and recorded via `store.last_notified_state`/`mark_notified`, in send-then-mark order:
   a post that fails leaves nothing recorded, so the next pass retries it.
+- **A decided item's card closes itself** — `close_decided_cards` runs at the end of every pass and
+  edits the DM in place, dropping its buttons, once `review_decisions` holds a verdict for the
+  item. A card is a live control surface; left alone it keeps offering actions that can now only
+  answer with a staleness refusal. Same send-then-mark order, and `closed:<verdict>` is what stops
+  the pass rewriting the same DM every interval.
 - **An undeliverable notification is recorded, never swallowed** — no steward resolving for the
   scope, or a resolved steward with no Slack identity here, writes a `job_runs` row
   (`review.record_undeliverable`) naming the event and the reason.
@@ -59,7 +64,9 @@ LOOKUP_FAILED = "failed"
 
 # The state-signature prefix an UNDELIVERABLE outcome is recorded under — no real item state
 # begins with this literal, so the two namespaces share one `steward_notifications` column safely.
-_UNDELIVERABLE_PREFIX = "undeliverable:"
+# Owned by `store`, with the column: `store.open_notifications` filters on the same two prefixes
+# in SQL, and a second spelling here would make that filter quietly wrong.
+_UNDELIVERABLE_PREFIX = store.UNDELIVERABLE_PREFIX
 
 # `review.KIND_*` -> the noun `job_runs` and the undeliverable copy name as "the {event}".
 _EVENT_NAMES = {
@@ -204,16 +211,71 @@ async def _notify_item(ctx, item: dict, stewards_map: dict) -> int:
         try:
             # `chat.postMessage` opens the DM implicitly when `channel` is a user id — Slack's
             # own documented convention, no `conversations.open` round trip.
-            await ctx.gateway.chat_post_message(slack_user_id, blocks=blocks, text=text)
+            posted = await ctx.gateway.chat_post_message(slack_user_id, blocks=blocks, text=text)
         except SlackApiError:
             log.error("steward doorbell: could not DM %s about %s", email, item_ref,
                      exc_info=True)
             continue   # not marked notified — the next pass retries, same as poller.poll_once
+        # Slack's own coordinates for the message just created — read from the RESPONSE, never
+        # assumed to be `slack_user_id`: a DM's channel id is not the user id it was opened with,
+        # and `close_decided_cards` edits by exactly these two values.
+        posted = posted or {}
         store.mark_notified(ctx.conn, item_kind=kind, item_id=item_id, steward_email=email,
-                            state=state)
+                            state=state, channel_id=str(posted.get("channel") or ""),
+                            message_ts=str(posted.get("ts") or ""))
         _record_delivered(ctx, kind=kind, item_id=item_id, steward_email=email, event=event)
         sent += 1
     return sent
+
+
+async def close_decided_cards(ctx) -> int:
+    """Edit every doorbell card whose item has since been decided into a closed one, and return
+    how many were closed.
+
+    A doorbell DM is a live control surface, and it outlived the decision: Approve/Reject stayed
+    clickable in a steward's inbox forever, so an item decided on another door left its own inbox
+    advertising actions that could only come back as a staleness refusal.
+
+    The trigger is the LEDGER, not the queue state. A `requeue` verdict returns the row to the
+    queue rather than closing it — the item leaves this inbox while its card stays in the DM — so
+    "has this been decided" is a question only `review_decisions` answers for every verdict.
+
+    And the question is "decided SINCE this card", not "decided at all". The ledger is append-only,
+    so a requeued item carries its old verdict for good — while the item itself comes back, because
+    coming back is what requeue is FOR. Asking only whether a decision exists would close the fresh
+    card in the same pass that posted it, and the steward would never again get an actionable card
+    for a re-parked capture: the doorbell would look alive and be inert.
+
+    Same send-then-mark discipline `_notify_item` keeps: `mark_notified` runs only after the edit
+    lands, so a Slack outage retries on the next pass instead of leaving a live-buttoned card
+    recorded as closed. And `closed:<verdict>` is what makes the pass idempotent — without it this
+    would rewrite the steward's DM once per poll interval, forever.
+    """
+    latest = review.latest_decisions(ctx.conn)
+    closed = 0
+    for row in store.open_notifications(ctx.conn):
+        kind, item_id = row["item_kind"], row["item_id"]
+        decision = latest.get((kind, item_id))
+        # Strictly newer, and a tie leaves the buttons live: that is the direction that degrades
+        # into the old behaviour (a card nobody closes) rather than into a doorbell that eats its
+        # own fresh cards.
+        if decision is None or decision["created_at"] <= row["notified_at"]:
+            continue
+        blocks, text = render.render_doorbell_closed(
+            kind=kind, item_id=item_id, verdict=decision["verdict"], actor=decision["actor"],
+            source=decision["source"])
+        try:
+            await ctx.gateway.chat_update(row["channel_id"], row["message_ts"], blocks=blocks,
+                                          text=text)
+        except SlackApiError:
+            log.error("steward doorbell: could not close the card for %s:%s in %s", kind, item_id,
+                     row["channel_id"], exc_info=True)
+            continue
+        store.mark_notified(ctx.conn, item_kind=kind, item_id=item_id,
+                            steward_email=row["steward_email"],
+                            state=f"{store.CLOSED_PREFIX}{decision['verdict']}")
+        closed += 1
+    return closed
 
 
 def _remediation(repo: str, baked: str) -> str:
@@ -278,6 +340,12 @@ async def poll_once(ctx) -> int:
     sent = 0
     for item in review.items_for_doorbell(ctx.conn):
         sent += await _notify_item(ctx, item, stewards_map)
+    # AFTER the notify loop, in the same pass and on the same schedule — a decided item is one
+    # this loop has just stopped seeing, so closing its card is the natural end of the pass rather
+    # than a second background task. Its own count is deliberately NOT added to `sent`: this
+    # function's contract is DMs SENT, which `tests/slack/test_doorbell.py` reads throughout, and
+    # an edit is not a notification.
+    await close_decided_cards(ctx)
     return sent
 
 

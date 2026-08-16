@@ -515,6 +515,9 @@ def test_entity_mint_modal_submission_calls_review_decide_safe_with_the_collecte
     assert len(fake.calls) == 1
     call = fake.calls[0]
     assert call["identity"] == STEWARD          # the RE-RESOLVED caller, never private_metadata's
+    assert call["source"] == "slack", (
+        "the DOOR names itself, in `_decide_and_confirm` — it is not a modal field, not a value in "
+        "`private_metadata`, and not something any handler on this surface chooses")
     assert call["item_kind"] == "entity-proposal"
     assert call["item_id"] == str(item_id)
     assert call["verdict"] == "approve"
