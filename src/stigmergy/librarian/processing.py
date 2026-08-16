@@ -710,13 +710,12 @@ def _unresolved_names(parked: dict) -> list[str]:
     (`entities.birth._prepare` refuses a whitespace-only one, so a blank subject can only ever
     cost a steward a line of attention it can never resolve). Normalising here rather than per
     shape is the point: a padded name that rendered one way through `triage.name` and another
-    through `triage.names` would be exactly the singular/plural asymmetry issue #32 exists to
+    through `triage.names` would be exactly the singular/plural asymmetry the plural park exists to
     close. `[]` when nothing was declared — the caller decides what a nameless park is called.
 
-    The singular `name` is read for a SECOND reason now that `agent.parse_outcome` folds it into
-    `names` at the boundary: this function is also handed a raw park dict by callers that never
-    crossed that boundary, and a shape this reader stopped understanding would silently drop the
-    name rather than fail. Reading both costs one line; writing both is what was retired.
+    The singular `name` is still read here: callers can hand this a raw park dict that never
+    crossed `agent.parse_outcome`'s fold, and a shape this reader stopped understanding would
+    silently drop the name.
     """
     names = [name for name in (str(n).strip() for n in (parked.get("names") or [])) if name]
     single = str(parked.get("name") or "").strip()
@@ -728,7 +727,7 @@ def _triage(item: dict, deps: Deps, outcome) -> Result:
     `unresolved-entity` outcome on a capture that still has its question asks it; every other park
     goes to the steward. Injection findings go into the REPORT as well as onto the `Result`.
 
-    A capture naming MORE THAN ONE unresolved entity (`triage.names`, issue #32) parks with every
+    A capture naming MORE THAN ONE unresolved entity (`triage.names`) parks with every
     name it declared, so a second name has somewhere to go instead of being dropped or garbled into
     the first. One name is that same shape with one entry — there is no singular road.
     """
@@ -946,12 +945,6 @@ def _anchor_veto_names(findings) -> list[str]:
     `Finding.values` carries them all; `locator` is a DISPLAY string (the first value, clamped) and
     is the fallback for a veto carrying no `values`, which is what keeps an older-shaped veto
     behaving exactly as it did.
-
-    It exists because the two roads answered this question differently and nothing made them meet.
-    `_refuse_meeting` collected every value; `_refuse` passed `[unanchorable.locator]`, so an
-    ordinary capture vetoed on three unresolved entities parked naming one — a steward registered
-    it, the capture came back, and was refused again on the second. "One ask, every name" is what
-    the plural park was built for, and it did not hold on the refusal road.
     """
     names = []
     for finding in findings:

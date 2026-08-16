@@ -82,16 +82,10 @@ def _private_key(env: dict) -> str:
         with open(path, encoding="utf-8") as f:
             return f.read()
     except OSError as ex:
-        # The path is where the App's PRIVATE KEY lives, and it is not in this message: it was,
-        # on the reasoning that `worker.process_next` never interpolates a mid-run
-        # `LibrarianConfigError` into the wire report — true of that handler, and false of the
-        # whole system. `entities.remote` catches this same exception on the server-side mint
-        # path, and `server.review` echoes what it raises to a steward verbatim, so the path
-        # reached the wire through a door this module had never looked at.
-        #
-        # MOVED, not lost: logged at ERROR with the traceback, where an operator reading the
-        # server log can see it and a steward cannot. `${PRIVATE_KEY_FILE_ENV}` is named instead,
-        # which is what an operator actually needs to fix it and carries no filesystem layout.
+        # The path is where the App's PRIVATE KEY lives and stays out of the MESSAGE:
+        # `entities.remote` catches this exception on the server-side mint path and `server.review`
+        # echoes it to a steward verbatim, so the path goes to the operator's log at ERROR and the
+        # message names ${PRIVATE_KEY_FILE_ENV} instead.
         log.error("cannot read the librarian App private key file at %r", path, exc_info=True)
         raise LibrarianConfigError(
             f"cannot read the librarian App private key file named by ${PRIVATE_KEY_FILE_ENV} "

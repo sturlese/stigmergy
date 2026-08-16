@@ -724,28 +724,45 @@ def gate_anchoring(ctx: GateContext) -> list[Finding]:
 
     if ctx.page_declared:
         return _per_page_anchoring(ctx, new_pages)
+    return _anchoring_outcome_findings(ctx, getattr(ctx.outcome, "anchoring", None) or {})
 
-    anchoring = getattr(ctx.outcome, "anchoring", None) or {}
+
+def _anchoring_outcome_findings(ctx: GateContext, anchoring: dict, *,
+                                path: str = "") -> list[Finding]:
+    """The check over ONE declared anchoring outcome, wherever it was declared — the whole rule,
+    in one place, so the per-page road and the per-capture road cannot start answering differently.
+
+    A `path` names the page whose declaration this is: it prefixes the message and becomes the
+    `locator` for the two findings that have nothing else to point at. The unresolved finding
+    locates the NAME on both roads, because that is the name a parked report tells a steward to
+    register; its `values` carry every declared name VERBATIM, so `processing._unanchorable` can
+    match a companion dead link against any of them, not only the one picked for display.
+    """
+    prefix = f"{path}: " if path else ""
     kind = str(anchoring.get("kind", "")).lower()
     if kind == "company":
         if not str(anchoring.get("reason", "")).strip():
             return [Finding("anchoring", "no-reason",
-                            "declared company-wide scope with no written reason: a page that "
-                            "belongs to no entity must say why in a sentence")]
+                            f"{prefix}declared company-wide scope with no written reason: a page "
+                            f"that belongs to no entity must say why in a sentence",
+                            locator=path)]
         return []
     if kind != "entity":
+        # The per-page sentence says "every FILED page" where the per-capture one says "every
+        # page". Carried, not unified: no test pins either spelling, so collapsing them here would
+        # silently reword what a submitter reads on one of the two roads.
+        every = "filed page" if path else "page"
         return [Finding("anchoring", "undeclared",
-                        "filed a page without declaring an anchoring outcome: every page names "
-                        "the entity it belongs to, or declares company-wide scope with a reason")]
-
+                        f"{prefix}filed a page without declaring an anchoring outcome: every "
+                        f"{every} names the entity it belongs to, or declares company-wide scope "
+                        f"with a reason",
+                        locator=path)]
     declared = _declared_entities(anchoring)
     # `_ids` is unused, but one function must decide what "resolves" means for write and veto.
     _ids, unresolved = resolve_entity_ids(anchoring, ctx.registry)
     if unresolved or not declared:
-        # `values` carries every declared name VERBATIM, so `processing._unanchorable` can match a
-        # companion dead link against any of them, not only the one picked for display.
         return [Finding("anchoring", ANCHORING_UNRESOLVED,
-                        _unresolved_message(declared, unresolved),
+                        f"{prefix}{_unresolved_message(declared, unresolved)}",
                         locator=_unresolved_name(declared, unresolved),
                         brief=anchoring_brief(ctx, declared),
                         values=tuple(unresolved or declared))]
@@ -761,30 +778,8 @@ def _per_page_anchoring(ctx: GateContext, new_pages: list[str]) -> list[Finding]
         declared_for_page = ctx.page_declared.get(path) or {}
         if "anchoring" not in declared_for_page:
             continue
-        anchoring = declared_for_page.get("anchoring") or {}
-        kind = str(anchoring.get("kind", "")).lower()
-        if kind == "company":
-            if not str(anchoring.get("reason", "")).strip():
-                out.append(Finding("anchoring", "no-reason",
-                                   f"{path}: declared company-wide scope with no written reason: "
-                                   f"a page that belongs to no entity must say why in a sentence",
-                                   locator=path))
-            continue
-        if kind != "entity":
-            out.append(Finding("anchoring", "undeclared",
-                               f"{path}: filed a page without declaring an anchoring outcome: "
-                               f"every filed page names the entity it belongs to, or declares "
-                               f"company-wide scope with a reason",
-                               locator=path))
-            continue
-        declared = _declared_entities(anchoring)
-        _ids, unresolved = resolve_entity_ids(anchoring, ctx.registry)
-        if unresolved or not declared:
-            out.append(Finding("anchoring", ANCHORING_UNRESOLVED,
-                               f"{path}: {_unresolved_message(declared, unresolved)}",
-                               locator=_unresolved_name(declared, unresolved),
-                               brief=anchoring_brief(ctx, declared),
-                               values=tuple(unresolved or declared)))
+        out += _anchoring_outcome_findings(ctx, declared_for_page.get("anchoring") or {},
+                                           path=path)
     return out
 
 
