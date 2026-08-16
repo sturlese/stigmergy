@@ -83,6 +83,15 @@ capture's journey produces; it never decides what the material MEANS — that is
   dead someone else's worker must be, a fact this package cannot see.
 - **Never assume a `triage` row is generic** — only rows carrying `schema.SITUATION_KEY` are
   identity questions `stigmergy-entities` can act on.
+- **Never name the parked-name keys outside their three declared homes.**
+  `schema.SITUATION_NAMES_KEY` is what an `unresolved-entity` park writes — a list, whatever the
+  count — and `schema.SITUATION_NAME_KEY` is READ-ONLY legacy: nothing writes it, and rows already
+  in the queue that carry it are never migrated, which is why `entities.situations.subjects_of`
+  keeps its fallback permanently rather than as a transition to finish. Defined here, written by
+  `librarian.report.triage_entity`, read by `entities.situations`, and nowhere else —
+  `tests/test_architecture.py` enforces that with a named exception list and a pruning test.
+  They are a wire format in a JSONB column with no schema behind them, so a fourth module deciding
+  what they mean is caught by nothing else.
 - **Never echo captured material — or a reply — unfenced.** A new read surface attaches to
   `query_submissions`'s shaping, which carries the withheld rule, not to its own `SELECT`.
 

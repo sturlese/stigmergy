@@ -109,8 +109,11 @@ TRIAGE_UNRESOLVED_ENTITY = "unresolved-entity"
 TRIAGE_UNSUPPORTED_TYPE = "unsupported-type"
 TRIAGE_KINDS = (TRIAGE_UNRESOLVED_ENTITY, TRIAGE_UNSUPPORTED_TYPE)
 # PUBLIC: `pydantic_backend.FilingAccount`'s validator demands the same field of the same kind.
-# Two enforcement points, one table.
-TRIAGE_REQUIRED_FIELD = {TRIAGE_UNRESOLVED_ENTITY: "name",
+# Two enforcement points, one table. `unresolved-entity` names the PLURAL field: it is the only
+# one an account is written into, and a repair instruction naming a field the account has no slot
+# for sends a model round a loop it cannot leave. The singular `triage.name` is still ACCEPTED
+# inbound (see `parse_outcome`) — accepted and asked for are different things.
+TRIAGE_REQUIRED_FIELD = {TRIAGE_UNRESOLVED_ENTITY: "names",
                          TRIAGE_UNSUPPORTED_TYPE: "judged_type"}
 
 MAX_OUTCOME_BYTES = 256 * 1024      # generous for an account of one page; not a memory budget
@@ -348,15 +351,21 @@ def parse_outcome(raw) -> Outcome:
                                                  field_name="a finding category", shape=shape)})
 
     triage_raw = _mapping(raw.get("triage"), field_name="triage", shape=shape)
-    # `names` mirrors `parse_meeting_outcome`'s own plural field (issue #32): additive beside the
-    # singular `name`, so a capture naming more than one unresolved entity has somewhere to put
-    # the second one instead of the agent collapsing both into one garbled string.
+    # ONE shape downstream, BOTH shapes accepted here. `names` mirrors `parse_meeting_outcome`'s
+    # own plural field (issue #32) and is the only one an `Outcome` carries; a singular
+    # `triage.name` is still ACCEPTED and folded into a one-element list, because a model may send
+    # either — the knowledge repo's `librarian` skill offers both spellings, and this repo's own
+    # repair brief (`gates.anchoring_brief`'s PARK option) spells the singular. Inbound tolerance is
+    # not outbound duplication: nothing below this line has a singular slot to disagree with.
+    # The RAW list is held, not re-derived: `_list` records its own shape findings, so calling it a
+    # second time for the completeness check below would report one malformed list twice.
+    names_raw = _list(triage_raw.get("names"), field_name="triage.names", shape=shape)
+    single = _identifier(triage_raw.get("name"), field_name="triage.name", shape=shape)
+    names = [_identifier(n, field_name="triage.names[]", shape=shape) for n in names_raw]
     triage = {
         "kind": _identifier(triage_raw.get("kind"), field_name="triage.kind",
                             shape=shape).strip().lower(),
-        "name": _identifier(triage_raw.get("name"), field_name="triage.name", shape=shape),
-        "names": [_identifier(n, field_name="triage.names[]", shape=shape)
-                  for n in _list(triage_raw.get("names"), field_name="triage.names", shape=shape)],
+        "names": names if _any_declared(names) else ([single] if _declared(single) else names),
         "judged_type": _identifier(triage_raw.get("judged_type"), field_name="triage.judged_type",
                                    shape=shape),
     }
@@ -403,10 +412,15 @@ def parse_outcome(raw) -> Outcome:
                       f"{', '.join(TRIAGE_KINDS)})")
         else:
             required = TRIAGE_REQUIRED_FIELD[triage["kind"]]
-            # `triage.names` satisfies the `unresolved-entity` requirement exactly as
-            # `triage.name` does — a park naming two entities is not a park naming none.
-            declared = _declared(triage_raw.get(required)) or (
-                triage["kind"] == TRIAGE_UNRESOLVED_ENTITY and _any_declared(triage["names"]))
+            # Asked of the RAW values in BOTH spellings — the rule `_declared` documents, applied to
+            # the plural road too. A name that failed its own bound comes back `""`, and asking the
+            # COERCED list would earn that park a second, FALSE "never declared" finding on top of
+            # the bound one: two findings in one corrective brief, contradicting each other, for the
+            # single retry `OUTPUT_RETRIES` allows. A park naming two entities is not a park naming
+            # none, and neither is a park naming one the older way.
+            declared = ((_declared(triage_raw.get("name")) or _any_declared(names_raw))
+                        if triage["kind"] == TRIAGE_UNRESOLVED_ENTITY
+                        else _declared(triage_raw.get(required)))
             if not declared:
                 shape.add("missing-field",
                           f"parks the capture as {triage['kind']!r} with no `triage.{required}`, "

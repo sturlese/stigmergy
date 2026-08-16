@@ -71,15 +71,23 @@ SITUATIONS = (SITUATION_UNRESOLVED_ENTITY, SITUATION_UNSUPPORTED_TYPE)
 SITUATION_KEY = "situation"
 
 # The two facts a steward needs beside the sentence — reading them out of prose is parsing.
-SITUATION_NAME_KEY = "entity_name"      # `unresolved-entity`: the name nothing registers
+# `SITUATION_NAME_KEY` is READ-ONLY LEGACY INPUT: nothing writes it any more (a park writes
+# `SITUATION_NAMES_KEY`, a list, whatever the count), and it is NOT deleted because rows carrying
+# it are never migrated — a queue row written before the collapse still has to read correctly, so
+# `entities.situations.subjects_of` keeps its fallback permanently. Its ask-side twin,
+# `unresolved_name` in `librarian.report`, was retired the same way and for the same reason.
+SITUATION_NAME_KEY = "entity_name"      # LEGACY, read only: the one name a pre-collapse park wrote
 SITUATION_TYPE_KEY = "judged_type"      # `unsupported-type`: the type the fast lane will not file
 
-# Additive beside the singular `SITUATION_NAME_KEY`: written only when a park carries more than one
-# unresolved name, authoritative when present, and iterated independently per name.
+# THE key an `unresolved-entity` park writes — a JSON list, one entry or many, authoritative
+# whenever present, iterated independently per name (a steward approves one without the others).
 SITUATION_NAMES_KEY = "entity_names"
 
-# The one word for "nothing was named at all". Shared so `entities.cli._suggestable` refuses it BY
-# VALUE — it is syntactically an ordinary name, and offering it would mint a garbage entity.
+# The one word for "nothing was named at all" — written by `librarian.report`'s park builders and
+# refused BY VALUE by both mint surfaces (`entities.cli._suggestable`, the ready-to-run command;
+# `entities.situations.mint_name_prefill`, the form default). It is syntactically an ordinary name,
+# so offering it would mint a garbage entity that then resolves for every capture saying it. All
+# three sides read THIS constant: a local copy of the words unrefuses it at whichever end holds it.
 UNNAMED_ENTITY_PLACEHOLDER = "something unnamed"
 
 # The refusals whose point is that a value must not travel. Suppressed, not redacted: gitleaks

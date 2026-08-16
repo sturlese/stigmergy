@@ -190,10 +190,13 @@ class _RecordingReviewDecide:
 
 
 def _park_capture(conn, evidence, *, submitted_by=ALICE, situation=None, names=None) -> int:
-    """`names` writes the PLURAL `SITUATION_NAMES_KEY` and NOTHING else — the exact row shape
-    `report.triage_entity_multi` produces for a capture naming more than one unresolved entity
-    (issue #32); it never writes the singular key beside it, so neither does this. Omitted, the
-    row is the single-name one every existing caller here already relied on."""
+    """`names` writes `SITUATION_NAMES_KEY` and NOTHING else — the row shape `report.triage_entity`
+    produces today for any number of unresolved names; it never writes the singular key beside it,
+    so neither does this.
+
+    Omitted, the row is the LEGACY single-name one, kept on purpose: nothing writes that key any
+    more, rows carrying it are never migrated, and these callers are where the doorbell's ability
+    to still read one is exercised."""
     key = evidence.put(b"material")
     report = {"summary": "parked", "status": capture_schema.TRIAGE}
     if situation:

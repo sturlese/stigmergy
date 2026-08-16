@@ -46,6 +46,7 @@ Not style — these are enforced, and the enforcement is where to look when one 
 | The frozen contract linter and the frozen meeting brief match the knowledge repo's own | `tests/librarian/test_frozen_linter.py`, `test_meeting_brief_contract.py` |
 | The diff the eight gates approved is the diff that lands | `gitcmd.commit(gated_entries=…)` + `tests/librarian/test_gitcmd_unit.py` |
 | `server.acl.visible()` is the ONE place read access is decided, and the only implementation of it | `server/acl.py`, `tests/test_contract_parity.py` |
+| A parked capture's unresolved names have one writer and one reader — every other module reaches them through `entities.situations` | `tests/test_architecture.py`, with its own exception list and pruning test |
 | The README's countable claims match the code | `tests/test_readme_claims.py` |
 | `docs/reference/` names no command, variable or count the code does not have, and `docs/README.md` lists every document that exists | `tests/test_docs_claims.py` — ADRs are exempt by design: they record a decision, not the present |
 

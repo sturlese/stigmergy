@@ -672,10 +672,10 @@ def test_a_repairable_zone_finding_beside_a_category_still_reaches_the_submitter
     assert result.report[schema.REASON_CODE_KEY] == schema.REASON_STEERING
 
 
-# ── the flow flag on the THIRD call site of the plural park builder ────────────────────────────
-# `report.triage_entity_multi(meeting=...)` is called from three places: `_ask_or_park_multi` (both
-# flows, via its own `meeting` parameter — pinned in `test_ordinary_multi_entity_park_unit.py`) and
-# here, from `_refuse_meeting`'s anchoring branch, which is meeting-only and passes `meeting=True`
+# ── the flow flag on the SECOND call site of the park builder ─────────────────────────────────
+# `report.triage_entity(meeting=...)` is called from two places: `_ask_or_park` (both flows, via
+# its own `meeting` parameter — pinned in `test_ordinary_multi_entity_park_unit.py`) and here, from
+# `_refuse_meeting`'s anchoring branch, which is meeting-only and passes `meeting=True`
 # literally. That literal is the kind of argument a refactor drops without any other test noticing:
 # every assertion this file already makes is about which STATE a veto earns, and none reads the
 # sentence a submitter is handed.
@@ -692,13 +692,55 @@ def test_a_meeting_refused_on_two_unresolved_anchors_parks_it_as_a_MEETING():
     assert result.report[schema.SITUATION_NAMES_KEY] == ["Jack", "Acme Capital"]
 
 
-def test_a_meeting_refused_on_ONE_unresolved_anchor_still_uses_the_singular_report():
-    """The branch's own `len(names) > 1` twin: one name goes through `report.triage_entity`, which
-    has no `meeting` flag at all and never had one. Asserted so the plural flag's arrival cannot be
-    read as a change to the single-name park, which is the common shape."""
+def test_a_meeting_refused_on_ONE_unresolved_anchor_writes_the_same_one_shape():
+    """INVERTED by the plural collapse. This used to assert that one name went through a SINGULAR
+    builder writing `SITUATION_NAME_KEY` with no plural key — the branch had a `len(names) > 1`
+    fork. There is no fork: one builder, one written key, a list of one. The singular key is
+    retired as an output, so its ABSENCE is half of what is asserted here.
+
+    Kept as its own case rather than folded into the two-name one above: the single-name park is
+    the common shape, and the count still chooses the SENTENCE, which is what the last assertion
+    reads."""
     result = processing._refuse_meeting(MEETING_ITEM, [_anchor_veto("Jack")], OUTCOME,
                                         agent_attempts=2)
 
     assert result.status == schema.TRIAGE
-    assert result.report[schema.SITUATION_NAME_KEY] == "Jack"
-    assert schema.SITUATION_NAMES_KEY not in result.report
+    assert result.report[schema.SITUATION_NAMES_KEY] == ["Jack"]
+    assert schema.SITUATION_NAME_KEY not in result.report
+    assert 'seems to be about "Jack"' in result.report["summary"]
+
+
+# ── the THIRD park road: `_refuse`'s own unanchorable branch, ordinary flow ────────────────────
+# `_refuse` parks an unanchorable ordinary capture through the same builder, and after the collapse
+# it does so with a LIST (`names=[unanchorable.locator]`). Nothing pinned its written shape before:
+# `test_case_1_unresolved_alone_parks_with_the_steward` reads the SUMMARY only, so this road could
+# have kept writing the retired singular key — or stopped writing a name key at all — with every
+# test in this file green.
+def test_an_unanchorable_ordinary_capture_parks_through_the_one_written_shape():
+    result = processing._refuse(ITEM, [_anchor_veto("Acme Ventures Inc")], OUTCOME,
+                                agent_attempts=2)
+
+    assert result.status == schema.TRIAGE
+    assert result.report[schema.SITUATION_NAMES_KEY] == ["Acme Ventures Inc"]
+    assert schema.SITUATION_NAME_KEY not in result.report
+    # ORDINARY, so the noun is the ordinary one — `_refuse` passes no `meeting` flag and the
+    # one-name sentence has no slot for one anyway.
+    assert "meeting" not in result.report["summary"]
+
+
+def test_characterization_an_ordinary_refusal_parks_on_the_ANCHOR_VETOS_FIRST_NAME_ONLY():
+    """CHARACTERIZATION, and a gap named rather than hidden. `_anchor_veto` carries every
+    unresolved name in `values`; `_refuse_meeting` collects them all, but `_refuse` still parks on
+    `unanchorable.locator` — the FIRST one. That predates the plural collapse (the old singular
+    builder could hold nothing else) and the collapse did not close it: the builder now takes a
+    list and this call site still hands it one element.
+
+    Recorded here so the asymmetry between the two refusal roads is a decision somebody takes,
+    not something a reader discovers from a steward's queue. If the intended behaviour is that an
+    ordinary refusal names every unresolved anchor the way the meeting one does, this assertion is
+    the line that changes — and it is a `src/` change, not a test one."""
+    result = processing._refuse(ITEM, [_anchor_veto("Jack", "Acme Capital")], OUTCOME,
+                                agent_attempts=2)
+
+    assert result.report[schema.SITUATION_NAMES_KEY] == ["Jack"]
+    assert "Acme Capital" not in result.report["summary"]

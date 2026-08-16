@@ -67,15 +67,27 @@ repo parser — nothing here touches `pages_index`); `stigmergy.index.store` is 
   bounds by default.
 - **Wording for humans lives in `report.py` only**; a read path branches on `reason_code`
   (`capture.schema.REJECTION_REASONS`), never on prose and never on `stage`, which is
-  `failed_system`'s alone. A capture naming several unresolved entities gets ONE pair of builders
-  for both flows (`needs_input_multi` / `triage_entity_multi`); what an ordinary capture and a
-  meeting differ in is their `meeting` flag — the noun the submitter's own material is called and
-  what is at stake — never a second builder telling one of them about the other's flow.
+  `failed_system`'s alone. An unresolved-entity park gets ONE pair of builders (`needs_input` /
+  `triage_entity`) for both flows and any number of names; what an ordinary capture and a meeting
+  differ in is their `meeting` flag — the noun the submitter's own material is called and what is at
+  stake — never a second builder telling one of them about the other's flow.
+- **A park writes ONE name shape: the plural, a list even for one name** — `unresolved_names` on
+  the ask side, `capture.schema.SITUATION_NAMES_KEY` on the parked row. The count chooses the
+  SENTENCE (one name reads as one name, never "1 things"), never the keys. The singular keys are
+  read-only LEGACY, not a deprecation waiting to be finished: nothing writes them, rows already
+  carrying them are never migrated, and `entities.situations.subjects_of` reads them permanently.
+  `report.py` is the DECLARED ONE WRITER, and that is enforced, not just described:
+  `tests/test_architecture.py` requires every module naming either constant AS CODE to be the
+  definition (`capture/schema.py`), the writer (here) or the reader (`entities/situations.py`) —
+  anything else is a listed exception carrying its reason, with the pruning test every allowlist
+  in that file has. Prose about the keys is free; a second writer is a reviewed decision there.
 - **An unresolved-entity park's names are normalised ONCE, in `processing._unresolved_names`** —
-  the account carries them as `triage.name` or `triage.names`, both flows read them through that
-  one function, and `_triage` routes more than one name into `_ask_or_park_multi`, the plural
-  machinery `_triage_meeting` uses. A second reader that strips differently makes one name mint two
-  registry entities that never match each other.
+  the account may spell them `triage.name` or `triage.names` (`agent.parse_outcome` folds the
+  singular into a one-element list at the boundary; accepting both inbound is not writing both
+  outbound), and both flows reach `_ask_or_park`, the ONE park router. A second reader that strips
+  differently makes one name mint two registry entities that never match each other. The
+  completeness check reads the RAW values of both spellings, so a name that failed its own bound
+  earns that finding alone — never a second, contradicting "never declared" one in the same brief.
 - **Do not put a filesystem path — or any `str(exception)` — on the wire for a mid-run fault**:
   `worker.process_next`'s config branch logs the real exception and returns a fixed sentence
   naming only the stage.

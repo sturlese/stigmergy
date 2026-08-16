@@ -873,7 +873,7 @@ def _self_parked() -> FilingAccount:
     and a new flow can reach the wrong one.
     """
     return _account(decision="triage",
-                    triage=OrdinaryTriage(kind="unresolved-entity", name=UNREGISTERED))
+                    triage=OrdinaryTriage(kind="unresolved-entity", names=[UNREGISTERED]))
 
 
 def _unanchorable_account() -> FilingAccount:

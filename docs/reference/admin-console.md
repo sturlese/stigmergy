@@ -102,7 +102,8 @@ gateway's own sentence (status code, never the token, never an echoed body) show
   real Approve form: name (prefilled from `mint_name_prefill`, the value
   `entities.situations.mint_name_prefill` decides on the parked row and BOTH entity routes send
   beside `subject` and `subjects` — the single unresolved name, or `""` when several or none are
-  unresolved; with an empty prefill and names left to place the field stays empty and those names
+  unresolved, or when the one name is the librarian's placeholder for a park that named nothing;
+  with an empty prefill and names left to place the field stays empty and those names
   are listed above it, because one submission mints one entity and the joined display string is
   none of their names — the same decided value the Slack mint modal reads, which makes the two
   doors offer a default in the same cases and name the same name; the console additionally strips

@@ -192,6 +192,53 @@ def test_characterization_subjects_of_is_empty_for_every_row_that_is_not_an_unre
     assert situations.classify(legacy) == schema.SITUATION_UNRESOLVED_ENTITY
 
 
+# ── the LEGACY ROW, written literally, never round-tripped ───────────────────────────────────────
+# A park writes one shape now — `entity_names`, a list, whatever the count — and nothing anywhere
+# writes `entity_name` any more. The read side keeps understanding it FOREVER, because rows parked
+# before that change are never migrated: a reader that dropped the fallback would blank a live
+# steward's queue on the day it shipped, and no test that goes through a builder could catch it,
+# because no builder can produce the shape any more.
+#
+# So this fixture is a LITERAL: raw strings, no `schema.*` constants, no builder. Two properties
+# fall out of that choice and neither is available any other way —
+#
+#   * it keeps testing the legacy shape after nothing writes it, where a round-trip version would
+#     quietly start testing whatever the current builder emits while still carrying the old name;
+#   * it pins the WIRE VALUES a live row actually carries. A rename of `SITUATION_NAME_KEY`'s
+#     VALUE would leave every constant-based test in this file green and every pre-collapse row
+#     unreadable; this one goes red, which is the correct answer.
+#
+# All three readers a steward's surfaces go through are asserted, because they are three different
+# functions and only `subjects_of` has the fallback written in it: `subject_of` and
+# `mint_name_prefill` inherit it, and an edit that gave either one its own name lookup would be
+# invisible here otherwise.
+LEGACY_ROW = {"status": "triage",
+              "report": {"situation": "unresolved-entity", "entity_name": "Jack"}}
+
+
+def test_a_row_written_before_the_plural_collapse_still_reads_correctly():
+    assert situations.subjects_of(LEGACY_ROW) == ["Jack"]
+    assert situations.subject_of(LEGACY_ROW) == "Jack"
+    assert situations.mint_name_prefill(LEGACY_ROW) == "Jack"
+
+
+def test_a_legacy_row_is_a_one_name_park_everywhere_the_count_is_read():
+    """The same row through `_situation_view`, which is what both mint doors and the admin console
+    are actually handed. A legacy row must be indistinguishable from a modern one-name park at that
+    layer — otherwise the one-vs-several rule takes a different branch for a row whose only sin is
+    its age, and a steward is offered a blank `Name` field for a park that names exactly one
+    thing."""
+    view = situations._situation_view(LEGACY_ROW)
+    modern = situations._situation_view(
+        {"status": "triage",
+         "report": {"situation": "unresolved-entity", "entity_names": ["Jack"]}})
+
+    assert view["situation"] == modern["situation"] == "unresolved-entity"
+    assert view["subject"] == modern["subject"] == "Jack"
+    assert view["subjects"] == modern["subjects"] == ["Jack"]
+    assert view["mint_name_prefill"] == modern["mint_name_prefill"] == "Jack"
+
+
 # ── the invariant the CLI's printed `--name` rests on ────────────────────────────────────────────
 def test_when_subjects_of_is_empty_subject_of_is_the_raw_singular_name_and_never_a_join():
     """`entities.cli._cmd_show` prints its next commands from `row.get("subjects") or [subject]`,
@@ -364,6 +411,137 @@ def test_current_behaviour_an_all_blank_plural_list_prefills_nothing_though_the_
 
     assert situations.mint_name_prefill(row) == ""
     assert situations.subject_of(row) == "Jack"
+
+
+# ── the placeholder refusal: the ONE value that is a name syntactically and nobody's name ────────
+# `schema.UNNAMED_ENTITY_PLACEHOLDER` is what `librarian.report`'s park builders write when a
+# capture parked with nothing left to name. It is a perfectly ordinary-looking string, so a mint
+# door that treated it as an ordinary name would offer it as the DEFAULT of a form whose submit
+# button signs a commit — and a steward who accepts the default mints an entity called "something
+# unnamed" that thereafter RESOLVES for every future capture containing that phrase. Self-
+# propagating, and a registry entry is not undone by deleting a row.
+#
+# Refused by VALUE at both mint surfaces, against the one shared constant. The sensitivity cases
+# come first; the specificity twins are below them, because this gate can bounce a real name.
+def test_the_no_name_placeholder_is_never_offered_as_a_prefill():
+    """The gate. A one-name park is exactly the shape that DOES prefill — this one is refused not
+    for its shape but for its value, which is the only thing that distinguishes it."""
+    row = _row(report={schema.SITUATION_KEY: schema.SITUATION_UNRESOLVED_ENTITY,
+                       schema.SITUATION_NAMES_KEY: [schema.UNNAMED_ENTITY_PLACEHOLDER]})
+
+    assert situations.subjects_of(row) == [schema.UNNAMED_ENTITY_PLACEHOLDER], (
+        "sanity: the row really is a one-name park — the refusal is about the VALUE, and a row "
+        "that had already lost its name would prove nothing")
+    assert situations.mint_name_prefill(row) == ""
+
+
+def test_the_placeholder_cannot_be_smuggled_past_the_refusal_with_padding():
+    """The plural key's entries are returned UNSTRIPPED (pinned above), so `"  something unnamed  "`
+    is what a prefill would otherwise carry — a different string from the constant, and a byte
+    comparison against the constant alone would let it through into the form. The check strips
+    before it compares. Note the padded value is still what a REAL name would be prefilled with
+    (also pinned above): the strip is the comparison's, not the answer's."""
+    row = _row(report={schema.SITUATION_KEY: schema.SITUATION_UNRESOLVED_ENTITY,
+                       schema.SITUATION_NAMES_KEY: [f"  {schema.UNNAMED_ENTITY_PLACEHOLDER}  "]})
+
+    assert situations.mint_name_prefill(row) == ""
+
+
+def test_a_legacy_row_carrying_the_placeholder_is_refused_the_same_way():
+    """The singular key reaches the same decision through `subjects_of`'s permanent fallback, so a
+    row parked before the plural collapse cannot be the one door that still offers it."""
+    row = _row(report={schema.SITUATION_KEY: schema.SITUATION_UNRESOLVED_ENTITY,
+                       schema.SITUATION_NAME_KEY: schema.UNNAMED_ENTITY_PLACEHOLDER})
+
+    assert situations.subjects_of(row) == [schema.UNNAMED_ENTITY_PLACEHOLDER]
+    assert situations.mint_name_prefill(row) == ""
+
+
+def test_the_two_mint_surfaces_refuse_the_placeholder_against_the_SAME_constant():
+    """The rule is "refused by value at every mint door", and there are two doors: this one (the
+    form default) and `entities.cli._suggestable` (the ready-to-run command). Asserted together,
+    because a rule enforced at one door and not the other is the shape this consolidation exists to
+    end — and both must be reading the shared constant, never a local copy of the words, or
+    renaming the librarian's fallback silently unrefuses it at whichever end still holds the old
+    spelling."""
+    from stigmergy.entities import cli
+
+    row = _row(report={schema.SITUATION_KEY: schema.SITUATION_UNRESOLVED_ENTITY,
+                       schema.SITUATION_NAMES_KEY: [schema.UNNAMED_ENTITY_PLACEHOLDER]})
+
+    assert situations.mint_name_prefill(row) == ""
+    assert cli._suggestable(schema.UNNAMED_ENTITY_PLACEHOLDER) is False
+    # the benign direction of the same pair, so this is not two absence checks agreeing
+    assert cli._suggestable("Globex Robotics") is True
+
+
+# ── the specificity twins: the gate must not bounce a real name ─────────────────────────────────
+def test_a_real_name_that_merely_contains_the_placeholder_words_still_prefills():
+    """The refusal is an EQUALITY, not a substring or a prefix test. "Something Unnamed Records" is
+    a name a person could really register, and a containment check would blank the field for it —
+    a defense that bounces real work, which is the failure mode a gate with no benign twin ships
+    with. Case is part of the value too: the librarian writes exactly one spelling."""
+    for real_name in ("Something Unnamed Records", "Unnamed", "Something Unnamed",
+                      "SOMETHING UNNAMED"):
+        row = _row(report={schema.SITUATION_KEY: schema.SITUATION_UNRESOLVED_ENTITY,
+                           schema.SITUATION_NAMES_KEY: [real_name]})
+
+        assert situations.mint_name_prefill(row) == real_name, real_name
+
+
+def test_the_placeholder_is_still_listed_as_the_rows_subject_even_though_it_cannot_prefill():
+    """What is refused is the DEFAULT, never the display. A park whose only name is the placeholder
+    still has to say so on the console and in the queue listing — "this capture named nothing" is
+    the fact a steward needs in order to act, and blanking the row as well would hide it."""
+    row = _row(report={schema.SITUATION_KEY: schema.SITUATION_UNRESOLVED_ENTITY,
+                       schema.SITUATION_NAMES_KEY: [schema.UNNAMED_ENTITY_PLACEHOLDER]})
+    view = situations._situation_view(row)
+
+    assert view["subject"] == schema.UNNAMED_ENTITY_PLACEHOLDER
+    assert view["subjects"] == [schema.UNNAMED_ENTITY_PLACEHOLDER]
+    assert view["mint_name_prefill"] == ""
+
+
+# ── the route the plural collapse created, round-tripped through the real builder ────────────────
+# The one place a round trip is the claim rather than a shortcut (contrast the LEGACY_ROW fixture
+# above, which is a literal precisely so it cannot follow the builder). The collapse gave the
+# placeholder a SECOND way onto a row: a park whose only declared name is stripped away by
+# `report._clean_identity` (`"###"` — shell metacharacters, nothing left) now falls back to the
+# placeholder where the retired singular builder wrote `entity_name: ""`.
+#
+# So the writer's new fallback and the reader's new refusal have to be tested TOGETHER: separately,
+# each is green while a mint form offers `something unnamed` as its default for a real parked row.
+def test_a_park_whose_only_name_was_stripped_away_reaches_the_reader_as_a_refused_prefill():
+    """OLD BEHAVIOUR: the singular builder wrote `entity_name: ""` for this capture, so
+    `subjects_of` answered `[]`, `subject_of` answered `""` and `mint_name_prefill` answered `""` —
+    a blank subject on a real parked row, and the prefill was empty by ACCIDENT (there was no name)
+    rather than by refusal. The row now says what happened, and the prefill is still empty — this
+    time because the value is refused.
+
+    The distinction is the whole point: the same `""` from a different cause, and the cause is what
+    a future change can break."""
+    from stigmergy.librarian import report as report_module
+
+    row = _row(report=report_module.triage_entity(names=["###"]))
+
+    assert situations.classify(row) == schema.SITUATION_UNRESOLVED_ENTITY
+    assert situations.subjects_of(row) == [schema.UNNAMED_ENTITY_PLACEHOLDER], (
+        "the writer's fallback: the row names the placeholder rather than going blank")
+    assert situations.mint_name_prefill(row) == "", (
+        "the reader's refusal: what the writer put there is exactly what no mint door may default "
+        "to — a steward clicking Create unchanged would sign 'something unnamed' into the registry")
+
+
+def test_the_same_park_with_a_surviving_name_still_prefills_it_end_to_end():
+    """The benign twin of the round trip: an ordinary one-name park, built by the SAME builder,
+    still prefills. Without this, the test above passes for a `mint_name_prefill` that has stopped
+    prefilling anything at all."""
+    from stigmergy.librarian import report as report_module
+
+    row = _row(report=report_module.triage_entity(names=["Globex Robotics"]))
+
+    assert situations.subjects_of(row) == ["Globex Robotics"]
+    assert situations.mint_name_prefill(row) == "Globex Robotics"
 
 
 # ── require_situation: the write guard (three distinct refusals) ─────────────────────────────────

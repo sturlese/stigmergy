@@ -54,6 +54,7 @@ line. A layering that lives only in a README is decoration; these are tests:
 | the librarian never imports the server | one direction only; every cross-package reach is a named, exercised exception |
 | every reader of `pages_index` names an ACL predicate, or is on a declared exception list | `acl.visible()` is the ONE place read access is decided |
 | the UNTRUSTED-DATA fence is built only in `stigmergy.text` | six separate copies once existed and one took the weak variant, so hostile content could close the fence early |
+| a parked capture's unresolved names have one definition, one writer and one reader | the keys are a JSONB wire format with no schema behind it, so nothing type-checks a module that writes the wrong one; two lanes each deciding for themselves is how a capture naming two entities lost one on its way to a human |
 | every declared exception must still be used | an exception list nobody prunes becomes a permission slip |
 | the README's countable claims match the code | `tests/test_readme_claims.py` — four of them had already drifted |
 | the reference docs name no command, variable or count the code does not have | `tests/test_docs_claims.py` — 60k words nobody can afford to re-read, so the checkable part is checked. `docs/decisions/` is exempt: an ADR records a decision, not the present |

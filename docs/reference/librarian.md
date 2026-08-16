@@ -682,13 +682,18 @@ likely cause is that this thread or document was captured before.
 
 ## Ask-back: the one question a capture gets
 
-The agent's outcome schema declares `triage: {kind: "unresolved-entity", name: …}` when it cannot
-place a capture. The worker's parser and structured schema (`agent.parse_outcome`,
-`pydantic_backend.OrdinaryTriage`) **also accept** `triage.names`, a JSON list, for material naming
-more than one unresolved entity at once — the same field the meeting account has always carried.
-What tells the agent to use it is the `librarian` skill, which lives in the knowledge repo, not
-here. **Worker code routes that declaration**, and the routing is a contract rather than a
-judgment:
+The agent's outcome declares `triage: {kind: "unresolved-entity", names: […]}` when it cannot place
+a capture — a JSON list, the same field the meeting account has always carried, holding every name
+the material left unregistered. `agent.parse_outcome` **also accepts** a singular `triage.name` and
+folds it into a one-element list at the boundary, because a model may send either spelling: the
+knowledge repo's `librarian` skill — the agent's one briefing, and what tells it which field to
+use — offers both, and this repo's own repair brief (`gates.anchoring_brief`, the PARK option a
+failed anchor is offered) spells the singular. What is ASKED FOR is narrower than what is accepted:
+`pydantic_backend.OrdinaryTriage` declares only `names`, so a structured account has one spelling
+available. That schema gates nothing today — the ordinary run's account comes home as a file, not a
+structured output — so it constrains the ordinary park only if that road is ever enabled; the file
+channel's boundary parse is what every ordinary park actually passes through. **Worker code routes
+that declaration**, and the routing is a contract rather than a judgment:
 
 | The agent declared | Where it lands |
 |---|---|
@@ -697,28 +702,34 @@ judgment:
 | `unsupported-type` | `triage` |
 | nothing — a veto survived both passes (`_unanchorable`, `_uncreatable_type`) | `triage` |
 
-The question is **code-built**, never agent prose: `report.needs_input` names the unresolved name,
+The question is **code-built**, never agent prose: `report.needs_input` names every unresolved name,
 lists the registry's entities with their aliases (through `gates.registry_candidates`, the same
 reading `anchoring_brief` uses, so the human list and the agent list cannot disagree), states both
 outcomes and their consequence, and ends with the exact `brain_reply(...)` call. It shares no
 template with `anchoring_brief`, the agent-facing counterpart of the same situation.
 
-**More than one unresolved name, still one question.** `processing._triage` routes a plural
-`triage.names` declaration through `_ask_or_park_multi` — the SAME one-ask-per-capture budget, and
-the SAME plural machinery the meeting flow's `_triage_meeting` uses (see meeting-distiller.md's own
-["Ask-back: several names, one question"](./meeting-distiller.md#ask-back-several-names-one-question),
-which this ordinary flow now mirrors rather than being the sole non-meeting exception to). A single
-name — via either `triage.name` or a one-element `triage.names` — still lands in the **singular
-report shape**: `report.needs_input` / `schema.SITUATION_NAME_KEY`, and no plural key. Which
-internal helper routes it is not the contract: `_ask_or_park_multi` delegates to the same singular
-builders for one name.
+**More than one unresolved name, still one question.** `processing._triage` hands every declared
+name to `_ask_or_park` — ONE router, the same one `_triage_meeting` uses, spending the same
+one-ask-per-capture budget (see meeting-distiller.md's own
+["Ask-back: several names, one question"](./meeting-distiller.md#ask-back-several-names-one-question)).
 
-**A name is normalised once, for both shapes.** `processing._unresolved_names` strips surrounding
-whitespace (internal whitespace is part of a name) and drops a blank — `entities.birth._prepare`
-refuses a whitespace-only name, so a blank subject can only cost a steward attention it can never
-resolve. One seam for `triage.name` and `triage.names` alike, or the same padded name would render
-differently depending on which field carried it. A park whose names are ALL blank declares nothing
-and is refused at the boundary (`agent._any_declared`), exactly as a blank `triage.name` is.
+**One park shape, whatever the count.** A park always writes the PLURAL keys — a list of one for
+one name: `unresolved_names` on the ask side, `schema.SITUATION_NAMES_KEY` on the parked row. The
+singular `unresolved_name` / `schema.SITUATION_NAME_KEY` are no longer written by anything; they
+are read-only legacy, kept because rows parked before this collapse are never migrated and
+`entities.situations.subjects_of` has to keep understanding them (permanently, not as a transition).
+What still branches on the count is the PROSE — one name reads as one name, several are listed
+numbered — and nothing a read path consumes.
+
+**A name is normalised once, for both inbound spellings.** `processing._unresolved_names` strips
+surrounding whitespace (internal whitespace is part of a name) and drops a blank —
+`entities.birth._prepare` refuses a whitespace-only name, so a blank subject can only cost a steward
+attention it can never resolve. One seam for `triage.name` and `triage.names` alike, or the same
+padded name would render differently depending on which field carried it. A park whose names are
+ALL blank declares nothing and is refused at the boundary (`agent._any_declared`), exactly as a
+blank `triage.name` is — asked of the RAW values in both spellings, so a name that failed its own
+length bound earns that one finding and not a second, contradicting "never declared" one in the
+single corrective brief.
 
 **The budget is a database column.** `asked_at` is stamped on the first transition into
 `needs_input` and never cleared, so "one ask per capture, ever" holds across a reply, a steward's

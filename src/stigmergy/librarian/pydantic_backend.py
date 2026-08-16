@@ -78,12 +78,23 @@ def prompt_cache_settings(model: str, prompt_cache: str) -> dict | None:
 
 
 # ── the accounts, as schemas instead of a file ────────────────────────────────────────────────
-# Field-for-field mirrors of the JSON `agent.parse_*_outcome` reads, so both channels carry the
-# SAME shape and the boundary parse is shared. BOUNDS are deliberately NOT restated — a second set
-# would drift from the one the file channel is judged by. REQUIREDNESS is: a defaulted field makes
-# an omission INVISIBLE, so the framework accepts a half-empty account, its `OUTPUT_RETRIES` never
-# fire, and the boundary refuses downstream having spent the WORKER's one corrective retry. The
-# BOUNDARY still keeps every check, because it also judges the FILE channel.
+# These mirror what `agent.parse_*_outcome` REQUIRES, not everything it ACCEPTS — a deliberate
+# asymmetry, and the one place to look when the two look out of step. The parser tolerates a
+# singular `triage.name` inbound and folds it into a one-element list; `OrdinaryTriage` offers only
+# `names`, because a schema is what the model is ASKED for and asking for one field in two spellings
+# is how a park ends up declaring both. Everything the model must answer is here in the same shape
+# the file channel carries, so the boundary parse stays shared.
+#
+# BOUNDS are deliberately NOT restated — a second set would drift from the one the file channel is
+# judged by. REQUIREDNESS is: a defaulted field makes an omission INVISIBLE, so the framework
+# accepts a half-empty account, its `OUTPUT_RETRIES` never fire, and the boundary refuses downstream
+# having spent the WORKER's one corrective retry. The BOUNDARY still keeps every check, because it
+# also judges the FILE channel.
+#
+# `FilingAccount` is NOT wired as an `output_type` today: the ordinary run's account comes home as a
+# file (see the `Agent(...)` construction in `run`, which passes none on purpose — a structured one
+# would ask for the account twice, in two shapes). Its validator therefore guards the structured
+# ordinary road only if one is ever enabled; `MeetingAccount` is the one that runs.
 
 
 def _needed(field: str, instead: str) -> str:
@@ -172,8 +183,9 @@ class MeetingAccount(BaseModel):
                 "triage.kind",
                 f"Parking says WHY: one of {', '.join(agent_module.TRIAGE_KINDS)}."))
         # A meeting always collects the PLURAL shape (a transcript can fail to anchor on several
-        # names at once) — `names` is required outright, never optional the way the ordinary
-        # flow's `FilingAccount` treats it beside the singular `name`.
+        # names at once), and so does `FilingAccount` — one rule, both flows. Neither schema offers
+        # the singular `name` the FILE channel still tolerates inbound: see the section comment
+        # above the accounts for why what is ASKED FOR is narrower than what is accepted.
         if kind == agent_module.TRIAGE_UNRESOLVED_ENTITY and not [
                 n for n in self.triage.names if (n or "").strip()]:
             raise ValueError(_needed(
@@ -223,16 +235,15 @@ class OrdinaryFinding(BaseModel):
 
 
 # This docstring is the JSON-schema DESCRIPTION the structured model reads, not a note to a
-# reader here — which is why `names` has to be named in it. A field described nowhere is a field
-# the model will not reach for, and the whole of issue #32 was a model with nowhere to put a
-# second name.
+# reader here — which is why `names` has to be named in it, and why there is no longer a singular
+# field beside it to reach for. A field described nowhere is a field the model will not reach for,
+# and the whole of issue #32 was a model with nowhere to put a second name.
 class OrdinaryTriage(BaseModel):
-    """Why the capture was parked, when `decision` is `triage`. For an `unresolved-entity` park:
-    `name` for the ONE entity the material is about, or `names` — every unresolved entity, each
-    on its own — when it is about more than one. Use `names` rather than crowding several into
-    `name`: a steward registers them one at a time, and a joined string is not any of them."""
+    """Why the capture was parked, when `decision` is `triage`. For an `unresolved-entity` park,
+    `names` carries every unresolved entity, each on its own — one name is a list of one. Never
+    crowd several into one entry: a steward registers them one at a time, and a joined string is
+    not any of them."""
     kind: str = ""
-    name: str = ""
     names: list[str] = Field(default_factory=list)
     judged_type: str = ""
 
@@ -285,14 +296,15 @@ class FilingAccount(BaseModel):
             raise ValueError(_needed(
                 "triage.kind",
                 f"Parking says WHY: one of {', '.join(agent_module.TRIAGE_KINDS)}."))
-        # A capture can name MORE THAN ONE unresolved entity too (issue #32): `triage.names`
-        # satisfies the same requirement `triage.name` would, exactly as `MeetingAccount` already
-        # accepts for its own (always-plural) `triage.names`.
-        if kind == agent_module.TRIAGE_UNRESOLVED_ENTITY and [
-                n for n in self.triage.names if (n or "").strip()]:
-            return self
+        # One table, one lookup, whichever SHAPE the required field has: an `unresolved-entity`
+        # park owes a `names` LIST (a capture can name more than one — issue #32 — and one name is
+        # a list of one, exactly as `MeetingAccount` has always required), an `unsupported-type`
+        # park owes a string. A list of blanks satisfies neither.
         required = agent_module.TRIAGE_REQUIRED_FIELD[kind]
-        if not (getattr(self.triage, required, "") or "").strip():
+        value = getattr(self.triage, required, "")
+        declared = ([v for v in value if (v or "").strip()] if isinstance(value, list)
+                    else (value or "").strip())
+        if not declared:
             raise ValueError(_needed(
                 f"triage.{required}",
                 f"It is the one thing the submitter is told about a {kind!r} park."))

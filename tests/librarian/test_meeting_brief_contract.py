@@ -227,7 +227,22 @@ RULE_TABLE = [
     # precisely what "computed by the worker from the archived material" names.
     ("computed by the worker from the archived material and this run's own facts.",
      'digest = hashlib.sha256((ctx.material or "").encode("utf-8")).hexdigest()'),
-    ("## Parking a meeting — atomic, whole capture, one ask", "_ask_or_park_multi"),
+    # **Re-pointed by the one-shape collapse.** The marker was the bare name `_ask_or_park_multi`,
+    # the plural park router. That router is gone: one `_ask_or_park` serves both flows and any
+    # number of names, so a bare-name marker would now be satisfied by the ORDINARY flow's own call
+    # and this row would go green with `_triage_meeting` no longer parking a meeting at all — the
+    # "satisfied by the thing merely existing" failure mode this file has already been bitten by.
+    #
+    # Re-pointed at `_triage_meeting`'s whole call, both lines of it, because all three claims of
+    # the brief phrase are in it and nowhere else: `names=names` is ATOMIC/whole capture (every
+    # unresolved name in one park), the single `_ask_or_park` call is ONE ASK (the shared budget),
+    # and `meeting=True` is what makes it a MEETING park rather than a capture — the literal a
+    # refactor drops without anything else noticing, since nothing else reads that sentence.
+    # Verified against the concatenated source before use: this string occurs exactly once, and it
+    # is not matched by the ordinary flow's call, which ends after `notes=notes)`.
+    ("## Parking a meeting — atomic, whole capture, one ask",
+     "_ask_or_park(item, deps, names=names, agent_rationale=rationale, notes=notes,\n"
+     "                        meeting=True)"),
     # REMOVED: ("there is no edit mechanism in this flow.",
     #           "no additive edits to pages that already exist").
     # BOTH SIDES INVALID. The marker was a COMMENT in `processing.py`, so this entry never proved a
