@@ -140,7 +140,15 @@ def content_key(data: bytes) -> str:
 
 
 class MemoryEvidenceStore:
-    """The offline double: same surface, a dict instead of a bucket."""
+    """The offline double: same surface, a dict instead of a bucket.
+
+    `bucket`/`endpoint_url` are part of that surface, not decoration: the drop doors NAME the
+    store they uploaded to and ask `refuse_split_stores` where it points, so a double without
+    them can only be driven through code paths that skip both.
+    """
+
+    bucket = "memory"
+    endpoint_url = "memory://local"
 
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}

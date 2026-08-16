@@ -52,11 +52,9 @@ def resolved_report(*, submission_id: int, actor: str, note: str, page: str = ""
                     commit: str = "") -> dict:
     """`resolved` — a steward handled this outside the fast lane.
 
-    Three shapes, because the honest sentence depends on what the steward left behind: page and
-    commit (named, with `SEARCHABILITY_NOTE` reused verbatim — a steward-folded page is as
-    invisible to search as a filed one); commit only; neither (says so plainly and names who to
-    ask). Never says "rejected" and never says "filed" — both would be false. No verification
-    verdict is claimed, because there is none to claim.
+    Never says "rejected" and never says "filed" — both would be false. No verification verdict
+    is claimed, because there is none to claim. `SEARCHABILITY_NOTE` is reused verbatim where a
+    page is named: a steward-folded page is as invisible to search as a filed one.
 
     `--page`/`--commit` are operator-typed and cross `clean` HERE, not at display sites: nothing
     checks that a "commit" is a sha, so ANSI escapes could ride it, and cleaning once lets

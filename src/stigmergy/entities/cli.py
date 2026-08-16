@@ -1,14 +1,15 @@
 """`stigmergy-entities` — governed entity birth: list · show · approve · reject · create ·
 regenerate. Each subcommand is a thin skin over the library, in `stigmergy-queue`'s dialect
 (exit 130 on Ctrl-C, `--json` emitting the machine value first, shared renderings imported —
-`format_age`, `_clean` — never re-implemented).
+`format_age`, `clean_for_terminal` (locally `_clean`) — never re-implemented).
 
-Everything `show` prints about a capture is UNTRUSTED: every value crosses `capture.cli._clean`
-(the same seam `stigmergy-queue show` uses — two renderers disagreeing about trust is how one
-ends up wrong), and the suggested approve command is built from a name only when `_suggestable`
-allows it, quoted even then; otherwise the name is printed on its own inert line and the steward
-types `--name` themselves. `reject` and `--requeue` ride `capture.dispositions`' own seams — a
-second triage->rejected path would be a second set of state guards to keep in agreement.
+Everything `show` prints about a capture is UNTRUSTED: every value crosses
+`capture.render.clean_for_terminal` (the same seam `stigmergy-queue show` uses — two renderers
+disagreeing about trust is how one ends up wrong), and the suggested approve command is built
+from a name only when `_suggestable` allows it, quoted even then; otherwise the name is printed
+on its own inert line and the steward types `--name` themselves. `reject` and `--requeue` ride
+`capture.dispositions`' own seams — a second triage->rejected path would be a second set of
+state guards to keep in agreement.
 
 Exit codes: 0 the command did what it said; 1 it refused (a collision, a dirty clone, a
 non-situation row) or `--check` found drift; 2 the TOOL could not run (no repo, no database).
@@ -25,8 +26,8 @@ import shlex
 import sys
 
 from stigmergy.capture import decisions, dispositions, schema
-from stigmergy.capture.cli import _clean, format_age
 from stigmergy.capture.errors import CaptureError
+from stigmergy.capture.render import clean_for_terminal, format_age
 from stigmergy.entities import birth, clone, generator, situations
 from stigmergy.entities import mint as mint_lib
 from stigmergy.entities.errors import EntityError
@@ -36,6 +37,10 @@ from stigmergy.librarian.errors import LibrarianError
 from stigmergy.review_kinds import KIND_ENTITY_PROPOSAL
 
 _DUMP = {"ensure_ascii": False, "indent": 2}
+
+# `stigmergy-queue`'s cleaner under the short name this module's call sites read with — the
+# implementation is `capture.render`'s, never a second one.
+_clean = clean_for_terminal
 
 EXIT_REFUSED = 1
 EXIT_CANNOT_RUN = 2

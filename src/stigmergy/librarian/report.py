@@ -28,7 +28,8 @@ MAX_QUESTION_CANDIDATES = 20
 
 def _clean(text: str, width: int = 0) -> str:
     """Untrusted text on its way to a human — `stigmergy.text.clamp` + `sanitize`, the same seam
-    `capture.cli._clean` uses, so the two packages' renderers cannot disagree about truncation."""
+    `capture.render.clean_for_terminal` uses, so the two packages' renderers cannot disagree
+    about truncation."""
     return textutil.clamp(textutil.sanitize(str(text or "")).replace("\n", " "), width)
 
 

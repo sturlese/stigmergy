@@ -14,24 +14,17 @@ worth keeping" contradicts the meeting flow's whole-transcript premise, so this 
 size first and its own refusal is the one an operator sees.
 """
 import argparse
-import os
 import sys
 
 from stigmergy.capture import cli, evidence, queue, schema
-from stigmergy.capture.errors import CaptureError, SubmissionRejected
+from stigmergy.capture.errors import SubmissionRejected
 from stigmergy.index import store
 
-# The operator identity `--submitted-by` defaults to. Single-operator traffic: one env var is
-# the whole of "configured" — there is no identity service to resolve against.
-OPERATOR_EMAIL_ENV = "STIGMERGY_MEETING_OPERATOR_EMAIL"
+# Referenced through this module by name (`meeting_cli.OPERATOR_EMAIL_ENV`); the value is the
+# drop doors' shared one, so there is nothing here for a second spelling to drift from.
+OPERATOR_EMAIL_ENV = cli.OPERATOR_EMAIL_ENV
 
-EXIT_INTERRUPTED = 130
-
-
-def _connect(dsn: str | None):
-    conn = store.connect(dsn)
-    schema.ensure_capture_schema(conn)   # idempotent: this CLI may be the first thing to run
-    return conn
+PROG = "stigmergy-meeting"
 
 
 def _refuse(message: str) -> "SubmissionRejected":
@@ -69,19 +62,9 @@ def _check_size(path: str, data: bytes) -> str:
                       f"nothing was queued.") from ex
 
 
-def _resolve_submitted_by(args) -> str:
-    submitted_by = args.submitted_by or os.environ.get(OPERATOR_EMAIL_ENV, "")
-    if not submitted_by:
-        raise _refuse(
-            f"--submitted-by is required (or set ${OPERATOR_EMAIL_ENV}) — attribution comes from "
-            f"a resolved identity on every other capture surface, and this operator CLI has none "
-            f"to resolve. Nothing was uploaded and nothing was queued.")
-    return submitted_by
-
-
 def _cmd_drop(args) -> int:
     ev = evidence.store_from_env()
-    refused = cli.refuse_split_stores(args, "stigmergy-meeting", ev)
+    refused = cli.refuse_split_stores(args, PROG, ev)
     if refused:
         return refused
 
@@ -93,7 +76,7 @@ def _cmd_drop(args) -> int:
         raise _refuse(f"--date: {ex}") from ex
     data = _read_transcript(args.file)
     text = _check_size(args.file, data)
-    submitted_by = _resolve_submitted_by(args)
+    submitted_by = cli.resolve_submitted_by(args)
 
     attendees = ", ".join(a.strip() for a in (args.attendees or "").split(",") if a.strip())
     hints = {
@@ -104,7 +87,7 @@ def _cmd_drop(args) -> int:
     if attendees:
         hints["attendees"] = attendees
 
-    conn = _connect(args.dsn)
+    conn = cli.connect(args.dsn)
     ack = queue.submit(conn, ev, kind=schema.MEETING, material=text, hints=hints,
                        submitted_by=submitted_by)
 
@@ -124,7 +107,7 @@ def _cmd_drop(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="stigmergy-meeting",
+        prog=PROG,
         description="Drop a meeting transcript onto the queue for the librarian's meeting flow. "
                     "This is a webhook simulation — a future webhook handler calls the same "
                     "enqueue seam with a different transport.")
@@ -144,33 +127,15 @@ def build_parser() -> argparse.ArgumentParser:
                         help="comma-separated attendee names — a HINT for the agent, never an "
                              "identity: it resolves nothing and authorizes nothing")
     cli.add_split_stores_flag(p_drop)
-    p_drop.add_argument("--submitted-by", default="",
-                        help=f"defaults to ${OPERATOR_EMAIL_ENV}; who this drop is attributed to")
+    cli.add_submitted_by_flag(p_drop)
     p_drop.set_defaults(fn=_cmd_drop)
     return ap
 
 
-def _interrupted(during: str) -> int:
-    print(f"stigmergy-meeting: interrupted {during} — no queue row was written (the insert is a "
-          f"single statement), but if the upload had already finished, an evidence object with "
-          f"nothing pointing at it may exist; that costs nothing and nothing will ever read it "
-          f"without a row. Re-run `stigmergy-meeting drop` when ready.", file=sys.stderr)
-    return EXIT_INTERRUPTED
-
-
 def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
-    try:
-        return args.fn(args)
-    except CaptureError as ex:
-        print(f"stigmergy-meeting: {ex}", file=sys.stderr)
-        return 1
-    except KeyboardInterrupt:
-        return _interrupted("while dropping the transcript")
-    except Exception as ex:  # noqa: BLE001 — a local operator needs the real reason
-        print(f"stigmergy-meeting: cannot reach the queue database or evidence store ({ex}); is "
-              f"the stack up (`make db-up`)?", file=sys.stderr)
-        return 2
+    return cli.drop_main(argv, parser=build_parser(), prog=PROG,
+                         on_interrupt=lambda: cli.drop_interrupted(
+                             PROG, "while dropping the transcript"))
 
 
 if __name__ == "__main__":

@@ -416,9 +416,9 @@ def test_capture_library_modules_never_import_raw_psycopg(path):
     `conn` as an argument (module docstring: "library code in this package never opens a
     connection"). `queue.py`/`ops.py` import `psycopg.types.json.Jsonb` for JSONB marshalling,
     which is fine (no connection capability); importing bare `psycopg` (the module `.connect`
-    lives on) would be the actual violation, and only `cli.py` and `meeting_cli.py` (both via
-    `stigmergy.index.store.connect`, checked above — operator CLI entry points, which is what the
-    exemption is for) may reach a database at all."""
+    lives on) would be the actual violation, and only the three operator CLIs — `cli.py`,
+    `meeting_cli.py` and `drive_cli.py` (all via `stigmergy.index.store.connect`, checked above —
+    entry points, which is what the exemption is for) — may reach a database at all."""
     offenders = [f"{path.name}:{line} -> {mod}"
                  for mod, line in _all_module_imports(path) if mod == "psycopg"]
     assert not offenders, (

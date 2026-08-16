@@ -1,13 +1,7 @@
 """Retention: captured material is deleted 30 days after the row that carried it went terminal.
 
-`payload` and `hints` are set to NULL in place; id, submitter, status, timestamps, `attempts`
-and `result_ref` survive, so the trace and the latency measurement stay intact and a purged
-submission is still readable as history. Keeping material forever accumulates other people's
-raw writing with no policy; deleting the ROW would destroy the record that it happened.
-
-Only TERMINAL rows are eligible — read from `schema.TERMINAL_STATUSES`, so `resolved` sits on
-the ordinary window like every other terminal status. A parked row is never purged out from
-under the question it is waiting on, no matter how old.
+The row is stripped, never deleted: keeping material forever accumulates other people's raw
+writing with no policy, and deleting the ROW would destroy the record that it happened.
 
 The evidence blob is untouched: it has its own lifecycle (the bucket's retention policy), and a
 filed page must stay checkable against its material after the row is stripped. "Physically":
@@ -19,7 +13,7 @@ from stigmergy.capture import ops, schema
 DEFAULT_RETENTION_DAYS = 30
 
 # Literal, not a bind parameter: `WITHHELD_REASONS` is a fixed, importable set.
-_WITHHELD_REASON_LITERALS = ", ".join(f"'{r}'" for r in sorted(schema.WITHHELD_REASONS))
+_WITHHELD_REASON_LITERALS = schema.sql_literals(schema.WITHHELD_REASONS)
 
 # One predicate shared by the preview and the action, so a dry run can never describe a
 # different set of rows than the purge that follows it. Two clauses, OR'd:
@@ -48,11 +42,6 @@ _PURGE = (f"UPDATE capture_queue SET payload = NULL, hints = NULL, outcome = NUL
           f"{_ELIGIBLE} RETURNING id")
 _PREVIEW = f"SELECT id FROM capture_queue {_ELIGIBLE} ORDER BY finished_at"
 
-# ── the secret/PII clock, which is not the ordinary one ────────────────────────────────────────
-# A rejection whose reason is a secret/PII match must not wait for the nightly job: the system
-# has already declared the material unsafe to keep, so it is purged immediately from the one
-# seam every `process_item` result crosses (`librarian.worker._finish`).
-#
 # NOT the same transaction as the rejection write — the connection is autocommit, so they are
 # two independently committed statements; a crash between them is `purge`'s reconciliation
 # clause's job, not this function's. Idempotent by the same payload/hints-not-NULL guard.

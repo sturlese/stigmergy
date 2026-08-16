@@ -4,9 +4,11 @@ payload.
 
 Which messages may cross the network: `SubmissionRejected` messages are safe to echo verbatim —
 the caller's own field/hint keys and static, value-free text, never a bucket, endpoint, DSN,
-path, or whether another identity exists. `EvidenceError` and `QueueStateError` are
-class-name-only summaries; the real cause is logged server-side. Generic over HTTP, specific in
-the local CLI — which is why the CLI, not the library, may name a DSN or bucket.
+path, or whether another identity exists. `EvidenceError` is a class-name-only summary.
+`QueueStateError` is a SCRUBBED state sentence — submission id, status and attempt counts only,
+never material and never another identity — because the MCP adapter echoes it verbatim. Generic
+over HTTP, specific in the local CLI — which is why the CLI, not the library, may name a DSN or
+bucket.
 """
 
 

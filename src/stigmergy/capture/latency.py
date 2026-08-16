@@ -10,7 +10,7 @@ one decimal place reads as a measurement nobody should believe.
 """
 from dataclasses import dataclass, field
 
-from stigmergy.capture import cli as queue_cli
+from stigmergy.capture.render import format_ms
 
 # The floor below which no percentile is reported at all.
 MIN_SAMPLES = 10
@@ -67,12 +67,12 @@ def summarize(latencies_ms, *, min_samples: int = MIN_SAMPLES) -> LatencySummary
 
 
 def render(summary: LatencySummary) -> str:
-    """One line for a terminal. `queue_cli.format_ms` is imported, not reimplemented: the
+    """One line for a terminal. `capture.render.format_ms` is imported, not reimplemented: the
     aggregate must not appear in a different unit or precision than `stigmergy-queue show`."""
     captures = f"{summary.samples} filed capture" + ("" if summary.samples == 1 else "s")
     if not summary.enough:
         return (f"capture->filed latency: not enough data yet — {captures} so far, "
                 f"{summary.min_samples} needed before p50/p95 mean anything")
-    parts = " · ".join(f"p{q}={queue_cli.format_ms(summary.percentiles_ms.get(q))}"
+    parts = " · ".join(f"p{q}={format_ms(summary.percentiles_ms.get(q))}"
                        for q in PERCENTILES)
     return f"capture->filed latency: {parts} over {captures}"
