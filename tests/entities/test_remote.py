@@ -355,18 +355,108 @@ def test_a_librarian_fault_after_the_clone_is_renamed_into_this_packages_vocabul
 
 def test_an_entity_error_from_the_mint_is_not_rewrapped_by_that_rename(tmp_path, monkeypatch):
     """The benign twin: the rename above catches `LibrarianError`, which `EntityError` is not, so
-    every refusal this package already words for a human (a collision, a lost push race, a secret
-    in the role text) still reaches the caller as itself and keeps its own sentence."""
-    from stigmergy.entities.errors import CollisionError
+    a refusal this package words for the STEWARD — a birth-field validation, a secret in the role
+    text, both clean by construction — still reaches the caller as itself and keeps its own
+    sentence. What the ladder above it maps is the four types whose sentences are worded for a
+    terminal instead (issue #57); `EntityError` itself is deliberately not an arm."""
     from tests.librarian import support
     env = support.build_repo(str(tmp_path / "git"))
 
-    def collide(repo, **kwargs):
-        raise CollisionError("that identity already resolves to Acme Corp")
+    def refuse(repo, **kwargs):
+        raise EntityError("--name contains a character which cannot appear in an entity name")
 
-    monkeypatch.setattr(remote.mint_lib, "mint", collide)
+    monkeypatch.setattr(remote.mint_lib, "mint", refuse)
 
-    with pytest.raises(CollisionError, match="already resolves"):
+    with pytest.raises(EntityError, match="cannot appear in an entity name"):
         remote.mint_via_clone(env.bare, "main", None, entity_id="acme-two", name="Acme Two",
                               entity_type="organization", today="2026-01-01",
                               approved_by="steward@example.com")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# issue #57 — every sentence this module publishes is publishable.
+#
+# `server.review` echoes an `EntityError` raised here to a steward over MCP verbatim, so a refusal
+# composed in this module is wire copy, not a log line. The two properties below are what makes
+# that safe, asserted over the constants themselves so a NEW sentence cannot be added without
+# meeting them. What reaches the wire in practice is proven at the door
+# (`tests/server/test_review.py`); this is the text's own contract.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# DERIVED, never listed: a refusal sentence added to this module joins both properties below by
+# existing. A hand-written list is how a constant gets added, missed, and shipped with a path in it
+# — and every list in this repo that was maintained by hand eventually stopped being maintained.
+ALL_REFUSAL_MESSAGES = sorted(n for n in dir(remote) if n.endswith("_MESSAGE"))
+
+# The one NAMED exception to the property below, and the reason it is named rather than derived:
+# these two refuse BEFORE a clone exists at all, so "Nothing was pushed" would be a smaller claim
+# than the truth. They say "Nothing was written" instead. Anything else this module ever publishes
+# is reachable once a clone has been attempted, and has to say what state was left behind.
+REFUSED_BEFORE_ANY_CLONE = {"APP_MISCONFIGURED_MESSAGE", "CREDENTIAL_FAULT_MESSAGE"}
+
+AFTER_A_CLONE_WAS_ATTEMPTED = [n for n in ALL_REFUSAL_MESSAGES if n not in REFUSED_BEFORE_ANY_CLONE]
+
+# The FIVE the post-clone ladder maps a refusal TYPE onto — the only place a type appears in this
+# file, so the mapping's own shape is pinned beside the text it produces.
+MAPPED_MINT_MESSAGES = {
+    "CloneStateError": remote.CLONE_STATE_FAULT_MESSAGE,
+    "TemplateMissingError": remote.TEMPLATE_MISSING_MESSAGE,
+    "CollisionRaceError": remote.COLLISION_RACE_MESSAGE,
+    "PushRaceError": remote.PUSH_RACE_MESSAGE,
+    "LibrarianError": remote.MINT_FAULT_MESSAGE,
+}
+
+
+@pytest.mark.parametrize("constant", ALL_REFUSAL_MESSAGES)
+def test_no_refusal_this_module_publishes_names_a_path_or_a_runnable_git_command(constant):
+    """The sweep, over EVERY constant — the ladder's four, the clone leg's, the git/config fault's
+    and both credential faults. `entities` writes for an operator standing in a clone (`clone.py`
+    and `mint.py` both hand out `git -C <path> …`) and this module is the ONE place those refusals
+    are re-worded for somebody who holds neither. A path here is the server host's own temp
+    directory, and it is deleted before the message is read."""
+    fx.assert_steward_facing(getattr(remote, constant))
+
+
+@pytest.mark.parametrize("constant", AFTER_A_CLONE_WAS_ATTEMPTED)
+def test_every_refusal_reachable_after_a_clone_says_nothing_was_pushed(constant):
+    """The one fact a steward needs before any other: their approval did not half-land.
+
+    A COMPLETE partition with the test below, derived from the module rather than from a list of
+    the arms — the clone leg's own refusal was an inline literal until this change and would have
+    sat outside a hand-picked set forever. A refusal that is silent about state sends a steward to
+    look for a commit that is not there, or leaves them afraid to approve again."""
+    assert "Nothing was pushed" in getattr(remote, constant)
+
+
+@pytest.mark.parametrize("constant", sorted(REFUSED_BEFORE_ANY_CLONE))
+def test_the_two_credential_faults_say_nothing_was_written_instead(constant):
+    """The other half of the partition, and the benign twin for the rule above: a named exception
+    that is honest rather than a gap. These fire before `mint_via_clone` has cloned anything, so
+    "Nothing was pushed" would understate it — nothing was written at all. Asserted in both
+    directions, so widening the rule to "every constant says Nothing was pushed" cannot be done by
+    quietly editing these two."""
+    assert "Nothing was written" in getattr(remote, constant)
+    assert "Nothing was pushed" not in getattr(remote, constant)
+
+
+def test_the_partition_covers_every_constant_and_overlaps_nowhere():
+    """The test on the two tests above. Both are parametrized over derived lists, and a derivation
+    that silently produced an EMPTY list would leave a parametrized test that runs zero cases and
+    reports green — the permanently-green test this repo's doctrine calls worse than no test."""
+    assert set(AFTER_A_CLONE_WAS_ATTEMPTED) | REFUSED_BEFORE_ANY_CLONE == set(ALL_REFUSAL_MESSAGES)
+    assert not set(AFTER_A_CLONE_WAS_ATTEMPTED) & REFUSED_BEFORE_ANY_CLONE
+    assert len(AFTER_A_CLONE_WAS_ATTEMPTED) >= len(MAPPED_MINT_MESSAGES) + 1, (
+        "the post-clone set no longer covers the five mapped sentences plus the clone leg's own")
+    assert set(ALL_REFUSAL_MESSAGES) >= REFUSED_BEFORE_ANY_CLONE, (
+        "a named exception outlived the constant it exempted — prune it")
+
+
+def test_the_mapped_mint_refusals_are_five_distinct_sentences():
+    """The ladder's specificity: 'approve again', 'commit the template first' and 'ask whoever runs
+    this deployment' are three different instructions, and collapsing any two of them onto one
+    constant would keep every assertion above green while telling a steward the wrong thing."""
+    assert len(set(MAPPED_MINT_MESSAGES.values())) == len(MAPPED_MINT_MESSAGES) == 5
+    published = [getattr(remote, name) for name in ALL_REFUSAL_MESSAGES]
+    for constant in MAPPED_MINT_MESSAGES.values():
+        assert constant in published, (
+            "a mapped sentence stopped being a module constant — the sweep above no longer covers "
+            "it, and nothing else checks it for a path")

@@ -23,8 +23,8 @@ plus an `Approved-by:` trailer naming the human.
 | `generator.py` | the registry generator: `read_entity_pages`, `derive_registry`, `registry_of`, `compare` (semantic drift), `check` / `regenerate`, `canonical_id_for` |
 | `clone.py` | the working copy's checks and push: `preflight` (branch/identity/clean/in-sync), `commit_and_push` with fetch-regenerate-retry, `write_page` / `discard_untracked`. Never repairs, never force-pushes |
 | `mint.py` | the ONE mint orchestration `cli._mint` and `remote.mint_via_clone` both call: drift refusal, the gate against the registry the commit will PUBLISH, the template render, `generator.regenerate`, the gitleaks scan, ONE commit, bounded rebase-and-retry |
-| `remote.py` | the server-driven mint door: `mint_via_clone` — a throwaway clone with the librarian App's credential, `mint.mint` with an `Approved-by:` trailer, cleanup in a `finally`. `credential` is needed only for `https://` remotes; raises only this package's own error types |
-| `errors.py` | `EntityError` (base), `CollisionError` (the governance verdict), `CloneStateError`, `PushRaceError`, `CapabilityUnavailableError`. Neither inbound consumer lets one of these out: `stigmergy.server.review` translates at every raise site (the mint and the pre-mint `require_situation` guard alike) into `ReviewError`/its own `CapabilityUnavailableError`, `stigmergy.admin` into `AdminRefused` at its own boundary — a surface barred from importing this package could catch one only as an unanticipated fault, whose text it must not show |
+| `remote.py` | the server-driven mint door: `mint_via_clone` — a throwaway clone with the librarian App's credential, `mint.mint` with an `Approved-by:` trailer, cleanup in a `finally`. `credential` is needed only for `https://` remotes; raises only this package's own error types. Also the ONE place a refusal changes audience: the post-clone ladder re-words the four types whose sentences name that clone, and passes the door-neutral ones through |
+| `errors.py` | `EntityError` (base), `CollisionError` (the governance verdict) and its `CollisionRaceError` subclass (the post-rebase re-ask), `CloneStateError`, `PushRaceError`, `TemplateMissingError`, `CapabilityUnavailableError`. Neither inbound consumer lets one of these out: `stigmergy.server.review` translates at every raise site (the mint and the pre-mint `require_situation` guard alike) into `ReviewError`/its own `CapabilityUnavailableError`, `stigmergy.admin` into `AdminRefused` at its own boundary — a surface barred from importing this package could catch one only as an unanticipated fault, whose text it must not show |
 
 ## Use these
 
@@ -73,7 +73,12 @@ plus an `Approved-by:` trailer naming the human.
 - `mint.mint` — any new caller that mints an entity calls THIS, never re-derives the discipline.
   `author` is the caller's to resolve; `mint()` never reads git config to find one.
 - `remote.mint_via_clone` — the ONE way a process with no steward's checkout mints; never open a
-  second clone path or mint an installation token elsewhere.
+  second clone path or mint an installation token elsewhere. It is also where a refusal is re-worded
+  for a steward who holds no clone (ADR 030's "two-door refusal wording" amendment): the module's
+  own constants carry the argument, and the mapping keys on the exception TYPE, never on its text.
+  A raise site anywhere in this package whose sentence names a path or a `git -C` command therefore
+  needs a class no door-neutral raise site shares — which is why `CollisionRaceError` exists beside
+  `CollisionError`, and `TemplateMissingError` beside a plain `EntityError`.
 - `clone.preflight` / `clone.commit_and_push` — the ONE way this subsystem writes to a git working
   copy. Git goes through `librarian.gitcmd` (the one dialect: error shaping, credential
   scrubbing); never wrap `subprocess.run(["git", ...])` again.
@@ -115,6 +120,11 @@ plus an `Approved-by:` trailer naming the human.
   past the collision gate (`birth.py`'s module docstring).
 - **Never add a second implementation of "collides".** `prepare` and `recheck` both call
   `_refuse_collisions`; reuse it.
+- **Never give `remote.mint_via_clone` a bare `except EntityError` arm.** Its ladder maps four
+  named types and everything else passes through ON PURPOSE — birth-field validation, the collision
+  verdict, the secrets refusal and the drift refusal are the refusals a steward can actually act on,
+  and all four are `EntityError`s. A catch-all arm would replace every one of them with "a
+  server-side fault, approve again".
 
 ## Data & contracts
 

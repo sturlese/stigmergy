@@ -318,6 +318,35 @@ def test_create_refuses_a_collision_and_names_the_registered_entry(repo):
     assert "jordan-reyes" in err
 
 
+# ── the CLI door keeps its full local diagnostics (issue #57, ADR 030's two-door amendment) ─────
+def test_the_cli_door_still_names_the_stewards_own_clone_when_the_template_is_missing(repo):
+    """The SERVER door now maps this refusal's TYPE (`TemplateMissingError`) to a sentence written
+    for a steward with no clone. This door must not have moved a byte: the operator running
+    `stigmergy-entities` IS standing in the clone the message names, and the path is the whole
+    diagnosis — which of their checkouts is missing the template.
+
+    Pinned byte-for-byte rather than by substring, because the two doors' wordings are now free to
+    diverge and nothing else would notice this one drifting toward the other. Reached through
+    `cli.main` (a real refusal, a real exit code, the real stderr line), not by asserting on the
+    exception, so what is pinned is what an operator actually reads.
+    """
+    _remote, steward = repo
+    os.remove(os.path.join(steward, "ops", "templates", "entity.md"))
+    fx.git("commit", "--quiet", "--all", "-m", "chore: drop the entity template", cwd=steward)
+    fx.git("push", "--quiet", "origin", "main", cwd=steward)
+
+    rc, _out, err = run_cli("--repo", steward, "--branch", "main", "create",
+                            "--id", "globex", "--name", "Globex", "--type", "organization",
+                            "--today", "2026-07-27")
+
+    assert rc == cli.EXIT_REFUSED
+    assert err == (
+        f"stigmergy-entities: {mint.TEMPLATE_RELPATH} is missing from {steward} — a new entity "
+        f"page is that template with its identity fields filled in, and this command does not "
+        f"carry its own copy (the template is the knowledge repo's own source of truth for the "
+        f"page's shape)\n")
+
+
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # The one human-driven write path used to run no secret scanner
 # ══════════════════════════════════════════════════════════════════════════════════════════════
