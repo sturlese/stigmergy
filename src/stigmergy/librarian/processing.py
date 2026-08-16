@@ -195,6 +195,16 @@ def _commit_message(item: dict, outcome, page_path: str, *, n_sources: int = 0) 
             f"Submitted-by: {item['submitted_by']}\n")
 
 
+def _pii_label(finding) -> str:
+    """The pattern label a PII finding names, read back out of the sentence the gate wrote."""
+    return finding.message.split("what looks like ", 1)[-1].split(" near line")[0]
+
+
+def _pii_line(finding) -> str:
+    """The line a PII finding's locator ends with — the whole locator when it names no line."""
+    return finding.locator.rsplit(":", 1)[-1]
+
+
 def _pre_agent(conn, item: dict, deps: Deps, *, material: "str | None" = None) -> tuple:
     """Everything BEFORE any flow's agent runs: dedup (levels 1-2) and the material-level
     secrets/PII scan. Levels 1-2 match only rows with status='filed', so a rejected, parked or
@@ -232,11 +242,40 @@ def _pre_agent(conn, item: dict, deps: Deps, *, material: "str | None" = None) -
                                for n, text in enumerate(material.splitlines(), start=1)])
     if pii_hits:
         hit = pii_hits[0]
-        label = hit.message.split("what looks like ", 1)[-1].split(" near line")[0]
         return material, Result(schema.REJECTED, "",
-                                report.rejected_pii(line=hit.locator.rsplit(":", 1)[-1],
-                                                    pattern_label=label))
+                                report.rejected_pii(line=_pii_line(hit),
+                                                    pattern_label=_pii_label(hit)))
     return material, None
+
+
+# How each flow finishes the shared stale-base sentence. Kept side by side so a reword of one is
+# read against the other: the ordinary lane names the three repo-sourced inputs it would misjudge.
+_STALE_BASE_TAIL_ORDINARY = (
+    "against the ACL config, entity registry and contract linter of a commit the remote may have "
+    "moved past hours ago. The likely cause is the GitHub App installation (revoked, or a token "
+    "that has expired since this container started) or the network. The capture is left in the "
+    "queue")
+_STALE_BASE_TAIL_MEETING = (
+    "against a commit the remote may have moved past. The capture is left in the queue")
+
+
+def _resolve_filing_base(item: dict, deps: Deps, *, log_noun: str, stale_tail: str) -> tuple:
+    """This item's base commit and the `deps` re-read at it, for either flow's preamble."""
+    settings = deps.settings
+    base = gitcmd.base_ref(deps.repo, settings.branch)
+    # Deployed only: a non-remote base is a FAULT, not a fallback. Raising rather than returning
+    # a `Result` releases the item instead of failing the row.
+    if settings.require_remote_base and not base.remote:
+        raise StaleBaseError(
+            f"the base resolved to the local {base.describe()} instead of origin/{settings.branch} "
+            f"— the fetch failed, so this deployed worker would judge capture #{item['id']} "
+            f"{stale_tail}")
+    log.info("filing %s %s against %s", log_noun, item["id"], base.describe())
+
+    # Re-read per item at THIS item's base commit: a cached ACL config fails silently OPEN.
+    return base, dataclasses.replace(deps,
+                                     registry=base_inputs.load_registry(deps.repo, base),
+                                     acl_config=base_inputs.load_acl(deps.repo, base))
 
 
 def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None) -> Result:
@@ -247,23 +286,8 @@ def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None)
         return early
     settings = deps.settings
 
-    base = gitcmd.base_ref(deps.repo, settings.branch)
-    # Deployed only: a non-remote base is a FAULT, not a fallback. Raising rather than returning
-    # a `Result` releases the item instead of failing the row.
-    if settings.require_remote_base and not base.remote:
-        raise StaleBaseError(
-            f"the base resolved to the local {base.describe()} instead of origin/{settings.branch} "
-            f"— the fetch failed, so this deployed worker would judge capture #{item['id']} against "
-            f"the ACL config, entity registry and contract linter of a commit the remote may have "
-            f"moved past hours ago. The likely cause is the GitHub App installation (revoked, or a "
-            f"token that has expired since this container started) or the network. The capture is "
-            f"left in the queue")
-    log.info("filing submission %s against %s", item["id"], base.describe())
-
-    # Re-read per item at THIS item's base commit: a cached ACL config fails silently OPEN.
-    deps = dataclasses.replace(deps,
-                               registry=base_inputs.load_registry(deps.repo, base),
-                               acl_config=base_inputs.load_acl(deps.repo, base))
+    base, deps = _resolve_filing_base(item, deps, log_noun="submission",
+                                      stale_tail=_STALE_BASE_TAIL_ORDINARY)
     passes = AgentPasses()
     # The contract linter is materialized from THIS item's base commit, not the operator's disk.
     with base_inputs.linter_at(deps.repo, base) as linter_path, \
@@ -336,16 +360,23 @@ _SEEDED_GATHERED_SENTENCES = {
 }
 
 
+def _declared_port_attr(agent, name: str, purpose_clause: str) -> bool:
+    """One filing-port capability, read off the backend and REFUSED when absent."""
+    if not hasattr(agent, name):
+        raise AgentError(
+            f"the configured agent ({type(agent).__name__}) declares no `{name}`, which is a "
+            f"required member of the filing port (librarian/filing_port.py): {purpose_clause}. A "
+            f"backend declares it as a class attribute; a WRAPPER around one must copy it from "
+            f"what it wraps")
+    return bool(getattr(agent, name))
+
+
 def _wants_gathered(agent) -> bool:
     """Does this backend want the gatherer's block? DECLARED, never defaulted: a
     `getattr(..., False)` would silently hand a wrapper's backend an empty seed."""
-    if not hasattr(agent, "wants_gathered"):
-        raise AgentError(
-            f"the configured agent ({type(agent).__name__}) declares no `wants_gathered`, which is "
-            f"a required member of the filing port (librarian/filing_port.py): the worker cannot "
-            f"tell whether to build this item's gathered context for it. A backend declares it as "
-            f"a class attribute; a WRAPPER around one must copy it from what it wraps")
-    return bool(agent.wants_gathered)
+    return _declared_port_attr(
+        agent, "wants_gathered",
+        "the worker cannot tell whether to build this item's gathered context for it")
 
 
 def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
@@ -357,14 +388,10 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
     """
     settings = deps.settings
     # DECLARED, never defaulted: `True` means the account carries the page's text home.
-    if not hasattr(deps.agent, "structured_ordinary"):
-        raise AgentError(
-            f"the configured agent ({type(deps.agent).__name__}) declares no "
-            f"`structured_ordinary`, which is a required member of the filing port "
-            f"(librarian/filing_port.py): the worker cannot tell whether to gather a context for "
-            f"it and whether it writes its own page. A backend declares it as a class attribute; a "
-            f"WRAPPER around one must copy it from what it wraps")
-    structured = bool(deps.agent.structured_ordinary)
+    structured = _declared_port_attr(
+        deps.agent, "structured_ordinary",
+        "the worker cannot tell whether to gather a context for it and whether it writes its own "
+        "page")
     # `None` for every capture whose door did not assert a source attachment.
     attachment = _source_attachment(item)
     # Server-composed. Left implicit, the brief's genre rules make a whole document read as
@@ -744,16 +771,10 @@ def _ask_or_park(item: dict, deps: Deps, *, names: list, agent_rationale: str,
                   findings=notes)
 
 
-def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
-          source_pages=()) -> Result:
-    """The gates passed: commit, push, and say what happened. `page_path` comes from the DIFF,
-    never the outcome. `source_pages` arrives in PART order from the writer's own plan, and is
-    excluded when picking `page_path` because `sources/` sorts before `wiki/`.
-    """
+def _commit_and_push(conn, item, deps, ctx, worktree, message, *, what: str) -> str:
+    """The gated commit and its push, for either flow; returns THE sha the push produced."""
     from stigmergy.librarian import githubapp
 
-    page_path = [p for p in ctx.in_lane_new_pages() if p not in ctx.provenance_pages][0]
-    message = _commit_message(item, outcome, page_path, n_sources=len(source_pages))
     author_name, author_email = githubapp.identity()
     # `gated_entries`: the diff the gates approved is the diff that lands, BYTES included. Pass
     # the entries `run_gates` was handed — re-deriving samples after the window being checked.
@@ -769,14 +790,26 @@ def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
 
     # Re-assert the lease immediately before the push, the only irreversible step: a lost lease
     # means the row was redelivered, and `finish` would refuse it only after the commit landed.
+    # The window is longest on the meeting flow: more pages, more gate work.
     if not queue.holds_lease(conn, item["id"], expected_attempts=item["attempts"]):
         raise LeaseLostError(
             f"the lease on submission {item['id']} (delivery {item['attempts']}) was lost while "
-            f"this item was being processed; nothing was pushed")
+            f"{what} was being processed; nothing was pushed")
     # THE sha from the push, not the local commit: after a rebase-and-retry the pre-push sha
     # names nothing reachable.
-    sha = gitcmd.push(worktree, branch=deps.settings.branch, remote_url=remote_url,
-                      config_env=config_env, author_name=author_name, author_email=author_email)
+    return gitcmd.push(worktree, branch=deps.settings.branch, remote_url=remote_url,
+                       config_env=config_env, author_name=author_name, author_email=author_email)
+
+
+def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
+          source_pages=()) -> Result:
+    """The gates passed: commit, push, and say what happened. `page_path` comes from the DIFF,
+    never the outcome. `source_pages` arrives in PART order from the writer's own plan, and is
+    excluded when picking `page_path` because `sources/` sorts before `wiki/`.
+    """
+    page_path = [p for p in ctx.in_lane_new_pages() if p not in ctx.provenance_pages][0]
+    message = _commit_message(item, outcome, page_path, n_sources=len(source_pages))
+    sha = _commit_and_push(conn, item, deps, ctx, worktree, message, what="this item")
 
     notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
     notes += [f.message for f in findings if f.severity == gates.SEVERITY_NOTE]
@@ -799,9 +832,10 @@ def _repo_slug(repo: str) -> str:
     return slug.removesuffix(".git")
 
 
-def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
-            diagnostics_path: str = "") -> Result:
-    """Both attempts vetoed. Which terminal state depends on WHY, not on which gate."""
+def _route_refusal(item, findings, outcome, *, anchoring_park, agent_attempts: int = 0,
+                   diagnostics_path: str = "") -> Result:
+    """Which terminal state a surviving veto earns — the routing BOTH flows share, with
+    `anchoring_park(veto, notes) -> Result | None` the one branch each decides for itself."""
     veto = gates.vetoes(findings)
     notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
 
@@ -819,14 +853,15 @@ def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
     # so `worker._finish` purges the submitter's payload and hints outright.
     pii = next((f for f in veto if f.gate == "pii" and f.code == "pii"), None)
     if pii:
-        label = pii.message.split("what looks like ", 1)[-1].split(" near line")[0]
         return Result(schema.REJECTED, "",
-                      report.rejected_pii(line=pii.locator.rsplit(":", 1)[-1],
-                                          pattern_label=label, where="the drafted page"),
+                      report.rejected_pii(line=_pii_line(pii), pattern_label=_pii_label(pii),
+                                          where="the drafted page"),
                       diagnostics_path=diagnostics_path)
 
     # `repairable` AND `locator`: this feeds `report.rejected_steering(path=…)`, so a finding
-    # naming no path belongs on `_uncreatable_type`'s road.
+    # naming no path belongs on `_uncreatable_type`'s road. `repairable` also excludes the
+    # UNREPAIRABLE zone findings: no agent could have produced them, so they are system faults and
+    # must not read as steering just because a category was declared alongside.
     zone = next((f for f in veto if f.gate == "zone" and f.repairable and f.locator), None)
     categories = _injection_categories(outcome)
     if zone and categories:
@@ -853,14 +888,9 @@ def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
                                          findings=notes),
                       findings=notes, diagnostics_path=diagnostics_path)
 
-    unanchorable = _unanchorable(veto)
-    if unanchorable:
-        # A veto that survived the last pass goes to the STEWARD; only `_triage` may ask.
-        return Result(schema.TRIAGE, "",
-                      report.triage_entity(names=_anchor_veto_names([unanchorable]),
-                                           agent_rationale=getattr(outcome, "summary", ""),
-                                           findings=notes, asked=bool(item.get("asked_at"))),
-                      findings=notes, diagnostics_path=diagnostics_path)
+    parked = anchoring_park(veto, notes)
+    if parked is not None:
+        return parked
 
     # Anything else is the librarian failing at its job, not the submitter's problem.
     worst = veto[0] if veto else None
@@ -869,9 +899,28 @@ def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
                                        agent_attempts=agent_attempts,
                                        stage=worst.gate if worst else "gates",
                                        reason=worst.message if worst else "unknown",
-                                       # Into the REPORT: that is what `queue.finish` persists.
+                                       # Into the REPORT, not only onto the `Result`: the report is
+                                       # what `queue.finish` persists.
                                        findings=notes),
                   findings=notes, diagnostics_path=diagnostics_path)
+
+
+def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
+            diagnostics_path: str = "") -> Result:
+    """Both ordinary attempts vetoed: its park is the ONE anchor `_unanchorable` names."""
+    def anchoring_park(veto, notes) -> "Result | None":
+        unanchorable = _unanchorable(veto)
+        if not unanchorable:
+            return None
+        # A veto that survived the last pass goes to the STEWARD; only `_triage` may ask.
+        return Result(schema.TRIAGE, "",
+                      report.triage_entity(names=_anchor_veto_names([unanchorable]),
+                                           agent_rationale=getattr(outcome, "summary", ""),
+                                           findings=notes, asked=bool(item.get("asked_at"))),
+                      findings=notes, diagnostics_path=diagnostics_path)
+
+    return _route_refusal(item, findings, outcome, anchoring_park=anchoring_park,
+                          agent_attempts=agent_attempts, diagnostics_path=diagnostics_path)
 
 
 def _uncreatable_type(veto) -> str:
@@ -1029,6 +1078,22 @@ def _write_attached_sources(worktree: str, attachment: SourceAttachment, outcome
                             in zip(paths, parts, strict=True)}}
 
 
+def _stamp_one_source(ctx: gates.GateContext, path: str, *, submitted_by: str, as_of: str,
+                      digest: str, extracted_at: str, page_id: str) -> None:
+    """Stamp ONE `sources/` page with the provenance group — THE source stamp for every flow."""
+    ctx.page_declared[path] = {"page_type": "source"}
+    _rewrite(ctx.worktree, path, lambda text: page_policy.stamp_source_fields(
+        text, submitted_by=submitted_by, as_of=as_of, content_hash=digest,
+        extracted_at=extracted_at, page_id=page_id))
+    # The provenance group MUST appear here — `gate_frontmatter`'s output-equality check covers
+    # only what `stamped_by_path` records, and forging this group re-anchors the whole chain.
+    # Render each value exactly as `page.stamp_source_fields` writes it.
+    ctx.stamped_by_path[path] = {
+        "status": page_policy.FILED_STATUS, "as_of": as_of, "submitted_by": submitted_by,
+        "content_hash": f"sha256:{digest}", "extracted_at": extracted_at, "tier": "1",
+        **({"id": page_id} if page_id else {})}
+
+
 def _stamp_attached_sources(ctx: gates.GateContext, deps: Deps, item: dict,
                             ids_by_path: dict) -> None:
     """Stamp the attachment's source pages with the PROVENANCE group (never the fast-lane group
@@ -1038,17 +1103,9 @@ def _stamp_attached_sources(ctx: gates.GateContext, deps: Deps, item: dict,
     digest = hashlib.sha256((ctx.material or "").encode("utf-8")).hexdigest()
     extracted_at = datetime.datetime.now(datetime.UTC).isoformat()
     for path in sorted(ctx.provenance_pages):
-        page_id = str(ids_by_path.get(path) or "")
-        ctx.page_declared[path] = {"page_type": "source"}
-        _rewrite(ctx.worktree, path, lambda text, d=digest, e=extracted_at, pid=page_id:
-                 page_policy.stamp_source_fields(text, submitted_by=item["submitted_by"],
-                                                 as_of=deps.as_of(), content_hash=d,
-                                                 extracted_at=e, page_id=pid))
-        ctx.stamped_by_path[path] = {
-            "status": page_policy.FILED_STATUS, "as_of": deps.as_of(),
-            "submitted_by": item["submitted_by"],
-            "content_hash": f"sha256:{digest}", "extracted_at": extracted_at, "tier": "1",
-            **({"id": page_id} if page_id else {})}
+        _stamp_one_source(ctx, path, submitted_by=item["submitted_by"], as_of=deps.as_of(),
+                          digest=digest, extracted_at=extracted_at,
+                          page_id=str(ids_by_path.get(path) or ""))
 
 
 # The drive flow: conversion at the worker, then the fast lane with the attachment ON. The
@@ -1182,17 +1239,8 @@ def process_meeting_item(conn, item: dict, deps: Deps) -> Result:
         return early
     settings = deps.settings
 
-    base = gitcmd.base_ref(deps.repo, settings.branch)
-    if settings.require_remote_base and not base.remote:
-        raise StaleBaseError(
-            f"the base resolved to the local {base.describe()} instead of origin/{settings.branch} "
-            f"— the fetch failed, so this deployed worker would judge capture #{item['id']} "
-            f"against a commit the remote may have moved past. The capture is left in the queue")
-    log.info("filing meeting submission %s against %s", item["id"], base.describe())
-
-    deps = dataclasses.replace(deps,
-                               registry=base_inputs.load_registry(deps.repo, base),
-                               acl_config=base_inputs.load_acl(deps.repo, base))
+    base, deps = _resolve_filing_base(item, deps, log_noun="meeting submission",
+                                      stale_tail=_STALE_BASE_TAIL_MEETING)
     passes = AgentPasses()
     meeting_meta = _meeting_meta(item)
     with base_inputs.linter_at(deps.repo, base) as linter_path, \
@@ -1763,23 +1811,12 @@ def _stamp_meeting(ctx: gates.GateContext, deps: Deps, item: dict, outcome,
     decisions_by_path = written.get("decisions_by_path", {})
 
     source_ids_by_path = written.get("source_ids_by_path", {})
+    digest = hashlib.sha256((ctx.material or "").encode("utf-8")).hexdigest()
+    extracted_at = datetime.datetime.now(datetime.UTC).isoformat()
     for path in source_pages:
-        page_id = str(source_ids_by_path.get(path) or "")
-        ctx.page_declared[path] = {"page_type": "source"}
-        digest = hashlib.sha256((ctx.material or "").encode("utf-8")).hexdigest()
-        extracted_at = datetime.datetime.now(datetime.UTC).isoformat()
-        _rewrite(ctx.worktree, path, lambda text, d=digest, e=extracted_at, pid=page_id:
-                 page_policy.stamp_source_fields(text, submitted_by=item["submitted_by"],
-                                                 as_of=as_of, content_hash=d, extracted_at=e,
-                                                 page_id=pid))
-        # The provenance group MUST appear here — `gate_frontmatter`'s output-equality check covers
-        # only what `stamped_by_path` records, and forging this group re-anchors the whole chain.
-        # Render each value exactly as `page.stamp_source_fields` writes it.
-        ctx.stamped_by_path[path] = {
-            "status": page_policy.FILED_STATUS, "as_of": as_of,
-            "submitted_by": item["submitted_by"],
-            "content_hash": f"sha256:{digest}", "extracted_at": extracted_at, "tier": "1",
-            **({"id": page_id} if page_id else {})}
+        _stamp_one_source(ctx, path, submitted_by=item["submitted_by"], as_of=as_of,
+                          digest=digest, extracted_at=extracted_at,
+                          page_id=str(source_ids_by_path.get(path) or ""))
 
     for path in meeting_pages:
         ctx.page_declared[path] = {"page_type": "meeting"}   # no "anchoring" key: provenance only
@@ -1826,30 +1863,12 @@ def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
                   *, reuse=None) -> Result:
     """The gates passed over the whole SET: one commit, push, report. `written` carries the
     code-computed source parts and the decision-path-to-anchoring map."""
-    from stigmergy.librarian import githubapp
-
     meeting_pages, decision_pages = _meeting_pages(ctx), sorted(_decision_pages(ctx))
     # In PART order, not alphabetical — `-p2` sorts before the bare stem's `.md`.
     source_pages = [f"{MEETING_SOURCE_PREFIX}{stem}.md" for stem in written["source_stems"]]
     meeting_page = meeting_pages[0]
     message = _meeting_commit_message(item, outcome, len(decision_pages))
-    author_name, author_email = githubapp.identity()
-    # Same TOCTOU close as `_file`'s, and the window is longer here: more pages, more gate work.
-    gitcmd.commit(worktree, message=message, author_name=author_name, author_email=author_email,
-                  gated_entries=ctx.entries)
-
-    remote_url, config_env = "", {}
-    if githubapp.configured():
-        slug = _repo_slug(deps.repo)
-        remote_url = githubapp.push_url(slug)
-        config_env = githubapp.push_config(githubapp.installation_token(), slug)
-
-    if not queue.holds_lease(conn, item["id"], expected_attempts=item["attempts"]):
-        raise LeaseLostError(
-            f"the lease on submission {item['id']} (delivery {item['attempts']}) was lost while "
-            f"this meeting was being processed; nothing was pushed")
-    sha = gitcmd.push(worktree, branch=deps.settings.branch, remote_url=remote_url,
-                      config_env=config_env, author_name=author_name, author_email=author_email)
+    sha = _commit_and_push(conn, item, deps, ctx, worktree, message, what="this meeting")
 
     decisions_by_path = written.get("decisions_by_path", {})
     decisions = [{"path": path, "anchoring": (decisions_by_path.get(path) or {}).get("anchoring", {})}
@@ -1911,72 +1930,19 @@ def _triage_meeting(item: dict, deps: Deps, outcome) -> Result:
 
 def _refuse_meeting(item, findings, outcome, *, agent_attempts: int = 0,
                     diagnostics_path: str = "") -> Result:
-    """Both meeting-agent passes vetoed. Reuses the ordinary flow's routing helpers; the anchoring
-    park is meeting-specific because a page SET can carry one unresolved anchor per decision."""
-    veto = gates.vetoes(findings)
-    notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
-
-    secret = next((f for f in veto if f.gate == "secrets" and f.code == "secret"), None)
-    if secret:
-        # From `values`, and matched on gate AND code — see `_refuse`.
-        line, rule = secret.values
-        return Result(schema.REJECTED, "",
-                      report.rejected_secret(line=line, rule_id=rule,
-                                             where="the drafted page"),
-                      diagnostics_path=diagnostics_path)
-    # Gate AND code, and irreversible if wrong: `reason_code=pii` is in `schema.WITHHELD_REASONS`,
-    # so `worker._finish` purges the submitter's payload and hints immediately.
-    pii = next((f for f in veto if f.gate == "pii" and f.code == "pii"), None)
-    if pii:
-        label = pii.message.split("what looks like ", 1)[-1].split(" near line")[0]
-        return Result(schema.REJECTED, "",
-                      report.rejected_pii(line=pii.locator.rsplit(":", 1)[-1],
-                                          pattern_label=label, where="the drafted page"),
-                      diagnostics_path=diagnostics_path)
-
-    # `repairable` excludes the UNREPAIRABLE zone findings: no agent in this flow could have
-    # produced them, so they are system faults and must not read as steering just because a
-    # category was declared alongside. `locator` too — see `_refuse`.
-    zone = next((f for f in veto if f.gate == "zone" and f.repairable and f.locator), None)
-    categories = _injection_categories(outcome)
-    if zone and categories:
-        return Result(schema.REJECTED, "",
-                      report.rejected_steering(path=zone.locator, category=categories[0],
-                                               findings=notes),
-                      diagnostics_path=diagnostics_path)
-
-    if _frontmatter_only(veto):
-        codes = {f.code for f in veto}
-        builder = (report.rejected_malformed_frontmatter if codes == {"unparseable"}
-                  else report.rejected_forged_field)
-        return Result(schema.REJECTED, "", builder(findings=notes),
-                      diagnostics_path=diagnostics_path)
-
-    uncreatable = _uncreatable_type(veto)
-    if uncreatable:
-        return Result(schema.TRIAGE, "",
-                      report.triage_type(judged_type=uncreatable,
-                                         agent_rationale=getattr(outcome, "summary", ""),
-                                         findings=notes),
-                      findings=notes, diagnostics_path=diagnostics_path)
-
-    # The meeting-specific park: only when EVERY veto is anchoring-unresolved does the whole
-    # capture park atomically. Anything else mixed in falls through to `failed`.
-    anchoring_vetoes = [f for f in veto
-                       if f.gate == "anchoring" and f.code == gates.ANCHORING_UNRESOLVED]
-    if anchoring_vetoes and len(anchoring_vetoes) == len(veto):
+    """Both meeting passes vetoed: its park is meeting-specific because a page SET can carry one
+    unresolved anchor per decision, so the WHOLE set parks or none of it does."""
+    def anchoring_park(veto, notes) -> "Result | None":
+        # Only when EVERY veto is anchoring-unresolved does the whole capture park atomically.
+        # Anything else mixed in falls through to `failed`.
+        anchoring_vetoes = [f for f in veto
+                           if f.gate == "anchoring" and f.code == gates.ANCHORING_UNRESOLVED]
+        if not anchoring_vetoes or len(anchoring_vetoes) != len(veto):
+            return None
         names = _anchor_veto_names(anchoring_vetoes) or [schema.UNNAMED_ENTITY_PLACEHOLDER]
         rep = report.triage_entity(names=names, agent_rationale=getattr(outcome, "summary", ""),
                                    findings=notes, asked=bool(item.get("asked_at")), meeting=True)
         return Result(schema.TRIAGE, "", rep, findings=notes, diagnostics_path=diagnostics_path)
 
-    worst = veto[0] if veto else None
-    return Result(schema.FAILED, "",
-                  report.failed_system(attempts=item.get("attempts", 1),
-                                       agent_attempts=agent_attempts,
-                                       stage=worst.gate if worst else "gates",
-                                       reason=worst.message if worst else "unknown",
-                                       # Into the REPORT, not only onto the `Result`: the report is
-                                       # what `queue.finish` persists.
-                                       findings=notes),
-                  findings=notes, diagnostics_path=diagnostics_path)
+    return _route_refusal(item, findings, outcome, anchoring_park=anchoring_park,
+                          agent_attempts=agent_attempts, diagnostics_path=diagnostics_path)
