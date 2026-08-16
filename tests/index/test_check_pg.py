@@ -120,11 +120,31 @@ def test_no_registry_skips_coverage_instead_of_inventing_findings(checked):
 
 
 def test_a_malformed_registry_raises_loudly(checked, tmp_path):
+    """The message is the LOADER's now (`kernel.registry.load_registry`), not a second one this
+    module used to spell for itself — the check reads the registry the way the server does."""
     conn, _ = checked
     bad = tmp_path / "registry.json"
     bad.write_text('{"not-entities": []}')
-    with pytest.raises(ValueError, match="malformed entity registry"):
+    with pytest.raises(ValueError, match="top-level 'entities' object is required"):
         check.run_checks(conn, registry_path=str(bad))
+
+
+def test_a_nameless_entity_is_refused_the_way_the_loader_refuses_it(checked, tmp_path):
+    """OLD BEHAVIOUR: accepted in silence — `registry_ids` returned `{'vantage'}` and the check
+    reported a clean substrate.
+
+    The lint hand-parsed the registry (`json.load` + a top-level shape assertion) instead of
+    reading it through `kernel.registry.load_registry`, so it validated STRICTLY LESS than the
+    loader every consumer actually uses. An entity with no `name` passed the lint and then made
+    `load_registry` raise at server startup: `stigmergy-index --check` blessed a substrate the
+    server refuses to load, which is the one thing this lint exists to prevent.
+    """
+    conn, _ = checked
+    nameless = tmp_path / "registry.json"
+    nameless.write_text('{"entities": {"vantage": {"type": "organization", "aliases": []}}}')
+
+    with pytest.raises(ValueError, match="needs at least a 'name'"):
+        check.run_checks(conn, registry_path=str(nameless))
 
 
 def test_findings_order_errors_first(checked):

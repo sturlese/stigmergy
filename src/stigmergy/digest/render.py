@@ -40,14 +40,14 @@ def _render_health(health: dict) -> list[str]:
     # "the sweep did not complete" — appended in BOTH branches below, regardless of `total`.
     sweep_incomplete = health.get("sweep_incomplete", False)
     if total == 0:
-        lines.append(f"Latest gardener run: {run_date} — 0 finding(s): every check came back "
-                     f"clean")
+        lines.append(f"Latest gardener run: {run_date} — {total} {_plural(total, 'finding')}: "
+                     f"every check came back clean")
         if sweep_incomplete:
             lines.append("(model sweep did not complete that run)")
         return lines
 
     counts = health["counts_by_severity"]
-    lines.append(f"Latest gardener run: {run_date} — {total} finding(s): "
+    lines.append(f"Latest gardener run: {run_date} — {total} {_plural(total, 'finding')}: "
                 f"{counts[gardener_schema.SEVERITY_SLA]} sla, "
                 f"{counts[gardener_schema.SEVERITY_WARN]} warn, "
                 f"{counts[gardener_schema.SEVERITY_INFO]} info")

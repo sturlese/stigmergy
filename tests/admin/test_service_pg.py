@@ -1,6 +1,7 @@
 """AdminService over the real queue/tables (stigmergy_test). The dispositions land through the
 SAME library seams the CLIs use, so what these prove is parity, not a parallel implementation."""
 import asyncio
+import json
 import os
 
 import pytest
@@ -16,6 +17,7 @@ from stigmergy.admin.service import (
 )
 from stigmergy.capture import dispositions, ops, queue
 from stigmergy.capture import schema as capture_schema
+from stigmergy.capture.errors import CaptureError
 from stigmergy.gardener.schema import JOB_NAME as GARDENER_JOB
 from stigmergy.gardener.schema import ensure_gardener_schema
 from stigmergy.gardener.store import insert_findings
@@ -74,6 +76,29 @@ def test_queue_show_returns_the_whole_trace_and_404s_on_nothing(conn, service):
     assert trace["queue_wait_ms"] is None
     with pytest.raises(AdminNotFound):
         service.queue_show(999_999)
+
+
+def test_a_report_that_is_not_an_object_is_served_unshaped_not_a_500(conn, service):
+    """OLD BEHAVIOUR: `AttributeError` out of `_traced_fields`, which the routes turn into a 500 —
+    the whole detail view lost, for one column's shape.
+
+    `report` is JSONB with no CHECK constraint behind it, so "an object" is a convention this
+    codebase's writers keep, never something the column enforces: a hand-run `UPDATE`, a migration
+    or any other writer can leave a scalar there. `_traced_fields` dict-comprehended `report`
+    unconditionally while its sibling `hints` line right below already guarded with `isinstance` —
+    the same tolerance, one line apart, applied to only one of them. Passed through UNSHAPED is
+    deliberate: sanitizing runs per key over an object, and there are no keys here; the console
+    renders what is there rather than hiding the row.
+    """
+    ack = submit_one(conn)
+    with conn.cursor() as cur:   # the shape no writer here produces, and nothing stops arriving
+        cur.execute("UPDATE capture_queue SET report = %s::jsonb WHERE id = %s", ('"oops"', ack["id"]))
+
+    trace = service.queue_show(ack["id"])
+
+    assert trace["id"] == ack["id"]
+    assert trace["report"] == "oops"
+    assert service.queue_list()["submissions"][0]["id"] == ack["id"], "the list view survives too"
 
 
 def test_untrusted_text_reaches_the_wire_without_control_characters(conn, service):
@@ -392,12 +417,72 @@ def test_digest_preview_builds_a_body_and_post_refuses_without_its_pieces(conn, 
         asyncio.run(service.digest_post(actor="steward"))
 
 
+# ── the async mutation seam must refuse the way its sync twin does ────────────────────────────────
+# `digest_post` is `_mutate_async`'s only caller, and its `_post` closure reaches `digest.run` ->
+# the queue and the Slack Web API — so the CaptureError branch is exercised at the seam itself
+# rather than by manufacturing a library failure three packages down through a real Slack post.
+def test_an_async_mutation_refused_by_a_library_is_the_same_409_its_sync_twin_gives(conn, service):
+    """OLD BEHAVIOUR: a 500. `_mutate` maps `CaptureError` to `AdminRefused` — the routes' 409,
+    carrying the library's own operator-facing sentence — and `admin/index.md` promises that
+    mapping for `_mutate`/`_mutate_async` alike. `_mutate_async` had only `except Exception`, so the
+    identical refusal came back through the routes' last-resort arm as an opaque server error, and
+    the operator lost the sentence telling them what to do about it."""
+    async def _refuse(_by):
+        raise CaptureError("nothing to post — the window is empty")
+
+    with pytest.raises(AdminRefused, match="the window is empty"):
+        asyncio.run(service._mutate_async("digest.post", "steward", {}, _refuse))
+
+    recorded = _actions(conn)[0]
+    assert (recorded["actor"], recorded["action"], recorded["outcome"]) == \
+        ("steward", "digest.post", "error")
+    assert recorded["error_class"] == "CaptureError", (
+        "admin_actions must keep the library's OWN exception class, not the AdminRefused it was "
+        "renamed to on the way out — the same rule `entity_approve` already holds")
+
+
+def test_an_async_mutation_failing_for_any_other_reason_still_propagates_unrenamed(conn, service):
+    """The benign twin of the branch above: only a domain refusal becomes `AdminRefused`. Anything
+    else stays itself all the way to the routes' 500, class name only — a genuine fault must never
+    be dressed up as an operator-actionable refusal."""
+    async def _boom(_by):
+        raise RuntimeError("psycopg fell over mid-post")
+
+    with pytest.raises(RuntimeError, match="psycopg fell over"):
+        asyncio.run(service._mutate_async("digest.post", "steward", {}, _boom))
+
+    assert _actions(conn)[0]["error_class"] == "RuntimeError"
+
+
 def test_index_state_and_substrate_check_run_over_the_real_store(service):
     state = service.index_state()
     assert state["meta"]["model"] == "fake-hashed-bow-256"   # the fake embedder's own signature
     assert state["zones"] == {}
     check = service.index_substrate_check()
     assert check["errors"] == 0 and isinstance(check["findings"], list)
+
+
+def test_a_registry_the_loader_refuses_reads_as_a_refusal_not_a_500(conn, admin_settings,
+                                                                    tmp_path):
+    """OLD BEHAVIOUR: a 500 with the class name and nothing else. `index_substrate_check` caught
+    `StigmergyIndexError` only, while the registry it points at is read through
+    `kernel.registry.load_registry`, which raises a bare `ValueError` for a nameless entity — the
+    very case `index.check.registry_ids` exists to stop blessing. The operator got "the operation
+    failed (ValueError)" for a file the loader could describe precisely.
+
+    It is a refusal, not a fault: the substrate the console was pointed at is broken, the loader's
+    own sentence names the file and the entity, and `AdminRefused` is what carries an
+    operator-actionable sentence to the console (409)."""
+    registry = tmp_path / "entity-registry.json"
+    registry.write_text(json.dumps({"entities": {"acme": {"aliases": []}}}))   # no 'name'
+    broken = AdminService(conn, server_settings=Settings(entity_registry_path=str(registry)),
+                          admin_settings=admin_settings)
+
+    with pytest.raises(AdminRefused) as caught:
+        broken.index_substrate_check()
+
+    assert "'acme'" in str(caught.value) and "name" in str(caught.value), (
+        "the loader's own sentence is the point — it says which file and which entity")
 
 
 # ── entities: read ────────────────────────────────────────────────────────────────────────────

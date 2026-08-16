@@ -19,7 +19,7 @@ from contextlib import redirect_stdout
 import pytest
 
 from stigmergy.capture import schema
-from stigmergy.entities import cli, clone, generator, situations
+from stigmergy.entities import cli, clone, generator, mint, situations
 from stigmergy.kernel.normalize import normalize
 from tests import adversarial_payloads
 from tests.entities import conftest as fx
@@ -457,6 +457,84 @@ def test_the_post_rebase_retry_benign_twin_two_unrelated_entities_both_land(tmp_
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
+# `--repo`: what the three operator CLIs agree a checkout is
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+def test_repo_accepts_a_real_git_worktree_checkout(repo, tmp_path):
+    """**Old behaviour: `isdir(os.path.join(path, ".git"))` refused a genuine worktree.** A
+    `git worktree add` checkout carries a `.git` FILE (a `gitdir:` pointer), not a directory, so
+    this door told a steward working in one that it "is not a git checkout" — while
+    `stigmergy-views`, pointed at the same directory, accepted it. Two commands, one checkout, two
+    answers about what it is.
+
+    A REAL worktree, not a hand-written `.git` file: what is being pinned is that git's own
+    on-disk shape is accepted, and a fixture that writes the pointer itself only proves the
+    predicate matches the fixture.
+    """
+    _remote, steward = repo
+    worktree = str(tmp_path / "worktree")
+    subprocess.run(["git", "worktree", "add", "-b", "steward-wt", worktree], cwd=steward,
+                   check=True, capture_output=True, text=True)
+    assert os.path.isfile(os.path.join(worktree, ".git")), "fixture: git must have written a FILE"
+
+    assert cli._repo(Args(repo=worktree)) == os.path.abspath(worktree)
+
+
+def test_repo_still_refuses_a_plain_directory_in_the_same_words(tmp_path):
+    """The benign twin: widening to `exists` must not turn the guard off. A directory with no
+    `.git` at all is still refused, and still with the sentence a steward may already have
+    searched for."""
+    from stigmergy.entities.errors import EntityError
+
+    plain = str(tmp_path / "not-a-checkout")
+    os.makedirs(plain)
+    with pytest.raises(EntityError) as caught:
+        cli._repo(Args(repo=plain))
+    assert str(caught.value) == (
+        f"{os.path.abspath(plain)} is not a git checkout — `--repo` (or $STIGMERGY_REPO) must "
+        f"point at your clone of the knowledge repo, because every command here commits to it "
+        f"with your own git identity")
+
+
+@pytest.mark.parametrize("content, label", [
+    (b"notes to self\n", "junk text"),
+    (b"\x00\x01\x02\xff\xfe", "binary"),
+    (b"", "empty"),
+])
+def test_repo_refuses_a_directory_whose_dot_git_is_a_junk_file(tmp_path, content, label):
+    """**Old behaviour: `os.path.exists(path/".git")` accepted ANY `.git` entry.** Widening from
+    `isdir` to `exists` for the sake of `git worktree add` also accepted a stray FILE named `.git`
+    — a leftover, a note, a binary — as a checkout. The command then committed with the steward's
+    own identity into a directory git does not manage, and the refusal a steward could have acted
+    on never fired.
+
+    A real worktree's `.git` file is a `gitdir:` pointer, so that prefix is the requirement now;
+    an unreadable or binary one refuses rather than raising, because a predicate that throws is
+    worse for the caller than one that says no. Its benign twin is
+    `test_repo_accepts_a_real_git_worktree_checkout` above, which is driven by git itself."""
+    from stigmergy.entities.errors import EntityError
+
+    junk = tmp_path / f"junk-{label}"
+    junk.mkdir()
+    (junk / ".git").write_bytes(content)
+
+    with pytest.raises(EntityError, match="is not a git checkout"):
+        cli._repo(Args(repo=str(junk)))
+
+
+def test_the_checkout_predicate_answers_false_for_an_unreadable_dot_git_never_raises(tmp_path):
+    """The predicate is a PREDICATE (see its docstring): reading the pointer must not turn an
+    odd filesystem into an exception the CLIs have no arm for — each of them writes its own
+    refusal around a `False`, and a raise from here would surface as a traceback instead."""
+    from stigmergy.librarian import config as librarian_config
+
+    dangling = tmp_path / "dangling"
+    dangling.mkdir()
+    os.symlink(str(tmp_path / "nowhere"), str(dangling / ".git"))
+
+    assert librarian_config.is_repo_checkout(str(dangling)) is False
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
 # `regenerate`: idempotence's own CLI surface
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 def test_regenerate_check_is_clean_on_a_fresh_repo(repo):
@@ -514,3 +592,40 @@ def test_a_keyboard_interrupt_during_create_is_answered_cleanly_not_with_a_trace
     assert "Traceback" not in err
     assert "interrupted" in err
     assert "not pushed" in err or "local clone" in err
+
+
+def test_a_keyboard_interrupt_before_the_commit_rolls_the_clone_back(repo, monkeypatch):
+    """**Old behaviour: Ctrl-C during the pre-commit gates left the clone dirty.** `mint`'s
+    rollback arm was `except Exception`, which cannot see a `KeyboardInterrupt` — so an operator
+    who interrupted the window between `write_page` and the commit (the registry regeneration and
+    the gitleaks scan, the slowest thing here and therefore the likeliest moment to hit Ctrl-C)
+    was left with an untracked entity page AND a rewritten `ops/entity-registry.json`. The next
+    `create`/`approve` then refused on `ensure_clean` — a dirty tree it had made itself, blamed on
+    the steward's own work. `views/regenerate.run` names `KeyboardInterrupt` explicitly for the
+    identical window; this one only had to widen to `BaseException`.
+
+    Interrupted at `_refuse_secrets`, i.e. AFTER `generator.regenerate` has already rewritten the
+    registry: interrupting the try block's first statement would restore a registry nothing had
+    touched yet and prove nothing about the rollback.
+    """
+    _remote, steward = repo
+    registry_path = os.path.join(steward, "ops", "entity-registry.json")
+    page_path = os.path.join(steward, "wiki", "entities", "Globex.md")
+    with open(registry_path, encoding="utf-8") as f:
+        registry_before = f.read()
+
+    def _boom(*a, **kw):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(mint, "_refuse_secrets", _boom)
+    rc, _out, _err = run_cli("--repo", steward, "--branch", "main", "create",
+                             "--id", "globex", "--name", "Globex", "--type", "organization",
+                             "--today", "2026-07-27")
+
+    assert rc == cli.EXIT_INTERRUPTED
+    assert not os.path.exists(page_path), "the page this command wrote must not survive its own abort"
+    with open(registry_path, encoding="utf-8") as f:
+        assert f.read() == registry_before, "the registry must be back to its pre-mint bytes"
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=steward,
+                            capture_output=True, text=True, check=True).stdout
+    assert status == "", f"the clone must be clean again, not {status!r}"

@@ -90,6 +90,54 @@ def _in_repo(repo: str, relpath: str) -> str:
     return os.path.join(repo, *relpath.split("/"))
 
 
+# ── which checkout a `--repo` means, and whether it is one ─────────────────────────────────────
+# Every operator CLI that takes a `--repo` resolves it the same way and against the same
+# constants — one precedence and one opinion about what a checkout is, instead of a copy per CLI.
+# TWO copies remain in this package, both deliberate and neither an operator CLI: `bootstrap.main`
+# resolves the same precedence inline because it runs BEFORE a checkout exists (it is the thing
+# that makes one, so the predicate below has nothing to be true about yet), and `Settings.from_args`
+# resolves it as one field among many for the worker, which is handed a path it does not have to
+# absolutize — `gitcmd` runs every command with `cwd=repo`. Making `Settings` absolutize is a
+# behaviour change for anyone passing a relative `--repo`, so it is a separate change, not this one.
+def repo_path(explicit: str = "") -> str:
+    """WHICH knowledge-repo checkout a command was pointed at, as an absolute path: an explicit
+    `--repo`, else `$STIGMERGY_REPO`, else the default. Answers WHERE only — a command that has to
+    WRITE to the checkout pairs this with `is_repo_checkout` below and writes its own refusal when
+    the predicate is false (each CLI owns its sentence; only the judgement is shared)."""
+    return os.path.abspath(explicit or os.environ.get(REPO_ENV) or REPO_DEFAULT)
+
+
+def is_repo_checkout(path: str) -> bool:
+    """The ONE predicate for "is this a git checkout" — what a command that commits to the repo
+    asks before it writes anything.
+
+    `.git` is a DIRECTORY in an ordinary clone but a FILE (a `gitdir:` pointer) in a
+    `git worktree add` checkout, so `isdir` alone is the bug: it refuses a genuine worktree. That
+    was a real disagreement, not a hypothetical — `stigmergy-entities` refused a worktree
+    `stigmergy-views` accepted, for the same directory.
+
+    Bare `exists` is the OTHER bug: it accepts a stray file named `.git` — a leftover, a note, a
+    binary — and the caller then commits with the steward's own identity into a directory git does
+    not manage. So the FILE case has to look like what git writes: a `gitdir:` pointer. Unreadable
+    or binary answers `False`, never raises.
+
+    A PREDICATE, deliberately, rather than a resolver that raises: a caller in `entities` may not
+    interpolate a foreign exception's text into its refusal (`tests/test_architecture.py`'s
+    `test_an_entities_refusal_never_splices_a_caught_exceptions_text`, because `server.review`
+    echoes those refusals to a steward verbatim). Each CLI therefore writes its own sentence
+    around the path it already holds, and only the JUDGEMENT is shared.
+    """
+    dot_git = os.path.join(path, ".git")
+    if os.path.isdir(dot_git):
+        return True
+    try:
+        with open(dot_git, "rb") as f:
+            head = f.read(64)
+    except OSError:
+        return False
+    return head.startswith(b"gitdir:")
+
+
 # Where a refused diff is preserved for diagnosis. Deliberately NOT under
 # `gitcmd.WORKTREE_PREFIX`: startup reaping would sweep it before anyone read it.
 REFUSED_DIFF_DIRNAME = "stigmergy-refused-diffs"

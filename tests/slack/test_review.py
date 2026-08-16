@@ -17,6 +17,7 @@ from stigmergy.entities import remote as entities_remote
 from stigmergy.entities.errors import EntityError
 from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.librarian import gitcmd, githubapp
+from stigmergy.librarian.errors import LibrarianConfigError
 from stigmergy.server import review as server_review
 from stigmergy.server.settings import Settings
 from stigmergy.slack import copy, render, review
@@ -725,6 +726,68 @@ def test_a_stale_entity_mint_after_the_row_left_triage_names_the_real_status_not
 # `review_decide_safe` (as `test_entity_mint_modal_submission_calls_review_decide_safe_with_the_
 # collected_metadata` above uses) proves the CALL is shaped correctly, never that a real attempt
 # through the real door mints nothing.
+def test_the_entity_mint_modal_never_opens_for_a_resolved_non_steward(env, conn):
+    """OLD BEHAVIOUR: the modal opened for ANY resolved identity. `handle_block_action`'s
+    entity-proposal Approve branch gated on identity RESOLUTION alone, then read the SYSTEM-WIDE,
+    unscoped review queue (`_mint_modal_inputs` -> `review.items_for_doorbell`) and rendered the
+    proposal's `subjects` — names lifted verbatim out of someone else's captured material — to
+    anyone in the workspace who could reach the button. Only the SUBMIT leg checked stewardship
+    (`_guard_governance_decision`), which is too late: the read has already happened by then.
+
+    The refusal is `NOT_YOURS_TO_DECIDE`, byte-identical to the one the decide leg carries, so this
+    path tells a non-steward nothing the other one would not have. Its benign twin is
+    `test_entity_proposal_approve_button_opens_the_mint_modal_with_the_name_prefilled` above: a
+    listed steward still gets the modal, prefill and all.
+    """
+    gw = FakeSlackGateway()
+    ctx = make_ctx(env, conn, gateway=gw)
+    gw.seed_email(ALICE, "U_ALICE")   # ALICE resolves, but ops/stewards.json names only STEWARD
+    item_id = _park_capture(conn, MemoryEvidenceStore(), submitted_by=STEWARD,
+                            situation=capture_schema.SITUATION_UNRESOLVED_ENTITY,
+                            names=["Globex Robotics"])
+
+    _run(review.handle_block_action(
+        ctx, action_id="review-modal:entity-proposal:approve", value=str(item_id),
+        trigger_id="T1", channel_id="U_ALICE", slack_user_id="U_ALICE", event_team_id=TEAM_ID))
+
+    assert gw.opened_views == [], (
+        "the modal renders the proposal's unresolved names — a non-steward must never see it")
+    assert len(gw.posted) == 1
+    assert gw.posted[0].text == server_review.NOT_YOURS_TO_DECIDE
+
+
+def test_a_broken_steward_map_refuses_the_mint_modal_instead_of_going_silent(env, conn,
+                                                                            monkeypatch):
+    """OLD BEHAVIOUR: `is_steward` promised "never an exception" and did not keep it — a malformed
+    `ops/stewards.json` (or a checkout `gitcmd` chokes on) raised `LibrarianConfigError` straight
+    out of the READ gate, past `handle_block_action` and into `app.py`'s last-resort logger. The
+    steward's click produced no modal AND no message: a fault was indistinguishable from a click
+    that never registered.
+
+    The predicate now fails closed, so this leg behaves like any other refusal: no view opens and
+    the steward is told, byte-identically to the ordinary refusal. `test_the_entity_mint_modal_
+    never_opens_for_a_resolved_non_steward` above is the same assertion for a real non-steward."""
+    def boom(*_a, **_k):
+        raise LibrarianConfigError("ops/stewards.json is not valid JSON")
+
+    monkeypatch.setattr(server_review, "load_stewards", boom)
+    gw = FakeSlackGateway()
+    ctx = make_ctx(env, conn, gateway=gw)
+    gw.seed_email(STEWARD, STEWARD_SLACK_ID)
+    item_id = _park_capture(conn, MemoryEvidenceStore(), submitted_by=ALICE,
+                            situation=capture_schema.SITUATION_UNRESOLVED_ENTITY,
+                            names=["Globex Robotics"])
+
+    _run(review.handle_block_action(
+        ctx, action_id="review-modal:entity-proposal:approve", value=str(item_id),
+        trigger_id="T1", channel_id=STEWARD_SLACK_ID, slack_user_id=STEWARD_SLACK_ID,
+        event_team_id=TEAM_ID))
+
+    assert gw.opened_views == [], "a fault must not serve the material the gate exists to withhold"
+    assert len(gw.posted) == 1, "silence is the one answer this click must never get"
+    assert gw.posted[0].text == server_review.NOT_YOURS_TO_DECIDE
+
+
 def test_entity_mint_modal_submission_non_steward_is_refused_and_mints_nothing(
         drift_free_env, conn):
     """The Slack-door twin of `tests/server/test_review.py::

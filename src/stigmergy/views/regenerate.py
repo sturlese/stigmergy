@@ -48,18 +48,43 @@ class RegenOutcome:
     timeline_shown: int = 0
 
 
+@dataclass(frozen=True)
+class _RemovalCause:
+    """Why a view was removed, in the two lengths its two readers need: `tail` closes the commit
+    subject somebody skims in `git log`, `message` is the sentence a steward reads on the terminal
+    and in `--json`. ONE object per cause, so the log and the report can never name different
+    causes for the same write — which is what happened while the CLI had to guess: it knew a
+    removal had occurred and not which road led there, so it stated one of the two as fact for
+    both."""
+    tail: str
+    message: str
+
+
+REMOVED_DEREGISTERED = _RemovalCause(
+    tail="entity de-registered",
+    message="entity de-registered — its pages are untouched, but nothing in the registry governs "
+            "a member set for them any more")
+REMOVED_NO_MEMBERS = _RemovalCause(
+    tail="no anchored pages remain",
+    message="no anchored pages remain — the last page anchored to it is gone (superseded or "
+            "re-anchored elsewhere)")
+
+
 def _remove_view(repo: str, entity_id: str, *, entity_name: str, branch: str, guarded: bool,
-                 commit_message: str) -> RegenOutcome:
+                 cause: _RemovalCause) -> RegenOutcome:
     """Delete a view that has no member set left, and commit the deletion. Both roads here — a
     de-registered entity, and an entity whose last anchored page went away — are the same write;
-    only the commit message differs, because the two reasons are not one reason."""
+    only the CAUSE differs, because the two reasons are not one reason, and it travels on the
+    outcome as well as into the commit: a caller reading `action == "removed"` cannot re-derive
+    which road was taken."""
     if guarded:
         writer.ensure_on_branch(repo, branch)
         writer.ensure_clean(repo)
     os.remove(view_path(repo, entity_id))
-    sha = writer.commit_and_push(repo, branch=branch, message=commit_message)
+    sha = writer.commit_and_push(repo, branch=branch,
+                                 message=f"chore(views): remove {entity_id} — {cause.tail}\n")
     return RegenOutcome(entity_id=entity_id, entity_name=entity_name, action="removed",
-                        commit=sha, path=view_relpath(entity_id))
+                        message=cause.message, commit=sha, path=view_relpath(entity_id))
 
 
 async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, branch: str = "main",
@@ -80,7 +105,7 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
         # this is unconditionally a removal.
         return _remove_view(
             repo, entity_id, entity_name=entity_id, branch=branch, guarded=guarded,
-            commit_message=f"chore(views): remove {entity_id} — entity de-registered\n")
+            cause=REMOVED_DEREGISTERED)
     entity_name = entity["name"]
     members = skeleton.members_of(repo, entity_id)
 
@@ -91,7 +116,7 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
                 message=f'no page anywhere in the repo declares entity: ["{entity_id}"] yet')
         return _remove_view(
             repo, entity_id, entity_name=entity_name, branch=branch, guarded=guarded,
-            commit_message=f"chore(views): remove {entity_id} — no anchored pages remain\n")
+            cause=REMOVED_NO_MEMBERS)
 
     member_hash = skeleton.member_hash(members)
     existing_hash = existing_member_hash(repo, entity_id)

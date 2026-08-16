@@ -44,3 +44,33 @@ def test_unparseable_frontmatter_degrades_to_body_only_rather_than_raising():
     fm, body = frontmatter.split_frontmatter("---\ntitle: x: [unclosed\n---\nfindable body\n")
     assert fm == {}
     assert "findable body" in body
+
+
+def test_a_frontmatter_block_that_is_a_list_is_no_frontmatter_at_all():
+    """OLD BEHAVIOUR: `(['a', 'b'], 'body\\n')` — a LIST handed back where the signature, the
+    docstring and every caller promise a dict.
+
+    Valid YAML that is not a mapping parsed cleanly and travelled on, so the type error surfaced
+    one frame later at the caller's first `.get`: `evals/run_filing._page_type` crashed on it, and
+    `entities.generator` only survived because it re-checked the type by hand. The tolerance this
+    parser promises is about the RESULT TYPE too — a block that is not a mapping declares no
+    fields, which is the same observation as having no frontmatter.
+    """
+    fm, body = frontmatter.split_frontmatter("---\n- a\n- b\n---\nbody\n")
+
+    assert fm == {}
+    assert body == "body\n"
+
+
+def test_a_frontmatter_block_that_is_a_scalar_is_no_frontmatter_at_all():
+    """OLD BEHAVIOUR: `(42, 'body\\n')` — an int where the contract promises a dict.
+
+    Same defect as the list case, and the shape a truncated or mis-fenced page reaches this
+    parser as. `index.corpus.split_frontmatter_checked` — the declared stricter twin — already
+    guarded against it; this one did not, and two parsers over one file format only stay honest
+    if what one learns reaches the other.
+    """
+    fm, body = frontmatter.split_frontmatter("---\n42\n---\nbody\n")
+
+    assert fm == {}
+    assert body == "body\n"

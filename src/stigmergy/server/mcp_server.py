@@ -232,7 +232,12 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
                                       aliases=aliases, role=role, requeue=requeue), **_DUMP)
         except (CaptureError, RateLimitError, CapabilityUnavailableError) as ex:
             return _error(str(ex))
-        except Exception as ex:  # noqa: BLE001 — class name only
+        except Exception as ex:  # noqa: BLE001 — same narrowing as read_page: this tool
+            # length-checks `notes`, `name`, `role` and every `alias`, and only `check_arg_length`'s
+            # own marked rejection is known-safe to echo. The tuple above is NOT widened to bare
+            # ValueError — the pydantic-echo hazard read_page's comment names applies here too.
+            if getattr(ex, "is_arg_length_error", False):
+                return _error(str(ex))
             return _failure("review_decide", ex)
 
     # Mounted under `capture_schema.REPLY_TOOL`, never this function's name: the ask-back question

@@ -42,8 +42,10 @@ def _connect(args):
 
 
 def _repo(args) -> str:
-    return (args.repo or os.environ.get(librarian_config.REPO_ENV)
-            or librarian_config.REPO_DEFAULT)
+    """WHERE only — deliberately not the checkout predicate. The digest never commits; it needs a
+    path to resolve `ops/slack-channels.json` against, not a git checkout. `gardener/cli.py`'s
+    twin says the same thing (this package's index.md: change both or neither)."""
+    return librarian_config.repo_path(args.repo)
 
 
 def _gateway():

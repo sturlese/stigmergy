@@ -719,10 +719,13 @@ _WEBHOOK_ALLOWED_LIBRARIAN_SYMBOLS = (
 
 # A SECOND declared exception, mirroring the webhook.py one above. `stigmergy.server.review` is
 # `review_queue`/`review_decide`'s implementation — the SYNCHRONOUS, human-triggered half of the
-# write path. It needs three librarian primitives the async worker already owns, and reusing them
+# write path. It needs four librarian primitives the async worker already owns, and reusing them
 # is the whole point: `gitcmd.base_ref` to read `ops/stewards.json` at the base commit (the same
-# governed-input discipline every other config gets), `base_inputs.load_stewards`/`load_stewards_file` to parse it, and
-# `gates.scan_secrets` over a steward's free-text note. Importing `stigmergy.librarian.worker`/
+# governed-input discipline every other config gets), `base_inputs.load_stewards`/`load_stewards_file` to parse it,
+# `gates.scan_secrets` over a steward's free-text note, and — the fourth, for the same reason
+# `webhook.py` needs it — `errors.LibrarianError`, the base class those first two RAISE, so
+# `is_steward` can keep its "never an exception" promise by catching what its own inputs throw.
+# Importing `stigmergy.librarian.worker`/
 # `processing`/`agent` (the ASYNC queue-drain loop) would still be the layering violation this
 # test exists to catch — a slow agent run inside an MCP call — and
 # `test_server_review_never_imports_the_async_librarian_loop` below asserts that prose rule
@@ -734,6 +737,8 @@ _REVIEW_ALLOWED_LIBRARIAN_SYMBOLS = (
     "stigmergy.librarian.gitcmd",       # base_ref: read ops/stewards.json at the base commit
     "stigmergy.librarian.gates",        # scan_secrets over a steward's own free-text note
     "stigmergy.librarian.base_inputs",  # load_stewards, the governed-input reader
+    "stigmergy.librarian.errors.LibrarianError",   # what the two above raise; is_steward fails
+                                                   # closed on it instead of letting it out
 )
 
 # The prose rule the exception's own comment states but nothing used to assert: importing the

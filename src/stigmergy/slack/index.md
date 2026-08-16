@@ -19,7 +19,7 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 | `replies.py` | the submitter's ask-back reply, and the "Show it here" click |
 | `poller.py` | the push channel back into the thread, over `store.REPORTABLE_STATUSES`, read-only against `capture_queue` |
 | `doorbell.py` | the steward doorbell: read-only over `review.items_for_doorbell`, one DM per (item, steward) per state change, undeliverable outcomes recorded |
-| `review.py` | the Block Kit review surface: buttons calling `review.review_decide_safe`, the free-text note modal and the entity-mint modal |
+| `review.py` | the Block Kit review surface: buttons calling `review.review_decide_safe`, the free-text note modal and the entity-mint modal (the one branch that also gates its READ on `server.review.is_steward`) |
 | `render.py` | the pure `(answer_dict, link_resolver) -> blocks` renderer plus every other message's blocks, doorbell cards and the two modals |
 | `mrkdwn.py` | CommonMark -> Slack `mrkdwn`, code spans protected |
 | `store.py` | this package's own two tables and their DDL: `slack_submissions` and `steward_notifications`. Also the package's only door into `stigmergy.capture` (`.schema` alone) |
@@ -47,6 +47,12 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 - `store` — the only reader/writer of both tables; a new Slack-originated write reuses `reserve`'s
   dedup pattern.
 - `review.review_decide_safe` — the only call `review.py` makes to change anything.
+- `server.review.is_steward(service, "")` — the read-side gate `review.handle_block_action` asks
+  before it opens the entity-mint modal, at the SAME universal scope `_guard_governance_decision`
+  uses for a proposal, refusing with the SAME `NOT_YOURS_TO_DECIDE` sentence. Never a second rule
+  spelled here, and never wrapped in a try of its own: the predicate fails closed on its own
+  faults. Called through `asyncio.to_thread` — on a checkout-backed deployment it runs a real
+  `git fetch`, and Slack's `trigger_id` expires in ~3s.
 - `doorbell._load_stewards_cached` — the notifier's 300s cache. A decision path calls
   `review.load_stewards` fresh instead, so a revoked steward cannot approve off a stale cache.
 - `gateway.SlackGateway` / `FakeSlackGateway` — every handler takes a gateway as an argument.

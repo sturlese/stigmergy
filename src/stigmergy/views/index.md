@@ -70,7 +70,11 @@ Downstream: `librarian.processing` imports `views.regenerate` (post-meeting trig
   signal, on the page itself), optional `acl` — `acl: []` is legal and rendered, never omitted.
 - `RegenOutcome.action`: `written` / `removed` / `unchanged` / `refused-unknown-entity` /
   `refused-no-members`. `removed` fires for two causes: no anchored members left, or a
-  de-registered entity whose view still exists.
+  de-registered entity whose view still exists. WHICH one travels on `RegenOutcome.message`
+  (`REMOVED_NO_MEMBERS` / `REMOVED_DEREGISTERED`, the same pair the commit subject's tail is built
+  from) — no caller re-derives it, and the CLI prints that message ALONE rather than naming a cause
+  of its own: there is no closing sentence true of both roads, and the shared tail it used to
+  append contradicted the de-registration one, where every page still anchors the entity.
 - `RunResult.stats`: `checked`/`written`/`withheld`/`removed`/`unchanged`/`refused` — a property,
   read by both `--json` and `job_runs.stats`.
 - `synthesis.VIEW_LIMITS` (6 requests / 6 tool calls), `MAX_PAGE_READS` (4), `PAGE_EXCERPT`

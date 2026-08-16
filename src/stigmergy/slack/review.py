@@ -1,12 +1,16 @@
 """The Slack review surface: buttons on a doorbell DM that call `review_decide`, and the modals
 some verdicts require first — a short one for the one piece of free text a note/reason needs, and
-a longer one for the metadata an entity-proposal Approve mints from. **The bot enforces
+a longer one for the metadata an entity-proposal Approve mints from. **The bot decides
 nothing**: it resolves who is asking and calls the SAME `review_decide_safe` every MCP caller
-calls, so `review_decide`'s own validation stays the one place a decision is made. Two item kinds
-reach a human here: a parked capture and an entity proposal. `items_for_doorbell` is the one read
-this module reuses (never re-queried a second way), so the entity-mint modal can prefill the
-proposal's own name at click time.
+calls, so `review_decide`'s own validation stays the one place a decision is made. It does gate one
+READ — the entity-mint modal, which renders a proposal's unresolved names before any decision
+exists — and it gates it by asking `server.review.is_steward`, the same predicate at the same scope
+the decide leg asks, never a second rule of its own. Two item kinds reach a human here: a parked
+capture and an entity proposal. `items_for_doorbell` is the one read this module reuses (never
+re-queried a second way), so the entity-mint modal can prefill the proposal's own name at click
+time.
 """
+import asyncio
 import json
 import logging
 
@@ -110,7 +114,9 @@ def _mint_modal_inputs(conn, item_id: str) -> tuple[list[str], str]:
     `items_for_doorbell` is the management-shaped, unscoped read this needs: a steward approving
     someone else's proposal must see ITS names, not their own ACL-scoped `review_queue` (which
     would hide it — a steward may be scoped, and self-approval is refused, so the row the steward
-    is about to act on was never theirs to begin with).
+    is about to act on was never theirs to begin with). Being unscoped is exactly why the caller
+    checks `review.is_steward` BEFORE calling this: the widening is authorized at the call site,
+    never here.
 
     `([], "")` when the item can no longer be found among the OPEN items (already decided, or
     disposed of between the doorbell DM and this click) — the modal still opens, with an empty
@@ -179,6 +185,26 @@ async def handle_block_action(ctx, *, action_id: str, value: str, trigger_id: st
         # is checked FIRST, ahead of `_MODAL_FIELD`, because it has no `(field, label, placeholder)`
         # entry to look up there at all.
         if kind == "entity-proposal" and verdict_token == "approve":
+            # The READ-side half of the same gate `review_decide` runs on submit. This branch is
+            # the one that SHOWS review material before any decision — `_mint_modal_inputs` reads
+            # the system-wide, unscoped doorbell queue and the modal renders the proposal's
+            # unresolved names, lifted out of someone else's captured material — so it asks
+            # `is_steward` at the SAME universal scope `_guard_governance_decision` uses for an
+            # entity proposal (`""`), and refuses with the SAME sentence, so failing here teaches a
+            # non-steward nothing the decide leg would not have taught them. The note-modal branch
+            # below is deliberately NOT gated: it exposes nothing beyond the card that was already
+            # delivered, and its own submission re-checks.
+            service = ctx.build_service(identity_result.email, identity_result.audiences)
+            # Off the event loop: on a checkout-backed deployment `load_stewards` runs a real
+            # `git fetch`, and Slack's `trigger_id` expires in ~3s — a blocking fetch here stalls
+            # every other interaction this process is serving and can burn the window that makes
+            # the modal openable at all. Never the doorbell's TTL cache: the FRESH read is the
+            # point of the gate (a revoked steward must not resolve off a stale map).
+            if not await asyncio.to_thread(review.is_steward, service, ""):
+                await ctx.post_or_log(
+                    ctx.gateway.chat_post_message(channel_id, text=review.NOT_YOURS_TO_DECIDE),
+                    what=f"entity-mint modal refusal for {item_id}")
+                return
             metadata = json.dumps({"item_kind": kind, "item_id": item_id,
                                    "channel_id": channel_id})
             names, name_prefill = _mint_modal_inputs(ctx.conn, item_id)

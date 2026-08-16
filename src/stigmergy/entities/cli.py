@@ -21,7 +21,6 @@ is not yet on the remote it fetches from, and the capture would park a second ti
 import argparse
 import datetime
 import json
-import os
 import shlex
 import sys
 
@@ -48,11 +47,11 @@ EXIT_INTERRUPTED = 130
 
 
 def _repo(args) -> str:
-    """The steward's clone. Same env var and default as the librarian's `--repo` — it is the
-    same checkout, told to one tool once."""
-    repo = args.repo or os.environ.get(librarian_config.REPO_ENV) or librarian_config.REPO_DEFAULT
-    path = os.path.abspath(repo)
-    if not os.path.isdir(os.path.join(path, ".git")):
+    """The steward's clone. Same env var, default and checkout predicate as the librarian's
+    `--repo` and `stigmergy-views`' — it is the same checkout, told to one tool once, and it used
+    to be three tools disagreeing about whether a worktree is one."""
+    path = librarian_config.repo_path(args.repo)
+    if not librarian_config.is_repo_checkout(path):
         raise EntityError(
             f"{path} is not a git checkout — `--repo` (or ${librarian_config.REPO_ENV}) must point "
             f"at your clone of the knowledge repo, because every command here commits to it with "

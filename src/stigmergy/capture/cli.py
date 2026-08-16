@@ -15,6 +15,8 @@ import os
 import sys
 import time
 
+import psycopg
+
 from stigmergy import text as textutil
 from stigmergy.capture import dispositions, evidence, queue, retention, schema
 from stigmergy.capture.errors import CaptureError, SubmissionRejected
@@ -485,6 +487,15 @@ def _interrupted(during: str) -> int:
     return EXIT_INTERRUPTED
 
 
+def _stack_down(ex: Exception) -> int:
+    """This door's ONE sentence for the stack being unreachable, at connect time and mid-command
+    alike — the same fault must not read as two different problems depending on which statement
+    hit it. Errors are LOCAL and specific here, so the real reason travels in the parentheses."""
+    print(f"stigmergy-queue: cannot reach the queue database ({ex}); is Postgres up "
+          f"(`make db-up`)?", file=sys.stderr)
+    return 2
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -492,9 +503,7 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         return _interrupted("while connecting to the queue database")
     except Exception as ex:  # noqa: BLE001 — a local operator needs the real reason, not a class
-        print(f"stigmergy-queue: cannot reach the queue database ({ex}); is Postgres up "
-              f"(`make db-up`)?", file=sys.stderr)
-        return 2
+        return _stack_down(ex)
     try:
         return args.fn(conn, args)
     except CaptureError as ex:
@@ -503,6 +512,19 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         # The net for every command `_cmd_claim` does not handle specifically.
         return _interrupted(f"during `{args.command}`")
+    except (psycopg.OperationalError, psycopg.InterfaceError) as ex:
+        # The connect is not where the stack goes away: Postgres restarting, a stopped container
+        # or a dropped socket lands HERE, inside the command body. Unguarded, it escaped as a
+        # traceback and exit 1 — the code a named refusal uses, so a wrapper read "bad input".
+        return _stack_down(ex)
+    except Exception as ex:  # noqa: BLE001 — a local operator needs the real reason, not a crash
+        # Everything else. This used to share the arm above, so a `KeyError` in a command body
+        # told the operator Postgres was down — a DIAGNOSIS, and a wrong one: they went and checked
+        # a database that was up while the real fault stayed unnamed. Same exit 2 and same "no
+        # traceback" posture; only the sentence stops claiming to know what happened.
+        print(f"stigmergy-queue: unexpected fault during `{args.command}` "
+              f"({ex.__class__.__name__}: {ex})", file=sys.stderr)
+        return 2
     finally:
         conn.close()
 

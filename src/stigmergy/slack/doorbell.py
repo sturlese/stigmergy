@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 DEFAULT_POLL_INTERVAL_S = 10
 
 # `review.load_stewards` is a real `git fetch origin main` per call — unbounded, that is one
-# fetch per poll pass. This TTL is for the doorbell only: `review._is_steward` (the authorization
+# fetch per poll pass. This TTL is for the doorbell only: `review.is_steward` (the authorization
 # check behind `review_decide`) calls `load_stewards` directly and stays always-fresh on purpose —
 # a revoked steward's approval must never succeed off a stale cache — so this TTL must never be
 # wired into it.

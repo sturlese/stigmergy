@@ -11,9 +11,11 @@ import subprocess
 import sys
 import time
 
+import psycopg
 import pytest
 
 from stigmergy.capture import cli, queue, retention, schema
+from stigmergy.capture.errors import CaptureError
 from stigmergy.capture.evidence import MemoryEvidenceStore
 from stigmergy.index import store
 from tests import childwatch
@@ -559,6 +561,78 @@ def test_cli_generic_interrupt_during_a_subcommand_exits_130_stderr_only_stdout_
     assert captured.out == ""                                    # --json stdout stays parseable
     assert "stigmergy-queue: interrupted during `list`" in captured.err
     assert "Traceback" not in captured.err
+
+
+# ── the generic fault net: the command BODY, not only the connect ────────────────────────────────
+def test_cli_a_database_fault_inside_a_subcommand_exits_2_instead_of_a_traceback(
+        clean_queue, capsys, monkeypatch):
+    """OLD BEHAVIOUR: the exception escaped `main` — Python printed a traceback and the process
+    exited 1, the code a NAMED refusal uses.
+
+    Only the connect was guarded. Everything the stack can do to a live connection happens inside
+    the command body instead: Postgres restarting, the container being stopped mid-`list`, a
+    dropped socket, an evidence store going away during `resolve`. Both drop doors already wrap
+    their whole dispatch (`drop_main`), so the same operator saw a clean sentence from
+    `stigmergy-meeting` and a stack trace from `stigmergy-queue` for the identical fault — and
+    exit 1 told a wrapper "your input was refused" when the truth was "the stack is down".
+    """
+    def boom(_conn, _args):
+        raise psycopg.OperationalError("consuming input failed: server closed the connection")
+
+    monkeypatch.setattr(cli, "_cmd_list", boom)
+
+    rc = cli.main(["--dsn", store.dsn(), "list"])
+
+    captured = capsys.readouterr()
+    assert rc == 2
+    assert "stigmergy-queue: cannot reach the queue database" in captured.err
+    assert "server closed the connection" in captured.err          # the REAL reason, locally
+    assert "make db-up" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_cli_a_non_database_fault_inside_a_subcommand_is_not_reported_as_a_dead_stack(
+        clean_queue, capsys, monkeypatch):
+    """OLD BEHAVIOUR: the mid-command net was a bare `except Exception` routed straight to
+    `_stack_down`, so EVERY unanticipated fault — a `KeyError` in `_cmd_purge`, an `AttributeError`
+    anywhere — told the operator "cannot reach the queue database … is Postgres up (`make db-up`)?"
+    That sentence is a diagnosis, and it was wrong: the operator went and checked a database that
+    was up the whole time while the real fault stayed unnamed.
+
+    The stack-down sentence now belongs to `psycopg.OperationalError`/`InterfaceError` only; every
+    other fault gets an honest "unexpected fault" line naming its class. Both still exit 2 with no
+    traceback — the exit code was never the part that lied."""
+    def boom(_conn, _args):
+        raise KeyError("retention_days")
+
+    monkeypatch.setattr(cli, "_cmd_purge", boom)
+
+    rc = cli.main(["--dsn", store.dsn(), "purge"])
+
+    captured = capsys.readouterr()
+    assert rc == 2                                                 # unchanged: not a refusal
+    assert "cannot reach the queue database" not in captured.err   # the sentence that was a lie
+    assert "make db-up" not in captured.err
+    assert "unexpected fault during `purge`" in captured.err
+    assert "KeyError" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_cli_a_named_refusal_inside_a_subcommand_still_exits_1(clean_queue, capsys, monkeypatch):
+    """The benign twin: the new blanket net sits BELOW the named handlers, so a `CaptureError`
+    still exits 1 with its own words. A guard that turned every refusal into "the stack is down"
+    would be worse than the traceback it replaced."""
+    def refuse(_conn, _args):
+        raise CaptureError("that submission is already resolved")
+
+    monkeypatch.setattr(cli, "_cmd_list", refuse)
+
+    rc = cli.main(["--dsn", store.dsn(), "list"])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "stigmergy-queue: that submission is already resolved" in captured.err
+    assert "cannot reach the queue database" not in captured.err
 
 
 # ── reclaim ──────────────────────────────────────────────────────────────────────────────────────

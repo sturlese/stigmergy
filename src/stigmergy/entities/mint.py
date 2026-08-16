@@ -69,10 +69,17 @@ def mint(repo: str, *, entity_id: str, name: str, entity_type: str, aliases=(), 
     try:
         generator.regenerate(repo)
         _refuse_secrets(repo, [proposal.relpath, generator.REGISTRY_RELPATH], action=action)
-    except Exception:
+    except BaseException:
         # Roll back by bytes we captured ourselves — never `git checkout` or `git clean`: the CLI
         # path is a human's clone, and a destructive git rollback is one bad predicate away from
         # discarding work this tool never saw.
+        #
+        # `BaseException`, not `Exception`: this window is the registry regeneration and the
+        # gitleaks scan — the slowest thing this command does, so the likeliest moment for a
+        # steward's Ctrl-C — and a `KeyboardInterrupt` that skipped the rollback left an untracked
+        # page and a rewritten registry behind, which the NEXT `create`/`approve` then refused on
+        # as a dirty tree. The re-raise is what keeps `KeyboardInterrupt`/`SystemExit` propagating
+        # after the clone has been put back; nothing here swallows one.
         _restore(page_path, registry_path, snapshot)
         raise
 
