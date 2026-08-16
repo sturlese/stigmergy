@@ -105,6 +105,33 @@ def test_needs_input_addresses_the_submitter_and_swaps_the_mcp_invocation(indexe
     assert "Acme Corp" in text   # the situation prose is reused, not rewritten
 
 
+def test_a_several_name_ask_shows_the_submitter_no_mcp_invocation_either(indexed, clean_tables):
+    """The user-visible symptom, on the road that had it. OLD BEHAVIOUR: `report.needs_input`
+    appended the SUBSTITUTED reply line to the summary for n > 1 and stored the BARE one in
+    `reply_invocation`, so `_needs_input_prose`'s exact-match strip never fired — and the Slack
+    card carried a raw `brain_reply(submission_id=..., answer=...)` call to a person whose only
+    interface is Slack.
+
+    Its one-name twin above passed throughout, which is exactly why this went unnoticed: the two
+    strings coincide for a single name.
+    """
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    ctx = build_context(fixture, conn, gateway=gw)
+    submission_id = _new_submission(ctx, identity=fixture.STEWARD, channel_id="C1", thread_ts="2.2")
+    rep = report.needs_input(submission_id=submission_id, names=["Acme", "Globex"],
+                             candidates=[{"name": "Acme Corp", "aliases": ["Acme"]}])
+    _claim_and_finish(conn, submission_id, status=capture_schema.NEEDS_INPUT, report_dict=rep)
+
+    assert _run(poller.poll_once(ctx)) == 1
+
+    text = gw.posted[0].blocks[0]["text"]["text"]
+    assert "brain_reply(" not in text, "the submitter is being shown a tool they cannot invoke"
+    assert "Reply with:" not in text, "the MCP clause survived, only its command was stripped"
+    assert copy.NEEDS_INPUT_INSTRUCTION in text      # the Slack-native ask replaced it
+    assert "Acme" in text and "Globex" in text       # both names still reach the person
+
+
 @pytest.mark.parametrize("status,rep_builder", [
     (capture_schema.TRIAGE, lambda: report.triage_entity(names=["Acme"])),
     (capture_schema.REJECTED, lambda: report.rejected_duplicate(page_path="x.md", as_of="2026-01")),

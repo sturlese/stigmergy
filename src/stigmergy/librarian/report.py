@@ -442,8 +442,15 @@ def needs_input(*, submission_id, names: list[str], candidates=(),
                        agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
                        findings=list(_as_list(findings)),
                        open_question=question,
-                       # The command as a FACT beside the sentence stating it.
-                       reply_invocation=invocation, unresolved_names=names)
+                       # The command as a FACT beside the sentence stating it — and it must be the
+                       # SAME command. `reply_line` and not `invocation`: for several names the
+                       # summary carries the substituted `<your answer, covering all N>` form, so
+                       # storing the bare one put two spellings of one sentence in one report.
+                       # `slack.poller._needs_input_prose` strips this suffix by exact match to
+                       # turn the MCP prose into a Slack card, which silently never matched for
+                       # n > 1 — leaving a Slack submitter looking at a raw `brain_reply(...)`
+                       # call they have no way to invoke from Slack.
+                       reply_invocation=reply_line, unresolved_names=names)
 
 
 # ── triage ────────────────────────────────────────────────────────────────────────────────────

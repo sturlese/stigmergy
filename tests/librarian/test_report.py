@@ -247,6 +247,42 @@ def test_needs_input_names_the_unresolved_name_and_states_the_reply_invocation_v
     assert out["reply_invocation"] == 'brain_reply(submission_id=42, answer="<your answer>")'
 
 
+def test_a_several_name_ask_stores_the_invocation_it_actually_wrote():
+    """OLD BEHAVIOUR: the summary got `invocation.replace("<your answer>", "<your answer, covering
+    all N>")` while `reply_invocation` stored the UNSUBSTITUTED string — two spellings of one
+    sentence in one report, six lines apart in one function.
+
+    `slack.poller._needs_input_prose` strips that suffix by exact match to turn MCP prose into a
+    Slack card (its own docstring: `reply_invocation` "is stored beside the sentence for exactly
+    this consumer"), so the strip silently never matched for n > 1 and a Slack submitter was shown
+    the raw `brain_reply(...)` call — a tool they have no way to invoke from Slack.
+
+    Asserted as a relationship rather than as a literal: what has to hold is that the field and the
+    sentence are the same string, whatever the wording becomes.
+    """
+    out = report.needs_input(submission_id=42, names=["Nebula Systems", "Acme Capital"],
+                             candidates=CANDIDATES, total_candidates=len(CANDIDATES))
+
+    assert out["reply_invocation"] in out["summary"]
+    assert out["summary"].endswith(f"\n\nReply with:\n  {out['reply_invocation']}")
+    assert "covering all 2" in out["reply_invocation"], (
+        "the stored command is the bare one again — the substituted line is what was written")
+    assert out["unresolved_names"] == ["Nebula Systems", "Acme Capital"]
+
+
+def test_a_one_name_ask_still_stores_the_plain_invocation_verbatim():
+    """The benign twin, and the reason the change above is safe. For one name the two strings were
+    already identical, so the fix must not have moved the singular road: the stored command is
+    still byte-for-byte what `schema.reply_invocation` builds — the string the reply channel
+    actually accepts, which `test_the_stated_reply_invocation_executed_verbatim...` runs for real.
+    """
+    out = report.needs_input(submission_id=42, names=["Nebula Systems"], candidates=CANDIDATES,
+                             total_candidates=len(CANDIDATES))
+
+    assert out["reply_invocation"] == schema.reply_invocation(42)
+    assert out["summary"].endswith(f"\n\nReply with:\n  {out['reply_invocation']}")
+
+
 def test_needs_input_lists_every_candidate_with_its_aliases():
     out = report.needs_input(submission_id=1, names=["Nebula"], candidates=CANDIDATES,
                              total_candidates=len(CANDIDATES))
