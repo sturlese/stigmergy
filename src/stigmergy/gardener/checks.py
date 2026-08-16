@@ -8,6 +8,7 @@ provenance-type pages: a provenance page's `entity: []` means "the extractor fou
 never a checked company-wide declaration. `check_aging_seeds` ages `updated` IN Postgres, so a
 test backdates the fixture row and lets `current_date` do the comparison.
 """
+import pathlib
 import re
 
 from stigmergy.gardener.schema import (
@@ -38,6 +39,16 @@ ALL_CHECK_SLUGS = (
     CHECK_DEAD_VOCABULARY, CHECK_COMPANY_WIDE_FRACTION, CHECK_COMPANY_PAGE_NAMES_ENTITY,
     CHECK_DATE_BEARING_BODY_LINK,
 )
+
+# The tail of every "this page may be anchored wrong" action — `check_company_page_names_entity`
+# here and `sweep.MODEL_SUGGESTED_ACTIONS[CHECK_MODEL_ANCHOR_FIT]` compose the SAME instruction,
+# and an operator reading one after the other must not find two wordings of one procedure.
+REANCHOR_BY_HAND = (
+    "a re-anchor has to be done by hand — edit `entity:` on the page in the knowledge repo "
+    "yourself, commit and push, since a hand edit in the wiki zone never passes through the "
+    "filing gates at all (that zone is people's to edit, not a capture's). If the content itself "
+    "needs restating, file a superseding page instead; and if the page really is company-wide, "
+    "leaving it alone is a legitimate answer too")
 
 
 def build_finding(*, check: str, severity: str, subject: str, detail: str,
@@ -370,12 +381,7 @@ def check_company_page_names_entity(conn, registry: Registry) -> list[dict]:
                 suggested_action=(
                     "no command — read the page and judge whether it's really company-wide or "
                     f"should have been anchored to {registry.title(entity_id) or entity_id} "
-                    "instead; a re-anchor has to be done by hand — edit `entity:` on the page "
-                    "in the knowledge repo yourself, commit and push, since a hand edit in the "
-                    "wiki zone never passes through the filing gates at all (that zone is "
-                    "people's to edit, not a capture's). If the content itself needs restating, file a "
-                    "superseding page instead; and if the page really is company-wide, leaving "
-                    "it alone is a legitimate answer too"),
+                    f"instead; {REANCHOR_BY_HAND}"),
             ))
     return findings
 
@@ -392,8 +398,6 @@ _WIKILINK_RE = re.compile(r"!?\[\[([^\[\]]+?)\]\]")
 def check_date_bearing_body_links(repo: str) -> list[dict]:
     """Population: every page in the three content zones, read from the repo checkout. One WARN
     finding per offending page, naming the first offending stem."""
-    import pathlib
-
     findings = []
     root = pathlib.Path(repo)
     for zone in ("wiki", "sources", "views"):

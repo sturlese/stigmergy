@@ -54,12 +54,7 @@ MODEL_SUGGESTED_ACTIONS = {
         "or an MCP capture)"),
     CHECK_MODEL_ANCHOR_FIT: (
         "no command — read the page and judge whether its anchored entity still fits its "
-        "content; a re-anchor has to be done by hand — edit `entity:` on the page in the "
-        "knowledge repo yourself, commit and push, since a hand edit in the wiki zone never "
-        "passes through the filing gates at all (that zone is people's to edit, not a "
-        "capture's). "
-        "If the content itself needs restating, file a superseding page instead; and if the "
-        "page really is company-wide, leaving it alone is a legitimate answer too"),
+        f"content; {checks.REANCHOR_BY_HAND}"),
     CHECK_MODEL_UNLINKED_MENTION: (
         "no command — read the pages named and judge whether the mention is worth a wikilink; "
         "if so, add it by hand (the gardener never edits a page's own links)"),

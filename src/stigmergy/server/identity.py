@@ -70,6 +70,11 @@ TOKEN_STORE_ENV = "STIGMERGY_TOKEN_STORE"            # inline JSON (a Fly secret
 TOKEN_STORE_FILE_ENV = "STIGMERGY_TOKEN_STORE_FILE"  # a path to the same JSON shape
 
 
+# 256 bits of entropy; `secrets.token_urlsafe` base64-encodes it (~43 chars). Every minter — the
+# per-user token and the console's one credential — draws from this figure, never its own.
+TOKEN_BYTES = 32
+
+
 def hash_token(token: str) -> str:
     """SHA-256 hex digest of a plaintext bearer token — the ONLY form ever written to disk, a
     log, or a repo."""

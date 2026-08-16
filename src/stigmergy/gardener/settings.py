@@ -48,7 +48,14 @@ DEFAULT_SWEEP_SAMPLE = 10
 SLACK_BOT_TOKEN_ENV = "SLACK_BOT_TOKEN"
 
 
-def _int_setting(env_name: str, default: int) -> int:
+# What a zero or negative value would do to THIS package's arithmetic. `digest.settings` shares the
+# validator and passes its own, because one sentence general enough for both would say nothing an
+# operator could act on.
+_POSITIVE_COUNT_WHY = ("a zero or negative day/window count makes every page/filing instantly past "
+                       "threshold.")
+
+
+def _int_setting(env_name: str, default: int, *, why: str = _POSITIVE_COUNT_WHY) -> int:
     raw = os.environ.get(env_name)
     if raw is None or raw == "":
         return default
@@ -60,8 +67,7 @@ def _int_setting(env_name: str, default: int) -> int:
             f"({default}) or set it to a positive whole number.") from None
     if value <= 0:
         raise StartupError(
-            f"${env_name}={value} must be a positive integer — a zero or negative day/window "
-            f"count makes every page/filing instantly past threshold. Unset it to use the "
+            f"${env_name}={value} must be a positive integer — {why} Unset it to use the "
             f"default ({default}) or set it to a positive integer.")
     return value
 

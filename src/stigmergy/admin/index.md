@@ -160,8 +160,9 @@ the transport's parser — importing it would close a cycle through the composit
 (`AdminNotFound`, and the inert console's blanket answer), 409 (`AdminRefused`), 421 (foreign
 `Host`), 500 (class name only), 502 (`ActionsError`). Every response carries
 `content-security-policy` (`default-src 'none'`; fetch directives `'self'`, `img-src` also `data:`;
-`base-uri`/`form-action`/`frame-ancestors` `'none'`), `x-content-type-options: nosniff` and
-`referrer-policy: no-referrer`; `/admin/api/*` additionally `cache-control: no-store`.
+`base-uri`/`form-action`/`frame-ancestors` `'none'`), `x-content-type-options: nosniff`,
+`referrer-policy: no-referrer` and `strict-transport-security: max-age=31536000;
+includeSubDomains`; `/admin/api/*` additionally `cache-control: no-store`.
 
 `CRON_WORKFLOWS` — `index-rebuild.yml`, `retention-purge.yml`, `gardener.yml`, each naming its
 `schedule_utc` and where the database truth lives (`job_runs:<job>`, or `index_meta.built_at` for
@@ -192,8 +193,8 @@ the only view returning a cleanup function.
   which is why the digest tab's history fills with them.
 - **The console reads page PATHS, never page BODIES.** `index/check` and `gardener` carry paths out
   of the corpus, both behind the operator token and both declared ACL exceptions.
-- `_zone_counts` swallows every exception and returns `{}` — "no index yet" is a state, not an
-  error. It is the one place a bare `except` is right here.
+- `_zone_counts` and `schema.record_action` are the only two places a swallowing `except` is right
+  here — no index yet is a state, and bookkeeping must never fail the work.
 - **The worker's lease is resolved per call** (`worker_visibility_timeout_s()` →
   `librarian_config.resolved_visibility_timeout_s()`), never frozen at import, and it governs both
   directions: a console comparing an old claim against `capture.queue`'s own 300 s would call every

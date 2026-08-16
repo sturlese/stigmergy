@@ -28,6 +28,9 @@ pins every import edge and the threshold-literal ban.
 Downstream: `digest` imports `schema`/`store`/`settings`; `admin` imports `store`/`schema`.
 Nothing else imports this package.
 
+`cli.py`'s `_connect`/`_gateway`/`_repo`/`main` are a deliberate twin of `digest/cli.py` — change
+both or neither.
+
 ## Reuse
 
 - `checks.build_finding` — the one finding assembler; `**extra` carries keys the table lacks

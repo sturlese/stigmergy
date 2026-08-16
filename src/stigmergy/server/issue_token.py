@@ -7,9 +7,7 @@ import argparse
 import secrets
 import sys
 
-from stigmergy.server.identity import hash_token
-
-TOKEN_BYTES = 32   # 256 bits of entropy; secrets.token_urlsafe base64-encodes it (~43 chars)
+from stigmergy.server.identity import TOKEN_BYTES, hash_token
 
 
 def issue(email: str) -> tuple[str, str]:

@@ -52,15 +52,21 @@ def parse_since(value: str) -> datetime:
             f"posted") from None
 
 
-def _watermark_since(conn) -> datetime | None:
-    """The last completed run's `stats['until']`; `None` when no completed run exists or its
-    `stats` carries no `until` (defensive — falls through to the default-window branch)."""
+def last_window_until(conn) -> str | None:
+    """The last completed `job='digest'` run's `stats['until']`, as the ISO string it is stored as
+    — `None` when no such run exists. Public because the admin console reports the same fact and
+    must never re-type this query."""
     with conn.cursor() as cur:
         cur.execute(_WATERMARK_SQL, (JOB_NAME,))
         row = cur.fetchone()
-    if not row or not row[0]:
-        return None
-    return datetime.fromisoformat(row[0])
+    return row[0] if row else None
+
+
+def _watermark_since(conn) -> datetime | None:
+    """The last completed run's `stats['until']`; `None` when no completed run exists or its
+    `stats` carries no `until` (defensive — falls through to the default-window branch)."""
+    raw = last_window_until(conn)
+    return datetime.fromisoformat(raw) if raw else None
 
 
 def _resolve_since(conn, *, since_override: datetime | None, window_days: int,

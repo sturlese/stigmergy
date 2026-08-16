@@ -8,10 +8,6 @@ from stigmergy.gardener import schema as gardener_schema
 from stigmergy.slack.mrkdwn import escape_mrkdwn
 
 
-def _fmt_path(path: str) -> str:
-    return f"`{escape_mrkdwn(path)}`"
-
-
 def _fmt_title(title: str) -> str:
     return f'"{escape_mrkdwn(title)}"'
 

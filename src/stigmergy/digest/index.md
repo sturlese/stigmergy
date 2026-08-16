@@ -16,7 +16,7 @@ corpus health and corpus deltas. It owns no table — it reads `gardener_finding
 | Module | What it is |
 |---|---|
 | `cli.py` | `stigmergy-digest [--repo] [--channels] [--dsn] [--since] [--dry-run]` — one command. The only module here that imports `stigmergy.index.store`, `stigmergy.librarian.config` or `stigmergy.slack.bolt_gateway` |
-| `run.py` | `run_digest` — resolve the window, gather, build, post (or preview), record. Plus `parse_since`, `DigestResult`, the two job names |
+| `run.py` | `run_digest` — resolve the window, gather, build, post (or preview), record. Plus `parse_since`, `last_window_until` (the raw watermark, read by `admin`), `DigestResult`, the two job names |
 | `sections.py` | `gather_corpus_health` / `gather_corpus_deltas` (plain dicts), `_filed_page_paths` (capture-row -> every page it filed), `_visible_pages` (the ONE ACL seam) |
 | `render.py` | `build_body` — pure Slack-mrkdwn assembly from the section dicts. No DB, no clock |
 | `settings.py` | `DigestSettings.from_args` — `window_days`, `digest_channel_id`. Re-exports the channel/token env names from `gardener.settings`, the one funnel |
@@ -25,6 +25,9 @@ corpus health and corpus deltas. It owns no table — it reads `gardener_finding
 `cli.py` is not `run_digest`'s only caller: `stigmergy.admin.service` awaits it behind the
 console's preview and post buttons, reusing `DigestSettings.from_args` — a signature change lands
 in both places.
+
+`cli.py`'s `_connect`/`_gateway`/`_repo`/`main` are a deliberate twin of `gardener/cli.py` —
+change both or neither.
 
 ## Reuse
 
