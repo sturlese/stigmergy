@@ -857,7 +857,7 @@ def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
     if unanchorable:
         # A veto that survived the last pass goes to the STEWARD; only `_triage` may ask.
         return Result(schema.TRIAGE, "",
-                      report.triage_entity(names=[unanchorable.locator],
+                      report.triage_entity(names=_anchor_veto_names([unanchorable]),
                                            agent_rationale=getattr(outcome, "summary", ""),
                                            findings=notes, asked=bool(item.get("asked_at"))),
                       findings=notes, diagnostics_path=diagnostics_path)
@@ -888,6 +888,28 @@ def _uncreatable_type(veto) -> str:
               else page_policy.type_for_folder(finding.locator))
     # Ask the shared table again, so a disagreement between the two views cannot invent a park.
     return "" if page_policy.classify_page_type(judged).creatable else judged
+
+
+def _anchor_veto_names(findings) -> list[str]:
+    """Every name an anchoring veto could not resolve, in order, without repeats — ONE reader for
+    both refusal roads.
+
+    `Finding.values` carries them all; `locator` is a DISPLAY string (the first value, clamped) and
+    is the fallback for a veto carrying no `values`, which is what keeps an older-shaped veto
+    behaving exactly as it did.
+
+    It exists because the two roads answered this question differently and nothing made them meet.
+    `_refuse_meeting` collected every value; `_refuse` passed `[unanchorable.locator]`, so an
+    ordinary capture vetoed on three unresolved entities parked naming one — a steward registered
+    it, the capture came back, and was refused again on the second. "One ask, every name" is what
+    the plural park was built for, and it did not hold on the refusal road.
+    """
+    names = []
+    for finding in findings:
+        for value in (finding.values or (finding.locator,)):
+            if value and value not in names:
+                names.append(value)
+    return names
 
 
 def _unanchorable(veto) -> "gates.Finding | None":
@@ -1943,12 +1965,7 @@ def _refuse_meeting(item, findings, outcome, *, agent_attempts: int = 0,
     anchoring_vetoes = [f for f in veto
                        if f.gate == "anchoring" and f.code == gates.ANCHORING_UNRESOLVED]
     if anchoring_vetoes and len(anchoring_vetoes) == len(veto):
-        names = []
-        for finding in anchoring_vetoes:
-            for value in (finding.values or (finding.locator,)):
-                if value and value not in names:
-                    names.append(value)
-        names = names or [schema.UNNAMED_ENTITY_PLACEHOLDER]
+        names = _anchor_veto_names(anchoring_vetoes) or [schema.UNNAMED_ENTITY_PLACEHOLDER]
         rep = report.triage_entity(names=names, agent_rationale=getattr(outcome, "summary", ""),
                                    findings=notes, asked=bool(item.get("asked_at")), meeting=True)
         return Result(schema.TRIAGE, "", rep, findings=notes, diagnostics_path=diagnostics_path)

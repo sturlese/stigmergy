@@ -2888,3 +2888,35 @@ def test_no_import_allowlist_entry_names_a_module_that_no_longer_exists(name):
     stale = sorted({e for e in _ALLOW_LISTS[name] if not _names_a_real_module(e)})
     assert not stale, (
         f"{name} grants imports of modules that do not exist — delete the entries: {stale}")
+
+
+# ── one module, one binding per top-level name ─────────────────────────────────────────────────
+ALL_STIGMERGY_SOURCES = sorted(p for p in STIGMERGY_ROOT.rglob("*.py") if p.name != "__init__.py")
+
+
+@pytest.mark.parametrize("path", ALL_STIGMERGY_SOURCES,
+                        ids=lambda p: str(p.relative_to(STIGMERGY_ROOT)))
+def test_no_module_defines_the_same_top_level_name_twice(path):
+    """A second `def` of a name already defined above it silently replaces the first, and every
+    call — including the ones written BETWEEN the two definitions — resolves to the second at
+    runtime.
+
+    Ruff cannot see this, which is why it is a test. `F811` is enabled here and stays quiet,
+    because it only fires on a redefinition of an UNUSED name: a first definition called from a
+    function defined between the two counts as used, so the pair that actually breaks at runtime is
+    exactly the pair the linter passes. Caught by hand in `librarian/processing.py`, a
+    two-thousand-line module where two helpers about unresolved names ended up one rename apart —
+    the shadowing one would have taken a `Finding` list while both live callers passed a dict.
+
+    Whole-file, not per-package: the hazard is length and distance, and it lives wherever both are.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    lines = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            lines.setdefault(node.name, []).append(node.lineno)
+    clashes = {name: at for name, at in lines.items() if len(at) > 1}
+    assert not clashes, (
+        f"{path.name} defines the same top-level name more than once "
+        f"{ {n: at for n, at in clashes.items()} } — the later definition wins for every caller, "
+        f"including the ones written above it. Rename one.")
