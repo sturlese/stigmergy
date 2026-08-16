@@ -14,7 +14,7 @@ from stigmergy.admin.service import (
     AdminService,
     worker_visibility_timeout_s,
 )
-from stigmergy.capture import ops, queue
+from stigmergy.capture import dispositions, ops, queue
 from stigmergy.capture import schema as capture_schema
 from stigmergy.gardener.schema import JOB_NAME as GARDENER_JOB
 from stigmergy.gardener.schema import ensure_gardener_schema
@@ -684,6 +684,116 @@ def test_entity_approve_refuses_a_collision_with_the_librarys_own_sentence(
         cur.execute("SELECT count(*) FROM review_decisions WHERE item_id = %s",
                     (str(second["id"]),))
         assert cur.fetchone()[0] == 0, "a refused mint must record nothing in the governance ledger"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# CHARACTERIZATION — this door's half of the mint sequence, pinned as it behaves TODAY.
+#
+# The console and `server.review` run the SAME five mechanical steps (`require_situation` ->
+# `mint_via_clone` -> `record_decision` -> conditional `requeue` after the push). What each door
+# proved about that sequence was different, so a property could hold on one and be merely assumed
+# on the other. These three have twins in `tests/server/test_review.py` under the same names minus
+# the door, except the self-approval one — that asymmetry is the WHOLE point of ADR 030 D2 and has
+# no twin by design.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+def test_characterization_the_console_door_requeues_strictly_after_the_push(
+        conn, entity_service, entity_mint_repo, monkeypatch, require_gitleaks):
+    """Pins the ORDER: at the instant `dispositions.requeue` is entered, the bare remote's `main`
+    ALREADY points at the mint commit.
+
+    `test_entity_approve_mints_for_real_and_records_both_ledgers` asserts the two END STATES (a
+    commit came back, the row is `queued`), which a requeue that ran FIRST satisfies just as well —
+    the note's `entity_id` is `resolved_id`, known before the mint is attempted. The failure a
+    reordering causes is invisible until a real run: the librarian fetches a remote that does not
+    carry the entity yet and parks the capture a SECOND time.
+
+    A spy, not a double — it records what git actually says and then delegates to the real
+    `requeue`. Real git, real Postgres, real disposition; the patch exists only because ordering is
+    unobservable from the end state.
+    """
+    ack = submit_one(conn)
+    park(conn, ack["id"], report=unresolved_entity_report("Globex Robotics"))
+    real_requeue = dispositions.requeue
+    observed_heads = []
+
+    def spy(*args, **kwargs):
+        observed_heads.append(
+            gitcmd.run("rev-parse", "main", cwd=entity_mint_repo).stdout.strip())
+        return real_requeue(*args, **kwargs)
+
+    monkeypatch.setattr(dispositions, "requeue", spy)
+    head_before = gitcmd.run("rev-parse", "main", cwd=entity_mint_repo).stdout.strip()
+
+    result = entity_service.entity_approve(ack["id"], actor="steward", name="Globex Robotics",
+                                           entity_type="organization", requeue=True)
+
+    assert observed_heads == [result["commit"]], (
+        "exactly ONE requeue, and the remote it ran against already carried the pushed commit — "
+        f"observed {observed_heads}, mint pushed {result['commit']}")
+    # Non-vacuity: the two candidate values are actually DIFFERENT, so the assertion above
+    # discriminates. Without this the test would still pass on a remote that never moved.
+    assert observed_heads[0] != head_before, (
+        "the probe cannot tell before from after — the mint did not move the remote")
+
+
+def test_characterization_one_console_mint_writes_exactly_one_ledger_row_with_an_empty_note(
+        conn, entity_service, require_gitleaks):
+    """Pins the ledger WRITE COUNT and the full row shape this door produces.
+
+    Every existing ledger assertion on both doors reads with `fetchone()`, which a second,
+    duplicate `record_decision` would pass unnoticed. `notes` is the shape difference the door
+    parity claim has never actually stated: the console form has no note field, so this door
+    writes `''` while `server.review` writes the steward's cleaned note (its twin pins that). A
+    `NULL` here instead of `''` would be a new spelling in an append-only table.
+    """
+    ack = submit_one(conn, submitted_by="filer@example.com")
+    park(conn, ack["id"], report=unresolved_entity_report("Globex Robotics"))
+
+    result = entity_service.entity_approve(
+        ack["id"], actor="steward@example.com", name="Globex Robotics",
+        entity_type="organization")
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT item_kind, item_id, verdict, actor, notes, extra FROM "
+                    "review_decisions WHERE item_id = %s", (str(ack["id"]),))
+        rows = cur.fetchall()
+    assert len(rows) == 1, f"one mint, one governance row — got {len(rows)}"
+    assert rows[0] == ("entity-proposal", str(ack["id"]), "approve", "steward@example.com", "",
+                       {"entity_id": "globex-robotics", "commit": result["commit"]})
+
+
+def test_characterization_the_console_does_not_enforce_self_approval_adr_030_d2(
+        conn, entity_service, entity_mint_repo, require_gitleaks):
+    """Pins the DELIBERATE ASYMMETRY, so no one can remove it by accident.
+
+    ADR 030 D2: MCP and Slack resolve a real identity, check `ops/stewards.json` and enforce
+    `SELF_APPROVAL_REFUSED` (`tests/server/test_review.py::test_review_decide_entity_proposal_
+    approve_self_approval_still_refused` and its Slack twin). The console mints under the ADMIN
+    TOKEN with `actor` as ATTRIBUTION, exactly like the CLI it replaced — the ADR calls enforcing a
+    second-human rule against one shared credential "theatre" and refuses to pretend.
+
+    So the SAME person filing and approving mints for real here, and the commit still names them.
+    Until this test the property was only exercised by ACCIDENT — the mint-for-real test above
+    happens to pass `actor="steward@example.com"` for a row `submit_one` defaults to the same
+    address — coverage that would evaporate the day someone changed that fixture default, and that
+    said nothing about WHY it must hold. A refactor that "helpfully" unified the two doors'
+    authorization would overturn a decision, not remove duplication; this is what goes red.
+    """
+    ack = submit_one(conn, submitted_by="same-person@example.com")
+    park(conn, ack["id"], report=unresolved_entity_report("Globex Robotics"))
+
+    result = entity_service.entity_approve(
+        ack["id"], actor="same-person@example.com", name="Globex Robotics",
+        entity_type="organization")
+
+    assert result["entity_id"] == "globex-robotics"
+    assert len(result["commit"]) == 40
+    message = gitcmd.run("log", "-1", "--format=%B", result["commit"],
+                         cwd=entity_mint_repo).stdout
+    assert "Approved-by: same-person@example.com" in message, (
+        "attribution, not authorization — the filer's own name reaches the commit (D2)")
+    recorded = _actions(conn)[0]
+    assert (recorded["action"], recorded["outcome"]) == ("entities.approve", "ok")
 
 
 def test_entity_approve_blank_actor_falls_back_to_the_configured_default(

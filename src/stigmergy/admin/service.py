@@ -12,7 +12,6 @@ class name only.
 """
 import logging
 import os
-from datetime import date
 
 from stigmergy import text as textutil
 from stigmergy.admin import schema as admin_schema
@@ -23,7 +22,6 @@ from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.errors import CaptureError
 from stigmergy.digest import run as digest_run
 from stigmergy.digest.settings import DIGEST_CHANNEL_ID_ENV, SLACK_BOT_TOKEN_ENV, DigestSettings
-from stigmergy.entities import remote as entities_remote
 from stigmergy.entities import situations
 from stigmergy.entities.errors import EntityError
 from stigmergy.entities.generator import ENTITY_TYPES, canonical_id_for
@@ -61,9 +59,6 @@ DISPATCHABLE = tuple(w["file"] for w in CRON_WORKFLOWS)
 # long agent item against the CLI's lease calls it dead while its worker is still on it. The one
 # declared reach into `stigmergy.librarian` is the config module alone.
 WORKER_MAX_ATTEMPTS = queue.DEFAULT_MAX_ATTEMPTS
-
-# The knowledge repo's default branch — the same constant `server.review._MINT_BRANCH` names.
-_MINT_BRANCH = "main"
 
 
 def worker_visibility_timeout_s() -> int:
@@ -311,10 +306,12 @@ class AdminService:
                        entity_id: str = "", aliases: str = "", role: str = "",
                        requeue: bool = True) -> dict:
         """Mint the entity this situation names, through the same server-driven door the review
-        lane's `review_decide` walks (`entities.remote.mint_via_clone` -> `entities.mint.mint`,
-        ADR 030 D3/D4). The CLI reaches `entities.mint.mint` too, but from the steward's OWN
+        lane's `review_decide` walks — literally the same function, `server.review.
+        mint_and_record_approval` (mint -> `review_decisions` row -> requeue strictly after the
+        push), which reaches `entities.remote.mint_via_clone` -> `entities.mint.mint`
+        (ADR 030 D3/D4). The CLI reaches `entities.mint.mint` too, but from the steward's OWN
         clone — `remote.py` is the throwaway-clone half only, and the shared seam is `mint.mint`,
-        one function below both. Driven directly rather than through
+        one function below both. The shared sequence is entered directly rather than through
         `review_decide` itself: the console mints under the admin token with `actor` as
         ATTRIBUTION, the same trust model as every other console mutation and as the CLI it
         replaces (D2). `review_decide`'s steward check and self-approval refusal are for a
@@ -326,8 +323,9 @@ class AdminService:
 
         Records TWO ledgers, like the other two doors: `admin_actions` (via `_mutate`, this
         package's own bookkeeping, actor-attributed) and `review_decisions` (the append-only
-        governance record — `server.review.record_decision`, reused rather than re-implemented,
-        so the ledger never drifts between hand-written INSERTs on three different doors).
+        governance record, written inside the shared sequence rather than re-implemented, so the
+        ledger never drifts between hand-written INSERTs on three different doors). This door
+        passes no `notes` — the form has no note field — so the row's note is `''`.
 
         `name`/`entity_type` are validated — and the situation itself confirmed still pending —
         before anything is attempted. `entity_id` defaults to `name`'s slug
@@ -353,27 +351,18 @@ class AdminService:
                "entity_type": clean_type, "requeue": bool(requeue)}
 
         def _do(by: str) -> dict:
+            # The guard stays HERE rather than inside the shared sequence: this door runs it after
+            # its own name/type validation and the review lane runs it before, so one shared
+            # answer would change what a caller wrong in both ways at once is told.
             situations.require_situation(self._conn, situation_id, action="approve")
-            mint_result = entities_remote.mint_via_clone(
-                self._server.librarian_repo_url, _MINT_BRANCH, os.environ,
-                entity_id=resolved_id, name=clean_name, entity_type=clean_type,
-                aliases=alias_list, role=role or "", today=date.today().isoformat(),
-                submission_id=situation_id, approved_by=by)
-            server_review.record_decision(
-                self._conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(situation_id),
-                verdict="approve", actor=by,
-                extra={"entity_id": mint_result["entity_id"], "commit": mint_result["commit"]})
-            requeued = None
-            if requeue:
-                # AFTER the push, never before — the CLI's own correctness property
-                # (`entities.cli`'s module docstring), restated by every door that mints: a
-                # requeue that ran first would hand the librarian a capture whose entity is not
-                # yet on the remote it fetches from, and the capture would park a second time.
-                requeued = dispositions.requeue(
-                    self._conn, situation_id, actor=by,
-                    note=f"entity {mint_result['entity_id']} approved and pushed "
-                         f"({mint_result['commit'][:12]})")
-            return {**mint_result, "requeued": bool(requeued)}
+            # Nothing is caught around this call: the library's own exception class must reach
+            # `_mutate`, which records it in `admin_actions` before the `except` below renames it
+            # for the caller.
+            return server_review.mint_and_record_approval(
+                self._conn, repo_url=self._server.librarian_repo_url,
+                submission_id=situation_id, entity_id=resolved_id, name=clean_name,
+                entity_type=clean_type, aliases=alias_list, role=role or "", actor=by,
+                requeue=requeue)
 
         try:
             return self._mutate("entities.approve", actor, args, _do)

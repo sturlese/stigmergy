@@ -8,7 +8,7 @@ Narrative: [`docs/reference/admin-console.md`](../../../docs/reference/admin-con
 
 **It is a skin, not a subsystem.** Every act lands on a seam another package owns and tests:
 `capture.dispositions`, `capture.retention`, `capture.queue.release_expired`, `gardener.store`,
-`digest.run`, `index.check`, `entities.situations`, `entities.remote.mint_via_clone`,
+`digest.run`, `index.check`, `entities.situations`, `server.review.mint_and_record_approval`,
 `server.pilot_report`. The only state it owns is `admin_actions`.
 
 **It is not a read surface over the corpus** — no search, no `ask`, no page bodies.
@@ -81,10 +81,14 @@ must not depend on a converter, so an unlisted file is a 400 naming the allowed 
   injectable. Never `os.environ` at module scope here.
 - `AdminService._mutate` / `_mutate_async` — every state-changing call goes through it: actor
   fallback, an `admin_actions` row on both outcomes, `CaptureError` → `AdminRefused`.
-- `entities.remote.mint_via_clone` + `server.review.record_decision` — `entity_approve`'s whole
-  seam: mint through a throwaway clone, then write the `review_decisions` row every mint door
-  shares. `EntityError`/`CapabilityUnavailableError` map to `AdminRefused` with the library's own
-  sentence.
+- `server.review.mint_and_record_approval` — `entity_approve`'s whole seam, and the SAME function
+  MCP and Slack mint through: mint via a throwaway clone, write the `review_decisions` row, then
+  requeue, strictly after the push. This package no longer reaches `entities.remote` itself. Two
+  things stay HERE by decision, not by omission: `situations.require_situation` (this door runs it
+  after its own name/type validation, the review lane before) and the exception mapping — nothing
+  is caught inside `_do`, so `_mutate` records the library's OWN class name in `admin_actions`
+  before the `except EntityError` outside it raises `AdminRefused` with the library's sentence.
+  `server.review.record_decision` stays a direct reuse for the Queue tab's reject.
 - `auth.token_matches` / `bearer_token` / `host_allowed` — pure; never re-derive a header parse.
 - `service._clean` (= `stigmergy.text.sanitize`) — the one cleaning seam for untrusted strings on
   the way out: control characters die, newlines and a literal `<script>` survive, because HTML

@@ -2388,10 +2388,14 @@ def test_digest_transitive_review_reach_is_a_named_declared_exception():
 # reach into the librarian is `config` alone (the worker's lease numbers), the same declared
 # shape as `webhook.py`'s githubapp-only exception.
 #
-# Since ADR 030, the entities edge is no longer read-only: `entity_approve` mints through the
-# governed door directly (`entities.remote.mint_via_clone`), under the admin token with the actor
-# as ATTRIBUTION rather than authorization (D2) — the same shape `capture.dispositions` already
-# gets from this package, not a new kind of reach. `stigmergy.entities.birth` and
+# Since ADR 030, the entities edge is no longer read-only: `entity_approve` mints, under the admin
+# token with the actor as ATTRIBUTION rather than authorization (D2) — the same shape
+# `capture.dispositions` already gets from this package, not a new kind of reach. It no longer
+# reaches `entities.remote` to do it: the mint sequence (mint -> `review_decisions` row -> requeue
+# strictly after the push) is `server.review.mint_and_record_approval`, ONE function both minting
+# doors call, so `stigmergy.entities.remote` is GONE from the set below — the governed door is
+# reached from `server/review.py`, which has its own declared exception for it.
+# `stigmergy.entities.birth` and
 # `stigmergy.entities.cli` are GONE from this set: both existed only for the bracket-placeholder
 # command template (`_entity_commands`), deleted the same change that built the real form (D5) —
 # nothing here prints a shell command any more, so the one shared shell-safety predicate
@@ -2411,7 +2415,6 @@ _ADMIN_ALLOWED_IMPORT_PREFIXES = (
     "stigmergy.digest.run",           # the digest itself — preview and post
     "stigmergy.digest.settings",      # the ONE spelling of the digest env names, never a second
     "stigmergy.entities.situations",  # the pending-situations read + entity_approve's write guard
-    "stigmergy.entities.remote",      # ADR 030 D3 — the server-driven mint door, entity_approve's seam
     "stigmergy.entities.generator",   # ENTITY_TYPES (the closed list) + canonical_id_for (the slug
                                      # default) — the same two names server.review reaches for
     "stigmergy.entities.errors",      # EntityError — every mint refusal maps to AdminRefused through it
@@ -2421,8 +2424,9 @@ _ADMIN_ALLOWED_IMPORT_PREFIXES = (
     "stigmergy.server.identity",      # hash_token — one hashing scheme, never a second
     "stigmergy.server.errors",
     "stigmergy.server.review",        # ensure_review_schema (compose-time DDL) + record_decision (the
-                                     # ONE review_decisions ledger writer — entity_approve's mint
-                                     # decision lands through it too, ADR 030)
+                                     # ONE review_decisions ledger writer — entity_approve's own
+                                     # reject decision lands through it) + mint_and_record_approval
+                                     # (the ONE mint sequence both minting doors run, ADR 030)
     "stigmergy.server.pilot_report",  # the measurement table, reused whole
     "stigmergy.server.webhook",       # JOB_NAME — the webhook's own job spelling, never re-typed
     "stigmergy.slack.bolt_gateway",   # the Slack SDK's ONE door — lazy-only, see the test below
@@ -2482,6 +2486,55 @@ def test_admin_actually_uses_its_declared_librarian_exception():
         "from _ADMIN_ALLOWED_IMPORT_PREFIXES and from this file's section comment")
 
 
+def _unused_admin_prefixes(prefixes, sources) -> list[str]:
+    """The declared prefixes NOTHING under `sources` imports anything below — matched by PREFIX,
+    the same way `test_admin_imports_only_its_declared_set` grants them, so the pruning half and
+    the enforcing half can never disagree about what an entry covers."""
+    imported = {mod for path in sources for mod, _ in _admin_resolved_imports(path)}
+    return sorted({p for p in prefixes if not any(mod.startswith(p) for mod in imported)})
+
+
+def test_every_declared_admin_import_prefix_is_actually_imported():
+    """`declared ⊆ used` over the WHOLE allowlist — the shape
+    `test_review_actually_uses_its_declared_entities_exception` already holds for the review lane,
+    which this tuple was missing.
+
+    The gap was not hypothetical. ADR 030's mint moved into ONE function
+    (`server.review.mint_and_record_approval`, called by both minting doors), `admin/service.py`
+    stopped importing `stigmergy.entities.remote` — and the grant for the governed mint door sat
+    here, live, over a package this console no longer touches, until a human noticed it by hand.
+    Nothing under `tests/` could have: `test_admin_actually_uses_its_declared_librarian_exception`
+    above covers exactly ONE of the entries (and keeps its place, because it also names the FILE
+    that must hold the import and the section comment to correct), and
+    `test_no_import_allowlist_entry_names_a_module_that_no_longer_exists` only asks whether the
+    granted module still EXISTS — `stigmergy.entities.remote` does exist, it is simply nobody's
+    business here any more. A grant nothing exercises pre-authorizes the next reach that happens to
+    match the prefix, which for an entities grant means a console that mints its own way again."""
+    unused = _unused_admin_prefixes(_ADMIN_ALLOWED_IMPORT_PREFIXES, ADMIN_SOURCES)
+    assert not unused, (
+        f"_ADMIN_ALLOWED_IMPORT_PREFIXES grants {unused}, which no module under admin/ imports "
+        "any more — delete the entries and the sentence about them in this file's section "
+        "comment. If one is genuinely declared-but-unused, it needs a stated reason here, not a "
+        "silent licence")
+
+
+def test_the_admin_prefix_pruning_check_can_go_red(tmp_path):
+    """**Proves the mechanism above can go red**, on the entry this refactor actually killed.
+
+    A superset assertion over a tuple that happens to be complete is indistinguishable from one
+    that never looks — this pins that the check reports a stale grant, and stops reporting it the
+    moment the import comes back."""
+    module = tmp_path / "synthetic_admin_module.py"
+    declared = ("stigmergy.capture", "stigmergy.entities.remote")
+
+    module.write_text("from stigmergy.capture import queue\n", encoding="utf-8")
+    assert _unused_admin_prefixes(declared, [module]) == ["stigmergy.entities.remote"]
+
+    module.write_text("from stigmergy.capture import queue\n"
+                      "from stigmergy.entities import remote\n", encoding="utf-8")
+    assert _unused_admin_prefixes(declared, [module]) == []
+
+
 @pytest.mark.parametrize("path", ADMIN_SOURCES, ids=lambda p: p.name)
 def test_admin_loads_the_slack_sdk_door_lazily(path):
     """`bolt_gateway` may only be imported INSIDE the handler that posts (digest.cli's own
@@ -2523,6 +2576,166 @@ def test_only_the_http_transport_composes_the_admin_branch():
                 offenders.append(f"{rel}:{line} -> {mod}")
     assert not offenders, (
         "stigmergy.admin is imported outside server/transport_http.py:\n  " + "\n  ".join(offenders))
+
+
+# ── ADR 030: the server-driven mint is entered from ONE place ──────────────────────────────────
+# Both minting doors (MCP/Slack through `review_decide`, the console through
+# `admin.service.entity_approve`) run the same three steps in the same order — mint, ledger row,
+# requeue strictly after the push. They used to run two COPIES of that sequence, and the ordering
+# rule is invisible from either door's end state, so a copy could be reordered and stay green.
+# There is one copy now, which is why this file's admin section no longer grants
+# `stigmergy.entities.remote`: the guard against a second copy is that a second CALL SITE of the
+# governed door has to appear somewhere, and this is what sees it.
+_GOVERNED_MINT_DOOR = "mint_via_clone"
+
+
+def _names_the_governed_mint_door(path: pathlib.Path) -> bool:
+    """True when the module CALLS or imports the door by name. Comments and docstrings are opaque
+    to `ast.parse`, which matters here: three modules describe the door in prose (`admin/
+    service.py`, `entities/mint.py`, `entities/errors.py`) and none of them reaches it."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return any(
+        (isinstance(node, ast.Attribute) and node.attr == _GOVERNED_MINT_DOOR)
+        or (isinstance(node, ast.Name) and node.id == _GOVERNED_MINT_DOOR)
+        or (isinstance(node, ast.ImportFrom)
+            and any(alias.name == _GOVERNED_MINT_DOOR for alias in node.names))
+        for node in ast.walk(tree))
+
+
+def test_the_governed_mint_door_has_exactly_one_call_site():
+    """`entities.remote.mint_via_clone` is reached from `server/review.py` and nowhere else.
+
+    This is the structural claim that makes a cross-door PARITY test unnecessary: parity is for a
+    contract implemented twice (`tests/test_contract_parity.py`'s own subject), and the ledger row,
+    the note and the ordering are written by one function now — a parity assertion would compare
+    the shared function against itself and read as coverage for a drift that cannot happen while
+    this test holds. If a second door ever mints on its own again, the two doors' end states will
+    still agree and THIS is what goes red.
+
+    Equality against a one-element list, not a `<= 1` count: renaming the door would otherwise
+    empty the scan and leave a permanently-green test behind."""
+    callers = sorted(_rel(p) for p in ALL_STIGMERGY_SOURCES
+                     if _names_the_governed_mint_door(p))
+    assert callers == ["server/review.py"], (
+        f"the governed mint door is called from {callers}, not from server/review.py alone — "
+        "either a second copy of the mint sequence is back (put it in "
+        "`server.review.mint_and_record_approval`, which both doors call), or the door was "
+        "renamed and this scan has gone blind")
+
+
+# ── ADR 030 D2: who may ENTER the shared mint sequence ─────────────────────────────────────────
+# The test above sees a SECOND COPY of the mint. It cannot see a second CALLER of the one copy,
+# and that is the other half of the same guarantee.
+#
+# `mint_and_record_approval` is PUBLIC and takes NO authorization argument of any kind — it clones
+# with the librarian App's credential, commits, pushes, writes the governance ledger and disposes a
+# queue row, on behalf of whoever calls it. That is correct (ADR 030 D2: authorization is
+# per-surface, because the console mints under one shared admin token and a second-human rule
+# enforced against one credential is theatre) and it is exactly why the CALLER SET has to be
+# closed: every entry below is a surface that has ALREADY decided authorization for itself — the
+# review lane by resolving a steward and refusing self-approval (`_guard_governance_decision`,
+# `SELF_APPROVAL_REFUSED`), the console by sitting behind the operator token. A Slack handler
+# calling it with `actor=<the requester's own email>` would leave `mint_via_clone`'s call site
+# exactly where it is, inside `server/review.py`, keep the test above green, and silently retire
+# `SELF_APPROVAL_REFUSED` on that surface.
+#
+# **This replaces a guarantee that used to be structural and is now gone.** Before the sequence
+# was extracted, minting from outside `server/review.py` meant importing `stigmergy.entities.remote`
+# — which `stigmergy.slack` is mechanically barred from (`test_slack_never_imports_*`) and which
+# `stigmergy.admin` could only do through a declared entry in `_ADMIN_ALLOWED_IMPORT_PREFIXES`.
+# That entry was DELETED when the console started calling this function instead. Nothing replaced
+# the barrier it implied until this test.
+_MINT_SEQUENCE = "mint_and_record_approval"
+
+# `server/review.py` DEFINES it and calls it from `_mint_entity_proposal`; `admin/service.py` calls
+# it as `server_review.mint_and_record_approval` from `entity_approve`. Slack is deliberately
+# absent and must stay absent: it reaches the review lane through `review_decide_safe`, which walks
+# the steward guard first.
+_MINT_SEQUENCE_CALLERS = ("admin/service.py", "server/review.py")
+
+
+def _names_the_mint_sequence(path: pathlib.Path) -> bool:
+    """True when the module CALLS or imports the shared sequence by name. AST, not text, for the
+    reason `_uses_acl_predicate` documents at length: `server/index.md`-style prose about the
+    function is not a call, and `server/review.py`'s own `def` line is not a reference either — an
+    `ast.FunctionDef` carries its name as a plain string, so the definition alone never counts and
+    a review lane that stopped calling its own sequence shows up as the absence it is."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return any(
+        (isinstance(node, ast.Attribute) and node.attr == _MINT_SEQUENCE)
+        or (isinstance(node, ast.Name) and node.id == _MINT_SEQUENCE)
+        or (isinstance(node, ast.ImportFrom)
+            and any(alias.name == _MINT_SEQUENCE for alias in node.names))
+        for node in ast.walk(tree))
+
+
+def _mint_sequence_callers(sources) -> list[pathlib.Path]:
+    return [p for p in sources if _names_the_mint_sequence(p)]
+
+
+def test_the_shared_mint_sequence_is_entered_from_exactly_the_two_authorizing_surfaces():
+    """`server.review.mint_and_record_approval` is reached from `server/review.py` and
+    `admin/service.py`, and from nowhere else — see the section comment above for why the set is
+    closed and for the removed `stigmergy.entities.remote` allowlist entry this stands in for.
+
+    Set EQUALITY, both directions, which is this file's house rule for every allowlist: a NEW
+    caller is a surface minting with the App credential without having decided who may
+    (`SELF_APPROVAL_REFUSED` stops existing there), and a caller that STOPS calling it means the
+    grant below has gone stale — either the door no longer mints, or it grew its own second copy of
+    the sequence, which is the defect the extraction removed. Equality also means renaming the
+    function empties the scan and goes red, instead of leaving a permanently-green test behind."""
+    callers = sorted(_rel(p) for p in _mint_sequence_callers(ALL_STIGMERGY_SOURCES))
+    assert callers == sorted(_MINT_SEQUENCE_CALLERS), (
+        f"the shared mint sequence is reached from {callers}, not from "
+        f"{sorted(_MINT_SEQUENCE_CALLERS)}. A NEW entry mints with the librarian App's credential "
+        "through a function that takes no authorization argument (ADR 030 D2) — route it through "
+        "`review_decide`, which resolves a steward and refuses self-approval, or state here why "
+        "that surface decides authorization for itself. A MISSING entry means a declared minting "
+        "door stopped calling the shared sequence: check it did not grow its own copy")
+
+
+def test_the_mint_sequence_caller_pin_can_go_red_in_both_directions(tmp_path):
+    """**Proves the mechanism above can go red on an intruder AND on a stale grant**, over
+    synthetic modules run through the real predicate.
+
+    The third file is the case a raw-text grep gets wrong and the case that actually matters here:
+    a Slack module that only MENTIONS the sequence in prose is not a caller, and must not be
+    reported as one — otherwise the pin gets relaxed the first time documentation names it."""
+    caller_a = tmp_path / "review.py"
+    caller_b = tmp_path / "service.py"
+    slack_like = tmp_path / "handlers.py"
+    caller_a.write_text("def _mint(service, **kw):\n"
+                        "    return mint_and_record_approval(service.conn, **kw)\n",
+                        encoding="utf-8")
+    caller_b.write_text("from stigmergy.server import review as server_review\n\n"
+                        "def approve(conn, **kw):\n"
+                        "    return server_review.mint_and_record_approval(conn, **kw)\n",
+                        encoding="utf-8")
+    slack_like.write_text(
+        '"""Buttons only. The mint itself is `review.mint_and_record_approval`, which this\n'
+        'module never calls — it goes through `review_decide_safe`."""\n\n'
+        "def on_approve(ctx, item_id):\n"
+        "    return ctx.service.review_decide_safe(item_id)   # mint_and_record_approval is not ours\n",
+        encoding="utf-8")
+    declared = ["review.py", "service.py"]
+    sources = [caller_a, caller_b, slack_like]
+
+    def observed():
+        return sorted(p.name for p in _mint_sequence_callers(sources))
+
+    assert observed() == declared, "the green baseline: prose about the sequence is not a call"
+
+    # Direction 1 — a new surface starts minting on its own.
+    slack_like.write_text("from stigmergy.server import review\n\n"
+                          "def on_approve(conn, **kw):\n"
+                          "    return review.mint_and_record_approval(conn, **kw)\n",
+                          encoding="utf-8")
+    assert observed() == ["handlers.py", "review.py", "service.py"] != declared
+
+    # Direction 2 — a declared caller stops calling it (the pruning half).
+    caller_b.write_text("def approve(conn, **kw):\n    raise NotImplementedError\n",
+                        encoding="utf-8")
+    assert observed() == ["handlers.py", "review.py"] != declared
 
 
 # ── the pruning rule, applied to the per-package import allow-lists ────────────────────────────

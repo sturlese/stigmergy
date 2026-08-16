@@ -311,9 +311,10 @@ def record_undeliverable(conn, *, event: str, item_ref: str, reason: str) -> Non
 # ── review_decide() ────────────────────────────────────────────────────────────────────────────
 def record_decision(conn, *, item_kind: str, item_id: str, verdict: str, actor: str,
                     notes: str = "", extra: dict | None = None) -> None:
-    """The ONE write to the append-only ledger, Postgres only. Public because the admin console's
-    `entity_approve` records here too, bypassing `review_decide`'s steward guard by design.
-    `extra` is the seam for per-kind detail: an append-only table cannot be migrated later."""
+    """The ONE write to the append-only ledger, Postgres only. Public because the admin console
+    records here too — `AdminService.queue_reject` — bypassing `review_decide`'s steward guard by
+    design. `extra` is the seam for per-kind detail: an append-only table cannot be migrated
+    later."""
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO review_decisions (item_kind, item_id, verdict, actor, notes, extra) "
@@ -445,28 +446,16 @@ def _decide_entity_proposal(service, item_id: str, verdict: str, notes: str, act
         _check_len("alias", alias)
     resolved_id = str(entity_id or "").strip() or canonical_id_for(clean_name)
 
-    mint_result = _mint_entity_proposal(
+    minted = _mint_entity_proposal(
         service, submission_id=submission_id, entity_id=resolved_id, name=clean_name,
-        entity_type=clean_type, aliases=alias_list, role=role or "", approved_by=actor)
-
-    record_decision(service.conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(submission_id),
-                    verdict=verdict, actor=actor, notes=notes,
-                    extra={"entity_id": mint_result["entity_id"], "commit": mint_result["commit"]})
-
-    requeued = None
-    if requeue:
-        # AFTER the push, never before: a requeue that ran first would hand the librarian a
-        # capture whose entity is not yet on the remote it fetches from.
-        requeued = dispositions.requeue(
-            service.conn, submission_id, actor=actor,
-            note=f"entity {mint_result['entity_id']} approved and pushed "
-                 f"({mint_result['commit'][:12]})")
+        entity_type=clean_type, aliases=alias_list, role=role or "", notes=notes,
+        approved_by=actor, requeue=requeue)
 
     return {"recorded": verdict, "item_kind": KIND_ENTITY_PROPOSAL,
                "item_id": str(submission_id),
-           "actor": actor, "minted": True, "entity_id": mint_result["entity_id"],
-           "name": mint_result["name"], "commit": mint_result["commit"],
-           "requeued": bool(requeued)}
+           "actor": actor, "minted": True, "entity_id": minted["entity_id"],
+           "name": minted["name"], "commit": minted["commit"],
+           "requeued": minted["requeued"]}
 
 
 def _alias_list(aliases) -> list[str]:
@@ -484,19 +473,83 @@ def _alias_list(aliases) -> list[str]:
 _MINT_BRANCH = "main"
 
 
+def mint_and_record_approval(conn, *, repo_url: str, submission_id: int, entity_id: str,
+                             name: str, entity_type: str, aliases: list[str], role: str,
+                             actor: str, notes: str = "", requeue: bool = False) -> dict:
+    """The mint sequence itself, in the ONE order that is correct — mint through the governed
+    door, write the governance ledger row, then (only if asked) requeue the capture.
+
+    Both SERVER-SIDE doors that mint run THIS: MCP/Slack through `_mint_entity_proposal` below,
+    the admin console through `admin.service.entity_approve`. Two copies of an ordering rule are
+    two places for it to be reordered, and the reordering is invisible from either door's end
+    state. There IS a third door, and it is the copy: `stigmergy-entities approve` mints from the
+    steward's own clone, runs its own spelling of the same order, and writes no `review_decisions`
+    row at all, because `stigmergy.entities` cannot import `stigmergy.server`. The ledger therefore
+    answers "who approved this identity" for the two server-side doors only — a CLI mint is
+    attributable from its commit's author, the steward's own git identity, and from nothing in
+    Postgres.
+
+    It deliberately covers three steps and no more. The pending-situation guard
+    (`situations.require_situation`) stays at each call site because the two doors run it at
+    different points in their own argument validation, and one shared answer would silently change
+    the other door's refusal for a caller who is wrong in both ways at once.
+
+    `stigmergy.entities` exceptions leave here UNTRANSLATED, on purpose: each door maps them
+    itself and maps them differently. `_mint_entity_proposal` turns them into this package's
+    vocabulary; the console lets the library's own class reach `admin.service._mutate`, which
+    records that class name in `admin_actions` before turning it into an `AdminRefused`. A
+    translation here would rename what the console's bookkeeping captures precisely.
+
+    `notes` is the doors' other asymmetry, and a parameter for that reason: the review lane
+    carries the steward's cleaned note into the ledger row, the console has no note field and
+    writes `''`. It goes VERBATIM into an append-only table that cannot be migrated afterwards,
+    and nothing here scans it — a caller passing a NON-EMPTY note must already have run
+    `_refuse_secret_note` (or an equivalent secrets scan) upstream. `review_decide` does, far
+    before the mint; the console passes `''` and so has nothing to scan.
+
+    `mint_via_clone` is reached as a MODULE ATTRIBUTE so it stays monkeypatchable.
+    """
+    mint_result = entities_remote.mint_via_clone(
+        repo_url, _MINT_BRANCH, os.environ,
+        entity_id=entity_id, name=name, entity_type=entity_type, aliases=aliases, role=role,
+        today=date.today().isoformat(), submission_id=submission_id, approved_by=actor)
+    record_decision(conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(submission_id),
+                    verdict=APPROVE, actor=actor, notes=notes,
+                    extra={"entity_id": mint_result["entity_id"], "commit": mint_result["commit"]})
+    requeued = None
+    if requeue:
+        # AFTER the push, never before — the CLI's own correctness property (`entities.cli`'s
+        # module docstring), restated by every door that mints: a requeue that ran first would
+        # hand the librarian a capture whose entity is not yet on the remote it fetches from, and
+        # the capture would park a second time. The note text is the operator-facing trace of why
+        # a capture came back; every door emits the same sentence.
+        requeued = dispositions.requeue(
+            conn, submission_id, actor=actor,
+            note=f"entity {mint_result['entity_id']} approved and pushed "
+                 f"({mint_result['commit'][:12]})")
+    return {**mint_result, "requeued": bool(requeued)}
+
+
 def _mint_entity_proposal(service, *, submission_id: int, entity_id: str, name: str,
-                          entity_type: str, aliases: list[str], role: str,
-                          approved_by: str) -> dict:
-    """The one call into the governed door: clone with the librarian App's credential, mint, push,
-    clean up. `mint_via_clone` is reached as a MODULE ATTRIBUTE so it stays monkeypatchable. The
-    mint's own `EntityError` is mapped into this package's vocabulary here, under the rule this
-    whole module holds: an `entities` exception type is translated where it is raised, never
-    allowed to leave — `_decide_entity_proposal`'s pre-mint guard does the same for its own."""
+                          entity_type: str, aliases: list[str], role: str, notes: str,
+                          approved_by: str, requeue: bool) -> dict:
+    """This door's half of `mint_and_record_approval`: the shared sequence with THIS package's
+    translation wrapped around it, under the rule this whole module holds — an `entities`
+    exception type is translated where this package meets it, never allowed to leave
+    (`_decide_entity_proposal`'s pre-mint guard does the same for its own).
+
+    The `try` covers the WHOLE shared sequence, not just the mint: the ledger row and the requeue
+    are inside it too. That is inert today — `CaptureError` and `EntityError` are disjoint
+    hierarchies, so neither of those two steps can raise what these handlers catch — but the
+    clause no longer means "the mint's own errors", it means "anything the sequence raises". Add
+    an `entities` call to `mint_and_record_approval` and this door starts translating it into a
+    `ReviewError` silently, where before it would have surfaced as an unanticipated fault.
+    """
     try:
-        return entities_remote.mint_via_clone(
-            service.settings.librarian_repo_url, _MINT_BRANCH, os.environ,
-            entity_id=entity_id, name=name, entity_type=entity_type, aliases=aliases, role=role,
-            today=date.today().isoformat(), submission_id=submission_id, approved_by=approved_by)
+        return mint_and_record_approval(
+            service.conn, repo_url=service.settings.librarian_repo_url,
+            submission_id=submission_id, entity_id=entity_id, name=name, entity_type=entity_type,
+            aliases=aliases, role=role, actor=approved_by, notes=notes, requeue=requeue)
     except EntityCapabilityUnavailableError as ex:
         raise CapabilityUnavailableError(str(ex)) from ex
     except EntityError as ex:
