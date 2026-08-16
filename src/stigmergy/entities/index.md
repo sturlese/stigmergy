@@ -17,7 +17,7 @@ plus an `Approved-by:` trailer naming the human.
 
 | Module | What it is |
 |---|---|
-| `cli.py` | `stigmergy-entities` — `list · show · approve · reject · create · regenerate [--check]`; a thin adapter over `mint.mint` (derives `author` from the steward's clone via `clone.preflight`); owns the printed-command safety (`_suggestable`) and is the only module here that opens a database connection |
+| `cli.py` | `stigmergy-entities` — `list · show · approve · reject · create · regenerate [--check]`; a thin adapter over `mint.mint` (derives `author` from the steward's clone via `clone.preflight`); owns the printed-command safety (`_suggestable`) and is the only module here that opens a database connection. `approve` and `reject` both write the `review_decisions` row through `capture.decisions` — below the `entities` -> `server` edge — naming this door with `decisions.SOURCE_CLI`, required on every ledger write |
 | `situations.py` | which parked (`triage`) rows are an identity decision — `classify`, `subject_of` / `subjects_of` / `mint_name_prefill`, the two semantic entry points (`list_pending_situations`, `get_situation`) and the write guard (`require_situation`) |
 | `birth.py` | resolve-before-mint as a pure function of a proposal and a registry (`prepare`, `recheck`, `_refuse_collisions`) and the page renderer (`render_page`, `_yaml_str`, `commit_message`) |
 | `generator.py` | the registry generator: `read_entity_pages`, `derive_registry`, `registry_of`, `compare` (semantic drift), `check` / `regenerate`, `canonical_id_for` |

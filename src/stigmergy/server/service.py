@@ -616,22 +616,28 @@ class BrainService:
                           lambda: review.review_queue(self, limit=limit))
 
     def review_decide(self, item_kind: str, item_id: str, verdict: str, notes: str = "", *,
-                      name: str = "", entity_id: str = "", entity_type: str = "", aliases=None,
-                      role: str = "", requeue: bool = False) -> dict:
+                      source: str, name: str = "", entity_id: str = "", entity_type: str = "",
+                      aliases=None, role: str = "", requeue: bool = False) -> dict:
         """Record a verdict on one review-queue item, attributed to THIS service's resolved
         identity; `review.review_decide` carries the contract. The audit row keeps lengths and
-        closed-vocabulary fields only, never the free text."""
+        closed-vocabulary fields only, never the free text.
+
+        `source` is REQUIRED and never defaulted here, deliberately: this method serves both the
+        MCP tool closure and Slack's card handler through `review_decide_safe`, and a default
+        would attribute whichever one forgot to pass it to the other. It rides the audit args
+        too — a closed vocabulary, and the one field that tells the two callers apart in
+        `audit_log`, which otherwise records them identically."""
         return self._call(
             "review_decide",
-            {"item_kind": item_kind, "item_id": item_id, "verdict": verdict,
+            {"item_kind": item_kind, "item_id": item_id, "verdict": verdict, "source": source,
              "notes_chars": len(notes or ""), "name_chars": len(name or ""),
              "entity_id": entity_id or "", "entity_type": entity_type or "",
              "aliases_present": bool(aliases), "role_chars": len(role or ""),
              "requeue": bool(requeue)},
             lambda: review.review_decide(
-                self, item_kind=item_kind, item_id=item_id, verdict=verdict, notes=notes,
-                name=name, entity_id=entity_id, entity_type=entity_type, aliases=aliases,
-                role=role, requeue=requeue))
+                self, item_kind=item_kind, item_id=item_id, verdict=verdict, source=source,
+                notes=notes, name=name, entity_id=entity_id, entity_type=entity_type,
+                aliases=aliases, role=role, requeue=requeue))
 
     # ── scoped read helpers (reused by the answer layer) ──────────────────────
     def scoped_entities(self) -> list[str]:

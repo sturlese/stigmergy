@@ -69,10 +69,10 @@ change both or neither.
   window_days` (first run only).
 - `gather_corpus_health` returns one of three states (`never_run` / `stale` / `ok`, the last with
   `sweep_incomplete`); `gather_corpus_deltas` returns `pages_filed_count`/`pages_filed_titles`/
-  `entities_born_count` — an approval COUNT with no names: every minting door writes the
-  `review_decisions` row, but not all of them fill `extra`, so a list of names would read as
-  complete and would not be. The copy says "approved" for a second reason — the row records an
-  APPROVAL, and one can exist without a mint.
+  `entities_born_count` — an approval COUNT with no names: every door writes the `review_decisions`
+  row and every row carries `extra` (at minimum its `source`), but only a minting approve fills in
+  `entity_id`, so a list of names would read as complete and would not be. The copy says "approved"
+  for a second reason — the row records an APPROVAL, and one can exist without a mint.
 - Post, then record — in that order: an interrupt between the two leaves a posted message with no
   watermark, a named risk both the interrupt copy and the `run_id is None` branch warn about.
 

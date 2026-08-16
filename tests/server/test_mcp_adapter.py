@@ -454,7 +454,11 @@ def test_review_queue_maps_an_unanticipated_exception_to_class_name_only(fake_se
 def test_review_decide_forwards_the_new_adr_030_arguments_and_returns_the_service_payload(
         fake_service):
     """The closure's own wiring for the six new optional params (ADR 030): every one reaches
-    `BrainService.review_decide` by name, none dropped and none renamed on the way through."""
+    `BrainService.review_decide` by name, none dropped and none renamed on the way through.
+
+    `source="mcp"` rides with them and is the closure's OWN, never a tool argument (issue #41
+    part 2): the door names itself, so no MCP caller can attribute its decision to Slack, the
+    console or a steward's shell."""
     fake_service.review_decide.return_value = {
         "recorded": "approve", "item_kind": "entity-proposal", "item_id": "42",
         "actor": "steward@example.com", "minted": True, "entity_id": "globex-robotics",
@@ -468,7 +472,7 @@ def test_review_decide_forwards_the_new_adr_030_arguments_and_returns_the_servic
 
     assert out == fake_service.review_decide.return_value
     fake_service.review_decide.assert_called_once_with(
-        "entity-proposal", "42", "approve", notes="", name="Globex Robotics",
+        "entity-proposal", "42", "approve", notes="", source="mcp", name="Globex Robotics",
         entity_id="globex-robotics", entity_type="organization", aliases=["Globex"],
         role="a robotics manufacturer", requeue=True)
 
@@ -489,7 +493,7 @@ def test_review_decide_old_shape_call_still_forwards_with_the_new_arguments_defa
 
     assert out == fake_service.review_decide.return_value
     fake_service.review_decide.assert_called_once_with(
-        "parked-capture", "7", "reject", notes="not useful", name="", entity_id="",
+        "parked-capture", "7", "reject", notes="not useful", source="mcp", name="", entity_id="",
         entity_type="", aliases=None, role="", requeue=False)
 
 

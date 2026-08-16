@@ -155,10 +155,12 @@ records the decision when it is. Without that, "who decided this identity" answe
 for approve and a different one for reject, on the one door that has both. Alongside their
 `admin_actions` row both record into `review_decisions` — the same append-only governance ledger
 MCP's `review_decide` and Slack's mint modal write into — so "who approved this identity" answers
-from one table regardless of which SERVER-SIDE door it came through (ADR 030). The door that
-answer misses is `stigmergy-entities approve`: it mints from the steward's own clone and writes no
-`review_decisions` row at all, because `stigmergy.entities` cannot import `stigmergy.server`. The
-`review_decisions` write and
+from one table regardless of which SERVER-SIDE door it came through (ADR 030) — and, since issue
+#51, regardless of which door at all: `stigmergy-entities approve`/`reject` mint from the steward's
+own clone and still write the same row, because the writer moved down to `capture.decisions`, below
+the `stigmergy.entities` -> `stigmergy.server` edge that would otherwise forbid it. Which door
+wrote a row is on the row itself: `extra->>'source'` is one of `mcp`/`slack`/`admin`/`cli`, required
+on every write. The `review_decisions` write and
 the git push it follows happen inside the SAME `_mutate`-wrapped attempt as the `admin_actions`
 row, not before it: a refusal anywhere in the mint leaves neither ledger touched.
 

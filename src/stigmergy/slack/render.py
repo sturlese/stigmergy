@@ -60,6 +60,19 @@ def clamp_section_text(text: str, limit: int = SECTION_TEXT_MAX) -> str:
     return _PARTIAL_ENTITY_RE.sub("", text[:limit - len(TRUNCATION_MARKER)]) + TRUNCATION_MARKER
 
 
+def escape_and_clamp(text: str) -> str:
+    """The same two steps every block on this surface takes, for the one message that is posted as
+    a bare `text=` instead of as blocks: the steward's decision confirmation.
+
+    Its sentence is composed from stored governance data — `review_decisions.actor`, naming whoever
+    decided the item first, plus a steward's own typed note — and Slack renders a `text` field as
+    mrkdwn exactly as it renders a section, so an unescaped `<url|label>` in there is a live link in
+    a steward's DM. Clamped by the section ceiling too: a confirmation is nowhere near it, and one
+    ceiling for the whole surface is what keeps this one habit rather than two.
+    """
+    return clamp_section_text(escape_mrkdwn(text))
+
+
 def _section(text: str) -> dict:
     """Every section, clamped HERE — the ONE builder every section goes through, so the next
     caller cannot be the one that forgot. An unclamped section (the answer body is unbounded
@@ -301,6 +314,34 @@ def render_doorbell_entity_proposal(*, item_id: str, submitter: str, name: str) 
                         item_id, style="danger"),
              ], block_id=f"review:{KIND_ENTITY_PROPOSAL}:{item_id}")]
     return blocks, copy.doorbell_entity_proposal_fallback(item_id=item_id)
+
+
+def _doorbell_card(headline: str, item_line: str) -> tuple[list[dict], str]:
+    """The buttonless frame both TERMINAL doorbell cards are edited into — decided, and superseded.
+    No `actions` block at all, which is the whole point of either edit: a button left on a card
+    that can no longer act is a control that only ever answers with a staleness refusal.
+
+    `escape_mrkdwn` on the same terms as the two live cards above: `actor` is a resolved identity
+    and `verdict`/`source` come from closed vocabularies, but this is a doorbell card and no card
+    here interpolates anything unescaped — the rule is cheaper to keep than to re-audit per field.
+    """
+    return [_section(escape_mrkdwn(headline)), _context(escape_mrkdwn(item_line))], item_line
+
+
+def render_doorbell_closed(*, kind: str, item_id: str, verdict: str, actor: str,
+                           source: str) -> tuple[list[dict], str]:
+    """The card a DECIDED item's DM is edited into: what was decided, by whom, through which door.
+    `actor` comes straight out of the ledger, which no writer sanitizes."""
+    return _doorbell_card(*copy.doorbell_closed(kind=kind, item_id=item_id, verdict=verdict,
+                                                actor=actor, source=source))
+
+
+def render_doorbell_superseded(*, kind: str, item_id: str) -> tuple[list[dict], str]:
+    """The card a REPLACED item's DM is edited into — same frame, no verdict. It is reached when a
+    real state change earns the item a second card: the first one is spent before the second is
+    posted, because one `steward_notifications` row holds one pair of coordinates and the newer
+    card's overwrite is what used to orphan the older message with its buttons still live."""
+    return _doorbell_card(*copy.doorbell_superseded(kind=kind, item_id=item_id))
 
 
 def render_note_modal(*, private_metadata: str, title: str, label: str,

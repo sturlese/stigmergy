@@ -515,6 +515,9 @@ def test_entity_mint_modal_submission_calls_review_decide_safe_with_the_collecte
     assert len(fake.calls) == 1
     call = fake.calls[0]
     assert call["identity"] == STEWARD          # the RE-RESOLVED caller, never private_metadata's
+    assert call["source"] == "slack", (
+        "the DOOR names itself, in `_decide_and_confirm` — it is not a modal field, not a value in "
+        "`private_metadata`, and not something any handler on this surface chooses")
     assert call["item_kind"] == "entity-proposal"
     assert call["item_id"] == str(item_id)
     assert call["verdict"] == "approve"
@@ -971,6 +974,77 @@ def test_a_clean_refusal_is_shown_to_the_steward_not_swallowed(env, conn):
         assert cur.fetchone()[0] == 0   # nothing recorded — the refusal happened before any write
 
 
+# ── the confirmation carries LEDGER text, and a Slack `text` field is rendered as mrkdwn ─────────
+# `review_decide`'s refusal names WHO got there first (`_already_decided_suffix`), read straight out
+# of `review_decisions.actor`. That column is written by four doors and never sanitized, so the
+# steward's confirmation is the one message on this surface composed from stored, attacker-reachable
+# text — and it was the one message posted with no escaping at all.
+_HOSTILE_ACTOR = "<https://evil.example|Approve>"
+
+
+def _decided_elsewhere(conn, item_id: int, *, actor: str) -> None:
+    """Another door decides the proposal first: the disposition, then the ledger row — the order
+    every real door writes them in. A click on the now-stale card refuses, and the refusal
+    interpolates THIS actor into the sentence the steward is shown."""
+    dispositions.reject(conn, item_id, actor=actor, reason="handled on another door")
+    server_review.record_decision(conn, item_kind=server_review.KIND_ENTITY_PROPOSAL,
+                                  item_id=str(item_id), verdict="reject", actor=actor,
+                                  source=server_review.SOURCE_ADMIN)
+
+
+def _refuse_a_stale_reject(ctx, conn, item_id: int) -> None:
+    """The steward clicks Reject on a card whose item another door already decided, and types a
+    reason — the shortest real path from a stored `actor` to a posted confirmation."""
+    metadata = json.dumps({"item_kind": "entity-proposal", "item_id": str(item_id),
+                          "verdict": "reject", "field": "notes",
+                          "channel_id": STEWARD_SLACK_ID})
+    state_values = {render.REVIEW_NOTE_MODAL_BLOCK_ID: {
+        render.REVIEW_NOTE_MODAL_ACTION_ID: {"value": "not a real identity"}}}
+    _run(review.handle_note_modal_submission(
+        ctx, private_metadata=metadata, state_values=state_values,
+        slack_user_id=STEWARD_SLACK_ID, event_team_id=TEAM_ID))
+
+
+def test_a_ledger_actor_that_looks_like_a_link_reaches_the_steward_as_literal_text(env, conn):
+    """OLD BEHAVIOUR: `_post_decision_confirmation` posted `_confirmation_text`'s string as a bare
+    `text=`, unescaped. Slack renders a `text` field as mrkdwn, so an actor recorded as
+    `<https://evil.example|Approve>` arrived in the steward's DM as a LIVE link labelled "Approve",
+    inside the very sentence explaining that someone else had already decided — a click target
+    manufactured out of a stored governance record, on the one surface whose whole doctrine is that
+    page- and material-derived text can never imitate the bot's own chrome.
+
+    The literal, escaped markup is the wanted outcome: the steward should see exactly the odd string
+    that was recorded."""
+    gw = FakeSlackGateway()
+    ctx = make_ctx(env, conn, gateway=gw)
+    item_id = _park_capture(conn, MemoryEvidenceStore(),
+                            situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    _decided_elsewhere(conn, item_id, actor=_HOSTILE_ACTOR)
+
+    _refuse_a_stale_reject(ctx, conn, item_id)
+
+    assert len(gw.posted) == 1
+    text = gw.posted[0].text
+    assert "already decided" in text, "the staleness refusal is the branch under test"
+    assert _HOSTILE_ACTOR not in text, "a live <url|label> link reached the steward"
+    assert "&lt;https://evil.example|Approve&gt;" in text
+
+
+def test_an_ordinary_actor_reaches_the_steward_byte_identical(env, conn):
+    """The benign twin. Escaping runs on EVERY confirmation this surface posts, so it has to be
+    invisible for the text a real refusal actually carries — an email address, a status word and a
+    timestamp. A steward reading `&amp;` in an ordinary sentence is this defense misfiring."""
+    gw = FakeSlackGateway()
+    ctx = make_ctx(env, conn, gateway=gw)
+    item_id = _park_capture(conn, MemoryEvidenceStore(),
+                            situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    _decided_elsewhere(conn, item_id, actor="console-operator@example.com")
+
+    _refuse_a_stale_reject(ctx, conn, item_id)
+
+    text = gw.posted[0].text
+    assert "already decided: reject by console-operator@example.com via admin" in text
+    assert "&" not in text, "nothing in an ordinary refusal should have been escaped at all"
 
 
 

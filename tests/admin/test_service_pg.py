@@ -611,7 +611,10 @@ def test_entity_approve_mints_for_real_and_records_both_ledgers(
     """The end-to-end proof, admin's own: ONE commit lands on the real bare remote, the append-
     only `review_decisions` ledger records the SAME `extra` shape `server.review`'s own mint does
     (`entity_id` + `commit`), and `admin_actions` records the attempt under the actor's name — the
-    two ledgers ADR 030 requires of a server-driven mint, whichever door it came through."""
+    two ledgers ADR 030 requires of a server-driven mint, whichever door it came through.
+
+    The one thing `extra` must NOT share with the MCP door is `source`: the shared mint sequence
+    takes it as a parameter precisely so each door names itself (issue #41 part 2)."""
     ack = submit_one(conn, submitted_by="steward@example.com")
     park(conn, ack["id"], report=unresolved_entity_report("Globex Robotics"))
 
@@ -632,7 +635,8 @@ def test_entity_approve_mints_for_real_and_records_both_ledgers(
         kind, item_id, verdict, actor, extra = cur.fetchone()
     assert (kind, item_id, verdict, actor) == (
         "entity-proposal", str(ack["id"]), "approve", "steward@example.com")
-    assert extra == {"entity_id": "globex-robotics", "commit": result["commit"]}
+    assert extra == {"source": "admin", "entity_id": "globex-robotics",
+                     "commit": result["commit"]}
 
     # The same door-parity proof `tests/server/test_review.py`'s own mint-for-real test makes for
     # MCP (ADR 030 D1): the App authors the commit, and the `Approved-by:` trailer carries the
@@ -844,7 +848,8 @@ def test_characterization_one_console_mint_writes_exactly_one_ledger_row_with_an
         rows = cur.fetchall()
     assert len(rows) == 1, f"one mint, one governance row — got {len(rows)}"
     assert rows[0] == ("entity-proposal", str(ack["id"]), "approve", "steward@example.com", "",
-                       {"entity_id": "globex-robotics", "commit": result["commit"]})
+                       {"source": "admin", "entity_id": "globex-robotics",
+                        "commit": result["commit"]})
 
 
 def test_characterization_the_console_does_not_enforce_self_approval_adr_030_d2(

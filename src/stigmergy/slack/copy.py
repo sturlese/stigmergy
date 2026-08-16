@@ -197,6 +197,38 @@ def doorbell_entity_proposal_fallback(*, item_id) -> str:
     return f"entity proposal #{item_id} needs a decision"
 
 
+def doorbell_closed(*, kind: str, item_id, verdict: str, actor: str, source: str) -> tuple[str, str]:
+    """`(headline, item_line)` for a card the doorbell is closing because the item was decided.
+
+    Returns BOTH lines rather than one string: they render as two different Block Kit blocks (a
+    section and the smaller grey context chrome), and a renderer splitting a joined string on a
+    newline would put the wording back in `render.py`, which is the one thing this module exists
+    to prevent.
+
+    It says WHO and WHERE, not just "decided": a steward looking at a card that changed under them
+    needs to know whether they were beaten to it by a colleague or by their own other window.
+    `source` is empty on decisions recorded before the ledger carried one, and the sentence still
+    has to read.
+    """
+    door = f" via {source}" if source else ""
+    return (f"✅ {verdict} — by {actor}{door}",
+            f"{kind} #{item_id} — decided elsewhere, so this card's buttons are gone. The full "
+            f"record is in the review ledger.")
+
+
+def doorbell_superseded(*, kind: str, item_id) -> tuple[str, str]:
+    """`(headline, item_line)` for a card being REPLACED by a newer one about the same item — the
+    shape `doorbell_closed` returns, and rendered by the same buttonless frame.
+
+    It must not read as a verdict, because nothing was decided: the item moved on (reprocessed,
+    re-parked) and this card's buttons would act on a stale reading of it. A steward who is not
+    told where the live card went reads a card that lost its buttons as the item being dropped.
+    """
+    return ("🔄 Superseded — a newer card for this item is further down this DM",
+            f"{kind} #{item_id} — it changed since this card was sent, so the buttons are gone. "
+            f"Act on the newer card.")
+
+
 # Read cold, later, by an operator debugging why a doorbell never rang: name WHY, and what could
 # not happen — never a bare "delivery failed".
 def doorbell_undeliverable_no_steward(*, scope: str, event: str, item_ref: str) -> str:

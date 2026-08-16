@@ -64,9 +64,17 @@ def _confirmation_text(result: dict, *, kind: str, item_id: str, verdict: str) -
 async def _post_decision_confirmation(ctx, *, channel_id: str, result: dict, kind: str,
                                       item_id: str, verdict: str, what: str) -> None:
     """Post `review_decide`'s own confirmation (or clean refusal) back to the steward — decided
-    in ONE place; every confirmation is the same plain message, whatever the verdict."""
+    in ONE place; every confirmation is the same plain message, whatever the verdict.
+
+    `render.escape_and_clamp` here rather than per branch, for the same reason the doorbell cards
+    escape every slot: this text is composed from a steward's typed note and from `review_decisions`
+    rows (a refusal names the actor who decided first, and nothing sanitizes that column at the
+    writer), and a Slack `text` field is mrkdwn — so one branch left raw is a live link in a
+    steward's DM. Escaping the whole sentence at the single post site is cheaper than re-auditing
+    which branch composes what."""
     text = _confirmation_text(result, kind=kind, item_id=item_id, verdict=verdict)
-    await ctx.post_or_log(ctx.gateway.chat_post_message(channel_id, text=text), what=what)
+    await ctx.post_or_log(
+        ctx.gateway.chat_post_message(channel_id, text=render.escape_and_clamp(text)), what=what)
 
 
 async def _decide_and_confirm(ctx, service, *, channel_id: str, kind: str, item_id: str,
@@ -79,8 +87,11 @@ async def _decide_and_confirm(ctx, service, *, channel_id: str, kind: str, item_
     told they had created.
     """
     try:
+        # The ONE place this surface enters the review lane — button, note modal and mint modal all
+        # funnel here — so `source` is stamped once and no handler can forget it.
         result = review.review_decide_safe(service, item_kind=kind, item_id=item_id,
-                                           verdict=verdict, **decide_kwargs)
+                                           verdict=verdict, source=review.SOURCE_SLACK,
+                                           **decide_kwargs)
     except Exception:
         log.error("slack review: review_decide failed for %s:%s", kind, item_id, exc_info=True)
         await ctx.post_or_log(

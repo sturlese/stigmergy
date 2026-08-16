@@ -16,7 +16,9 @@ class BoltSlackGateway:
         raising — an honest negative (`users_not_found`) or an already-in-the-wanted-state
         redelivery (`already_reacted`). Membership decides, never truthiness, so a tolerated code
         whose value is `None` returns `None` rather than falling through to a raise. Every other
-        failure — the SDK's own or a timeout — still becomes this package's `SlackApiError`."""
+        failure — the SDK's own or a timeout — still becomes this package's `SlackApiError`,
+        CARRYING the code where the failure had one: a caller deciding whether a retry could ever
+        work must not have to parse the SDK's prose back out of `str(ex)`."""
         from slack_sdk.errors import SlackApiError as SdkSlackApiError
         try:
             return await method(**kwargs)
@@ -25,7 +27,7 @@ class BoltSlackGateway:
             code = response.get("error") if response is not None else None
             if tolerate and code in tolerate:
                 return tolerate[code]
-            raise SlackApiError(str(ex)) from ex
+            raise SlackApiError(str(ex), code=str(code or "")) from ex
         except Exception as ex:  # noqa: BLE001 — a timeout/connection reset is an API failure too
             raise SlackApiError(f"{ex.__class__.__name__}: {ex}") from ex
 

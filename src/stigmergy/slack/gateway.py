@@ -13,7 +13,17 @@ from typing import Protocol
 class SlackApiError(RuntimeError):
     """Any failure calling the real Slack Web API. Never raised for an honest "no such thing"
     answer (an unmapped user's `users.info` still SUCCEEDS, with no email) — only for the API
-    failing to answer at all."""
+    failing to answer at all.
+
+    `code` is Slack's own error code when the failure carried one (`message_not_found`,
+    `channel_not_found`, …) and `""` when it did not — a timeout or a connection reset has none.
+    It is here so a caller can tell a refusal that can NEVER succeed from one worth retrying:
+    `str(ex)` is prose the SDK assembles, and nothing should be pattern-matching that.
+    """
+
+    def __init__(self, message: str, *, code: str = "") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class SlackGateway(Protocol):
@@ -168,6 +178,10 @@ class FakeSlackGateway:
         self.fail_conversations_info: set[str] = set()
         self.fail_post_count = 0
         self.fail_update_count = 0
+        # The Slack error CODE a scripted `chat.update` failure carries. `""` is the coded-less
+        # shape (a timeout, a reset), so the SAME countdown drives a caller that classifies
+        # terminal refusals — `message_not_found` and a timeout must not degrade the same way.
+        self.fail_update_code = ""
         self.fail_ephemeral_count = 0
         self.fail_any_blocks = False
         # The progress-reaction lifecycle's own countdowns, so "the reactions API is down, the
@@ -252,7 +266,7 @@ class FakeSlackGateway:
                          blocks: list | None = None) -> dict:
         if self.fail_update_count > 0:
             self.fail_update_count -= 1
-            raise SlackApiError("chat.update failed")
+            raise SlackApiError("chat.update failed", code=self.fail_update_code)
         _raise_if_invalid_blocks(blocks, fail_any_blocks=self.fail_any_blocks)
         self.updated.append(_Updated(channel_id, ts, text, blocks))
         return {"ok": True, "channel": channel_id, "ts": ts}

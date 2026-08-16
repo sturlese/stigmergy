@@ -89,7 +89,9 @@ must not depend on a converter, so an unlisted file is a 400 naming the allowed 
   after its own name/type validation, the review lane before) and the exception mapping — nothing
   is caught inside `_do`, so `_mutate` records the library's OWN class name in `admin_actions`
   before the `except EntityError` outside it raises `AdminRefused` with the library's sentence.
-  `server.review.record_decision` stays a direct reuse for the Queue tab's reject.
+  `server.review.record_decision` stays a direct reuse for the Queue tab's reject. Both writes name
+  this door with `server.review.SOURCE_ADMIN` — required on every ledger write, so a console row is
+  told apart from an MCP or Slack one on the row itself rather than by inference.
 - `auth.token_matches` / `bearer_token` / `host_allowed` — pure; never re-derive a header parse.
 - `service._clean` (= `stigmergy.text.sanitize`) — the one cleaning seam for untrusted strings on
   the way out: control characters die, newlines and a literal `<script>` survive, because HTML

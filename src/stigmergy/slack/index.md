@@ -18,7 +18,7 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 | `capture.py` | the 🧠 gesture: public channels only, verbatim thread material, provenance hints, reserve-then-fill dedup, progress-reaction lifecycle (`mark_in_progress`/`finish_progress`, driven from `app.py`) |
 | `replies.py` | the submitter's ask-back reply, and the "Show it here" click |
 | `poller.py` | the push channel back into the thread, over `store.REPORTABLE_STATUSES`, read-only against `capture_queue` |
-| `doorbell.py` | the steward doorbell: read-only over `review.items_for_doorbell`, one DM per (item, steward) per state change, undeliverable outcomes recorded |
+| `doorbell.py` | the steward doorbell: read-only over `review.items_for_doorbell`, one DM per (item, steward) per state change, the card a replacement supersedes edited shut first, undeliverable outcomes recorded, and `close_decided_cards` — the end of every pass, which edits a decided item's newest DM into a buttonless closed card off `review.latest_decisions`. `TERMINAL_EDIT_CODES` is what separates an edit worth retrying from a message that is gone |
 | `review.py` | the Block Kit review surface: buttons calling `review.review_decide_safe`, the free-text note modal and the entity-mint modal (the one branch that also gates its READ on `server.review.is_steward`) |
 | `render.py` | the pure `(answer_dict, link_resolver) -> blocks` renderer plus every other message's blocks, doorbell cards and the two modals |
 | `mrkdwn.py` | CommonMark -> Slack `mrkdwn`, code spans protected |
@@ -45,7 +45,9 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
   `ask` bucket. Every `ask` goes through it; never `AnswerService(...).ask(...)` directly.
 - `render.render_answer` — the one answer renderer, pure.
 - `store` — the only reader/writer of both tables; a new Slack-originated write reuses `reserve`'s
-  dedup pattern.
+  dedup pattern. `last_notification` is the one read of a (item, steward) row — state AND card
+  pointer together; `last_notified_state` is its state-only wrapper, and `is_live_card` the
+  row-level twin of `open_notifications`' own filter.
 - `review.review_decide_safe` — the only call `review.py` makes to change anything.
 - `server.review.is_steward(service, "")` — the read-side gate `review.handle_block_action` asks
   before it opens the entity-mint modal, at the SAME universal scope `_guard_governance_decision`
@@ -121,7 +123,15 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
   is per (thread, reactor), so one person 🧠-ing two messages of a thread is one capture and two
   people are two.
 - `steward_notifications` — one row per (item_kind, item_id, steward_email) with the `state` last
-  notified at; an `undeliverable:<class>` state dedups a failure without a third table.
+  notified at, plus `channel_id`/`message_ts`, the card's own Slack coordinates. ONE row means one
+  pair of coordinates: a second card for the same item overwrites the first's, which is why
+  `_notify_item` supersedes the old message before posting the new one. `state` carries three
+  namespaces separated by prefixes owned in `store.py`: a real item state (unprefixed), an
+  `undeliverable:<class>` outcome that never became a message, and a `closed:*` card the doorbell
+  has already finished with — `closed:<verdict>` edited shut, or `CLOSED_UNREACHABLE` for one Slack
+  will never let it edit again. `mark_notified` PRESERVES the coordinates on a state-only re-mark;
+  `open_notifications` is the reader that skips both prefixed namespaces and every row missing
+  either coordinate (a pre-change row — nothing can recover where its message went).
 - `stigmergy.review_kinds.ITEM_KINDS` — `entity-proposal` and `parked-capture`, the two kinds a
   human decides on directly. `ENTITY_TYPES` is the closed list the entity-mint modal offers,
   restated here and held honest by a drift test against `entities.generator`.
@@ -142,7 +152,18 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 - **Only the original submitter's reply counts** as an answer to an ask-back; `replies` scans all
   of a thread's mapped rows for the resolved replier's own email and consults `q.reply` rather than
   inferring "answered" from status.
-- `store.py` is the only module that may import `stigmergy.capture`, and only `.schema`.
+- `store.py` is the only module that may import `stigmergy.capture`, and only `.schema`. The
+  doorbell's closing pass therefore reads the `review_decisions` ledger through
+  `server.review.latest_decisions`, never `capture.decisions` directly.
+- **A doorbell card is a control surface with a lifetime.** Once the item is decided — through any
+  door that writes the ledger — the card is edited shut rather than left clickable, and a card a
+  newer one replaces is edited shut before the replacement goes out. The trigger for closing is the
+  LEDGER, not the queue state: a `requeue` verdict puts the row back in the queue, so the item
+  leaves this inbox while its card stays in the DM. The corollary is that a parked capture drained
+  through `stigmergy-queue` or the console's Queue tab writes no ledger row at all, so its card
+  ages out rather than closing.
+- Every decision this package records names its door: `_decide_and_confirm` passes
+  `review.SOURCE_SLACK` once, and every button and both modals funnel through it.
 
 ## Tests
 
