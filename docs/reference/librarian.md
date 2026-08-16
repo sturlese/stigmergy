@@ -713,8 +713,15 @@ name to `_ask_or_park` — ONE router, the same one `_triage_meeting` uses, spen
 one-ask-per-capture budget (see meeting-distiller.md's own
 ["Ask-back: several names, one question"](./meeting-distiller.md#ask-back-several-names-one-question)).
 
-**One park shape, whatever the count.** A park always writes the PLURAL keys — a list of one for
-one name: `unresolved_names` on the ask side, `schema.SITUATION_NAMES_KEY` on the parked row. The
+**One park shape, whatever the count — and the same names, whichever road refused.** A park always
+writes the PLURAL keys — a list of one for one name: `unresolved_names` on the ask side,
+`schema.SITUATION_NAMES_KEY` on the parked row. Both refusal roads (`_refuse` for an ordinary
+capture, `_refuse_meeting` for a meeting) read the anchoring veto through one function,
+`_anchor_veto_names`, which takes every name in `Finding.values` and falls back to `locator` for a
+veto that carries none. That is a fix, not a description of how it always worked: the ordinary road
+passed `[unanchorable.locator]` — the FIRST name — so a capture refused on three unresolved entities
+parked naming one, a steward registered it, and the capture came back and was refused again on the
+second (issue #49). The
 singular `unresolved_name` / `schema.SITUATION_NAME_KEY` are no longer written by anything; they
 are read-only legacy, kept because rows parked before this collapse are never migrated and
 `entities.situations.subjects_of` has to keep understanding them (permanently, not as a transition).

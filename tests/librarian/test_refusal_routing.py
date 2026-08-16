@@ -728,19 +728,64 @@ def test_an_unanchorable_ordinary_capture_parks_through_the_one_written_shape():
     assert "meeting" not in result.report["summary"]
 
 
-def test_characterization_an_ordinary_refusal_parks_on_the_ANCHOR_VETOS_FIRST_NAME_ONLY():
-    """CHARACTERIZATION, and a gap named rather than hidden. `_anchor_veto` carries every
-    unresolved name in `values`; `_refuse_meeting` collects them all, but `_refuse` still parks on
-    `unanchorable.locator` — the FIRST one. That predates the plural collapse (the old singular
-    builder could hold nothing else) and the collapse did not close it: the builder now takes a
-    list and this call site still hands it one element.
+def test_an_ordinary_refusal_parks_on_every_name_the_anchor_veto_found():
+    """The decision the characterization test asked for, taken (issue #49).
 
-    Recorded here so the asymmetry between the two refusal roads is a decision somebody takes,
-    not something a reader discovers from a steward's queue. If the intended behaviour is that an
-    ordinary refusal names every unresolved anchor the way the meeting one does, this assertion is
-    the line that changes — and it is a `src/` change, not a test one."""
+    OLD BEHAVIOUR, pinned here until this commit: `_refuse` passed `[unanchorable.locator]` — the
+    FIRST name — while `_refuse_meeting` collected every value. So an ordinary capture vetoed on
+    three unresolved entities parked naming ONE. A steward saw one thing to register, registered
+    it, the capture came back, and was refused again on the second: "one ask, every name", the
+    property the plural park exists for, did not hold on the refusal road.
+
+    Both roads now read the veto through `_unresolved_names`, so this is not two call sites that
+    happen to agree — there is one answer and two callers, which is the shape the plural collapse
+    was for. `locator` remains the fallback for a veto carrying no `values` (below), so a veto of
+    the older shape behaves exactly as it did.
+    """
     result = processing._refuse(ITEM, [_anchor_veto("Jack", "Acme Capital")], OUTCOME,
                                 agent_attempts=2)
 
-    assert result.report[schema.SITUATION_NAMES_KEY] == ["Jack"]
-    assert "Acme Capital" not in result.report["summary"]
+    assert result.report[schema.SITUATION_NAMES_KEY] == ["Jack", "Acme Capital"]
+    assert "Acme Capital" in result.report["summary"]
+
+
+def test_both_refusal_roads_read_one_anchor_veto_into_the_same_names():
+    """The asymmetry stated as an equality, which is the only form that cannot drift back.
+
+    Two assertions that each road names every value would still pass if one of them started
+    ordering, de-duplicating or clamping differently. Comparing them to each other means the
+    question "which names does an unresolved anchor park on" has exactly one answer in this module.
+    """
+    veto = [_anchor_veto("Jack", "Acme Capital", "Nebula Systems")]
+
+    ordinary = processing._refuse(ITEM, veto, OUTCOME, agent_attempts=2)
+    meeting = processing._refuse_meeting(MEETING_ITEM, veto, OUTCOME, agent_attempts=2)
+
+    assert (ordinary.report[schema.SITUATION_NAMES_KEY]
+            == meeting.report[schema.SITUATION_NAMES_KEY]
+            == ["Jack", "Acme Capital", "Nebula Systems"])
+
+
+def test_a_veto_carrying_no_values_still_parks_on_its_locator():
+    """The benign twin, and the `or` in `_unresolved_names` that keeps this change safe.
+
+    A veto with an empty `values` is the shape everything had before `values` existed; reading only
+    `values` would park it on NO name at all, which turns a steward's actionable item into an
+    empty one — a worse regression than the bug being fixed, and invisible to every test above.
+    """
+    bare = gates.Finding(gate="anchoring", code=gates.ANCHORING_UNRESOLVED,
+                        message="nothing anchors", locator="Solo Name", repairable=False)
+
+    result = processing._refuse(ITEM, [bare], OUTCOME, agent_attempts=2)
+
+    assert result.status == schema.TRIAGE
+    assert result.report[schema.SITUATION_NAMES_KEY] == ["Solo Name"]
+
+
+def test_the_same_name_twice_in_one_veto_is_asked_about_once():
+    """A registry can veto the same spelling twice (two mentions, one unresolved name). Asking a
+    steward to register "Jack" and then "Jack" reads as two different people."""
+    result = processing._refuse(ITEM, [_anchor_veto("Jack", "Jack", "Acme Capital")], OUTCOME,
+                                agent_attempts=2)
+
+    assert result.report[schema.SITUATION_NAMES_KEY] == ["Jack", "Acme Capital"]

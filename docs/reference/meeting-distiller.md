@@ -279,7 +279,12 @@ Routing a refused capture: `_refuse_meeting` mirrors the ordinary flow's cause-b
 `triage` via `_uncreatable_type` for a governed type the fast lane cannot mint) and adds one
 meeting-specific park: when EVERY surviving veto is a per-decision anchoring-unresolved finding (one
 per decision page that could not anchor), the whole capture parks in `triage`, naming every
-unresolved name at once — never one page filed and another silently dropped. Anything else mixed in
+unresolved name at once — never one page filed and another silently dropped. What is meeting-specific
+is *how many findings there are*, not how their names are read: both roads take that from
+`processing._anchor_veto_names`, so an ordinary refusal and a meeting refusal cannot answer "which
+names does this park on" differently. They did until issue #49 — the ordinary road passed the veto's
+`locator`, the first name only, so a capture refused on three unresolved entities parked naming one
+and came back refused on the second after a steward had registered it. Anything else mixed in
 (a binary-page veto, an unrelated dead link, an unexplained zone veto) is not provably the whole
 story and falls through to `failed`, exactly like the ordinary flow's own `_unanchorable` posture.
 
