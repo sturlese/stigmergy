@@ -60,13 +60,19 @@ def existing_view_ids(repo: str) -> set[str]:
             for stem in (name[:-3],) if _ENTITY_ID_RE.fullmatch(stem)}
 
 
-def list_stale_entities(repo: str) -> list[str]:
+def list_stale_entities(repo: str, *, rows=None) -> list[str]:
     """`--stale`'s population: entities with an EXISTING view whose member set no longer
     matches. Also `gardener.checks.check_stale_views`'s population, reused verbatim so the two
-    can never disagree about what "stale" means."""
+    can never disagree about what "stale" means.
+
+    The repo is parsed ONCE for the whole sweep and handed down to `skeleton.members_of`: a parse
+    per entity is O(views x corpus). `rows` lets a caller that already holds a parse pass it in;
+    the parser itself is deliberately NOT memoized, because a stale cache under a writer is worse
+    than a re-parse."""
+    rows = corpus.load_pages(repo) if rows is None else rows
     out = []
     for entity_id in sorted(existing_view_ids(repo)):
-        members = skeleton.members_of(repo, entity_id)
+        members = skeleton.members_of(repo, entity_id, rows=rows)
         h = skeleton.member_hash(members) if members else None
         if h != existing_member_hash(repo, entity_id):
             out.append(entity_id)

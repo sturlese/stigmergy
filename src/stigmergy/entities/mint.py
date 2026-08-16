@@ -15,6 +15,7 @@ import os
 
 from stigmergy.entities import birth, clone, generator
 from stigmergy.entities.errors import CollisionError, EntityError
+from stigmergy.kernel.fsutil import write_text_atomic
 from stigmergy.librarian import config as librarian_config
 from stigmergy.librarian import gates
 
@@ -177,5 +178,6 @@ def _restore(page_path: str, registry_path: str, snapshot: str | None) -> None:
     if snapshot is None:
         clone.discard_untracked(registry_path)
     else:
-        with open(registry_path, "w", encoding="utf-8") as f:
-            f.write(snapshot)
+        # Atomic like the write it un-does: a truncating rewrite interrupted mid-rollback would
+        # leave a half-written registry in the steward's clone.
+        write_text_atomic(registry_path, snapshot)

@@ -48,7 +48,7 @@ stigmergy-librarian = "stigmergy.librarian.cli:main"
 stigmergy-librarian-boot = "stigmergy.librarian.bootstrap:main"          # the DEPLOYED worker's entry point — clone the knowledge repo, verify checkout == base ref, strip the read path's secrets, exec `stigmergy-librarian run`
 stigmergy-librarian-credential = "stigmergy.librarian.gitcredential:main" # git credential helper backed by the GitHub App, so the fetch before every claim authenticates in a container with no operator git config
 stigmergy-entities = "stigmergy.entities.cli:main"                       # governed entity birth + the registry generator — the ONE path-scoped writer of ops/ (registry + wiki/entities/), and a human drives it
-stigmergy-views = "stigmergy.views.cli:main"                             # per-entity view regeneration (deterministic skeleton + verified synthesis) — the ONLY writer of views/, App-bot-authored
+stigmergy-views = "stigmergy.views.cli:main"                             # per-entity view regeneration (deterministic skeleton + bounded synthesis) — the ONLY writer of views/, App-bot-authored
 stigmergy-slack = "stigmergy.slack.app:main"                             # the Slack transport — the third process group's entry point, Socket Mode, one process
 stigmergy-pilot-report = "stigmergy.server.pilot_report:main"            # the pilot-checkpoint table, from real audit_log/capture_queue rows — reads only
 stigmergy-gardener = "stigmergy.gardener.cli:main"                       # eight deterministic corpus-health checks, findings + job_runs persisted, severity-grouped report, SLA notice

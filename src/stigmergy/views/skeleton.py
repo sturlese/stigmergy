@@ -32,15 +32,20 @@ class Member:
     content_hash: str
 
 
-def _member_rows(repo: str) -> list[corpus.PageRow]:
-    return [r for r in corpus.load_pages(repo) if r.zone in MEMBER_ZONES]
+def _member_rows(repo: str, rows=None) -> list[corpus.PageRow]:
+    return [r for r in (corpus.load_pages(repo) if rows is None else rows)
+            if r.zone in MEMBER_ZONES]
 
 
-def members_of(repo: str, entity_id: str) -> list[Member]:
+def members_of(repo: str, entity_id: str, *, rows=None) -> list[Member]:
     """Every page whose `entity:` contains `entity_id`, sorted by path — the one member set
     every other computation (staleness hash, ACL intersection, synthesis prompt, `members:`
-    count) is built from."""
-    rows = [r for r in _member_rows(repo) if entity_id in r.entity]
+    count) is built from.
+
+    `rows` lets a caller sweeping many entities hand in ONE `corpus.load_pages` parse instead of
+    paying for a fresh one per entity; `None` parses the repo here, as every single-entity caller
+    wants."""
+    rows = [r for r in _member_rows(repo, rows) if entity_id in r.entity]
     return [Member(path=r.path, title=r.title, type=r.type, as_of=r.as_of,
                    superseded_by=r.superseded_by, acl=r.acl, content_hash=r.content_hash)
             for r in sorted(rows, key=lambda r: r.path)]
@@ -88,6 +93,12 @@ def timeline_order(members: list[Member]) -> list[Member]:
     return dated + undated
 
 
+def timeline_shown(n_members: int, cap: int = TIMELINE_CAP) -> int:
+    """How many timeline entries a view of `n_members` actually renders. One answer, so
+    `render_timeline`'s slice and the count a caller reports cannot disagree."""
+    return min(n_members, cap)
+
+
 def render_timeline(members: list[Member], *, cap: int = TIMELINE_CAP) -> str:
     """The Timeline section's markdown: a lead line stating total and shown, one bullet per
     member shown."""
@@ -95,7 +106,7 @@ def render_timeline(members: list[Member], *, cap: int = TIMELINE_CAP) -> str:
     if not ordered:
         return "No anchored pages."
     total = len(ordered)
-    shown = ordered[:cap]
+    shown = ordered[:timeline_shown(total, cap)]
     if total > cap:
         lead = (f"{total} page(s) anchored to this entity, most recent first — showing the "
                 f"{len(shown)} most recent, {total - len(shown)} older not shown:")

@@ -155,6 +155,9 @@ _REVIEW_DECLARED_TRANSITIVE_KERNEL_MODULES = frozenset({
     "stigmergy.kernel",
     "stigmergy.kernel.acl",
     "stigmergy.kernel.frontmatter",
+    # `entities.mint._restore` rolls the registry snapshot back through `fsutil.write_text_atomic`
+    # so an interrupted rollback cannot leave a truncated `ops/entity-registry.json` in a clone.
+    "stigmergy.kernel.fsutil",
     "stigmergy.kernel.normalize",
     "stigmergy.kernel.registry",
 })

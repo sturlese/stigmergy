@@ -253,9 +253,8 @@ def test_commit_and_push_exhausts_its_bounded_attempts_and_leaves_the_commit_loc
         return real_run(*args, **kwargs)
 
     monkeypatch.setattr(clone.gitcmd, "run", _always_reject_push)
-    # `**kwargs`: `commit_and_push` threads its own `wording` param straight through to
-    # `_rebase_onto_remote` (the parameterized-messages seam) — this fake stands in for the real
-    # function's SIGNATURE too, so the retry loop's call still binds.
+    # `**kwargs`: this fake stands in for the real function's SIGNATURE too, so the retry
+    # loop's call still binds if `_rebase_onto_remote` ever grows a keyword again.
     monkeypatch.setattr(clone, "_rebase_onto_remote", lambda repo, branch, **kwargs: None)
 
     with pytest.raises(PushRaceError, match="after 3 attempts"):

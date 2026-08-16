@@ -13,11 +13,9 @@ the only thing `--force` could buy is overwriting somebody else's commit on the 
 """
 import os
 import time
-from dataclasses import dataclass
 
 from stigmergy.entities.errors import CloneStateError, PushRaceError
 from stigmergy.librarian import gitcmd
-from stigmergy.librarian.errors import GitError
 
 # Lower than `gitcmd.PUSH_ATTEMPTS` on purpose: that budget belongs to an unattended worker. This
 # runs in front of a person, each attempt costs a fetch + rebase + regeneration, and a branch
@@ -25,38 +23,12 @@ from stigmergy.librarian.errors import GitError
 MAX_PUSH_ATTEMPTS = 3
 PUSH_BACKOFF_BASE_S = 0.2
 
-
-@dataclass(frozen=True)
-class Wording:
-    """The subject-specific phrases `identity`/`commit_and_push`/`_rebase_onto_remote` compose
-    their refusal messages from.
-
-    Parameterized because the git machinery is generic and the sentences are not: hardcoded
-    entity-birth wording becomes a lie the moment a second caller reuses this module for a
-    different governed write. Every field defaults to the entity-birth wording, so this package's
-    own call sites pass no `wording` at all."""
-    identity_governs: str = "approved an entity is what makes entity birth governed at all"
-    conflict_target: str = "the same entity page or the same registry entry"
-    conflict_kind: str = "an identity decision"
-    conflict_owner: str = "a steward has to make"
-    conflict_next: str = "decide whether this entity still needs creating"
-    race_middle: str = ", and nothing about this entity conflicted with anything"
-    race_tail: str = ("once the branch settles, or check whether another steward is approving at "
-                      "the same time")
-
-
-# The default used everywhere a caller does not pass its own — named so a reader can find, by
-# name, which wording an unparameterized call resolves to.
-ENTITY_WORDING = Wording()
-
-
 # Every leg that talks to a remote is bounded: these functions also run inside an HTTP request on
 # a server-driven mint, where an unanswered remote pins a worker.
 NETWORK_TIMEOUT_S = 60
 
 
-def identity(repo: str, *, action: str = "approve", wording: Wording = ENTITY_WORDING
-            ) -> tuple[str, str]:
+def identity(repo: str, *, action: str = "approve") -> tuple[str, str]:
     """`(name, email)` from the clone's own git config — the STEWARD's identity, not the App's.
 
     Refused rather than defaulted when unset: `git blame` must answer "who approved this
@@ -70,7 +42,7 @@ def identity(repo: str, *, action: str = "approve", wording: Wording = ENTITY_WO
         raise CloneStateError(
             f"your clone at {repo} has no git {missing} configured, and `{action}` commits with "
             f"YOUR identity rather than the librarian's — `git blame` naming the human who "
-            f"{wording.identity_governs}. Set it with `git -C "
+            f"approved an entity is what makes entity birth governed at all. Set it with `git -C "
             f"{repo} config user.name \"Your Name\"` (and user.email), then re-run this command")
     return name, email
 
@@ -138,16 +110,14 @@ def ensure_in_sync(repo: str, branch: str, *, action: str = "approve") -> None:
         f"force-pushes; run `git -C {repo} pull --rebase` first, then re-run this command")
 
 
-def preflight(repo: str, branch: str, *, action: str = "approve", wording: Wording = ENTITY_WORDING
-             ) -> tuple[str, str]:
+def preflight(repo: str, branch: str, *, action: str = "approve") -> tuple[str, str]:
     """Every check that must pass before anything is written, in cost order. Returns the identity.
 
     `ensure_on_branch` runs first — cheapest, and the precondition the others are stated against:
     a wrong-branch clone must be refused before anything reports on a ref it is not standing on.
-    `wording` threads only into `identity`; the other checks are already generic.
     """
     ensure_on_branch(repo, branch, action=action)
-    who = identity(repo, action=action, wording=wording)
+    who = identity(repo, action=action)
     ensure_clean(repo, action=action)
     ensure_in_sync(repo, branch, action=action)
     return who
@@ -158,8 +128,7 @@ def head(repo: str) -> str:
 
 
 def commit_and_push(repo: str, *, branch: str, message: str, author: tuple[str, str],
-                    regenerate=None, attempts: int = MAX_PUSH_ATTEMPTS, on_retry=None,
-                    wording: Wording = ENTITY_WORDING) -> str:
+                    regenerate=None, attempts: int = MAX_PUSH_ATTEMPTS, on_retry=None) -> str:
     """Commit everything staged in `repo` as `author`, then push it to `branch`. Returns the sha.
 
     `regenerate` is a zero-argument callable run after each rebase — the whole reason this is not
@@ -192,14 +161,15 @@ def commit_and_push(repo: str, *, branch: str, message: str, author: tuple[str, 
         if attempt == attempts:
             raise PushRaceError(
                 f"could not push to {branch} after {attempts} attempts — origin/{branch} kept "
-                f"moving faster than this retry loop could keep up with{wording.race_middle}. "
-                f"The commit IS in your local clone "
+                f"moving faster than this retry loop could keep up with, and nothing about this "
+                f"entity conflicted with anything. The commit IS in your local clone "
                 f"({head(repo)[:12]}) and nothing was force-pushed: run `git -C {repo} push origin "
-                f"{branch}` {wording.race_tail}")
+                f"{branch}` once the branch settles, or check whether another steward is approving "
+                f"at the same time")
         if on_retry:
             on_retry(f"origin/{branch} moved while committing (another push landed first) — "
                      f"refetching, regenerating and retrying ({attempt}/{attempts - 1})")
-        _rebase_onto_remote(repo, branch, wording=wording)
+        _rebase_onto_remote(repo, branch)
         if regenerate and regenerate():
             # `--amend`, not a second commit: the page and its registry land in ONE commit, and a
             # race is not a reason to publish two.
@@ -211,7 +181,7 @@ def commit_and_push(repo: str, *, branch: str, message: str, author: tuple[str, 
     raise PushRaceError("push loop exited without a verdict")   # unreachable; no silent success
 
 
-def _rebase_onto_remote(repo: str, branch: str, *, wording: Wording = ENTITY_WORDING) -> None:
+def _rebase_onto_remote(repo: str, branch: str) -> None:
     """Fetch and replay this commit on top of whatever landed. A genuine conflict is NOT
     resolved: it means somebody else's commit touched the same entity page or registry entry —
     precisely the identity collision this subsystem exists to make a human decide.
@@ -221,11 +191,11 @@ def _rebase_onto_remote(repo: str, branch: str, *, wording: Wording = ENTITY_WOR
     if rebase.returncode != 0:
         gitcmd.run("rebase", "--abort", cwd=repo, check=False)
         raise PushRaceError(
-            f"another commit on {branch} changed {wording.conflict_target}, "
-            f"and this command does not resolve conflicts — that overlap is {wording.conflict_kind}, "
-            f"which is the one thing {wording.conflict_owner} personally. Your clone was left "
+            f"another commit on {branch} changed the same entity page or the same registry entry, "
+            f"and this command does not resolve conflicts — that overlap is an identity decision, "
+            f"which is the one thing a steward has to make personally. Your clone was left "
             f"unchanged (the rebase was aborted); run `git -C {repo} pull --rebase`, look at what "
-            f"landed, and {wording.conflict_next}")
+            f"landed, and decide whether this entity still needs creating")
 
 
 def write_page(repo: str, relpath: str, text: str) -> str:
@@ -259,6 +229,5 @@ def discard_untracked(path: str) -> None:
         pass
 
 
-__all__ = ["ENTITY_WORDING", "MAX_PUSH_ATTEMPTS", "Wording", "commit_and_push",
-           "discard_untracked", "ensure_clean", "ensure_in_sync", "ensure_on_branch", "head",
-           "identity", "preflight", "write_page", "GitError"]
+__all__ = ["MAX_PUSH_ATTEMPTS", "commit_and_push", "discard_untracked", "ensure_clean",
+           "ensure_in_sync", "ensure_on_branch", "head", "identity", "preflight", "write_page"]

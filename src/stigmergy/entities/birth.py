@@ -57,6 +57,21 @@ _YAML_UNSAFE = frozenset('"\\')
 _CONTROL_CATEGORY = "Cc"
 
 
+def _refuse_forbidden(value: str, charset, *, subject: str, consequence: str) -> None:
+    """Refuse any of `charset` in `value`, naming the characters found. REFUSE, never strip — the
+    same posture as `_refuse_control_characters`, over the sets a filename, a wikilink or a YAML
+    scalar cannot carry.
+
+    `consequence` is a TEMPLATE this module authors, never a value from outside it: one site's
+    sentence names the offending characters a second time, and does so as `{found}`.
+    """
+    bad = sorted(charset & set(value))
+    if not bad:
+        return
+    found = ", ".join(repr(c) for c in bad)
+    raise EntityError(f"{subject} contains {found}, {consequence.format(found=found)}")
+
+
 def _refuse_control_characters(value: str, *, subject: str, consequence: str) -> None:
     """Refuse C0/C1 in a value a human is going to approve. REFUSE, never strip.
 
@@ -69,7 +84,7 @@ def _refuse_control_characters(value: str, *, subject: str, consequence: str) ->
 
     So the refusal is the honest failure, and this is the terminal gate every door passes through:
     Slack, MCP, the admin console and the CLI all reach `prepare`. A per-surface sanitizer would be
-    a fourth thing to keep in step, which is how the admin console ended up the only protected one.
+    a fourth thing to keep in step.
     """
     found = sorted({c for c in value if unicodedata.category(c) == _CONTROL_CATEGORY})
     if not found:
@@ -108,12 +123,11 @@ def _clean_name(name: str) -> str:
             f"--name is {len(value)} characters (max {MAX_NAME_CHARS}) — it becomes a page title, "
             f"a filename and a wikilink target, so a name this long is a sentence rather than an "
             f"identity")
-    bad = sorted(_FORBIDDEN_IN_NAME & set(value))
-    if bad:
-        raise EntityError(
-            f"--name contains {', '.join(repr(c) for c in bad)}, which cannot appear in an entity "
-            f"name — the name IS the filename ({generator.ENTITIES_RELDIR}/<name>.md) and the "
-            f"wikilink other pages resolve it by")
+    _refuse_forbidden(
+        value, _FORBIDDEN_IN_NAME, subject="--name",
+        consequence=f"which cannot appear in an entity name — the name IS the filename "
+                    f"({generator.ENTITIES_RELDIR}/<name>.md) and the wikilink other pages resolve "
+                    f"it by")
     _refuse_control_characters(
         value, subject="--name",
         consequence=f"the name IS the filename ({generator.ENTITIES_RELDIR}/<name>.md) and the "
@@ -171,14 +185,12 @@ def _clean_aliases(aliases, *, name: str) -> tuple[str, ...]:
         value = " ".join(str(alias or "").split())
         if not value:
             continue
-        bad = sorted(_FORBIDDEN_IN_NAME & set(value))
-        if bad:
-            raise EntityError(
-                f"the alias {value!r} contains {', '.join(repr(c) for c in bad)}, which cannot "
-                f"appear in an entity name or in an alias for one — an alias is a spelling the "
-                f"registry resolves to this entity and a wikilink other pages reach it by, and "
-                f"{', '.join(repr(c) for c in bad)} would have to be quoted or escaped to be "
-                f"either. Drop it, or split this into separate --aliases values")
+        _refuse_forbidden(
+            value, _FORBIDDEN_IN_NAME, subject=f"the alias {value!r}",
+            consequence="which cannot appear in an entity name or in an alias for one — an alias "
+                        "is a spelling the registry resolves to this entity and a wikilink other "
+                        "pages reach it by, and {found} would have to be quoted or escaped to be "
+                        "either. Drop it, or split this into separate --aliases values")
         _refuse_control_characters(
             value, subject=f"the alias {value!r}",
             consequence="an alias is a spelling the registry resolves to this entity and a "
@@ -205,13 +217,11 @@ def _clean_role(role) -> str:
     stops escaping.
     """
     value = " ".join(str(role or "").split())[:MAX_ROLE_CHARS]
-    bad = sorted(_YAML_UNSAFE & set(value))
-    if bad:
-        raise EntityError(
-            f"--role contains {', '.join(repr(c) for c in bad)}, which cannot appear in the "
-            f"page's `role` field — it is written into the frontmatter, where those characters "
-            f"delimit and escape the value rather than being part of it. Rephrase the line "
-            f"without them (single quotes are fine)")
+    _refuse_forbidden(
+        value, _YAML_UNSAFE, subject="--role",
+        consequence="which cannot appear in the page's `role` field — it is written into the "
+                    "frontmatter, where those characters delimit and escape the value rather than "
+                    "being part of it. Rephrase the line without them (single quotes are fine)")
     # Held to the control-character rule too, even though `role` is a sentence rather than an
     # identity and is deliberately NOT held to `_FORBIDDEN_IN_NAME`. The two rules answer different
     # questions: that set is about what a filename and a wikilink can carry, this one is about
@@ -310,9 +320,6 @@ def render_page(template: str, proposal: Proposal, *, today: str) -> str:
     rendered = _rewrite_frontmatter(front, fields)
     body = body.replace("<Entity Name>", proposal.name)
     return f"---\n{rendered}\n---\n{body}"
-
-
-_PLACEHOLDER_PREFIX = "<"
 
 
 def _yaml_str(value) -> str:

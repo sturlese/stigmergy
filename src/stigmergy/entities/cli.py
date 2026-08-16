@@ -18,6 +18,7 @@ the push lands, because a requeue that ran first would hand the librarian a capt
 is not yet on the remote it fetches from, and the capture would park a second time.
 """
 import argparse
+import datetime
 import json
 import os
 import shlex
@@ -57,10 +58,8 @@ def _repo(args) -> str:
 def _connect(args):
     conn = store.connect(args.dsn)
     schema.ensure_capture_schema(conn)
-    # The governance ledger too, the same startup pattern every other entry point that writes it
-    # already follows (`server.service`, `transport_http`, `admin.routes`, the two cron CLIs).
-    # Without it, `approve` on a database no server has ever started against would mint, push, and
-    # then fail on the INSERT — after the irreversible half.
+    # Without it, `approve` against a database no server has started on would mint, push, and then
+    # fail on the INSERT — after the irreversible half.
     decisions.ensure_decisions_schema(conn)
     return conn
 
@@ -85,7 +84,8 @@ def _cmd_list(conn, args) -> int:
         return 0
     print(f"{len(rows)} pending entity situation(s)\n")
     for row in rows:
-        subject = f'"{row["subject"]}"' if row["subject"] else "(nothing recorded)"
+        subject = (f'"{_clean(row["subject"], MAX_SUBJECT_CHARS)}"' if row["subject"]
+                   else "(nothing recorded)")
         asked = "asked" if row.get("asked_at") else ""
         print(f"  #{row['id']:<5} {row['situation']:<18} {subject:<34} {asked:<6} "
               f"parked {format_age(row.get('parked_age_ms'))}")
@@ -101,6 +101,17 @@ def _cmd_list(conn, args) -> int:
 _SUGGESTABLE_PUNCTUATION = frozenset(" .,&+-")
 MAX_SUBJECT_CHARS = 120
 
+# The two halves of an approve line that are the TOOL's own text, whichever branch composes it.
+_TYPE_CHOICES = f"--type <{'|'.join(birth.ENTITY_TYPES)}>"
+_APPROVE_TAIL = "--aliases \"...\" [--role \"...\"] [--requeue]"
+
+
+def _approve_template(submission_id: int) -> str:
+    """The approve line with LITERAL placeholders where a name would otherwise go — nothing
+    untrusted reaches it, so it is safe to print for any capture."""
+    return (f"    stigmergy-entities approve {submission_id} --id <canonical-id> "
+            f"--name \"<Entity Name>\" {_TYPE_CHOICES} {_APPROVE_TAIL}")
+
 
 def _cmd_show(conn, args) -> int:
     row = situations.get_situation(conn, args.id)
@@ -111,14 +122,15 @@ def _cmd_show(conn, args) -> int:
         return 0
     report = row.get("report") or {}
     situation, subject = row["situation"], row["subject"]
-    # A row parked before `schema.SITUATION_KEY` existed records no subject at all; rendering `""`
-    # would read as a bug in the tool. `open_question` is what those rows do carry, so it stands in.
-    legacy = _clean(str(report.get("open_question") or "").strip(), 300)
     shown = _clean(subject, MAX_SUBJECT_CHARS)
     if situation == schema.SITUATION_UNRESOLVED_ENTITY:
         headline = (f'could not resolve the entity "{shown}"' if shown else
                     "could not resolve which entity the material is about")
     elif situation == schema.SITUATION_UNSUPPORTED_TYPE:
+        # A row parked before `schema.SITUATION_KEY` existed records no subject at all; rendering
+        # `""` would read as a bug in the tool. `open_question` is what those rows do carry, so it
+        # stands in.
+        legacy = _clean(str(report.get("open_question") or "").strip(), 300)
         headline = (f'parked as an unsupported type ("{shown}")' if shown else
                     "parked as a type the fast lane does not file"
                     + (f" — the librarian asked: {legacy}" if legacy else ""))
@@ -185,16 +197,13 @@ def _print_next_commands(submission_id: int, situation: str, subjects: list) -> 
     one per name).
     """
     unresolved = situation == schema.SITUATION_UNRESOLVED_ENTITY
-    types = f"--type <{'|'.join(birth.ENTITY_TYPES)}>"
-    tail = "--aliases \"...\" [--role \"...\"] [--requeue]"
     subjects = list(subjects) or [""]
     multi = unresolved and len(subjects) > 1
 
     if not unresolved:
         # `unsupported-type`: the subject is a TYPE, not a name — nothing untrusted reaches the line.
         print("\n  to approve it as a new entity:")
-        print(f"    stigmergy-entities approve {submission_id} --id <canonical-id> "
-              f"--name \"<Entity Name>\" {types} {tail}")
+        print(_approve_template(submission_id))
         print("  to decline it:")
         print(f"    stigmergy-entities reject {submission_id} --reason \"...\"")
         return
@@ -208,13 +217,12 @@ def _print_next_commands(submission_id: int, situation: str, subjects: list) -> 
                   f"decide on yourself:\n")
             print(f"    {_clean(name, MAX_SUBJECT_CHARS)}")
             print(f"\n  to approve{label or ' it'} as a new entity:")
-            print(f"    stigmergy-entities approve {submission_id} --id <canonical-id> "
-                  f"--name \"<Entity Name>\" {types} {tail}")
+            print(_approve_template(submission_id))
         else:
             print(f"\n  to approve{label or ' it'} as a new entity:")
             print(f"    stigmergy-entities approve {submission_id} "
                   f"--id {generator.canonical_id_for(name)} --name {shlex.quote(name)} "
-                  f"{types} {tail}")
+                  f"{_TYPE_CHOICES} {_APPROVE_TAIL}")
     if multi:
         print("\n  (approve each name above separately; only the LAST call needs --requeue — "
               "there is one submission, not one per name)")
@@ -295,11 +303,9 @@ def _cmd_reject(conn, args) -> int:
     situations.require_situation(conn, args.id, action="reject")
     actor = args.by or _steward(args)
     result = dispositions.reject(conn, args.id, actor=actor, reason=args.reason)
-    # Refusing an identity is as much a governance decision as granting one, and the console
-    # already records its own Reject for exactly that reason (`AdminService.queue_reject`). Left
-    # out, this door would close the approve half of the gap and keep the reject half — and
-    # "who decided this identity" would still answer from different tables depending on the
-    # verdict. `require_situation` above has already established this row IS an entity situation.
+    # Both verdicts are recorded, so "who decided this identity" answers from one table whichever
+    # way it went. `require_situation` above has already established this row IS an entity
+    # situation.
     decisions.record_decision(conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(args.id),
                               verdict=decisions.REJECT, actor=actor, notes=args.reason,
                               extra={"door": "cli"})
@@ -445,7 +451,7 @@ def _interrupted(during: str) -> int:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    args.today = getattr(args, "today", None) or __import__("datetime").date.today().isoformat()
+    args.today = getattr(args, "today", None) or datetime.date.today().isoformat()
     conn = None
     try:
         if getattr(args, "needs_db", False):

@@ -124,8 +124,9 @@ plus an `Approved-by:` trailer naming the human.
   enumerate it differently).
 - `generator.PageEntity` (frozen) — one page's identity claim as read off disk.
 - `generator.Divergence` / `RegenerateOutcome` — `Divergence` is semantic ("which entity, and
-  what about it"), never a text diff; `RegenerateOutcome.changed` is BYTE-level (allows the one
-  canonicalization commit when only formatting differs).
+  what about it"), never a text diff. `changed` is semantic from `check` (any divergence) and
+  BYTE-level from `regenerate` — the byte answer is what allows the one canonicalization commit
+  when only formatting differs.
 - `generator._duplicate_ids` / `_duplicate_match_keys` — two different collapses, both raised by
   `read_entity_pages`: same slug id, and distinct ids whose titles claim one `normalize()` key
   (legal-suffix folding). The knowledge repo's own linter mirrors the match-key rule — a declared
@@ -141,13 +142,15 @@ plus an `Approved-by:` trailer naming the human.
 
 Pinned in `tests/test_architecture.py`: this package imports `capture`, `stigmergy.kernel` and a
 declared set of `librarian` modules (`gitcmd`/`errors`, `config`, `gates`, `githubapp`); `cli.py`
-additionally reaches `stigmergy.index` for the one connection seam. It never imports `server` or
-`answer`; `librarian`, `capture` and `views` never import it back. Two inbound edges exist, both
-named, symbol-scoped exceptions with their own architecture tests: `stigmergy.server.review` (the
-review inbox: `situations`, `generator.canonical_id_for`/`ENTITY_TYPES`, `remote`, the two error
-names) and `stigmergy.admin` (the console: `situations`, `remote`, `generator`, `errors`) — both
-walk the same governed mint door (`remote.mint_via_clone` -> `mint.mint`), and neither is a
-license for the other to widen.
+additionally reaches `stigmergy.index` for the one connection seam. The `librarian.gates` edge is
+the secrets scanner and only that: `approve`/`create` commit `--no-verify`, so this scan is the
+one that runs — the governed door into `main` (where a secret can never be deleted from) must not
+be the unscanned one. It never imports `server` or `answer`; `librarian`, `capture` and `views`
+never import it back. Two inbound edges exist, both named, symbol-scoped exceptions with their own
+architecture tests: `stigmergy.server.review` (the review inbox: `situations`,
+`generator.canonical_id_for`/`ENTITY_TYPES`, `remote`, the two error names) and `stigmergy.admin`
+(the console: `situations`, `remote`, `generator`, `errors`) — both walk the same governed mint
+door (`remote.mint_via_clone` -> `mint.mint`), and neither is a license for the other to widen.
 
 ## Proofs that live elsewhere
 

@@ -7,13 +7,11 @@ withheld-material rule; this module adds only "which parked rows are an ENTITY s
 `approve` will refuse teaches its reader to ignore it), where `stigmergy-queue list` is
 MANAGEMENT; the filter is a named function here, never re-derived in a CLI. The read is not the
 permission: `require_situation` guards `approve`/`reject` before anything is written. What a mint
-form may PREFILL is decided here too (`mint_name_prefill`), once, travels on the row
-(`_situation_view`) and is read by both mint doors — a surface that re-derives it from the name
-list is a second policy that can drift into minting a name nobody chose. Two kinds
-of situation: `unresolved-entity` (the ask-back's terminus) and `unsupported-type` ("this is a
-page about one specific person" is an identity claim). Legacy rows predating
-`schema.SITUATION_KEY` are classified by an `open_question` prefix fallback — a transition,
-deletable once no such `triage` row survives retention.
+form may PREFILL is decided once, here, and travels on the row: a surface that re-derives it is a
+second policy. Two kinds of situation: `unresolved-entity` (the ask-back's terminus) and
+`unsupported-type` ("this is a page about one specific person" is an identity claim). Legacy rows
+predating `schema.SITUATION_KEY` are classified by an `open_question` prefix fallback — a
+transition, deletable once no such `triage` row survives retention.
 """
 from stigmergy.capture import queue, schema
 from stigmergy.entities.errors import EntityError
@@ -84,14 +82,6 @@ def mint_name_prefill(row: dict) -> str:
     phrase. Refused here rather than at each door, because a door that forgot the check is a door
     that mints it.
 
-    What this makes identical across the doors is the DECISION — whether a default is offered at
-    all, and which name it is. Not the bytes: each transport still sanitizes what it renders on its
-    own terms (the admin console strips control characters, Slack and MCP do not), so a ragged name
-    reaches two forms differently. What that can no longer do is mint anything:
-    `birth._refuse_control_characters` refuses C0/C1 at the terminal gate every door passes
-    through, so a Slack steward accepting a ragged default gets a refusal naming the code point
-    rather than a page whose filename nobody can type.
-
     Deliberately NOT tidied on the way out: `subjects_of` returns the plural key's entries
     unstripped, and nothing de-duplicates them, so `["  Jack  "]` prefills with its padding and
     `["Jack", "Jack"]` is a two-name park with an empty field. Both are pinned in
@@ -120,14 +110,9 @@ def subject_of(row: dict) -> str:
 
 
 def _situation_view(row: dict) -> dict:
-    """A listed row plus the facts this tool sorts and renders on. Additive: the row keeps every
-    field `queue._shape_listed` gave it, so the two tools' `--json` describe one row the same
-    way.
-
-    `mint_name_prefill` travels HERE, beside `subject`/`subjects`, rather than being added by hand
-    on each surface: a shaper that computes it itself decides it on whatever row it happens to
-    hold, and two surfaces preprocessing that row differently is how one park ends up with two
-    default names for a mint nothing can cancel.
+    """A listed row plus the facts this tool sorts and renders on. Additive — the row keeps every
+    field `queue._shape_listed` gave it. `mint_name_prefill` is attached here so no surface
+    computes it itself.
     """
     return {**row, "situation": classify(row), "subject": subject_of(row),
            "subjects": subjects_of(row), "mint_name_prefill": mint_name_prefill(row)}
