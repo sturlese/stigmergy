@@ -22,12 +22,26 @@ DEPLOY_DIR="$HERE/deploy"
 # and must not survive the script; an EXIT trap is the only form that holds on every path out,
 # including the deploy failing. `tests/test_deploy_defaults.py` runs this script and checks both
 # halves — that the deploy saw the real roster, and that nothing but the defaults outlived it.
+#
+# ONE list, `name:empty-default`, and that is the point of it: the set this script CLEARS on the
+# way in and the set it RESTORES on the way out have to be the same set. They were not. The script
+# used to clear by deleting the whole directory, while the trap only ever knew these four files —
+# so when `deploy/workflows/` arrived beside them (three cron templates and a README, all
+# tracked), one `make deploy-staging` deleted them from the working tree and nothing here could
+# put them back. Blast radius larger than the repair, silently, for as long as it took someone to
+# run a deploy and read `git status`. Derived from one list, the two cannot drift apart again.
+BAKED=(
+  'identities.json:{}'
+  'entity-registry.json:{"entities": {}}'
+  'slack-channels.json:{}'
+  'stewards.json:{}'
+)
+
 restore_deploy_defaults() {
   mkdir -p "$DEPLOY_DIR"
-  printf '{}\n'               > "$DEPLOY_DIR/identities.json"
-  printf '{"entities": {}}\n' > "$DEPLOY_DIR/entity-registry.json"
-  printf '{}\n'               > "$DEPLOY_DIR/slack-channels.json"
-  printf '{}\n'               > "$DEPLOY_DIR/stewards.json"
+  for entry in "${BAKED[@]}"; do
+    printf '%s\n' "${entry#*:}" > "$DEPLOY_DIR/${entry%%:*}"
+  done
 }
 trap restore_deploy_defaults EXIT
 
@@ -37,8 +51,13 @@ if [ ! -f "$STIGMERGY_REPO/ops/identities.json" ]; then
   exit 2
 fi
 
-rm -rf "$DEPLOY_DIR"
+# Clear what this script writes, and NOTHING else — never the directory itself. `deploy/` also
+# holds tracked files this script knows nothing about, and the next one added re-opens the wound
+# if the delete is by directory rather than by name.
 mkdir -p "$DEPLOY_DIR"
+for entry in "${BAKED[@]}"; do
+  rm -f "$DEPLOY_DIR/${entry%%:*}"
+done
 cp "$STIGMERGY_REPO/ops/identities.json" "$DEPLOY_DIR/identities.json"
 echo "deploy: baked $STIGMERGY_REPO/ops/identities.json -> deploy/identities.json"
 

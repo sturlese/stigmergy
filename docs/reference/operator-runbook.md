@@ -155,6 +155,14 @@ published, so it restores the committed defaults on the way out through an EXIT 
 halves: that `fly deploy` saw the real files, and that nothing but the defaults outlived the script.
 If you ever find real data under `deploy/`, restore the empty defaults before committing.
 
+The script touches **only those four names**, never the `deploy/` directory itself, because
+`deploy/` holds tracked files it does not bake — `workflows/` today, whatever is added next
+tomorrow. It used to clear the directory outright, and since the EXIT trap knew how to rebuild the
+four JSON files and nothing else, one `make deploy-staging` deleted the four files under
+`deploy/workflows/` from the working tree; a routine `git add -A` afterwards would have committed
+their removal. The delete set and the restore set are now derived from one list in the script, so
+they cannot drift apart again.
+
 Then it runs `fly deploy` (one image, all three process groups) and pins both singleton groups:
 `fly scale count slack=1 --yes` — Socket Mode has no leader election and `fly deploy` creates two
 machines by default for a NEW process group — and `fly scale count worker=1 --yes`, because the

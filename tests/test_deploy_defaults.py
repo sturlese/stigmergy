@@ -57,7 +57,20 @@ def test_the_committed_deploy_file_is_the_empty_default(name):
 # The one directory `deploy/` is allowed to contain. It holds the three cron workflows an
 # operator copies into their own knowledge repo — deliberately NOT under `.github/workflows/`,
 # where GitHub would register them on this public repo and show three "Disabled" rows.
+#
+# `_staged_run` seeds a tracked file into every directory named here before it runs the real
+# script, so this declaration has a RUNTIME counterpart instead of being a statement about a tree
+# nobody exercises. Extending the set therefore extends what the deploy script is proven to leave
+# alone, in the same edit.
 EXPECTED_SUBDIRS = {"workflows"}
+
+SIBLING_MARKER = "tracked.yml"
+
+
+def _sibling_body(sub: str) -> str:
+    """The stub content seeded under `deploy/<sub>/`. Distinct per directory, so an assertion that
+    the file survived cannot pass on a file the script happened to recreate."""
+    return f"# tracked by git, written by nobody in scripts/deploy_staging.sh: deploy/{sub}/\n"
 
 
 def test_no_other_file_has_appeared_in_deploy():
@@ -98,6 +111,15 @@ def _staged_run(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     shutil.copy2(DEPLOY_SCRIPT, scripts / "deploy_staging.sh")
+
+    # The staged `deploy/` starts out looking like the real one — tracked siblings and all. It did
+    # not, and that single difference is why the script's `rm -rf` on this directory went
+    # unnoticed: there was nothing here to destroy, so the destruction was invisible to the one
+    # test positioned to see it.
+    for sub in sorted(EXPECTED_SUBDIRS):
+        (tmp_path / "deploy" / sub).mkdir(parents=True)
+        (tmp_path / "deploy" / sub / SIBLING_MARKER).write_text(_sibling_body(sub),
+                                                                encoding="utf-8")
 
     ops = tmp_path / "knowledge" / "ops"
     ops.mkdir(parents=True)
@@ -157,6 +179,33 @@ def test_the_deploy_itself_still_sees_the_real_roster(tmp_path):
     # being vacuous for it: without this, the staged run never wrote one, the script took its
     # `{}` branch, and `{} == {}` proved nothing.
     assert json.loads(seen_stewards.read_text(encoding="utf-8")) == _STEWARDS
+
+
+def test_a_deploy_leaves_tracked_files_it_never_baked_untouched(tmp_path):
+    """The fix for the second defect in this script, same shape as the first one above.
+
+    OLD BEHAVIOUR: the script opened with `rm -rf "$DEPLOY_DIR"`, and `restore_deploy_defaults`
+    knew only the four JSON files. So one `make deploy-staging` deleted `deploy/workflows/`
+    — a README and three cron templates, all tracked — from the working tree, with nothing in the
+    script able to put them back. The next `git add -A` commits that deletion, and `git add -A`
+    is exactly what someone runs after deploying.
+
+    It stayed invisible because the two halves of the check never met: `EXPECTED_SUBDIRS` declared
+    `workflows/` but ran no script, and the test that ran the script ran it against a `tmp_path`
+    where the directory had never existed. `_staged_run` now seeds one from that same declaration,
+    which is the join that was missing.
+    """
+    deploy_dir, _, _ = _staged_run(tmp_path)
+
+    for sub in sorted(EXPECTED_SUBDIRS):
+        survivor = deploy_dir / sub / SIBLING_MARKER
+        assert survivor.is_file(), (
+            f"the deploy script destroyed deploy/{sub}/{SIBLING_MARKER}. It is tracked, nothing in "
+            f"the script knows how to recreate it, and the next `git add -A` publishes its "
+            f"deletion. Delete only the files the script itself writes — the `BAKED` list — never "
+            f"the directory.")
+        assert survivor.read_text(encoding="utf-8") == _sibling_body(sub), (
+            f"deploy/{sub}/{SIBLING_MARKER} survived but its content changed")
 
 
 def test_the_scripts_restored_defaults_are_the_ones_this_file_asserts(tmp_path):
