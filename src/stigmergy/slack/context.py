@@ -52,9 +52,9 @@ class SlackContext:
     # and recorded once per process lifetime, never once per item per pass.
     _stewards_empty_warned: bool = False
     # `doorbell._load_stewards_cached`'s TTL cache for `ops/stewards.json` — uncached, every poll
-    # pass is a real `git fetch`. LOCAL to the doorbell's notifications; `review._is_steward`'s
+    # pass is a real `git fetch`. LOCAL to the doorbell's notifications; `review.is_steward`'s
     # authorization check stays on its own always-fresh read: a revoked steward's approval must
-    # never succeed off a stale cache.
+    # never succeed off a stale cache, and neither must the mint modal open off one.
     _stewards_cache: dict = field(default_factory=dict)
     # Injectable clock, the same seam `UsersInfoCache(clock=...)` uses; only
     # `doorbell._load_stewards_cached` reads it.

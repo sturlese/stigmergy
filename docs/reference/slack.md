@@ -273,8 +273,20 @@ for a note/reason, `review.handle_entity_mint_modal_submission` for an entity-pr
 metadata) re-resolves the acting identity from Slack's own authoritative event body every time —
 never from a value round-tripped through `private_metadata`, which carries only WHAT the decision is
 about (item kind, id, and — for the note modal — verdict/field), never WHO is making it. Every
-decision calls the SAME `review_decide_safe` an MCP caller calls; this package enforces nothing
-itself. Every confirmation this surface posts is the same plain message — there is no branch that
+decision calls the SAME `review_decide_safe` an MCP caller calls; this package decides nothing
+itself.
+
+One READ on this surface is gated, and it is the entity-mint modal. Opening it reads the
+system-wide, unscoped doorbell queue and renders the proposal's unresolved names — material lifted
+out of somebody else's capture, shown before any decision exists — so the Approve branch of
+`handle_block_action` asks `server.review.is_steward(service, "")` after resolving the clicker and
+before reading anything, the same predicate at the same universal scope the decide leg's own
+`_guard_governance_decision` uses for a proposal. A non-steward gets `NOT_YOURS_TO_DECIDE`, the
+byte-identical sentence the decide leg carries, so failing here teaches nothing the other leg would
+not have. The note modal is deliberately not gated: it shows nothing beyond the card already
+delivered, and its submission re-checks anyway.
+
+Every confirmation this surface posts is the same plain message — there is no branch that
 differs, though a minted approve's own confirmation names the entity and the commit it produced
 (`copy.entity_minted`), the same way a `parked-capture` resolve already names its own note.
 

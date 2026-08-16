@@ -1,9 +1,15 @@
 """Every user-controlled string argument reachable over the public HTTP boundary — `query`, the
-`filters` keys and values, `path`, `entity`, and `ask`'s `question` — is length-checked BEFORE
-the DB read, the embedder call, or the LLM call it would otherwise trigger. Pure/unit where
-possible (poisoned doubles that raise if ever touched — the strongest proof that the check runs
-first); the at-limit/pass side uses the real `indexed` Postgres fixture, since "passes" has to
-mean the call actually reaches and completes the real work."""
+`filters` keys and values, `path`, `entity`, `ask`'s `question`, and `review_decide`'s four free-text
+fields (`notes`, `name`, `role`, each `alias`) — is length-checked BEFORE the DB read, the embedder
+call, or the LLM call it would otherwise trigger. Pure/unit where possible (poisoned doubles that
+raise if ever touched — the strongest proof that the check runs first); the at-limit/pass side uses
+the real `indexed` Postgres fixture, since "passes" has to mean the call actually reaches and
+completes the real work.
+
+`notes` is the one of review's four this file can reach with a poisoned service: it is checked at the
+top of `review.review_decide`, before any row is read. `name`/`role`/`alias` are checked inside
+`_decide_entity_proposal`, downstream of a real submission row AND a passed steward guard, so their
+coverage lives with the fixtures that have both (`tests/server/test_review.py`)."""
 import pytest
 
 from stigmergy.server.errors import RateLimitError
@@ -191,6 +197,68 @@ def test_ask_over_the_limit_never_constructs_the_answer_service(monkeypatch):
     assert out == {"error": f"question too long (max {MAX_ARG_CHARS} characters)"}
     assert svc.audit.rows[-1]["outcome"] == "error"
     assert svc.audit.rows[-1]["error_class"] == "ValueError"
+
+
+def test_review_decide_over_the_limit_notes_returns_the_checks_own_sentence(monkeypatch):
+    """OLD BEHAVIOUR: `{"error": "review_decide failed (ValueError)"}`.
+
+    `review.review_decide` length-checks `notes` before it reads anything, and `check_arg_length`
+    raises its MARKED `ValueError` — but the `review_decide` closure caught only `(CaptureError,
+    RateLimitError, CapabilityUnavailableError)`, so the marked rejection fell through to
+    `_failure`, which is class-name-only by design. A steward pasting an over-long note was told
+    which tool broke and nothing about what to do, while every read tool answered the same overflow
+    with the actionable sentence.
+
+    Poisoned conn/embedder: the check must fire before the submission row is read, so nothing on
+    this path may touch the database at all.
+    """
+    from stigmergy.server.mcp_server import build_mcp
+
+    svc = poisoned_service(audit=FakeAudit())
+    mcp = build_mcp(svc)
+
+    out = _call_mcp(mcp, "review_decide", item_kind="parked-capture", item_id="1",
+                    verdict="requeue", notes="x" * (MAX_ARG_CHARS + 1))
+    assert out == {"error": f"notes too long (max {MAX_ARG_CHARS} characters)"}
+    assert svc.audit.rows[-1]["error_class"] == "ValueError"
+
+
+def test_review_decide_at_the_limit_notes_reaches_the_row_read():
+    """The benign twin: an AT-limit note is never rejected for its LENGTH — the call proceeds to
+    `_row_for_item`, whose first move is to touch the (poisoned) connection. The `AssertionError`
+    that comes back is `Poison`'s own, a genuinely different failure from the length check's, so
+    "passed the guard" can never be read as "was rejected by it"."""
+    from stigmergy.server.mcp_server import build_mcp
+
+    svc = poisoned_service(audit=FakeAudit())
+    mcp = build_mcp(svc)
+
+    out = _call_mcp(mcp, "review_decide", item_kind="parked-capture", item_id="1",
+                    verdict="requeue", notes="x" * MAX_ARG_CHARS)
+    assert out == {"error": "review_decide failed (AssertionError)"}   # reached the DB read
+    assert svc.audit.rows[-1]["error_class"] == "AssertionError"
+
+
+def test_a_pydantic_shaped_value_error_is_still_reduced_to_a_class_name(monkeypatch):
+    """The specificity half of the escape: only `check_arg_length`'s OWN marked rejection is echoed.
+    An UNMARKED `ValueError` — the shape a `pydantic_core.ValidationError` arrives in, carrying
+    untrusted content or internal field paths — must still collapse to a class name."""
+    from stigmergy.server.mcp_server import build_mcp
+
+    def _unmarked(*_a, **_kw):
+        raise ValueError("SECRET-MARKER field path leaked from somewhere internal")
+    # The first read `_decide_parked_capture` makes, reached as a module attribute by
+    # `review._row_for_item` — patched here rather than raised from a double, so the ValueError
+    # arrives from exactly where a real one would.
+    monkeypatch.setattr("stigmergy.capture.queue.get_submission_trace", _unmarked)
+
+    svc = poisoned_service(audit=FakeAudit())
+    mcp = build_mcp(svc)
+
+    out = _call_mcp(mcp, "review_decide", item_kind="parked-capture", item_id="1",
+                    verdict="requeue", notes="a short note")
+    assert out == {"error": "review_decide failed (ValueError)"}
+    assert "SECRET-MARKER" not in out["error"]
 
 
 def test_ask_at_the_limit_does_reach_the_answer_service(monkeypatch):

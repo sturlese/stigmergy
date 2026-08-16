@@ -70,11 +70,16 @@ SELF_APPROVAL_REFUSED = (
     "review it; you may still record reject or request_changes on your own submission yourself")
 
 
-def _is_steward(service, scope_path: str) -> bool:
+def is_steward(service, scope_path: str) -> bool:
     """Is the caller's resolved identity a steward for `scope_path`? Fails closed with `False`,
-    never an exception, when this server has neither a checkout nor a baked snapshot."""
-    repo = getattr(service.settings, "knowledge_repo", "") or ""
-    baked = getattr(service.settings, "stewards_path", "") or ""
+    never an exception, when this server has neither a checkout nor a baked snapshot.
+
+    PUBLIC because it is also the READ-side gate: a surface that shows review material BEFORE a
+    decision (`slack.review`'s entity-mint modal renders a proposal's unresolved names) has to ask
+    the same question the decide leg asks, at the same scope, or the decide leg's own guard arrives
+    after the material has already been served."""
+    repo = service.settings.knowledge_repo or ""
+    baked = service.settings.stewards_path or ""
     if not repo and not baked:
         return False
     stewards = load_stewards(repo, baked)
@@ -82,11 +87,15 @@ def _is_steward(service, scope_path: str) -> bool:
         stewards, scope_path)
 
 
+# The name this module's own guards were written against, kept so a caller reaching for the
+# private spelling still lands on the one implementation.
+
+
 def _guard_governance_decision(service, *, found: bool, submitted_by: str, scope_path: str,
                                verdict: str) -> None:
     """The `entity-proposal` gate: steward required, self-approval refused. `found=False` and "not
     a steward" collapse onto the SAME `NOT_YOURS_TO_DECIDE` sentence."""
-    if not found or not _is_steward(service, scope_path):
+    if not found or not is_steward(service, scope_path):
         raise ReviewError(NOT_YOURS_TO_DECIDE)
     if verdict == APPROVE and submitted_by and service.identity == submitted_by:
         raise ReviewError(SELF_APPROVAL_REFUSED)
@@ -99,7 +108,7 @@ def _guard_parked_capture_decision(service, *, found: bool, submitted_by: str) -
         raise ReviewError(NOT_YOURS_TO_DECIDE)
     if service.identity and service.identity == submitted_by:
         return
-    if _is_steward(service, ""):   # a parked capture has no page path yet: universal scope only
+    if is_steward(service, ""):   # a parked capture has no page path yet: universal scope only
         return
     raise ReviewError(NOT_YOURS_TO_DECIDE)
 
@@ -227,7 +236,7 @@ def items_for_doorbell(conn, *, limit: int = DOORBELL_ITEM_LIMIT) -> list[dict]:
 def load_stewards(repo: str, baked_path: str = "") -> dict:
     """`ops/stewards.json` — from the REPO at `origin/main`'s fresh tip wherever a checkout exists
     (never the working tree: a revoked steward must not resolve off a stale read), from the
-    deploy-time snapshot at `baked_path` where none does. The ONE input `_is_steward` reads too,
+    deploy-time snapshot at `baked_path` where none does. The ONE input `is_steward` reads too,
     so one map decides both who to ring and who may approve. An absent file on either road is an
     EMPTY map, never an error, and every decision downstream fails closed.
     """

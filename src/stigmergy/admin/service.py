@@ -434,9 +434,21 @@ class AdminService:
         return result
 
     async def _mutate_async(self, action: str, actor: str, args: dict, fn):
+        """`_mutate` for an awaitable mutation, to the letter — actor fallback, an `admin_actions`
+        row on both outcomes, `CaptureError` renamed to `AdminRefused` so a domain refusal reaches
+        the operator as the routes' 409 with the library's own sentence, and everything else
+        re-raised unrenamed. The bookkeeping write itself may fail without failing the work.
+
+        The two are kept as twins rather than merged: no cursor may be held across an `await`
+        (this class's own concurrency invariant), and a shared body would have to be async, pulling
+        every sync caller into an event loop it does not have."""
         by = (actor or "").strip() or self._admin.actor
         try:
             result = await fn(by)
+        except CaptureError as ex:
+            admin_schema.record_action(self._conn, actor=by, action=action, args=args,
+                                       outcome="error", error_class=ex.__class__.__name__)
+            raise AdminRefused(str(ex)) from ex
         except Exception as ex:
             admin_schema.record_action(self._conn, actor=by, action=action, args=args,
                                        outcome="error", error_class=ex.__class__.__name__)
@@ -559,7 +571,11 @@ class AdminService:
         return shaped
 
     def _traced_fields(self, row: dict) -> dict:
-        """Sanitize every untrusted string a queue row carries, structure untouched."""
+        """Sanitize every untrusted string a queue row carries, structure untouched.
+
+        `report` and `hints` are JSONB with no CHECK constraint under them, so both are shaped only
+        when they actually ARE objects: a scalar left there by any writer this console does not own
+        travels through unshaped rather than taking the whole detail view down with it."""
         out = dict(row)
         for key in ("excerpt", "error", "reply"):
             if key in out:
@@ -568,7 +584,7 @@ class AdminService:
             out["events"] = [{**e, "actor": _clean(e.get("actor")), "note": _clean(e.get("note")),
                               "event": _clean(e.get("event")), "at": _clean(e.get("at"))}
                              for e in out["events"]]
-        if out.get("report"):
+        if out.get("report") and isinstance(out["report"], dict):
             out["report"] = {k: (_clean(v) if isinstance(v, str) else v)
                              for k, v in out["report"].items()}
         if out.get("hints") and isinstance(out["hints"], dict):
