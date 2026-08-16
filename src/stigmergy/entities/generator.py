@@ -9,6 +9,7 @@ recover — `birth.prepare` verifies the steward's `--id` against it and refuses
 this cannot read is an ERROR, never a skip: a silently dropped page is a registry that quietly
 stops resolving a name the graph anchored on.
 """
+import logging
 import os
 from dataclasses import dataclass, field
 
@@ -16,6 +17,8 @@ from stigmergy.entities.errors import EntityError
 from stigmergy.kernel import frontmatter as graph_pages
 from stigmergy.kernel.normalize import normalize, slugify
 from stigmergy.kernel.registry import Registry, load_registry, save_registry
+
+log = logging.getLogger(__name__)
 
 # Repo-relative, slash-separated — git paths first, filesystem paths second.
 ENTITIES_RELDIR = "wiki/entities"
@@ -102,9 +105,20 @@ def read_entity_pages(repo: str) -> list[PageEntity]:
             with open(path, encoding="utf-8") as f:
                 text = f.read()
         except OSError as ex:
+            # `str(OSError)` is `[Errno 13] Permission denied: '/abs/path/to/the/file.md'` — the
+            # ABSOLUTE path, and on a server-driven mint that is the throwaway clone under the
+            # host's temp directory. This function runs inside `entities.mint.mint`, which
+            # `server.review` reaches and whose `EntityError`s MCP echoes to a steward verbatim,
+            # so the errno was carrying a filesystem layout to the wire.
+            #
+            # `relpath` stays: it is repo-relative, it is the part that identifies WHICH page is
+            # unreadable, and it discloses nothing about the host. The errno class and the full
+            # path go to the log, where an operator reads them.
+            log.error("entity page %r could not be read from %r", relpath, directory, exc_info=True)
             raise EntityError(
-                f"{relpath} could not be read ({ex}) — the entity registry is derived from these "
-                f"pages, so it cannot be regenerated without it") from ex
+                f"{relpath} could not be read ({ex.__class__.__name__}) — the entity registry is "
+                f"derived from these pages, so it cannot be regenerated without it. The details "
+                f"are in the server log") from ex
         front, _ = graph_pages.split_frontmatter(text)
         if not isinstance(front, dict):
             front = {}

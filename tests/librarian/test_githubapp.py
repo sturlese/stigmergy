@@ -8,6 +8,7 @@ true (`githubapp.py`'s own docstring), so this suite needs no key and no connect
 """
 import base64
 import json
+import logging
 
 import pytest
 
@@ -83,6 +84,47 @@ def test_configured_accepts_the_private_key_file_variant_in_place_of_the_inline_
           githubapp.INSTALLATION_ID_ENV: FULL_ENV[githubapp.INSTALLATION_ID_ENV],
           githubapp.PRIVATE_KEY_FILE_ENV: str(key_path)}
     assert githubapp.configured(env) is True
+
+
+def test_an_unreadable_private_key_file_does_not_put_its_path_in_the_refusal(tmp_path, caplog):
+    """OLD BEHAVIOUR: the message interpolated `{path!r}` — where the App's private key lives.
+
+    It was reasoned safe on the grounds that `worker.process_next` never interpolates a mid-run
+    `LibrarianConfigError` into the wire report. True of that handler, and not of the system:
+    `entities.remote` catches this same exception on the server-side mint path, and
+    `server.review` echoes what that raises to a steward verbatim over MCP. The path reached the
+    wire through a door this module had never looked at, which is the failure mode of every
+    "safe because of what the current caller does" argument.
+
+    `${STIGMERGY_LIBRARIAN_PRIVATE_KEY_FILE}` is named instead: it is what an operator has to fix,
+    and it says nothing about this host's filesystem.
+    """
+    missing = tmp_path / "nested" / "absent-key.pem"
+    env = {githubapp.APP_ID_ENV: FULL_ENV[githubapp.APP_ID_ENV],
+          githubapp.INSTALLATION_ID_ENV: FULL_ENV[githubapp.INSTALLATION_ID_ENV],
+          githubapp.PRIVATE_KEY_FILE_ENV: str(missing)}
+
+    with caplog.at_level(logging.ERROR, logger=githubapp.log.name), \
+            pytest.raises(LibrarianConfigError) as caught:
+        githubapp._private_key(env)
+
+    told_the_caller = str(caught.value)
+    assert str(missing) not in told_the_caller, "the private-key file path is still in the refusal"
+    assert str(tmp_path) not in told_the_caller, "a parent directory of it leaked instead"
+    assert githubapp.PRIVATE_KEY_FILE_ENV in told_the_caller, (
+        "the refusal no longer says which variable to fix — the path was dropped, not moved")
+    # MOVED, not lost: the operator still has the path, in the place only they can read.
+    assert str(missing) in caplog.text
+
+
+def test_a_readable_private_key_file_is_still_simply_read(tmp_path):
+    """The benign twin. This gate sits in front of every App-authenticated push, so an over-eager
+    one would take the librarian offline rather than leak nothing."""
+    key_path = tmp_path / "key.pem"
+    key_path.write_text(FULL_ENV[githubapp.PRIVATE_KEY_ENV], encoding="utf-8")
+    env = {githubapp.PRIVATE_KEY_FILE_ENV: str(key_path)}
+
+    assert githubapp._private_key(env) == FULL_ENV[githubapp.PRIVATE_KEY_ENV]
 
 
 # ── installation_token(): the whole path, including real RS256 signing, via a stub opener ──────

@@ -1403,6 +1403,115 @@ def test_only_entities_cli_imports_the_index():
     assert used, "entities.cli no longer imports stigmergy.index — the connection seam drifted"
 
 
+# ── what an `entities` refusal may SAY, not only which types it may raise ─────────────────────
+# `entities/remote.py`'s module docstring states the rule: `server.review` echoes every
+# `EntityError` from here VERBATIM over MCP (`review_decide_safe` returns `{"error": str(ex)}` for
+# `CaptureError`/`CapabilityUnavailableError`, and `review.py` translates `EntityError` into
+# `ReviewError` on the way), so a message built from a foreign exception's text publishes whatever
+# that exception happened to say.
+#
+# It was stated in a docstring and broken twelve lines below it, twice — `f"...misconfigured: {ex}"`
+# and `f"...could not mint a GitHub credential...: {ex}"`, both splicing a `librarian`
+# `LibrarianConfigError` whose text names, among other things, the App private-key FILE PATH. A
+# rule that reads as enforced and is not is worse than one nobody wrote down.
+#
+# FOREIGN text is what this refuses, and the distinction is the whole rule. `entities` re-raising
+# one of its OWN errors with the caught one's text inside is fine and deliberate — that text was
+# written for this audience, and `server/review.py` does the same thing one layer up when it turns
+# an `EntityError` into a `ReviewError`. What must never be spliced is a type from outside this
+# package's vocabulary: an `OSError`, whose `str()` is `[Errno 13] ...: '/abs/path'`, or a
+# `librarian` error naming the App private-key file. Nothing in this package chose those words,
+# so nothing in this package can vouch for them.
+_ENTITIES_OWN_ERRORS = {"EntityError", "CapabilityUnavailableError", "CollisionError",
+                        "CloneStateError", "PushRaceError"}
+
+
+def _caught_names(handler: ast.ExceptHandler) -> set[str]:
+    """The exception type names one `except` clause catches (`()` for a bare `except:`)."""
+    node = handler.type
+    if node is None:
+        return set()
+    parts = node.elts if isinstance(node, ast.Tuple) else [node]
+    return {p.id if isinstance(p, ast.Name) else getattr(p, "attr", "?") for p in parts}
+
+
+def _class_name_only_uses(node, caught: str) -> set[int]:
+    """The `caught` mentions that publish a TYPE NAME rather than the exception's own words —
+    `ex.__class__.__name__` and `type(ex).__name__`.
+
+    Carved out by name because it is the idiom the fix USES: `githubapp` and `generator` both
+    answer "which kind of fault was this" without answering "and here is what it said about the
+    filesystem". A rule that refused it too would leave no safe way to name the fault at all, and
+    a rule with no permitted alternative is one people route around.
+    """
+    safe = set()
+    for sub in ast.walk(node):
+        if not (isinstance(sub, ast.Attribute) and sub.attr == "__name__"):
+            continue
+        inner = sub.value
+        if (isinstance(inner, ast.Attribute) and inner.attr == "__class__"
+                and isinstance(inner.value, ast.Name) and inner.value.id == caught):
+            safe.add(id(inner.value))
+        elif (isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+                and inner.func.id == "type" and len(inner.args) == 1
+                and isinstance(inner.args[0], ast.Name) and inner.args[0].id == caught):
+            safe.add(id(inner.args[0]))
+    return safe
+
+
+def _spliced_exception_raises(path: pathlib.Path) -> list[str]:
+    """`file:line -> Type(caught)` for every `raise <an entities error>(...)` inside an
+    `except <a FOREIGN type> as e:` whose arguments carry `e`'s own words — as an f-string field,
+    as `str(e)`, or as `e.args`. Any of those counts: `{ex}` and `{ex.args[0]}` publish the same
+    sentence. Naming `e`'s CLASS is not carrying its words (`_class_name_only_uses`).
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    offenders = []
+    for handler in (n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler) and n.name):
+        caught_types = _caught_names(handler)
+        if caught_types and caught_types <= _ENTITIES_OWN_ERRORS:
+            continue                        # this package's own vocabulary — safe by authorship
+        for raise_node in (n for n in ast.walk(handler) if isinstance(n, ast.Raise)):
+            call = raise_node.exc
+            if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name):
+                continue
+            if call.func.id not in _ENTITIES_OWN_ERRORS:
+                continue
+            safe = {i for arg in call.args for i in _class_name_only_uses(arg, handler.name)}
+            mentions = any(isinstance(sub, ast.Name) and sub.id == handler.name
+                           and id(sub) not in safe
+                           for arg in call.args for sub in ast.walk(arg))
+            if mentions:
+                offenders.append(
+                    f"{path.name}:{raise_node.lineno} -> "
+                    f"{call.func.id}(<{'/'.join(sorted(caught_types)) or 'bare except'}>)")
+    return offenders
+
+
+@pytest.mark.parametrize("path", ENTITIES_SOURCES, ids=lambda p: p.name)
+def test_an_entities_refusal_never_splices_a_caught_exceptions_text(path):
+    """The rule `entities/remote.py` states, enforced instead of merely written down.
+
+    Three splices existed when this was added: the two `remote.py` ones the issue named, and
+    `generator.py`'s `EntityError(f"... ({ex}) ...")` over an `OSError`, which put the absolute
+    path of an unreadable entity page on the wire and had been missed by a hand trace. That third
+    one is the argument for having this test at all.
+
+    Its benign twin is `mint.py`'s collision refusal, which splices an `EntityError` the package
+    raised itself and must keep passing: a rule that also refused re-raising our own words would
+    have to be widened or ignored within a week, and this is the distinction that keeps it narrow.
+
+    `log.error(..., exc_info=True)` is where the detail goes. Moved, not lost: an operator reading
+    the server log still gets the traceback, and a steward gets a sentence written for them.
+    """
+    offenders = _spliced_exception_raises(path)
+    assert not offenders, (
+        "a stigmergy.entities refusal interpolated the exception it caught. `server.review` echoes "
+        "these to a steward verbatim over MCP, so this publishes whatever that exception says — "
+        "the App private-key file path, a temp directory, a remote's HTTP body. Log it with "
+        "`exc_info=True` and raise a written sentence:\n  " + "\n  ".join(offenders))
+
+
 @pytest.mark.parametrize("path", LIBRARIAN_SOURCES, ids=lambda p: p.name)
 def test_librarian_never_imports_entities(path):
     """The other side of that edge (`librarian/index.md`: "Do not import stigmergy.entities" — the

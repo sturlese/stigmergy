@@ -35,6 +35,28 @@ MINT_FAULT_MESSAGE = (
     "through, not a problem with the identity you approved. Nothing was pushed. The details are "
     "in the server log; ask whoever runs this deployment to look, then approve again")
 
+# The two CREDENTIAL faults, told the same way and for the same reason. These used to splice
+# `str(exception)` in — twelve lines below the rule above forbidding exactly that — so a
+# `librarian` exception's own text reached a steward over MCP verbatim. `githubapp` raises
+# `LibrarianConfigError` naming the private-key FILE PATH among other things, which made this a
+# server-side filesystem disclosure to anyone who could trigger the error.
+#
+# Both are deliberately unactionable BY THE STEWARD, because neither has a steward-side fix: a
+# half-set App and a revoked installation are both operator work. What the steward needs is to
+# know it is not their approval that was wrong and that nothing was pushed — the same two facts
+# `MINT_FAULT_MESSAGE` leads with.
+APP_MISCONFIGURED_MESSAGE = (
+    "the librarian GitHub App credential on this server is incomplete, so the identity you "
+    "approved could not be pushed. Nothing was written. This is a deployment fault, not a problem "
+    "with the identity: the details are in the server log — ask whoever runs this deployment to "
+    "look, then approve again")
+
+CREDENTIAL_FAULT_MESSAGE = (
+    "the librarian GitHub App would not issue a credential for this push, so the identity you "
+    "approved could not be minted. Nothing was written. Its installation may have been revoked or "
+    "its key rotated — the details are in the server log; ask whoever runs this deployment to "
+    "look, then approve again")
+
 
 def mint_via_clone(repo_url: str, branch: str, credential, *, entity_id: str, name: str,
                    entity_type: str, aliases=(), role: str = "", today: str,
@@ -122,7 +144,8 @@ def _authenticated_url(repo_url: str, credential) -> str:
         # docstring).
         app_configured = bool(credential) and githubapp.configured(credential)
     except LibrarianConfigError as ex:
-        raise EntityError(f"the librarian GitHub App is misconfigured: {ex}") from ex
+        log.error("the librarian GitHub App credential is half-configured", exc_info=True)
+        raise EntityError(APP_MISCONFIGURED_MESSAGE) from ex
     if not app_configured:
         raise CapabilityUnavailableError(
             f"minting against an https:// knowledge repo needs the librarian GitHub App credential "
@@ -135,6 +158,7 @@ def _authenticated_url(repo_url: str, credential) -> str:
         # The App IS configured but GitHub would not hand back a token (revoked installation,
         # rotated key) — an operational fault, not an absent capability: the fix is "check the
         # App", not "configure one".
-        raise EntityError(f"could not mint a GitHub credential to push this entity: {ex}") from ex
+        log.error("the librarian GitHub App would not issue an installation token", exc_info=True)
+        raise EntityError(CREDENTIAL_FAULT_MESSAGE) from ex
     scheme, rest = repo_url.split("://", 1)
     return f"{scheme}://x-access-token:{token}@{rest}"
