@@ -273,8 +273,10 @@ for a note/reason, `review.handle_entity_mint_modal_submission` for an entity-pr
 metadata) re-resolves the acting identity from Slack's own authoritative event body every time —
 never from a value round-tripped through `private_metadata`, which carries only WHAT the decision is
 about (item kind, id, and — for the note modal — verdict/field), never WHO is making it. Every
-decision calls the SAME `review_decide_safe` an MCP caller calls; this package decides nothing
-itself.
+decision calls the SAME `review_decide_safe` an MCP caller calls; this package decides no ACCESS to
+knowledge and no verdict of its own. The one thing it does gate is described next — whether a
+steward-only mint form opens — and even there it asks the review lane's own predicate rather than
+inventing a rule; `server.acl.visible()` remains the ONE place read access to a page is decided.
 
 One READ on this surface is gated, and it is the entity-mint modal. Opening it reads the
 system-wide, unscoped doorbell queue and renders the proposal's unresolved names — material lifted

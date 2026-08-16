@@ -7,7 +7,7 @@ import pytest
 
 from stigmergy.kernel.registry import Registry
 from stigmergy.views import cli, regenerate
-from tests.views.conftest import FakeConn, build_repo, registry_of, remote_log
+from tests.views.conftest import FakeConn, build_repo, git, registry_of, remote_log
 
 
 def test_regenerate_requires_exactly_one_target():
@@ -136,3 +136,52 @@ def test_a_removal_is_reported_with_its_own_cause_never_one_hardcoded_sentence(t
     payload = json.loads(capsys.readouterr().out)
     assert payload["action"] == "removed"
     assert "de-registered" in payload["message"]   # was "" for every removal
+
+
+# The de-registration road's own sentence: the pages are all still there.
+_PAGES_UNTOUCHED = "its pages are untouched"
+# The members-gone road's own sentence.
+_LAST_PAGE_GONE = "the last page anchored to"
+# The shared tail the two roads used to share, and could not both be true of.
+_NOTHING_ANCHORS = "Nothing anchors"
+
+
+def test_each_removal_road_prints_only_its_own_true_sentence(tmp_path, capsys):
+    """**Old behaviour: `_report_single` closed EVERY removal with a shared tail — "Nothing
+    anchors <entity> any more, so there is nothing left to summarize."** On the de-registration
+    road that contradicts the very message printed one clause earlier, which says the entity's
+    pages are untouched: the pages still anchor it, it is the REGISTRY that stopped governing
+    them. The tail is gone; each road prints `o.message`, which already carries its own cause.
+
+    Both roads driven for real, and asserted POSITIVELY as well as negatively — pinning only the
+    absence of the old sentence would leave a report that says nothing at all passing."""
+    remote, clone = build_repo(str(tmp_path / "git"))
+    registry = registry_of()
+
+    # Road 1 — the entity is de-registered; every page it anchored is still on disk.
+    asyncio.run(regenerate.regenerate_entity(clone, "acme-corp", registry=registry))
+    deregistered = asyncio.run(regenerate.regenerate_entity(clone, "acme-corp",
+                                                            registry=Registry()))
+    assert deregistered.action == "removed"
+    assert cli._report_single(deregistered, _Args(clone)) == 0
+    out = capsys.readouterr().out
+    assert _PAGES_UNTOUCHED in out, "the de-registration road must state its OWN cause"
+    assert _LAST_PAGE_GONE not in out
+    assert _NOTHING_ANCHORS not in out, (
+        "the pages still anchor it — this is the sentence that contradicted the one above it")
+    assert f"committed {deregistered.commit[:12]}" in out   # the commit line survives the drop
+
+    # Road 2 — the entity stays registered and its last anchored page goes away.
+    remote2, clone2 = build_repo(str(tmp_path / "git2"))
+    asyncio.run(regenerate.regenerate_entity(clone2, "acme-corp", registry=registry))
+    git("rm", "--quiet", "-r", "wiki/entities", "wiki/decisions", cwd=clone2)
+    git("commit", "--quiet", "-m", "chore: the last anchored pages go away", cwd=clone2)
+    git("push", "--quiet", "origin", "main", cwd=clone2)
+    no_members = asyncio.run(regenerate.regenerate_entity(clone2, "acme-corp", registry=registry))
+    assert no_members.action == "removed"
+    assert cli._report_single(no_members, _Args(clone2)) == 0
+    out = capsys.readouterr().out
+    assert _LAST_PAGE_GONE in out, "the members-gone road must state its OWN cause"
+    assert _PAGES_UNTOUCHED not in out
+    assert _NOTHING_ANCHORS not in out
+    assert f"committed {no_members.commit[:12]}" in out

@@ -283,7 +283,13 @@ class AdminService:
         registry = self._server.entity_registry_path or None
         try:
             findings = index_check.run_checks(self._conn, registry_path=registry)
-        except StigmergyIndexError as ex:
+        except (StigmergyIndexError, ValueError) as ex:
+            # `ValueError` too: the registry this check reads is loaded by
+            # `kernel.registry.load_registry`, which raises a bare one (a nameless entity, a
+            # non-object top level) — exactly the substrate `index.check.registry_ids` exists to
+            # stop blessing. Caught here it is a REFUSAL with the loader's own sentence naming the
+            # file and the entity; uncaught it was a 500 reading "the operation failed
+            # (ValueError)", which tells an operator nothing about a file they can fix.
             raise AdminRefused(str(ex)) from ex
         return {"findings": findings,
                 "errors": sum(1 for f in findings if f["severity"] == "error"),

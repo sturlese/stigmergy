@@ -12,6 +12,7 @@ git-untouched claim here is only worth making against a real ref.
 """
 import itertools
 import json
+import logging
 import os
 
 import pytest
@@ -24,7 +25,9 @@ from stigmergy.entities import generator as entities_generator
 from stigmergy.entities import remote as entities_remote
 from stigmergy.entities.errors import EntityError
 from stigmergy.librarian import gitcmd
+from stigmergy.librarian.errors import LibrarianConfigError
 from stigmergy.server import review
+from stigmergy.server.service import MAX_ARG_CHARS
 from tests import adversarial_payloads
 from tests.server.conftest import ALICE, STEWARD
 from tests.server.conftest import make_review_service as make_service
@@ -1198,6 +1201,38 @@ def test_the_repo_wins_where_a_checkout_exists(env, conn, tmp_path):
         svc.review_decide(item_kind="entity-proposal", item_id=str(item_id), verdict="approve")
 
 
+def test_a_broken_steward_map_fails_closed_instead_of_raising_out_of_the_predicate(
+        env, conn, monkeypatch, caplog):
+    """OLD BEHAVIOUR: `is_steward`'s docstring promised "Fails closed with `False`, never an
+    exception", and the code did not keep it — a malformed `ops/stewards.json` (or a broken
+    checkout `gitcmd` chokes on) let `LibrarianConfigError` out of the predicate. The DECIDE leg's
+    own `except Exception` absorbed it; the Slack READ leg had nothing to absorb it, so a
+    steward's click vanished into the last-resort logger with no feedback at all.
+
+    The predicate now keeps its own promise: it returns `False` and logs the fault at ERROR, so
+    the operator still has the diagnosis while the caller gets an ordinary refusal."""
+    def boom(*_a, **_k):
+        raise LibrarianConfigError("ops/stewards.json is not valid JSON")
+
+    monkeypatch.setattr(review, "load_stewards", boom)
+    svc = make_service(env, conn, STEWARD)
+
+    with caplog.at_level(logging.ERROR, logger="stigmergy.server.review"):
+        assert review.is_steward(svc, "") is False
+
+    assert any(rec.exc_info for rec in caplog.records), (
+        "the fault must reach the operator's log with a traceback — the caller only sees a refusal")
+
+
+def test_a_working_steward_map_still_resolves_a_steward(env, conn, tmp_path):
+    """The benign twin: catching the config fault inside the predicate must not make it answer
+    `False` to everyone. A well-formed map still resolves its steward."""
+    baked = _baked(tmp_path, f'{{"*": ["{STEWARD}"]}}')
+    svc = make_service(env, conn, STEWARD, knowledge_repo="", stewards_path=baked)
+
+    assert review.is_steward(svc, "") is True
+
+
 # ── the kinds are disjoint on the DECIDE path too, not only in the listing ─────────────────────
 def test_an_entity_proposal_cannot_be_decided_as_a_parked_capture(env, conn):
     """OLD BEHAVIOUR: the caller's `item_kind` chose which authorization rule applied.
@@ -1327,3 +1362,97 @@ def test_an_unrestricted_queue_and_a_scoped_one_both_still_work(env, conn):
     own = review.review_queue(alice)
     assert own["scope"] == "own"
     assert [i["submitted_by"] for i in own["items"]] == [ALICE]
+
+
+# ── the mint-metadata arguments are length-checked too (the half `tests/server/test_arg_length.py`
+# cannot reach: `name`/`role`/`alias` sit inside `_decide_entity_proposal`, downstream of a real
+# submission row AND a passed steward guard, so they need THIS file's fixtures) ─────────────────
+def _call_mcp(mcp, tool: str, **args) -> dict:
+    """`tool`, not `name` — `review_decide`'s own argument list has a `name` in it, and a helper
+    that swallows it would silently drop the field these tests are about."""
+    import asyncio
+    blocks, _ = asyncio.run(mcp.call_tool(tool, args))
+    return json.loads(blocks[0].text)
+
+
+@pytest.fixture()
+def mint_never_runs(monkeypatch):
+    """A marker in place of the mint, so "passed the length guard" is provable by a failure that
+    is unmistakably NOT the length check's — and no test here pays for a real commit to say so."""
+    def marker(*_a, **_kw):
+        raise RuntimeError("reached the mint")
+    monkeypatch.setattr(review, "_mint_entity_proposal", marker)
+
+
+def _mcp_for(env, conn):
+    from stigmergy.server.mcp_server import build_mcp
+    return build_mcp(make_service(env, conn, STEWARD))
+
+
+@pytest.mark.parametrize("field", ["name", "role"])
+def test_an_over_limit_mint_argument_comes_back_as_the_checks_own_sentence(env, conn,
+                                                                          mint_never_runs, field):
+    """`tests/server/test_arg_length.py` claimed `name`/`role`/`alias` coverage that lived nowhere:
+    only `notes` — checkable with a poisoned service — was actually exercised. These three are
+    checked inside `_decide_entity_proposal`, past `_row_for_item` and `_guard_governance_
+    decision`, so they need a real parked row and a real steward.
+
+    The property is the same one `notes` pins: `check_arg_length`'s MARKED `ValueError` is echoed
+    by the `review_decide` closure, so an over-long argument tells the steward what to fix instead
+    of collapsing to `review_decide failed (ValueError)`."""
+    item_id = _park_capture(conn, MemoryEvidenceStore(),
+                            situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    args = {"name": "Stark Industries", "entity_type": "organization",
+            field: "x" * (MAX_ARG_CHARS + 1)}
+
+    out = _call_mcp(_mcp_for(env, conn), "review_decide", item_kind="entity-proposal",
+                    item_id=str(item_id), verdict="approve", **args)
+
+    assert out == {"error": f"{field} too long (max {MAX_ARG_CHARS} characters)"}
+
+
+def test_one_over_limit_alias_comes_back_as_the_checks_own_sentence(env, conn, mint_never_runs):
+    """The per-alias half: `_alias_list` yields a list and every element is checked, so a single
+    over-long alias is refused by its own name — `alias`, not `aliases`."""
+    item_id = _park_capture(conn, MemoryEvidenceStore(),
+                            situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+
+    out = _call_mcp(_mcp_for(env, conn), "review_decide", item_kind="entity-proposal",
+                    item_id=str(item_id), verdict="approve", name="Stark Industries",
+                    entity_type="organization", aliases=["x" * (MAX_ARG_CHARS + 1)])
+
+    assert out == {"error": f"alias too long (max {MAX_ARG_CHARS} characters)"}
+
+
+def test_a_long_comma_separated_alias_string_is_many_short_aliases_and_passes(env, conn,
+                                                                             mint_never_runs):
+    """`_alias_list` SPLITS a comma-separated string, so the bound applies per resolved alias and
+    never to the string a caller typed. A steward pasting a long list of ordinary aliases —
+    comfortably over `MAX_ARG_CHARS` in total — must reach the mint, not be refused for a length
+    no single alias has. Its twin is the test above: one alias that IS over the bound still trips
+    it."""
+    item_id = _park_capture(conn, MemoryEvidenceStore(),
+                            situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    many = ",".join(f"alias-{i}" for i in range(MAX_ARG_CHARS // 4))
+    assert len(many) > MAX_ARG_CHARS, "the whole point: the STRING is over the bound"
+
+    out = _call_mcp(_mcp_for(env, conn), "review_decide", item_kind="entity-proposal",
+                    item_id=str(item_id), verdict="approve", name="Stark Industries",
+                    entity_type="organization", aliases=many)
+
+    assert out == {"error": "review_decide failed (RuntimeError)"}   # the marker: reached the mint
+
+
+def test_an_at_limit_mint_argument_reaches_the_mint(env, conn, mint_never_runs):
+    """The benign twin, and the reason the bound is worth having a specificity test for: an
+    argument exactly AT the limit is not rejected for its length. The `RuntimeError` that comes
+    back is the marker's, a genuinely different failure from the length check's `ValueError`, so
+    "passed the guard" can never be read as "was rejected by it"."""
+    item_id = _park_capture(conn, MemoryEvidenceStore(),
+                            situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+
+    out = _call_mcp(_mcp_for(env, conn), "review_decide", item_kind="entity-proposal",
+                    item_id=str(item_id), verdict="approve", name="Stark Industries",
+                    entity_type="organization", role="x" * MAX_ARG_CHARS)
+
+    assert out == {"error": "review_decide failed (RuntimeError)"}

@@ -257,3 +257,14 @@ def test_a_malformed_acl_at_base_is_refused_with_the_locator_naming_the_commit(t
         base_inputs.load_acl(repo, _base(sha_broken))
     # benign twin: sha1's own (valid) ACL is unaffected
     base_inputs.load_acl(repo, _base(sha1))   # must not raise
+
+
+def test_a_stewards_file_that_is_not_utf8_is_unreadable_not_a_raw_decode_error(tmp_path):
+    """An unreadable stewards map is a NAMED config refusal, whatever makes it unreadable.
+    OLD BEHAVIOUR: non-UTF-8 bytes raised `UnicodeDecodeError` — a `ValueError`, not an
+    `OSError` — so it escaped this loader's own promise and, downstream, escaped
+    `server.review.is_steward`'s fail-closed catch, swallowing a steward's click in silence."""
+    path = tmp_path / "stewards.json"
+    path.write_bytes(b'{"*": ["ana@example.com"]}\xff\xfe')
+    with pytest.raises(LibrarianConfigError, match="could not be read"):
+        base_inputs.load_stewards_file(str(path))

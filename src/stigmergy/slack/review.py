@@ -10,6 +10,7 @@ capture and an entity proposal. `items_for_doorbell` is the one read this module
 re-queried a second way), so the entity-mint modal can prefill the proposal's own name at click
 time.
 """
+import asyncio
 import json
 import logging
 
@@ -194,7 +195,12 @@ async def handle_block_action(ctx, *, action_id: str, value: str, trigger_id: st
             # below is deliberately NOT gated: it exposes nothing beyond the card that was already
             # delivered, and its own submission re-checks.
             service = ctx.build_service(identity_result.email, identity_result.audiences)
-            if not review.is_steward(service, ""):
+            # Off the event loop: on a checkout-backed deployment `load_stewards` runs a real
+            # `git fetch`, and Slack's `trigger_id` expires in ~3s — a blocking fetch here stalls
+            # every other interaction this process is serving and can burn the window that makes
+            # the modal openable at all. Never the doorbell's TTL cache: the FRESH read is the
+            # point of the gate (a revoked steward must not resolve off a stale map).
+            if not await asyncio.to_thread(review.is_steward, service, ""):
                 await ctx.post_or_log(
                     ctx.gateway.chat_post_message(channel_id, text=review.NOT_YOURS_TO_DECIDE),
                     what=f"entity-mint modal refusal for {item_id}")

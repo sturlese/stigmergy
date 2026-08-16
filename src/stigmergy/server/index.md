@@ -109,7 +109,10 @@ lives in `capture.decisions`, below both packages, and this package only re-expo
   admin console strips control characters out of what it renders. That difference no longer reaches
   the repo: `entities.birth` refuses C0/C1 at the one gate every door passes through.
 - Steward resolution fails closed: `is_steward` returns False without a checkout or a baked
-  snapshot; `load_stewards` reads `origin/main`'s fresh tip wherever a checkout exists, and the
+  snapshot, AND when the map it reads cannot be loaded at all (a malformed `ops/stewards.json`, a
+  broken checkout) — it catches that inside and logs it, because a caller on the READ leg has no
+  other net and a raise there is a click that vanishes with no feedback;
+  `load_stewards` reads `origin/main`'s fresh tip wherever a checkout exists, and the
   same read decides both doorbell delivery and decision authority. `is_steward` is PUBLIC because a
   surface that SHOWS review material before any decision exists — `slack.review`'s entity-mint
   modal — has to ask the same question at the same scope, or the decide leg's guard arrives after

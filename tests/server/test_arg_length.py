@@ -9,7 +9,10 @@ completes the real work.
 `notes` is the one of review's four this file can reach with a poisoned service: it is checked at the
 top of `review.review_decide`, before any row is read. `name`/`role`/`alias` are checked inside
 `_decide_entity_proposal`, downstream of a real submission row AND a passed steward guard, so their
-coverage lives with the fixtures that have both (`tests/server/test_review.py`)."""
+coverage lives with the fixtures that have both — `tests/server/test_review.py`, in its
+`test_an_over_limit_mint_argument_comes_back_as_the_checks_own_sentence` section, which also pins
+the `_alias_list` split (a long comma-separated STRING is many short aliases and must pass; one
+long single alias must not)."""
 import pytest
 
 from stigmergy.server.errors import RateLimitError

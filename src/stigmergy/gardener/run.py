@@ -229,6 +229,10 @@ async def run_gardener(conn, *, repo: str, settings: GardenerSettings, channels_
         # Class name only, never `str(ex)` — the same rule and the same reason as
         # `_run_sweep_pass`'s `stats["error"]`: a database error quotes the statement that failed,
         # and that statement carries page paths and ACL labels an operator's terminal must not
-        # learn them from.
+        # learn them from. So the class name is the OPERATOR's copy and the log below holds the
+        # DIAGNOSIS: without it this arm destroyed the only account of what went wrong, and the
+        # narrow arms above cannot see the faults this one exists for.
+        log.error("gardener: the notice block failed after the findings were committed",
+                  exc_info=True)
         result.notice_error = ex.__class__.__name__
     return result

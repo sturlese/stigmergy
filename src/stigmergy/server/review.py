@@ -23,6 +23,7 @@ from stigmergy.entities.errors import CapabilityUnavailableError as EntityCapabi
 from stigmergy.entities.errors import EntityError
 from stigmergy.entities.generator import ENTITY_TYPES, canonical_id_for
 from stigmergy.librarian import base_inputs, gates, gitcmd
+from stigmergy.librarian.errors import LibrarianError
 from stigmergy.review_kinds import (
     ITEM_KINDS,
     KIND_ENTITY_PROPOSAL,
@@ -82,13 +83,20 @@ def is_steward(service, scope_path: str) -> bool:
     baked = service.settings.stewards_path or ""
     if not repo and not baked:
         return False
-    stewards = load_stewards(repo, baked)
+    try:
+        stewards = load_stewards(repo, baked)
+    except (LibrarianError, OSError):
+        # The promise in the docstring, kept here rather than at each call site. A malformed
+        # `ops/stewards.json` raises `LibrarianConfigError` and a broken checkout raises out of
+        # `gitcmd`; the DECIDE leg's own `except Exception` would absorb either, but the READ leg
+        # in `slack.review` has nothing to absorb them and a steward's click would vanish with no
+        # feedback at all. Fail closed — and log the fault, because the caller only ever sees an
+        # ordinary refusal and this is the operator's only copy of the diagnosis.
+        log.error("steward resolution failed — treating the caller as not a steward",
+                  exc_info=True)
+        return False
     return bool(service.identity) and service.identity in resolve_stewards_for_scope(
         stewards, scope_path)
-
-
-# The name this module's own guards were written against, kept so a caller reaching for the
-# private spelling still lands on the one implementation.
 
 
 def _guard_governance_decision(service, *, found: bool, submitted_by: str, scope_path: str,

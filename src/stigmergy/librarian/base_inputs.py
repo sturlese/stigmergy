@@ -119,7 +119,9 @@ def load_stewards_file(path: str) -> dict:
             text = f.read()
     except FileNotFoundError:
         return {}
-    except OSError as ex:
+    # `UnicodeDecodeError` is a `ValueError`, not an `OSError`: without it here, non-UTF-8 bytes
+    # escape as a raw decode error past every caller that fails closed on `LibrarianError`.
+    except (OSError, UnicodeDecodeError) as ex:
         raise LibrarianConfigError(
             f"{path} could not be read ({ex.__class__.__name__}) — it is the deployed doorbell's "
             f"own scope -> steward map, and an unreadable one must not be mistaken for 'nobody is "

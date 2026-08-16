@@ -50,7 +50,9 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 - `server.review.is_steward(service, "")` — the read-side gate `review.handle_block_action` asks
   before it opens the entity-mint modal, at the SAME universal scope `_guard_governance_decision`
   uses for a proposal, refusing with the SAME `NOT_YOURS_TO_DECIDE` sentence. Never a second rule
-  spelled here.
+  spelled here, and never wrapped in a try of its own: the predicate fails closed on its own
+  faults. Called through `asyncio.to_thread` — on a checkout-backed deployment it runs a real
+  `git fetch`, and Slack's `trigger_id` expires in ~3s.
 - `doorbell._load_stewards_cached` — the notifier's 300s cache. A decision path calls
   `review.load_stewards` fresh instead, so a revoked steward cannot approve off a stale cache.
 - `gateway.SlackGateway` / `FakeSlackGateway` — every handler takes a gateway as an argument.

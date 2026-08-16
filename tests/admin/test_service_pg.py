@@ -1,6 +1,7 @@
 """AdminService over the real queue/tables (stigmergy_test). The dispositions land through the
 SAME library seams the CLIs use, so what these prove is parity, not a parallel implementation."""
 import asyncio
+import json
 import os
 
 import pytest
@@ -459,6 +460,29 @@ def test_index_state_and_substrate_check_run_over_the_real_store(service):
     assert state["zones"] == {}
     check = service.index_substrate_check()
     assert check["errors"] == 0 and isinstance(check["findings"], list)
+
+
+def test_a_registry_the_loader_refuses_reads_as_a_refusal_not_a_500(conn, admin_settings,
+                                                                    tmp_path):
+    """OLD BEHAVIOUR: a 500 with the class name and nothing else. `index_substrate_check` caught
+    `StigmergyIndexError` only, while the registry it points at is read through
+    `kernel.registry.load_registry`, which raises a bare `ValueError` for a nameless entity — the
+    very case `index.check.registry_ids` exists to stop blessing. The operator got "the operation
+    failed (ValueError)" for a file the loader could describe precisely.
+
+    It is a refusal, not a fault: the substrate the console was pointed at is broken, the loader's
+    own sentence names the file and the entity, and `AdminRefused` is what carries an
+    operator-actionable sentence to the console (409)."""
+    registry = tmp_path / "entity-registry.json"
+    registry.write_text(json.dumps({"entities": {"acme": {"aliases": []}}}))   # no 'name'
+    broken = AdminService(conn, server_settings=Settings(entity_registry_path=str(registry)),
+                          admin_settings=admin_settings)
+
+    with pytest.raises(AdminRefused) as caught:
+        broken.index_substrate_check()
+
+    assert "'acme'" in str(caught.value) and "name" in str(caught.value), (
+        "the loader's own sentence is the point — it says which file and which entity")
 
 
 # ── entities: read ────────────────────────────────────────────────────────────────────────────

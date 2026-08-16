@@ -591,6 +591,33 @@ def test_cli_a_database_fault_inside_a_subcommand_exits_2_instead_of_a_traceback
     assert "Traceback" not in captured.err
 
 
+def test_cli_a_non_database_fault_inside_a_subcommand_is_not_reported_as_a_dead_stack(
+        clean_queue, capsys, monkeypatch):
+    """OLD BEHAVIOUR: the mid-command net was a bare `except Exception` routed straight to
+    `_stack_down`, so EVERY unanticipated fault — a `KeyError` in `_cmd_purge`, an `AttributeError`
+    anywhere — told the operator "cannot reach the queue database … is Postgres up (`make db-up`)?"
+    That sentence is a diagnosis, and it was wrong: the operator went and checked a database that
+    was up the whole time while the real fault stayed unnamed.
+
+    The stack-down sentence now belongs to `psycopg.OperationalError`/`InterfaceError` only; every
+    other fault gets an honest "unexpected fault" line naming its class. Both still exit 2 with no
+    traceback — the exit code was never the part that lied."""
+    def boom(_conn, _args):
+        raise KeyError("retention_days")
+
+    monkeypatch.setattr(cli, "_cmd_purge", boom)
+
+    rc = cli.main(["--dsn", store.dsn(), "purge"])
+
+    captured = capsys.readouterr()
+    assert rc == 2                                                 # unchanged: not a refusal
+    assert "cannot reach the queue database" not in captured.err   # the sentence that was a lie
+    assert "make db-up" not in captured.err
+    assert "unexpected fault during `purge`" in captured.err
+    assert "KeyError" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_cli_a_named_refusal_inside_a_subcommand_still_exits_1(clean_queue, capsys, monkeypatch):
     """The benign twin: the new blanket net sits BELOW the named handlers, so a `CaptureError`
     still exits 1 with its own words. A guard that turned every refusal into "the stack is down"

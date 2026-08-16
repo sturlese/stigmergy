@@ -139,10 +139,12 @@ def _report_single(o: regenerate.RegenOutcome, args) -> int:
              f"page(s). Nothing was written; the member set has not changed since the last "
              f"regeneration.")
     elif o.action == "removed":
-        # The CAUSE comes from `o.message` (see `_outcome_line`); only the tail is shared, because
-        # it is the one thing both roads really do have in common.
-        print(f"removed {o.path} — {o.message}. Nothing anchors {_who(o.entity_id, o.entity_name)} "
-             f"any more, so there is nothing left to summarize.")
+        # `o.message` is the WHOLE explanation (see `_RemovalCause`): each road carries its own,
+        # and there is no sentence true of both to close with. The tail that used to be appended
+        # here — "nothing anchors it any more" — contradicted the de-registration road's own
+        # message, where the pages still anchor the entity and only the registry stopped
+        # governing them.
+        print(f"removed {o.path} — {o.message}.")
         print(f"  committed {o.commit[:12]} (steward: App bot), pushed to {args.branch}")
     else:
         shown = _timeline_phrase(o)

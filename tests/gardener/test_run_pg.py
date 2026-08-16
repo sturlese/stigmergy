@@ -4,6 +4,7 @@ durable, re-fetched result.
 """
 import asyncio
 import datetime
+import logging
 import os
 
 from psycopg import errors as pg_errors
@@ -248,7 +249,8 @@ def test_run_gardener_records_a_notice_error_when_the_channel_is_unset(conn, rep
     assert gateway.posted == []
 
 
-def test_run_gardener_survives_a_database_failure_inside_the_notice_block(conn, repo, monkeypatch):
+def test_run_gardener_survives_a_database_failure_inside_the_notice_block(conn, repo, monkeypatch,
+                                                                         caplog):
     """**Old behaviour: the run died and the operator lost an already-persisted report.** The
     guard named `GardenerError`/`SlackApiError`/`IdentityError` only, while
     `notice.scope_findings_to_channel` runs a `SELECT ... FROM pages_index` inside that very
@@ -258,6 +260,11 @@ def test_run_gardener_survives_a_database_failure_inside_the_notice_block(conn, 
     The CLASS NAME, never `str(ex)`: a psycopg error quotes the statement that failed, and that
     statement carries page paths and ACL labels to an operator's terminal — the rule
     `_run_sweep_pass` already applies to its own `stats["error"]`, one function up.
+
+    **Second old behaviour: that redaction destroyed the only account of the fault.** The class
+    name is all the operator's terminal may learn; the arm now ALSO logs with `exc_info=True`, so
+    the diagnosis survives somewhere. Without it the module imported `logging`, defined `log` and
+    never called it, and a broken notice was undebuggable past its class name.
     """
     _seed_minimal_corpus(conn, repo)
     support.force_one_sla_finding(monkeypatch)
@@ -270,9 +277,13 @@ def test_run_gardener_survives_a_database_failure_inside_the_notice_block(conn, 
     monkeypatch.setattr(run.notice, "scope_findings_to_channel", _boom)
     gateway = FakeSlackGateway()
 
-    result = _run(conn, repo, settings=GardenerSettings(digest_channel_id="C0123456789"),
-                  gateway=gateway)
+    with caplog.at_level(logging.ERROR, logger="stigmergy.gardener.run"):
+        result = _run(conn, repo, settings=GardenerSettings(digest_channel_id="C0123456789"),
+                      gateway=gateway)
 
+    assert any(rec.exc_info and "notice block failed" in rec.getMessage()
+               for rec in caplog.records), (
+        "the class name is the operator's copy — the log has to hold the diagnosis")
     assert result.notice_posted is False
     assert result.notice_error == "UndefinedTable"
     assert "pages_index" not in result.notice_error   # no page path reaches the terminal

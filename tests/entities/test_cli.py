@@ -495,6 +495,45 @@ def test_repo_still_refuses_a_plain_directory_in_the_same_words(tmp_path):
         f"with your own git identity")
 
 
+@pytest.mark.parametrize("content, label", [
+    (b"notes to self\n", "junk text"),
+    (b"\x00\x01\x02\xff\xfe", "binary"),
+    (b"", "empty"),
+])
+def test_repo_refuses_a_directory_whose_dot_git_is_a_junk_file(tmp_path, content, label):
+    """**Old behaviour: `os.path.exists(path/".git")` accepted ANY `.git` entry.** Widening from
+    `isdir` to `exists` for the sake of `git worktree add` also accepted a stray FILE named `.git`
+    — a leftover, a note, a binary — as a checkout. The command then committed with the steward's
+    own identity into a directory git does not manage, and the refusal a steward could have acted
+    on never fired.
+
+    A real worktree's `.git` file is a `gitdir:` pointer, so that prefix is the requirement now;
+    an unreadable or binary one refuses rather than raising, because a predicate that throws is
+    worse for the caller than one that says no. Its benign twin is
+    `test_repo_accepts_a_real_git_worktree_checkout` above, which is driven by git itself."""
+    from stigmergy.entities.errors import EntityError
+
+    junk = tmp_path / f"junk-{label}"
+    junk.mkdir()
+    (junk / ".git").write_bytes(content)
+
+    with pytest.raises(EntityError, match="is not a git checkout"):
+        cli._repo(Args(repo=str(junk)))
+
+
+def test_the_checkout_predicate_answers_false_for_an_unreadable_dot_git_never_raises(tmp_path):
+    """The predicate is a PREDICATE (see its docstring): reading the pointer must not turn an
+    odd filesystem into an exception the CLIs have no arm for — each of them writes its own
+    refusal around a `False`, and a raise from here would surface as a traceback instead."""
+    from stigmergy.librarian import config as librarian_config
+
+    dangling = tmp_path / "dangling"
+    dangling.mkdir()
+    os.symlink(str(tmp_path / "nowhere"), str(dangling / ".git"))
+
+    assert librarian_config.is_repo_checkout(str(dangling)) is False
+
+
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # `regenerate`: idempotence's own CLI surface
 # ══════════════════════════════════════════════════════════════════════════════════════════════
