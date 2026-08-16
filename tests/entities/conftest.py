@@ -10,6 +10,7 @@ and a double would prove nothing about them.
 """
 import json
 import os
+import re
 import subprocess
 
 import pytest
@@ -126,6 +127,35 @@ def remote_files(remote: str, ref: str = "main") -> list[str]:
 def remote_registry(remote: str, ref: str = "main") -> dict:
     text = git("show", f"{ref}:ops/entity-registry.json", cwd=remote).stdout
     return json.loads(text)
+
+
+# ── what a SERVER-door refusal may say (issue #57, ADR 030's two-door amendment) ────────────────
+# `server.review` echoes an `EntityError`'s text to a steward over MCP verbatim. A steward holds no
+# clone, so a sentence naming an absolute path or a `git -C` command tells them about the server's
+# throwaway temp directory and hands them an instruction nobody on that side of the wire can run.
+#
+# The predicate lives HERE rather than beside either test because BOTH suites assert it —
+# `tests/entities/test_remote.py` sweeps the mapped constants, `tests/server/test_review.py` asserts
+# what actually reaches the wire — and a second copy of a safety predicate is a second place for it
+# to be quietly weakened. It is strictly stronger than the `/tmp` · `/private/` · `/Users/` roots the
+# issue named: any token STARTING with `/` is an absolute path on some host. A repo-relative path
+# (`ops/templates/entity.md`) and a spaced-out alternative (`list_entities / describe_entity`) are
+# both deliberately outside it — they name nothing about the host.
+_ABSOLUTE_PATH = re.compile(r"(?:^|[\s(\[\"'`])/\S")
+
+
+def assert_steward_facing(message: str) -> None:
+    """Raise unless `message` is safe to publish to a steward over MCP."""
+    leak = _ABSOLUTE_PATH.search(message)
+    assert not leak, (
+        f"a server-door refusal named an absolute path ({message[leak.start():leak.start() + 60]!r} "
+        f"…) — the steward reading this over MCP has no filesystem to find it on, and it is the "
+        f"server host's temp directory. Log it with `exc_info=True` and map the type to a written "
+        f"sentence:\n  {message}")
+    assert "git -C" not in message, (
+        f"a server-door refusal told a steward to run a git command — `git -C` names a clone that "
+        f"exists only inside the server process and is deleted before anyone reads this:\n  "
+        f"{message}")
 
 
 @pytest.fixture()

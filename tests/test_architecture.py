@@ -30,6 +30,7 @@ import sys
 import pytest
 
 from stigmergy.digest import settings as _digest_settings
+from stigmergy.entities import errors as _entities_errors
 from stigmergy.gardener import settings as _gardener_settings
 
 STIGMERGY_ROOT = pathlib.Path(__file__).resolve().parents[1] / "src" / "stigmergy"
@@ -1436,8 +1437,14 @@ def test_only_entities_cli_imports_the_index():
 # package's vocabulary: an `OSError`, whose `str()` is `[Errno 13] ...: '/abs/path'`, or a
 # `librarian` error naming the App private-key file. Nothing in this package chose those words,
 # so nothing in this package can vouch for them.
-_ENTITIES_OWN_ERRORS = {"EntityError", "CapabilityUnavailableError", "CollisionError",
-                        "CloneStateError", "PushRaceError"}
+#
+# DERIVED from the module, never listed here. As a literal it went stale the first time the
+# hierarchy grew (issue #57 added two classes), and stale in the direction that FALSELY ACCUSES: a
+# handler catching a class this set had not heard of stops counting as "our own vocabulary", and
+# the deliberate, allowed re-raise of our own words below it reads as a splice.
+_ENTITIES_OWN_ERRORS = {
+    name for name, obj in vars(_entities_errors).items()
+    if isinstance(obj, type) and issubclass(obj, _entities_errors.EntityError)}
 
 
 def _caught_names(handler: ast.ExceptHandler) -> set[str]:

@@ -21,14 +21,22 @@ from stigmergy.capture import dispositions
 from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.errors import CaptureError
 from stigmergy.capture.evidence import MemoryEvidenceStore
+from stigmergy.entities import birth as entities_birth
 from stigmergy.entities import generator as entities_generator
+from stigmergy.entities import mint as entities_mint
 from stigmergy.entities import remote as entities_remote
-from stigmergy.entities.errors import EntityError
+from stigmergy.entities.errors import (
+    CloneStateError,
+    CollisionRaceError,
+    EntityError,
+    PushRaceError,
+)
 from stigmergy.librarian import gitcmd
 from stigmergy.librarian.errors import LibrarianConfigError
 from stigmergy.server import review
 from stigmergy.server.service import MAX_ARG_CHARS
 from tests import adversarial_payloads
+from tests.entities.conftest import assert_steward_facing
 from tests.server.conftest import ALICE, STEWARD
 from tests.server.conftest import make_review_service as make_service
 
@@ -824,6 +832,246 @@ def test_the_same_mint_fault_reaches_this_door_as_a_review_error_and_slack_as_an
         service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
         verdict="approve", name="Globex Robotics", entity_type="organization")
     assert safe == {"error": "the registry and the pages already disagree"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# issue #57 — WHICH mint refusals may cross this wire in the library's own words, and which are
+# rewritten for the steward reading them.
+#
+# `entities` writes for an operator standing in a clone: its refusals name that clone's path and
+# hand out `git -C <path> …` commands. `_mint_entity_proposal` echoes an `EntityError`'s text
+# VERBATIM to a steward over MCP, and the clone a server-driven mint refuses in is a
+# `TemporaryDirectory` that is already deleted by the time anyone reads the sentence. So the four
+# DIRTY refusal types are mapped to written sentences at `entities.remote` — the boundary that
+# exists for exactly that — and the CLEAN, steward-actionable ones keep passing through untouched.
+#
+# The battery below drives the real door. Each mapped case asserts the same three things — no
+# absolute path, no `git -C`, and its own key phrase — and each pass-through case asserts the
+# library's own sentence arrived unchanged. `assert_steward_facing` is shared with the constants'
+# own sweep in `tests/entities/test_remote.py`.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+def _approve_globex(service, proposal_id, **extra):
+    """The one well-formed approve every case below drives, so a refusal is the only variable."""
+    return review.review_decide(
+        service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
+        verdict="approve", name="Globex Robotics", entity_type="organization", **extra)
+
+
+def _proposal_and_steward(env, conn):
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    return proposal_id, make_service(env, conn, identity_name=STEWARD, audiences=None,
+                                     evidence=evidence)
+
+
+def _mint_raising(exception_type, message_for):
+    """A `mint_lib.mint` stub raising `exception_type`, worded from the REAL throwaway clone path
+    it is handed — the same interpolation the production refusal does. The leak these tests exist
+    to catch is therefore the real one, not a literal standing in for it."""
+    def boom(repo, **_kwargs):
+        raise exception_type(message_for(repo))
+    return boom
+
+
+def test_a_missing_entity_template_refuses_without_naming_the_servers_throwaway_clone(
+        drift_free_env, conn):
+    """RED FIRST, and END-TO-END: the template really is absent from the remote's `main`, the mint
+    really clones, and `mint.mint`'s own refusal really reaches the wire.
+
+    OLD BEHAVIOUR — the exact line a steward got back over MCP, observed on this test before the
+    mapping existed (the temp root is the host's; on a Linux server it reads `/tmp/...`):
+
+        ops/templates/entity.md is missing from /var/folders/j1/7vqsgmw139b2c5xbw30s8xr40000gn/
+        T/stigmergy-entity-mint-saptenvs/repo — a new entity page is that template with its
+        identity fields filled in, and this command does not carry its own copy (the template is
+        the knowledge repo's own source of truth for the page's shape)
+
+    Three things wrong with it at this door: it publishes the server host's temp directory, it
+    names a directory that no longer exists (the `TemporaryDirectory` is gone before the message is
+    serialized), and it says "this command does not carry its own copy" to somebody who ran no
+    command. The fix a steward CAN act on — commit the template to the knowledge repo — was the one
+    thing the sentence never said.
+    """
+    from tests.librarian import support
+    env = drift_free_env
+    os.remove(os.path.join(env.repo, "ops", "templates", "entity.md"))
+    support.commit_and_push(env.repo, "test: remove the entity template from the knowledge repo")
+    proposal_id, service = _proposal_and_steward(env, conn)
+    before = all_refs(env)
+
+    with pytest.raises(review.ReviewError) as caught:
+        _approve_globex(service, proposal_id)
+
+    told_the_steward = str(caught.value)
+    assert_steward_facing(told_the_steward)
+    assert "Nothing was pushed" in told_the_steward
+    assert entities_mint.TEMPLATE_RELPATH in told_the_steward, (
+        "the repo-relative path is the actionable half and must survive the rewrite")
+    assert all_refs(env) == before
+
+
+@pytest.mark.parametrize("exception_type,message_for,key_phrase", [
+    pytest.param(
+        CollisionRaceError,
+        lambda repo: (f"--name 'Globex Robotics' already resolves to Globex Robotics\n\nThis "
+                      f"collision did not exist when the command started: something else pushed to "
+                      f"main while this one was committing, and the identity being minted resolves "
+                      f"to theirs. Nothing was pushed and nothing was force-pushed; the commit is "
+                      f"in the local clone (0123456789ab), where `git -C {repo} log -1` and `git "
+                      f"-C {repo} log origin/main -1` show both sides of the race"),
+        "resolves to an existing entry", id="collision"),
+    pytest.param(
+        PushRaceError,
+        lambda repo: (f"could not push to main after 3 attempts — origin/main kept moving faster "
+                      f"than this retry loop could keep up with, and nothing about this entity "
+                      f"conflicted with anything. The commit IS in your local clone (0123456789ab) "
+                      f"and nothing was force-pushed: run `git -C {repo} push origin main` once "
+                      f"the branch settles, or check whether another steward is approving at the "
+                      f"same time"),
+        "a quieter moment will land it", id="push-race"),
+    pytest.param(
+        CloneStateError,
+        lambda repo: (f"refusing to approve — your local clone at {repo} has 2 uncommitted "
+                      f"change(s). `approve` commits and pushes with your own git identity, and "
+                      f"anything already in the working tree would land in that commit too; commit "
+                      f"or stash first (`git -C {repo} status` to see what is pending), then "
+                      f"re-run this command"),
+        "a server-side fault", id="clone-state"),
+])
+def test_a_dirty_mint_refusal_is_rewritten_before_it_reaches_the_steward(
+        env, conn, monkeypatch, exception_type, message_for, key_phrase):
+    """RED FIRST, at the `mint_lib.mint` seam — the three types whose real refusals are worded for
+    a terminal and cannot be provoked end-to-end here without racing a second pusher or dirtying a
+    clone this process does not own. The WIRE is what is under test, so the seam is the honest
+    place to inject: everything from `mint_via_clone` outward is real, including the clone whose
+    path each injected sentence interpolates.
+
+    OLD BEHAVIOUR: every one of these arrived at the steward verbatim — `except LibrarianError`
+    caught none of them, they are `EntityError`s, and `_mint_entity_proposal` re-raises an
+    `EntityError`'s text unchanged. Three `git -C /var/folders/...` commands and one "your local
+    clone at …", all pointing at a directory inside the server process.
+    """
+    monkeypatch.setattr(entities_remote.mint_lib, "mint",
+                        _mint_raising(exception_type, message_for))
+    proposal_id, service = _proposal_and_steward(env, conn)
+    before = all_refs(env)
+
+    with pytest.raises(review.ReviewError) as caught:
+        _approve_globex(service, proposal_id)
+
+    told_the_steward = str(caught.value)
+    assert_steward_facing(told_the_steward)
+    assert "Nothing was pushed" in told_the_steward
+    assert key_phrase in told_the_steward, (
+        "the four mapped types collapsed onto one sentence — a steward cannot tell 'approve again' "
+        "from 'commit the template first' from 'ask the operator'")
+    assert all_refs(env) == before
+
+
+def test_a_mapped_refusal_moves_the_librarys_own_diagnosis_to_the_server_log(
+        env, conn, monkeypatch, caplog):
+    """MOVED, not lost — the same posture `MINT_FAULT_MESSAGE` already holds. The operator reading
+    the server log still gets the sentence naming the clone and the traceback under it; a mapping
+    that dropped the diagnosis would leave nobody with it at all."""
+    monkeypatch.setattr(entities_remote.mint_lib, "mint", _mint_raising(
+        PushRaceError, lambda repo: f"could not push to main — run `git -C {repo} push origin main`"))
+    proposal_id, service = _proposal_and_steward(env, conn)
+
+    with caplog.at_level(logging.ERROR, logger=entities_remote.log.name), \
+            pytest.raises(review.ReviewError):
+        _approve_globex(service, proposal_id)
+
+    assert "git -C" in caplog.text, "the operator lost the one detail that names the fault"
+    assert caplog.records[-1].exc_info, "and lost the traceback under it"
+
+
+# ── the benign twins: the refusals that are already clean AND steward-actionable pass through ───
+def test_an_ordinary_collision_verdict_still_reaches_the_wire_naming_the_registered_entry(
+        drift_free_env, conn):
+    """The specificity twin of the collision arm, and the reason `CollisionRaceError` exists at all.
+
+    `CollisionError` is raised at TWO sites with two different jobs. `birth._refuse_collisions` is
+    the resolve-before-mint GOVERNANCE verdict — the identity simply already exists — and its
+    sentence names the entry, its aliases and the fix (`point the capture at the existing entity`).
+    `mint._recheck_and_regenerate` re-asks the same gate after a rebase and splices two `git -C
+    <clone>` commands onto it. Mapping the BASE class at the server door would have caught both and
+    told a steward "something else changed the registry ... approve again" about an entity that has
+    been registered for months — a governance verdict turned into a retry loop that cannot succeed,
+    and the one refusal in this subsystem a steward can always act on, gone.
+
+    Driven end-to-end against the fixture repo's own registered `Acme Corp`, so what is asserted is
+    the real gate's real sentence and not a stub's.
+    """
+    env = drift_free_env
+    proposal_id, service = _proposal_and_steward(env, conn)
+    before = all_refs(env)
+
+    with pytest.raises(review.ReviewError) as caught:
+        review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
+                             item_id=str(proposal_id), verdict="approve", name="Acme Corp",
+                             entity_type="organization")
+
+    told_the_steward = str(caught.value)
+    assert_steward_facing(told_the_steward)
+    assert "already resolves to the registered entity" in told_the_steward
+    assert "point the capture at the existing entity" in told_the_steward
+    assert "Nothing was pushed" not in told_the_steward, (
+        "the collision VERDICT was swept into the race arm's sentence — the steward is now told to "
+        "approve again, forever, for an identity that already exists")
+    assert all_refs(env) == before
+
+
+def test_a_birth_validation_refusal_still_reaches_the_wire_verbatim(drift_free_env, conn):
+    """The pass-through half, and the specificity of the whole ladder. `birth.prepare` refuses a
+    name that could not be a filename or a wikilink; that sentence names the character, names the
+    consequence, and names no host — it is the steward's OWN input that is wrong, and rewriting it
+    into "a server-side fault, approve again" would strip the one thing they can act on.
+
+    Compared against `birth.prepare`'s own raise rather than a literal, so "verbatim" means what it
+    says: any rewording at `entities.remote` — including a helpful prefix — fails this."""
+    env = drift_free_env
+    hostile = 'Globex" --aliases "Jordan Reyes'
+    proposal_id, service = _proposal_and_steward(env, conn)
+    with pytest.raises(EntityError) as raised_by_the_library:
+        entities_birth.prepare(canonical_id=entities_generator.canonical_id_for(hostile),
+                               name=hostile, entity_type="organization",
+                               registry=entities_generator.registry_of([]), existing_pages=[])
+
+    with pytest.raises(review.ReviewError) as reached_the_wire:
+        review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
+                             item_id=str(proposal_id), verdict="approve", name=hostile,
+                             entity_type="organization")
+
+    assert str(reached_the_wire.value) == str(raised_by_the_library.value)
+    assert "Nothing was pushed" not in str(reached_the_wire.value), (
+        "a birth refusal was swept into the server door's mapping — the steward's own fix is gone")
+
+
+def test_the_secrets_refusal_still_reaches_the_wire_with_its_repo_relative_page_and_rule_id(
+        drift_free_env, conn):
+    """The other pass-through, and the one that looks dirty and is not: `mint._relocate` already
+    rewrites gitleaks' scratch path to the repo-relative page name, so this refusal names
+    `wiki/entities/<name>.md` and a rule id — both meaningful to a steward, neither a host path.
+    A real mint, a real scanner, a real credential shape (`env` requires gitleaks).
+
+    Its fix is the steward's too: take the credential out of the role field and approve again."""
+    env = drift_free_env
+    proposal_id, service = _proposal_and_steward(env, conn)
+    before = all_refs(env)
+
+    with pytest.raises(review.ReviewError) as caught:
+        _approve_globex(service, proposal_id,
+                        role=f"reachable at {adversarial_payloads.GITHUB_PAT}")
+
+    told_the_steward = str(caught.value)
+    assert_steward_facing(told_the_steward)
+    assert "wiki/entities/Globex Robotics.md" in told_the_steward
+    assert "github-pat" in told_the_steward, "the rule id is what the steward would allowlist"
+    assert "Nothing was pushed" not in told_the_steward, (
+        "the secrets refusal was swept into the server door's mapping — it already says what was "
+        "written and what to do, in the steward's own terms")
+    assert all_refs(env) == before
 
 
 # ── the remaining (kind, verdict) pairs, the ones needing real rows ────────────────────────────

@@ -9,13 +9,26 @@ for the one `git clone`, and every error path is scrubbed by `gitcmd._scrub`. An
 capability REFUSES by naming it (`CapabilityUnavailableError`) rather than degrading. This
 module's public seam raises only `entities.errors` types: every `librarian.*` exception is caught
 and re-raised, so a caller only ever knows this package's vocabulary.
+
+It is also THE boundary where a refusal changes audience. Everything a caller gets from here is
+echoed verbatim to a steward over MCP by `server.review`, and the rest of `stigmergy.entities`
+writes for an operator standing in a clone. So the four refusal TYPES whose sentences interpolate
+that clone are re-worded here and the door-neutral ones pass through — the constants below carry
+the full argument, and ADR 030's "two-door refusal wording" amendment carries the rule.
 """
 import logging
 import os
 import tempfile
 
 from stigmergy.entities import mint as mint_lib
-from stigmergy.entities.errors import CapabilityUnavailableError, EntityError
+from stigmergy.entities.errors import (
+    CapabilityUnavailableError,
+    CloneStateError,
+    CollisionRaceError,
+    EntityError,
+    PushRaceError,
+    TemplateMissingError,
+)
 from stigmergy.librarian import gitcmd, githubapp
 from stigmergy.librarian.errors import GitError, LibrarianConfigError, LibrarianError
 
@@ -34,6 +47,65 @@ MINT_FAULT_MESSAGE = (
     "the mint could not be completed — the server hit a git or configuration fault partway "
     "through, not a problem with the identity you approved. Nothing was pushed. The details are "
     "in the server log; ask whoever runs this deployment to look, then approve again")
+
+# ── the refusals this door RE-WORDS, and the ones it deliberately does not (ADR 030's amendment) ─
+# `stigmergy.entities` composes its refusals for an operator standing IN the clone: `clone.py` and
+# `mint.py` name that clone's path and hand out `git -C <path> ...` to run in it. Here the clone is
+# the `TemporaryDirectory` above, deleted before `server.review` echoes the sentence to a steward
+# over MCP — so the path is the SERVER HOST's, the command is unrunnable, and an instruction like
+# "commit or stash first" is addressed to nobody. Each arm below logs the library's diagnosis with
+# `exc_info=True` and raises one of these instead: MOVED, not lost, the same trade
+# `MINT_FAULT_MESSAGE` already makes.
+#
+# Every one leads with what state was left behind, because that is the fact a steward needs before
+# any other, and ends with the one action THEY can take. Four sentences and not one, because
+# "approve again", "commit the template first" and "ask whoever runs this deployment" are three
+# different instructions.
+#
+# **What passes through untouched, and why — the pass-through set is the design, not an omission:**
+#   · birth-field validation (`birth.prepare`) — the steward's own input is what is wrong and the
+#     sentence names the character, the field and the consequence. Nothing about the host.
+#   · the collision VERDICT (`birth._refuse_collisions`, a plain `CollisionError`) — it names the
+#     registered entry and says to point the capture at it. Only `CollisionRaceError`, the
+#     post-rebase re-ask, is mapped; catching its base class here would turn a governance verdict
+#     into "something moved, approve again" and send a steward round a loop that cannot succeed.
+#   · the secrets refusal (`mint._refuse_secrets`) — `_relocate` has already rewritten gitleaks'
+#     scratch path to the repo-relative page, and the rule id is what a steward would allowlist.
+#   · the drift refusal (`mint._refuse_drift`) — names `generator.FIX_COMMAND`, which is portable
+#     and run against the knowledge repo, not against any clone this process made.
+# All four are `EntityError`s, which is why there is no bare `except EntityError` arm below and
+# must not become one: it would swallow every refusal a steward can actually act on.
+CLONE_STATE_FAULT_MESSAGE = (
+    "the server's fresh clone was not in a mintable state — a server-side fault, not a problem "
+    "with the identity you approved. Nothing was pushed. The details are in the server log; "
+    "approve again once whoever runs this deployment has looked")
+
+# The repo-relative path is the actionable half and is kept; `mint_lib.TEMPLATE_RELPATH` rather
+# than a second literal, so the two doors can never name different files.
+TEMPLATE_MISSING_MESSAGE = (
+    f"the knowledge repo has no {mint_lib.TEMPLATE_RELPATH}, and a new entity page is that "
+    f"template with its identity filled in. Nothing was pushed. Commit the template to the "
+    f"knowledge repo (any checkout), then approve again — the next attempt clones fresh and will "
+    f"see it")
+
+COLLISION_RACE_MESSAGE = (
+    "something else changed the registry while this mint was in flight, and the identity being "
+    "approved now resolves to an existing entry. Nothing was pushed and nothing was force-pushed. "
+    "Approve again: the next attempt re-checks against what actually landed — and if it refuses "
+    "again, the identity already exists (list_entities / describe_entity will show it)")
+
+PUSH_RACE_MESSAGE = (
+    "the knowledge repo's main kept moving while this mint retried its push. Nothing was pushed "
+    "and nothing was force-pushed; no state was left behind on the server. Approve again — a "
+    "quieter moment will land it")
+
+# The clone leg's own refusal — not a ladder arm (nothing has been minted yet) but published the
+# same way, so it lives with them rather than inline: the sweep over this module's constants is
+# what proves no sentence here names a path, and a literal buried in a handler is outside it.
+CLONE_FAILED_MESSAGE = (
+    "the knowledge repo could not be cloned to mint this entity — the server could not reach it "
+    "or is not credentialed for it. Nothing was pushed. The details are in the server log; ask "
+    "whoever runs this deployment to look")
 
 # The two CREDENTIAL faults, told the same way and for the same reason. Neither may splice the
 # caught exception's text: `githubapp` raises `LibrarianConfigError` naming the private-key FILE
@@ -77,12 +149,9 @@ def mint_via_clone(repo_url: str, branch: str, credential, *, entity_id: str, na
         except GitError as ex:
             # `_scrub` keeps the CREDENTIAL out of `str(ex)`, but scrubbed is not safe to publish:
             # what remains is git's stderr naming this host's temp directory. Logged, not echoed
-            # (see `MINT_FAULT_MESSAGE`).
+            # (see `CLONE_FAILED_MESSAGE`).
             log.error("server-driven mint: could not clone the knowledge repo", exc_info=True)
-            raise EntityError(
-                "the knowledge repo could not be cloned to mint this entity — the server could "
-                "not reach it or is not credentialed for it. Nothing was pushed. The details are "
-                "in the server log; ask whoever runs this deployment to look") from ex
+            raise EntityError(CLONE_FAILED_MESSAGE) from ex
         try:
             # Configured on the clone too, not only handed to `mint()` as `author`: the rebase in
             # `clone.commit_and_push`'s retry needs SOME committer identity, and a fresh temp
@@ -93,6 +162,26 @@ def mint_via_clone(repo_url: str, branch: str, credential, *, entity_id: str, na
                 repo, entity_id=entity_id, name=name, entity_type=entity_type, aliases=aliases,
                 role=role, branch=branch, today=today, author=author, submission_id=submission_id,
                 trailer=f"Approved-by: {_trailer_actor(approved_by)}", on_output=on_output)
+        # The ladder, ordered but order-INDEPENDENT: none of these four is a subclass of another
+        # (pinned by `tests/entities/test_errors.py`), so no arm shadows the one below it. What the
+        # order DOES require is that all four precede any `except EntityError` — there is none, and
+        # adding one would silently swallow the pass-through set named above.
+        except CloneStateError as ex:
+            log.error("server-driven mint: the throwaway clone was not in a mintable state",
+                      exc_info=True)
+            raise EntityError(CLONE_STATE_FAULT_MESSAGE) from ex
+        except TemplateMissingError as ex:
+            log.error("server-driven mint: the knowledge repo carries no entity template",
+                      exc_info=True)
+            raise EntityError(TEMPLATE_MISSING_MESSAGE) from ex
+        except CollisionRaceError as ex:
+            log.error("server-driven mint: the registry moved under an already-passed gate",
+                      exc_info=True)
+            raise EntityError(COLLISION_RACE_MESSAGE) from ex
+        except PushRaceError as ex:
+            log.error("server-driven mint: the push lost its race with the knowledge repo",
+                      exc_info=True)
+            raise EntityError(PUSH_RACE_MESSAGE) from ex
         except LibrarianError as ex:
             # The seam the module docstring promises, for everything after the clone: e.g.
             # `gates.ensure_scanner` raises `LibrarianConfigError` when gitleaks is absent, and a

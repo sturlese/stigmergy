@@ -1,8 +1,10 @@
 # ADR 030 — entity birth completes from all three interfaces
 
-**Status:** accepted · 2026-08-04 · **amended 2026-08-16** (see "Amendment: the ledger writer
-moves below the doors" at the end — the CLI door, described here as ledger-less, now records the
-same row) · supersedes ADR 029's "entity writes stay CLI" consequence,
+**Status:** accepted · 2026-08-04 · **amended 2026-08-16** twice (see the two amendments at the
+end — "the ledger writer moves below the doors", after which the CLI door, described here as
+ledger-less, records the same row; and "two-door refusal wording", which splits what a refusal SAYS
+per door while D4's reuse of the checks themselves stands) · supersedes ADR 029's "entity writes
+stay CLI" consequence,
 which deferred exactly this decision to its own record ("web-native entity birth needs an
 authorship decision (operator identity vs App bot) that deserves its own ADR"). This is that ADR.
 Requested and argued before it was written; unblocked by steward resolution reaching the
@@ -213,3 +215,95 @@ CLI, exactly as D2 says.
 - A database no server has ever started against now gets the ledger table from the CLI's own
   `_connect`, the same startup pattern every other entry point follows. Without it, `approve`
   would mint, push, and then fail on the INSERT — after the irreversible half.
+
+
+## Amendment: two-door refusal wording (2026-08)
+
+**Status:** accepted · amends D4's reuse half. Nothing above is withdrawn; one consequence of the
+reuse it mandates is closed.
+
+### What this record got wrong by omission
+
+D4 settles that the discipline survives by reuse: both doors call the same `stigmergy.entities`
+seams. It says nothing about the refusals those seams produce, and a refusal is not door-neutral
+just because the check that raised it is.
+
+`stigmergy.entities` was written for one door. Its messages address an operator standing in a
+clone: they interpolate that clone's absolute path and hand out `git -C <path> …` to run in it,
+which is exactly right for `stigmergy-entities` and exactly what makes the subsystem debuggable.
+The server door then reused the same seams — and `server.review` echoes an `EntityError` to a
+steward over MCP **verbatim**. What a steward got back for a missing entity template was:
+
+> `ops/templates/entity.md` is missing from
+> `/var/folders/j1/7vqsgmw139b2c5xbw30s8xr40000gn/T/stigmergy-entity-mint-saptenvs/repo` — … this
+> command does not carry its own copy …
+
+Three things wrong with it at that door: it publishes the server host's temp directory, it names a
+directory that no longer exists (the `TemporaryDirectory` is removed before the message is
+serialized), and it tells somebody who ran no command that "this command" carries no copy. The one
+fix a steward *could* act on — commit the template to the knowledge repo — was the only thing the
+sentence never said. The same shape held for a lost push race, an unmintable clone and a
+post-rebase collision.
+
+### The decision
+
+**A refusal that names a filesystem path or a runnable command is composed for the door whose
+operator can act on it, and the OTHER door re-words it at the boundary that exists for that.**
+
+For the server door that boundary is `entities.remote.mint_via_clone` — already the module where
+every foreign exception is renamed into this package's vocabulary. Its post-clone `try` grows an
+ordered ladder over four refusal TYPES (`CloneStateError`, `TemplateMissingError`,
+`CollisionRaceError`, `PushRaceError`), each arm logging the library's own diagnosis with
+`exc_info=True` and raising a written sentence in its place. MOVED, not lost: the operator reading
+the server log still gets the path and the traceback, which is the trade `MINT_FAULT_MESSAGE`
+already made for `LibrarianError`. **The CLI door is unchanged, byte for byte.**
+
+**The mapping keys on the TYPE, never on the text**, so a raise site whose sentence is written for
+a terminal needs a class no door-neutral raise site shares. Two classes were added for that and for
+nothing else: `TemplateMissingError`, and `CollisionRaceError` for the post-rebase re-ask in
+`mint._recheck_and_regenerate`.
+
+`CollisionRaceError` is the subtle half and the reason this is a decision rather than a rewording.
+`CollisionError` was raised at two sites doing two different jobs: `birth._refuse_collisions` is
+the resolve-before-mint **governance verdict** — the identity already exists, point the capture at
+it — and is door-neutral; `mint._recheck_and_regenerate` re-asks that same gate after a rebase and
+splices the local clone's sha and two `git -C` commands onto the answer. Mapping the base class
+would have caught both and told a steward "something else changed the registry while this mint was
+in flight, approve again" about an entity registered months ago: a governance verdict turned into a
+retry loop that cannot succeed. The race subclasses the verdict, so every existing `except
+CollisionError` still catches it and the terminal still reads the full sentence.
+
+**The pass-through set is part of the decision, not what is left over.** Birth-field validation,
+the collision verdict, the secrets refusal (`mint._relocate` has already rewritten gitleaks'
+scratch path to the repo-relative page, and the rule id is what a steward would allowlist) and the
+drift refusal (which names the portable `stigmergy-entities regenerate`) all reach the wire
+untouched. They are the refusals a steward can act on, and every one of them is an `EntityError` —
+which is why `mint_via_clone` has no bare `except EntityError` arm and must never grow one.
+
+### Alternatives, and why not
+
+- **Map at `server.review` instead.** It is where the wire is, but it is also the place that must
+  not know which `entities` refusals are dirty — and the admin console reaches the same mint
+  without passing through it, so the leak would stay open on one of the two server doors.
+- **Sanitize the text — strip anything path-shaped on the way out.** Cheap and general, and it
+  produces a sentence nobody wrote: the remaining words still address an operator holding a clone.
+  A refusal is copy, and copy is composed, not filtered.
+- **Give `entities` one neutral wording for every door.** It would cost the CLI its whole local
+  diagnosis — *which* checkout is dirty, *which* sha the commit is sitting on — to spare a steward
+  a path. The terminal door is the one where those answers cannot be looked up anywhere else.
+
+### Consequences
+
+- Four sentences and not one, because "approve again", "commit the template first" and "ask whoever
+  runs this deployment" are three different instructions. Every mapped sentence leads with what
+  state was left behind ("Nothing was pushed"), which is the fact a steward needs before any other,
+  and ends with the action they can take.
+- `admin_actions.error_class` records `EntityError` for a mapped fault instead of the library's own
+  class, the posture that column already had for every `LibrarianError`. The library's class and
+  its full sentence are in the server log.
+- The properties are enforced, not written down: `tests/entities/test_remote.py` sweeps every
+  refusal constant this module publishes for an absolute path or a `git -C`, deriving the list from
+  the module so a new sentence joins by existing; `tests/server/test_review.py` proves what reaches
+  the wire, mapped and passed-through alike, with the template case driven end to end against a
+  real remote; `tests/entities/test_cli.py` pins the CLI's own sentence byte for byte, since the two
+  doors are now free to diverge and nothing else would notice this one drifting.

@@ -14,7 +14,7 @@ non-empty; the empty default keeps a steward's own commit byte-identical.
 import os
 
 from stigmergy.entities import birth, clone, generator
-from stigmergy.entities.errors import CollisionError, EntityError
+from stigmergy.entities.errors import CollisionRaceError, EntityError, TemplateMissingError
 from stigmergy.kernel.fsutil import write_text_atomic
 from stigmergy.librarian import config as librarian_config
 from stigmergy.librarian import gates
@@ -56,7 +56,10 @@ def mint(repo: str, *, entity_id: str, name: str, entity_type: str, aliases=(), 
 
     template_path = os.path.join(repo, *TEMPLATE_RELPATH.split("/"))
     if not os.path.exists(template_path):
-        raise EntityError(
+        # The TYPE, not the text, is what `entities.remote` reads to re-word this for a steward
+        # holding no clone; the sentence below stays the operator's, naming which checkout is
+        # missing the template (`entities/errors.py`'s module docstring).
+        raise TemplateMissingError(
             f"{TEMPLATE_RELPATH} is missing from {repo} — a new entity page is that template with "
             f"its identity fields filled in, and this command does not carry its own copy (the "
             f"template is the knowledge repo's own source of truth for the page's shape)")
@@ -135,7 +138,11 @@ def _recheck_and_regenerate(repo: str, proposal: birth.Proposal, *, branch: str)
         birth.recheck(proposal, registry=generator.registry_of(others),
                       existing_pages=[e.relpath for e in others])
     except EntityError as ex:
-        raise CollisionError(
+        # `CollisionRaceError`, not the plain `CollisionError` the gate itself raises: the two say
+        # different things and only this one names the clone. `entities.remote` maps THIS type and
+        # lets the gate's own verdict through, so a steward who simply proposed an identity that
+        # already exists keeps being told to point the capture at it.
+        raise CollisionRaceError(
             f"{ex}\n\nThis collision did not exist when the command started: something else "
             f"pushed to {branch} while this one was committing, and the identity being minted "
             f"resolves to theirs. Nothing was pushed and nothing was force-pushed; the commit is "
