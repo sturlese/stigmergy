@@ -211,8 +211,10 @@ overrides it; 7 days on a genuine first run), two sections, in this order:
    to run next, never silence).
 2. **Corpus deltas** — pages filed in-window (count + titles) and entity approvals in-window
    (a count of `review_decisions` entity-proposal approvals — the approval event, which is what
-   this system can actually timestamp; the later, separate mint commit carries no ledger row of
-   its own, so the section counts approvals, not mints. The rendered line says "approved" rather
+   this system can actually timestamp; the mint commit itself carries no ledger row of its own, so
+   the section counts approvals, not mints. All three approving doors write that row, the
+   `stigmergy-entities` CLI included, so the count is complete (issue #51) — it was not before, and
+   under-reported by exactly the CLI's share with nothing saying so. The rendered line says "approved" rather
    than "born" for exactly that reason: an approved-never-minted proposal would otherwise count as
    a birth forever).
 

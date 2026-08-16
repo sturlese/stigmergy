@@ -12,6 +12,7 @@ import asyncio
 import os
 import sys
 
+from stigmergy.capture import decisions
 from stigmergy.capture import schema as capture_schema
 from stigmergy.digest import run
 from stigmergy.digest.errors import DigestError
@@ -19,7 +20,6 @@ from stigmergy.digest.settings import SLACK_BOT_TOKEN_ENV, DigestSettings
 from stigmergy.gardener.schema import ensure_gardener_schema
 from stigmergy.index import store
 from stigmergy.librarian import config as librarian_config
-from stigmergy.server import review
 from stigmergy.server.errors import StartupError
 from stigmergy.slack import channels
 
@@ -36,7 +36,7 @@ def _connect(args):
     conn = store.connect(args.dsn)
     # Every table the two sections read, or this run's own job_runs row needs.
     capture_schema.ensure_capture_schema(conn)
-    review.ensure_review_schema(conn)
+    decisions.ensure_decisions_schema(conn)
     ensure_gardener_schema(conn)
     return conn
 

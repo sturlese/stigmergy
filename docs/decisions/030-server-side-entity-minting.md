@@ -1,6 +1,8 @@
 # ADR 030 — entity birth completes from all three interfaces
 
-**Status:** accepted · 2026-08-04 · supersedes ADR 029's "entity writes stay CLI" consequence,
+**Status:** accepted · 2026-08-04 · **amended 2026-08-16** (see "Amendment: the ledger writer
+moves below the doors" at the end — the CLI door, described here as ledger-less, now records the
+same row) · supersedes ADR 029's "entity writes stay CLI" consequence,
 which deferred exactly this decision to its own record ("web-native entity birth needs an
 authorship decision (operator identity vs App bot) that deserves its own ADR"). This is that ADR.
 Requested and argued before it was written; unblocked by steward resolution reaching the
@@ -143,3 +145,71 @@ the two doors is the defect class this decision exists to prevent.
   in `tests/test_architecture.py`, never a general license.
 - A revoked steward's approve authority on the deployed groups still moves at re-bake speed
   (steward resolution's own recorded trade); the fast lever remains the identity's token.
+
+
+## Amendment: the ledger writer moves below the doors (2026-08-16)
+
+**Status:** accepted · amends D2's attribution half. Nothing above is withdrawn; one gap it left
+open is closed.
+
+### What this record got wrong by omission
+
+D2 settles who may act at each door and how they are attributed. It says nothing about who
+*records* the act, and the answer turned out to be "two doors out of three". `review_decisions` is
+written by `server.review.record_decision`, and `stigmergy.entities` may not import
+`stigmergy.server` — an edge `tests/test_architecture.py` enforces and this record relies on. So
+`stigmergy-entities approve` minted, pushed, and wrote nothing to Postgres.
+
+That is not a tidiness problem, because two surfaces read the table as if it were complete: the
+admin console's Activity view and the weekly digest's governance section. Both under-reported
+identity approvals, silently, by exactly the CLI's share — and nobody reading either could tell
+"no CLI approvals happened" from "CLI approvals are not counted". An incompleteness a reader cannot
+see is worse than a documented absence.
+
+### The decision
+
+**The ledger moves to `stigmergy.capture.decisions`, below both `entities` and `server`.** That
+module now owns the table: its DDL, its one write, its one read, and the verdict vocabulary. All
+three doors record the same row. `server.review` re-exports `ensure_review_schema` and
+`record_decision` under the names eight entry points already used, because a table changing owner
+is not a reason for all of them to learn a new import.
+
+**No architecture edge is crossed to do it.** `entities` and `server` both already import
+`capture`, which is the bottom of the durable-state stack — the `entities` -> `server` edge this
+record depends on is untouched, and the architecture tests still enforce it in both directions.
+
+The CLI's `reject` records too. Refusing an identity is as much a governance decision as granting
+one, the console already recorded its own Reject for that reason, and recording only `approve`
+would leave "who decided this identity" answering from different tables depending on the verdict.
+
+**D2 is unchanged in substance**: `record_decision` carries no authorization and never has.
+Authorization stays per surface — a resolved MCP identity, an admin token, a steward's shell — and
+a permission check buried in the writer would be a fourth, invisible one none of the doors could
+state. Self-approval remains *enforced* on MCP and Slack and *attributed* on the console and the
+CLI, exactly as D2 says.
+
+### Alternatives, and why not
+
+- **A second writer inside the CLI**, duplicating the schema behind its own `--dsn`. Cheaper, and
+  it puts a second writer on an append-only governance table — the way two definitions of what a
+  decision is eventually appear.
+- **Accept the gap and document it**, making both reading surfaces say "server-side approvals".
+  Legitimate: the CLI is a host-local door for an operator who already holds the DSN and the
+  credentials, and its mints *are* attributable from git. Rejected because every future reader of
+  those two surfaces would have to carry the caveat, and a count that is complete needs no caveat
+  at all.
+
+### Consequences
+
+- `review_decisions` answers "who approved this identity" for every door. A CLI approval is now
+  attributable twice — its commit's author and its ledger row, carrying the same steward identity.
+- `extra` records which door decided (`{"door": "cli"}`), and for an approve the entity id and the
+  commit that landed. Additive, in the column ADR 030 already reserved for per-kind detail.
+- **The digest and the gardener stopped importing the server.** Both cron CLIs reached into
+  `server.review` for one DDL call, and `digest.sections` for two literals — which pulled the whole
+  git write stack (`librarian.gitcmd`/`gates`/`base_inputs`/`githubapp`) into every digest process
+  to count rows in one table. The declared transitive-reach exception for that is now empty, and
+  its test still runs, so a re-widening is visible on the first module.
+- A database no server has ever started against now gets the ledger table from the CLI's own
+  `_connect`, the same startup pattern every other entry point follows. Without it, `approve`
+  would mint, push, and then fail on the INSERT — after the irreversible half.

@@ -24,10 +24,11 @@ on every delivery, never only the one right after it was given — `processing.p
 """
 import subprocess
 
-from stigmergy.capture import queue, schema
+from stigmergy.capture import decisions, queue, schema
 from stigmergy.entities import cli as entities_cli
 from stigmergy.entities import generator
 from stigmergy.librarian import worker
+from stigmergy.review_kinds import KIND_ENTITY_PROPOSAL
 from stigmergy.server.service import BrainService
 from stigmergy.server.settings import Settings
 from tests.entities import conftest as fx
@@ -130,6 +131,31 @@ def test_full_circle_approve_requeue_refile_anchored_no_restart(rig, clean_queue
     row_after_approve = _row(clean_queue, ack["id"])
     assert row_after_approve["status"] == schema.QUEUED
 
+    # ── and the governance ledger saw it. ───────────────────────────────────────────────────────
+    # OLD BEHAVIOUR: this door wrote no `review_decisions` row, because `stigmergy.entities` may
+    # not import `stigmergy.server`, where the writer lived. So a CLI approval was invisible to the
+    # two surfaces that read this table as if it were complete — the console's Activity view and
+    # the digest's governance count — and neither could tell "no CLI approvals happened" from
+    # "CLI approvals are not counted" (issue #51). The writer moved BELOW both packages instead.
+    #
+    # Asserted HERE, on the one test that drives the real CLI against a real database and a real
+    # remote, rather than against a stub: the whole claim is that a row lands beside a push that
+    # actually happened.
+    with clean_queue.cursor() as cur:
+        cur.execute("SELECT item_kind, verdict, actor, extra FROM review_decisions "
+                    "WHERE item_id = %s", (str(ack["id"]),))
+        ledger = cur.fetchall()
+    assert len(ledger) == 1, "the CLI approve wrote no ledger row, or wrote more than one"
+    item_kind, verdict, actor, extra = ledger[0]
+    assert (item_kind, verdict) == (KIND_ENTITY_PROPOSAL, decisions.APPROVE)
+    # The same identity the commit is authored with — one approval, two records, one person.
+    assert actor == STEWARD_LABEL
+    assert extra["entity_id"] == canonical_id
+    assert extra["door"] == "cli", "the row does not say which door decided it"
+    assert extra["commit"] == subprocess.run(
+        ["git", "rev-parse", "main"], cwd=env.bare, capture_output=True, text=True,
+        check=True).stdout.strip(), "the recorded commit is not the one that landed on the remote"
+
     # ── phase 4: the SAME worker (no restart — `deps`/`rig` were built once, at the top of this
     # test), re-files the ORIGINATING capture, anchored to the newborn entity. This is what
     # actually exercises fetch-before-claim: `deps.repo` never saw the steward's push directly —
@@ -147,6 +173,43 @@ def test_full_circle_approve_requeue_refile_anchored_no_restart(rig, clean_queue
     final_row = next(r for r in view["submissions"] if r["id"] == ack["id"])
     assert final_row["reply"] == UNREGISTERED_NAME
     assert final_row["report"]["status"] == schema.FILED
+
+
+def test_a_cli_reject_is_recorded_in_the_ledger_too(rig, clean_queue, tmp_path):
+    """The other verdict on the same door. Recording only `approve` would close half the gap and
+    leave "who decided this identity" answering from different tables depending on the answer —
+    the admin console already records its own Reject for exactly that reason.
+
+    Driven through the real CLI against the real queue, like the approve above; the mint itself is
+    what a reject does NOT do, so no clone is involved.
+    """
+    env, deps = rig
+    _fix_preexisting_fixture_drift(env)
+
+    ack = support.submit(clean_queue, deps, MATERIAL)
+    worker.process_next(clean_queue, deps)                      # asks
+    _service(clean_queue, SUBMITTER, audiences=set()).reply(ack["id"], UNREGISTERED_NAME)
+    _, parked = worker.process_next(clean_queue, deps)          # parks in triage
+    assert parked.status == schema.TRIAGE, parked.report.get("summary")
+
+    rc = entities_cli.main([
+        "--repo", env.repo, "--dsn", _dsn(clean_queue),
+        "reject", str(ack["id"]), "--reason", "we already track this under Acme Corp",
+        "--by", STEWARD_LABEL])
+    assert rc == 0
+
+    with clean_queue.cursor() as cur:
+        cur.execute("SELECT item_kind, verdict, actor, notes, extra FROM review_decisions "
+                    "WHERE item_id = %s", (str(ack["id"]),))
+        ledger = cur.fetchall()
+    assert len(ledger) == 1
+    item_kind, verdict, actor, notes, extra = ledger[0]
+    assert (item_kind, verdict, actor) == (KIND_ENTITY_PROPOSAL, decisions.REJECT, STEWARD_LABEL)
+    assert notes == "we already track this under Acme Corp"
+    assert extra["door"] == "cli"
+    # And the capture itself really was rejected — the ledger row is a record OF something, not a
+    # substitute for it.
+    assert _row(clean_queue, ack["id"])["status"] == schema.REJECTED
 
 
 def _dsn(conn) -> str:
