@@ -18,8 +18,10 @@ import pytest
 
 from stigmergy.capture import dispositions
 from stigmergy.capture import schema as capture_schema
+from stigmergy.capture.errors import CaptureError
 from stigmergy.capture.evidence import MemoryEvidenceStore
 from stigmergy.entities import generator as entities_generator
+from stigmergy.entities import remote as entities_remote
 from stigmergy.entities.errors import EntityError
 from stigmergy.librarian import gitcmd
 from stigmergy.server import review
@@ -488,11 +490,58 @@ def test_review_decide_entity_proposal_approve_credential_missing_names_the_capa
     assert before == after
 
 
+def test_review_decide_entity_proposal_approve_refuses_a_secret_note_before_it_mints(env, conn):
+    """The one refusal shape this section's own header lists ("a secret in the note") and never
+    had a dedicated test: `test_review_decide_refuses_a_secret_in_a_note` exercises the
+    `parked-capture` × `reject` cell, where nothing mints and nothing is pushed. On THIS cell the
+    scan is a precondition of an irreversible act.
+
+    `mint_and_record_approval` states it as one: the note goes VERBATIM into an append-only table
+    that cannot be migrated afterwards, and the shared sequence scans nothing itself — "a caller
+    passing a NON-EMPTY note must already have run `_refuse_secret_note`". So the property is
+    ordering, not just refusal: the scan has to come BEFORE the commit is pushed, because a
+    credential that reaches `review_decisions` cannot be deleted from it and a page that reaches
+    the knowledge repo has been published to everyone who can clone it.
+
+    Every ref on the bare remote, not just `main` — the same posture as the categorical matrix.
+    The benign twin is not repeated here: `test_characterization_one_mcp_mint_writes_exactly_one_
+    ledger_row_carrying_the_note` mints with an ordinary note and asserts that note lands in the
+    row, which is exactly this gate's specificity, and `test_an_ordinary_note_is_not_refused` pins
+    the predicate's own.
+    """
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    service = make_service(env, conn, identity_name=STEWARD, audiences=None, evidence=evidence)
+    # The SHARED fixture, never a second literal — see `test_review_decide_refuses_a_secret_in_a_
+    # note` for why a locally-written secret-shaped string is its own problem.
+    secret_note = f"{adversarial_payloads.GITHUB_PAT} is the token, use it to redeploy"
+    before = all_refs(env)
+
+    with pytest.raises(review.ReviewError, match="likely secret"):
+        review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
+                             item_id=str(proposal_id), verdict="approve", notes=secret_note,
+                             name="Globex Robotics", entity_type="organization", requeue=True)
+
+    assert all_refs(env) == before, "nothing may be pushed once the note has been refused"
+    with conn.cursor() as cur:
+        cur.execute("SELECT notes FROM review_decisions WHERE item_id = %s", (str(proposal_id),))
+        assert cur.fetchall() == [], "and the refused note must never reach the append-only ledger"
+        cur.execute("SELECT status FROM capture_queue WHERE id = %s", (proposal_id,))
+        assert cur.fetchone()[0] == capture_schema.TRIAGE
+
+
 def test_review_decide_entity_proposal_approve_requeues_after_the_push(drift_free_env, conn):
-    """`requeue=True` sends the originating capture back to the librarian, and — the CLI's own
-    correctness property (`entities.cli`'s module docstring) — only AFTER the push has landed:
-    proven here by asserting BOTH the push landed and the row is `queued` again, from the ledger's
-    own extra column that names the commit that unblocked it."""
+    """`requeue=True` sends the originating capture back to the librarian: the response says
+    `requeued`, and the row really is `queued` again in the database rather than only in the
+    reply — the two END STATES, which is all this test pins.
+
+    It USED to claim it proved the ordering too, "from the ledger's own extra column that names the
+    commit that unblocked it". The body reads neither `review_decisions.extra` nor git, and both
+    assertions below are satisfied just as well by a requeue that ran BEFORE the mint. The ordering
+    property lives in `test_characterization_the_mcp_door_requeues_strictly_after_the_push`, which
+    observes the remote at the instant the requeue is entered; the name here is kept as-is because
+    the end states are worth pinning on their own and this is what every other suite cites."""
     env = drift_free_env
     evidence = MemoryEvidenceStore()
     proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
@@ -507,6 +556,271 @@ def test_review_decide_entity_proposal_approve_requeues_after_the_push(drift_fre
     with conn.cursor() as cur:
         cur.execute("SELECT status FROM capture_queue WHERE id = %s", (proposal_id,))
         assert cur.fetchone()[0] == capture_schema.QUEUED
+
+
+def test_review_decide_entity_proposal_approve_without_requeue_leaves_the_capture_in_triage(
+        drift_free_env, conn):
+    """The benign twin of the test above, on the door where the un-requeued path is the DEFAULT.
+
+    `review_decide`'s `requeue` defaults to False (the console's defaults to True, and has had this
+    twin since ADR 030: `tests/admin/test_service_pg.py::
+    test_entity_approve_requeue_false_leaves_the_capture_parked`), so this is the shape an ordinary
+    MCP or Slack approve takes — and nothing asserted the capture stays parked through it. A
+    requeue that fired unconditionally would leave every existing assertion on this door green
+    while re-filing a capture the steward deliberately left in triage, which is the state
+    `test_the_entity_proposal_ledger_records_the_canonical_id_too` says a second steward still sees
+    in `review_queue`.
+
+    The mint itself is asserted to have HAPPENED, so "still in triage" cannot be read as "the
+    approve fell over before it got there"."""
+    env = drift_free_env
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    service = make_service(env, conn, identity_name=STEWARD, audiences=None, evidence=evidence)
+
+    result = review.review_decide(
+        service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
+        verdict="approve", name="Globex Robotics", entity_type="organization")
+
+    assert result["minted"] is True and len(result["commit"]) == 40
+    assert result["requeued"] is False
+    with conn.cursor() as cur:
+        cur.execute("SELECT status, trace FROM capture_queue WHERE id = %s", (proposal_id,))
+        status, trace = cur.fetchone()
+    assert status == capture_schema.TRIAGE
+    assert [e["event"] for e in (trace or [])] == [], (
+        "an un-requeued approve leaves no disposition event on the row's own trace either")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# CHARACTERIZATION — the mint sequence's ORDER and its ledger row, pinned as they are TODAY.
+#
+# The test above asserts the two END STATES (a commit came back, the row is `queued` again). Both
+# of them are satisfied just as well by a requeue that ran FIRST: the note's `entity_id` is
+# `resolved_id`, known before the mint is attempted, so hoisting the requeue above
+# `mint_via_clone` costs nothing any current assertion would notice — only the `commit[:12]` in
+# the note text depends on the mint, and a reordering that also reshapes the note keeps every
+# green tick. The failure that reordering causes is invisible until a real run: the librarian
+# fetches a remote that does not carry the entity yet and parks the capture a SECOND time.
+#
+# Both tests below have a byte-for-byte twin on the console door
+# (`tests/admin/test_service_pg.py`, same names minus the door). Two doors run this sequence; a
+# property asserted on one and assumed on the other is the one that breaks silently.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+def test_characterization_the_mcp_door_requeues_strictly_after_the_push(drift_free_env, conn,
+                                                                        monkeypatch):
+    """Pins the ORDER: at the instant `dispositions.requeue` is entered, the bare remote's `main`
+    ALREADY points at the mint commit.
+
+    A spy, not a double — it records what git actually says and then delegates to the real
+    `requeue`. Real git, real Postgres, real disposition; the patch exists only because ordering
+    is unobservable from the end state, which is exactly why it is the property at risk.
+    """
+    env = drift_free_env
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    service = make_service(env, conn, identity_name=STEWARD, audiences=None, evidence=evidence)
+    real_requeue = dispositions.requeue
+    observed_heads = []
+
+    def spy(*args, **kwargs):
+        observed_heads.append(gitcmd.run("rev-parse", "main", cwd=env.bare).stdout.strip())
+        return real_requeue(*args, **kwargs)
+
+    monkeypatch.setattr(dispositions, "requeue", spy)
+    head_before = gitcmd.run("rev-parse", "main", cwd=env.bare).stdout.strip()
+
+    result = review.review_decide(
+        service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
+        verdict="approve", name="Globex Robotics", entity_type="organization", requeue=True)
+
+    assert observed_heads == [result["commit"]], (
+        "exactly ONE requeue, and the remote it ran against already carried the pushed commit — "
+        f"observed {observed_heads}, mint pushed {result['commit']}")
+    # Non-vacuity: the two candidate values are actually DIFFERENT, so the assertion above
+    # discriminates. Without this the test would still pass on a remote that never moved.
+    assert observed_heads[0] != head_before, (
+        "the probe cannot tell before from after — the mint did not move the remote")
+
+
+def test_characterization_one_mcp_mint_writes_exactly_one_ledger_row_carrying_the_note(
+        drift_free_env, conn):
+    """Pins the ledger WRITE COUNT and the full row shape this door produces.
+
+    Every existing ledger assertion on both doors reads with `fetchone()`, which a second,
+    duplicate `record_decision` would pass unnoticed — and `test_review_decide_records_append_only_
+    and_a_second_decision_does_not_overwrite` establishes that a duplicate would be a second ROW,
+    not an overwrite. `notes` is part of the shape and part of the asymmetry: this door carries the
+    steward's cleaned note into the row, the console door writes `''` (its twin pins that).
+    """
+    env = drift_free_env
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    service = make_service(env, conn, identity_name=STEWARD, audiences=None, evidence=evidence)
+
+    result = review.review_decide(
+        service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
+        verdict="approve", name="Globex Robotics", entity_type="organization",
+        notes="a second steward agrees", requeue=True)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT item_kind, item_id, verdict, actor, notes, extra FROM "
+                    "review_decisions WHERE item_id = %s", (str(proposal_id),))
+        rows = cur.fetchall()
+    assert len(rows) == 1, f"one mint, one governance row — got {len(rows)}"
+    assert rows[0] == (review.KIND_ENTITY_PROPOSAL, str(proposal_id), "approve", STEWARD,
+                       "a second steward agrees",
+                       {"entity_id": "globex-robotics", "commit": result["commit"]})
+
+
+def test_characterization_the_requeue_note_says_which_entity_and_which_commit_unblocked_the_row(
+        drift_free_env, conn):
+    """Pins the requeue NOTE — the operator-facing trace of why a capture came back, asserted
+    nowhere until now on either door.
+
+    `capture_queue.trace` is where a human looks when a row is `queued` again with no visible
+    reason, and this sentence is the only record that a mint is what put it there: the ledger row
+    lives in a different table, and the requeue itself writes no report (`dispositions.requeue`'s
+    own docstring). Dropping the note, or reducing it to "requeued", would keep every other
+    assertion on this lane green.
+
+    Asserted ONCE, on this door, deliberately: both doors emit it from the same
+    `mint_and_record_approval` (`tests/test_architecture.py::
+    test_the_governed_mint_door_has_exactly_one_call_site` is what keeps that true), so a second
+    copy of this assertion on the console would pin a second sentence that does not exist.
+
+    The exact text, not a substring: the entity id and the 12-char commit prefix are the two facts
+    that make the note actionable, and a formatting change that dropped either would still contain
+    the words."""
+    env = drift_free_env
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    service = make_service(env, conn, identity_name=STEWARD, audiences=None, evidence=evidence)
+
+    result = review.review_decide(
+        service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
+        verdict="approve", name="Globex Robotics", entity_type="organization", requeue=True)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT trace FROM capture_queue WHERE id = %s", (proposal_id,))
+        trace = cur.fetchone()[0] or []
+    assert [e["event"] for e in trace] == [capture_schema.EVENT_REQUEUED]
+    assert trace[0]["actor"] == STEWARD, "the steward who approved, not the librarian"
+    assert trace[0]["note"] == (
+        f"entity globex-robotics approved and pushed ({result['commit'][:12]})")
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# What the shared mint sequence does with an exception, and what its callers are allowed to assume
+# about the one they are NOT catching. Three tests, one per claim `mint_and_record_approval` and
+# `_mint_entity_proposal` make in prose and nothing else held.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+def test_the_capture_and_entity_exception_hierarchies_stay_disjoint():
+    """`_mint_entity_proposal`'s `try` covers the WHOLE shared sequence — the mint, the ledger row
+    and the requeue — and its docstring calls that "inert today", because the two steps it newly
+    covers raise `CaptureError`s and the two handlers catch `EntityError`s. That inertness is a
+    fact about two class hierarchies in two different packages, and nothing asserted it: re-parent
+    either root (a shared `StigmergyError` base is the obvious way it happens) and the review lane
+    silently starts translating a Postgres/disposition fault into a caller-facing `ReviewError`,
+    where it used to surface as the unanticipated fault it is. Both directions, because either
+    re-parenting closes the gap.
+
+    Costs nothing to run and fails loudly the day the assumption stops holding — which is the whole
+    point of pinning an assumption instead of trusting it."""
+    assert not issubclass(EntityError, CaptureError), (
+        "an `entities` exception became a `CaptureError` — `review_decide`'s callers now receive "
+        "it as a clean refusal, and `_mint_entity_proposal`'s translation is no longer the only "
+        "way one crosses the package boundary")
+    assert not issubclass(CaptureError, EntityError), (
+        "a `capture` exception became an `EntityError` — `_mint_entity_proposal`'s `except "
+        "EntityError` now swallows the ledger write and the requeue too, renaming a real fault "
+        "into a refusal the steward is told to act on")
+
+
+def test_mint_and_record_approval_lets_the_librarys_own_exception_out_untranslated(
+        env, conn, monkeypatch):
+    """The shared sequence raises `stigmergy.entities`' OWN class, unwrapped — the property the
+    console depends on and the one this refactor could most easily have destroyed by being helpful.
+
+    `admin.service.entity_approve` catches nothing around this call on purpose: the library's class
+    name must reach `_mutate`, which records it in `admin_actions` before renaming it to
+    `AdminRefused`. A translation inside `mint_and_record_approval` would rename what that
+    bookkeeping captures precisely, and every existing test on both doors would stay green, because
+    both doors' *callers* only ever see the translated class.
+
+    The mint is faulted through `entities_remote.mint_via_clone` as a module attribute — the seam
+    `mint_and_record_approval`'s own docstring promises stays patchable. Nothing else is faked:
+    real Postgres, a real parked row, so the ledger assertion below means something."""
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+
+    def boom(*_a, **_k):
+        raise EntityError("the registry and the pages already disagree")
+
+    monkeypatch.setattr(entities_remote, "mint_via_clone", boom)
+
+    with pytest.raises(EntityError) as caught:
+        review.mint_and_record_approval(
+            conn, repo_url=env.bare, submission_id=proposal_id, entity_id="globex-robotics",
+            name="Globex Robotics", entity_type="organization", aliases=[], role="",
+            actor=STEWARD, requeue=True)
+
+    assert type(caught.value) is EntityError, (
+        f"the library's own class, not a subclass or a wrapper — got {type(caught.value).__name__}")
+    assert not isinstance(caught.value, CaptureError), (
+        "translated into this package's vocabulary somewhere inside the shared sequence — the "
+        "console's `admin_actions` row would record the wrong class name")
+    # The sequence is ordered, so a mint that never returned wrote neither of the two steps after
+    # it: no governance row, and the capture was not requeued out from under a mint that failed.
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM review_decisions WHERE item_id = %s", (str(proposal_id),))
+        assert cur.fetchone()[0] == 0, "a failed mint must record nothing in the governance ledger"
+        cur.execute("SELECT status FROM capture_queue WHERE id = %s", (proposal_id,))
+        assert cur.fetchone()[0] == capture_schema.TRIAGE, "and must not requeue the capture"
+
+
+def test_the_same_mint_fault_reaches_this_door_as_a_review_error_and_slack_as_an_error_dict(
+        env, conn, monkeypatch):
+    """The specificity twin of the test above: the SAME fault, through the door that translates.
+
+    Together the two pin the per-door asymmetry the refactor deliberately kept — untranslated out
+    of `mint_and_record_approval`, `ReviewError` out of `review_decide`. This half is what
+    `stigmergy.slack` depends on and cannot check for itself: it is barred from importing
+    `stigmergy.entities.errors`, so an `EntityError` that escaped `review_decide` would reach the
+    Slack handler as an unanticipated fault whose text must never be shown — the steward would get
+    the generic failure sentence instead of "the registry and the pages already disagree", for a
+    refusal they could have acted on.
+
+    `review_decide_safe` is asserted on the same fault rather than trusted from `review_decide`'s
+    result: it is the function Slack actually calls, and its `except` clause names `CaptureError`,
+    which only catches this because the translation happened upstream."""
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    service = make_service(env, conn, identity_name=STEWARD, audiences=None, evidence=evidence)
+
+    def boom(*_a, **_k):
+        raise EntityError("the registry and the pages already disagree")
+
+    monkeypatch.setattr(entities_remote, "mint_via_clone", boom)
+
+    with pytest.raises(review.ReviewError) as caught:
+        review.review_decide(service, item_kind=review.KIND_ENTITY_PROPOSAL,
+                             item_id=str(proposal_id), verdict="approve",
+                             name="Globex Robotics", entity_type="organization")
+    assert str(caught.value) == "the registry and the pages already disagree", (
+        "the library's sentence reaches the steward verbatim — the translation changes the CLASS, "
+        "never the text")
+
+    safe = review.review_decide_safe(
+        service, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(proposal_id),
+        verdict="approve", name="Globex Robotics", entity_type="organization")
+    assert safe == {"error": "the registry and the pages already disagree"}
 
 
 # ── the remaining (kind, verdict) pairs, the ones needing real rows ────────────────────────────

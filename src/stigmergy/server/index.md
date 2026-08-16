@@ -21,7 +21,7 @@ path, authenticated by HMAC instead.
 |---|---|
 | `service.py` | `BrainService` and `_call`/`call_async`, the ONE rate-limit + audit seam every tool rides — a tool off this seam is invisible to the limiter and the audit trail. `build_service` (stdio) and `open_scoped_resources` (the shared conn+embedder build every transport wires through). Also: the audit shapers, `check_arg_length`/`MAX_ARG_CHARS`, `fetch_page_raw` (the one fetch+ACL+sanitize base), `scoped_entities` (the one entity-existence rule), the `neutralize_fence`/`fence` and `SLACK_DOOR` re-exports, `UnavailableEmbedder` |
 | `mcp_server.py` | The FastMCP tool closures BOTH transports share — `search_brain` · `read_page` · `list_entities` · `describe_entity` · `brain_submit` · `brain_submissions` · `review_queue` · `review_decide` · `brain_reply` (mounted under `capture_schema.REPLY_TOOL`, never the function's own name) · `ask` — plus the `stigmergy-server` entry point and `_dsn_location`. Tool docstrings are the client-visible contract: leave them byte-identical unless the contract changes |
-| `review.py` | The review lane: `review_queue`/`review_decide`/`review_decide_safe`, the shared base `_collect_open_items`, the authorization predicates (`_is_steward`, `_guard_*`), the append-only `review_decisions` ledger, the governed mint seam (`_mint_entity_proposal` → `entities.remote.mint_via_clone`, reached as a module attribute), and the doorbell's read side (`items_for_doorbell`, `load_stewards`, `resolve_stewards_for_scope`, `record_undeliverable`) |
+| `review.py` | The review lane: `review_queue`/`review_decide`/`review_decide_safe`, the shared base `_collect_open_items`, the authorization predicates (`_is_steward`, `_guard_*`), the append-only `review_decisions` ledger, the governed mint sequence (`mint_and_record_approval` → `entities.remote.mint_via_clone`, reached as a module attribute — the ONE function both SERVER-SIDE minting doors run, this one through `_mint_entity_proposal`'s translation; `stigmergy-entities approve` is a third door that mints outside it and writes no ledger row), and the doorbell's read side (`items_for_doorbell`, `load_stewards`, `resolve_stewards_for_scope`, `record_undeliverable`) |
 | `transport_http.py` | The streamable-HTTP transport: `_BearerAuthMiddleware` (raw ASGI), `_ScopedServiceProxy` + the `_current_service` contextvar, the request-body cap, the DNS-rebinding allowlist (`$STIGMERGY_PUBLIC_HOST`), `build_http_app`/`serve_http`, `token_store_from_env`, the webhook mount, and the admin console's ASGI branch |
 | `webhook.py` | `POST /webhook/github`: HMAC over the RAW body, then a two-phase incremental `pages_index` upsert (`process_push`), split-chain supersession propagation included. Reuses `corpus.page_row` and `store.upsert_pages`/`delete_pages` — never write a second `pages_index` path |
 | `identity.py` | `resolve_audiences` (the file-backed resolver both transports use) and the per-request half: `hash_token` · `load_token_store` · `resolve_email_for_token`. Fail-closed on every step |
@@ -40,7 +40,7 @@ path, authenticated by HMAC instead.
 |---|---|
 | `answer` | `service.BrainService` (`search`, `read_page`, `describe_entity`, `fetch_page_raw`, `scoped_entities`), `service.fence`/`neutralize_fence` |
 | `slack` | `service.open_scoped_resources`/`BrainService`/`SLACK_DOOR`, `identity.resolve_audiences`, `audit`, `ratelimit`, `settings.Settings`, `errors`, `review` (the doorbell reads, `review_decide_safe`) |
-| `admin` | `review` (`record_decision` and the review reads), `pilot_report`, `identity.hash_token`, `webhook.JOB_NAME`, `errors` |
+| `admin` | `review` (`record_decision`, `mint_and_record_approval`, `ensure_review_schema` and the review reads), `pilot_report`, `identity.hash_token`, `webhook.JOB_NAME`, `errors` |
 | `gardener` | `errors`, `acl.visible`/`all_visible`, `review` |
 | `digest` | `errors`, `acl.visible`, `review` (it reads the decisions ledger directly) |
 
@@ -72,10 +72,25 @@ path, authenticated by HMAC instead.
   door-gated (`SLACK_DOOR`).
 - `review_decide` is Postgres-only for `reject` and every `parked-capture` verdict; the ONE git
   path is an entity-proposal `approve`, through `_mint_entity_proposal` and nothing else.
-- An `entities` exception type never leaves this package: `review.py` translates it into
-  `ReviewError` (or `CapabilityUnavailableError`) at the raise site — the pre-mint guard
-  `situations.require_situation` exactly as much as the mint. `stigmergy.slack` may not import
-  `stigmergy.entities`, so anything untranslated reaches a caller that can only catch it as an
+- `mint_and_record_approval` is the ONE mint sequence for both SERVER-SIDE doors — the review lane
+  (MCP, Slack) through `_mint_entity_proposal`, the admin console through
+  `admin.service.entity_approve`: mint, then the ledger row, then — only if asked — the requeue,
+  which must never precede the push. A THIRD door mints outside it: `stigmergy-entities approve`
+  runs its own copy of the same order from the steward's clone and writes NO `review_decisions`
+  row, because `stigmergy.entities` cannot import this package — the ledger answers "who approved
+  this identity" for the two server-side doors only. `mint_and_record_approval` raises `entities`
+  exceptions UNTRANSLATED because each door maps them differently (here into this package's
+  vocabulary, there into `admin_actions`' recorded class name), and it stops short of
+  `situations.require_situation`, which each door runs at its own point in its own validation
+  order.
+- An `entities` exception type never leaves this package through `review_decide` or
+  `review_decide_safe`: `review.py` translates it into `ReviewError` (or
+  `CapabilityUnavailableError`) at the raise site — the pre-mint guard
+  `situations.require_situation` exactly as much as the mint. The ONE exception is
+  `mint_and_record_approval`, left untranslated on purpose for the single caller
+  (`admin.service`) whose `admin_actions` bookkeeping records the library's own class name.
+  `stigmergy.slack` may not import `stigmergy.entities`, which is why Slack must reach the mint
+  only through `review_decide`/`review_decide_safe`: anything untranslated would reach it as an
   unanticipated fault whose text it must not show.
 - An `entity-proposal` item carries the unresolved identity in every shape `situations` emits it:
   `subject`, one display string joining several names with `", "`; `subjects`, the per-name list a

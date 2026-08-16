@@ -110,18 +110,20 @@ gateway's own sentence (status code, never the token, never an echoed body) show
   control characters out of everything it renders, so the two forms can still differ in the bytes
   of a ragged name), type (the closed list, shipped from
   `/admin/api/meta` so the page never hardcodes a second copy of it), optional aliases/role, a
-  pre-checked requeue box. Approve mints through the same server-driven door the review lane
-  (MCP, Slack) walks (`entities.remote.mint_via_clone` -> `entities.mint.mint`, ONE commit,
-  authored by the librarian App with an `Approved-by:` trailer naming the actor) — the CLI shares
-  the same `entities.mint.mint` discipline but drives it from the steward's own clone, never
-  through `entities.remote` — and records the decision in BOTH
+  pre-checked requeue box. Approve runs the same mint sequence the review lane (MCP, Slack) runs —
+  literally the same function, `server.review.mint_and_record_approval`: mint, ledger row, then the
+  requeue, which never precedes the push (`entities.remote.mint_via_clone` ->
+  `entities.mint.mint`, ONE commit, authored by the librarian App with an `Approved-by:` trailer
+  naming the actor) — the CLI shares the same `entities.mint.mint` discipline but drives it from
+  the steward's own clone, never through `entities.remote` — and records the decision in BOTH
   ledgers — `admin_actions` (this console's own bookkeeping) and the append-only
-  `review_decisions` (ADR 030, superseding ADR 029's "writes stay CLI"). The console mints under
-  the admin token with the actor as ATTRIBUTION, exactly like every other console mutation and
-  like the CLI it replaces — MCP and Slack instead enforce a resolved identity's steward status
-  and refuse self-approval; the console (like the CLI) does neither, because the shared admin
-  credential cannot back a second-human rule. Reject is not duplicated here: the same row is
-  reachable, and rejectable, from the Queue tab.
+  `review_decisions` (ADR 030, superseding ADR 029's "writes stay CLI"); the console form has no
+  note field, so its ledger row's note is empty where the review lane's carries the steward's.
+  The console mints under the admin token with the actor as ATTRIBUTION, exactly like every other
+  console mutation and like the CLI it replaces — MCP and Slack instead enforce a resolved
+  identity's steward status and refuse self-approval; the console (like the CLI) does neither,
+  because the shared admin credential cannot back a second-human rule. Reject is not duplicated
+  here: the same row is reachable, and rejectable, from the Queue tab.
 - **Activity** — the pilot-report numbers (answer shape, latency percentiles), per-identity/tool
   audit aggregates, the real `ask` questions (golden-set quarry), rate-limit refusals, and the
   console's own action log.
@@ -152,8 +154,11 @@ growing a button of its own, and that path checks whether the row is an entity s
 records the decision when it is. Without that, "who decided this identity" answered from one table
 for approve and a different one for reject, on the one door that has both. Alongside their
 `admin_actions` row both record into `review_decisions` — the same append-only governance ledger
-MCP's `review_decide` and Slack's mint modal write into — so "who approved this identity" answers from
-one table regardless of which door it came through (ADR 030). The `review_decisions` write and
+MCP's `review_decide` and Slack's mint modal write into — so "who approved this identity" answers
+from one table regardless of which SERVER-SIDE door it came through (ADR 030). The door that
+answer misses is `stigmergy-entities approve`: it mints from the steward's own clone and writes no
+`review_decisions` row at all, because `stigmergy.entities` cannot import `stigmergy.server`. The
+`review_decisions` write and
 the git push it follows happen inside the SAME `_mutate`-wrapped attempt as the `admin_actions`
 row, not before it: a refusal anywhere in the mint leaves neither ledger touched.
 
