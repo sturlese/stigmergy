@@ -66,6 +66,12 @@ def show_it_here_success(page_title: str, excerpt: str) -> str:
     return f"📄 *{page_title}*\n\n{excerpt}"
 
 
+def show_it_here_fallback(page_title: str) -> str:
+    """The plain-text `text=` companion of `show_it_here_success` — the notification line, and all
+    a client that renders no blocks shows."""
+    return f"📄 {page_title}"
+
+
 def show_it_here_refusal(path: str) -> str:
     """The exact string `read_page` returns for both a nonexistent and an out-of-scope path —
     reused, not rephrased: two different sentences would make this affordance an oracle for which
@@ -119,6 +125,17 @@ def filed(*, page_path: str, commit: str, anchor: str, source_page: str = "") ->
             "up automatically tonight, not right away.")
 
 
+def filed_fallback(*, page_path: str) -> str:
+    """The `text=` companion of `filed`'s card: the notification line for a filed capture."""
+    return f"filed: {page_path}"
+
+
+def report_fallback(status: str) -> str:
+    """The `text=` companion of every other reported status — the status word, then a noun for
+    what happened, since the sentence itself is in the card."""
+    return f"{status}: capture update"
+
+
 NEEDS_INPUT_INSTRUCTION = "Just reply in this thread with your answer."
 
 
@@ -168,6 +185,16 @@ def doorbell_entity_proposal(*, item_id, submitter: str, name: str) -> str:
             f"registered resolves to it.\n\n"
             f"`stigmergy-entities show {item_id}` for the details and the exact command to "
             f"approve or reject it.")
+
+
+# The `text=` companion of each doorbell card: the DM's notification line, which must name the
+# item without carrying any of the material the card itself is deliberately terse about.
+def doorbell_parked_capture_fallback(*, item_id) -> str:
+    return f"parked capture #{item_id} needs you"
+
+
+def doorbell_entity_proposal_fallback(*, item_id) -> str:
+    return f"entity proposal #{item_id} needs a decision"
 
 
 # Read cold, later, by an operator debugging why a doorbell never rang: name WHY, and what could
@@ -234,11 +261,13 @@ def entity_mint_several_unresolved(*, names: list[str]) -> str:
             f"others stay unresolved on this capture until each gets its own decision.")
 
 
+def decision_recorded(*, verdict: str, kind: str, item_id: str, actor: str) -> str:
+    """The confirmation for a decision `review_decide` composed no `message` of its own for."""
+    return f"recorded: {verdict} on {kind} #{item_id} — {actor}"
+
+
 def entity_minted(*, entity_id: str, name: str, commit: str, requeued: bool) -> str:
-    """A minted approve's own confirmation — `review._decide_entity_proposal` composes no
-    `message` key for a mint, so the generic fallback would name neither the entity nor the
-    commit. Callers pass the full sha; truncated to the short form here — a steward reads a
-    commit to recognize it, never to paste it somewhere exact."""
+    """Callers pass the full sha; truncated to the short form here."""
     requeue_line = ("The originating capture was requeued — the librarian will file it against "
                     "this entity next." if requeued else
                     "The originating capture stays parked, as asked — requeue it by hand when "

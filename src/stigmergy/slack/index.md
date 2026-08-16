@@ -13,7 +13,7 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 | `app.py` | `stigmergy-slack`'s entry point: Bolt async app, Socket Mode, event registration, `acquire_singleton_lock`, and the poller and doorbell as two background tasks. Read it first when tracing an event; only it and `bolt_gateway.py` may import `slack_bolt`/`slack_sdk` |
 | `identity.py` | Slack profile email -> `ops/identities.json` via `resolve_audiences`; `is_ignorable_event`; `is_configured_workspace`; `UsersInfoCache`; the five-way `IdentityResult` |
 | `channels.py` | `ops/slack-channels.json` — a channel's audience scope, empty-set default for anything unlisted |
-| `context.py` | `SlackContext` (process-wide conn, embedder, rate limiter, audit, evidence, cache, link resolver, "Show it here" tokens), `build_service`, and the two seams `decline` and `post_or_log` |
+| `context.py` | `SlackContext` (process-wide conn, embedder, rate limiter, audit, evidence, cache, link resolver, "Show it here" tokens), `resolve_slack_identity`, `build_service`, and the two seams `decline` and `post_or_log` |
 | `mention.py` | `@brain <question>` and DMs: placeholder, channel/DM scope split, retrieval-set comparison, edit-retry-then-fallback |
 | `capture.py` | the 🧠 gesture: public channels only, verbatim thread material, provenance hints, reserve-then-fill dedup, progress-reaction lifecycle (`mark_in_progress`/`finish_progress`, driven from `app.py`) |
 | `replies.py` | the submitter's ask-back reply, and the "Show it here" click |
@@ -30,9 +30,11 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 
 ## Reuse
 
-- `identity.resolve_slack_identity` — the one identity call, with five outcomes (`Ignored`,
-  `ForeignTeam`, `TransientFailure`, `NoAccess`, `Resolved`). Every one but `Resolved` is
-  fail-closed; no `BrainService` is built on those paths. `NoAccess` covers all three
+- `context.SlackContext.resolve_slack_identity` — the one identity call every handler makes; it
+  delegates to `identity.resolve_slack_identity` with the identities path and the CONFIGURED
+  workspace read off `ctx.settings`, so a handler supplies only the EVENT's own team id. Five
+  outcomes (`Ignored`, `ForeignTeam`, `TransientFailure`, `NoAccess`, `Resolved`). Every one but
+  `Resolved` is fail-closed; no `BrainService` is built on those paths. `NoAccess` covers all three
   no-identity reasons at once so a prober cannot map `ops/identities.json` by comparing replies.
 - `context.SlackContext.decline` — the one way an identity refusal is told to someone.
 - `context.SlackContext.post_or_log` — the one seam for non-critical sends: post or log, never

@@ -38,7 +38,10 @@ _DEDUP_KEY_NAME = "slack_submissions_dedup_key"
 # The column list in the exact order `pg_get_constraintdef` renders `UNIQUE (a, b, c)` — the DDL
 # and the migration's skip check must agree on what today's definition string is.
 _DEDUP_KEY_COLUMNS = ("team_id", "channel_id", "thread_ts", "slack_user_id")
-_DEDUP_KEY_DEF = f"UNIQUE ({', '.join(_DEDUP_KEY_COLUMNS)})"
+_DEDUP_KEY_COLUMN_LIST = ", ".join(_DEDUP_KEY_COLUMNS)
+_DEDUP_KEY_DEF = f"UNIQUE ({_DEDUP_KEY_COLUMN_LIST})"
+# The same columns qualified for `_COLLAPSE_PLAN_SELECT`'s `slack_submissions s` alias.
+_DEDUP_KEY_COLUMN_LIST_S = ", ".join(f"s.{column}" for column in _DEDUP_KEY_COLUMNS)
 
 _DDL = f"""
 CREATE TABLE IF NOT EXISTS slack_submissions (
@@ -95,7 +98,7 @@ WHERE c.conrelid = 'slack_submissions'::regclass
 # `needs_input` row. `IS TRUE` ranks NULL and FALSE alike.
 _COLLAPSE_PLAN_SELECT = f"""
 SELECT s.id, s.submission_id, ROW_NUMBER() OVER (
-    PARTITION BY s.team_id, s.channel_id, s.thread_ts, s.slack_user_id
+    PARTITION BY {_DEDUP_KEY_COLUMN_LIST_S}
     ORDER BY (s.submission_id IS NOT NULL) DESC,
              (q.status = '{capture_schema.NEEDS_INPUT}') IS TRUE DESC,
              s.created_at DESC, s.id DESC
@@ -146,7 +149,7 @@ BEGIN
 
         ALTER TABLE slack_submissions
             ADD CONSTRAINT {_DEDUP_KEY_NAME}
-            UNIQUE (team_id, channel_id, thread_ts, slack_user_id);
+            {_DEDUP_KEY_DEF};
     END IF;
 END $$
 """
@@ -209,12 +212,12 @@ def ensure_write_path_schema(conn) -> None:
     ensure_slack_schema(conn)
 
 
-_RESERVE = """
+_RESERVE = f"""
 INSERT INTO slack_submissions (team_id, channel_id, message_ts, thread_ts, slack_user_id,
                                submitted_by)
 VALUES (%(team_id)s, %(channel_id)s, %(message_ts)s, %(thread_ts)s, %(slack_user_id)s,
         %(submitted_by)s)
-ON CONFLICT (team_id, channel_id, thread_ts, slack_user_id) DO NOTHING
+ON CONFLICT ({_DEDUP_KEY_COLUMN_LIST}) DO NOTHING
 RETURNING id
 """
 

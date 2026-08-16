@@ -397,12 +397,12 @@ def test_an_unexpected_exception_inside_a_listener_never_escapes_it(indexed, cle
     app = build_bolt_app(ctx)
     listener = _listener(app, "on_reaction_added")
 
-    from stigmergy.slack import app as app_mod
+    from stigmergy.slack import context as context_mod
 
     async def _boom(*_a, **_kw):
         raise RuntimeError("something nobody anticipated")
 
-    monkeypatch.setattr(app_mod, "resolve_slack_identity", _boom)
+    monkeypatch.setattr(context_mod, "resolve_slack_identity", _boom)
 
     event = {"reaction": "brain", "user": "U_ANA", "team": TEAM_ID,
              "item": {"channel": FINANCE_CHANNEL, "ts": "1.1"}}

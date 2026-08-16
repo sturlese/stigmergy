@@ -582,7 +582,7 @@ def _mint_view(names, prefill) -> dict:
     renderer's own `name_prefill is None` fallback, which is the duplicate of the rule this
     consolidation exists to remove — and would keep passing after the real caller stopped using
     it."""
-    return render.render_entity_mint_modal(trigger_id="T1", private_metadata="{}",
+    return render.render_entity_mint_modal(private_metadata="{}",
                                            unresolved_names=names, name_prefill=prefill)
 
 
@@ -654,7 +654,7 @@ def test_no_names_at_all_prefills_nothing_and_explains_nothing():
     assert _sections(view) == []
     # Both defaults together are what an un-updated caller hits: no names, no decision. It must
     # still open, and it must still offer nothing.
-    bare = render.render_entity_mint_modal(trigger_id="T1", private_metadata="{}")
+    bare = render.render_entity_mint_modal(private_metadata="{}")
     assert "initial_value" not in _name_element(bare)
     assert _sections(bare) == []
 
@@ -692,7 +692,7 @@ def test_the_renderer_obeys_a_prefill_that_contradicts_the_names_and_never_re_de
     caller said no default is safe. If this test ever fails, the rule has grown a second home in
     this module; if it can no longer be written, the renderer started deciding again."""
     obeys_a_prefill = render.render_entity_mint_modal(
-        trigger_id="T1", private_metadata="{}", name_prefill="X",
+        private_metadata="{}", name_prefill="X",
         unresolved_names=["A", "B"])
 
     assert _name_element(obeys_a_prefill)["initial_value"] == "X", (
@@ -702,7 +702,7 @@ def test_the_renderer_obeys_a_prefill_that_contradicts_the_names_and_never_re_de
         "copy must not fire beside a filled field")
 
     obeys_an_empty_decision = render.render_entity_mint_modal(
-        trigger_id="T1", private_metadata="{}", name_prefill="",
+        private_metadata="{}", name_prefill="",
         unresolved_names=["Solo"])
 
     assert "initial_value" not in _name_element(obeys_an_empty_decision), (

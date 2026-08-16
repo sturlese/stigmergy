@@ -27,9 +27,14 @@ def _needs_input_prose(report: dict) -> str:
     return summary[:-len(suffix)] if invocation and summary.endswith(suffix) else summary
 
 
-def _blocks_for(status: str, report: dict, result_ref: str) -> tuple[list[dict], str]:
-    """`(blocks, plain_text_fallback)` for one reportable status; `needs_input` is the caller's —
-    it needs the row's `slack_user_id` for its @-mention."""
+def _blocks_for(status: str, report: dict, result_ref: str, *,
+                slack_user_id: str) -> tuple[list[dict], str]:
+    """`(blocks, plain_text_fallback)` for one reportable status. `slack_user_id` is the row's own
+    reactor: `needs_input` @-mentions them, since the thread may have other participants."""
+    if status == NEEDS_INPUT:
+        prose = _needs_input_prose(report)
+        return (render.render_needs_input(situation_prose=prose, slack_user_id=slack_user_id),
+                copy.needs_input_body(prose, slack_user_id=slack_user_id))
     if status == FILED:
         page_path = report.get("page_path", "") or result_ref
         commit = report.get("commit", "")
@@ -39,10 +44,10 @@ def _blocks_for(status: str, report: dict, result_ref: str) -> tuple[list[dict],
         source_page = (report.get("source_pages") or [""])[0]
         blocks = render.render_filed(page_path=page_path, commit=commit, anchor=anchor,
                                      source_page=source_page)
-        return blocks, f"filed: {page_path}"
+        return blocks, copy.filed_fallback(page_path=page_path)
     # triage / rejected / resolved / failed: reuse the report's own sentence, bold-prefixed.
     blocks = render.render_generic_report(status, report.get("summary", ""))
-    return blocks, f"{status}: capture update"
+    return blocks, copy.report_fallback(status)
 
 
 async def poll_once(ctx) -> int:
@@ -53,13 +58,8 @@ async def poll_once(ctx) -> int:
         status = row["status"]
         report = row["report"] or {}
         try:
-            if status == NEEDS_INPUT:
-                prose = _needs_input_prose(report)
-                blocks = render.render_needs_input(situation_prose=prose,
-                                                    slack_user_id=row["slack_user_id"])
-                text = copy.needs_input_body(prose, slack_user_id=row["slack_user_id"])
-            else:
-                blocks, text = _blocks_for(status, report, row["result_ref"] or "")
+            blocks, text = _blocks_for(status, report, row["result_ref"] or "",
+                                       slack_user_id=row["slack_user_id"])
             await ctx.gateway.chat_post_message(row["channel_id"], blocks=blocks, text=text,
                                                 thread_ts=row["thread_ts"])
         except SlackApiError:
