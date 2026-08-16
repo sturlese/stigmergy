@@ -664,7 +664,10 @@ export async function entityDetailView(host, id) {
 // per-name list, is listed for the steward to pick from. The Slack mint modal obeys the same
 // decided value, so neither door can disagree about WHEN a default is safe. The offered STRING
 // can still differ: this console strips control characters out of what it renders and Slack does
-// not, so a ragged name reaches the two forms with different bytes (issue #46).
+// not, so a ragged name reaches the two forms with different bytes. Neither can mint one:
+// `entities.birth` refuses C0/C1 for every door, so the value this form submits — already
+// stripped, and therefore exactly what the steward read — mints, while Slack's raw one is
+// refused by name.
 async function entityApproveFlow(row) {
   const names = (row.subjects || []).map((n) => String(n)).filter((n) => n.trim());
   const proposed = String(row.mint_name_prefill || "");

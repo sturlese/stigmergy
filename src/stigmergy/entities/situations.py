@@ -87,7 +87,10 @@ def mint_name_prefill(row: dict) -> str:
     What this makes identical across the doors is the DECISION — whether a default is offered at
     all, and which name it is. Not the bytes: each transport still sanitizes what it renders on its
     own terms (the admin console strips control characters, Slack and MCP do not), so a ragged name
-    can reach two forms differently. That gap is open (issue #46) and is not closed here.
+    reaches two forms differently. What that can no longer do is mint anything:
+    `birth._refuse_control_characters` refuses C0/C1 at the terminal gate every door passes
+    through, so a Slack steward accepting a ragged default gets a refusal naming the code point
+    rather than a page whose filename nobody can type.
 
     Deliberately NOT tidied on the way out: `subjects_of` returns the plural key's entries
     unstripped, and nothing de-duplicates them, so `["  Jack  "]` prefills with its padding and

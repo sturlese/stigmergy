@@ -46,8 +46,13 @@ plus an `Approved-by:` trailer naming the human.
   form (`admin/static/assets/views.js`) — OBEY it: they render it, and list `subjects` when it is
   `""`. Neither counts the names again, so no door can disagree about WHEN a default is safe.
   The offered STRING can still differ between them: sanitization is per transport — the console
-  strips control characters out of what it renders, Slack and MCP do not — a known gap (issue #46)
-  this rule does not close. Submitting either door mints one entity as one signed commit, so a
+  strips control characters out of what it renders, Slack and MCP do not. What that can no longer
+  cause is a garbled entity: `birth._refuse_control_characters` REFUSES C0/C1 in a name, an alias
+  and a role at the terminal gate every door passes through, so the worst a ragged prefill produces
+  is a refusal naming the code point. The console's stripped default mints; Slack's raw one is
+  refused. Both are honest — on each door the steward mints exactly the name they READ — which is
+  why the remaining difference is in the outcome and not in what anyone was shown. Submitting
+  either door mints one entity as one signed commit, so a
   surface that re-derives the rule is a second policy that can drift into minting a name nobody
   chose.
   `cli._print_next_commands` looks similar and is not this: its one-vs-several test decides whether

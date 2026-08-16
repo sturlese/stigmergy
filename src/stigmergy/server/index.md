@@ -102,7 +102,8 @@ path, authenticated by HMAC instead.
   surface re-deriving the rule from `subjects` is a second policy that can drift. What the shared
   answer settles is WHEN a default is offered and WHICH name it is — the offered string itself can
   still differ per transport, since this item and the Slack modal carry names unsanitized while the
-  admin console strips control characters out of what it renders (issue #46).
+  admin console strips control characters out of what it renders. That difference no longer reaches
+  the repo: `entities.birth` refuses C0/C1 at the one gate every door passes through.
 - Steward resolution fails closed: `_is_steward` returns False without a checkout or a baked
   snapshot; `load_stewards` reads `origin/main`'s fresh tip wherever a checkout exists, and the
   same read decides both doorbell delivery and decision authority.

@@ -399,7 +399,9 @@ def render_entity_mint_modal(*, trigger_id: str, private_metadata: str,
     What the shared decision guarantees is that this door and the console's Approve form offer a
     default in the same cases and name the same name. Not the same bytes: this modal renders what
     the item carries, while the console strips control characters out of everything it renders, so
-    a ragged name still reaches the two forms differently (issue #46).
+    a ragged name still reaches the two forms differently. It can no longer MINT differently in
+    silence — `entities.birth` refuses C0/C1 for every door — so accepting a ragged default here
+    costs a refusal naming the code point, not a garbled entity.
 
     `entity_type` is a `static_select` over the closed list, so a submission can never carry a
     type `entities.mint` would refuse. `aliases` is ONE comma-separated field
