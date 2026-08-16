@@ -1331,6 +1331,11 @@ _ENTITIES_LIBRARY_ALLOWED_PREFIXES = (
 # seam, mirroring `capture.cli`'s own exception.
 _ENTITIES_CLI_EXTRA_ALLOWED_PREFIXES = _ENTITIES_LIBRARY_ALLOWED_PREFIXES + (
     "stigmergy.index",
+    # `KIND_ENTITY_PROPOSAL`, for the `review_decisions` row `approve`/`reject` now write through
+    # `capture.decisions`. The root module exists so packages that may not import each other can
+    # still agree on these strings, and this is exactly that case: the CLI writes the same ledger
+    # `server.review` does without importing it.
+    "stigmergy.review_kinds",
 )
 
 
@@ -2092,7 +2097,10 @@ _GARDENER_CLI_EXTRA_ALLOWED_PREFIXES = _GARDENER_ALLOWED_PREFIXES + (
     "stigmergy.index.store",
     "stigmergy.slack.bolt_gateway",
     "stigmergy.librarian.config",
-    "stigmergy.server.review",
+    # `ensure_decisions_schema`. This was `stigmergy.server.review` until the ledger moved down to
+    # `capture.decisions`: a cron CLI reached into the SERVER for one DDL call, which is a
+    # dependency no scheduled job should have had.
+    "stigmergy.capture.decisions",
 )
 
 
@@ -2311,9 +2319,15 @@ _DIGEST_ALLOWED_PREFIXES = (
     "stigmergy.server.acl",              # visible() — the broadcast predicate (package docstring):
                                        # every page title/path this package renders is scoped to
                                        # the destination channel's own audiences
-    "stigmergy.server.review",           # KIND_ENTITY_PROPOSAL/APPROVE/ensure_review_schema — a
-                                       # one-way read edge into the governed-birth log, creating
-                                       # no cycle
+    "stigmergy.capture.decisions",       # APPROVE + ensure_decisions_schema — the governed-birth
+                                       # ledger this package COUNTS. Was `stigmergy.server.review`
+                                       # until the table moved below both writers: the digest read
+                                       # the server for two literals and one DDL call, and the
+                                       # edge disappeared with the move rather than being argued
+                                       # for
+    "stigmergy.review_kinds",            # KIND_ENTITY_PROPOSAL — the root module that exists so
+                                       # packages barred from importing each other still agree on
+                                       # these strings
     "stigmergy.server.errors",           # StartupError — the shared settings-validation vocabulary
                                        # SlackSettings/server.settings.Settings/GardenerSettings
                                        # already use, one package over
@@ -2335,7 +2349,8 @@ _DIGEST_CLI_EXTRA_ALLOWED_PREFIXES = _DIGEST_ALLOWED_PREFIXES + (
     "stigmergy.index.store",
     "stigmergy.slack.bolt_gateway",
     "stigmergy.librarian.config",
-)
+)   # `ensure_decisions_schema` needs no entry here: `capture.decisions` is granted to the whole
+    # package below, for `sections.py`'s own read of the same table.
 
 
 def test_digest_sources_found():
@@ -2434,32 +2449,22 @@ def test_digest_threshold_literals_stay_in_settings(path):
         + "\n  ".join(f"{path.name}:{lineno}: {value!r}" for value, lineno in offenders))
 
 
-# The digest's own transitive-git-stack pin. `stigmergy.digest` legitimately imports
-# `stigmergy.server.review` (its own package docstring: "a one-way read edge... creating no cycle"),
-# and `server.review` itself module-level-imports `stigmergy.librarian.gitcmd`/`.gates`/
-# `.base_inputs` directly (the read-only half of the git stack, for steward resolution and a
-# note's secrets scan) plus, since ADR 030, `stigmergy.librarian.githubapp` TRANSITIVELY through
-# `entities.remote` (the App credential a server-driven entity-proposal approve mints and pushes
-# with) — so importing ANY digest module that reaches `sections.py` (`.sections`, and transitively
-# `.run`/`.cli`) has ALWAYS pulled the git write stack into every digest process, invisible to
-# `test_digest_never_touches_git_plumbing`'s own AST-level check (which only sees `digest/*.py`'s
-# OWN `import`/`from` statements, never a transitive reach through an approved edge — the
-# identical class of gap `test_gardener_never_touches_git_plumbing` names in its own docstring).
-# Unlike the gardener's fix (extracting `views.staleness` to avoid the reach entirely), `digest`
-# keeps the reach: `server.review` is a deliberate, ratified edge, not an accident to extract
-# away. The pin is therefore ADVISORY — it names the reach by module, so a future WIDENING of it,
-# rather than its mere existence, is what turns this test red.
-_DIGEST_DECLARED_TRANSITIVE_LIBRARIAN_MODULES = frozenset({
-    "stigmergy.librarian",
-    "stigmergy.librarian.acl_rules",
-    "stigmergy.librarian.base_inputs",
-    "stigmergy.librarian.config",
-    "stigmergy.librarian.errors",
-    "stigmergy.librarian.gates",
-    "stigmergy.librarian.githubapp",
-    "stigmergy.librarian.gitcmd",
-    "stigmergy.librarian.page",
-})
+# The digest's own transitive-git-stack pin — now a pin on the ABSENCE of the reach.
+#
+# `stigmergy.digest` used to import `stigmergy.server.review` for two literals and one DDL call,
+# and `server.review` module-level-imports `librarian.gitcmd`/`.gates`/`.base_inputs` (the
+# read-only half of the git stack, for steward resolution and a note's secrets scan) plus, since
+# ADR 030, `librarian.githubapp` transitively through `entities.remote`. So every digest process
+# loaded the git WRITE stack to count rows in one table — invisible to
+# `test_digest_never_touches_git_plumbing`, whose AST-level check only sees `digest/*.py`'s own
+# import statements and never a transitive reach through an approved edge.
+#
+# Moving `review_decisions` down to `capture.decisions` (issue #51) removed the edge instead of
+# ratifying it: the digest now reads the ledger it counts and the root `review_kinds` module, and
+# reaches no librarian module at all. The declared set is EMPTY on purpose rather than deleted —
+# an empty frozenset with a live test is what makes a future re-widening turn this red on the
+# first module, where a deleted test would let the whole stack back in silently.
+_DIGEST_DECLARED_TRANSITIVE_LIBRARIAN_MODULES = frozenset()
 
 
 def test_digest_transitive_review_reach_is_a_named_declared_exception():

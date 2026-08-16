@@ -23,7 +23,7 @@ import os
 import shlex
 import sys
 
-from stigmergy.capture import dispositions, schema
+from stigmergy.capture import decisions, dispositions, schema
 from stigmergy.capture.cli import _clean, format_age
 from stigmergy.capture.errors import CaptureError
 from stigmergy.entities import birth, clone, generator, situations
@@ -32,6 +32,7 @@ from stigmergy.entities.errors import EntityError
 from stigmergy.index import store
 from stigmergy.librarian import config as librarian_config
 from stigmergy.librarian.errors import LibrarianError
+from stigmergy.review_kinds import KIND_ENTITY_PROPOSAL
 
 _DUMP = {"ensure_ascii": False, "indent": 2}
 
@@ -56,6 +57,11 @@ def _repo(args) -> str:
 def _connect(args):
     conn = store.connect(args.dsn)
     schema.ensure_capture_schema(conn)
+    # The governance ledger too, the same startup pattern every other entry point that writes it
+    # already follows (`server.service`, `transport_http`, `admin.routes`, the two cron CLIs).
+    # Without it, `approve` on a database no server has ever started against would mint, push, and
+    # then fail on the INSERT — after the irreversible half.
+    decisions.ensure_decisions_schema(conn)
     return conn
 
 
@@ -244,6 +250,14 @@ def _cmd_approve(conn, args) -> int:
     row = situations.require_situation(conn, args.id, action="approve")
     result = _mint(repo, args, submission_id=args.id,
                    on_output=lambda line: print(line, file=sys.stderr))
+    # AFTER the push, like the requeue below and for the same reason: a ledger row for a mint that
+    # then failed to land would claim an identity exists that nothing can resolve. Attribution is
+    # `--by` or this clone's git identity — the same value the commit is authored with, so the two
+    # records of one approval name one person (ADR 030 D2: attributed here, enforced on MCP).
+    decisions.record_decision(
+        conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(args.id), verdict=decisions.APPROVE,
+        actor=args.by or result["steward"],
+        extra={"entity_id": result["entity_id"], "commit": result["commit"], "door": "cli"})
     requeued = None
     if args.requeue:
         # AFTER the push, never before (module docstring). Through the drain's own seam, so the
@@ -279,8 +293,16 @@ def _cmd_create(conn, args) -> int:
 
 def _cmd_reject(conn, args) -> int:
     situations.require_situation(conn, args.id, action="reject")
-    result = dispositions.reject(conn, args.id, actor=args.by or _steward(args),
-                                 reason=args.reason)
+    actor = args.by or _steward(args)
+    result = dispositions.reject(conn, args.id, actor=actor, reason=args.reason)
+    # Refusing an identity is as much a governance decision as granting one, and the console
+    # already records its own Reject for exactly that reason (`AdminService.queue_reject`). Left
+    # out, this door would close the approve half of the gap and keep the reject half — and
+    # "who decided this identity" would still answer from different tables depending on the
+    # verdict. `require_situation` above has already established this row IS an entity situation.
+    decisions.record_decision(conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(args.id),
+                              verdict=decisions.REJECT, actor=actor, notes=args.reason,
+                              extra={"door": "cli"})
     if args.json:
         print(json.dumps(result, **_DUMP))
         return 0

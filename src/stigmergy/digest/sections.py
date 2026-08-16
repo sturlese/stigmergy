@@ -13,10 +13,11 @@ through a gardener-precomputed shape for a structural reason: the gardener does 
 destination channel, so a title it precomputed would sit in `job_runs.stats` having passed no ACL
 predicate at all — the scoping decision must live where the channel is known.
 """
+from stigmergy.capture import decisions
 from stigmergy.capture import schema as capture_schema
 from stigmergy.gardener import schema as gardener_schema
 from stigmergy.gardener import store as gardener_store
-from stigmergy.server import review
+from stigmergy.review_kinds import KIND_ENTITY_PROPOSAL
 from stigmergy.server.acl import visible
 from stigmergy.text import parse_result_ref
 
@@ -118,16 +119,16 @@ _ENTITIES_BORN_SQL = (
 
 def _entities_born_count(conn, *, since, until) -> int:
     with conn.cursor() as cur:
-        cur.execute(_ENTITIES_BORN_SQL, {"item_kind": review.KIND_ENTITY_PROPOSAL,
-                                         "verdict": review.APPROVE, "since": since,
+        cur.execute(_ENTITIES_BORN_SQL, {"item_kind": KIND_ENTITY_PROPOSAL,
+                                         "verdict": decisions.APPROVE, "since": since,
                                          "until": until})
         return cur.fetchone()[0]
 
 
 def gather_corpus_deltas(conn, *, since, until, audiences: set[str]) -> dict:
     """The section's two facts: pages filed (count + titles, ACL-scoped) and entities born — a
-    COUNT only. The ledger names the minted entity for some rows but not all (a CLI approve
-    writes no ledger row), so naming entities would read as a complete list and is not one; an
+    COUNT only. All three doors write the ledger now (issue #51), but they do not all fill `extra`
+    the same way, so naming entities would still read as a complete list and would not be one; an
     honest count is what the data supports."""
     pages = _pages_filed(conn, since=since, until=until, audiences=audiences)
     return {

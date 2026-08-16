@@ -11,6 +11,7 @@ import asyncio
 import os
 import sys
 
+from stigmergy.capture import decisions
 from stigmergy.capture import schema as capture_schema
 from stigmergy.gardener import report, run
 from stigmergy.gardener.errors import GardenerError
@@ -18,7 +19,6 @@ from stigmergy.gardener.schema import ensure_gardener_schema
 from stigmergy.gardener.settings import SLACK_BOT_TOKEN_ENV, GardenerSettings
 from stigmergy.index import store
 from stigmergy.librarian import config as librarian_config
-from stigmergy.server import review
 from stigmergy.server.errors import StartupError
 from stigmergy.slack import channels
 
@@ -36,7 +36,7 @@ def _connect(args):
     # All three schemas, so a FRESH database is never a table short (`UndefinedTable`) — a gap a
     # mature database, and every test fixture, hides. Same shape and order as `digest/cli.py`.
     capture_schema.ensure_capture_schema(conn)   # capture_queue/job_runs
-    review.ensure_review_schema(conn)            # review_decisions — read by stigmergy-digest
+    decisions.ensure_decisions_schema(conn)      # review_decisions — read by stigmergy-digest
     ensure_gardener_schema(conn)                 # gardener_findings — this package's own table
     return conn
 

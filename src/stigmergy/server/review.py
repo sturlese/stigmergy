@@ -12,14 +12,11 @@ import logging
 import os
 from datetime import date
 
-from psycopg.types.json import Jsonb
-
-from stigmergy.capture import dispositions
+from stigmergy.capture import decisions, dispositions
 from stigmergy.capture import ops as capture_ops
 from stigmergy.capture import queue as capture_queue
 from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.errors import CaptureError
-from stigmergy.capture.schema import startup_ddl_lock
 from stigmergy.entities import remote as entities_remote
 from stigmergy.entities import situations
 from stigmergy.entities.errors import CapabilityUnavailableError as EntityCapabilityUnavailableError
@@ -49,39 +46,21 @@ def _check_len(name: str, value: str) -> None:
     from stigmergy.server.service import check_arg_length
     check_arg_length(name, value or "")
 
-# Append-only: no code path here UPDATEs or DELETEs, so a second decision cannot overwrite the
-# first.
-_REVIEW_DECISIONS_DDL = """
-CREATE TABLE IF NOT EXISTS review_decisions (
-    id BIGSERIAL PRIMARY KEY,
-    item_kind TEXT NOT NULL,
-    item_id TEXT NOT NULL,
-    verdict TEXT NOT NULL,
-    actor TEXT NOT NULL,
-    notes TEXT NOT NULL DEFAULT '',
-    extra JSONB,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-)
-"""
-_REVIEW_DECISIONS_INDEX = (
-    "CREATE INDEX IF NOT EXISTS review_decisions_item_idx ON review_decisions (item_kind, item_id)"
-)
-
-# `review_decisions` is the one table this module owns.
-_ALL_DDL = (_REVIEW_DECISIONS_DDL, _REVIEW_DECISIONS_INDEX)
-
-
-def ensure_review_schema(conn) -> None:
-    """Idempotent DDL for the review lane's one table, safe from two processes at once."""
-    with startup_ddl_lock(conn) as cur:
-        for statement in _ALL_DDL:
-            cur.execute(statement)
+# `review_decisions` is no longer this module's table. It moved to `capture.decisions`, BELOW both
+# this package and `stigmergy.entities`, so `stigmergy-entities approve` can write the same row
+# without crossing the `entities` -> `server` edge the architecture tests enforce (ADR 030 D2, and
+# the amendment recording why). Re-exported by the two names callers already use, because the
+# owner of a table moving is not a reason for eight entry points to learn a new import.
+ensure_review_schema = decisions.ensure_decisions_schema
+record_decision = decisions.record_decision
 
 
 # `review_decide`'s verdict vocabulary — uniform EXCEPT `parked-capture`, which keeps
 # `capture.dispositions`' own three verbs.
-APPROVE, REJECT, REQUEST_CHANGES = "approve", "reject", "request_changes"
-GENERIC_VERDICTS = (APPROVE, REJECT, REQUEST_CHANGES)
+# Re-exported from the ledger that records them (`capture.decisions`), not defined here: this
+# module is one of three writers, and the vocabulary belongs with the table.
+APPROVE, REJECT, REQUEST_CHANGES = decisions.APPROVE, decisions.REJECT, decisions.REQUEST_CHANGES
+GENERIC_VERDICTS = decisions.GENERIC_VERDICTS
 
 class ReviewError(CaptureError):
     """A clean, caller-facing refusal, echoed verbatim over the wire — never git/DB internals."""
@@ -157,14 +136,7 @@ def _neutralize_leaves(value, depth: int = 0):
     return value
 
 
-def _latest_decisions(conn) -> dict[tuple[str, str], dict]:
-    """The most recent decision per item — a rendering convenience, not a state machine."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT DISTINCT ON (item_kind, item_id) item_kind, item_id, verdict, actor, "
-            "created_at FROM review_decisions ORDER BY item_kind, item_id, created_at DESC")
-        return {(kind, item_id): {"verdict": verdict, "actor": actor, "created_at": created_at}
-                for kind, item_id, verdict, actor, created_at in cur.fetchall()}
+_latest_decisions = decisions.latest_decisions
 
 
 def _query_all_open_submissions(conn, *, submitted_by: str | None, limit: int) -> list[dict]:
@@ -309,19 +281,6 @@ def record_undeliverable(conn, *, event: str, item_ref: str, reason: str) -> Non
 
 
 # ── review_decide() ────────────────────────────────────────────────────────────────────────────
-def record_decision(conn, *, item_kind: str, item_id: str, verdict: str, actor: str,
-                    notes: str = "", extra: dict | None = None) -> None:
-    """The ONE write to the append-only ledger, Postgres only. Public because the admin console
-    records here too — `AdminService.queue_reject` — bypassing `review_decide`'s steward guard by
-    design. `extra` is the seam for per-kind detail: an append-only table cannot be migrated
-    later."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO review_decisions (item_kind, item_id, verdict, actor, notes, extra) "
-            "VALUES (%s,%s,%s,%s,%s,%s)",
-            (item_kind, item_id, verdict, actor, notes, Jsonb(extra) if extra else None))
-
-
 def _refuse_secret_note(notes: str) -> None:
     """The secrets scan over a steward note, here at the CALL SITE because `stigmergy.capture` may
     never import `stigmergy.librarian`. Runs before `notes` reaches `clean` or a report."""
@@ -483,11 +442,14 @@ def mint_and_record_approval(conn, *, repo_url: str, submission_id: int, entity_
     the admin console through `admin.service.entity_approve`. Two copies of an ordering rule are
     two places for it to be reordered, and the reordering is invisible from either door's end
     state. There IS a third door, and it is the copy: `stigmergy-entities approve` mints from the
-    steward's own clone, runs its own spelling of the same order, and writes no `review_decisions`
-    row at all, because `stigmergy.entities` cannot import `stigmergy.server`. The ledger therefore
-    answers "who approved this identity" for the two server-side doors only — a CLI mint is
-    attributable from its commit's author, the steward's own git identity, and from nothing in
-    Postgres.
+    steward's own clone and runs its own spelling of the same order, because `stigmergy.entities`
+    cannot import `stigmergy.server`.
+
+    What it no longer does is skip the ledger. The writer moved DOWN to `capture.decisions`, below
+    both packages, so all three doors record the same row and `review_decisions` answers "who
+    approved this identity" completely (issue #51, ADR 030's amendment). A CLI approval is
+    attributable twice over now — from its commit's author and from its ledger row, which carry the
+    same steward identity.
 
     It deliberately covers three steps and no more. The pending-situation guard
     (`situations.require_situation`) stays at each call site because the two doors run it at
