@@ -206,7 +206,10 @@ CLI, exactly as D2 says.
 - `review_decisions` answers "who approved this identity" for every door. A CLI approval is now
   attributable twice — its commit's author and its ledger row, carrying the same steward identity.
 - `extra` records which door decided (`{"door": "cli"}`), and for an approve the entity id and the
-  commit that landed. Additive, in the column ADR 030 already reserved for per-kind detail.
+  commit that landed. Additive, in the column ADR 030 already reserved for per-kind detail. *(Later:
+  `record_decision` gained a required `source` argument that names the door for all four of them,
+  validated against a closed set, so this door stopped writing its own `door` key — nothing ever
+  read it. The ledger is never migrated, so rows written before that keep it.)*
 - **The digest and the gardener stopped importing the server.** Both cron CLIs reached into
   `server.review` for one DDL call, and `digest.sections` for two literals — which pulled the whole
   git write stack (`librarian.gitcmd`/`gates`/`base_inputs`/`githubapp`) into every digest process

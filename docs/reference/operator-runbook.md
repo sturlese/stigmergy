@@ -578,9 +578,16 @@ roads approves it ([ADR 030](../decisions/030-server-side-entity-minting.md)):
 | MCP's `review_decide` | an agent session is already open | a caller token with steward status |
 
 Whichever road you take, the ledger row records it (`review_decisions.extra->>'source'` is one of
-`cli`/`admin`/`slack`/`mcp`), a doorbell card already DMed for that item closes itself on the next
-poll pass, and anyone who reaches the item too late is told who got there first, on which road and
-when — instead of only that the row has moved on.
+`cli`/`admin`/`slack`/`mcp`), and the doorbell card already DMed for that item closes itself on the
+next poll pass. What the road that arrives too late SAYS differs, though: MCP's `review_decide` and
+the Slack card name who got there first, on which road and when; `stigmergy-entities` and the
+console report the row's new state, which tells you the decision is gone without telling you whose
+it was.
+
+The ledger is also what closes a card, so this only holds for the identity decisions above: a
+parked capture that is NOT an identity question, drained with `stigmergy-queue resolve`/`reject` or
+from the console's Queue tab, writes no `review_decisions` row at all — its doorbell card is never
+closed and simply ages out.
 
 `stigmergy-entities` needs no server at all — it commits from YOUR OWN clone with YOUR OWN git
 identity:

@@ -842,6 +842,34 @@ def test_a_failed_chat_update_leaves_the_card_open_for_the_next_pass(env, conn):
     assert len(gw.updated) == 1
 
 
+def test_a_card_slack_says_is_gone_is_recorded_unreachable_and_never_retried(env, conn):
+    """OLD BEHAVIOUR: every failed close was treated as transient. A card whose message was
+    deleted, or whose DM the bot can no longer reach, answers `message_not_found` on EVERY attempt
+    — so the pass re-sent the same doomed `chat.update` once per poll interval, forever, for as
+    long as the row existed.
+
+    The transient half is deliberately unchanged (`test_a_failed_chat_update_leaves_the_card_open_
+    for_the_next_pass` above, a coded-less failure): one bad minute must not permanently disarm a
+    card that is perfectly editable.
+    """
+    ctx, gw, item_id = _ring_once(env, conn,
+                                  situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    _decide(conn, review.KIND_ENTITY_PROPOSAL, item_id, verdict="reject", actor=STEWARD,
+            source=review.SOURCE_ADMIN, close=_reject)
+    gw.fail_update_count = 1
+    gw.fail_update_code = "message_not_found"
+
+    assert _run(doorbell_module.close_decided_cards(ctx)) == 0, (
+        "an unclosable card is not a closed one — the count is cards actually edited shut")
+    assert slack_store.last_notified_state(
+        conn, item_kind=review.KIND_ENTITY_PROPOSAL, item_id=str(item_id),
+        steward_email=STEWARD) == slack_store.CLOSED_UNREACHABLE
+
+    gw.fail_update_count = 0     # Slack would answer perfectly well now; nothing must ask it
+    assert _run(doorbell_module.close_decided_cards(ctx)) == 0
+    assert gw.updated == []
+
+
 def test_poll_once_closes_decided_cards_as_part_of_an_ordinary_pass(env, conn):
     """The wiring: nothing schedules `close_decided_cards` separately — it runs inside the pass
     the doorbell already makes, after the notify loop, so a deployment gets it with no new task."""
@@ -853,6 +881,90 @@ def test_poll_once_closes_decided_cards_as_part_of_an_ordinary_pass(env, conn):
     _run(poll_once(ctx))
 
     assert len(gw.updated) == 1
+
+
+def test_the_card_a_new_one_replaces_is_superseded_never_left_live_in_the_dm(env, conn):
+    """OLD BEHAVIOUR: `steward_notifications` holds ONE row per (item, steward), so posting a
+    second card for the same item overwrote the first card's `channel_id`/`message_ts` — the older
+    message was orphaned the instant the newer one went out. Nothing could ever edit it again, so
+    its Approve/Reject stayed clickable forever, and closing the item afterwards closed only the
+    newest card. The steward's DM kept a live control surface for an item that was decided, which
+    is the exact defect `close_decided_cards` exists to remove.
+
+    The replaced card is edited into a buttonless "superseded" shape BEFORE the replacement is
+    posted, so the pointer is spent while it is still the only one recorded.
+    """
+    from stigmergy.capture import dispositions
+
+    ctx, gw, item_id = _ring_once(env, conn)
+    # A real state change: requeued (no ledger row — nothing is DECIDED here), reprocessed, and
+    # parked right back in `triage`. The bell rings a second time, which is what replaces the card.
+    dispositions.requeue(conn, item_id, actor=STEWARD, note="back to the librarian")
+    claimed = capture_queue.claim_next(conn)
+    assert claimed is not None and claimed["id"] == item_id
+    capture_queue.finish(conn, item_id, status=capture_schema.TRIAGE,
+                         expected_attempts=claimed["attempts"],
+                         report={"summary": "parked again", "status": capture_schema.TRIAGE})
+
+    assert _run(poll_once(ctx)) == 1
+    assert len(gw.posted) == 2
+
+    _decide(conn, review.KIND_PARKED_CAPTURE, item_id, verdict="reject", actor=STEWARD,
+            source=review.SOURCE_SLACK, close=_reject)
+    _run(poll_once(ctx))
+
+    edited = {(u.channel_id, u.ts): u for u in gw.updated}
+    assert (gw.posted[0].channel_id, gw.posted[0].ts) in edited, (
+        "the REPLACED card was never edited — its buttons outlive the decision, in the DM")
+    assert (gw.posted[1].channel_id, gw.posted[1].ts) in edited, "and the newest card must close"
+    for coordinates, update in edited.items():
+        assert not [b for b in update.blocks if b["type"] == "actions"], (
+            f"the card at {coordinates} still offers actions")
+
+
+def test_a_superseded_card_says_so_and_points_at_the_newer_one(env, conn):
+    """What the replaced card is edited INTO. It is not "decided" — nobody decided anything — so it
+    must not claim a verdict; it has to say why its buttons are gone and where the live card is, or
+    a steward reads it as the item having been silently dropped."""
+    from stigmergy.capture import dispositions
+
+    ctx, gw, item_id = _ring_once(env, conn)
+    dispositions.requeue(conn, item_id, actor=STEWARD, note="back to the librarian")
+    claimed = capture_queue.claim_next(conn)
+    capture_queue.finish(conn, item_id, status=capture_schema.TRIAGE,
+                         expected_attempts=claimed["attempts"],
+                         report={"summary": "parked again", "status": capture_schema.TRIAGE})
+
+    _run(poll_once(ctx))
+
+    assert len(gw.updated) == 1
+    rendered = " ".join(str(b) for b in gw.updated[0].blocks)
+    assert "superseded" in rendered.lower()
+    assert f"#{item_id}" in rendered, "the card must still name the item it was about"
+    assert "reject" not in rendered.lower(), "no verdict was reached — it must not read as decided"
+
+
+@pytest.mark.parametrize("error_code", ["", "message_not_found"])
+def test_a_failed_supersede_edit_still_lets_the_new_card_through(env, conn, error_code):
+    """The priority when Slack is half-available: the steward MUST get the new card. A stale card
+    with live buttons is an annoyance the next pass can fix; a park nobody is told about is the
+    doorbell not working.
+
+    Both classes, because only one of them is obvious: a TERMINAL refusal here means the old
+    message is already gone, which is the outcome the supersede wanted anyway."""
+    from stigmergy.capture import dispositions
+
+    ctx, gw, item_id = _ring_once(env, conn)
+    gw.fail_update_code = error_code
+    dispositions.requeue(conn, item_id, actor=STEWARD, note="back to the librarian")
+    claimed = capture_queue.claim_next(conn)
+    capture_queue.finish(conn, item_id, status=capture_schema.TRIAGE,
+                         expected_attempts=claimed["attempts"],
+                         report={"summary": "parked again", "status": capture_schema.TRIAGE})
+    gw.fail_update_count = 1
+
+    assert _run(poll_once(ctx)) == 1, "the replacement card must be posted anyway"
+    assert len(gw.posted) == 2
 
 
 def test_a_re_parked_capture_gets_a_LIVE_card_again_not_one_the_old_decision_closes(env, conn):

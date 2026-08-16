@@ -269,7 +269,7 @@ def _cmd_approve(conn, args) -> int:
     decisions.record_decision(
         conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(args.id), verdict=decisions.APPROVE,
         actor=args.by or result["steward"], source=decisions.SOURCE_CLI,
-        extra={"entity_id": result["entity_id"], "commit": result["commit"], "door": "cli"})
+        extra={"entity_id": result["entity_id"], "commit": result["commit"]})
     requeued = None
     if args.requeue:
         # AFTER the push, never before (module docstring). Through the drain's own seam, so the
@@ -312,8 +312,7 @@ def _cmd_reject(conn, args) -> int:
     # situation.
     decisions.record_decision(conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(args.id),
                               verdict=decisions.REJECT, actor=actor,
-                              source=decisions.SOURCE_CLI, notes=args.reason,
-                              extra={"door": "cli"})
+                              source=decisions.SOURCE_CLI, notes=args.reason)
     if args.json:
         print(json.dumps(result, **_DUMP))
         return 0

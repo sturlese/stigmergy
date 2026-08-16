@@ -328,7 +328,7 @@ def _already_decided_suffix(conn, item_kind: str, submission_id) -> str:
     is to work out which of two decisions came first. `source` is `""` on every row written before
     the column existed (the ledger is never migrated), and those rows still have to render.
     """
-    decision = decisions.latest_decisions(conn).get((item_kind, str(submission_id)))
+    decision = decisions.latest_decision_for(conn, item_kind=item_kind, item_id=str(submission_id))
     if not decision:
         return ""
     when = decision["created_at"]

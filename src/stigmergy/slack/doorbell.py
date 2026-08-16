@@ -3,16 +3,22 @@ steward's Slack DM. A second `asyncio` background task in the SAME `slack` proce
 never a fourth process group. It never claims, leases or mutates a queue row: every read goes
 through `stigmergy.server.review.items_for_doorbell`.
 
-Four properties, each load-bearing:
+Five properties, each load-bearing:
 
 - **One notification per (item, steward), re-sent only on a state change** — `_state_signature`
-  compared and recorded via `store.last_notified_state`/`mark_notified`, in send-then-mark order:
+  compared and recorded via `store.last_notification`/`mark_notified`, in send-then-mark order:
   a post that fails leaves nothing recorded, so the next pass retries it.
-- **A decided item's card closes itself** — `close_decided_cards` runs at the end of every pass and
-  edits the DM in place, dropping its buttons, once `review_decisions` holds a verdict for the
-  item. A card is a live control surface; left alone it keeps offering actions that can now only
-  answer with a staleness refusal. Same send-then-mark order, and `closed:<verdict>` is what stops
-  the pass rewriting the same DM every interval.
+- **A decided item's most recent card closes itself** — `close_decided_cards` runs at the end of
+  every pass and edits that DM in place, dropping its buttons, once `review_decisions` holds a
+  verdict NEWER than the card. Only a decision that reaches the LEDGER closes anything: a parked
+  capture drained through `stigmergy-queue` or the console's Queue tab writes no ledger row, so its
+  card ages out rather than closing. A card is a live control surface; left alone it keeps offering
+  actions that can now only answer with a staleness refusal. Same send-then-mark order, and
+  `closed:<verdict>` is what stops the pass rewriting the same DM every interval.
+- **A card that a newer one replaces is superseded first** — one `steward_notifications` row per
+  (item, steward) holds ONE pair of Slack coordinates, so `_notify_item` edits the old message shut
+  before the post that overwrites them. Without that, a second card orphans the first with its
+  buttons live and the closing pass can only ever reach the newest one.
 - **An undeliverable notification is recorded, never swallowed** — no steward resolving for the
   scope, or a resolved steward with no Slack identity here, writes a `job_runs` row
   (`review.record_undeliverable`) naming the event and the reason.
@@ -61,6 +67,18 @@ def _load_stewards_cached(ctx, repo: str, baked_path: str = "") -> dict:
 LOOKUP_FOUND = "found"
 LOOKUP_NOT_FOUND = "not_found"
 LOOKUP_FAILED = "failed"
+
+# Slack error codes for which editing a card can NEVER succeed: the message is gone, its DM is
+# gone, or this token may not edit that message. Retrying one of them is one API call per pass,
+# forever, for a card that will never change again. Every OTHER failure (a timeout, a 429, a 5xx)
+# keeps the blind retry, because those do come back — the same distinction `_resolve_slack_user_id`
+# draws between an honest miss and an API that could not answer.
+TERMINAL_EDIT_CODES = frozenset({"message_not_found", "cant_update_message", "channel_not_found"})
+
+# `_edit_card`'s tri-state result, for the same reason the lookup above has one.
+EDIT_OK = "ok"
+EDIT_TERMINAL = "terminal"
+EDIT_TRANSIENT = "transient"
 
 # The state-signature prefix an UNDELIVERABLE outcome is recorded under — no real item state
 # begins with this literal, so the two namespaces share one `steward_notifications` column safely.
@@ -167,6 +185,51 @@ def _record_undeliverable_once(ctx, *, kind: str, item_id: str, steward_email: s
                         state=undeliverable_state)
 
 
+async def _edit_card(ctx, *, channel_id: str, message_ts: str, blocks: list[dict], text: str,
+                     what: str) -> str:
+    """Edit one doorbell card in place, and say WHICH KIND of failure it was:
+    `EDIT_OK`/`EDIT_TERMINAL`/`EDIT_TRANSIENT`.
+
+    The ONE place both edits this module makes cross the gateway — closing a decided card and
+    superseding a replaced one — so the classification cannot exist on one path and quietly not on
+    the other. What each caller does with a terminal refusal is its own business: only the closing
+    pass has a row worth marking, since a supersede's row is overwritten by the card it is making
+    way for.
+    """
+    try:
+        await ctx.gateway.chat_update(channel_id, message_ts, blocks=blocks, text=text)
+    except SlackApiError as ex:
+        terminal = ex.code in TERMINAL_EDIT_CODES
+        log.error("steward doorbell: could not %s — %s", what,
+                  "this card is unreachable for good" if terminal else "retrying on the next pass",
+                  exc_info=True)
+        return EDIT_TERMINAL if terminal else EDIT_TRANSIENT
+    return EDIT_OK
+
+
+async def _supersede_previous_card(ctx, previous: dict | None, *, kind: str, item_id: str) -> None:
+    """Spend the coordinates of the card a replacement is about to take over from — BEFORE it is
+    posted, because that post is what overwrites them.
+
+    `steward_notifications` holds one row per (item, steward), so it holds ONE pair of Slack
+    coordinates. A second card for the same item (a real state change: requeued, reprocessed,
+    parked again) used to orphan the first message the instant `mark_notified` recorded the new
+    one, leaving its Approve/Reject live in the DM for good — `close_decided_cards` would then
+    close only the newest card, and the defect that pass exists to remove came back through an item
+    merely changing state twice.
+
+    A failed edit is logged and PROCEEDS. Posting the new card matters more: a stale card with live
+    buttons is an annoyance the next pass can still fix (nothing is marked until the post lands, so
+    the old coordinates survive), while a park nobody is told about is the doorbell not working.
+    """
+    if previous is None or not store.is_live_card(previous):
+        return
+    blocks, text = render.render_doorbell_superseded(kind=kind, item_id=item_id)
+    await _edit_card(ctx, channel_id=previous["channel_id"], message_ts=previous["message_ts"],
+                     blocks=blocks, text=text,
+                     what=f"supersede the previous card for {kind}:{item_id}")
+
+
 async def _notify_item(ctx, item: dict, stewards_map: dict) -> int:
     kind, item_id = item["kind"], item["id"]
     item_ref = f"{kind}:{item_id}"
@@ -189,9 +252,11 @@ async def _notify_item(ctx, item: dict, stewards_map: dict) -> int:
     state = _state_signature(item)
     sent = 0
     for email in stewards:
-        last_state = store.last_notified_state(ctx.conn, item_kind=kind, item_id=item_id,
-                                               steward_email=email)
-        if last_state == state:
+        # The pair's whole row, not just its state: if this pass does send, the card already
+        # standing at these coordinates has to be spent before the new one overwrites them.
+        previous = store.last_notification(ctx.conn, item_kind=kind, item_id=item_id,
+                                           steward_email=email)
+        if previous is not None and previous["state"] == state:
             continue   # already told, at this exact state
         slack_user_id, lookup_status = await _resolve_slack_user_id(ctx, email)
         if slack_user_id is None:
@@ -208,6 +273,7 @@ async def _notify_item(ctx, item: dict, stewards_map: dict) -> int:
             # the next pass retries the lookup, like a failed post below.
             continue
         blocks, text = _render_for_item(item)
+        await _supersede_previous_card(ctx, previous, kind=kind, item_id=item_id)
         try:
             # `chat.postMessage` opens the DM implicitly when `channel` is a user id — Slack's
             # own documented convention, no `conversations.open` round trip.
@@ -253,6 +319,12 @@ async def close_decided_cards(ctx) -> int:
     """
     latest = review.latest_decisions(ctx.conn)
     closed = 0
+    # Read-then-write over `steward_notifications` with no row lock, which is correct only because
+    # ONE process ever runs this loop: `fly scale count slack=1` (pinned by
+    # tests/test_deployment_config.py) plus `app.acquire_singleton_lock`. Two doorbells against the
+    # same database would both see the same open card and both edit it. If that ceiling is ever
+    # relaxed, this pass needs `FOR UPDATE SKIP LOCKED` over the row it is about to re-mark, the
+    # way `capture.queue.claim_next` already claims a queue row.
     for row in store.open_notifications(ctx.conn):
         kind, item_id = row["item_kind"], row["item_id"]
         decision = latest.get((kind, item_id))
@@ -264,17 +336,22 @@ async def close_decided_cards(ctx) -> int:
         blocks, text = render.render_doorbell_closed(
             kind=kind, item_id=item_id, verdict=decision["verdict"], actor=decision["actor"],
             source=decision["source"])
-        try:
-            await ctx.gateway.chat_update(row["channel_id"], row["message_ts"], blocks=blocks,
-                                          text=text)
-        except SlackApiError:
-            log.error("steward doorbell: could not close the card for %s:%s in %s", kind, item_id,
-                     row["channel_id"], exc_info=True)
-            continue
+        outcome = await _edit_card(ctx, channel_id=row["channel_id"], message_ts=row["message_ts"],
+                                   blocks=blocks, text=text,
+                                   what=f"close the card for {kind}:{item_id} in "
+                                        f"{row['channel_id']}")
+        if outcome == EDIT_TRANSIENT:
+            continue   # nothing recorded, so the next pass retries — the send-then-mark order
+        # A TERMINAL refusal is recorded as `closed:unreachable`: the message or its DM is gone, so
+        # the pass must stop re-attempting the edit every interval. Deliberately NOT counted — the
+        # card is unclosable, which is a different fact from closed, and this function's return
+        # value is what the tests read as "cards actually edited shut".
         store.mark_notified(ctx.conn, item_kind=kind, item_id=item_id,
                             steward_email=row["steward_email"],
-                            state=f"{store.CLOSED_PREFIX}{decision['verdict']}")
-        closed += 1
+                            state=(f"{store.CLOSED_PREFIX}{decision['verdict']}"
+                                   if outcome == EDIT_OK else store.CLOSED_UNREACHABLE))
+        if outcome == EDIT_OK:
+            closed += 1
     return closed
 
 

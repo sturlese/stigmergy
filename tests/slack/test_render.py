@@ -366,6 +366,25 @@ def test_doorbell_entity_proposal_never_renders_a_link_from_the_subject():
     assert not _no_link_renders_as_a_real_hyperlink(_text(blocks))
 
 
+# A `review_decisions.actor`, which is what the closed card is built from — four doors write that
+# column and none of them sanitizes it.
+_HOSTILE_LEDGER_ACTOR = "<https://evil.example|Approve>"
+
+
+def test_doorbell_closed_card_never_renders_a_link_from_the_ledgers_actor():
+    """The third card had no hostile-slot pin, though it is the only one composed from STORED text
+    rather than from the item in hand — and its failure mode needs no CommonMark conversion at all:
+    Slack's own `<url|label>` syntax renders live unless something escapes it. Without
+    `escape_mrkdwn` here, a steward whose card just changed under them is shown a clickable
+    "Approve" where the name of the colleague who beat them to it should be."""
+    blocks, _ = render.render_doorbell_closed(kind="entity-proposal", item_id="1", verdict="reject",
+                                              actor=_HOSTILE_LEDGER_ACTOR, source="admin")
+
+    text = _text(blocks)
+    assert _HOSTILE_LEDGER_ACTOR not in text
+    assert "&lt;https://evil.example|Approve&gt;" in text
+
+
 
 
 def test_no_doorbell_card_renderer_calls_to_mrkdwn():
@@ -378,6 +397,9 @@ def test_no_doorbell_card_renderer_calls_to_mrkdwn():
     doorbell_renderers = [getattr(render, name) for name in dir(render)
                           if name.startswith("render_doorbell_")]
     assert len(doorbell_renderers) >= 2, "expected every doorbell card renderer to be found"
+    # And the frame the two terminal cards share: the rule has to hold one indirection deep, or
+    # moving the escaping into a helper would quietly retire the check for both of them.
+    doorbell_renderers.append(render._doorbell_card)
     for fn in doorbell_renderers:
         names = {instr.argval for instr in dis.get_instructions(fn)
                  if instr.opname in ("LOAD_GLOBAL", "LOAD_METHOD", "LOAD_ATTR")}

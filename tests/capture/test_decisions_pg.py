@@ -68,8 +68,10 @@ def test_every_declared_source_is_accepted_and_lands_in_extra(clean_ledger, sour
 
 
 def test_the_source_rides_beside_the_per_kind_detail_extra_already_carried(clean_ledger):
-    """`extra` stays the per-kind seam it was: a mint's `entity_id`/`commit` and the CLI's own
-    `door` marker survive the merge untouched, with `source` added beside them."""
+    """`extra` stays the per-kind seam it was: a mint's `entity_id`/`commit` survive the merge
+    untouched, with `source` added beside them — and so does any other key. `door` is here because
+    it is what the CLI door used to write and what its historical rows still carry; it stopped once
+    `source` said the same thing for every door."""
     decisions.record_decision(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL, item_id="42",
                               verdict=decisions.APPROVE, actor="steward@example.com",
                               source=decisions.SOURCE_CLI,
@@ -78,6 +80,23 @@ def test_the_source_rides_beside_the_per_kind_detail_extra_already_carried(clean
 
     assert _extra_of(clean_ledger, "42") == {
         "source": "cli", "entity_id": "globex-robotics", "commit": "a" * 40, "door": "cli"}
+
+
+def test_a_source_planted_in_extra_cannot_overwrite_the_validated_one(clean_ledger):
+    """OLD BEHAVIOUR: `source` was merged FIRST (`{"source": source, **(extra or {})}`), so a
+    caller's own `extra["source"]` won the merge and the row named a door nothing had validated —
+    the closed vocabulary bounced `"rest-api"` as an ARGUMENT and stored it as DATA in the same
+    call, and the table is append-only, so that row is permanent and every reader of
+    `extra->>'source'` believes it.
+
+    `source` is authoritative. `extra` stays the per-kind seam it was and simply cannot reach this
+    one key."""
+    decisions.record_decision(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL, item_id="3",
+                              verdict=decisions.APPROVE, actor="steward@example.com",
+                              source=decisions.SOURCE_MCP, extra={"source": "rest-api"})
+
+    assert _extra_of(clean_ledger, "3") == {"source": "mcp"}
+    assert decisions.latest_decisions(clean_ledger)[(KIND_ENTITY_PROPOSAL, "3")]["source"] == "mcp"
 
 
 # ── the read side ──────────────────────────────────────────────────────────────────────────────
@@ -91,6 +110,36 @@ def test_latest_decisions_returns_the_recorded_source(clean_ledger):
     assert latest["source"] == "slack"
     assert latest["verdict"] == decisions.APPROVE
     assert latest["actor"] == "steward@example.com"
+
+
+def test_latest_decision_for_returns_the_newest_row_of_a_contested_item(clean_ledger):
+    """The single-item read the refusal path uses (`server.review._already_decided_suffix`), and
+    the property it depends on: this table is append-only, so a second decision on the same item is
+    a second ROW, and "already decided by whom" means the NEWEST one — never whichever the
+    database happened to return first."""
+    for verdict, actor in ((decisions.REJECT, "first@example.com"),
+                           (decisions.APPROVE, "second@example.com")):
+        decisions.record_decision(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL, item_id="11",
+                                  verdict=verdict, actor=actor, source=decisions.SOURCE_ADMIN)
+
+    latest = decisions.latest_decision_for(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL,
+                                           item_id="11")
+
+    assert (latest["verdict"], latest["actor"]) == (decisions.APPROVE, "second@example.com")
+    assert latest["source"] == "admin"
+
+
+def test_latest_decision_for_is_none_on_an_item_nobody_has_decided(clean_ledger):
+    """The benign twin, and the branch the refusal path reads most: an undecided item must produce
+    NO staleness suffix at all, not an empty-ish dict a caller has to interpret."""
+    decisions.record_decision(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL, item_id="11",
+                              verdict=decisions.APPROVE, actor="steward@example.com",
+                              source=decisions.SOURCE_ADMIN)
+
+    assert decisions.latest_decision_for(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL,
+                                         item_id="12") is None
+    assert decisions.latest_decision_for(clean_ledger, item_kind=KIND_PARKED_CAPTURE,
+                                         item_id="11") is None, "the KIND is part of the key"
 
 
 def test_a_row_written_before_this_column_existed_reads_back_as_an_empty_source(clean_ledger):

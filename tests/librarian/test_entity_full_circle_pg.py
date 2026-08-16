@@ -151,7 +151,7 @@ def test_full_circle_approve_requeue_refile_anchored_no_restart(rig, clean_queue
     # The same identity the commit is authored with — one approval, two records, one person.
     assert actor == STEWARD_LABEL
     assert extra["entity_id"] == canonical_id
-    assert extra["door"] == "cli", "the row does not say which door decided it"
+    assert extra["source"] == "cli", "the row does not say which door decided it"
     assert extra["commit"] == subprocess.run(
         ["git", "rev-parse", "main"], cwd=env.bare, capture_output=True, text=True,
         check=True).stdout.strip(), "the recorded commit is not the one that landed on the remote"
@@ -206,7 +206,7 @@ def test_a_cli_reject_is_recorded_in_the_ledger_too(rig, clean_queue, tmp_path):
     item_kind, verdict, actor, notes, extra = ledger[0]
     assert (item_kind, verdict, actor) == (KIND_ENTITY_PROPOSAL, decisions.REJECT, STEWARD_LABEL)
     assert notes == "we already track this under Acme Corp"
-    assert extra["door"] == "cli"
+    assert extra["source"] == "cli"
     # And the capture itself really was rejected — the ledger row is a record OF something, not a
     # substitute for it.
     assert _row(clean_queue, ack["id"])["status"] == schema.REJECTED

@@ -321,17 +321,57 @@ def mark_reported(conn, reservation_id: int, status: str) -> None:
 UNDELIVERABLE_PREFIX = "undeliverable:"
 CLOSED_PREFIX = "closed:"
 
+# The one `closed:` state that is not a verdict: a card Slack says can never be edited again
+# (`doorbell.TERMINAL_EDIT_CODES`). It shares the namespace deliberately — the pass must stop
+# revisiting it for exactly the same reason a genuinely closed card is left alone — and no verdict
+# is spelled this way, so the two can never be confused when the column is read back.
+CLOSED_UNREACHABLE = f"{CLOSED_PREFIX}unreachable"
+
+_NOTIFICATION_FOR_PAIR = """
+SELECT state, channel_id, message_ts
+FROM steward_notifications
+WHERE item_kind = %s AND item_id = %s AND steward_email = %s
+"""
+
+
+def last_notification(conn, *, item_kind: str, item_id: str, steward_email: str) -> dict | None:
+    """What this (item, steward) pair was last told, and WHERE that message landed — `None` if the
+    pair has never been notified.
+
+    The shared read behind both questions the doorbell asks of this row: whether the state has moved
+    (send again?) and whether a card is still standing at the recorded coordinates (supersede it
+    first?). One statement rather than two, because the second question only ever arises about the
+    row the first one just looked at.
+    """
+    with conn.cursor() as cur:
+        cur.execute(_NOTIFICATION_FOR_PAIR, (item_kind, item_id, steward_email))
+        columns = [c.name for c in cur.description]
+        row = cur.fetchone()
+    return dict(zip(columns, row, strict=True)) if row else None
+
 
 def last_notified_state(conn, *, item_kind: str, item_id: str, steward_email: str) -> str | None:
     """The state this (item, steward) pair was last DMed at, or `None` if never notified — the
-    doorbell sends only when this differs from the item's current state signature."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT state FROM steward_notifications "
-            "WHERE item_kind = %s AND item_id = %s AND steward_email = %s",
-            (item_kind, item_id, steward_email))
-        row = cur.fetchone()
-    return row[0] if row else None
+    state-only half of `last_notification`, for the callers that record an outcome rather than
+    a card (an undeliverable notification never became a message, so it has no coordinates)."""
+    row = last_notification(conn, item_kind=item_kind, item_id=item_id,
+                            steward_email=steward_email)
+    return row["state"] if row else None
+
+
+def is_live_card(row: dict) -> bool:
+    """Whether this row still points at a message that can be edited: a real item state (neither
+    namespace prefix), and both of Slack's coordinates stored.
+
+    The row-level twin of `_OPEN_NOTIFICATIONS`' WHERE clause below, which asks the same question
+    of the whole table. They are two spellings of one rule ON PURPOSE — a `LIKE` filter cannot be
+    called on a dict in hand and a Python predicate cannot keep the closing pass from reading every
+    row ever written — so they are kept side by side, and `tests/slack/test_store_pg.py` drives
+    both over the same rows.
+    """
+    state = row.get("state") or ""
+    return (bool(row.get("channel_id")) and bool(row.get("message_ts"))
+            and not state.startswith((CLOSED_PREFIX, UNDELIVERABLE_PREFIX)))
 
 
 _MARK_NOTIFIED = """
@@ -364,17 +404,25 @@ def mark_notified(conn, *, item_kind: str, item_id: str, steward_email: str, sta
 
 
 # Only cards that are still LIVE and still reachable: not already closed, not an undeliverable
-# outcome (which never became a message), and carrying real coordinates — every row written before
-# this table had them reads as `''` and can only age out, since no API call recovers where a
-# message went.
-_OPEN_NOTIFICATIONS = f"""
+# outcome (which never became a message), and carrying BOTH coordinates — `chat.update` needs the
+# channel as much as the ts, and every row written before this table had them reads as `''` and can
+# only age out, since no API call recovers where a message went.
+#
+# The two prefixes are BOUND, not interpolated: they are module constants today, but a `LIKE`
+# pattern built by string formatting is one edit away from carrying a `%` or a quote that changes
+# what the statement means, and this filter is the only thing standing between the closing pass and
+# rewriting DMs it has already finished with.
+_OPEN_NOTIFICATIONS = """
 SELECT item_kind, item_id, steward_email, state, channel_id, message_ts, notified_at
 FROM steward_notifications
-WHERE state NOT LIKE '{CLOSED_PREFIX}%'
-  AND state NOT LIKE '{UNDELIVERABLE_PREFIX}%'
+WHERE state NOT LIKE %(closed)s
+  AND state NOT LIKE %(undeliverable)s
   AND message_ts <> ''
+  AND channel_id <> ''
 ORDER BY id
 """
+_OPEN_NOTIFICATIONS_PARAMS = {"closed": f"{CLOSED_PREFIX}%",
+                              "undeliverable": f"{UNDELIVERABLE_PREFIX}%"}
 
 
 def open_notifications(conn) -> list[dict]:
@@ -387,6 +435,6 @@ def open_notifications(conn) -> list[dict]:
     which is what makes the newer card outlive the older decision.
     """
     with conn.cursor() as cur:
-        cur.execute(_OPEN_NOTIFICATIONS)
+        cur.execute(_OPEN_NOTIFICATIONS, _OPEN_NOTIFICATIONS_PARAMS)
         columns = [c.name for c in cur.description]
         return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]

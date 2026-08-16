@@ -73,9 +73,11 @@ def record_decision(conn, *, item_kind: str, item_id: str, verdict: str, actor: 
     It is validated against `DECISION_SOURCES` and raises `ValueError` — nothing a caller typed
     reaches here, so an unknown spelling is a bug in a door, not input to refuse politely.
 
-    `extra` is the seam for per-kind detail, and stays that: `source` is merged in FIRST so a
-    per-kind key can never be shadowed by it. An append-only table cannot be migrated later, so a
-    field that turns out to be needed has nowhere else to go.
+    `extra` is the seam for per-kind detail, and stays that — an append-only table cannot be
+    migrated later, so a field that turns out to be needed has nowhere else to go. It is merged in
+    FIRST, so `source` is authoritative: a caller cannot override it through `extra`. The other
+    direction let a door's own dict smuggle past the closed vocabulary above — bounced as an
+    argument, stored as data — and a row naming a door nothing validated is permanent.
     """
     if source not in DECISION_SOURCES:
         raise ValueError(f"unknown decision source {source!r} (one of {', '.join(DECISION_SOURCES)})"
@@ -85,7 +87,7 @@ def record_decision(conn, *, item_kind: str, item_id: str, verdict: str, actor: 
         cur.execute(
             "INSERT INTO review_decisions (item_kind, item_id, verdict, actor, notes, extra) "
             "VALUES (%s,%s,%s,%s,%s,%s)",
-            (item_kind, item_id, verdict, actor, notes, Jsonb({"source": source, **(extra or {})})))
+            (item_kind, item_id, verdict, actor, notes, Jsonb({**(extra or {}), "source": source})))
 
 
 def latest_decisions(conn) -> dict[tuple[str, str], dict]:
@@ -105,3 +107,31 @@ def latest_decisions(conn) -> dict[tuple[str, str], dict]:
         return {(kind, item_id): {"verdict": verdict, "actor": actor, "source": source or "",
                                   "created_at": created_at}
                 for kind, item_id, verdict, actor, source, created_at in cur.fetchall()}
+
+
+_LATEST_FOR_ITEM = """
+SELECT verdict, actor, extra->>'source', created_at FROM review_decisions
+WHERE item_kind = %s AND item_id = %s
+ORDER BY created_at DESC
+LIMIT 1
+"""
+
+
+def latest_decision_for(conn, *, item_kind: str, item_id: str) -> dict | None:
+    """The most recent decision on ONE item, in the same shape `latest_decisions` returns per item,
+    or `None` if that item has never been decided.
+
+    Not a convenience wrapper over it: `latest_decisions` is a `DISTINCT ON` over the WHOLE table,
+    so asking it about a single item pays for every decision the ledger has ever held. This is the
+    question `review_decisions_item_idx` exists for, and it is asked on a refusal path.
+
+    `source` is `""` for the rows written before the column existed, exactly as above — the ledger
+    is never migrated, so every reader has to render one.
+    """
+    with conn.cursor() as cur:
+        cur.execute(_LATEST_FOR_ITEM, (item_kind, item_id))
+        row = cur.fetchone()
+    if row is None:
+        return None
+    verdict, actor, source, created_at = row
+    return {"verdict": verdict, "actor": actor, "source": source or "", "created_at": created_at}

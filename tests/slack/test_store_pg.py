@@ -520,23 +520,46 @@ def test_mark_notified_stores_the_card_pointer_and_a_state_only_upsert_preserves
                                                                     "1001.1")
 
 
-def test_open_notifications_lists_only_live_cards_with_a_stored_pointer(clean_notifications):
-    """The reader's whole contract, over the four rows that must NOT come back: a card already
-    closed, an undeliverable outcome (which never became a message at all), a row whose post
-    failed before a pointer existed, and — the benign twin — the live one that must."""
+def test_last_notification_returns_the_state_and_the_card_pointer_together(clean_notifications):
+    """One read, both answers the doorbell needs about this pair: has the state moved (send again?)
+    and is a card still standing at these coordinates (supersede it before the new one overwrites
+    them?). `last_notified_state` is the state-only wrapper over the same statement, for the
+    callers recording an outcome that never became a message."""
     conn = clean_notifications
-    store.mark_notified(conn, item_kind="parked-capture", item_id="1",
-                        steward_email="a@example.com", state="triage",
-                        channel_id="D_A", message_ts="1.1")
-    store.mark_notified(conn, item_kind="parked-capture", item_id="2",
-                        steward_email="a@example.com", state="closed:reject",
-                        channel_id="D_A", message_ts="2.1")
-    store.mark_notified(conn, item_kind="parked-capture", item_id="3",
-                        steward_email="a@example.com", state="undeliverable:not_found")
-    store.mark_notified(conn, item_kind="parked-capture", item_id="4",
-                        steward_email="a@example.com", state="triage")
+    key = {"item_kind": "parked-capture", "item_id": "9", "steward_email": "a@example.com"}
+    assert store.last_notification(conn, **key) is None, "never notified reads as None, not {}"
+
+    store.mark_notified(conn, **key, state="triage", channel_id="D_A", message_ts="9.1")
+
+    row = store.last_notification(conn, **key)
+    assert (row["state"], row["channel_id"], row["message_ts"]) == ("triage", "D_A", "9.1")
+    assert store.last_notified_state(conn, **key) == "triage"
+
+
+def test_open_notifications_lists_only_live_cards_with_a_stored_pointer(clean_notifications):
+    """The reader's whole contract, over the rows that must NOT come back: a card already closed,
+    an undeliverable outcome (which never became a message at all), a row whose post failed before
+    a pointer existed, a row carrying HALF a pointer (a ts and no channel — `chat.update` addresses
+    a message by both, so half is as un-editable as none), and — the benign twin — the live one
+    that must.
+
+    `store.is_live_card` is driven over the SAME rows: it is the row-level twin of this query's
+    WHERE clause, asked by the doorbell about the single row it holds before it supersedes a card.
+    Two spellings of one rule are only safe for as long as something exercises both."""
+    conn = clean_notifications
+    rows = {
+        "1": {"state": "triage", "channel_id": "D_A", "message_ts": "1.1"},
+        "2": {"state": "closed:reject", "channel_id": "D_A", "message_ts": "2.1"},
+        "3": {"state": "undeliverable:not_found", "channel_id": "", "message_ts": ""},
+        "4": {"state": "triage", "channel_id": "", "message_ts": ""},
+        "5": {"state": "triage", "channel_id": "", "message_ts": "5.1"},
+    }
+    for item_id, row in rows.items():
+        store.mark_notified(conn, item_kind="parked-capture", item_id=item_id,
+                            steward_email="a@example.com", **row)
 
     assert sorted(r["item_id"] for r in store.open_notifications(conn)) == ["1"]
+    assert [item_id for item_id, row in rows.items() if store.is_live_card(row)] == ["1"]
 
 
 def test_a_re_mark_moves_notified_at_forward(clean_notifications):

@@ -37,6 +37,17 @@ class _StubClient:
     async def reactions_remove(self, **kwargs):
         raise SdkSlackApiError("the request failed", {"ok": False, "error": self._error_code})
 
+    async def chat_update(self, **kwargs):
+        raise SdkSlackApiError("the request failed", {"ok": False, "error": self._error_code})
+
+
+class _TimingOutClient:
+    """A client whose failure never reaches Slack's own error vocabulary at all — a timeout or a
+    connection reset, which is what `_call`'s second `except` collapses."""
+
+    async def chat_update(self, **kwargs):
+        raise TimeoutError("read timed out")
+
 
 # ── the reaction lifecycle's own benign redelivery outcomes are not failures at all ─────────────
 def test_reactions_add_treats_already_reacted_as_success_not_a_failure():
@@ -71,3 +82,29 @@ def test_reactions_remove_still_raises_slack_api_error_for_a_missing_scope():
     gateway = BoltSlackGateway(_StubClient("missing_scope"))
     with pytest.raises(SlackApiError):
         _run(gateway.reactions_remove("C1", "1.1", "hourglass_flowing_sand"))
+
+
+# ── the error CODE survives the collapse, because a caller decides retry-or-not on it ───────────
+def test_a_failed_call_carries_slacks_own_error_code_onto_slack_api_error():
+    """`doorbell` classifies `message_not_found` as terminal and stops re-editing that card once
+    per poll pass forever. That decision is only real if the code actually reaches it — `str(ex)`
+    is prose the SDK assembles, and nothing may go pattern-matching it. Proven at the REAL
+    gateway's own boundary: the offline double raising a coded error proves only the double."""
+    gateway = BoltSlackGateway(_StubClient("message_not_found"))
+
+    with pytest.raises(SlackApiError) as raised:
+        _run(gateway.chat_update("C1", "1.1", text="closed"))
+
+    assert raised.value.code == "message_not_found"
+
+
+def test_a_failure_that_never_reached_slack_carries_no_code_at_all():
+    """The benign twin, and the one that matters most: a timeout has no Slack error code, so it
+    must read as `""`. Anything else would classify an outage as permanent and leave a perfectly
+    editable card live with its buttons, marked as unreachable."""
+    gateway = BoltSlackGateway(_TimingOutClient())
+
+    with pytest.raises(SlackApiError) as raised:
+        _run(gateway.chat_update("C1", "1.1", text="closed"))
+
+    assert raised.value.code == ""
