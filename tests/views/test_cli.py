@@ -1,9 +1,11 @@
 """`stigmergy-views` — argparse shape, refusals, exit codes."""
 import asyncio
+import json
 import os
 
 import pytest
 
+from stigmergy.kernel.registry import Registry
 from stigmergy.views import cli, regenerate
 from tests.views.conftest import FakeConn, build_repo, registry_of, remote_log
 
@@ -56,11 +58,12 @@ def test_main_exits_2_when_the_database_is_unreachable(monkeypatch):
 
 # ── --force must actually widen --stale's population ────────────────────────────────────────────
 class _Args:
-    def __init__(self, repo, *, stale=False, all_=False, entity=None, force=False):
+    def __init__(self, repo, *, stale=False, all_=False, entity=None, force=False,
+                 as_json=False):
         self.repo = repo
         self.dsn = None
         self.branch = "main"
-        self.json = False
+        self.json = as_json
         self.entity = entity
         self.stale = stale
         self.all = all_
@@ -100,3 +103,36 @@ def test_stale_without_force_still_only_regenerates_what_is_actually_stale(tmp_p
     conn = FakeConn()
     cli._cmd_regenerate(conn, _Args(clone, stale=True, force=False))
     assert remote_log(remote) == log_before
+
+
+# ── a removal states WHICH cause it was ─────────────────────────────────────────────────────────
+def test_a_removal_is_reported_with_its_own_cause_never_one_hardcoded_sentence(tmp_path, capsys):
+    """**Old behaviour: every removal printed the members-gone sentence.** `RegenOutcome.message`
+    was `""` for removals, so `_outcome_line` said "no anchored pages remain — view removed" and
+    `_report_single` said "the last page anchored to … is gone (superseded or re-anchored
+    elsewhere)" down BOTH roads — including the one where the pages are all still there and it is
+    the ENTITY that was de-registered. The steward is then sent to look for pages that never
+    moved, and `--json` carried `"message": ""`, so no surface could tell the two apart.
+
+    Driven by a REAL de-registration removal, not a hand-built outcome: what is being pinned is
+    that the cause travels from the branch that knows it all the way to what the operator reads.
+    """
+    remote, clone = build_repo(str(tmp_path / "git"))
+    asyncio.run(regenerate.regenerate_entity(clone, "acme-corp", registry=registry_of()))
+    outcome = asyncio.run(regenerate.regenerate_entity(clone, "acme-corp", registry=Registry()))
+    assert outcome.action == "removed"
+
+    batch_line = cli._outcome_line(outcome)
+    assert "de-registered" in batch_line
+    assert "no anchored pages remain" not in batch_line
+
+    assert cli._report_single(outcome, _Args(clone)) == 0
+    out = capsys.readouterr().out
+    assert "de-registered" in out
+    assert "the last page anchored to" not in out
+    assert f"committed {outcome.commit[:12]}" in out   # the removal's own report is otherwise intact
+
+    assert cli._report_single(outcome, _Args(clone, as_json=True)) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["action"] == "removed"
+    assert "de-registered" in payload["message"]   # was "" for every removal

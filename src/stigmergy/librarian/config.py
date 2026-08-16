@@ -90,6 +90,36 @@ def _in_repo(repo: str, relpath: str) -> str:
     return os.path.join(repo, *relpath.split("/"))
 
 
+# ── which checkout a `--repo` means, and whether it is one ─────────────────────────────────────
+# Every operator CLI that takes a `--repo` resolves it the same way and against the same
+# constants; three copies of the precedence, and two different opinions about what a checkout is,
+# is what these two replace.
+def repo_path(explicit: str = "") -> str:
+    """WHICH knowledge-repo checkout a command was pointed at, as an absolute path: an explicit
+    `--repo`, else `$STIGMERGY_REPO`, else the default. Answers WHERE only — a command that has to
+    write to the checkout calls `resolve_repo` instead, which adds the predicate."""
+    return os.path.abspath(explicit or os.environ.get(REPO_ENV) or REPO_DEFAULT)
+
+
+def is_repo_checkout(path: str) -> bool:
+    """The ONE predicate for "is this a git checkout" — what a command that commits to the repo
+    asks before it writes anything.
+
+    `.git` is a DIRECTORY in an ordinary clone but a FILE (a `gitdir:` pointer) in a
+    `git worktree add` checkout, so `exists` is the test and `isdir` is the bug: it refuses a
+    genuine worktree while accepting nothing else that `exists` would. That was a real
+    disagreement, not a hypothetical — `stigmergy-entities` refused a worktree `stigmergy-views`
+    accepted, for the same directory.
+
+    A PREDICATE, deliberately, rather than a resolver that raises: a caller in `entities` may not
+    interpolate a foreign exception's text into its refusal (`tests/test_architecture.py`'s
+    `test_an_entities_refusal_never_splices_a_caught_exceptions_text`, because `server.review`
+    echoes those refusals to a steward verbatim). Each CLI therefore writes its own sentence
+    around the path it already holds, and only the JUDGEMENT is shared.
+    """
+    return os.path.exists(os.path.join(path, ".git"))
+
+
 # Where a refused diff is preserved for diagnosis. Deliberately NOT under
 # `gitcmd.WORKTREE_PREFIX`: startup reaping would sweep it before anyone read it.
 REFUSED_DIFF_DIRNAME = "stigmergy-refused-diffs"

@@ -42,8 +42,11 @@ def _connect(args):
 
 
 def _repo(args) -> str:
-    return (args.repo or os.environ.get(librarian_config.REPO_ENV)
-            or librarian_config.REPO_DEFAULT)
+    """WHERE only — deliberately not `resolve_repo`. The gardener never commits, so it does not
+    need a git checkout, only a readable copy of the registry and the views; `run._require_repo`
+    states that weaker requirement, and states it for every caller of `run_gardener`, not just
+    this one."""
+    return librarian_config.repo_path(args.repo)
 
 
 def _gateway():

@@ -8,7 +8,14 @@ import pytest
 
 from stigmergy.kernel.registry import Registry
 from stigmergy.views import regenerate, skeleton
-from tests.views.conftest import FakeConn, build_repo, registry_of, remote_files, remote_log
+from tests.views.conftest import (
+    FakeConn,
+    build_repo,
+    git,
+    registry_of,
+    remote_files,
+    remote_log,
+)
 
 
 def test_write_produces_the_skeleton_sections(repo):
@@ -149,6 +156,44 @@ def test_a_deregistered_entitys_view_is_removed_not_refused_forever(repo):
     # never a silent no-op that could mask the removal not having happened.
     again = asyncio.run(regenerate.regenerate_entity(clone, "acme-corp", registry=deregistered))
     assert again.action == "refused-unknown-entity"
+
+
+def test_a_removal_carries_which_of_its_two_causes_it_was(tmp_path):
+    """**Old behaviour: `RegenOutcome.message` was `""` for every removal**, so the only surface
+    that told a steward WHY a view had gone was `views/cli.py`, which hardcoded one sentence ("the
+    last page anchored to it is gone") and printed it down both roads — telling the steward of a
+    just-de-registered entity that its pages had vanished. They had not; the entity had. Two
+    different facts, two different next actions, and the two call sites already knew which was
+    which (their commit messages say so).
+
+    Asserted on the CAUSE words, not on the full sentence: this pins that the outcome distinguishes
+    the two roads, without freezing an operator-facing wording that is free to be improved.
+    """
+    # road 1: the entity was de-registered, its pages untouched
+    remote, clone = build_repo(str(tmp_path / "dereg"))
+    asyncio.run(regenerate.regenerate_entity(clone, "acme-corp", registry=registry_of()))
+    deregistered = asyncio.run(
+        regenerate.regenerate_entity(clone, "acme-corp", registry=Registry()))
+    assert deregistered.action == "removed"
+    assert "de-registered" in deregistered.message
+    assert "no anchored pages remain" not in deregistered.message
+
+    # road 2: the entity is still registered, its last anchored page went away
+    remote2, clone2 = build_repo(str(tmp_path / "members"), n_decisions=1)
+    registry = registry_of()
+    asyncio.run(regenerate.regenerate_entity(clone2, "acme-corp", registry=registry))
+    os.remove(os.path.join(clone2, "wiki", "decisions", "decision-1.md"))
+    os.remove(os.path.join(clone2, "wiki", "entities", "Acme Corp.md"))
+    git("add", "--all", cwd=clone2)
+    git("commit", "--quiet", "-m", "chore: remove every member", cwd=clone2,
+       env={"GIT_AUTHOR_NAME": "Test Steward", "GIT_AUTHOR_EMAIL": "steward@example.com",
+            "GIT_COMMITTER_NAME": "Test Steward", "GIT_COMMITTER_EMAIL": "steward@example.com"})
+    git("push", "--quiet", cwd=clone2)
+
+    gone = asyncio.run(regenerate.regenerate_entity(clone2, "acme-corp", registry=registry))
+    assert gone.action == "removed"
+    assert "no anchored pages remain" in gone.message
+    assert "de-registered" not in gone.message
 
 
 # ── job_runs must not lie by omission on partial failure ────────────────────────────────────────

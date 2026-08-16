@@ -77,11 +77,39 @@ def test_health_zero_findings_this_run():
     health = _health_ok(run_date=datetime.date(2026, 7, 31))
     body = build_body(since=SINCE, until=UNTIL, health=health,
                       deltas=_deltas())
-    assert ("Latest gardener run: 2026-07-31 — 0 finding(s): every check came back clean") in body
+    assert ("Latest gardener run: 2026-07-31 — 0 findings: every check came back clean") in body
     # no per-severity bullets when the whole run is clean
     assert "• sla:" not in body
     assert "• warn:" not in body
     assert "• info:" not in body
+
+
+def test_health_pluralizes_its_finding_count_like_every_sibling_count_in_this_body():
+    """**Old spelling: `"N finding(s)"`, both places** — the two health-section counts were the
+    last "(s)" in a body whose every other count (`_plural(days, 'day')`, `_plural(n, 'page')`,
+    `"birth"/"births"`) is properly pluralized. `_plural` already lived in this module; the health
+    section simply never used it. The four assertions in this file that pinned the parenthesized
+    spelling were updated with this change — it is the contract, and this is the decision.
+
+    Slack is where a human reads this, so the seam between "1 finding" and "1 finding(s)" is the
+    difference between a system that writes and one that fills in a template.
+    """
+    one = build_body(since=SINCE, until=UNTIL, deltas=_deltas(),
+                     health=_health_ok(run_date=datetime.date(2026, 7, 31), warn=1,
+                                       checks_by_severity={"warn": {"stale-view": 1}}))
+    assert "— 1 finding: 0 sla, 1 warn, 0 info" in one
+    assert "finding(s)" not in one
+
+    two = build_body(since=SINCE, until=UNTIL, deltas=_deltas(),
+                     health=_health_ok(run_date=datetime.date(2026, 7, 31), warn=2,
+                                       checks_by_severity={"warn": {"stale-view": 2}}))
+    assert "— 2 findings: 0 sla, 2 warn, 0 info" in two
+
+    # the clean-run branch is the second count, and 0 is plural
+    clean = build_body(since=SINCE, until=UNTIL, deltas=_deltas(),
+                       health=_health_ok(run_date=datetime.date(2026, 7, 31)))
+    assert "— 0 findings: every check came back clean" in clean
+    assert "finding(s)" not in clean
 
 
 def test_health_populated_run_breaks_down_sla_and_warn_by_check_never_info():
@@ -91,7 +119,7 @@ def test_health_populated_run_breaks_down_sla_and_warn_by_check_never_info():
                             "warn": {"stale-view": 3, "aging-seed": 2}})
     body = build_body(since=SINCE, until=UNTIL, health=health,
                       deltas=_deltas())
-    assert "Latest gardener run: 2026-07-31 — 21 finding(s): 2 sla, 5 warn, 14 info" in body
+    assert "Latest gardener run: 2026-07-31 — 21 findings: 2 sla, 5 warn, 14 info" in body
     assert "• sla: contradiction-sla-open (1), contradiction-sla-orphaned (1)" in body
     assert "• warn: aging-seed (2), stale-view (3)" in body
     assert "• info: 14 (full breakdown: `stigmergy-gardener`)" in body
@@ -116,7 +144,7 @@ def test_health_notes_an_incomplete_sweep_alongside_populated_findings():
                         checks_by_severity={"warn": {"stale-view": 3}}, sweep_incomplete=True)
     body = build_body(since=SINCE, until=UNTIL, health=health,
                       deltas=_deltas())
-    assert "Latest gardener run: 2026-07-31 — 3 finding(s)" in body
+    assert "Latest gardener run: 2026-07-31 — 3 findings" in body
     assert "(model sweep did not complete that run)" in body
 
 
@@ -126,7 +154,7 @@ def test_health_notes_an_incomplete_sweep_even_with_zero_findings():
     health = _health_ok(run_date=datetime.date(2026, 7, 31), sweep_incomplete=True)
     body = build_body(since=SINCE, until=UNTIL, health=health,
                       deltas=_deltas())
-    assert "0 finding(s): every check came back clean" in body
+    assert "0 findings: every check came back clean" in body
     assert "(model sweep did not complete that run)" in body
 
 

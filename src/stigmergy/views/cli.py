@@ -29,11 +29,10 @@ EXIT_INTERRUPTED = 130
 
 
 def _repo(args) -> str:
-    repo = args.repo or os.environ.get(librarian_config.REPO_ENV) or librarian_config.REPO_DEFAULT
-    path = os.path.abspath(repo)
-    # `.git` is a directory in an ordinary clone but a FILE in a worktree checkout — `exists`,
-    # not `isdir`, accepts both and still refuses a plain non-git directory.
-    if not os.path.exists(os.path.join(path, ".git")):
+    # The worktree-tolerant predicate this command was already right about lives in
+    # `librarian.config.is_repo_checkout` now — `stigmergy-entities` had its own, stricter copy.
+    path = librarian_config.repo_path(args.repo)
+    if not librarian_config.is_repo_checkout(path):
         raise ViewError(
             f"{path} is not a git checkout — `--repo` (or ${librarian_config.REPO_ENV}) must "
             f"point at your clone of the knowledge repo, because this command commits to it")
@@ -81,7 +80,9 @@ def _outcome_line(o: regenerate.RegenOutcome) -> str:
     if o.action == "unchanged":
         return f"  {who}"
     if o.action == "removed":
-        return f"  {who}  no anchored pages remain — view removed — committed {o.commit[:12]}"
+        # `o.message`, never a sentence composed here: there are two roads to a removal and only
+        # `regenerate` knows which one was taken.
+        return f"  {who}  view removed: {o.message} — committed {o.commit[:12]}"
     if o.action == "written":
         phrase = _timeline_phrase(o)
         shown = f"{o.member_count} page(s), {phrase}" if phrase else f"{o.member_count} page(s)"
@@ -138,9 +139,10 @@ def _report_single(o: regenerate.RegenOutcome, args) -> int:
              f"page(s). Nothing was written; the member set has not changed since the last "
              f"regeneration.")
     elif o.action == "removed":
-        print(f"removed {o.path} — the last page anchored to {_who(o.entity_id, o.entity_name)} "
-             f"is gone (superseded or re-anchored elsewhere); nothing points at it anymore, so "
-             f"there is nothing left to summarize.")
+        # The CAUSE comes from `o.message` (see `_outcome_line`); only the tail is shared, because
+        # it is the one thing both roads really do have in common.
+        print(f"removed {o.path} — {o.message}. Nothing anchors {_who(o.entity_id, o.entity_name)} "
+             f"any more, so there is nothing left to summarize.")
         print(f"  committed {o.commit[:12]} (steward: App bot), pushed to {args.branch}")
     else:
         shown = _timeline_phrase(o)

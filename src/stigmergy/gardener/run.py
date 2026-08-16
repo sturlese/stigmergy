@@ -5,9 +5,12 @@ Calls `ops.record_job_run` directly, not the `job_run` context manager: that man
 row on exit, and every finding needs `run_id` at insert time. The try/except below replicates its
 shape so a failed run still gets an honest `status='error'` row.
 
-The sweep pass can never make this function raise: a sweep outage must not cost the operator the
-deterministic checks that already ran, so `_run_sweep_pass` catches everything and reports
-through its returned stats. Every OTHER failure aborts the run entirely.
+Two passes can never make this function raise, for one reason — work already done must not be
+lost to a later, optional step. The sweep: a sweep outage must not cost the operator the
+deterministic checks that already ran, so `_run_sweep_pass` catches everything and reports through
+its returned stats. The notice: it runs AFTER the findings are committed, so every failure it can
+have — including the database errors its own ACL scoping query raises — is absorbed into
+`RunResult.notice_error`. Every OTHER failure aborts the run entirely.
 
 A failed sweep commits `'partial'`, never `'ok'`: `sweep.previous_run_watermark` reads only
 `'ok'` rows, and an `'ok'` here would advance the sweep watermark past pages nothing judged.
@@ -214,7 +217,18 @@ async def run_gardener(conn, *, repo: str, settings: GardenerSettings, channels_
         result.notice_posted = posted is not None
     except (GardenerError, SlackApiError, IdentityError) as ex:
         # The findings are already committed — a notice failure must never withhold the report.
-        # `IdentityError` = the posting channel's audiences could not be resolved (malformed
-        # channels file); caught like a missing token rather than taking the run down.
+        # These three are this stack's own vocabulary (a missing token/channel, a Slack API
+        # refusal, and — `IdentityError` — a malformed channels file the posting channel's
+        # audiences could not be resolved from), so their SENTENCE is written for an operator and
+        # is what gets recorded.
         result.notice_error = str(ex)
+    except Exception as ex:  # noqa: BLE001 — see above: the report is already persisted, so NO
+        # failure in this block may withhold it. The narrow arms above cannot see everything this
+        # block raises: `scope_findings_to_channel` queries the pages index to scope the notice,
+        # so a psycopg error is reachable here and used to escape the whole run.
+        # Class name only, never `str(ex)` — the same rule and the same reason as
+        # `_run_sweep_pass`'s `stats["error"]`: a database error quotes the statement that failed,
+        # and that statement carries page paths and ACL labels an operator's terminal must not
+        # learn them from.
+        result.notice_error = ex.__class__.__name__
     return result
