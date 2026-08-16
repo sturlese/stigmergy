@@ -109,6 +109,13 @@ class _ScopedServiceProxy:
         return getattr(service, name)
 
 
+async def _refuse(scope, receive, send, body, status) -> None:
+    """One refusal path for every pre-service rejection: the body is a module constant, never
+    composed from what was rejected — the real reason is logged server-side only."""
+    response = JSONResponse(body, status_code=status)
+    await response(scope, receive, send)
+
+
 class _BearerAuthMiddleware:
     """Raw ASGI middleware (not `BaseHTTPMiddleware`): running the auth check and the downstream
     app in the SAME coroutine, with no task hand-off, is what guarantees the `_current_service`
@@ -147,8 +154,7 @@ class _BearerAuthMiddleware:
         auth_values = [v for k, v in (scope.get("headers") or []) if k.lower() == b"authorization"]
         if len(auth_values) > 1:
             log.warning("HTTP auth refused: %d Authorization headers presented", len(auth_values))
-            response = JSONResponse(_UNAUTHORIZED_BODY, status_code=401)
-            await response(scope, receive, send)
+            await _refuse(scope, receive, send, _UNAUTHORIZED_BODY, 401)
             return
         raw = auth_values[0].decode("latin-1") if auth_values else ""
         # Scheme match case-insensitive per RFC 9110 §11.1; split on the first space so a token
@@ -160,8 +166,7 @@ class _BearerAuthMiddleware:
             audiences_tuple = resolve_audiences(self._settings.identities_path, email)
         except IdentityError as ex:
             log.warning("HTTP auth refused: %s", ex)   # server-side only — never in the response
-            response = JSONResponse(_UNAUTHORIZED_BODY, status_code=401)
-            await response(scope, receive, send)
+            await _refuse(scope, receive, send, _UNAUTHORIZED_BODY, 401)
             return
 
         # Size check AFTER auth (neither branch has read a byte of body yet): a declared
@@ -171,8 +176,7 @@ class _BearerAuthMiddleware:
         if declared is not None and declared > MAX_REQUEST_BODY_BYTES:
             log.warning("HTTP request refused: content-length %d exceeds %d bytes",
                         declared, MAX_REQUEST_BODY_BYTES)
-            response = JSONResponse(_TOO_LARGE_BODY, status_code=413)
-            await response(scope, receive, send)
+            await _refuse(scope, receive, send, _TOO_LARGE_BODY, 413)
             return
 
         audiences = set(audiences_tuple) if audiences_tuple is not None else None

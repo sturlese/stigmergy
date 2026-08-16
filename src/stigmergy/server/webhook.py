@@ -134,7 +134,7 @@ def in_zone_changes(changes: dict[str, str]) -> dict[str, str]:
             if path.startswith(prefixes) and corpus.is_indexable_page(path)}
 
 
-def fetch_file_content(repo_slug: str, path: str, sha: str, token: str, *, opener=None) -> str:
+def _fetch_file_content(repo_slug: str, path: str, sha: str, token: str, *, opener=None) -> str:
     """One file's text AT THE PUSHED SHA, via the GitHub Contents API — no clone, no checkout.
     `Accept: application/vnd.github.raw+json` asks GitHub to hand back the raw bytes directly
     rather than a base64-JSON envelope."""
@@ -227,7 +227,7 @@ def process_push(conn, embedder, payload: dict, settings: WebhookSettings, *, op
         token = githubapp.installation_token()
         for path in to_upsert_paths:
             zone = path.split("/", 1)[0]
-            text = fetch_file_content(settings.repo, path, sha, token, opener=opener)  # network
+            text = _fetch_file_content(settings.repo, path, sha, token, opener=opener)  # network
             rows.append(corpus.page_row(path, zone, text))
 
         skipped = sum(1 for r in rows if before_hashes.get(r.path) == r.content_hash)

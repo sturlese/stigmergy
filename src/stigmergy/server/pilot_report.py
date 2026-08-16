@@ -32,12 +32,11 @@ def _week_bucket(ts: datetime) -> str:
 def questions_per_identity_per_week(conn, *, since: datetime | None = None) -> dict[str, dict[str, int]]:
     """`identity -> {week -> count}`, from every `ask` call `audit_log` recorded (regardless of
     outcome — a rate-limited or errored `ask` is still a question somebody asked)."""
+    params = (since,) if since is not None else ()
+    query = ("SELECT identity, ts FROM audit_log WHERE tool = 'ask'"
+             + (" AND ts >= %s" if params else ""))
     with conn.cursor() as cur:
-        if since is not None:
-            cur.execute("SELECT identity, ts FROM audit_log WHERE tool = 'ask' AND ts >= %s",
-                        (since,))
-        else:
-            cur.execute("SELECT identity, ts FROM audit_log WHERE tool = 'ask'")
+        cur.execute(query, params)
         rows = cur.fetchall()
     counts: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     for identity, ts in rows:
@@ -48,13 +47,11 @@ def questions_per_identity_per_week(conn, *, since: datetime | None = None) -> d
 def answer_shape(conn, *, since: datetime | None = None) -> dict:
     """% answered-with-citation vs honest refusal, from `ask`'s `audit_log.result` summary —
     never the question or answer text. Only successful calls with a recorded result count."""
+    params = (since,) if since is not None else ()
+    query = ("SELECT result FROM audit_log WHERE tool = 'ask' AND outcome = 'ok'"
+             " AND result IS NOT NULL" + (" AND ts >= %s" if params else ""))
     with conn.cursor() as cur:
-        query = ("SELECT result FROM audit_log WHERE tool = 'ask' AND outcome = 'ok'"
-                " AND result IS NOT NULL")
-        if since is not None:
-            cur.execute(query + " AND ts >= %s", (since,))
-        else:
-            cur.execute(query)
+        cur.execute(query, params)
         results = [row[0] for row in cur.fetchall()]
 
     total = len(results)

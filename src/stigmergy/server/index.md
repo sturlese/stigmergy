@@ -34,7 +34,7 @@ path, authenticated by HMAC instead.
 | `pilot_report.py` | `stigmergy-pilot-report` — the measurement table from columns other code already writes. Reads only, no DDL: it works under a read-only database role |
 | `issue_token.py` | `stigmergy-issue-token <email>` — prints the plaintext bearer token once and the sha256 store line |
 
-## Consumers (one-way, always — nothing here imports any of them)
+## Consumers (one-way, except the admin console's ASGI branch, composed only in `transport_http.build_http_app`)
 
 | Consumer | Reaches |
 |---|---|

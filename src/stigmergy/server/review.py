@@ -33,24 +33,16 @@ from stigmergy.server.errors import CapabilityUnavailableError
 log = logging.getLogger(__name__)
 
 
-def _neutralize(text: str) -> str:
-    """Lazy: `service.py` imports THIS module at module scope, so the reverse edge must not be
-    taken at import time."""
-    from stigmergy.server.service import neutralize_fence
-    return neutralize_fence(text or "")
-
-
 def _check_len(name: str, value: str) -> None:
-    """Lazy for `_neutralize`'s cycle reason; without it an unbounded `notes` string reaches
+    """Lazy: `service.py` imports THIS module at module scope, so the reverse edge must not be
+    taken at import time. Without the bound an unbounded `notes` string reaches
     `dispositions.clean` or a gitleaks scan."""
     from stigmergy.server.service import check_arg_length
     check_arg_length(name, value or "")
 
-# `review_decisions` is no longer this module's table. It moved to `capture.decisions`, BELOW both
-# this package and `stigmergy.entities`, so `stigmergy-entities approve` can write the same row
-# without crossing the `entities` -> `server` edge the architecture tests enforce (ADR 030 D2, and
-# the amendment recording why). Re-exported by the two names callers already use, because the
-# owner of a table moving is not a reason for eight entry points to learn a new import.
+# The ledger lives in `capture.decisions`, BELOW both this package and `stigmergy.entities`, so
+# the entities CLI writes the same row without crossing the `entities` -> `server` edge.
+# Re-exported here under the names callers already use.
 ensure_review_schema = decisions.ensure_decisions_schema
 record_decision = decisions.record_decision
 
@@ -121,22 +113,15 @@ def _parse_id(item_id: str) -> int | None:
 
 
 def _neutralize_leaves(value, depth: int = 0):
-    """`_neutralize` over every STRING LEAF — one rule at the boundary instead of per-field calls,
-    which reliably miss a field. Past the depth bound the subtree is DROPPED: a recursion limit
-    that hands back what it declined to check is a fail-open bound."""
-    from stigmergy.server.service import MAX_AUDIT_DEPTH
-    if depth > MAX_AUDIT_DEPTH:
-        return None
-    if isinstance(value, str):
-        return _neutralize(value)
-    if isinstance(value, dict):
-        return {str(k): _neutralize_leaves(v, depth + 1) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_neutralize_leaves(v, depth + 1) for v in value]
-    return value
+    """`neutralize_fence` over every STRING LEAF — one rule at the boundary instead of per-field
+    calls, which reliably miss a field. Past the depth bound the subtree is DROPPED: a recursion
+    limit that hands back what it declined to check is a fail-open bound.
 
-
-_latest_decisions = decisions.latest_decisions
+    The walker itself is `service._neutralize_report`, the ONE implementation — a second copy of a
+    boundary rule is a second place for it to drift, and this one had. Lazy for `_check_len`'s
+    cycle reason."""
+    from stigmergy.server.service import _neutralize_report
+    return _neutralize_report(value, depth)
 
 
 def _query_all_open_submissions(conn, *, submitted_by: str | None, limit: int) -> list[dict]:
@@ -179,11 +164,10 @@ def _collect_open_items(conn, *, submitted_by: str | None, limit: int) -> list[d
                 "kind": KIND_ENTITY_PROPOSAL, "id": str(row["id"]),
                 "submitted_by": row["submitted_by"], "situation": situation,
                 "subject": situations.subject_of(row),
-                # BOTH, exactly as `situations._situation_view` emits both, and for the same
-                # reason: `subject` is ONE display string that joins several names with ", ",
-                # so a consumer acting on a name — prefilling a mint form, running one command
-                # per name — must read `subjects` or it will act on a joined compound that is
-                # not any of them.
+                # BOTH, for the reason `situations.subjects_of` states: `subject` is ONE display
+                # string that joins several names with ", ", so a consumer acting on a name —
+                # prefilling a mint form, running one command per name — must read `subjects` or
+                # it will act on a joined compound that is not any of them.
                 "subjects": situations.subjects_of(row),
                 # The name a mint form may default to, decided ONCE (`situations`) rather than
                 # re-derived from `subjects` by each door: both doors write the same irreversible
@@ -206,9 +190,9 @@ def _collect_open_items(conn, *, submitted_by: str | None, limit: int) -> list[d
             })
 
     items = [_neutralize_leaves(item) for item in items]
-    decisions = _latest_decisions(conn)
+    latest_by_item = decisions.latest_decisions(conn)
     for item in items:
-        item["decision"] = decisions.get((item["kind"], item["id"]))
+        item["decision"] = latest_by_item.get((item["kind"], item["id"]))
     return items
 
 
@@ -217,7 +201,7 @@ def review_queue(service, *, limit: int = 50) -> dict:
     item; a scoped one sees only items IT submitted, the ownership scope
     `BrainService.submissions` applies to the fast lane."""
     identity = service.identity
-    unrestricted = service.audiences is None
+    unrestricted = service.unrestricted
     # A SCOPED caller with no identity would pass `submitted_by=None` — the MANAGEMENT scope —
     # while being labelled `scope: "own"`. Fail closed where the widening decision is made.
     if not unrestricted and not identity:
@@ -281,6 +265,26 @@ def record_undeliverable(conn, *, event: str, item_ref: str, reason: str) -> Non
 
 
 # ── review_decide() ────────────────────────────────────────────────────────────────────────────
+def _row_for_item(service, item_id: str) -> tuple[int | None, dict | None]:
+    """`(submission_id, row)` for a review-queue item id — `(None, None)` for a malformed one, the
+    same "not found" a nonexistent id gets. Shared by both decide paths so neither can start
+    reading the row on its own terms; what each does with a found row is its own rule."""
+    submission_id = _parse_id(item_id)
+    row = capture_queue.get_submission_trace(service.conn, submission_id) \
+        if submission_id is not None else None
+    return submission_id, row
+
+
+def _recorded_message(kind: str, verdict: str, submission_id, actor: str, note: str = "") -> str:
+    """The confirmation sentence, composed ONCE so every surface and every item kind relays the
+    same one. `note` is passed only where the verdict's own rule requires one."""
+    line = f"recorded: {verdict} on {kind} #{submission_id} by {actor}."
+    if note:
+        line += (f" Note: \"{note}\"\nNothing else happens automatically — this was not filed "
+                f"as a page.")
+    return line
+
+
 def _refuse_secret_note(notes: str) -> None:
     """The secrets scan over a steward note, here at the CALL SITE because `stigmergy.capture` may
     never import `stigmergy.librarian`. Runs before `notes` reaches `clean` or a report."""
@@ -302,9 +306,7 @@ def _decide_parked_capture(service, item_id: str, verdict: str, notes: str, acto
     `capture.dispositions.DISPOSITIONS`, stored verbatim, so a button label can never disagree
     with the recorded verdict. Authorization runs before anything else, so a nonexistent id is
     refused by the SAME sentence an unauthorized one is."""
-    submission_id = _parse_id(item_id)
-    row = capture_queue.get_submission_trace(service.conn, submission_id) \
-        if submission_id is not None else None
+    submission_id, row = _row_for_item(service, item_id)
     # An entity situation is NOT a parked capture, enforced HERE: without this the caller's
     # `item_kind` picks the authorization rule, and an entity proposal's own submitter could route
     # it into this kind's looser guard. NOT FOUND, not a distinct refusal, which would leak.
@@ -333,15 +335,8 @@ def _decide_parked_capture(service, item_id: str, verdict: str, notes: str, acto
     # raw-spelling ledger row could never join back to the item it decided.
     record_decision(service.conn, item_kind=KIND_PARKED_CAPTURE, item_id=str(submission_id),
                     verdict=verdict, actor=actor, notes=notes)
-    # Composed HERE, once, so every surface relays the SAME confirmation sentence.
-    if verdict == dispositions.RESOLVE:
-        message = (f"recorded: resolve on {KIND_PARKED_CAPTURE} #{submission_id} by {actor}. "
-                  f"Note: \"{notes}\"\nNothing else happens automatically — this was not filed "
-                  f"as a page.")
-    elif verdict == dispositions.REJECT:
-        message = f"recorded: reject on {KIND_PARKED_CAPTURE} #{submission_id} by {actor}."
-    else:
-        message = f"recorded: requeue on {KIND_PARKED_CAPTURE} #{submission_id} by {actor}."
+    message = _recorded_message(KIND_PARKED_CAPTURE, verdict, submission_id, actor,
+                                note=notes if verdict == dispositions.RESOLVE else "")
     return {"recorded": verdict, "item_kind": KIND_PARKED_CAPTURE, "item_id": str(submission_id),
            "actor": actor, "result": result, "message": message}
 
@@ -353,9 +348,7 @@ def _decide_entity_proposal(service, item_id: str, verdict: str, notes: str, act
     mints. `name`/`entity_type` are validated only AFTER authorization, so a refused caller learns
     nothing about what a mint would need. `entity_id` prefills to `name`'s slug, and
     `entities.mint.mint` refuses one that is not actually that slug."""
-    submission_id = _parse_id(item_id)
-    row = capture_queue.get_submission_trace(service.conn, submission_id) \
-        if submission_id is not None else None
+    submission_id, row = _row_for_item(service, item_id)
     _guard_governance_decision(service, found=row is not None,
                                submitted_by=(row or {}).get("submitted_by", ""),
                                scope_path="", verdict=verdict)
@@ -378,7 +371,7 @@ def _decide_entity_proposal(service, item_id: str, verdict: str, notes: str, act
         if not notes:
             raise ReviewError("reject requires a reason")
         dispositions.reject(service.conn, submission_id, actor=actor, reason=notes)
-        message = f"recorded: reject on {KIND_ENTITY_PROPOSAL} #{submission_id} by {actor}."
+        message = _recorded_message(KIND_ENTITY_PROPOSAL, verdict, submission_id, actor)
         record_decision(service.conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(submission_id),
                         verdict=verdict, actor=actor, notes=notes)
         return {"recorded": verdict, "item_kind": KIND_ENTITY_PROPOSAL,
@@ -445,11 +438,8 @@ def mint_and_record_approval(conn, *, repo_url: str, submission_id: int, entity_
     steward's own clone and runs its own spelling of the same order, because `stigmergy.entities`
     cannot import `stigmergy.server`.
 
-    What it no longer does is skip the ledger. The writer moved DOWN to `capture.decisions`, below
-    both packages, so all three doors record the same row and `review_decisions` answers "who
-    approved this identity" completely (issue #51, ADR 030's amendment). A CLI approval is
-    attributable twice over now — from its commit's author and from its ledger row, which carry the
-    same steward identity.
+    All three doors write the ledger row (the writer is `capture.decisions`), so `review_decisions`
+    answers "who approved this identity" for every door.
 
     It deliberately covers three steps and no more. The pending-situation guard
     (`situations.require_situation`) stays at each call site because the two doors run it at
@@ -500,12 +490,9 @@ def _mint_entity_proposal(service, *, submission_id: int, entity_id: str, name: 
     exception type is translated where this package meets it, never allowed to leave
     (`_decide_entity_proposal`'s pre-mint guard does the same for its own).
 
-    The `try` covers the WHOLE shared sequence, not just the mint: the ledger row and the requeue
-    are inside it too. That is inert today — `CaptureError` and `EntityError` are disjoint
-    hierarchies, so neither of those two steps can raise what these handlers catch — but the
-    clause no longer means "the mint's own errors", it means "anything the sequence raises". Add
-    an `entities` call to `mint_and_record_approval` and this door starts translating it into a
-    `ReviewError` silently, where before it would have surfaced as an unanticipated fault.
+    The `try` covers the WHOLE shared sequence, not just the mint. Inert today (`CaptureError` and
+    `EntityError` are disjoint), but any `entities` call added to `mint_and_record_approval` starts
+    being translated into `ReviewError` here.
     """
     try:
         return mint_and_record_approval(
