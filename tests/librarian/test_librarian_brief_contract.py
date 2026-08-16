@@ -42,7 +42,7 @@ import pathlib
 
 import pytest
 
-from stigmergy.librarian import agent, config, edits, gates, gather, processing
+from stigmergy.librarian import agent, config, edits, gates, gather, processing, pydantic_backend
 
 # ── this contract runs in CI ────────────────────────────────────────────────────────────────────
 # The same two-halves arrangement `test_meeting_brief_contract.py` argues for at length: the RULE
@@ -190,15 +190,21 @@ def test_the_contract_table_is_not_vacuous():
 
 # ── the code side: read once, so every table entry's "marker in code" check is grep-cheap ───────
 def _code_text() -> str:
-    """The five modules the ordinary flow's contract actually lives in.
+    """The six modules the ordinary flow's contract actually lives in.
 
     Wider than the meeting version's two, because ADR 033 spread the flow: `gather` builds the
     context the brief promises, `edits` validates the declarations it documents, and `agent` owns
     the outcome boundary that decides which half of the account is well-formed.
+
+    `pydantic_backend` joined them for issue #53. The brief documents an inbound spelling
+    (`triage.name`, folded into `names`) that BOTH outcome boundaries have to honour — the file
+    channel through `agent.parse_outcome` and the structured road through `OrdinaryTriage`. A
+    contract that could only see one of them would go green on the day the other stopped agreeing,
+    which is the whole shape of what #53 was filed about.
     """
     import inspect
     return "".join(inspect.getsource(module)
-                   for module in (gates, processing, agent, edits, gather))
+                   for module in (gates, processing, agent, edits, gather, pydantic_backend))
 
 
 # (brief phrase, code marker) — see the module docstring for what each direction proves. Every
@@ -273,10 +279,14 @@ RULE_TABLE = [
     # contract while the row went green. Each half keeps its own live marker: the fixed set of kinds
     # this flow accepts, and the map that says which field each kind's report cannot be written
     # without (`TRIAGE_REQUIRED_FIELD[triage["kind"]]`, the lookup `parse_outcome` performs).
-    ('`kind` is `"unresolved-entity"` (with `name`, or `names` when the material leaves more than '
-     "one)", "TRIAGE_KINDS"),
-    ('or `"unsupported-type"` (with `judged_type`) — both the kind and its field are required, '
-     "because", "TRIAGE_REQUIRED_FIELD"),
+    # RE-POINTED by issue #53, which made `names` the primary spelling and rewrapped this sentence:
+    # both halves now sit on ONE line where they used to sit on two. They stay TWO rows anyway, for
+    # the reason above — a single row aimed at the joint phrase would go green while saying nothing
+    # about whichever kind fell outside its substring.
+    ('`kind` is `"unresolved-entity"` (with `names`, a list even for one) or `"unsupported-type"` '
+     "(with", "TRIAGE_KINDS"),
+    ("`judged_type`) — both the kind and its field are required, because",
+     "TRIAGE_REQUIRED_FIELD"),
     # ── issue #32: EVERY unresolved name, and never joined into one ───────────────────────────
     # The rule the brief change exists for, pinned on both of the places the brief now states it.
     #
@@ -284,8 +294,16 @@ RULE_TABLE = [
     #    it returns every name the account declared from EITHER shape — which is precisely "name
     #    every one of them in `names`" on the code side. A brief that kept promising the plural
     #    field while that reader went back to `parked.get("name")` is issue #32 reopening.
-    ("When the material leaves MORE THAN ONE thing unregistered, name **every** one of them in "
-     "`names` —", "_unresolved_names"),
+    ("`names` is a LIST, always — one entry when one thing is unregistered, and when the material "
+     "leaves", "_unresolved_names"),
+    # ── issue #53: the legacy singular spelling, tolerated on BOTH outcome boundaries ──────────
+    # The brief now promises that `"name": "Acme Corp"` is still read as a one-entry list. Pinned
+    # to the LINE THAT PERFORMS the fold, never to the validator's name: a marker satisfied by a
+    # method merely existing is the failure mode this table has already hit twice, and a validator
+    # that had stopped folding would still be a validator. `agent.parse_outcome`'s own half of the
+    # same tolerance is covered by the `_unresolved_names` row above, which reads either shape.
+    ("accepted and read as a one-entry list, so an older account is never refused over the "
+     "spelling —", 'return {**data, "names": [single]}'),
     # 2. The `## Never` bullet, which is the same rule stated as a prohibition ("park only SOME, or
     #    join several into one"). Its marker is the ORDINARY flow's own call into the park router,
     #    as a FULL CALL LINE rather than a bare function name.
