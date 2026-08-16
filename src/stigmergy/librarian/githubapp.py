@@ -82,12 +82,20 @@ def _private_key(env: dict) -> str:
         with open(path, encoding="utf-8") as f:
             return f.read()
     except OSError as ex:
-        # The path IS operator-sensitive — it is where the App's private key lives — and naming
-        # it is safe only because this is a local CLI diagnostic: `worker.process_next` never
-        # interpolates a mid-run `LibrarianConfigError` into the wire report. The guarantee
-        # lives THERE — if that handler is ever changed, this message puts the path on the wire.
+        # The path is where the App's PRIVATE KEY lives, and it is not in this message: it was,
+        # on the reasoning that `worker.process_next` never interpolates a mid-run
+        # `LibrarianConfigError` into the wire report — true of that handler, and false of the
+        # whole system. `entities.remote` catches this same exception on the server-side mint
+        # path, and `server.review` echoes what it raises to a steward verbatim, so the path
+        # reached the wire through a door this module had never looked at.
+        #
+        # MOVED, not lost: logged at ERROR with the traceback, where an operator reading the
+        # server log can see it and a steward cannot. `${PRIVATE_KEY_FILE_ENV}` is named instead,
+        # which is what an operator actually needs to fix it and carries no filesystem layout.
+        log.error("cannot read the librarian App private key file at %r", path, exc_info=True)
         raise LibrarianConfigError(
-            f"cannot read the librarian App private key at {path!r}: {ex.__class__.__name__}") from ex
+            f"cannot read the librarian App private key file named by ${PRIVATE_KEY_FILE_ENV} "
+            f"({ex.__class__.__name__}) — the path is in the server log") from ex
 
 
 def _app_jwt(app_id: str, private_key: str) -> str:

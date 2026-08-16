@@ -11,6 +11,7 @@ closes, is the credential math no server-side test exercises without a real `htt
 a real App: the tokenized URL's exact shape, the half-configured-App refusal, and that a failed
 mint still cleans up its own throwaway clone.
 """
+import logging
 import os
 
 import pytest
@@ -64,7 +65,27 @@ def test_a_half_configured_app_is_a_plain_entity_error_not_capability_unavailabl
     with pytest.raises(EntityError) as excinfo:
         remote._authenticated_url("https://github.com/acme/knowledge.git", partial)
     assert not isinstance(excinfo.value, CapabilityUnavailableError)
-    assert "misconfigured" in str(excinfo.value)
+    assert str(excinfo.value) == remote.APP_MISCONFIGURED_MESSAGE
+
+
+def test_a_half_configured_app_does_not_echo_the_librarian_exceptions_own_text(caplog):
+    """OLD BEHAVIOUR: the message was `f"the librarian GitHub App is misconfigured: {ex}"`, so a
+    `librarian` exception's own text reached a steward over MCP verbatim — twelve lines below this
+    module's rule forbidding exactly that splice. `githubapp` names the private-key FILE PATH in
+    one of the `LibrarianConfigError`s reachable here, which made this a server-side filesystem
+    disclosure to anyone able to trigger it.
+
+    MOVED, not lost, is the property: the operator still gets the detail, in the log.
+    """
+    partial = {remote.githubapp.APP_ID_ENV: "123456"}
+    with caplog.at_level(logging.ERROR, logger=remote.log.name), pytest.raises(EntityError) as ex:
+        remote._authenticated_url("https://github.com/acme/knowledge.git", partial)
+
+    told_the_steward = str(ex.value)
+    assert remote.githubapp.PRIVATE_KEY_FILE_ENV not in told_the_steward
+    assert "LibrarianConfigError" not in told_the_steward
+    assert caplog.records and caplog.records[-1].exc_info, (
+        "the detail was dropped rather than moved — an operator now has nothing to debug with")
 
 
 def test_a_credential_that_cannot_mint_a_token_is_a_plain_entity_error(monkeypatch):
@@ -78,7 +99,26 @@ def test_a_credential_that_cannot_mint_a_token_is_a_plain_entity_error(monkeypat
     with pytest.raises(EntityError) as excinfo:
         remote._authenticated_url("https://github.com/acme/knowledge.git", FULL_CREDENTIAL)
     assert not isinstance(excinfo.value, CapabilityUnavailableError)
-    assert "HTTP 401" in str(excinfo.value)
+    assert str(excinfo.value) == remote.CREDENTIAL_FAULT_MESSAGE
+
+
+def test_a_token_exchange_fault_moves_githubs_own_words_to_the_log(monkeypatch, caplog):
+    """The second half of the same defect. OLD BEHAVIOUR: `f"...: {ex}"` put whatever the token
+    exchange said — GitHub's HTTP body included — in front of a steward.
+
+    The benign twin for both is `test_..._is_a_plain_entity_error` above: the steward is still
+    told the mint failed and that it was not their approval's fault, which is the only part they
+    can act on. A refusal that says nothing at all would be the other way to fail this.
+    """
+    def boom(env):
+        raise LibrarianConfigError("GitHub refused an installation token (HTTP 401)")
+    monkeypatch.setattr(remote.githubapp, "installation_token", boom)
+
+    with caplog.at_level(logging.ERROR, logger=remote.log.name), pytest.raises(EntityError) as ex:
+        remote._authenticated_url("https://github.com/acme/knowledge.git", FULL_CREDENTIAL)
+
+    assert "HTTP 401" not in str(ex.value)
+    assert "HTTP 401" in caplog.text, "the operator lost the one detail that names the fault"
 
 
 def test_embeds_a_minted_token_into_the_url_in_the_shape_gitcmd_scrubs(monkeypatch):
