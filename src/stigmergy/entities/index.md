@@ -18,7 +18,7 @@ plus an `Approved-by:` trailer naming the human.
 | Module | What it is |
 |---|---|
 | `cli.py` | `stigmergy-entities` — `list · show · approve · reject · create · regenerate [--check]`; a thin adapter over `mint.mint` (derives `author` from the steward's clone via `clone.preflight`); owns the printed-command safety (`_suggestable`) and is the only module here that opens a database connection |
-| `situations.py` | which parked (`triage`) rows are an identity decision — `classify`, `subject_of` / `subjects_of`, the two semantic entry points (`list_pending_situations`, `get_situation`) and the write guard (`require_situation`) |
+| `situations.py` | which parked (`triage`) rows are an identity decision — `classify`, `subject_of` / `subjects_of` / `mint_name_prefill`, the two semantic entry points (`list_pending_situations`, `get_situation`) and the write guard (`require_situation`) |
 | `birth.py` | resolve-before-mint as a pure function of a proposal and a registry (`prepare`, `recheck`, `_refuse_collisions`) and the page renderer (`render_page`, `_yaml_str`, `commit_message`) |
 | `generator.py` | the registry generator: `read_entity_pages`, `derive_registry`, `registry_of`, `compare` (semantic drift), `check` / `regenerate`, `canonical_id_for` |
 | `clone.py` | the working copy's checks and push: `preflight` (branch/identity/clean/in-sync), `commit_and_push` with fetch-regenerate-retry, `write_page` / `discard_untracked`. Never repairs, never force-pushes |
@@ -28,10 +28,30 @@ plus an `Approved-by:` trailer naming the human.
 
 ## Use these
 
-- `situations.classify` / `subject_of` / `subjects_of` — the ONE reading of "is this parked row an
-  entity situation, and about what". `subjects_of` is the per-name list (an ordinary or meeting
-  park can carry several, each independently approvable); `subject_of` the single display string
-  it collapses to.
+- `situations.classify` / `subject_of` / `subjects_of` / `mint_name_prefill` — the ONE reading of
+  "is this parked row an entity situation, about what, and what may a form offer for it". Three
+  functions over the same row with three different jobs: `subject_of` DISPLAYS (one string; several
+  names joined with `", "`), `subjects_of` ACTS (the per-name list — an ordinary or meeting park
+  can carry several names, each independently approvable), `mint_name_prefill` DECIDES (the single
+  unresolved name, or `""` when several or none mean no default can be right).
+- `situations.mint_name_prefill` — the one-vs-several prefill rule for the entity-mint Name field,
+  decided HERE and nowhere else, and DELIVERED on the row: `_situation_view` carries it beside
+  `subject`/`subjects`, so every consumer of `list_pending_situations` / `get_situation` (the CLI's
+  `--json`, both admin entity routes) reads one already-decided value instead of computing it over
+  whatever shape of the row it happens to hold. Both mint doors — the Slack modal (`slack.render`,
+  handed the same value on the review item `server.review` builds) and the admin console's Approve
+  form (`admin/static/assets/views.js`) — OBEY it: they render it, and list `subjects` when it is
+  `""`. Neither counts the names again, so no door can disagree about WHEN a default is safe.
+  The offered STRING can still differ between them: sanitization is per transport — the console
+  strips control characters out of what it renders, Slack and MCP do not — a known gap (issue #46)
+  this rule does not close. Submitting either door mints one entity as one signed commit, so a
+  surface that re-derives the rule is a second policy that can drift into minting a name nobody
+  chose.
+  `cli._print_next_commands` looks similar and is not this: its one-vs-several test decides whether
+  to LABEL each printed command with its name, over a list whose fallback is taken only when
+  `subjects_of` is empty — which is exactly when no join ran, so what it reaches is the row's raw
+  singular `SITUATION_NAME_KEY`, verbatim, never the joined display string. Nothing there prefills
+  a form.
 - `situations.require_situation` — the write guard before anything is validated or written; being
   able to read a row is not permission to mint from it.
 - `birth.prepare` / `birth.recheck` — resolve-before-mint, pure (a `Registry` in, a `Proposal` or

@@ -654,24 +654,33 @@ export async function entityDetailView(host, id) {
 // `entity_id` is deliberately NOT a field here, the same call `slack.render`'s entity-mint modal
 // makes (ADR 030 D5, "one less field to mistype") — it defaults server-side to the slug of `name`.
 //
-// `Name` prefills from `subjects`, the per-name list, and NEVER from the joined `subject` display
-// string (`entities.situations.subject_of`): a park naming two unresolved entities joins them into
+// `Name` prefills from `mint_name_prefill` — the decision `entities.situations` takes once on the
+// parked row, which `admin.service._situation` only sanitizes and sends, identically on the list
+// and detail routes — and NEVER from the joined `subject` display string
+// (`entities.situations.subject_of`): a park naming two unresolved entities joins them into
 // "Jack, Acme Capital", which is neither name, and one submission here mints ONE entity with ONE
-// commit nothing can cancel afterwards. So the prefill exists only when exactly one name could be
-// meant; with several the field stays empty and the names are listed for the steward to pick from
-// — the rule `slack.render.render_entity_mint_modal` applies to the same data on the other door.
+// commit nothing can cancel afterwards. This flow does not count names: an empty prefill with
+// names still to place IS the several-names case, so the field stays empty and `subjects`, the
+// per-name list, is listed for the steward to pick from. The Slack mint modal obeys the same
+// decided value, so neither door can disagree about WHEN a default is safe. The offered STRING
+// can still differ: this console strips control characters out of what it renders and Slack does
+// not, so a ragged name reaches the two forms with different bytes (issue #46).
 async function entityApproveFlow(row) {
   const names = (row.subjects || []).map((n) => String(n)).filter((n) => n.trim());
-  const proposed = names.length === 1 ? names[0] : "";
+  const proposed = String(row.mint_name_prefill || "");
   const answer = await confirmForm({
     title: `Approve #${row.id} — mint a new entity`,
     consequence: "mints a real entity: pushes ONE commit to the knowledge repo (authored by the "
       + "librarian App, Approved-by you) and regenerates the registry. Not something cancelling "
       + "after this point can undo.",
-    note: names.length > 1
+    note: !proposed && names.length
       ? banner("warn",
-          el("div", {}, `this capture names ${names.length} entities the registry does not `
-            + "recognize:"),
+          // No count in this sentence: the several-names decision was taken on the raw row, and
+          // this list is what survived sanitizing — a name made entirely of control characters
+          // counts towards "no default is safe" and then has nothing left to show. Naming a
+          // number here would contradict the bullets on exactly the park that motivated the rule.
+          el("div", {}, "this capture names several entities the registry does not recognize — "
+            + "these are the ones it can show:"),
           el("ul", { class: "names" }, names.map((name) => el("li", {}, name))),
           el("div", {}, "they are minted one at a time — type the single name you are approving "
             + "now; the others stay unresolved on this capture until each gets its own decision."))

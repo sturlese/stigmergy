@@ -110,6 +110,17 @@ must not depend on a converter, so an unlisted file is a 400 naming the allowed 
 - Raising a message that could carry captured content across the HTTP boundary. The catch-all in
   `_json_endpoint` returns `the operation failed (<ClassName>)`; only the three domain errors and
   `ActionsError` cross with their sentence.
+- Deciding in `views.js` when the Approve form's `Name` may carry a default. The one-vs-several
+  rule is `entities.situations.mint_name_prefill`'s alone, and it is taken where `subject` and
+  `subjects` are — in `situations._situation_view`, on the row BOTH entity routes read, so the
+  list route and the detail route cannot answer differently. `_situation` only sanitizes what it
+  is handed (`mint_name_prefill` beside `subject`/`subjects`) and never recomputes it from a row
+  it preprocessed itself; `entityApproveFlow` renders it — an empty prefill with names still to
+  place IS the several-names case, so the field stays empty and `subjects` is listed. Never
+  prefill from the joined `subject` display string, and never count names here: this form mints
+  ONE entity as ONE commit, and the Slack modal obeys the same decided value, so a second
+  derivation is two doors that can disagree about whether a default is safe at all.
+  `tests/admin/test_static_discipline.py` greps for exactly this.
 - Building DOM from an HTML string in `static/`. `innerHTML`, `outerHTML`, `insertAdjacentHTML`,
   `document.write`, `eval(`, `new Function` and any `http(s)` `src`/`href` are grepped out of the
   shipped files by `tests/admin/test_static_discipline.py`; only `textContent` makes markup inert.

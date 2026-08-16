@@ -2,6 +2,7 @@
 order, real static files, real Postgres underneath. The inner app is a marker so every test can
 prove non-admin traffic still reaches it untouched."""
 import asyncio
+import json
 
 import httpx
 import pytest
@@ -9,8 +10,15 @@ from starlette.responses import JSONResponse
 
 from stigmergy.admin.routes import compose
 from stigmergy.admin.settings import AdminSettings
+from stigmergy.capture import schema as capture_schema
 from stigmergy.server.settings import Settings
-from tests.admin.conftest import ADMIN_TOKEN, park, submit_one, unresolved_entity_report
+from tests.admin.conftest import (
+    ADMIN_TOKEN,
+    park,
+    submit_one,
+    unresolved_entity_names_report,
+    unresolved_entity_report,
+)
 
 
 async def _inner(scope, receive, send):
@@ -149,6 +157,239 @@ def test_a_malformed_body_is_a_400_not_a_traceback(conn, app):
     response = asyncio.run(go())
     assert response.status_code == 400
     assert response.json() == {"error": "request body must be valid JSON"}
+
+
+# ── the entities surface over HTTP: what the console's mint form is actually handed ────────────
+# CHARACTERIZATION, and a hole this file had: the two GET routes the Entities tab reads had no
+# wire-level test at all — only the POST that mints. Everything the browser knows about an
+# unresolved-entity park crosses exactly these two responses, and `views.js` decides its `Name`
+# prefill from what it finds there, so an omission on this wire is an omission the frontend cannot
+# recover from and no Python test would otherwise notice.
+def test_characterization_the_entities_wire_carries_both_the_joined_subject_and_the_per_name_list(
+        conn, app):
+    """Pins the SHAPE, on both routes, for a park naming two unresolved entities. `subject` is the
+    display string (`", ".join`) and `subjects` is the per-name list; the list route wraps its rows
+    in a `situations` envelope and the detail route returns the object bare. The console navigates
+    list -> detail, so a key present on one path only is a key the next reader finds missing."""
+    ack = submit_one(conn)
+    park(conn, ack["id"], report=unresolved_entity_names_report("Jack", "Acme Capital"))
+
+    listed = _request(app, "GET", "/admin/api/entities")
+    assert listed.status_code == 200
+    rows = {r["id"]: r for r in listed.json()["situations"]}
+    assert rows[ack["id"]]["subject"] == "Jack, Acme Capital"
+    assert rows[ack["id"]]["subjects"] == ["Jack", "Acme Capital"]
+
+    detail = _request(app, "GET", f"/admin/api/entities/{ack['id']}")
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["subject"] == "Jack, Acme Capital"
+    assert body["subjects"] == ["Jack", "Acme Capital"]
+    assert body["situation"] == "unresolved-entity"
+    # The joined compound is a DISPLAY string and nothing on this wire may be mistaken for a name:
+    # it is not among the names, so a client that prefilled from it mints something nobody wrote.
+    assert body["subject"] not in body["subjects"]
+
+
+def test_characterization_a_single_name_park_reaches_the_wire_as_a_one_element_list(conn, app):
+    """The benign twin, and the case the console prefills from: one unresolved name arrives as a
+    one-element `subjects` list whose only entry equals `subject`. The two keys agreeing here is
+    what makes the several-names case distinguishable at all."""
+    ack = submit_one(conn)
+    park(conn, ack["id"], report=unresolved_entity_report("Globex Robotics"))
+
+    body = _request(app, "GET", f"/admin/api/entities/{ack['id']}").json()
+
+    assert body["subject"] == "Globex Robotics"
+    assert body["subjects"] == ["Globex Robotics"]
+
+
+def test_characterization_an_unsupported_type_park_reaches_the_wire_with_no_names_at_all(
+        conn, app):
+    """The third situation the same two routes serve. `subject` is the judged TYPE and `subjects`
+    is EMPTY — never a one-element list holding the type, which a form prefilling from `subjects`
+    would offer a steward as an entity named "person"."""
+    ack = submit_one(conn)
+    park(conn, ack["id"], report={
+        capture_schema.SITUATION_KEY: capture_schema.SITUATION_UNSUPPORTED_TYPE,
+        capture_schema.SITUATION_TYPE_KEY: "person"})
+
+    body = _request(app, "GET", f"/admin/api/entities/{ack['id']}").json()
+
+    assert body["situation"] == "unsupported-type"
+    assert body["subject"] == "person"
+    assert body["subjects"] == []
+
+
+# ── the decided mint prefill over HTTP: the value the console's Approve form defaults to ───────
+# `entities.situations.mint_name_prefill` decides one-vs-several ONCE, and `views.js` reads
+# `row.mint_name_prefill` instead of counting names itself. That only holds if the key is actually
+# on the wire — on BOTH routes, since the console navigates list -> detail and opens the Approve
+# form from either. A frontend reading a key the API does not send gets `undefined`, prefills
+# nothing, and shows no listing either: an empty required field with no explanation, silently.
+# The rule's own cases live in `tests/entities/test_situations.py`; these prove delivery.
+def test_a_multi_name_park_sends_an_empty_mint_prefill_on_both_entity_routes(conn, app):
+    """Two unresolved names: `mint_name_prefill` is `""` — the instruction to leave `Name` empty
+    and list `subjects` — and it is PRESENT rather than absent, on the list route and on the detail
+    route alike. Absent and empty look the same to `row.mint_name_prefill || ""` in the browser and
+    are not the same contract: only a present key proves the server decided."""
+    ack = submit_one(conn)
+    park(conn, ack["id"], report=unresolved_entity_names_report("Jack", "Acme Capital"))
+
+    listed = {r["id"]: r for r in _request(app, "GET", "/admin/api/entities").json()["situations"]}
+    detail = _request(app, "GET", f"/admin/api/entities/{ack['id']}").json()
+
+    for where, row in (("list", listed[ack["id"]]), ("detail", detail)):
+        assert "mint_name_prefill" in row, (
+            f"the {where} route omits `mint_name_prefill` — the console's Approve form reads it "
+            "and would fall back to an unexplained empty field")
+        assert row["mint_name_prefill"] == "", where
+        # coexistence: the two older keys are unchanged in name, type and value on the same wire
+        assert row["subject"] == "Jack, Acme Capital", where
+        assert row["subjects"] == ["Jack", "Acme Capital"], where
+
+
+def test_a_single_name_park_sends_that_name_as_the_mint_prefill_on_both_entity_routes(conn, app):
+    """The benign twin. A consolidation that blanked every prefill satisfies the test above and
+    fails here, and a steward who retypes the same name on every approval learns to stop reading
+    the field — which is how the next wrong value gets submitted."""
+    ack = submit_one(conn)
+    park(conn, ack["id"], report=unresolved_entity_report("Globex Robotics"))
+
+    listed = {r["id"]: r for r in _request(app, "GET", "/admin/api/entities").json()["situations"]}
+    detail = _request(app, "GET", f"/admin/api/entities/{ack['id']}").json()
+
+    assert listed[ack["id"]]["mint_name_prefill"] == "Globex Robotics"
+    assert detail["mint_name_prefill"] == "Globex Robotics"
+    assert detail["subjects"] == ["Globex Robotics"]
+
+
+def test_an_unsupported_type_park_sends_an_empty_prefill_and_never_the_judged_type(conn, app):
+    """The judged type is this row's `subject` and is not a name anybody mints — the prefill must
+    not carry it into a form whose submission pushes a signed commit."""
+    ack = submit_one(conn)
+    park(conn, ack["id"], report={
+        capture_schema.SITUATION_KEY: capture_schema.SITUATION_UNSUPPORTED_TYPE,
+        capture_schema.SITUATION_TYPE_KEY: "person"})
+
+    body = _request(app, "GET", f"/admin/api/entities/{ack['id']}").json()
+
+    assert body["mint_name_prefill"] == ""
+    assert body["subject"] == "person"
+
+
+def test_an_entities_row_carrying_the_new_prefill_still_satisfies_an_old_shape_reader(conn, app):
+    """COEXISTENCE, over HTTP. The key is ADDITIVE: a client written before it existed still finds
+    every field it reads, with the same name, type and value. Consumed through such a reader rather
+    than eyeballed, so a rename or a retype fails it too — and its own derived answer is asserted
+    to equal the server's decision, which is what makes the derivation safe to delete."""
+    ack = submit_one(conn)
+    park(conn, ack["id"], report=unresolved_entity_names_report("Jack", "Acme Capital"))
+
+    row = _request(app, "GET", f"/admin/api/entities/{ack['id']}").json()
+
+    def old_shape_reader(entry: dict) -> str:
+        """`entityApproveFlow` before the consolidation: it counted `subjects` itself."""
+        names = [str(n) for n in (entry["subjects"] or []) if str(n).strip()]
+        return names[0] if len(names) == 1 else ""
+
+    assert old_shape_reader(row) == ""
+    assert old_shape_reader(row) == row["mint_name_prefill"]
+    assert row["subject"] == "Jack, Acme Capital" and row["situation"] == "unresolved-entity"
+
+
+def test_the_console_decides_the_prefill_on_the_raw_row_before_sanitizing_shows_the_names(
+        conn, app):
+    """**The one behavioural delta of the consolidation, pinned as a decision.**
+
+    `_situation` decides on the RAW row and `_clean` (control characters stripped) runs on the way
+    out, so a name made ENTIRELY of control characters — which `subjects_of`'s `.strip()` filter
+    keeps, since `\\x01` is not whitespace — counts towards the decision and then leaves as `""`.
+
+    OLD BEHAVIOUR for `subjects == ["Jack", "\\x01"]`: the console received `["Jack", ""]`, its own
+    JS filter dropped the empty entry, it saw ONE name and prefilled "Jack" — while the Slack door,
+    deciding on the same park before any such stripping, saw TWO and left its field empty. The two
+    doors could not agree.
+
+    NOW: the decision is taken once, before sanitizing, so both doors say "several names, no
+    default" — the console leaves `Name` empty and lists what survived ("Jack"). Strictly safer
+    (an emptied field is retyped; a wrong accepted default is a commit) and it is what makes the
+    two doors agree at all. Accepted deliberately; asserted here so the decide-before-sanitize
+    ORDERING is a contract rather than something rediscovered from a bug report."""
+    ack = submit_one(conn)
+    park(conn, ack["id"], report=unresolved_entity_names_report("Jack", "\x01"))
+
+    body = _request(app, "GET", f"/admin/api/entities/{ack['id']}").json()
+
+    assert body["mint_name_prefill"] == "", (
+        "the prefill is decided on the raw row, where this park has TWO names — deciding after "
+        "`_clean` would prefill 'Jack' and disagree with the Slack door on the same park")
+    assert body["subjects"] == ["Jack", ""], (
+        "sanitizing still runs, and it runs AFTER: the control-character name reaches the browser "
+        "emptied, so the listing shows only the name a human can read")
+    assert "\x01" not in json.dumps(body), "no control character may reach the console"
+
+
+def test_the_two_entity_routes_agree_byte_for_byte_on_the_prefill_of_a_ragged_name(conn, app):
+    """One park, ONE default name — the same bytes on the list route and on the detail route.
+
+    OLD BEHAVIOUR, for a park whose singular `SITUATION_NAME_KEY` is `"\\x01 Jack"`:
+
+        GET /admin/api/entities        ->  mint_name_prefill == " Jack"   (what `main` answers)
+        GET /admin/api/entities/{id}   ->  mint_name_prefill == "Jack"
+
+    and the DETAIL route is the one the console's Approve form is opened from, so the string a
+    steward submits unchanged was not the string the list had shown them, nor the one the Slack
+    door offers for the same row — three surfaces, three default names for one park.
+
+    Order, not rule: `entities_show` sanitized the row BEFORE handing it to the decision, so
+    `mint_name_prefill` read a `report` whose STRING values had already had their control
+    characters removed and `.strip()` then also took the space they had been shielding. (The
+    plural-key tests above never caught it: `_traced_fields` only cleans `isinstance(v, str)`
+    values, so a `SITUATION_NAMES_KEY` list passes through untouched.) The decision is taken on
+    the RAW row — the test above pins that ordering — and sanitized ONCE on the way out.
+
+    Byte-identical rather than "close enough": the difference is a leading space in a name minted
+    into the knowledge repo as an entity title and slugged into its canonical id.
+    """
+    ack = submit_one(conn)
+    park(conn, ack["id"], report=unresolved_entity_report("\x01 Jack"))
+
+    listed = {r["id"]: r for r in _request(app, "GET", "/admin/api/entities").json()["situations"]}
+    detail = _request(app, "GET", f"/admin/api/entities/{ack['id']}").json()
+    list_prefill = listed[ack["id"]]["mint_name_prefill"]
+    detail_prefill = detail["mint_name_prefill"]
+
+    assert list_prefill == detail_prefill, (
+        f"one park, two default names: the list route offers {list_prefill!r} and the detail "
+        f"route — the one the Approve form is opened from — offers {detail_prefill!r}")
+    assert detail_prefill == " Jack", (
+        "the prefill is decided on the RAW row, where this name is '\\x01 Jack', and the console's "
+        "only transformation is `_clean` on the way out; tidying it further is a decision about "
+        "what gets minted, taken in `entities.situations`, not a side effect of sanitizing twice")
+    assert detail_prefill in detail["subjects"], (
+        "the offered default must be one of the names the row DISPLAYS — a prefill that is in no "
+        "listing is a name no surface ever showed the steward who submits it")
+    assert "\x01" not in json.dumps(detail), "no control character may reach the console"
+
+
+def test_an_ordinary_punctuated_name_still_prefills_and_still_agrees_on_both_routes(conn, app):
+    """The specificity twin of the regression above: agreeing is not enough, the two routes have
+    to agree on the NAME. Blanking every prefill, or normalizing one into the other, satisfies that
+    test and fails this one. Its payload is deliberately not the plain-ASCII name of
+    `test_a_single_name_park_sends_that_name_as_the_mint_prefill_on_both_entity_routes`: accents
+    and punctuation are what a "sanitize harder / strip more" fix quietly rewrites, and they are
+    ordinary in the entity names stewards actually mint."""
+    name = "Jörg & Söhne AB"
+    ack = submit_one(conn)
+    park(conn, ack["id"], report=unresolved_entity_report(name))
+
+    listed = {r["id"]: r for r in _request(app, "GET", "/admin/api/entities").json()["situations"]}
+    detail = _request(app, "GET", f"/admin/api/entities/{ack['id']}").json()
+
+    assert listed[ack["id"]]["mint_name_prefill"] == name
+    assert detail["mint_name_prefill"] == name
+    assert detail["subjects"] == [name]
 
 
 # ── the entities surface over HTTP: a real Approve, mints (ADR 030) ────────────────────────────

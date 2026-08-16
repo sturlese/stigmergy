@@ -314,7 +314,7 @@ def test_entity_proposal_approve_button_opens_the_mint_modal_with_the_name_prefi
 def test_entity_proposal_approve_modal_prefill_is_empty_when_the_item_is_no_longer_open(
         env, conn):
     """The doorbell-card scenario where the proposal was decided or disposed of between the DM and
-    this click (see `_unresolved_names_for`'s own docstring): the modal still opens, just with an
+    this click (see `_mint_modal_inputs`'s own docstring): the modal still opens, just with an
     empty name field a steward can fill by hand — never a crash, never a stale name."""
     gw = FakeSlackGateway()
     ctx = make_ctx(env, conn, gateway=gw)
@@ -341,7 +341,7 @@ def test_approving_a_two_name_proposal_opens_a_modal_with_no_prefill_and_no_join
     for it, through the same governed door
     `test_entity_mint_modal_submission_mints_for_real_end_to_end` below exercises.
 
-    Real Postgres row, real `_unresolved_names_for` read, real renderer, `FakeSlackGateway` in
+    Real Postgres row, real `_mint_modal_inputs` read, real renderer, `FakeSlackGateway` in
     Slack's place — nothing between the parked row and the opened view is doubled, because the
     defect lived exactly there.
     """
@@ -392,6 +392,100 @@ def test_approving_a_single_name_proposal_still_prefills_it_through_the_same_doo
     view = gw.opened_views[0]["view"]
     blocks_by_id = {b["block_id"]: b for b in view["blocks"] if "block_id" in b}
     assert blocks_by_id[render.ENTITY_MINT_NAME_BLOCK_ID]["element"]["initial_value"] == "Jack"
+
+
+# CHARACTERIZATION, on the same real road as the two tests above, and the reason it is worth
+# having twice. The one-vs-several rule is now decided in ONE place (`entities.situations.
+# mint_name_prefill`) and pinned there directly, but the tidy inputs — one clean name, two clean
+# names — were the only ones this DOOR had ever been shown. The rows below are the ragged inputs a
+# real park can produce, pinned at the seam that survives any reshuffle of who decides: a parked
+# Postgres row goes in, the payload Slack would show a steward comes out. They record what the door
+# does today, not what it ought to do; each has a twin on the pure function in
+# `tests/entities/test_situations.py`, and the pair is what proves the decision and its delivery
+# have not drifted apart.
+def test_characterization_two_identical_names_open_the_several_names_modal_not_a_prefilled_one(
+        env, conn):
+    """A park naming the same unresolved entity twice is a TWO-name park all the way down: nothing
+    de-duplicates, so the count that drives the rule is 2, the `Name` field stays EMPTY and the
+    steward is shown the same name listed twice. This looks like a bug to a reader and it is the
+    safe direction of one — the field a steward would otherwise accept unchanged stays blank — but
+    a consolidation that de-duplicates flips this row to a silent prefill, which is a behaviour
+    change reaching the knowledge repo, not a tidy-up."""
+    gw = FakeSlackGateway()
+    ctx = make_ctx(env, conn, gateway=gw)
+    item_id = _park_capture(conn, MemoryEvidenceStore(),
+                            situation=capture_schema.SITUATION_UNRESOLVED_ENTITY,
+                            names=["Jack", "Jack"])
+
+    _run(review.handle_block_action(
+        ctx, action_id="review-modal:entity-proposal:approve", value=str(item_id),
+        trigger_id="T1", channel_id=STEWARD_SLACK_ID, slack_user_id=STEWARD_SLACK_ID,
+        event_team_id=TEAM_ID))
+
+    view = gw.opened_views[0]["view"]
+    blocks_by_id = {b["block_id"]: b for b in view["blocks"] if "block_id" in b}
+    assert "initial_value" not in blocks_by_id[render.ENTITY_MINT_NAME_BLOCK_ID]["element"]
+    sections = [b["text"]["text"] for b in view["blocks"] if b.get("type") == "section"]
+    assert len(sections) == 1 and sections[0].count("Jack") == 2
+
+
+def test_characterization_a_padded_single_name_is_prefilled_with_its_padding_intact(env, conn):
+    """The plural key's entries are filtered on `.strip()` but never stripped, so the whitespace a
+    park wrote around a name rides all the way into `initial_value` — and `initial_value` is what a
+    steward submits unchanged, so `"  Jack  "` is what the mint is asked for. The SINGULAR key is
+    stripped on the way out of `situations.subjects_of`, so the identical name arrives clean by the
+    other road (`tests/entities/test_situations.py` pins that asymmetry at its source).
+
+    Recorded, not endorsed: trimming here is very likely an improvement, but it is a change to what
+    gets minted and it belongs to a decision, not to a refactor whose contract is "behaviour must
+    be identical"."""
+    gw = FakeSlackGateway()
+    ctx = make_ctx(env, conn, gateway=gw)
+    item_id = _park_capture(conn, MemoryEvidenceStore(),
+                            situation=capture_schema.SITUATION_UNRESOLVED_ENTITY,
+                            names=["  Jack  "])
+
+    _run(review.handle_block_action(
+        ctx, action_id="review-modal:entity-proposal:approve", value=str(item_id),
+        trigger_id="T1", channel_id=STEWARD_SLACK_ID, slack_user_id=STEWARD_SLACK_ID,
+        event_team_id=TEAM_ID))
+
+    view = gw.opened_views[0]["view"]
+    blocks_by_id = {b["block_id"]: b for b in view["blocks"] if "block_id" in b}
+    assert blocks_by_id[render.ENTITY_MINT_NAME_BLOCK_ID]["element"]["initial_value"] == "  Jack  "
+    assert [b["text"]["text"] for b in view["blocks"] if b.get("type") == "section"] == [], (
+        "one name after filtering is the SINGLE-name case — the several-names copy must not fire")
+
+
+def test_a_control_character_name_is_a_second_name_on_this_door_too(env, conn):
+    """The parity half of the admin console's one accepted behavioural delta
+    (`tests/admin/test_routes_pg.py::test_the_console_decides_the_prefill_on_the_raw_row_before_
+    sanitizing_shows_the_names`). The console sanitizes control characters on the way out, so a
+    name made entirely of them used to VANISH before that door counted, leaving it prefilling
+    "Jack" where this door left its field empty — the two doors disagreeing about the same park.
+
+    This road has no such step: nothing between the parked row and this payload strips control
+    characters (`server.review` neutralizes the UNTRUSTED-DATA fence token and nothing else), so
+    `["Jack", "\\x01"]` was a two-name park here BEFORE the consolidation and still is. Asserted
+    rather than argued: if a sanitizing step is ever added to this path, this test is what says the
+    two doors have gone back to disagreeing."""
+    gw = FakeSlackGateway()
+    ctx = make_ctx(env, conn, gateway=gw)
+    item_id = _park_capture(conn, MemoryEvidenceStore(),
+                            situation=capture_schema.SITUATION_UNRESOLVED_ENTITY,
+                            names=["Jack", "\x01"])
+
+    _run(review.handle_block_action(
+        ctx, action_id="review-modal:entity-proposal:approve", value=str(item_id),
+        trigger_id="T1", channel_id=STEWARD_SLACK_ID, slack_user_id=STEWARD_SLACK_ID,
+        event_team_id=TEAM_ID))
+
+    view = gw.opened_views[0]["view"]
+    blocks_by_id = {b["block_id"]: b for b in view["blocks"] if "block_id" in b}
+    assert "initial_value" not in blocks_by_id[render.ENTITY_MINT_NAME_BLOCK_ID]["element"], (
+        "two names is two names on this door — a prefill here would mint 'Jack' and drop the other")
+    sections = [b["text"]["text"] for b in view["blocks"] if b.get("type") == "section"]
+    assert len(sections) == 1 and "Jack" in sections[0]
 
 
 def test_entity_mint_modal_submission_calls_review_decide_safe_with_the_collected_metadata(

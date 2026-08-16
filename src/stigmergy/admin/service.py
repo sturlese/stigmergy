@@ -305,7 +305,7 @@ class AdminService:
         row = situations.get_situation(self._conn, submission_id)
         if row is None:
             raise AdminNotFound(f"submission {submission_id} does not exist")
-        return self._situation(self._traced_fields(row))
+        return self._situation(row)
 
     def entity_approve(self, situation_id: int, *, actor: str, name: str, entity_type: str,
                        entity_id: str = "", aliases: str = "", role: str = "",
@@ -624,9 +624,16 @@ class AdminService:
         return out
 
     def _situation(self, row: dict) -> dict:
+        """Sanitize a row `entities.situations` already shaped. Every derived field arrives
+        decided — `subject`, `subjects` and `mint_name_prefill` alike — and is only cleaned here,
+        so no caller can hand this a differently-preprocessed row and get a different default
+        name than the other route. `mint_name_prefill == ""` is the instruction to leave the
+        Approve form's field empty and list `subjects`, not an absent key.
+        """
         out = self._traced_fields(row)
         out["subject"] = _clean(out.get("subject"))
         out["subjects"] = [_clean(s) for s in out.get("subjects") or []]
+        out["mint_name_prefill"] = _clean(out.get("mint_name_prefill"))
         return out
 
     def _audit_aggregate(self) -> list[dict]:

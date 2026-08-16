@@ -77,10 +77,17 @@ path, authenticated by HMAC instead.
   `situations.require_situation` exactly as much as the mint. `stigmergy.slack` may not import
   `stigmergy.entities`, so anything untranslated reaches a caller that can only catch it as an
   unanticipated fault whose text it must not show.
-- An `entity-proposal` item carries the unresolved identity TWICE, as `situations` emits it:
-  `subject`, one display string joining several names with `", "`, and `subjects`, the per-name
-  list. A consumer that ACTS on a name — prefilling a mint form, running one command per name —
-  reads `subjects`; the joined `subject` is not any of the real names.
+- An `entity-proposal` item carries the unresolved identity in every shape `situations` emits it:
+  `subject`, one display string joining several names with `", "`; `subjects`, the per-name list a
+  consumer that ACTS on a name reads (running one command per name — the joined `subject` is not
+  any of the real names); and `mint_name_prefill`, the name a mint form may default to.
+- The one-vs-several prefill rule is decided ONCE, in `entities.situations.mint_name_prefill`, and
+  `_collect_open_items` only carries the answer out. `""` means no single string can be right, and
+  the surface lists `subjects` instead. Both mint doors write the same irreversible commit, so a
+  surface re-deriving the rule from `subjects` is a second policy that can drift. What the shared
+  answer settles is WHEN a default is offered and WHICH name it is — the offered string itself can
+  still differ per transport, since this item and the Slack modal carry names unsanitized while the
+  admin console strips control characters out of what it renders (issue #46).
 - Steward resolution fails closed: `_is_steward` returns False without a checkout or a baked
   snapshot; `load_stewards` reads `origin/main`'s fresh tip wherever a checkout exists, and the
   same read decides both doorbell delivery and decision authority.

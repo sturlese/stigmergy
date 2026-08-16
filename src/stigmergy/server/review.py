@@ -213,6 +213,11 @@ def _collect_open_items(conn, *, submitted_by: str | None, limit: int) -> list[d
                 # per name — must read `subjects` or it will act on a joined compound that is
                 # not any of them.
                 "subjects": situations.subjects_of(row),
+                # The name a mint form may default to, decided ONCE (`situations`) rather than
+                # re-derived from `subjects` by each door: both doors write the same irreversible
+                # commit, so the two must never disagree about when a default is safe. `""` means
+                # "no single string can be right here" — the surface lists `subjects` instead.
+                "mint_name_prefill": situations.mint_name_prefill(row),
                 "parked_age_ms": row.get("parked_age_ms"), "created_at": row.get("created_at"),
                 # the doorbell's change token: a requeue re-parking into the SAME situation is
                 # still a state change, not silence

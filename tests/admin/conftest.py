@@ -131,8 +131,22 @@ def park(conn, submission_id, *, status=capture_schema.TRIAGE, report=None, erro
 
 
 def unresolved_entity_report(name):
+    """The SINGULAR park shape: one unresolved name under `SITUATION_NAME_KEY`. Every caller in
+    this package used to build this and only this, which left the console's whole several-names
+    path — the one the mint form's empty-`Name` rule exists for — unreachable from these suites.
+    Use `unresolved_entity_names_report` for that half."""
     return {capture_schema.SITUATION_KEY: capture_schema.SITUATION_UNRESOLVED_ENTITY,
             capture_schema.SITUATION_NAME_KEY: name}
+
+
+def unresolved_entity_names_report(*names):
+    """The PLURAL park shape: `SITUATION_NAMES_KEY` and nothing else — the exact row
+    `report.triage_entity_multi` writes for a capture naming more than one unresolved entity
+    (issue #32), which never writes the singular key beside it, so neither does this. Deliberately
+    a second function rather than an optional argument on the one above: the two report shapes are
+    different data, and a caller has to choose which one it is exercising."""
+    return {capture_schema.SITUATION_KEY: capture_schema.SITUATION_UNRESOLVED_ENTITY,
+            capture_schema.SITUATION_NAMES_KEY: list(names)}
 
 
 # ── entity_approve's own git fixture (ADR 030) ───────────────────────────────────────────────
