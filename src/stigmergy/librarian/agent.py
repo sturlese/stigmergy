@@ -557,33 +557,6 @@ def parse_meeting_outcome(raw) -> MeetingOutcome:
                           triage=triage)
 
 
-def read_meeting_outcome(worktree: str, *, delete: bool = True) -> MeetingOutcome:
-    """`read_outcome`'s sibling: same file, same channel, a different parse at the boundary."""
-    path = os.path.join(worktree, OUTCOME_FILENAME)
-    if not os.path.exists(path):
-        raise AgentError(f"the agent wrote no {OUTCOME_FILENAME}: there is no account of what "
-                         f"it did, so nothing can be filed")
-    try:
-        size = os.path.getsize(path)
-        if size > MAX_OUTCOME_BYTES:
-            raise AgentError(f"the agent's {OUTCOME_FILENAME} is {size} bytes, over the "
-                             f"{MAX_OUTCOME_BYTES}-byte ceiling")
-        with open(path, encoding="utf-8") as f:
-            raw = json.load(f)
-    except AgentError:
-        raise
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as ex:
-        raise AgentError(f"the agent's {OUTCOME_FILENAME} could not be read "
-                         f"({ex.__class__.__name__})") from ex
-    finally:
-        if delete:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-    return parse_meeting_outcome(raw)
-
-
 def read_outcome(worktree: str, *, delete: bool = True) -> Outcome:
     """Read (and by default remove) the agent's outcome file, validated into an `Outcome`. Removed
     BEFORE the diff is taken, which is why it can live inside the worktree at all. The size

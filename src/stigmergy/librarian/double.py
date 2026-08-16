@@ -40,6 +40,7 @@ import re
 from stigmergy.kernel import normalize
 from stigmergy.kernel import registry as registry_module
 from stigmergy.librarian import gitcmd
+from stigmergy.librarian import page as page_policy
 from stigmergy.librarian.agent import (
     OUTCOME_FILENAME,
     confined_write,
@@ -101,7 +102,7 @@ class DoubleAgent:
             gathered: str = "") -> AgentRun:
         # `flow_note`/`gathered` are accepted and unused: the signature answers the PORT.
         directives = _directives(material)
-        findings = [f for f in _findings(material)]
+        findings = _findings(material)
         run = AgentRun(turns=1, tool_calls=3)
         answered = ""       # the registry's own name for what a reply named, when it named one
 
@@ -141,11 +142,7 @@ class DoubleAgent:
 
         # ── the filing path ──────────────────────────────────────────────────────────────
         page_type = directives.get("type") or "note"
-        folder = {
-            "note": "wiki/notes", "decision": "wiki/decisions",
-            "concept": "wiki/concepts", "project": "wiki/projects",
-            "playbook": "wiki/playbooks", "postmortem": "wiki/postmortems",
-        }.get(page_type, "wiki/notes")
+        folder = page_policy.FOLDER_BY_TYPE.get(page_type, "wiki/notes")
         title = self._title(material)
         page_path = f"{folder}/{title}.md"
 

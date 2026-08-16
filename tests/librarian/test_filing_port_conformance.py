@@ -53,7 +53,7 @@ from stigmergy.librarian.pydantic_backend import (
     FilingAccount,
     OrdinaryAnchoring,
     OrdinaryPage,
-    PydanticMeetingAgent,
+    PydanticFilingAgent,
 )
 from tests.librarian import support
 
@@ -70,7 +70,7 @@ PORT_DECLARATIONS = ("structured_ordinary", "wants_gathered")
 # and forgotten here would leave this whole file silently measuring two of three.
 BACKEND_CLASSES = {
     "double": DoubleAgent,
-    agent_module.PYDANTIC_BACKEND: PydanticMeetingAgent,
+    agent_module.PYDANTIC_BACKEND: PydanticFilingAgent,
 }
 
 
@@ -99,7 +99,7 @@ def test_build_agent_returns_the_backend_this_file_conforms(name):
     proven about nothing.
 
     The settings carry a PRICED, provider-prefixed model for every branch, not only the one that
-    needs it: `PydanticMeetingAgent.__init__` prices its configured id at construction (the backstop
+    needs it: `PydanticFilingAgent.__init__` prices its configured id at construction (the backstop
     below `worker.startup_checks`), so a `Settings` carrying a bare model id would
     refuse here for a reason that has nothing to do with the port. The double ignores the field.
     """
@@ -117,7 +117,7 @@ def test_constructing_the_token_priced_backend_refuses_an_unpriced_model():
     and only then discover the run cannot say what it cost.
     """
     with pytest.raises(LibrarianConfigError, match="openai:gpt-9"):
-        PydanticMeetingAgent(dataclasses.replace(_settings(), model="openai:gpt-9"))
+        PydanticFilingAgent(dataclasses.replace(_settings(), model="openai:gpt-9"))
 
 
 @pytest.mark.parametrize("name", ["double"])
@@ -665,10 +665,10 @@ def _ordinary_flow_cases(tmp_path):
     other = support.build_repo(str(tmp_path / "git-pydantic"))
     double = DoubleAgent(dataclasses.replace(settings, repo=env.repo))
     return {
-        "pydantic-files": (PydanticMeetingAgent(
+        "pydantic-files": (PydanticFilingAgent(
             settings, model_factory=lambda: _writing_model(_AGENTIC_ACCOUNT)),
             other.repo, "A note about Acme Corp."),
-        "pydantic-fault": (PydanticMeetingAgent(settings, model_factory=_raises),
+        "pydantic-fault": (PydanticFilingAgent(settings, model_factory=_raises),
                            _skill_worktree(tmp_path / "faulting"), "A note about Acme Corp."),
         "double-files": (double, env.repo, "A note about Acme Corp."),
         "double-bad-shape": (double, env.repo, "DOUBLE:bad-shape\nA note about Acme Corp."),
@@ -763,7 +763,7 @@ def test_the_iterating_ordinary_pass_is_priced_and_counted_like_the_loop_it_now_
     ignored by design.
     """
     env = support.build_repo(str(tmp_path / "git"))
-    backend = PydanticMeetingAgent(
+    backend = PydanticFilingAgent(
         _settings(), model_factory=lambda: _writing_model(_AGENTIC_ACCOUNT, searches=2))
 
     run = backend.run(worktree=env.repo, material="A note about Acme Corp.",
@@ -795,7 +795,7 @@ def test_the_ordinary_faults_carry_the_spend_the_same_way(tmp_path):
     before the toolbox is built and before anything reads the checkout, so it is reachable without
     a git repo at all.
     """
-    backend = PydanticMeetingAgent(_settings(), model_factory=_raises)
+    backend = PydanticFilingAgent(_settings(), model_factory=_raises)
 
     with pytest.raises(AgentError) as exc_info:
         backend.run(worktree=_skill_worktree(tmp_path), material="an ordinary note", hints={},
@@ -818,7 +818,7 @@ def test_the_ordinary_flow_no_longer_refuses_this_backend_at_all(tmp_path):
     it, which is the one regression this file is placed to notice.
     """
     env = support.build_repo(str(tmp_path / "git"))
-    backend = PydanticMeetingAgent(
+    backend = PydanticFilingAgent(
         _settings(), model_factory=lambda: _writing_model(_AGENTIC_ACCOUNT))
 
     run = backend.run(worktree=env.repo, material="an ordinary note", hints={},
@@ -841,7 +841,7 @@ def test_the_priced_backends_meeting_faults_carry_a_usable_spend(tmp_path, facto
     `getattr(ex, "run_cost_usd", 0.0)`, so an absent field and an honest zero are indistinguishable
     downstream, and the port's docstring says the field must be there either way.
     """
-    backend = PydanticMeetingAgent(_settings(), model_factory=factory)
+    backend = PydanticFilingAgent(_settings(), model_factory=factory)
 
     with pytest.raises(AgentError) as exc_info:
         backend.run_meeting(worktree=_brief_worktree(tmp_path), material="t", meeting_meta={},
@@ -857,7 +857,7 @@ def test_a_config_fault_stays_off_the_priced_road_deliberately(tmp_path):
     the WORKER's configuration road (`LibrarianConfigError`, which `process_next` names on its own
     terms), not an agent attempt that cost something. Pricing it would invent a figure for a fault
     that pre-dates the model call."""
-    backend = PydanticMeetingAgent(_settings(), model_factory=_raises)
+    backend = PydanticFilingAgent(_settings(), model_factory=_raises)
 
     with pytest.raises(LibrarianConfigError):
         backend.run_meeting(worktree=str(tmp_path), material="t", meeting_meta={}, registry=None,

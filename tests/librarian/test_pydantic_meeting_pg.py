@@ -9,7 +9,7 @@ checked keylessly and whose behaviour is only ever exercised through a hand-writ
 been tested about everything except being a backend.
 
 **The offline seam is `model_factory`, and it is the backend's own, not a monkeypatch.**
-`PydanticMeetingAgent(settings, model_factory=…)` takes a zero-arg callable returning anything
+`PydanticFilingAgent(settings, model_factory=…)` takes a zero-arg callable returning anything
 pydantic-ai accepts as a model, so the whole distillation path — instructions built from the brief
 in the worktree, the per-item prompt, the framework's run, the usage accounting, the pricing, and
 `agent.parse_meeting_outcome` at the trust boundary — runs for real against a `TestModel`. Nothing
@@ -38,7 +38,7 @@ from stigmergy.librarian.pydantic_backend import (
     MeetingAccount,
     MeetingAnchoring,
     MeetingDecision,
-    PydanticMeetingAgent,
+    PydanticFilingAgent,
 )
 from tests.librarian import support
 
@@ -121,7 +121,7 @@ def _test_model(account: MeetingAccount) -> TestModel:
 
 
 def _rig(tmp_path, model_factory, *, model: str = PRICED_MODEL, **setting_overrides):
-    """A `RepoEnv` + `Deps` whose agent is a REAL `PydanticMeetingAgent` over an offline model.
+    """A `RepoEnv` + `Deps` whose agent is a REAL `PydanticFilingAgent` over an offline model.
 
     Built through `support.build_settings`/`build_deps` — the same wiring every other librarian
     test uses — with the agent injected, which is exactly where `agent.build_agent` would have put
@@ -131,7 +131,7 @@ def _rig(tmp_path, model_factory, *, model: str = PRICED_MODEL, **setting_overri
     env = support.build_repo(str(tmp_path / "git"))
     settings = support.build_settings(env, worktree_root=str(tmp_path / "worktrees"),
                                       backend="pydantic", model=model, **setting_overrides)
-    agent = PydanticMeetingAgent(settings, model_factory=model_factory)
+    agent = PydanticFilingAgent(settings, model_factory=model_factory)
     return env, support.build_deps(env, settings, agent=agent), agent
 
 
@@ -272,7 +272,7 @@ def test_an_unpriced_configured_model_refuses_even_though_the_injected_model_is_
     **RE-PINNED at the construction site, which is where the refusal moved and is a strictly
     earlier one.** It used to fire from `_cost`, after a real model call — priced work already paid
     for, refused only on the way to reporting it. Same exception, same message, now raised by
-    `PydanticMeetingAgent.__init__`, so the object that would spend the money cannot be built. The
+    `PydanticFilingAgent.__init__`, so the object that would spend the money cannot be built. The
     injected `TestModel` is free and irrelevant: the price is looked up by the CONFIGURED id, and
     that is the whole point.
     """
@@ -281,7 +281,7 @@ def test_an_unpriced_configured_model_refuses_even_though_the_injected_model_is_
                                       backend="pydantic", model="openai:gpt-9")
 
     with pytest.raises(LibrarianConfigError, match="openai:gpt-9") as exc_info:
-        PydanticMeetingAgent(settings, model_factory=lambda: _test_model(_account()))
+        PydanticFilingAgent(settings, model_factory=lambda: _test_model(_account()))
 
     # the same refusal `require_priced` gives everywhere else, not a second, thinner one
     assert pricing.PRICING_ENV in str(exc_info.value)
@@ -343,7 +343,7 @@ def test_the_re_file_after_a_mint_spends_no_model_call_and_reports_zero_dollars(
     dispositions.requeue(clean_queue, item["id"], actor="steward@example.com", note="minted")
 
     refiled_deps = dataclasses.replace(
-        deps, agent=PydanticMeetingAgent(deps.settings, model_factory=_poison))
+        deps, agent=PydanticFilingAgent(deps.settings, model_factory=_poison))
     _, refiled = worker.process_next(clean_queue, refiled_deps)
 
     assert calls["n"] == 0
@@ -386,7 +386,7 @@ def test_the_poison_really_is_poison_a_re_file_that_cannot_reuse_does_reach_the_
     dispositions.requeue(clean_queue, item["id"], actor="steward@example.com",
                          note="requeued without minting anything")
     refiled_deps = dataclasses.replace(
-        deps, agent=PydanticMeetingAgent(deps.settings, model_factory=_poison))
+        deps, agent=PydanticFilingAgent(deps.settings, model_factory=_poison))
 
     _, refiled = worker.process_next(clean_queue, refiled_deps)
 
@@ -442,7 +442,7 @@ class _RecordingAgent:
     """A transparent wrapper that records what each pass cost — from the envelope when the pass
     returns, and from the FAULT when it raises.
 
-    Not a stand-in for the backend: every call delegates, and the real `PydanticMeetingAgent` does
+    Not a stand-in for the backend: every call delegates, and the real `PydanticFilingAgent` does
     all the work. It exists because the two roads a pass's spend can travel are invisible from
     outside — `processing` banks one off `AgentRun.cost_usd` and the other off the exception's
     `run_cost_usd`, and a report showing only the total cannot say whether both were taken.

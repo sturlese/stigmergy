@@ -102,6 +102,8 @@ def _needed(field: str, instead: str) -> str:
     `ValueError` back as the retry prompt, so this is the only text that can repair the
     account."""
     return f"`{field}` is required and came back empty. {instead}"
+
+
 class MeetingAnchoring(BaseModel):
     """One decision's own anchor. `kind` is `entity` (with `entities`) or `company` (with a written
     `reason`); the registry, not this schema, decides whether a name resolves."""
@@ -992,7 +994,3 @@ class PydanticFilingAgent:
                  counts["input_tokens"], counts["cache_read_tokens"],
                  counts["cache_write_tokens"], counts["output_tokens"], cost, pricing.AS_OF)
         return cost
-
-
-# Compatibility alias; it goes when no module outside this file imports it.
-PydanticMeetingAgent = PydanticFilingAgent
