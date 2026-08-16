@@ -158,6 +158,77 @@ def test_a_name_starting_with_a_dot_is_refused():
         _prepare(canonical_id="x", name=".Globex", entity_type="organization")
 
 
+# ── control characters: invisible in every field a steward reads them in ────────────────────────
+# OLD BEHAVIOUR: they reached a signed commit. `" ".join(value.split())` folds only the characters
+# Python calls whitespace, and `\x01` is not one; `_FORBIDDEN_IN_NAME` lists none of them either.
+# The admin console happened to be safe because `admin/service.py::_traced_fields` cleans string
+# values on the way out — a DISPLAY defence on ONE surface, not the gate. Slack and MCP had none:
+# a capture naming an organization `"\x01 Acme"` parked, the doorbell offered a mint modal already
+# filled in with it, and a steward accepting the default minted a page whose title and FILENAME
+# carried a character nobody can type.
+@pytest.mark.parametrize("bad_char", ["\x00", "\x01", "\x08", "\x1a", "\x7f", "\x9b"])
+def test_a_name_carrying_a_control_character_is_refused_and_names_its_code_point(bad_char):
+    with pytest.raises(EntityError, match="control characters") as caught:
+        _prepare(canonical_id="x", name=f"{bad_char} Globex", entity_type="organization")
+    assert f"U+{ord(bad_char):04X}" in str(caught.value), (
+        "the refusal has to name the code point — the character is invisible, so a message "
+        "quoting it back shows the operator an empty pair of quotes")
+
+
+@pytest.mark.parametrize("field", ["alias", "role"])
+def test_a_control_character_is_refused_in_an_alias_and_in_a_role_too(field):
+    """An alias is a wikilink target and a registry key, so it carries the name's whole problem.
+    `role` is only a sentence — held to this rule anyway, because the question is not what the
+    character breaks syntactically, it is whether a steward can see what they are approving."""
+    kwargs = {"aliases": ["Glob\x01ex Corp"]} if field == "alias" else {"role": "the \x01 boss"}
+    with pytest.raises(EntityError, match="control characters"):
+        _prepare(canonical_id="globex", name="Globex", entity_type="organization", **kwargs)
+
+
+def test_a_stripped_name_is_never_minted_in_place_of_the_refusal():
+    """REFUSE, never strip, and this is the assertion that keeps it that way.
+
+    Silently dropping the character would mint `Globex` from a value a steward read as `Globex`
+    and approved — indistinguishable to them, and the artefact is a filename in a signed commit.
+    A future "be helpful, just clean it" edit passes every other test in this file.
+    """
+    with pytest.raises(EntityError):
+        _prepare(canonical_id="globex", name="Glob\x01ex", entity_type="organization")
+
+
+# ── the benign twin, which this gate needs more than most: it stands in front of real work ──────
+@pytest.mark.parametrize("name", [
+    "Peña-Rodríguez S.L.",          # the issue's own example: accents and a hyphen
+    "Café Zürich",
+    "O'Brien & Sons",
+    "Møller-Maersk",
+    "Ação Digital, Lda.",
+    "北京科技",                       # nothing in this rule is about ASCII
+    "Globex  Corp",                 # collapsed to one space by the normalizer, not refused
+])
+def test_ordinary_names_a_steward_legitimately_types_still_mint(name):
+    """A test that only proves a gate fires measures its sensitivity and never its specificity.
+
+    Every name here is one somebody's real company or colleague is called. They also cover the
+    characters most likely to be caught by a range written by hand instead of asked as a Unicode
+    category: accented letters, a right single quote, a slashed O, CJK.
+    """
+    collapsed = " ".join(name.split())
+    proposal = _prepare(canonical_id=generator.canonical_id_for(collapsed), name=name,
+                        entity_type="organization")
+    assert proposal.name == collapsed
+
+
+def test_a_tab_and_a_newline_are_still_collapsed_rather_than_refused():
+    """The other half of specificity. Tab and newline ARE control characters by category, and a
+    name pasted out of a document routinely carries them — so the check runs AFTER the whitespace
+    collapse that already folds them into single spaces, and only the invisible remainder reaches
+    it. Refusing a pasted tab would make this gate bounce ordinary work every day."""
+    proposal = _prepare(canonical_id="globex-corp", name="Globex\tCorp\n",
+                        entity_type="organization")
+    assert proposal.name == "Globex Corp"
+
+
 def test_more_than_the_alias_ceiling_is_refused():
     aliases = [f"Alias {i}" for i in range(birth.MAX_ALIASES + 1)]
     with pytest.raises(EntityError, match="aliases"):

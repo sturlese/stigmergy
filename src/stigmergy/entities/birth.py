@@ -16,6 +16,7 @@ AND `render_page` serializes every steward-authored value through `_yaml_str`. E
 closes the chain; only both survive somebody later relaxing one of them.
 """
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from stigmergy.entities import generator
@@ -47,6 +48,37 @@ _FORBIDDEN_IN_NAME = set('/\\:*?"<>|[]#^')
 # set above — an intersection would silently go EMPTY if that set were narrowed, the one way a
 # defence-in-depth layer can vanish without a visible diff.
 _YAML_UNSAFE = frozenset('"\\')
+
+# Unicode category `Cc` — C0 and C1 — checked AFTER the whitespace collapse each cleaner starts
+# with, so this is the set that actually survives it: `str.split()` already folds tab, newline and
+# the separators through U+001F into single spaces, and what remains is the invisible half
+# (U+0000-U+0008, U+000E-U+001A, U+007F, most of C1). Asked as a category rather than as a
+# hand-written range because a range is a thing to get wrong once and never notice.
+_CONTROL_CATEGORY = "Cc"
+
+
+def _refuse_control_characters(value: str, *, subject: str, consequence: str) -> None:
+    """Refuse C0/C1 in a value a human is going to approve. REFUSE, never strip.
+
+    A name reaching here can come from CAPTURED MATERIAL: the librarian parks an unresolved entity,
+    the Slack doorbell offers a mint modal already filled in with it, and a steward accepts the
+    default. A control character is invisible in a rendered field, so stripping it silently would
+    mint an identity subtly different from the one that was read and approved — and the artefact is
+    a page title, a filename and a wikilink target inside a signed commit. Irreversible, and
+    load-bearing for everything that resolves the name afterwards.
+
+    So the refusal is the honest failure, and this is the terminal gate every door passes through:
+    Slack, MCP, the admin console and the CLI all reach `prepare`. A per-surface sanitizer would be
+    a fourth thing to keep in step, which is how the admin console ended up the only protected one.
+    """
+    found = sorted({c for c in value if unicodedata.category(c) == _CONTROL_CATEGORY})
+    if not found:
+        return
+    raise EntityError(
+        f"{subject} contains {', '.join(f'U+{ord(c):04X}' for c in found)} — control characters, "
+        f"which cannot appear there. They render as NOTHING, so this value does not look the way "
+        f"it reads: {consequence}. Retype the visible characters rather than pasting, and if this "
+        f"was prefilled from captured material, the material is where the character came from")
 
 # `created`/`updated` are written as bare YAML dates (quoting would change their type against
 # every hand-authored page). A bare scalar cannot be escaped, so the value is CONSTRAINED instead.
@@ -82,6 +114,11 @@ def _clean_name(name: str) -> str:
             f"--name contains {', '.join(repr(c) for c in bad)}, which cannot appear in an entity "
             f"name — the name IS the filename ({generator.ENTITIES_RELDIR}/<name>.md) and the "
             f"wikilink other pages resolve it by")
+    _refuse_control_characters(
+        value, subject="--name",
+        consequence=f"the name IS the filename ({generator.ENTITIES_RELDIR}/<name>.md) and the "
+                    f"wikilink other pages resolve it by, so this would mint an entity nobody can "
+                    f"type by hand")
     if value.startswith("."):
         raise EntityError("--name starts with '.', which would make a hidden file rather than a page")
     return value
@@ -142,6 +179,11 @@ def _clean_aliases(aliases, *, name: str) -> tuple[str, ...]:
                 f"registry resolves to this entity and a wikilink other pages reach it by, and "
                 f"{', '.join(repr(c) for c in bad)} would have to be quoted or escaped to be "
                 f"either. Drop it, or split this into separate --aliases values")
+        _refuse_control_characters(
+            value, subject=f"the alias {value!r}",
+            consequence="an alias is a spelling the registry resolves to this entity and a "
+                        "wikilink other pages reach it by, so this would register a spelling "
+                        "nobody can type")
         key = generator.canonical_id_for(value)
         if not key or key in seen:
             continue
@@ -170,6 +212,15 @@ def _clean_role(role) -> str:
             f"page's `role` field — it is written into the frontmatter, where those characters "
             f"delimit and escape the value rather than being part of it. Rephrase the line "
             f"without them (single quotes are fine)")
+    # Held to the control-character rule too, even though `role` is a sentence rather than an
+    # identity and is deliberately NOT held to `_FORBIDDEN_IN_NAME`. The two rules answer different
+    # questions: that set is about what a filename and a wikilink can carry, this one is about
+    # whether a steward can SEE what they are approving — and that question does not care whether
+    # the value is an identity.
+    _refuse_control_characters(
+        value, subject="--role",
+        consequence="the line is written into the page's frontmatter and read back by anyone "
+                    "who opens it")
     return value
 
 

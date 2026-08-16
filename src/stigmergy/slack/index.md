@@ -81,8 +81,9 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
   decided value travels in the item dict. That shared decision fixes WHEN a default is offered and
   WHICH name it is, on this door and on the admin console's alike; it does not make the two forms
   byte-identical, because sanitizing is per transport (the console strips control characters, this
-  one does not — issue #46). Submitting that modal mints: an accepted default is one click from a
-  garbled entity in the knowledge repo, as a signed commit.
+  one does not). What stops that from mattering is `entities.birth`, which refuses C0/C1 in a name
+  for every door alike. Submitting that modal still mints, so an accepted default remains one click
+  from a signed commit in the knowledge repo — it just cannot be a garbled one any more.
 - Importing `stigmergy.server.review`'s `KIND_*`/`ENTITY_TYPES` from a renderer — use
   `stigmergy.review_kinds`, which keeps `render.py` free of `librarian`/`entities`/PyYAML.
 - Caching `ops/stewards.json` on the authorization path.
