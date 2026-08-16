@@ -179,5 +179,8 @@ def _restore(page_path: str, registry_path: str, snapshot: str | None) -> None:
         clone.discard_untracked(registry_path)
     else:
         # Atomic like the write it un-does: a truncating rewrite interrupted mid-rollback would
-        # leave a half-written registry in the steward's clone.
+        # leave a half-written registry in the steward's clone. A crash between the tmp write and
+        # the rename leaves `<registry>.tmp` untracked, and `clone.ensure_clean` then refuses the
+        # NEXT approve by name (`--porcelain` counts untracked files) — deliberately fail-closed;
+        # the operator deletes the leftover.
         write_text_atomic(registry_path, snapshot)

@@ -23,6 +23,8 @@ pins every import edge and the threshold-literal ban.
 | `notice.py` | The SLA Slack notice: `sla_findings`, `scope_findings_to_channel`, `compose_notice`, `require_channel`, `post_sla_notice` |
 | `schema.py` | The DDL behind `startup_ddl_lock`, `JOB_NAME`, the severity/source vocabularies, `MAX_DETAIL_CHARS`, `MAX_MODEL_DETAIL_CHARS` |
 | `settings.py` | `GardenerSettings.from_args` — the thresholds, the digest channel, the sweep's model and sample size. Owns `DIGEST_CHANNEL_ID_ENV` and `SLACK_BOT_TOKEN_ENV`, which `digest.settings` re-exports |
+
+`settings.int_setting` is the shared count-shaped env validator; `stigmergy.digest.settings` is a declared consumer (the digest package imports it rather than hand-mirroring it).
 | `errors.py` | `GardenerError` (a precondition on running the tool) and `SweepGarbage` (a run-level outcome — a sibling, not a subclass) |
 
 Downstream: `digest` imports `schema`/`store`/`settings`; `admin` imports `store`/`schema`.

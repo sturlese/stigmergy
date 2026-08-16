@@ -155,8 +155,9 @@ _REVIEW_DECLARED_TRANSITIVE_KERNEL_MODULES = frozenset({
     "stigmergy.kernel",
     "stigmergy.kernel.acl",
     "stigmergy.kernel.frontmatter",
-    # `entities.mint._restore` rolls the registry snapshot back through `fsutil.write_text_atomic`
-    # so an interrupted rollback cannot leave a truncated `ops/entity-registry.json` in a clone.
+    # `kernel.registry.save_registry` writes through `fsutil.write_text_atomic` (and
+    # `entities.mint._restore` rolls back through the same helper), so an interrupted write cannot
+    # leave a truncated `ops/entity-registry.json`.
     "stigmergy.kernel.fsutil",
     "stigmergy.kernel.normalize",
     "stigmergy.kernel.registry",
@@ -933,7 +934,7 @@ def test_the_acl_adapters_reach_into_pipelines_private_names_is_pinned():
 
 def test_the_acl_private_names_still_have_the_shape_the_adapter_assumes():
     """A name surviving is not enough: the adapter iterates `_MATCHERS` as a container of key names
-    and calls `_check_labels(path, audiences)` positionally. Both assumptions are pinned, because a
+    and calls `_check_labels(label, audiences)` positionally. Both assumptions are pinned, because a
     private name changed IN PLACE fails the same way a renamed one does."""
     from stigmergy.kernel import acl as acl_model
     from stigmergy.librarian import acl_rules

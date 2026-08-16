@@ -10,7 +10,7 @@ reads off `args`.
 import os
 from dataclasses import dataclass
 
-from stigmergy.gardener.settings import DIGEST_CHANNEL_ID_ENV, SLACK_BOT_TOKEN_ENV, _int_setting
+from stigmergy.gardener.settings import DIGEST_CHANNEL_ID_ENV, SLACK_BOT_TOKEN_ENV, int_setting
 
 __all__ = ["DIGEST_CHANNEL_ID_ENV", "SLACK_BOT_TOKEN_ENV", "WINDOW_DAYS_ENV",
           "DEFAULT_WINDOW_DAYS", "DigestSettings"]
@@ -41,5 +41,5 @@ class DigestSettings:
         shape."""
         return cls(
             digest_channel_id=os.environ.get(DIGEST_CHANNEL_ID_ENV, ""),
-            window_days=_int_setting(WINDOW_DAYS_ENV, DEFAULT_WINDOW_DAYS, why=_WINDOW_WHY),
+            window_days=int_setting(WINDOW_DAYS_ENV, DEFAULT_WINDOW_DAYS, why=_WINDOW_WHY),
         )

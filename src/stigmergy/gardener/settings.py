@@ -55,7 +55,7 @@ _POSITIVE_COUNT_WHY = ("a zero or negative day/window count makes every page/fil
                        "threshold.")
 
 
-def _int_setting(env_name: str, default: int, *, why: str = _POSITIVE_COUNT_WHY) -> int:
+def int_setting(env_name: str, default: int, *, why: str = _POSITIVE_COUNT_WHY) -> int:
     raw = os.environ.get(env_name)
     if raw is None or raw == "":
         return default
@@ -107,14 +107,14 @@ class GardenerSettings:
         """`args` is accepted, not consulted — env-tunable only; kept for the convention's
         shape."""
         return cls(
-            aging_seed_days=_int_setting(AGING_SEED_DAYS_ENV, DEFAULT_AGING_SEED_DAYS),
-            concentration_window=_int_setting(CONCENTRATION_WINDOW_ENV,
+            aging_seed_days=int_setting(AGING_SEED_DAYS_ENV, DEFAULT_AGING_SEED_DAYS),
+            concentration_window=int_setting(CONCENTRATION_WINDOW_ENV,
                                               DEFAULT_CONCENTRATION_WINDOW),
             concentration_share=_share_setting(CONCENTRATION_SHARE_ENV,
                                                DEFAULT_CONCENTRATION_SHARE),
-            company_window=_int_setting(COMPANY_WINDOW_ENV, DEFAULT_COMPANY_WINDOW),
+            company_window=int_setting(COMPANY_WINDOW_ENV, DEFAULT_COMPANY_WINDOW),
             company_share=_share_setting(COMPANY_SHARE_ENV, DEFAULT_COMPANY_SHARE),
             digest_channel_id=os.environ.get(DIGEST_CHANNEL_ID_ENV, ""),
             model=os.environ.get(MODEL_ENV) or DEFAULT_GARDENER_MODEL,
-            sweep_sample=_int_setting(SWEEP_SAMPLE_ENV, DEFAULT_SWEEP_SAMPLE),
+            sweep_sample=int_setting(SWEEP_SAMPLE_ENV, DEFAULT_SWEEP_SAMPLE),
         )

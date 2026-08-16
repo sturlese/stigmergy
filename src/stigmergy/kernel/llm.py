@@ -32,8 +32,9 @@ def build_model(model_name: str | None = None):
 
     from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
 
-    # The pinned pydantic-ai reports zero tokens for OpenAI reasoning models; every
-    # agent-construction site installs the repair. Idempotent — see `kernel.usage_repair`.
+    # The pinned pydantic-ai reports zero tokens for OpenAI reasoning models — a zero that reads
+    # as free, the one direction a cost figure must never lie in. Every agent-construction site
+    # installs the repair. Idempotent — see `kernel.usage_repair`.
     ensure_usage_extraction_repaired()
 
     model_name = model_name or os.environ.get("CLEAN_MODEL", DEFAULT_MODEL)

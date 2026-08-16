@@ -189,8 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv=None) -> int:
-    return cli.drop_main(argv, parser=build_parser(), prog=PROG,
-                         on_interrupt=lambda: cli.drop_interrupted(PROG))
+    return cli.drop_main(argv, parser=build_parser(), prog=PROG)
 
 
 if __name__ == "__main__":

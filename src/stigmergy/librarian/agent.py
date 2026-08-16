@@ -368,9 +368,10 @@ def parse_outcome(raw) -> Outcome:
 
     triage_raw = _mapping(raw.get("triage"), field_name="triage", shape=shape)
     # ONE shape downstream, BOTH accepted here: a singular `triage.name` is folded into a
-    # one-element list — models send either spelling, and the repair brief's PARK option spells the
-    # singular. The RAW list is held, not re-derived: `_list` records its own shape findings, so a
-    # second call would report one malformed list twice.
+    # one-element list — models send either spelling, the knowledge repo's `librarian` skill
+    # offers both, and the repair brief's PARK option spells the singular; the tolerance can only
+    # retire when all three stop. The RAW list is held, not re-derived: `_list` records its own
+    # shape findings, so a second call would report one malformed list twice.
     names_raw = _list(triage_raw.get("names"), field_name="triage.names", shape=shape)
     single = _identifier(triage_raw.get("name"), field_name="triage.name", shape=shape)
     names = [_identifier(n, field_name="triage.names[]", shape=shape) for n in names_raw]

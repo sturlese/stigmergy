@@ -15,7 +15,7 @@ INT_SETTINGS = [
     (settings.CONCENTRATION_WINDOW_ENV, settings.DEFAULT_CONCENTRATION_WINDOW,
      "concentration_window"),
     (settings.COMPANY_WINDOW_ENV, settings.DEFAULT_COMPANY_WINDOW, "company_window"),
-    # the sweep's own sample size — validated by the SAME `_int_setting` every other count-shaped
+    # the sweep's own sample size — validated by the SAME `int_setting` every other count-shaped
     # threshold above already uses, so it rides the identical parametrized suite below rather than
     # needing its own copy of every case.
     (settings.SWEEP_SAMPLE_ENV, settings.DEFAULT_SWEEP_SAMPLE, "sweep_sample"),

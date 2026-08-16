@@ -1,7 +1,9 @@
 """Retention: captured material is deleted 30 days after the row that carried it went terminal.
 
 The row is stripped, never deleted: keeping material forever accumulates other people's raw
-writing with no policy, and deleting the ROW would destroy the record that it happened.
+writing with no policy, and deleting the ROW would destroy the record that it happened. Only
+TERMINAL rows are eligible — a parked row is never purged out from under the question it is
+waiting on.
 
 The evidence blob is untouched: it has its own lifecycle (the bucket's retention policy), and a
 filed page must stay checkable against its material after the row is stripped. "Physically":

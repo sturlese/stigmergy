@@ -148,7 +148,9 @@ class MemoryEvidenceStore:
     """
 
     bucket = "memory"
-    endpoint_url = "memory://local"
+    # Loopback-shaped on purpose: the double stands in for the LOCAL store, so the drop doors'
+    # split-stores guard must read it exactly as it reads MinIO.
+    endpoint_url = "http://127.0.0.1:9000"
 
     def __init__(self) -> None:
         self.objects: dict[str, bytes] = {}

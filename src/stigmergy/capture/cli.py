@@ -121,10 +121,10 @@ def drop_interrupted(prog: str, during: str = "") -> int:
     return EXIT_INTERRUPTED
 
 
-def drop_main(argv, *, parser: argparse.ArgumentParser, prog: str, on_interrupt) -> int:
+def drop_main(argv, *, parser: argparse.ArgumentParser, prog: str, during: str = "") -> int:
     """Every drop door's entry point: parse, dispatch, and map the three failure classes to the
     exit codes a wrapper reads — 1 a named refusal, 130 an interruption, 2 the stack being down.
-    `on_interrupt` is the door's own sentence, which names what it was in the middle of."""
+    `during` names what the door was in the middle of, for the interrupt sentence."""
     args = parser.parse_args(argv)
     try:
         return args.fn(args)
@@ -132,7 +132,7 @@ def drop_main(argv, *, parser: argparse.ArgumentParser, prog: str, on_interrupt)
         print(f"{prog}: {ex}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        return on_interrupt()
+        return drop_interrupted(prog, during)
     except Exception as ex:  # noqa: BLE001 — a local operator needs the real reason
         print(f"{prog}: cannot reach the queue database or evidence store ({ex}); is the stack up "
               f"(`make db-up`)?", file=sys.stderr)

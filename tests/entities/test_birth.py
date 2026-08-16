@@ -158,6 +158,22 @@ def test_a_name_starting_with_a_dot_is_refused():
         _prepare(canonical_id="x", name=".Globex", entity_type="organization")
 
 
+def test_a_refusal_consequence_carrying_a_literal_brace_still_refuses_cleanly():
+    """A brace in a consequence template must stay a refusal, never become a KeyError.
+    OLD BEHAVIOUR: `consequence.format(found=found)` raised KeyError on any brace that was
+    not `{found}`, turning a governance-path refusal into an unanticipated fault."""
+    with pytest.raises(EntityError, match="cannot appear"):
+        birth._refuse_forbidden('a/b', birth._FORBIDDEN_IN_NAME, subject="the name",
+                                consequence='which cannot appear in a JSON example like {"a": 1}')
+
+
+def test_the_refusal_consequence_found_placeholder_still_substitutes():
+    """The benign twin: the one sanctioned `{found}` placeholder keeps working."""
+    with pytest.raises(EntityError, match=r"repeats \'/\'"):
+        birth._refuse_forbidden('a/b', birth._FORBIDDEN_IN_NAME, subject="the name",
+                                consequence="which repeats {found} here")
+
+
 # ── control characters: invisible in every field a steward reads them in ────────────────────────
 # OLD BEHAVIOUR: they reached a signed commit. `" ".join(value.split())` folds only the characters
 # Python calls whitespace, and `\x01` is not one; `_FORBIDDEN_IN_NAME` lists none of them either.

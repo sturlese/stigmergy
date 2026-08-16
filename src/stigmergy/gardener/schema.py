@@ -32,6 +32,9 @@ MAX_MODEL_DETAIL_CHARS = 200
 
 # The two CHECK constraints are the vocabularies above, spelled for SQL — a value the code can
 # produce and the column would reject is the drift these constants exist to make impossible.
+# `repr`, not `capture.schema.sql_literals`: that helper SORTS, and these CHECKs are already
+# committed to databases in DECLARATION order — sorting would change the constraint's definition
+# string. Safe only because both vocabularies are lowercase identifiers with no quote or backslash.
 _SEVERITY_SQL_LIST = ", ".join(repr(s) for s in SEVERITIES)
 _SOURCE_SQL_LIST = ", ".join(repr(s) for s in SOURCES)
 

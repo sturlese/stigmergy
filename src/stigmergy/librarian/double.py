@@ -138,6 +138,8 @@ class DoubleAgent:
 
         # ── the filing path ──────────────────────────────────────────────────────────────
         page_type = directives.get("type") or "note"
+        # Any type the placement table lacks lands in the default folder and is judged by the
+        # gates from there — the double carries no second vocabulary of its own.
         folder = page_policy.FOLDER_BY_TYPE.get(page_type, "wiki/notes")
         title = self._title(material)
         page_path = f"{folder}/{title}.md"

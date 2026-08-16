@@ -63,13 +63,15 @@ def _refuse_forbidden(value: str, charset, *, subject: str, consequence: str) ->
     scalar cannot carry.
 
     `consequence` is a TEMPLATE this module authors, never a value from outside it: one site's
-    sentence names the offending characters a second time, and does so as `{found}`.
+    sentence names the offending characters a second time, and does so as `{found}`. `replace`,
+    not `format`: `str.format` raises on any brace that is not `{found}`, and this runs on a
+    refusal path where a raise is not a refusal.
     """
     bad = sorted(charset & set(value))
     if not bad:
         return
     found = ", ".join(repr(c) for c in bad)
-    raise EntityError(f"{subject} contains {found}, {consequence.format(found=found)}")
+    raise EntityError(f"{subject} contains {found}, {consequence.replace('{found}', found)}")
 
 
 def _refuse_control_characters(value: str, *, subject: str, consequence: str) -> None:

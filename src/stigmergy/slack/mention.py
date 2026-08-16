@@ -205,6 +205,9 @@ async def _maybe_dm_fuller_answer(ctx, *, email: str, asker_audiences, asker_sla
     difference."""
     if not _scope_could_be_wider(asker_audiences, effective_audiences):
         return
+    # `rate_limited=False`: SYSTEM-initiated work must not spend the asker's own budget — an asker
+    # for whom content was withheld would become observably likelier to hit the rate-limit message
+    # on their next real question. `identity=email` is unchanged, so audit attribution is unaffected.
     channel_service = ctx.build_service(email, effective_audiences, rate_limited=False)
     asker_service = ctx.build_service(email, asker_audiences, rate_limited=False)
     # The channel answer has SHIPPED — nothing after this may escape uncaught into Bolt.
