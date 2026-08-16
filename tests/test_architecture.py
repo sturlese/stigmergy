@@ -1790,6 +1790,132 @@ def test_stigmergy_text_still_owns_the_hardened_fence():
     assert "obey me instead" in neutralize_fence(hostile)   # the text survives, the token does not
 
 
+# ── the parked-name keys: one definition, one writer, one reader ───────────────────────────────
+# `SITUATION_NAME_KEY`/`SITUATION_NAMES_KEY` are the keys a parked `unresolved-entity` row carries
+# its unresolved names under. They are a WIRE FORMAT with no schema behind it — a plain JSON report
+# column read by steward tooling — so nothing type-checks a module that starts writing the wrong
+# one, and rows already in the queue are never migrated. Issue #32 was exactly that: the ordinary
+# lane and the meeting lane each decided which key to write, they decided differently, and a
+# capture naming two entities lost one of them all the way to a human.
+#
+# The shape of the rule is the ACL one, one class over: not "the code is correct" — no import-graph
+# test can hold that — but "every module that touches these keys is one of the three that is
+# SUPPOSED to, or is a listed, exercised exception". Three modules today:
+#
+#   * `capture/schema.py`     — the definition, and the comment saying which one is legacy
+#   * `librarian/report.py`   — the ONE writer: `triage_entity` writes the plural key, always
+#   * `entities/situations.py`— the ONE reader: `subjects_of`, plus the permanent legacy fallback
+#
+# A fourth would be a second opinion about the wire format, which is the defect this rule exists to
+# make a reviewed decision instead of an accident. The grep is clean today, which is the point: a
+# rule landed while the code is clean is a rule about the NEXT reader, not a retrofit.
+_SITUATION_KEY_NAMES = frozenset({"SITUATION_NAME_KEY", "SITUATION_NAMES_KEY"})
+
+# AST, not raw text, for the reason `_uses_acl_predicate` states at length: a comment or a
+# docstring EXPLAINING which key a module relies on somebody else to write is prose, and prose is
+# free to name it. `entities/cli.py` is the live example — it points a reader at the singular key
+# in a comment and never touches it as code, which is correct and must not need a licence here.
+_SITUATION_KEY_HOMES = {
+    "capture/schema.py": "the definition — both constants and the legacy note live here",
+    "librarian/report.py": "the ONE writer: a park writes the plural key, a list whatever the count",
+    "entities/situations.py": "the ONE reader, including the permanent pre-collapse fallback",
+}
+
+# Empty today. A module that genuinely has to name one of these keys — a migration, a second
+# transport that must read a parked row without going through `entities.situations` — is added
+# here with its reason, in a diff a reviewer sees, exactly as `ACL_REACHABILITY_EXCEPTIONS` and
+# `FENCE_LITERAL_EXCEPTIONS` are. The pruning test below is what stops an entry outliving its use.
+SITUATION_KEY_EXCEPTIONS: dict[str, str] = {}
+
+
+def _names_a_situation_key(path: pathlib.Path) -> bool:
+    """Does this module reference either constant AS CODE? Same AST posture, and the same reason,
+    as `_uses_acl_predicate` — an `ast.Name`/`ast.Attribute`/`ast.alias` exists only where the
+    identifier is really used; a docstring's text is opaque to the parser."""
+    tree = ast.parse(path.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in _SITUATION_KEY_NAMES:
+            return True
+        if isinstance(node, ast.Attribute) and node.attr in _SITUATION_KEY_NAMES:
+            return True
+        if isinstance(node, ast.alias) and node.name in _SITUATION_KEY_NAMES:
+            return True
+    return False
+
+
+def _situation_key_users() -> list[pathlib.Path]:
+    return [p for p in ALL_STIGMERGY_SOURCES if _names_a_situation_key(p)]
+
+
+def test_the_situation_key_users_are_found_at_all():
+    """Anti-vacuity, and the pointing-at-an-empty-destination guard in one. If the constants were
+    renamed, or the writer stopped writing them, the scan below would match nothing and pass
+    forever — a permanently-green test reads as coverage. Every declared home must still name the
+    key it is declared for, and the constants must still be real symbols carrying the wire values a
+    row already in the queue was written with."""
+    from stigmergy.capture import schema as capture_schema
+
+    assert capture_schema.SITUATION_NAME_KEY == "entity_name"
+    assert capture_schema.SITUATION_NAMES_KEY == "entity_names"
+    found = {_rel(p) for p in _situation_key_users()}
+    missing = sorted(set(_SITUATION_KEY_HOMES) - found)
+    assert not missing, (
+        f"these modules are declared as the definition/writer/reader of the parked-name keys but "
+        f"no longer name either constant as code: {missing}. If the responsibility MOVED, move the "
+        f"entry; if the key was renamed, this file is one of the places that has to say so.")
+
+
+@pytest.mark.parametrize("path", _situation_key_users(), ids=_rel)
+def test_every_module_naming_a_parked_name_key_is_a_declared_home_or_an_exception(path):
+    """One definition, one writer, one reader — or a listed reason. A module that reaches for
+    `SITUATION_NAME_KEY`/`SITUATION_NAMES_KEY` is deciding, on its own, what a parked row's name
+    field means; that decision belongs to `entities.situations` (reading) and `librarian.report`
+    (writing), because they are what the two mint doors and the admin console already agree
+    through."""
+    rel = _rel(path)
+    assert rel in _SITUATION_KEY_HOMES or rel in SITUATION_KEY_EXCEPTIONS, (
+        f"{rel} names a parked-name key as code. Read the row through "
+        f"`entities.situations.subjects_of`/`subject_of` and write it through "
+        f"`librarian.report.triage_entity` — or add {rel!r} to SITUATION_KEY_EXCEPTIONS in this "
+        f"file WITH the reason, and say which of the two keys it needs and why the shared reader "
+        f"cannot answer it.")
+
+
+def test_the_parked_name_key_scan_can_go_red_and_leaves_prose_alone(tmp_path):
+    """**Proves the mechanism can go red, on both directions at once.** A synthetic module that
+    uses the constant as code is caught; one that only MENTIONS it in a docstring and a comment is
+    not — which is not a hypothetical, it is `entities/cli.py`'s real shape, and a raw-text grep
+    would have demanded a licence for a module that touches nothing."""
+    offender = tmp_path / "synthetic_second_opinion.py"
+    offender.write_text(
+        "from stigmergy.capture import schema\n\n"
+        "def names_of(report):\n"
+        "    return report.get(schema.SITUATION_NAMES_KEY) or []\n",
+        encoding="utf-8")
+    assert _names_a_situation_key(offender) is True
+
+    prose_only = tmp_path / "synthetic_prose_only.py"
+    prose_only.write_text(
+        '"""Prints the value `situations.subject_of` reached through the row\'s raw singular\n'
+        'SITUATION_NAME_KEY — this module never reads the key itself."""\n\n'
+        "def show(row):\n"
+        "    return row['subject']   # SITUATION_NAMES_KEY is somebody else's business\n",
+        encoding="utf-8")
+    assert "SITUATION_NAME_KEY" in prose_only.read_text(), (
+        "test setup is broken: the fixture must look like an offender to a raw-text grep")
+    assert _names_a_situation_key(prose_only) is False
+
+
+def test_no_parked_name_key_exception_has_gone_stale():
+    """The pruning half every allowlist in this file has. An entry whose module stopped naming the
+    key — or was deleted — is a licence left lying around for a future file of the same name."""
+    users = {_rel(p) for p in _situation_key_users()}
+    stale = sorted(set(SITUATION_KEY_EXCEPTIONS) - users)
+    assert not stale, (
+        f"these SITUATION_KEY_EXCEPTIONS entries no longer name a parked-name key — delete "
+        f"them: {stale}")
+
+
 # A literal path fragment under `wiki/` — the git-checkout convention every page-writing
 # package roots its writes under. The read-only packages below must never hold one.
 _KNOWLEDGE_PATH_LITERAL = "wiki/"

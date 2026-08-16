@@ -49,7 +49,7 @@ def test_clamp_never_cuts_inside_a_brain_reply_invocation_at_the_old_200_and_300
     from stigmergy.capture import schema
     from stigmergy.librarian import report
 
-    out = report.needs_input(submission_id=14, name="Nebula Systems",
+    out = report.needs_input(submission_id=14, names=["Nebula Systems"],
                              candidates=[{"name": "Acme Corp", "aliases": ["Acme"]}],
                              total_candidates=1)
     summary = out["summary"]

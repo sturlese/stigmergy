@@ -56,10 +56,13 @@ def drift_free_env(env):
 
 # ── review_queue / review_decide ───────────────────────────────────────────────────────────────
 def _park_capture(conn, evidence, *, submitted_by=ALICE, situation=None, names=None) -> int:
-    """`names` writes the PLURAL `SITUATION_NAMES_KEY` and NOTHING else — the exact row shape
-    `report.triage_entity_multi` produces for a multi-entity park (issue #32); it never writes the
-    singular key beside it, so neither does this. The default single-name row is unchanged, so
-    every existing caller keeps the row it always had."""
+    """`names` writes `SITUATION_NAMES_KEY` and NOTHING else — the row shape `report.triage_entity`
+    produces today for any number of unresolved names; it never writes the singular key beside it,
+    so neither does this.
+
+    The default single-name row is the LEGACY shape (the retired singular key) and is left that
+    way on purpose: nothing writes it any more, rows carrying it are never migrated, and these
+    callers are where the review API's ability to still read one is exercised."""
     key = evidence.put(b"some material")
     report = {"summary": "parked for a look", "status": capture_schema.TRIAGE}
     if situation:

@@ -131,20 +131,27 @@ def park(conn, submission_id, *, status=capture_schema.TRIAGE, report=None, erro
 
 
 def unresolved_entity_report(name):
-    """The SINGULAR park shape: one unresolved name under `SITUATION_NAME_KEY`. Every caller in
-    this package used to build this and only this, which left the console's whole several-names
-    path — the one the mint form's empty-`Name` rule exists for — unreachable from these suites.
-    Use `unresolved_entity_names_report` for that half."""
+    """The LEGACY park shape: one unresolved name under the retired singular `SITUATION_NAME_KEY`.
+
+    **Deliberately kept after the plural collapse, and this is the reason.** Nothing writes this
+    key any more — a park writes `SITUATION_NAMES_KEY`, a list, whatever the count — but rows
+    carrying it are never migrated, so the console has to keep rendering them forever. Every caller
+    below is therefore also this repo's coverage that the console reads a pre-collapse row
+    correctly, which no fixture built from today's builder could give it.
+
+    Use `unresolved_entity_names_report` for the shape a park writes today (both counts). That the
+    two are indistinguishable to every reader downstream is pinned once, at the ONE place the
+    fallback lives: `tests/entities/test_situations.py`."""
     return {capture_schema.SITUATION_KEY: capture_schema.SITUATION_UNRESOLVED_ENTITY,
             capture_schema.SITUATION_NAME_KEY: name}
 
 
 def unresolved_entity_names_report(*names):
-    """The PLURAL park shape: `SITUATION_NAMES_KEY` and nothing else — the exact row
-    `report.triage_entity_multi` writes for a capture naming more than one unresolved entity
-    (issue #32), which never writes the singular key beside it, so neither does this. Deliberately
-    a second function rather than an optional argument on the one above: the two report shapes are
-    different data, and a caller has to choose which one it is exercising."""
+    """The park shape a librarian writes TODAY: `SITUATION_NAMES_KEY` and nothing else — the exact
+    row `report.triage_entity` produces for any number of unresolved names, one or many, which
+    never writes the singular key beside it, so neither does this. Deliberately a second function
+    rather than an optional argument on the one above: the two report shapes are different data —
+    one current, one legacy — and a caller has to choose which one it is exercising."""
     return {capture_schema.SITUATION_KEY: capture_schema.SITUATION_UNRESOLVED_ENTITY,
             capture_schema.SITUATION_NAMES_KEY: list(names)}
 

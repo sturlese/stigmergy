@@ -33,7 +33,10 @@ plus an `Approved-by:` trailer naming the human.
   functions over the same row with three different jobs: `subject_of` DISPLAYS (one string; several
   names joined with `", "`), `subjects_of` ACTS (the per-name list — an ordinary or meeting park
   can carry several names, each independently approvable), `mint_name_prefill` DECIDES (the single
-  unresolved name, or `""` when several or none mean no default can be right).
+  unresolved name, or `""` when several or none mean no default can be right — and `""` too for
+  `capture.schema.UNNAMED_ENTITY_PLACEHOLDER`, refused BY VALUE for the reason `cli._suggestable`
+  refuses it: it is the librarian's word for a park that named nothing, and a mint door is one
+  unchanged click from signing it into the registry, where it then resolves forever).
 - `situations.mint_name_prefill` — the one-vs-several prefill rule for the entity-mint Name field,
   decided HERE and nowhere else, and DELIVERED on the row: `_situation_view` carries it beside
   `subject`/`subjects`, so every consumer of `list_pending_situations` / `get_situation` (the CLI's
@@ -82,6 +85,15 @@ plus an `Approved-by:` trailer naming the human.
   load-bearing: the unattended worker must never depend on the steward's CLI. Where both need the
   same fact (which characters an entity name may carry), it is duplicated and declared at both
   ends — `librarian.report`'s identity filter and this package's `cli._suggestable`.
+- **Never read a parked row's name key yourself.** `situations.subjects_of` / `subject_of` are the
+  DECLARED ONE READER of `capture.schema.SITUATION_NAMES_KEY` and its legacy singular, and that is
+  enforced rather than agreed: `tests/test_architecture.py` requires every module naming either
+  constant AS CODE to be the definition (`capture/schema.py`), the one writer
+  (`librarian/report.py`) or this module — anything else is a listed exception carrying its reason,
+  with the pruning test every allowlist in that file has (naming a key in a comment stays free, as
+  `cli.py` does). The keys are a wire format in a JSONB column with no schema behind them, so
+  nothing type-checks a second opinion about what a park named; two lanes each deciding that for
+  themselves is issue #32, where a capture naming two entities lost one all the way to a human.
 - **Never resolve a collision against the file on disk when a repo could be drifting.** `mint.mint`
   asks the gate about the registry the COMMIT will publish (`generator.registry_of` over freshly
   re-read pages); `mint._refuse_drift` runs first so that answer means something.
@@ -113,9 +125,10 @@ plus an `Approved-by:` trailer naming the human.
   `read_entity_pages`: same slug id, and distinct ids whose titles claim one `normalize()` key
   (legal-suffix folding). The knowledge repo's own linter mirrors the match-key rule — a declared
   duplication across two repos with no shared import.
-- `capture.schema.SITUATION_NAMES_KEY` — the plural sibling of `SITUATION_NAME_KEY`, written only
-  for multi-name parks; `situations.subjects_of` falls back to the singular key as a one-element
-  list, keeping every single-name reader unchanged.
+- `capture.schema.SITUATION_NAMES_KEY` — the ONLY name key a park writes, a list whatever the count.
+  `situations.subjects_of` still falls back to the singular `SITUATION_NAME_KEY` as a one-element
+  list, and that fallback is PERMANENT: rows parked before the plural collapse keep the old key and
+  are never migrated, so a reader that dropped it would blank a live steward's queue.
 - The template, `ops/templates/entity.md`, is read from the repo and never reproduced here — an
   edit to it reaches minted pages with no platform release.
 

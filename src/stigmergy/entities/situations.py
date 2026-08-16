@@ -47,10 +47,13 @@ def classify(row: dict) -> str:
 def subjects_of(row: dict) -> list[str]:
     """Every unresolved name this row carries, independently actionable.
 
-    `schema.SITUATION_NAMES_KEY` (a list) is authoritative when present — an ordinary or meeting
-    park can carry several names, each approvable independently; a single-name park falls back to
-    the singular `SITUATION_NAME_KEY` as a one-element list. `[]` for `unsupported-type`, which
-    has no NAME to place (see `subject_of` for its subject, the judged type).
+    `schema.SITUATION_NAMES_KEY` (a list) is authoritative when present, and is now the only key a
+    park WRITES — an ordinary or meeting park carries every unresolved name, each approvable
+    independently. The fallback to the singular `SITUATION_NAME_KEY` as a one-element list is
+    PERMANENT and not a transition to finish: rows parked before the plural collapse keep the old
+    key forever (they are never migrated), so deleting the fallback would silently blank a live
+    steward's queue. `[]` for `unsupported-type`, which has no NAME to place (see `subject_of` for
+    its subject, the judged type).
     """
     if classify(row) != schema.SITUATION_UNRESOLVED_ENTITY:
         return []
@@ -74,6 +77,13 @@ def mint_name_prefill(row: dict) -> str:
     offer. A surface renders that listing when this answers `""` and names exist — it never counts
     again, or the rule is back to being decided per door.
 
+    `schema.UNNAMED_ENTITY_PLACEHOLDER` is refused BY VALUE, the same rule and the same reason as
+    `entities.cli._suggestable`: it is the librarian's own fallback word for a park that named
+    nothing, syntactically an ordinary name, and a mint door is ONE unchanged click from signing it
+    into the registry — where it would then resolve for every future capture containing that
+    phrase. Refused here rather than at each door, because a door that forgot the check is a door
+    that mints it.
+
     What this makes identical across the doors is the DECISION — whether a default is offered at
     all, and which name it is. Not the bytes: each transport still sanitizes what it renders on its
     own terms (the admin console strips control characters, Slack and MCP do not), so a ragged name
@@ -83,10 +93,13 @@ def mint_name_prefill(row: dict) -> str:
     unstripped, and nothing de-duplicates them, so `["  Jack  "]` prefills with its padding and
     `["Jack", "Jack"]` is a two-name park with an empty field. Both are pinned in
     `tests/entities/test_situations.py`; changing either changes what gets minted, which is a
-    decision and not a consolidation.
+    decision and not a consolidation. The placeholder check is the one exception, and it compares
+    the STRIPPED value, so the padding cannot smuggle it past.
     """
     names = subjects_of(row)
-    return names[0] if len(names) == 1 else ""
+    if len(names) != 1 or names[0].strip() == schema.UNNAMED_ENTITY_PLACEHOLDER:
+        return ""
+    return names[0]
 
 
 def subject_of(row: dict) -> str:

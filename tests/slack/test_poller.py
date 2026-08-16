@@ -91,7 +91,7 @@ def test_needs_input_addresses_the_submitter_and_swaps_the_mcp_invocation(indexe
     gw = FakeSlackGateway()
     ctx = build_context(fixture, conn, gateway=gw)
     submission_id = _new_submission(ctx, identity=fixture.STEWARD, channel_id="C1", thread_ts="2.1")
-    rep = report.needs_input(submission_id=submission_id, name="Acme",
+    rep = report.needs_input(submission_id=submission_id, names=["Acme"],
                              candidates=[{"name": "Acme Corp", "aliases": ["Acme"]}])
     _claim_and_finish(conn, submission_id, status=capture_schema.NEEDS_INPUT, report_dict=rep)
 
@@ -106,7 +106,7 @@ def test_needs_input_addresses_the_submitter_and_swaps_the_mcp_invocation(indexe
 
 
 @pytest.mark.parametrize("status,rep_builder", [
-    (capture_schema.TRIAGE, lambda: report.triage_entity(name="Acme")),
+    (capture_schema.TRIAGE, lambda: report.triage_entity(names=["Acme"])),
     (capture_schema.REJECTED, lambda: report.rejected_duplicate(page_path="x.md", as_of="2026-01")),
     (capture_schema.FAILED, lambda: report.failed_system(attempts=1, stage="gate",
                                                          reason="zone refused")),
@@ -137,7 +137,7 @@ def test_resolved_report_reuses_the_stewards_own_sentence(indexed, clean_tables)
     ctx = build_context(fixture, conn, gateway=gw)
     submission_id = _new_submission(ctx, identity=fixture.STEWARD, channel_id="C1", thread_ts="4.1")
     _claim_and_finish(conn, submission_id, status=capture_schema.TRIAGE,
-                      report_dict=report.triage_entity(name="Acme"))
+                      report_dict=report.triage_entity(names=["Acme"]))
     dispositions.resolve(conn, submission_id, actor="steward", note="handled by hand")
 
     reported = _run(poller.poll_once(ctx))
@@ -153,7 +153,7 @@ def test_a_status_is_reported_exactly_once_even_across_multiple_polls(indexed, c
     gw = FakeSlackGateway()
     ctx = build_context(fixture, conn, gateway=gw)
     submission_id = _new_submission(ctx, identity=fixture.STEWARD, channel_id="C1", thread_ts="5.1")
-    rep = report.triage_entity(name="Acme")
+    rep = report.triage_entity(names=["Acme"])
     _claim_and_finish(conn, submission_id, status=capture_schema.TRIAGE, report_dict=rep)
 
     first = _run(poller.poll_once(ctx))
@@ -173,7 +173,7 @@ def test_a_submission_with_no_slack_origin_produces_no_slack_traffic(indexed, cl
     ack = service.submit("raw", "an MCP-originated capture")   # no slack_submissions row at all
     claimed = queue.claim_next(conn)
     assert claimed["id"] == ack["id"]
-    rep = report.triage_entity(name="Someone")
+    rep = report.triage_entity(names=["Someone"])
     queue.finish(conn, ack["id"], status=capture_schema.TRIAGE, expected_attempts=claimed["attempts"],
                 error=rep["summary"], report=rep)
 

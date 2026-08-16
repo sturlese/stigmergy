@@ -260,8 +260,10 @@ RULE_TABLE = [
     ("So do not declare an edit on the", "outside-lane"),
     # The one-ask budget: the brief promises at most one question ever, and `_ask_or_park` is the
     # single place that decides whether this park spends it. The marker is the DEFINITION, not the
-    # bare name: `_ask_or_park` is a prefix of `_ask_or_park_multi`, so a bare-name marker would
-    # have stayed green with the singular decider deleted outright.
+    # bare name — a bare-name marker is satisfied by any mention, including a comment or a call
+    # that no longer decides anything. (It used to be stated as "`_ask_or_park` is a prefix of
+    # `_ask_or_park_multi`"; the plural sibling was deleted by the one-shape collapse, and the
+    # reason for pinning the definition survives it unchanged.)
     ("**The submitter is asked at most once, ever.**", "def _ask_or_park("),
     # The two park kinds and the field each one's report cannot be written without — now TWO rows,
     # because issue #32 rewrote the sentence that used to state both on one line. The
@@ -285,16 +287,27 @@ RULE_TABLE = [
     ("When the material leaves MORE THAN ONE thing unregistered, name **every** one of them in "
      "`names` —", "_unresolved_names"),
     # 2. The `## Never` bullet, which is the same rule stated as a prohibition ("park only SOME, or
-    #    join several into one"). Its marker is the ORDINARY flow's own call into the plural ask —
-    #    the full call line, not the bare function name: `_ask_or_park_multi` already existed for
-    #    the meeting flow, so a bare-name marker would have been green throughout the entire bug.
-    #    What was missing, and what this pins, is `_triage` ROUTING a multi-name park into it.
-    #    Shape borrowed from `test_meeting_brief_contract.py`'s ("## Parking a meeting — atomic,
-    #    whole capture, one ask", "_ask_or_park_multi") row; that table has no row of its own for
-    #    the meeting brief's equivalent "Park only SOME" bullet.
+    #    join several into one"). Its marker is the ORDINARY flow's own call into the park router,
+    #    as a FULL CALL LINE rather than a bare function name.
+    #
+    #    **Re-pointed by the one-shape collapse, and the re-point is the row's own subject.** The
+    #    marker used to be `_ask_or_park_multi(item, deps, names=names, ...)` — the plural sibling
+    #    the ordinary flow had to reach to name a second entity. There is no sibling now: one
+    #    router serves both counts and both flows, so what this row pins is `_triage` handing it
+    #    the NAMES LIST, which is "one ask names every one of them" on the code side. Parking on
+    #    only some of them would mean not passing the list.
+    #
+    #    Why the full call line and not `def _ask_or_park(`: the definition already has its own row
+    #    above (the one-ask budget), and a marker satisfied by the function merely EXISTING would
+    #    have been green throughout issue #32 — the plural machinery existed the whole time; what
+    #    was missing was the ordinary flow routing into it. Verified against the concatenated
+    #    source before use: this string occurs exactly once, it is not a substring of the
+    #    definition line (`def _ask_or_park(item: dict, ...` — `item:` not `item,`), and it does
+    #    not match `_triage_meeting`'s call, which wraps after `notes=notes,` and so ends in a
+    #    comma where this one ends in a paren.
     ("- Park only SOME of a capture's unresolved names, or join several into one — one ask names "
      "every",
-     "_ask_or_park_multi(item, deps, names=names, agent_rationale=rationale, notes=notes)"),
+     "_ask_or_park(item, deps, names=names, agent_rationale=rationale, notes=notes)"),
 
     # ── what the worker HANDS the agent: four fields, four producers ──────────────────────────
     # The brief promises a context the agent no longer has a tool to go and get. Each promise is

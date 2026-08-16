@@ -532,8 +532,13 @@ def test_every_shape_problem_is_reported_in_ONE_pass_not_the_first_one_found():
 @pytest.mark.parametrize("raw, expected", [
     pytest.param({"decision": "file"}, "title", id="a filing with no title"),
     pytest.param({"decision": "triage"}, "triage.kind", id="a park with no kind"),
+    # `triage.names`, not `triage.name`, and asserted with the `s`: `TRIAGE_REQUIRED_FIELD` is the
+    # REPAIR INSTRUCTION a model is handed, and an account has no singular slot to satisfy it with
+    # any more. The old expectation `"triage.name"` is a PREFIX of the new message, so it would
+    # have kept passing whichever field the table named — a substring that cannot tell the two
+    # apart is not pinning the one that matters.
     pytest.param({"decision": "triage", "triage": {"kind": "unresolved-entity"}},
-                 "triage.name", id="an unresolved entity with no name"),
+                 "triage.names", id="an unresolved entity with no name"),
     pytest.param({"decision": "triage", "triage": {"kind": "unsupported-type"}},
                  "triage.judged_type", id="an unsupported type with no judged_type"),
 ])
@@ -547,23 +552,68 @@ def test_a_missing_required_field_is_a_correctable_finding_and_never_an_invented
     assert expected in raised.value.findings[0].message
 
 
-@pytest.mark.parametrize("kind, field", [("unresolved-entity", "name"),
-                                        ("unsupported-type", "judged_type")])
-def test_a_well_formed_park_of_either_kind_passes(kind, field):
+@pytest.mark.parametrize("kind, field, expected", [
+    # INVERTED for `unresolved-entity` by the plural collapse: `triage.name` is still ACCEPTED
+    # inbound and is now NORMALISED to a one-element `names` list at this boundary, so the field it
+    # arrived in is no longer the field it lands in. The park still passes untouched, which is what
+    # this twin is for.
+    ("unresolved-entity", "name", ("names", ["Globex Corp"])),
+    ("unresolved-entity", "names", ("names", ["Globex Corp"])),
+    ("unsupported-type", "judged_type", ("judged_type", "Globex Corp")),
+])
+def test_a_well_formed_park_of_either_kind_passes(kind, field, expected):
     """The benign twin of the required-field checks: both documented parks go through untouched,
     and neither needs a `title` — that requirement belongs to a filing."""
+    declared = ["Globex Corp"] if field == "names" else "Globex Corp"
     outcome = agent.parse_outcome({"decision": "triage",
-                                   "triage": {"kind": kind, field: "Globex Corp"}})
+                                   "triage": {"kind": kind, field: declared}})
+    landing, value = expected
     assert outcome.decision == "triage" and outcome.triage["kind"] == kind
-    assert outcome.triage[field] == "Globex Corp"
+    assert outcome.triage[landing] == value
+    # The retired singular slot is not carried forward under its own name: one shape downstream.
+    assert "name" not in outcome.triage
+
+
+# ── ONE shape downstream, BOTH shapes accepted at the boundary ────────────────────────────────
+# The plural collapse's own acceptance criterion: `parse_outcome` accepts an account declaring
+# `triage.name` and one declaring `triage.names` and produces the SAME internal shape. Inbound
+# tolerance is not outbound duplication — the brief offers both spellings and a model may send
+# either, while nothing below this line has a singular slot to disagree with.
+#
+# This is pinned once here as an equality, and exercised continuously everywhere else: the keyless
+# `double.DoubleAgent` still emits `triage.name` for an ordinary park, so every suite that drives
+# the double crosses the singular road on every run.
+def test_the_two_inbound_spellings_of_ONE_name_produce_an_identical_triage():
+    singular = agent.parse_outcome({
+        "decision": "triage", "triage": {"kind": "unresolved-entity", "name": "Jack"}})
+    plural = agent.parse_outcome({
+        "decision": "triage", "triage": {"kind": "unresolved-entity", "names": ["Jack"]}})
+
+    assert singular.triage == plural.triage
+    assert singular.triage["names"] == ["Jack"]
+    # ...and the retired field is not carried through under its own name by EITHER road, or a
+    # downstream reader could still branch on which spelling arrived.
+    assert "name" not in singular.triage and "name" not in plural.triage
+
+
+def test_a_declared_plural_list_wins_over_a_singular_name_declared_beside_it():
+    """The one case an equality cannot cover: an account declaring BOTH. The plural list is the
+    authoritative one — it is the shape that can hold every name — and the singular is not appended
+    to it, which would turn a two-name park into a three-name one naming the first twice."""
+    outcome = agent.parse_outcome({
+        "decision": "triage",
+        "triage": {"kind": "unresolved-entity", "name": "Jack",
+                   "names": ["Jack", "Acme Capital"]}})
+
+    assert outcome.triage["names"] == ["Jack", "Acme Capital"]
 
 
 # ── issue #32: the ordinary path has no slot for more than one unresolved entity name ─────────
 # `parse_meeting_outcome` already accepts a PLURAL `triage.names` list (`SITUATION_NAMES_KEY`) for
 # exactly the case of a capture naming several distinct unresolved entities at once — see
 # `test_a_parked_meeting_naming_its_unresolved_entities_validates` in
-# `test_structured_schema_unit.py`. `parse_outcome` has never grown the same field: it still only
-# ever reads the singular `triage.name` (`SITUATION_NAME_KEY`).
+# `test_structured_schema_unit.py`. `parse_outcome` has since grown the same field, and the
+# singular one it used to read exclusively is now folded into it at this boundary.
 def test_parse_outcome_accepts_the_plural_triage_names_field_like_the_meeting_flow_does():
     """Issue #32 reproduction, at `agent.parse_outcome` — the tightest layer the defect is visible
     at with no LLM involved. A capture naming two distinct unresolved entities ("Jack" the person,

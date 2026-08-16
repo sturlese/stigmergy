@@ -5,7 +5,9 @@ sensitivity and never its specificity. Behaviour comes from directives in the ma
 
     DOUBLE:type=<t>          file as this page type instead of `note`
     DOUBLE:company           anchor with company-wide scope instead of an entity
-    DOUBLE:triage-entity=<n> park: the material is about an entity the registry lacks
+    DOUBLE:triage-entity=<a[,b,…]> park: the material is about entities the registry lacks. Comma-
+                             separated, like `meeting-triage`: ONE name emits the singular
+                             `triage.name`, several emit the plural `triage.names` (see `run`)
     DOUBLE:triage-type=<t>   park: the material is really a governed type
     DOUBLE:hallucinate       write a figure the material does not support, on EVERY attempt
     DOUBLE:hallucinate-once  write it on the first attempt, fix it on the corrective retry
@@ -109,13 +111,23 @@ class DoubleAgent:
             # that accepted any reply would prove nothing about the gate at the end of the loop.
             answered = self._resolve_reply(worktree, reply)
             if not answered:
+                # Comma-separated, like `meeting-triage`: the ORDINARY lane parks any number of
+                # names too, and a directive that could carry only one left the plural inbound road
+                # (issue #32 — the collapse this whole shape exists to prevent) untravelled by the
+                # entire keyless suite. A REPLY that resolved nothing is still what the park names,
+                # as one answer naming one thing — unchanged, and not slot-split like the meeting
+                # ask, whose several questions arrive in one reply.
+                declared = [n.strip() for n in directives["triage-entity"].split(",") if n.strip()]
+                names = ([reply.strip()[:200]] if reply.strip()
+                         else declared or ["an unregistered thing"])
+                # ONE name keeps the SINGULAR `triage.name`. That spelling is the inbound tolerance
+                # `agent.parse_outcome` folds into a one-element list, and this is what exercises it
+                # on every keyless run; emitting the plural here too would leave the fold pinned in
+                # one unit test and travelled nowhere else.
                 return self._park(worktree, run, {
                     "decision": "triage",
-                    "triage": {"kind": "unresolved-entity",
-                               "name": (reply.strip()[:200] if reply.strip()
-                                        else directives["triage-entity"]
-                                        or "an unregistered thing"),
-                               "judged_type": ""},
+                    "triage": {"kind": "unresolved-entity", "judged_type": "",
+                               **({"name": names[0]} if len(names) == 1 else {"names": names})},
                     "findings": [{"category": c} for c in findings],
                     "summary": "the material is about something the registry does not know"})
             # Resolved: file, anchored to the REGISTRY's spelling, never the submitter's.

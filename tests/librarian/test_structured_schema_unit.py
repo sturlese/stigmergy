@@ -221,30 +221,65 @@ def test_a_park_with_no_usable_kind_is_refused_and_told_the_vocabulary():
 # meeting flow: the schema is tested as a contract, not as whichever road happens to be wired.
 def test_a_parked_ordinary_capture_may_name_SEVERAL_unresolved_entities():
     """The ordinary flow's half of the plural shape: a capture naming two unresolved entities
-    declares `triage.names`, and the completeness validator treats that as satisfying exactly what
-    the singular `triage.name` would. Before issue #32 this account was REFUSED for a missing
-    `triage.name` — the model's only repair instruction was to put two names in a one-name field,
-    which is how "Jack Acme Capital" got written."""
+    declares `triage.names`. Before issue #32 this account was REFUSED for a missing `triage.name`
+    — the model's only repair instruction was to put two names in a one-name field, which is how
+    "Jack Acme Capital" got written."""
     account = FilingAccount(
         decision="triage",
         triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
                               names=["Jack", "Acme Capital"]))
 
     assert account.triage.names == ["Jack", "Acme Capital"]
-    assert account.triage.name == ""     # the singular slot stays empty; it is not a fallback
+    # INVERTED by the plural collapse. This used to assert `account.triage.name == ""` — "the
+    # singular slot stays empty; it is not a fallback". There is no singular slot: `OrdinaryTriage`
+    # carries `names` only, so the absence is now structural rather than conventional.
+    assert not hasattr(account.triage, "name")
 
 
-def test_a_plural_park_of_BLANK_names_is_still_refused_and_still_names_the_singular_field():
+def test_a_plural_park_of_BLANK_names_is_still_refused_and_names_the_PLURAL_field():
     """Specificity twin for the acceptance above — the branch must not become a hole. A `names`
-    list that carries no actual name satisfies nothing, and the repair instruction the model gets
-    back is the unchanged one: `triage.name`. (The empty-list case is covered by
+    list that carries no actual name satisfies nothing. INVERTED: the repair instruction is now
+    `triage.names`, and it has to be, because the account has no `triage.name` for a model to put
+    anything in — a repair instruction naming a field the schema does not have is a loop the model
+    cannot leave. (The empty-list case is covered by
     `test_a_park_that_omits_the_field_its_kind_obliges_is_refused` above, off the same table.)"""
     with pytest.raises(ValidationError) as exc_info:
         FilingAccount(decision="triage",
                       triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
                                             names=["   ", ""]))
 
-    assert "`triage.name`" in _message(exc_info)
+    assert "`triage.names`" in _message(exc_info)
+
+
+# ── the benign twin the removal of `OrdinaryTriage.name` invites ───────────────────────────────
+# Deleting a field from a pydantic model is silent by default: `OrdinaryTriage(name="Jack")` does
+# not raise, it DROPS the argument. So the removal has two halves worth pinning, and only together
+# do they say what happened — a park that names its entity in the surviving field validates, and a
+# park that names it in the retired one does NOT quietly pass as if it had.
+def test_a_one_name_park_validates_through_the_surviving_PLURAL_field():
+    account = FilingAccount(
+        decision="triage",
+        triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY, names=["Jack"]))
+
+    assert account.triage.names == ["Jack"]
+
+
+def test_a_park_naming_its_entity_only_in_the_RETIRED_field_does_not_silently_pass():
+    """The half that would rot in silence. `name=` is dropped by the model rather than rejected, so
+    without this the retired field could come back as a typo — or a caller could keep passing it —
+    and the account would look accepted while carrying no name at all. What must NOT happen is a
+    green validation; what does happen is the ordinary missing-field refusal, naming `triage.names`.
+
+    NOTE for the reader who wonders whether this is right: `agent.parse_outcome` is deliberately
+    MORE tolerant than this — it accepts an inbound `triage.name` and folds it into `names`. The
+    two enforcement points are duplication by design, and they now differ on exactly this one
+    spelling. That asymmetry is recorded here rather than left to be discovered."""
+    with pytest.raises(ValidationError) as exc_info:
+        FilingAccount(decision="triage",
+                      triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
+                                            name="Jack"))
+
+    assert "`triage.names`" in _message(exc_info)
 
 
 def test_the_plural_shape_buys_the_OTHER_park_kind_nothing():
@@ -295,15 +330,17 @@ def test_every_decision_in_a_meeting_filing_must_carry_its_own_title():
 
 
 def test_a_parked_meeting_must_carry_the_PLURAL_names_field():
-    """**Both flows now know the plural shape; what still differs is whether it is OBLIGATORY.**
-    A meeting park is always plural — `parse_meeting_outcome` REQUIRES `names` outright, with no
-    singular fallback, so an account carrying only a `name` is refused here. The ordinary flow
-    ACCEPTS `names` as one of TWO shapes (issue #32): `FilingAccount` takes either the singular
-    `triage.name` or a non-empty `triage.names`, and refuses only when NEITHER is there — see
-    `test_a_park_that_omits_the_field_its_kind_obliges_is_refused` and
-    `test_a_parked_ordinary_capture_may_name_SEVERAL_unresolved_entities` for that pair. A meeting
-    schema that copied the ordinary validator would therefore accept a `name`-only park this flow
-    has no reader for."""
+    """**Both schemas now require the same plural shape, and this is where that convergence is
+    stated.** A meeting park has always been plural — `parse_meeting_outcome` REQUIRES `names`
+    outright, with no singular fallback. Since the plural collapse the ordinary schema asks for the
+    same thing: `OrdinaryTriage` carries `names` only, and `FilingAccount` refuses an
+    `unresolved-entity` park whose list holds no actual name (see
+    `test_a_park_that_omits_the_field_its_kind_obliges_is_refused` and the two twins beside it).
+
+    What is deliberately NOT symmetric is the BOUNDARY: `agent.parse_outcome` still accepts an
+    inbound `triage.name` and folds it into a one-element list, because the ordinary brief offers
+    both spellings to the model. Tolerating a spelling on the way in is not carrying a second
+    field."""
     with pytest.raises(ValidationError) as exc_info:
         MeetingAccount(decision="triage",
                        triage=MeetingTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY))
@@ -336,7 +373,7 @@ def test_a_complete_ordinary_PARK_validates_and_carries_no_page():
     design depends on."""
     account = FilingAccount(decision="triage",
                             triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
-                                                  name="Halcyon Grid"))
+                                                  names=["Halcyon Grid"]))
 
     assert account.page.title == "" and account.page.body == ""
 
@@ -671,7 +708,7 @@ def test_both_readers_refuse_the_same_incomplete_park(kind, required):
 def test_a_complete_park_satisfies_BOTH_readers(tmp_path):
     """The benign twin of the agreement: a park that names its field is accepted by both, so
     neither enforcement point is refusing work the other would let through."""
-    values = {agent_module.TRIAGE_UNRESOLVED_ENTITY: {"name": "Halcyon Grid"},
+    values = {agent_module.TRIAGE_UNRESOLVED_ENTITY: {"names": ["Halcyon Grid"]},
               agent_module.TRIAGE_UNSUPPORTED_TYPE: {"judged_type": "dataset"}}
 
     for kind, extra in values.items():

@@ -5,7 +5,9 @@ hand. That is exactly the shape of a yardstick that lies: rename `pages_edited` 
 park through a builder that writes `unresolved_names` where the instrument reads `unresolved_name`,
 and the scorer tests stay green while the facet reports 0.00 for every backend forever — a number
 that reads as a failing model and is actually a broken instrument. It would be discovered after
-paying for a real run, and nothing in the table would say so.
+paying for a real run, and nothing in the table would say so. That second example is not
+hypothetical: the plural collapse retired the singular ask key, and the two park cases below are
+the ones that had to move.
 
 So nothing is canned here. Reports come from `librarian.report`'s own builders, the reuse block
 from `processing._reuse_note`, the pages out of a REAL `git` commit through the same
@@ -232,18 +234,24 @@ def test_the_duplicate_refusal_carries_the_reason_code_F04_is_scored_on(filed, e
            dict.fromkeys(entry["expect"], True)
 
 
-def test_a_park_on_one_name_is_observed_through_the_reports_singular_key(filed, expectations):
-    """`report.needs_input` writes `unresolved_name`; its plural sibling writes `unresolved_names`
-    and a meeting parking on ONE name goes through the singular builder. The instrument reads both
-    — proven here rather than assumed, because a park that observed nothing scores every
-    `park_question` cell a miss while the backend did exactly the right thing."""
+def test_a_park_on_one_name_is_observed_through_the_reports_plural_key(filed, expectations):
+    """INVERTED by the plural collapse. `report.needs_input` used to write the singular
+    `unresolved_name` for a one-name park and this test was named for that; it now writes
+    `unresolved_names`, a one-element list, whatever the count. The instrument's job is unchanged
+    and is why this test exists: a park it observed nothing from scores every `park_question` cell
+    a miss while the backend did exactly the right thing, and that reads as a failing model rather
+    than a broken yardstick.
+
+    Built from the REAL builder, never a canned dict — which is what makes this the test that
+    catches the rename."""
     env, _ = filed
     entry = expectations["F02-unknown-entity-parks"]
     rep = report_module.needs_input(
-        submission_id=17, name="Halcyon Grid",
+        submission_id=17, names=["Halcyon Grid"],
         candidates=[{"id": "northwind-freight", "name": "Northwind Freight", "aliases": []}],
         total_candidates=3)
 
+    assert "unresolved_name" not in rep      # the shape the instrument is being read against
     observed = _observe(_result(schema.NEEDS_INPUT, "", rep), 1, env)
 
     assert observed["park_question"] == ["Halcyon Grid"]
@@ -255,13 +263,33 @@ def test_a_park_on_several_names_is_observed_through_the_reports_plural_key(file
     """One ask for all of them — a partial page set is worse than an honest park — so the
     instrument has to see every name the question covered."""
     env, _ = filed
-    rep = report_module.needs_input_multi(submission_id=18,
-                                          names=["Project Wren", "Halcyon Grid"],
-                                          candidates=[], total_candidates=0)
+    rep = report_module.needs_input(submission_id=18,
+                                    names=["Project Wren", "Halcyon Grid"],
+                                    candidates=[], total_candidates=0)
     observed = _observe(_result(schema.NEEDS_INPUT, "", rep), 1, env)
     assert observed["park_question"] == ["Project Wren", "Halcyon Grid"]
     assert run_filing.score_phase({"park_question": ["Project Wren", "Halcyon Grid"]},
                                   observed)["park_question"] is True
+
+
+# ── the instrument's LEGACY read, which no builder can produce any more ────────────────────────
+# `_observe` still reads `unresolved_name` first and falls back to `unresolved_names`. Nothing
+# writes the singular key now, so the two tests above exercise only the fallback — the primary
+# branch became unreachable from any builder on the same day, and an unreachable branch that reads
+# as coverage is what this file's own docstring is about.
+#
+# The report here is therefore a LITERAL, deliberately not round-tripped through a builder: what it
+# stands for is a report written by the OLD code and read back by today's instrument — a run
+# scored from a stored result, or a queue row parked before the collapse. A round-trip version
+# would silently stop testing the thing it names the moment the builder changed, which is exactly
+# what just happened to the case above.
+def test_a_legacy_park_report_carrying_the_retired_singular_key_is_still_observed(filed):
+    env, _ = filed
+    legacy = {"status": schema.NEEDS_INPUT, "unresolved_name": "Halcyon Grid"}
+
+    observed = _observe(_result(schema.NEEDS_INPUT, "", legacy), 1, env)
+
+    assert observed["park_question"] == ["Halcyon Grid"]
 
 
 # ── the meeting: a page SET, each decision anchoring on its own ────────────────────────────────

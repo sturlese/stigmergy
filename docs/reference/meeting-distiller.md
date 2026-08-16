@@ -296,21 +296,20 @@ could be the agent acting on injected text.
 ## Ask-back: several names, one question
 
 A transcript can name more than one unresolved entity in a single capture — a call naming two
-customers and an unregistered project code. `processing._triage_meeting` routes every meeting park
-through `_ask_or_park_multi`, unconditionally (a transcript's `triage.names` is always the plural
-shape). The ORDINARY flow shares the same machinery for the same reason — a capture naming two
-unresolved entities is not a meeting-only shape — with one difference: `processing._triage` routes
-through `_ask_or_park_multi` only when `triage.names` actually carries more than one name; a single
-name, however it arrived, lands in the singular report shape either way. What DOES differ is the
-prose: `report.needs_input_multi`/`triage_entity_multi` take a `meeting` flag that names the parked
-thing as its own submitter knows it, and adds the consequence only a page set has (an unplaced name
-costs more than its own decision, because a meeting page cannot link a decision that was never
-filed). Either way the SAME one-ask-per-capture budget (`capture_queue.asked_at`) is spent once,
-naming every unresolved name in one question rather than the first one found; see
+customers and an unregistered project code. `processing._triage_meeting` hands every name it
+declared to `_ask_or_park`, the ONE park router; the ORDINARY flow uses the same one for the same
+reason — a capture naming two unresolved entities is not a meeting-only shape — and both write the
+same report shape whatever the count. What DIFFERS between the flows is the prose:
+`report.needs_input`/`triage_entity` take a `meeting` flag that names the parked thing as its own
+submitter knows it, and adds the consequence only a page set has (an unplaced name costs more than
+its own decision, because a meeting page cannot link a decision that was never filed). Either way
+the SAME one-ask-per-capture budget (`capture_queue.asked_at`) is spent once, naming every
+unresolved name in one question rather than the first one found; see
 [`librarian.md`'s own "Ask-back" section](./librarian.md#ask-back-the-one-question-a-capture-gets)
 for the ordinary flow's routing table.
-`capture.schema.SITUATION_NAMES_KEY` (a JSON list, additive beside the unchanged
-singular `SITUATION_NAME_KEY`) carries the plural case on the parked row, from EITHER flow;
+`capture.schema.SITUATION_NAMES_KEY` (a JSON list, one entry or many, and the only key a park now
+writes — the singular `SITUATION_NAME_KEY` is read-only legacy) carries the names on the parked row,
+from EITHER flow;
 `entities.situations.subjects_of` is the per-name reader `stigmergy-entities show` uses to print one
 `stigmergy-entities approve` command PER unresolved name, each checked and runnable independently.
 See [`../../src/stigmergy/entities/index.md`](../../src/stigmergy/entities/index.md) and
@@ -411,7 +410,7 @@ reads perfectly plausibly on its own.
 | `tests/librarian/test_meeting_brief_contract.py` | the brief↔gates two-sided contract, in both directions |
 | `tests/librarian/test_meeting_outcome_reuse_unit.py` | the reuse predicate — when a stored outcome is re-filed without an agent call, and when it must not be |
 | `tests/librarian/test_gates_unit.py` | the flow-scoped `GateContext` fields, per-page anchoring, the provenance-group exemption |
-| `tests/librarian/test_report.py` | `report.filed_meeting` / `triage_entity_multi` / `needs_input_multi` |
+| `tests/librarian/test_report.py` | `report.filed_meeting` / `triage_entity` / `needs_input`, including their several-name prose |
 | `tests/entities/test_situations.py` | `subjects_of`'s multi-name fallback |
 
 No test needs an API key: `double.DoubleAgent.run_meeting` drives every sabotage in the table above,
