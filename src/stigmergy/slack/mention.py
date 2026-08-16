@@ -7,10 +7,10 @@ of a placeholder left up forever.
 import asyncio
 import logging
 import re
-import uuid
 
 from stigmergy.server.errors import CapabilityUnavailableError, IdentityError, RateLimitError
 from stigmergy.slack import channels, copy, render
+from stigmergy.slack.context import short_ref
 from stigmergy.slack.gateway import SlackApiError
 from stigmergy.slack.identity import IdentityResult, NoAccess, Resolved, TransientFailure
 from stigmergy.slack.mrkdwn import escape_mrkdwn, to_mrkdwn
@@ -37,12 +37,6 @@ def strip_mention(text: str, bot_user_id: str = "") -> str:
     if bot_user_id:
         return re.sub(rf"<@{re.escape(bot_user_id)}(?:\|[^>]*)?>", "", s).strip()
     return _LEADING_MENTION_RE.sub("", s).strip()
-
-
-def _short_id() -> str:
-    """An opaque correlation token for the server-error copy: logged alongside the real exception so
-    an operator can find it, safe to show a user (no path, no DSN, no traceback)."""
-    return uuid.uuid4().hex[:8]
 
 
 async def _edit_or_fallback(ctx, *, channel_id: str, ts: str, thread_ts: str, blocks: list,
@@ -151,7 +145,7 @@ async def handle_mention(ctx, *, event_team_id: str, channel_id: str, thread_ts:
         except IdentityError:
             # Fail-closed is right; total silence is not — the same honest server-error copy every
             # other unexpected failure gets, with a correlation ref.
-            ref = _short_id()
+            ref = short_ref()
             log.error("slack: malformed slack-channels.json (ref=%s)", ref, exc_info=True)
             await ctx.post_or_log(
                 ctx.gateway.chat_post_message(channel_id, blocks=render.render_server_error(ref),
@@ -184,7 +178,7 @@ async def handle_mention(ctx, *, event_team_id: str, channel_id: str, thread_ts:
                                 blocks=render.render_rate_limit(), text=copy.RATE_LIMIT)
         return
     except Exception as ex:
-        ref = _short_id()
+        ref = short_ref()
         level = log.error if not isinstance(ex, CapabilityUnavailableError) else log.warning
         level("slack ask failed (ref=%s)", ref, exc_info=True)
         await _edit_or_fallback(ctx, channel_id=channel_id, ts=placeholder_ts, thread_ts=thread_ts,
@@ -211,10 +205,9 @@ async def _maybe_dm_fuller_answer(ctx, *, email: str, asker_audiences, asker_sla
     difference."""
     if not _scope_could_be_wider(asker_audiences, effective_audiences):
         return
-    # `rate_limited=False` — SYSTEM-initiated work the asker did not request: spending their own
-    # budget would make an asker for whom content was withheld observably likelier to hit the
-    # rate-limit message on their NEXT real question. `identity=email` is unchanged, so audit
-    # attribution is unaffected.
+    # `rate_limited=False`: SYSTEM-initiated work must not spend the asker's own budget — an asker
+    # for whom content was withheld would become observably likelier to hit the rate-limit message
+    # on their next real question. `identity=email` is unchanged, so audit attribution is unaffected.
     channel_service = ctx.build_service(email, effective_audiences, rate_limited=False)
     asker_service = ctx.build_service(email, asker_audiences, rate_limited=False)
     # The channel answer has SHIPPED — nothing after this may escape uncaught into Bolt.

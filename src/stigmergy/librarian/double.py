@@ -40,6 +40,7 @@ import re
 from stigmergy.kernel import normalize
 from stigmergy.kernel import registry as registry_module
 from stigmergy.librarian import gitcmd
+from stigmergy.librarian import page as page_policy
 from stigmergy.librarian.agent import (
     OUTCOME_FILENAME,
     confined_write,
@@ -101,7 +102,7 @@ class DoubleAgent:
             gathered: str = "") -> AgentRun:
         # `flow_note`/`gathered` are accepted and unused: the signature answers the PORT.
         directives = _directives(material)
-        findings = [f for f in _findings(material)]
+        findings = _findings(material)
         run = AgentRun(turns=1, tool_calls=3)
         answered = ""       # the registry's own name for what a reply named, when it named one
 
@@ -111,19 +112,15 @@ class DoubleAgent:
             # that accepted any reply would prove nothing about the gate at the end of the loop.
             answered = self._resolve_reply(worktree, reply)
             if not answered:
-                # Comma-separated, like `meeting-triage`: the ORDINARY lane parks any number of
-                # names too, and a directive that could carry only one left the plural inbound road
-                # (issue #32 — the collapse this whole shape exists to prevent) untravelled by the
-                # entire keyless suite. A REPLY that resolved nothing is still what the park names,
-                # as one answer naming one thing — unchanged, and not slot-split like the meeting
-                # ask, whose several questions arrive in one reply.
+                # Comma-separated, like `meeting-triage`: the ordinary lane parks any number of
+                # names. A reply that resolved nothing is still what the park names — one answer
+                # naming one thing.
                 declared = [n.strip() for n in directives["triage-entity"].split(",") if n.strip()]
                 names = ([reply.strip()[:200]] if reply.strip()
                          else declared or ["an unregistered thing"])
-                # ONE name keeps the SINGULAR `triage.name`. That spelling is the inbound tolerance
-                # `agent.parse_outcome` folds into a one-element list, and this is what exercises it
-                # on every keyless run; emitting the plural here too would leave the fold pinned in
-                # one unit test and travelled nowhere else.
+                # ONE name keeps the SINGULAR `triage.name`: that is the inbound tolerance
+                # `agent.parse_outcome` folds into a list, and this is what exercises it on every
+                # keyless run.
                 return self._park(worktree, run, {
                     "decision": "triage",
                     "triage": {"kind": "unresolved-entity", "judged_type": "",
@@ -141,11 +138,9 @@ class DoubleAgent:
 
         # ── the filing path ──────────────────────────────────────────────────────────────
         page_type = directives.get("type") or "note"
-        folder = {
-            "note": "wiki/notes", "decision": "wiki/decisions",
-            "concept": "wiki/concepts", "project": "wiki/projects",
-            "playbook": "wiki/playbooks", "postmortem": "wiki/postmortems",
-        }.get(page_type, "wiki/notes")
+        # Any type the placement table lacks lands in the default folder and is judged by the
+        # gates from there — the double carries no second vocabulary of its own.
+        folder = page_policy.FOLDER_BY_TYPE.get(page_type, "wiki/notes")
         title = self._title(material)
         page_path = f"{folder}/{title}.md"
 

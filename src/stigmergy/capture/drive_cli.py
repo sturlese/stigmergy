@@ -28,18 +28,20 @@ import sys
 import tempfile
 
 from stigmergy.capture import cli, drive_client, evidence, queue, schema
-from stigmergy.capture.errors import CaptureError, SubmissionRejected
+from stigmergy.capture.errors import SubmissionRejected
 from stigmergy.index import store
 from stigmergy.kernel.converters import method_for_ext
 
-OPERATOR_EMAIL_ENV = "STIGMERGY_MEETING_OPERATOR_EMAIL"   # one operator identity, every drop CLI
+# Referenced through this module by name (`drive_cli.OPERATOR_EMAIL_ENV`); one operator identity,
+# every drop CLI, so the value is the shared one and not a second spelling of it.
+OPERATOR_EMAIL_ENV = cli.OPERATOR_EMAIL_ENV
+
+PROG = "stigmergy-drive"
 
 # The door's own cap on a fetched file. Distinct from `schema.MAX_MATERIAL_BYTES` (text
 # material, here only the manifest): the real bound is what the worker can convert and what
 # vision OCR accepts. 25 MB covers every real deck while refusing the videos-and-archives class.
 MAX_DRIVE_FILE_BYTES = 25 * 1024 * 1024
-
-EXIT_INTERRUPTED = 130
 
 # The wake-condition sentence, composed once; this door ships the refusal, not the container.
 _OFFICE_REFUSAL = (
@@ -49,24 +51,8 @@ _OFFICE_REFUSAL = (
     "nothing was queued.")
 
 
-def _connect(dsn: str | None):
-    conn = store.connect(dsn)
-    schema.ensure_capture_schema(conn)   # idempotent: this CLI may be the first thing to run
-    return conn
-
-
 def _refuse(message: str) -> "SubmissionRejected":
     return SubmissionRejected(message)
-
-
-def _resolve_submitted_by(args) -> str:
-    submitted_by = args.submitted_by or os.environ.get(OPERATOR_EMAIL_ENV, "")
-    if not submitted_by:
-        raise _refuse(
-            f"--submitted-by is required (or set ${OPERATOR_EMAIL_ENV}) — attribution comes "
-            f"from a resolved identity on every other capture surface, and this operator CLI "
-            f"has none to resolve. Nothing was uploaded and nothing was queued.")
-    return submitted_by
 
 
 def _effective_name(meta: "drive_client.DriveFile") -> str:
@@ -129,12 +115,12 @@ def _manifest(meta: "drive_client.DriveFile", name: str, digest: str, n_bytes: i
 
 def _cmd_drop(args) -> int:
     ev = evidence.store_from_env()
-    refused = cli.refuse_split_stores(args, "stigmergy-drive", ev)
+    refused = cli.refuse_split_stores(args, PROG, ev)
     if refused:
         return refused
 
     file_id = drive_client.file_id_from(args.ref)
-    submitted_by = _resolve_submitted_by(args)
+    submitted_by = cli.resolve_submitted_by(args)
     client = drive_client.GogDriveClient(args.gog_bin or None)
 
     meta = client.metadata(file_id)
@@ -160,7 +146,7 @@ def _cmd_drop(args) -> int:
         "drive_modified": meta.modified,
     }
 
-    conn = _connect(args.dsn)
+    conn = cli.connect(args.dsn)
     bytes_key = ev.put(data)
     ack = queue.submit(conn, ev, kind=schema.DRIVE,
                        material=_manifest(meta, name, digest, len(data)),
@@ -183,7 +169,7 @@ def _cmd_drop(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="stigmergy-drive",
+        prog=PROG,
         description="Drop one Drive file onto the queue for the librarian's drive flow. The "
                     "door fetches with YOUR local Google auth (gog), archives the original "
                     "bytes as evidence, and enqueues exactly one row — no model, no conversion.")
@@ -193,8 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_drop = sub.add_parser("drop", help="fetch one Drive file and enqueue exactly one drive row")
     p_drop.add_argument("ref", help="the Drive file's share URL or bare file id")
-    p_drop.add_argument("--submitted-by", default="",
-                        help=f"defaults to ${OPERATOR_EMAIL_ENV}; who this drop is attributed to")
+    cli.add_submitted_by_flag(p_drop)
     cli.add_split_stores_flag(p_drop)
     p_drop.add_argument("--gog-bin", default="",
                         help=f"the gog binary (default: ${drive_client.GOG_BIN_ENV} or "
@@ -203,27 +188,8 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
-def _interrupted() -> int:
-    print("stigmergy-drive: interrupted — no queue row was written (the insert is a single "
-          "statement), but if the upload had already finished, an evidence object with nothing "
-          "pointing at it may exist; that costs nothing and nothing will ever read it without a "
-          "row. Re-run `stigmergy-drive drop` when ready.", file=sys.stderr)
-    return EXIT_INTERRUPTED
-
-
 def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
-    try:
-        return args.fn(args)
-    except CaptureError as ex:
-        print(f"stigmergy-drive: {ex}", file=sys.stderr)
-        return 1
-    except KeyboardInterrupt:
-        return _interrupted()
-    except Exception as ex:  # noqa: BLE001 — a local operator needs the real reason
-        print(f"stigmergy-drive: cannot reach the queue database or evidence store ({ex}); is "
-              f"the stack up (`make db-up`)?", file=sys.stderr)
-        return 2
+    return cli.drop_main(argv, parser=build_parser(), prog=PROG)
 
 
 if __name__ == "__main__":

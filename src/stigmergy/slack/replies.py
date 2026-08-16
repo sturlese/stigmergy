@@ -5,7 +5,7 @@ import logging
 
 from stigmergy.slack import copy, render
 from stigmergy.slack.gateway import SlackApiError
-from stigmergy.slack.identity import Resolved, resolve_slack_identity
+from stigmergy.slack.identity import Resolved
 from stigmergy.slack.store import find_thread_submissions, is_awaiting_reply
 
 log = logging.getLogger(__name__)
@@ -50,10 +50,8 @@ async def handle_thread_message(ctx, *, team_id: str, channel_id: str, thread_ts
     if not submissions:
         return   # ordinary conversation — no Slack-originated capture in this thread
 
-    identity_result = await resolve_slack_identity(
-        ctx.gateway, ctx.cache, identities_path=ctx.settings.server.identities_path,
-        configured_team_id=ctx.settings.team_id, event_team_id=team_id,
-        slack_user_id=slack_user_id)
+    identity_result = await ctx.resolve_slack_identity(event_team_id=team_id,
+                                                       slack_user_id=slack_user_id)
     if not isinstance(identity_result, Resolved):
         return
 
@@ -114,10 +112,8 @@ async def handle_show_it_here(ctx, *, action_value: str, clicking_slack_user_id:
     if clicking_slack_user_id != owner_slack_user_id:
         return   # silently declined — someone other than the original asker
 
-    identity_result = await resolve_slack_identity(
-        ctx.gateway, ctx.cache, identities_path=ctx.settings.server.identities_path,
-        configured_team_id=ctx.settings.team_id, event_team_id=event_team_id,
-        slack_user_id=clicking_slack_user_id)
+    identity_result = await ctx.resolve_slack_identity(event_team_id=event_team_id,
+                                                       slack_user_id=clicking_slack_user_id)
     if not isinstance(identity_result, Resolved):
         return   # silently declined — including an identity failure of the clicking user
 
@@ -143,7 +139,7 @@ async def handle_show_it_here(ctx, *, action_value: str, clicking_slack_user_id:
         excerpt = _unfence(result.get("body", ""))[:SHOW_IT_HERE_EXCERPT_CHARS]
         blocks = render.render_show_it_here_success(page_title=result.get("title") or path,
                                                      excerpt=excerpt)
-        text = f"📄 {result.get('title') or path}"
+        text = copy.show_it_here_fallback(result.get("title") or path)
 
     try:
         if is_dm:

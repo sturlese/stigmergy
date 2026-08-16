@@ -155,6 +155,10 @@ _REVIEW_DECLARED_TRANSITIVE_KERNEL_MODULES = frozenset({
     "stigmergy.kernel",
     "stigmergy.kernel.acl",
     "stigmergy.kernel.frontmatter",
+    # `kernel.registry.save_registry` writes through `fsutil.write_text_atomic` (and
+    # `entities.mint._restore` rolls back through the same helper), so an interrupted write cannot
+    # leave a truncated `ops/entity-registry.json`.
+    "stigmergy.kernel.fsutil",
     "stigmergy.kernel.normalize",
     "stigmergy.kernel.registry",
 })
@@ -413,9 +417,9 @@ def test_capture_library_modules_never_import_raw_psycopg(path):
     `conn` as an argument (module docstring: "library code in this package never opens a
     connection"). `queue.py`/`ops.py` import `psycopg.types.json.Jsonb` for JSONB marshalling,
     which is fine (no connection capability); importing bare `psycopg` (the module `.connect`
-    lives on) would be the actual violation, and only `cli.py` and `meeting_cli.py` (both via
-    `stigmergy.index.store.connect`, checked above — operator CLI entry points, which is what the
-    exemption is for) may reach a database at all."""
+    lives on) would be the actual violation, and only the three operator CLIs — `cli.py`,
+    `meeting_cli.py` and `drive_cli.py` (all via `stigmergy.index.store.connect`, checked above —
+    entry points, which is what the exemption is for) — may reach a database at all."""
     offenders = [f"{path.name}:{line} -> {mod}"
                  for mod, line in _all_module_imports(path) if mod == "psycopg"]
     assert not offenders, (
@@ -930,7 +934,7 @@ def test_the_acl_adapters_reach_into_pipelines_private_names_is_pinned():
 
 def test_the_acl_private_names_still_have_the_shape_the_adapter_assumes():
     """A name surviving is not enough: the adapter iterates `_MATCHERS` as a container of key names
-    and calls `_check_labels(path, audiences)` positionally. Both assumptions are pinned, because a
+    and calls `_check_labels(label, audiences)` positionally. Both assumptions are pinned, because a
     private name changed IN PLACE fails the same way a renamed one does."""
     from stigmergy.kernel import acl as acl_model
     from stigmergy.librarian import acl_rules
@@ -2297,8 +2301,8 @@ def test_gardener_threshold_literals_stay_in_settings(path):
 # ── the digest's own layering edges ────────────────────────────────────────────────────────────
 # Mirrors `gardener`'s allowlist style. The load-bearing DIFFERENCE from `gardener`'s own list:
 # the digest BROADCASTS (package docstring), so it is granted `server.acl`/`slack.channels` (a
-# real ACL predicate at the destination channel's audiences) and a read edge into
-# `server.review`'s governed-birth log that `gardener` deliberately is not ─────────────────────
+# real ACL predicate at the destination channel's audiences) and a read edge into the
+# governed-birth ledger (`capture.decisions`) that `gardener` deliberately is not ──────────────
 DIGEST = pathlib.Path(__file__).resolve().parents[1] / "src" / "stigmergy" / "digest"
 DIGEST_SOURCES = sorted(p for p in DIGEST.rglob("*.py") if p.name != "__init__.py")
 

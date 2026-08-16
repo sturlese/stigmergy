@@ -9,6 +9,7 @@ Nothing in a payload can set a server-computed field: `submitted_by` comes from 
 identity and is never read from client input — that structural fact is the security property, and
 the refusals here are loud annotation on top of it.
 """
+import datetime
 import hashlib
 import logging
 import re
@@ -74,8 +75,7 @@ SITUATION_KEY = "situation"
 # `SITUATION_NAME_KEY` is READ-ONLY LEGACY INPUT: nothing writes it any more (a park writes
 # `SITUATION_NAMES_KEY`, a list, whatever the count), and it is NOT deleted because rows carrying
 # it are never migrated — a queue row written before the collapse still has to read correctly, so
-# `entities.situations.subjects_of` keeps its fallback permanently. Its ask-side twin,
-# `unresolved_name` in `librarian.report`, was retired the same way and for the same reason.
+# `entities.situations.subjects_of` keeps its fallback permanently.
 SITUATION_NAME_KEY = "entity_name"      # LEGACY, read only: the one name a pre-collapse park wrote
 SITUATION_TYPE_KEY = "judged_type"      # `unsupported-type`: the type the fast lane will not file
 
@@ -180,7 +180,6 @@ EVENT_REPLIED = "replied"
 EVENT_REQUEUED = "requeued"
 EVENT_RESOLVED = "resolved"
 EVENT_REJECTED = "rejected"
-TRACE_EVENTS = (EVENT_ASKED, EVENT_REPLIED, EVENT_REQUEUED, EVENT_RESOLVED, EVENT_REJECTED)
 
 # The actor recorded for the one event no human performs.
 ACTOR_LIBRARIAN = "librarian"
@@ -317,14 +316,21 @@ def material_digest(material: str) -> tuple[str, int]:
     return _sha256_hex(data), len(data)
 
 
+def _present_and_plural(values: dict | None, keys) -> tuple[list[str], bool]:
+    """Which of `keys` the caller actually set, sorted, and whether that is more than one. Only
+    NON-None values count — a declared-but-unset parameter is not an assertion — and the three
+    refusals below share this so they cannot disagree about what "present" means."""
+    present = sorted(k for k, v in (values or {}).items() if v is not None and k in keys)
+    return present, len(present) > 1
+
+
 def reject_server_owned_arguments(args: dict) -> None:
     """Fail LOUDLY on any server-owned field arriving as a tool argument — the refusal the SDK
     cannot make. Only NON-None values count; the message names KEYS, never values. It can only
     refuse fields the caller's surface declares (see `ATTRIBUTION_FIELDS`)."""
-    present = sorted(k for k, v in args.items() if v is not None and k in SERVER_OWNED_FIELDS)
+    present, plural = _present_and_plural(args, SERVER_OWNED_FIELDS)
     if not present:
         return
-    plural = len(present) > 1
     message = (f"{', '.join(present)} {'are' if plural else 'is'} set by the server, not by the "
                f"caller — remove {'them' if plural else 'it'} and resubmit")
     if "submitted_by" in present:
@@ -339,11 +345,9 @@ def reject_source_provenance_hints(hints: dict | None, *, door: str) -> None:
     only, never inside `normalize_hints`/`queue.submit`."""
     if door == SLACK_DOOR:
         return
-    present = sorted(k for k, v in (hints or {}).items()
-                     if v is not None and k in SOURCE_PROVENANCE_HINT_KEYS)
+    present, plural = _present_and_plural(hints, SOURCE_PROVENANCE_HINT_KEYS)
     if not present:
         return
-    plural = len(present) > 1
     raise SubmissionRejected(
         f"{', '.join(present)} {'are' if plural else 'is'} set by the Slack transport itself, "
         f"not by the caller — remove {'them' if plural else 'it'} and resubmit (this pair decides "
@@ -407,15 +411,13 @@ def validate_meeting_date(value: str) -> str:
     """A meeting date, refused unless it is a real `YYYY-MM-DD` calendar date. Raises
     `SubmissionRejected`, so "no row and no object" holds here too; `prepare_submission` is the
     seam every caller crosses, the CLI's early call a convenience."""
-    import datetime as _datetime
-
     text = str(value or "").strip()
     if not _MEETING_DATE_RE.match(text):
         raise SubmissionRejected(
             f"a meeting date must be YYYY-MM-DD (got {value!r}) — it becomes `as_of` on every "
             f"decision page this meeting files")
     try:
-        _datetime.date.fromisoformat(text)
+        datetime.date.fromisoformat(text)
     except ValueError:
         raise SubmissionRejected(f"{value!r} is not a real calendar date") from None
     return text
@@ -424,11 +426,9 @@ def validate_meeting_date(value: str) -> str:
 def reject_drive_provenance_hints(hints: dict | None) -> None:
     """Fail LOUDLY on `drive_file_id`/`drive_url` from ANY client door: the one legitimate asserter
     (`stigmergy-drive drop`) never passes through `BrainService._submit`."""
-    present = sorted(k for k, v in (hints or {}).items()
-                     if v is not None and k in DRIVE_PROVENANCE_HINT_KEYS)
+    present, plural = _present_and_plural(hints, DRIVE_PROVENANCE_HINT_KEYS)
     if not present:
         return
-    plural = len(present) > 1
     raise SubmissionRejected(
         f"{', '.join(present)} {'are' if plural else 'is'} set by the stigmergy-drive operator "
         f"CLI itself, not by a caller — remove {'them' if plural else 'it'} and resubmit (Drive "
@@ -494,10 +494,20 @@ def prepare_submission(kind: str, material: str, hints: dict | None = None) -> S
     )
 
 
+def sql_literals(values) -> str:
+    """A fixed, importable set of words as a SQL literal list — `'a', 'b'`, sorted so the emitted
+    statement is the same on every process. For VOCABULARIES declared in this module only: they
+    are code, never input, which is what makes interpolating them instead of binding them safe.
+    """
+    return ", ".join(f"'{v}'" for v in sorted(values))
+
+
 # ── DDL (idempotent; owned here, never dropped by an index rebuild) ───────────────────────────
 # NAMED because adding a status must replace it on existing tables, and the name is exactly what
 # Postgres derives for an unnamed column check here — so the two are the same object.
 _STATUS_CHECK_NAME = "capture_queue_status_check"
+# Declaration order, not `sql_literals`' sorted one: `STATUSES` is the vocabulary in the order a
+# reader meets it, and this CHECK is the one place that order is already committed to a database.
 _STATUS_LITERALS = ", ".join(f"'{s}'" for s in STATUSES)
 
 _CAPTURE_QUEUE_DDL = f"""

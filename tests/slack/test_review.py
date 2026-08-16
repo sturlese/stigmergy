@@ -224,13 +224,6 @@ def test_parse_action_id_direct_and_modal():
     assert review._parse_action_id("review-modal:parked-capture:resolve") == (
         "modal", "parked-capture", "resolve")
     assert review._parse_action_id("some_other_action") is None
-    # `entity-proposal:approve` is recognized under BOTH prefixes: the new one is what this build
-    # renders (ADR 030 D5, below); the old (direct) one still parses — see
-    # `test_a_stale_direct_approve_action_...` — because a card rendered by an OLDER deploy may
-    # still carry it.
-    assert review.is_review_action("review:entity-proposal:approve") is True
-    assert review.is_review_action("review-modal:entity-proposal:approve") is True
-    assert review.is_review_action("slack_show_page") is False
 
 
 # ── direct-fire actions: requeue ─────────────────────────────────────────────────────────────

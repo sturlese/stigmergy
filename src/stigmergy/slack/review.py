@@ -13,19 +13,9 @@ import logging
 from stigmergy.server import review
 from stigmergy.slack import copy, render
 from stigmergy.slack.gateway import SlackApiError
-from stigmergy.slack.identity import Resolved, resolve_slack_identity
+from stigmergy.slack.identity import Resolved
 
 log = logging.getLogger(__name__)
-
-# Slack-facing verdict TOKENS — worded the way a steward for that item kind already thinks —
-# translated to `review_decide`'s own fixed vocabulary here, once, so a button label can diverge
-# from the stored verdict word without two places needing to agree on the mapping. A token with no
-# entry here is passed through unchanged (`_verdict_for`).
-_VERDICT_TOKEN_TO_VERDICT = {
-    "acknowledge": "approve",
-    "not_a_real_conflict": "reject",
-    "approve-company-wide": "approve",
-}
 
 # Which (kind, verdict_token) pairs need a modal before `review_decide` can be called at all, and
 # what that modal collects: `(field_kwarg, label, placeholder)`. Every OTHER button on this
@@ -36,10 +26,6 @@ _MODAL_FIELD = {
     ("parked-capture", "reject"): ("notes", copy.REASON_LABEL, ""),
     ("entity-proposal", "reject"): ("notes", copy.REASON_LABEL, ""),
 }
-
-
-def _verdict_for(verdict_token: str) -> str:
-    return _VERDICT_TOKEN_TO_VERDICT.get(verdict_token, verdict_token)
 
 
 def _parse_action_id(action_id: str) -> tuple[str, str, str] | None:
@@ -56,21 +42,10 @@ def _parse_action_id(action_id: str) -> tuple[str, str, str] | None:
     return None
 
 
-def is_review_action(action_id: str) -> bool:
-    return _parse_action_id(action_id) is not None
-
-
-async def _resolve(ctx, *, event_team_id: str, slack_user_id: str):
-    return await resolve_slack_identity(
-        ctx.gateway, ctx.cache, identities_path=ctx.settings.server.identities_path,
-        configured_team_id=ctx.settings.team_id, event_team_id=event_team_id,
-        slack_user_id=slack_user_id)
-
-
 def _confirmation_text(result: dict, *, kind: str, item_id: str, verdict: str) -> str:
     """`result["minted"]` gets its OWN confirmation, naming the entity and the short commit —
     `_decide_entity_proposal` composes no `message` key for that outcome, so the generic
-    `f"recorded: {verdict} ..."` fallback would name neither."""
+    `copy.decision_recorded` fallback would name neither."""
     if "error" in result:
         return result["error"]
     if result.get("minted"):
@@ -78,7 +53,8 @@ def _confirmation_text(result: dict, *, kind: str, item_id: str, verdict: str) -
                                   name=result.get("name", ""), commit=result.get("commit", ""),
                                   requeued=bool(result.get("requeued")))
     return (result.get("message")
-           or f"recorded: {verdict} on {kind} #{item_id} — {result.get('actor', '')}")
+           or copy.decision_recorded(verdict=verdict, kind=kind, item_id=item_id,
+                                     actor=result.get("actor", "")))
 
 
 async def _post_decision_confirmation(ctx, *, channel_id: str, result: dict, kind: str,
@@ -191,7 +167,8 @@ async def handle_block_action(ctx, *, action_id: str, value: str, trigger_id: st
     mode, kind, verdict_token = parsed
     item_id = value
 
-    identity_result = await _resolve(ctx, event_team_id=event_team_id, slack_user_id=slack_user_id)
+    identity_result = await ctx.resolve_slack_identity(event_team_id=event_team_id,
+                                                       slack_user_id=slack_user_id)
     if not isinstance(identity_result, Resolved):
         return   # silently declined — same posture `handle_show_it_here` takes for an identity
                  # failure; a steward whose own identity fails to resolve gets no feedback that
@@ -206,8 +183,7 @@ async def handle_block_action(ctx, *, action_id: str, value: str, trigger_id: st
                                    "channel_id": channel_id})
             names, name_prefill = _mint_modal_inputs(ctx.conn, item_id)
             view = render.render_entity_mint_modal(
-                trigger_id=trigger_id, private_metadata=metadata,
-                unresolved_names=names, name_prefill=name_prefill)
+                private_metadata=metadata, unresolved_names=names, name_prefill=name_prefill)
             await _open_modal(ctx, trigger_id=trigger_id, view=view,
                               what=f"the entity-mint modal for {item_id}")
             return
@@ -227,20 +203,18 @@ async def handle_block_action(ctx, *, action_id: str, value: str, trigger_id: st
             return
         field, label, placeholder = modal_field
         metadata = json.dumps({
-            "item_kind": kind, "item_id": item_id, "verdict": _verdict_for(verdict_token),
+            "item_kind": kind, "item_id": item_id, "verdict": verdict_token,
             "field": field, "channel_id": channel_id,
         })
-        view = render.render_note_modal(trigger_id=trigger_id, private_metadata=metadata,
-                                        title=copy.NOTE_MODAL_TITLE, label=label,
-                                        placeholder=placeholder, initial_context="")
+        view = render.render_note_modal(private_metadata=metadata, title=copy.NOTE_MODAL_TITLE,
+                                        label=label, placeholder=placeholder)
         await _open_modal(ctx, trigger_id=trigger_id, view=view,
                           what=f"the note modal for {kind}:{item_id}")
         return
 
-    verdict = _verdict_for(verdict_token)
     service = ctx.build_service(identity_result.email, identity_result.audiences)
     await _decide_and_confirm(
-        ctx, service, channel_id=channel_id, kind=kind, item_id=item_id, verdict=verdict,
+        ctx, service, channel_id=channel_id, kind=kind, item_id=item_id, verdict=verdict_token,
         what=f"review-decide confirmation for {kind}:{item_id}")
 
 
@@ -271,7 +245,8 @@ async def handle_note_modal_submission(ctx, *, private_metadata: str, state_valu
     text_value = _text_value(state_values, render.REVIEW_NOTE_MODAL_BLOCK_ID,
                              render.REVIEW_NOTE_MODAL_ACTION_ID)
 
-    identity_result = await _resolve(ctx, event_team_id=event_team_id, slack_user_id=slack_user_id)
+    identity_result = await ctx.resolve_slack_identity(event_team_id=event_team_id,
+                                                       slack_user_id=slack_user_id)
     if not isinstance(identity_result, Resolved):
         return
 
@@ -314,7 +289,8 @@ async def handle_entity_mint_modal_submission(ctx, *, private_metadata: str, sta
     requeue = _checkbox_checked(state_values, render.ENTITY_MINT_REQUEUE_BLOCK_ID,
                                 render.ENTITY_MINT_REQUEUE_ACTION_ID)
 
-    identity_result = await _resolve(ctx, event_team_id=event_team_id, slack_user_id=slack_user_id)
+    identity_result = await ctx.resolve_slack_identity(event_team_id=event_team_id,
+                                                       slack_user_id=slack_user_id)
     if not isinstance(identity_result, Resolved):
         return
 

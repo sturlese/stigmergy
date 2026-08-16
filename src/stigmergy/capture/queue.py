@@ -142,7 +142,7 @@ _FINISH_DIAGNOSE = "SELECT status, attempts FROM capture_queue WHERE id = %s"
 # credential. `hints` loses `client`/`declared_frontmatter` and keeps `flagged` (field names only);
 # `reply` is withheld too (a capture can be asked, answered, and only then refused); `trace` stays,
 # its notes being code-built or steward-authored.
-_WITHHELD_REASON_LITERALS = ", ".join(f"'{r}'" for r in sorted(schema.WITHHELD_REASONS))
+_WITHHELD_REASON_LITERALS = schema.sql_literals(schema.WITHHELD_REASONS)
 _REASON_CODE_SQL = f"report ->> '{schema.REASON_CODE_KEY}'"
 # `schema._reason_flagged` is the Python mirror of exactly this expression — change both.
 # `COALESCE(..., false)` keeps it two-valued: a NULL `report` would otherwise yield SQL NULL, a
@@ -154,27 +154,46 @@ _REASON_FLAGGED_SQL = (
 
 # Widened to also withhold while the gate has not run (`queued`/`claimed`) or never will
 # (`failed`); `schema.withheld_reason` picks the sentence this boolean cannot distinguish.
-_GATE_NOT_YET_RUN_LITERALS = ", ".join(f"'{s}'" for s in sorted(schema.GATE_NOT_YET_RUN_STATUSES))
+_GATE_NOT_YET_RUN_LITERALS = schema.sql_literals(schema.GATE_NOT_YET_RUN_STATUSES)
 _MATERIAL_WITHHELD = (
     f"({_REASON_FLAGGED_SQL} OR status IN ({_GATE_NOT_YET_RUN_LITERALS}, '{schema.FAILED}'))"
 )
 
+# The parked pair as SQL literals, used by the age expression below and by the disposition guard
+# further down: "is this row parked" must be one set, or a disposition could act on a state the
+# age column does not consider parked.
+_PARKED_LITERALS = schema.sql_literals(schema.PARKED_STATUSES)
+
 # How long a human has been waited on, computed IN POSTGRES (same clock-skew reason as
 # `claimed_age_ms`); NULL on a row that is not parked at all.
 _PARKED_AGE_MS = f"""
-CASE WHEN status IN ({', '.join(f"'{s}'" for s in sorted(schema.PARKED_STATUSES))})
+CASE WHEN status IN ({_PARKED_LITERALS})
      THEN extract(epoch from (now() - COALESCE(parked_at, created_at))) * 1000 END
 """
 
+# ── what the listing and the single-row trace both select ─────────────────────────────────────
+# The two read paths (`_LIST_SELECT` and `get_submission_trace`) answer the same questions about a
+# row, and a column or an expression added to one and not the other is how `stigmergy-queue list`
+# and `show` start describing the same submission differently. Written once here and interpolated
+# into both; the column list carries the listing's own wrap, which the trace query flattens.
+_SHARED_COLUMNS = """id, kind, submitted_by, status, attempts, created_at, claimed_at, finished_at,
+       result_ref, error, report, blob_refs, asked_at, trace"""
+_SHARED_COLUMNS_ONE_LINE = " ".join(_SHARED_COLUMNS.split())
+
+# `reply` obeys `_MATERIAL_WITHHELD` on BOTH paths: a withheld reply that leaked through whichever
+# surface forgot the CASE would be the whole point of the rule, missed.
+_WITHHELD_REPLY = f"CASE WHEN {_MATERIAL_WITHHELD} THEN NULL ELSE reply END AS reply"
+_PARKED_AGE = f"{_PARKED_AGE_MS} AS parked_age_ms"
+_PAYLOAD_PURGED = "(payload IS NULL) AS payload_purged"
+
 _LIST_SELECT = f"""
-SELECT id, kind, submitted_by, status, attempts, created_at, claimed_at, finished_at,
-       result_ref, error, report, blob_refs, asked_at, trace,
-       {_PARKED_AGE_MS} AS parked_age_ms,
-       (payload IS NULL) AS payload_purged,
+SELECT {_SHARED_COLUMNS},
+       {_PARKED_AGE},
+       {_PAYLOAD_PURGED},
        {_MATERIAL_WITHHELD} AS material_withheld,
        CASE WHEN {_MATERIAL_WITHHELD} THEN NULL
             ELSE left(payload ->> 'text', %(excerpt)s) END AS excerpt,
-       CASE WHEN {_MATERIAL_WITHHELD} THEN NULL ELSE reply END AS reply,
+       {_WITHHELD_REPLY},
        payload ->> 'sha256' AS content_sha256,
        (payload ->> 'bytes')::bigint AS bytes,
        CASE WHEN {_MATERIAL_WITHHELD} THEN hints - ARRAY['client', 'declared_frontmatter']
@@ -353,8 +372,6 @@ def _lost_lease_reason(submission_id: int, status: str, expected_attempts: int, 
 # These move a row NOBODY holds, so the guard is the STATE in the WHERE clause and a disposition
 # racing a live claim fails loudly. `attempts` appears in neither statement: bumping it would burn
 # a delivery no worker got, resetting it would hand a stale worker back a fence it had lost.
-_PARKED_LITERALS = ", ".join(f"'{s}'" for s in sorted(schema.PARKED_STATUSES))
-
 _DISPOSE = f"""
 UPDATE capture_queue
 SET status = %(status)s,
@@ -508,12 +525,11 @@ def get_submission_trace(conn, submission_id: int, *, submitter: str | None = No
     nonexistent id. `reply` obeys the same `_MATERIAL_WITHHELD` expression `_LIST_SELECT` uses."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, kind, submitted_by, status, attempts, created_at, claimed_at,"
-            " finished_at, result_ref, error, report, blob_refs, asked_at, trace,"
-            f" CASE WHEN {_MATERIAL_WITHHELD} THEN NULL ELSE reply END AS reply,"
+            f"SELECT {_SHARED_COLUMNS_ONE_LINE},"
+            f" {_WITHHELD_REPLY},"
             f" {_MATERIAL_WITHHELD} AS material_withheld,"
-            f" {_PARKED_AGE_MS} AS parked_age_ms,"
-            " (payload IS NULL) AS payload_purged"
+            f" {_PARKED_AGE},"
+            f" {_PAYLOAD_PURGED}"
             " FROM capture_queue"
             " WHERE id = %s AND (%s::text IS NULL OR submitted_by = %s)",
             (submission_id, submitter, submitter))

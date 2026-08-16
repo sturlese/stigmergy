@@ -269,16 +269,32 @@ def _yaml_list(values) -> str:
     return "[" + ", ".join(json.dumps(str(v)) for v in values) + "]"
 
 
+def _rebuild(front_matter: str, body: str) -> str:
+    """A page from its two halves, with exactly ONE blank line after the closing `---`. THE one
+    reassembly every writer here goes through: normalizing the gap is what makes a stamp
+    idempotent, and what lets `frontmatter_lines`/`body_lines` compare a before and an after
+    without failing on a blank line the writer would have dropped anyway."""
+    return f"---\n{front_matter}\n---\n" + (f"\n{body}" if body else "")
+
+
+def _restamp(text: str, strip_keys, stamped_lines: list[str]) -> str:
+    """Drop the top-level keys the caller names and append the values it asserts, in one pass. The
+    CALLER decides what the server owns on its kind of page; the split, the strip and the rebuild
+    are the same either way, so a page with no frontmatter at all still gets stamped rather than
+    silently keeping a claim of its own."""
+    front, rest = split_frontmatter(text)
+    if not front:
+        front, rest = "", text or ""
+    kept = _strip_keys(front, strip_keys)
+    front_matter = "\n".join([*kept, *stamped_lines]).strip("\n")
+    return _rebuild(front_matter, rest.lstrip("\n"))
+
+
 def stamp_server_fields(text: str, *, submitted_by: str,
                         acl: list[str] | None, as_of: str, entity: list[str] = ()) -> str:
     """Rewrite a page's frontmatter so every server-owned field is the SERVER's value. A falsy `acl`
     omits the field — the page contract's spelling of "open". `entity` is ALWAYS written, since
     `entity: []` is itself the company-wide declaration and must differ from no line at all."""
-    front, rest = split_frontmatter(text)
-    if not front:
-        front, rest = "", text or ""
-
-    kept = _strip_keys(front, set(SERVER_OWNED_KEYS))
     stamped = [
         f"status: {FILED_STATUS}",
         f"as_of: {as_of}",
@@ -287,11 +303,7 @@ def stamp_server_fields(text: str, *, submitted_by: str,
     ]
     if acl:
         stamped.append(f"acl: {_yaml_list(acl)}")
-    front_matter = "\n".join([*kept, *stamped]).strip("\n")
-
-    # Exactly ONE blank line after the closing `---`; normalizing is what makes the stamp idempotent.
-    body = rest.lstrip("\n")
-    return f"---\n{front_matter}\n---\n" + (f"\n{body}" if body else "")
+    return _restamp(text, set(SERVER_OWNED_KEYS), stamped)
 
 
 def stamp_source_fields(text: str, *, submitted_by: str, as_of: str,
@@ -300,10 +312,6 @@ def stamp_source_fields(text: str, *, submitted_by: str, as_of: str,
     """`stamp_server_fields`'s sibling for a `sources/` page. `content_hash` is recomputed from the
     bytes this run verified, so the page's claim and the evidence-store key cannot disagree.
     `entity`/`acl` are absent by contract: a source page is provenance, not anchored."""
-    front, rest = split_frontmatter(text)
-    if not front:
-        front, rest = "", text or ""
-    kept = _strip_keys(front, set(SERVER_OWNED_KEYS) | {"content_hash", "extracted_at", "tier"})
     stamped = [
         f"status: {FILED_STATUS}",
         f"as_of: {as_of}",
@@ -314,9 +322,8 @@ def stamp_source_fields(text: str, *, submitted_by: str, as_of: str,
     ]
     if page_id:
         stamped.append(f'id: "{page_id}"')
-    front_matter = "\n".join([*kept, *stamped]).strip("\n")
-    body = rest.lstrip("\n")
-    return f"---\n{front_matter}\n---\n" + (f"\n{body}" if body else "")
+    return _restamp(text, set(SERVER_OWNED_KEYS) | {"content_hash", "extracted_at", "tier"},
+                    stamped)
 
 
 def add_source_citation(text: str, stem: str) -> tuple[str, list[str]]:
@@ -337,8 +344,7 @@ def add_source_citation(text: str, stem: str) -> tuple[str, list[str]]:
         values.append(link)
     kept = _strip_keys(front, ("sources",))
     front_matter = "\n".join([*kept, f"sources: {_yaml_list(values)}"]).strip("\n")
-    body = rest.lstrip("\n")
-    return f"---\n{front_matter}\n---\n" + (f"\n{body}" if body else ""), values
+    return _rebuild(front_matter, rest.lstrip("\n")), values
 
 
 def open_for_rewrite(full: str):
@@ -516,9 +522,8 @@ def with_related_link(text: str, name: str) -> tuple[str, bool]:
                     break
             lines.insert(end, f"{indent}- {_yaml_scalar(link)}")
 
-    body = rest.lstrip("\n")
     front_matter = "\n".join(lines).strip("\n")
-    return f"---\n{front_matter}\n---\n" + (f"\n{body}" if body else ""), True
+    return _rebuild(front_matter, rest.lstrip("\n")), True
 
 
 def _yaml_scalar(value: str) -> str:

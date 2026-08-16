@@ -14,8 +14,9 @@ ENTITY_REGISTRY_RELATIVE = os.path.join("ops", "entity-registry.json")
 
 
 def default_path(repo_dir: str | None) -> str:
-    """Same `--repo` convention as `identity.default_path` — baked at server startup, never a
-    live re-read of a working tree that could be mid-edit."""
+    """Same `--repo` convention as `identity.default_path`. The PATH is resolved once at startup;
+    the file itself is read per call, so a deployment that must not track working-tree edits points
+    this at a baked artifact."""
     return os.path.join(repo_dir, ENTITY_REGISTRY_RELATIVE) if repo_dir else ""
 
 

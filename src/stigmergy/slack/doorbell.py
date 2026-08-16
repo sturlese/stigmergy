@@ -19,6 +19,7 @@ Three properties, each load-bearing:
   one edit to it must not hand this module a `report['summary']` the secrets/PII gate never ran
   over.
 """
+import asyncio
 import logging
 
 from stigmergy.server import review
@@ -26,6 +27,8 @@ from stigmergy.slack import copy, render, store
 from stigmergy.slack.gateway import SlackApiError
 
 log = logging.getLogger(__name__)
+
+DEFAULT_POLL_INTERVAL_S = 10
 
 # `review.load_stewards` is a real `git fetch origin main` per call — unbounded, that is one
 # fetch per poll pass. This TTL is for the doorbell only: `review._is_steward` (the authorization
@@ -94,10 +97,9 @@ def _summary_for_doorbell(item: dict) -> str:
     return withheld or item.get("summary", "")
 
 
-def _render_for_item(item: dict, *, is_resend: bool) -> tuple[list[dict], str]:
+def _render_for_item(item: dict) -> tuple[list[dict], str]:
     """`(blocks, plain_text_fallback)` — never reads a capture's raw material or an entity
-    proposal's rationale (module docstring). `is_resend` is accepted and currently unused: a card
-    is re-sent verbatim or not at all."""
+    proposal's rationale (module docstring)."""
     kind = item["kind"]
     if kind == review.KIND_PARKED_CAPTURE:
         return render.render_doorbell_parked_capture(item_id=item["id"],
@@ -111,9 +113,7 @@ async def _resolve_slack_user_id(ctx, email: str) -> tuple[str | None, str]:
     """`(slack_user_id, status)`, `status` one of `LOOKUP_FOUND`/`LOOKUP_NOT_FOUND`/
     `LOOKUP_FAILED`. An API failure must never be recorded as the SAME fact an honest
     `users_not_found` miss is; failures are still logged loudly for an operator debugging a
-    silent doorbell. Cached on `ctx.cache`, positive results only — `users.lookupByEmail` is
-    Tier-3 (~50/min), and uncached per-(item, steward)-per-pass calls turn a transient rate limit
-    into a sustained one that reads the whole workspace as steward-less indefinitely."""
+    silent doorbell. Cached on `ctx.cache`, positive results only — see `UsersInfoCache`."""
     team_id = ctx.settings.team_id
     cached = ctx.cache.get_id_by_email(team_id, email)
     if cached is not None:
@@ -200,7 +200,7 @@ async def _notify_item(ctx, item: dict, stewards_map: dict) -> int:
             # (a false, potentially permanent fact about the person), and not recorded at all:
             # the next pass retries the lookup, like a failed post below.
             continue
-        blocks, text = _render_for_item(item, is_resend=last_state is not None)
+        blocks, text = _render_for_item(item)
         try:
             # `chat.postMessage` opens the DM implicitly when `channel` is a user id — Slack's
             # own documented convention, no `conversations.open` round trip.
@@ -247,7 +247,7 @@ async def poll_once(ctx) -> int:
     """One pass over every open review item. Returns how many DMs were actually sent (test seam,
     mirroring `poller.poll_once`'s own return contract)."""
     repo = ctx.settings.server.knowledge_repo
-    baked = getattr(ctx.settings.server, "stewards_path", "") or ""
+    baked = ctx.settings.server.stewards_path or ""
     if not repo and not baked:
         # No checkout AND no baked snapshot: nothing can ever resolve to a steward. Recorded, not
         # silent — a deployment-wide reason to deliver nothing is the fault an operator most
@@ -281,11 +281,10 @@ async def poll_once(ctx) -> int:
     return sent
 
 
-async def run_doorbell(ctx, *, interval_s: int = 10, stop_event=None) -> None:
+async def run_doorbell(ctx, *, interval_s: int = DEFAULT_POLL_INTERVAL_S,
+                       stop_event: asyncio.Event | None = None) -> None:
     """The loop `app` runs as its own background task beside `poller.run_poller` — same shape:
     `asyncio.Event`-gated sleep between passes, one bad pass logged and swallowed."""
-    import asyncio
-
     stop_event = stop_event or asyncio.Event()
     while not stop_event.is_set():
         try:

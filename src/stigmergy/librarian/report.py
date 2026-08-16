@@ -28,7 +28,8 @@ MAX_QUESTION_CANDIDATES = 20
 
 def _clean(text: str, width: int = 0) -> str:
     """Untrusted text on its way to a human — `stigmergy.text.clamp` + `sanitize`, the same seam
-    `capture.cli._clean` uses, so the two packages' renderers cannot disagree about truncation."""
+    `capture.render.clean_for_terminal` uses, so the two packages' renderers cannot disagree
+    about truncation."""
     return textutil.clamp(textutil.sanitize(str(text or "")).replace("\n", " "), width)
 
 
@@ -226,8 +227,7 @@ def rejected_duplicate(*, page_path: str, as_of: str) -> dict:
     summary = (f"{schema.REJECTED} — this matches a page already in the graph: "
                f"{_clean(page_path)} (filed {as_of}); nothing new was created. If this capture "
                f"adds new information, resubmit just what's different.")
-    return _rejected(schema.REASON_DUPLICATE, summary, page_path=page_path,
-)
+    return _rejected(schema.REASON_DUPLICATE, summary, page_path=page_path)
 
 
 def rejected_secret(*, line: str, rule_id: str, where: str = "your material") -> dict:
@@ -264,7 +264,7 @@ def rejected_steering(*, path: str, category: str, findings: list = ()) -> dict:
                f"the lane (category: {category}) and the attempt reached {_clean(path)}; "
                f"nothing was filed and no partial page exists. Remove the instruction-like text "
                f"and resubmit the content you actually want kept.")
-    return _rejected(schema.REASON_STEERING, summary,                     findings=list(findings))
+    return _rejected(schema.REASON_STEERING, summary, findings=list(findings))
 
 
 def rejected_malformed_frontmatter(*, findings: list = ()) -> dict:
@@ -276,7 +276,7 @@ def rejected_malformed_frontmatter(*, findings: list = ()) -> dict:
                f"multiple lines without the continuation indented under its key. Resubmit with "
                f"that field as a single-line list, e.g. `entity: [\"acme\"]`, or with its "
                f"continuation lines indented under the key.")
-    return _rejected(schema.REASON_MALFORMED_FRONTMATTER, summary,                     findings=list(findings))
+    return _rejected(schema.REASON_MALFORMED_FRONTMATTER, summary, findings=list(findings))
 
 
 def rejected_forged_field(*, findings: list = ()) -> dict:
@@ -288,7 +288,7 @@ def rejected_forged_field(*, findings: list = ()) -> dict:
                f"layer was removed and which therefore no page may claim. Nothing was filed and "
                f"no partial page exists. Remove that field from what you submit and resubmit — "
                f"the librarian fills in what it computes.")
-    return _rejected(schema.REASON_MALFORMED_FRONTMATTER, summary,                     findings=list(findings))
+    return _rejected(schema.REASON_MALFORMED_FRONTMATTER, summary, findings=list(findings))
 
 
 # ── needs_input: the one question a capture gets ──────────────────────────────────────────────
@@ -443,13 +443,9 @@ def needs_input(*, submission_id, names: list[str], candidates=(),
                        findings=list(_as_list(findings)),
                        open_question=question,
                        # The command as a FACT beside the sentence stating it — and it must be the
-                       # SAME command. `reply_line` and not `invocation`: for several names the
-                       # summary carries the substituted `<your answer, covering all N>` form, so
-                       # storing the bare one put two spellings of one sentence in one report.
+                       # SAME substituted form the summary carries:
                        # `slack.poller._needs_input_prose` strips this suffix by exact match to
-                       # turn the MCP prose into a Slack card, which silently never matched for
-                       # n > 1 — leaving a Slack submitter looking at a raw `brain_reply(...)`
-                       # call they have no way to invoke from Slack.
+                       # build the Slack card.
                        reply_invocation=reply_line, unresolved_names=names)
 
 

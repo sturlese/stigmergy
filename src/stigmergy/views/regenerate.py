@@ -27,8 +27,9 @@ JOB_NAME = "views"
 # The staleness reads live in `views.staleness` (the read-only half, importable by
 # `gardener.checks` without this module's write path) and are re-exported here on purpose —
 # `__all__` says so — so every call site reaches them as `regenerate.X`.
-__all__ = ["view_relpath", "existing_view_ids", "list_all_anchored_entities",
-          "list_stale_entities", "regenerate_entity", "run", "RegenOutcome", "RunResult"]
+__all__ = ["view_relpath", "view_path", "existing_view_ids", "existing_member_hash",
+          "list_all_anchored_entities", "list_stale_entities", "regenerate_entity", "run",
+          "RegenOutcome", "RunResult"]
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,20 @@ class RegenOutcome:
     timeline_shown: int = 0
 
 
+def _remove_view(repo: str, entity_id: str, *, entity_name: str, branch: str, guarded: bool,
+                 commit_message: str) -> RegenOutcome:
+    """Delete a view that has no member set left, and commit the deletion. Both roads here — a
+    de-registered entity, and an entity whose last anchored page went away — are the same write;
+    only the commit message differs, because the two reasons are not one reason."""
+    if guarded:
+        writer.ensure_on_branch(repo, branch)
+        writer.ensure_clean(repo)
+    os.remove(view_path(repo, entity_id))
+    sha = writer.commit_and_push(repo, branch=branch, message=commit_message)
+    return RegenOutcome(entity_id=entity_id, entity_name=entity_name, action="removed",
+                        commit=sha, path=view_relpath(entity_id))
+
+
 async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, branch: str = "main",
                             force: bool = False, guarded: bool = True) -> RegenOutcome:
     """One entity, one call, one commit (or none, on a no-op/refusal). `guarded=True` (the CLI's
@@ -63,15 +78,9 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
         # A view orphaned by de-registration: without this branch `--entity` would refuse it and
         # `--stale` would list it forever, with no way to act. No governed member set remains, so
         # this is unconditionally a removal.
-        if guarded:
-            writer.ensure_on_branch(repo, branch)
-            writer.ensure_clean(repo)
-        os.remove(view_path(repo, entity_id))
-        sha = writer.commit_and_push(
-            repo, branch=branch,
-            message=f"chore(views): remove {entity_id} — entity de-registered\n")
-        return RegenOutcome(entity_id=entity_id, entity_name=entity_id, action="removed",
-                            commit=sha, path=view_relpath(entity_id))
+        return _remove_view(
+            repo, entity_id, entity_name=entity_id, branch=branch, guarded=guarded,
+            commit_message=f"chore(views): remove {entity_id} — entity de-registered\n")
     entity_name = entity["name"]
     members = skeleton.members_of(repo, entity_id)
 
@@ -80,15 +89,9 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
             return RegenOutcome(
                 entity_id=entity_id, entity_name=entity_name, action="refused-no-members",
                 message=f'no page anywhere in the repo declares entity: ["{entity_id}"] yet')
-        if guarded:
-            writer.ensure_on_branch(repo, branch)
-            writer.ensure_clean(repo)
-        os.remove(view_path(repo, entity_id))
-        sha = writer.commit_and_push(
-            repo, branch=branch,
-            message=f"chore(views): remove {entity_id} — no anchored pages remain\n")
-        return RegenOutcome(entity_id=entity_id, entity_name=entity_name, action="removed",
-                            commit=sha, path=view_relpath(entity_id))
+        return _remove_view(
+            repo, entity_id, entity_name=entity_name, branch=branch, guarded=guarded,
+            commit_message=f"chore(views): remove {entity_id} — no anchored pages remain\n")
 
     member_hash = skeleton.member_hash(members)
     existing_hash = existing_member_hash(repo, entity_id)
@@ -136,7 +139,7 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
         path=view_relpath(entity_id), member_count=len(members),
         synthesis_shipped=result.shipped, acl=view_audience,
         timeline_total=len(timeline_ordered),
-        timeline_shown=min(len(timeline_ordered), skeleton.TIMELINE_CAP))
+        timeline_shown=skeleton.timeline_shown(len(timeline_ordered)))
 
 
 @dataclass

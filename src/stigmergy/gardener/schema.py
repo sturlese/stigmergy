@@ -30,13 +30,21 @@ MAX_DETAIL_CHARS = 500
 # the clamp is what actually guarantees the column bound.
 MAX_MODEL_DETAIL_CHARS = 200
 
-_GARDENER_FINDINGS_DDL = """
+# The two CHECK constraints are the vocabularies above, spelled for SQL — a value the code can
+# produce and the column would reject is the drift these constants exist to make impossible.
+# `repr`, not `capture.schema.sql_literals`: that helper SORTS, and these CHECKs are already
+# committed to databases in DECLARATION order — sorting would change the constraint's definition
+# string. Safe only because both vocabularies are lowercase identifiers with no quote or backslash.
+_SEVERITY_SQL_LIST = ", ".join(repr(s) for s in SEVERITIES)
+_SOURCE_SQL_LIST = ", ".join(repr(s) for s in SOURCES)
+
+_GARDENER_FINDINGS_DDL = f"""
 CREATE TABLE IF NOT EXISTS gardener_findings (
     id BIGSERIAL PRIMARY KEY,
     run_id BIGINT NOT NULL,
     check_slug TEXT NOT NULL,
-    severity TEXT NOT NULL CHECK (severity IN ('info', 'warn', 'sla')),
-    source TEXT NOT NULL DEFAULT 'deterministic' CHECK (source IN ('deterministic', 'model')),
+    severity TEXT NOT NULL CHECK (severity IN ({_SEVERITY_SQL_LIST})),
+    source TEXT NOT NULL DEFAULT 'deterministic' CHECK (source IN ({_SOURCE_SQL_LIST})),
     subject TEXT NOT NULL DEFAULT '',
     detail TEXT NOT NULL DEFAULT '',
     suggested_action TEXT NOT NULL DEFAULT '',

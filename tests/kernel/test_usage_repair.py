@@ -430,7 +430,7 @@ def test_the_librarian_meeting_backend_installs_the_repair(spy, tmp_path):
     from stigmergy.librarian.pydantic_backend import (
         MeetingAccount,
         MeetingTriage,
-        PydanticMeetingAgent,
+        PydanticFilingAgent,
     )
 
     brief = tmp_path / ".claude" / "skills" / "meeting-distiller"
@@ -447,7 +447,7 @@ def test_the_librarian_meeting_backend_installs_the_repair(spy, tmp_path):
     account = MeetingAccount(
         decision="triage",
         triage=MeetingTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY, names=["Halcyon Grid"]))
-    backend = PydanticMeetingAgent(
+    backend = PydanticFilingAgent(
         config.Settings(repo=str(tmp_path), model="openai:gpt-5.6-terra"),
         model_factory=lambda: TestModel(custom_output_args=account.model_dump()))
     try:
@@ -492,7 +492,7 @@ def test_every_module_that_builds_a_pydantic_ai_agent_installs_the_repair():
 def test_the_repaired_counts_price_a_real_run_to_a_real_figure(installed):
     """**End to end, through the seam this milestone built.** The counts come out of the repaired
     extraction, go into `librarian.pricing.compute_cost_usd` exactly as
-    `PydanticMeetingAgent._cost` sends them, and produce dollars.
+    `PydanticFilingAgent._cost` sends them, and produce dollars.
 
     The expected figure is DERIVED here from the payload's own counts and the table's own rates —
     never a number copied from a run — so a rate change or a payload edit moves both sides

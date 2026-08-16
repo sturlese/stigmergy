@@ -8,6 +8,7 @@ import json
 import os
 from dataclasses import dataclass, field
 
+from stigmergy.kernel.fsutil import write_text_atomic
 from stigmergy.kernel.normalize import normalize
 
 REGISTRY_FILE = "entity-registry.json"
@@ -57,8 +58,4 @@ def save_registry(path: str, reg: Registry) -> None:
     data = {"entities": {cid: {"name": e["name"], "type": e["type"],
                                "aliases": sorted(set(e["aliases"]))}
                          for cid, e in sorted(reg.entities.items())}}
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
-        f.write("\n")
-    os.replace(tmp, path)
+    write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n")

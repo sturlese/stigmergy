@@ -83,8 +83,9 @@ must not depend on a converter, so an unlisted file is a 400 naming the allowed 
   fallback, an `admin_actions` row on both outcomes, `CaptureError` → `AdminRefused`.
 - `server.review.mint_and_record_approval` — `entity_approve`'s whole seam, and the SAME function
   MCP and Slack mint through: mint via a throwaway clone, write the `review_decisions` row, then
-  requeue, strictly after the push. This package no longer reaches `entities.remote` itself. Two
-  things stay HERE by decision, not by omission: `situations.require_situation` (this door runs it
+  requeue, strictly after the push. `entities.remote` is reached by that sequence, never from this
+  package — its import allowlist grants `situations`, `generator` and `errors` only. Two things
+  stay HERE by decision, not by omission: `situations.require_situation` (this door runs it
   after its own name/type validation, the review lane before) and the exception mapping — nothing
   is caught inside `_do`, so `_mutate` records the library's OWN class name in `admin_actions`
   before the `except EntityError` outside it raises `AdminRefused` with the library's sentence.
@@ -160,8 +161,9 @@ the transport's parser — importing it would close a cycle through the composit
 (`AdminNotFound`, and the inert console's blanket answer), 409 (`AdminRefused`), 421 (foreign
 `Host`), 500 (class name only), 502 (`ActionsError`). Every response carries
 `content-security-policy` (`default-src 'none'`; fetch directives `'self'`, `img-src` also `data:`;
-`base-uri`/`form-action`/`frame-ancestors` `'none'`), `x-content-type-options: nosniff` and
-`referrer-policy: no-referrer`; `/admin/api/*` additionally `cache-control: no-store`.
+`base-uri`/`form-action`/`frame-ancestors` `'none'`), `x-content-type-options: nosniff`,
+`referrer-policy: no-referrer` and `strict-transport-security: max-age=31536000;
+includeSubDomains`; `/admin/api/*` additionally `cache-control: no-store`.
 
 `CRON_WORKFLOWS` — `index-rebuild.yml`, `retention-purge.yml`, `gardener.yml`, each naming its
 `schedule_utc` and where the database truth lives (`job_runs:<job>`, or `index_meta.built_at` for
@@ -192,8 +194,8 @@ the only view returning a cleanup function.
   which is why the digest tab's history fills with them.
 - **The console reads page PATHS, never page BODIES.** `index/check` and `gardener` carry paths out
   of the corpus, both behind the operator token and both declared ACL exceptions.
-- `_zone_counts` swallows every exception and returns `{}` — "no index yet" is a state, not an
-  error. It is the one place a bare `except` is right here.
+- `_zone_counts` and `schema.record_action` are the only two places a swallowing `except` is right
+  here — no index yet is a state, and bookkeeping must never fail the work.
 - **The worker's lease is resolved per call** (`worker_visibility_timeout_s()` →
   `librarian_config.resolved_visibility_timeout_s()`), never frozen at import, and it governs both
   directions: a console comparing an old claim against `capture.queue`'s own 300 s would call every

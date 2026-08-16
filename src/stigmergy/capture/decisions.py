@@ -5,20 +5,9 @@
 an identity, and nothing here changes a row's status. They are next to each other because both are
 written by the surfaces a human acts through; they answer different questions and share no state.
 
-**It lives in `capture` because of who has to write to it**, not because it is a capture concern.
-Three doors mint an entity: MCP/Slack through `server.review`, the admin console through
-`AdminService`, and `stigmergy-entities approve` from a steward's own clone. The third wrote no
-row, and could not: `stigmergy.entities` may not import `stigmergy.server`, an edge
-`tests/test_architecture.py` enforces and ADR 030 D2 argues for. So a CLI approval was invisible to
-the two surfaces that read this table as if it were complete — the admin console's Activity view
-and the weekly digest's governance section — and neither could tell "no CLI approvals happened"
-from "CLI approvals are not counted".
-
-Moving the writer BELOW both packages closes that without touching the edge: `entities` and
-`server` both already import `capture`, which is the bottom of the durable-state stack. The
-alternative considered and rejected was a second writer inside the CLI duplicating this schema —
-cheaper, and a second writer on an append-only governance table is the kind of duplication that
-ends with two definitions of what a decision is. See ADR 030.
+Below both writers on purpose: `stigmergy.entities` may not import `stigmergy.server`
+(tests/test_architecture.py), so the only place all three minting doors can reach is here.
+Moving it up breaks the CLI door silently — it would record nothing. See ADR 030.
 
 **Append-only, and that is a property rather than a convention**: nothing here UPDATEs or DELETEs,
 so a second decision on the same item is a second ROW. The history of a contested approval is the
@@ -28,9 +17,8 @@ from psycopg.types.json import Jsonb
 
 from stigmergy.capture.schema import startup_ddl_lock
 
-# The verdicts this ledger records, here rather than beside one of its writers. `stigmergy.entities`
-# cannot import `stigmergy.server`, so a constant living up there left the CLI door spelling
-# "approve" as a literal — one typo away from a row no reader would ever count.
+# Here, not beside a writer: `stigmergy.entities` cannot import `stigmergy.server`, and a
+# spelled-out verdict is one typo from a row no reader counts.
 APPROVE, REJECT, REQUEST_CHANGES = "approve", "reject", "request_changes"
 GENERIC_VERDICTS = (APPROVE, REJECT, REQUEST_CHANGES)
 
@@ -56,10 +44,7 @@ _ALL_DDL = (_REVIEW_DECISIONS_DDL, _REVIEW_DECISIONS_INDEX)
 def ensure_decisions_schema(conn) -> None:
     """Idempotent DDL for the ledger's one table, safe from two processes at once.
 
-    Takes `capture.schema`'s startup lock — the same one every other table in this database is
-    created under — because `IF NOT EXISTS` is a check and not a lock: two entry points starting
-    together both pass it and the loser dies with a `DuplicateTable` nothing can tell from a real
-    schema conflict.
+    Takes `schema.startup_ddl_lock` — the database's one DDL lock; see its docstring.
     """
     with startup_ddl_lock(conn) as cur:
         for statement in _ALL_DDL:

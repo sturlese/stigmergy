@@ -56,7 +56,7 @@ ORDER BY started_at DESC LIMIT 1
 """
 
 
-def latest_completed_run(conn, *, job: str = JOB_NAME) -> dict | None:
+def latest_completed_run(conn) -> dict | None:
     """The most recent completed run, or `None`. Public for `stigmergy.digest`'s corpus-health
     read.
 
@@ -65,7 +65,7 @@ def latest_completed_run(conn, *, job: str = JOB_NAME) -> dict | None:
     `sweep.previous_run_watermark`'s `'ok'`-only predicate; the two readers of this column
     disagree on purpose."""
     with conn.cursor() as cur:
-        cur.execute(_LATEST_COMPLETED_RUN, (job,))
+        cur.execute(_LATEST_COMPLETED_RUN, (JOB_NAME,))
         row = cur.fetchone()
     if row is None:
         return None

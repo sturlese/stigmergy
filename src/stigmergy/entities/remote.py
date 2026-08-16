@@ -35,11 +35,9 @@ MINT_FAULT_MESSAGE = (
     "through, not a problem with the identity you approved. Nothing was pushed. The details are "
     "in the server log; ask whoever runs this deployment to look, then approve again")
 
-# The two CREDENTIAL faults, told the same way and for the same reason. These used to splice
-# `str(exception)` in — twelve lines below the rule above forbidding exactly that — so a
-# `librarian` exception's own text reached a steward over MCP verbatim. `githubapp` raises
-# `LibrarianConfigError` naming the private-key FILE PATH among other things, which made this a
-# server-side filesystem disclosure to anyone who could trigger the error.
+# The two CREDENTIAL faults, told the same way and for the same reason. Neither may splice the
+# caught exception's text: `githubapp` raises `LibrarianConfigError` naming the private-key FILE
+# PATH, which `server.review` would echo to a steward over MCP.
 #
 # Both are deliberately unactionable BY THE STEWARD, because neither has a steward-side fix: a
 # half-set App and a revoked installation are both operator work. What the steward needs is to

@@ -68,13 +68,6 @@ def registry_path(repo: str) -> str:
     return os.path.join(repo, *REGISTRY_RELPATH.split("/"))
 
 
-def entity_page_path(repo: str, name: str) -> str:
-    """Where a page for `name` lives. The title IS the filename (wikilinks resolve by basename):
-    a page whose title and stem disagree would be linkable under one spelling and registered
-    under another."""
-    return os.path.join(entities_dir(repo), f"{name}.md")
-
-
 def _aliases_of(front: dict) -> tuple[str, ...]:
     """`aliases` as a tuple of clean strings. A scalar is accepted as a one-element list — the
     linter already flags it, and refusing here would let one lint error block every other
@@ -105,15 +98,9 @@ def read_entity_pages(repo: str) -> list[PageEntity]:
             with open(path, encoding="utf-8") as f:
                 text = f.read()
         except OSError as ex:
-            # `str(OSError)` is `[Errno 13] Permission denied: '/abs/path/to/the/file.md'` — the
-            # ABSOLUTE path, and on a server-driven mint that is the throwaway clone under the
-            # host's temp directory. This function runs inside `entities.mint.mint`, which
-            # `server.review` reaches and whose `EntityError`s MCP echoes to a steward verbatim,
-            # so the errno was carrying a filesystem layout to the wire.
-            #
-            # `relpath` stays: it is repo-relative, it is the part that identifies WHICH page is
-            # unreadable, and it discloses nothing about the host. The errno class and the full
-            # path go to the log, where an operator reads them.
+            # `str(OSError)` carries the ABSOLUTE path, and MCP echoes this `EntityError`
+            # verbatim — so the message keeps only the repo-relative `relpath`; the errno and the
+            # path go to the log.
             log.error("entity page %r could not be read from %r", relpath, directory, exc_info=True)
             raise EntityError(
                 f"{relpath} could not be read ({ex.__class__.__name__}) — the entity registry is "
@@ -247,7 +234,8 @@ class Divergence:
 
 @dataclass
 class RegenerateOutcome:
-    """What `regenerate` did or would do. `changed` is the only thing a caller branches on."""
+    """What `regenerate` did or would do. `changed` is the only thing a caller branches on: it is
+    semantic from `check` (any divergence) and BYTE-level from `regenerate`."""
     changed: bool = False
     page_count: int = 0
     divergences: list[Divergence] = field(default_factory=list)
@@ -304,7 +292,7 @@ def check(repo: str) -> RegenerateOutcome:
     """What `--check` reports. Reads only — nothing on disk moves, so it is safe in CI and on a
     dirty clone."""
     entities = read_entity_pages(repo)
-    derived = derive_registry(repo)
+    derived = registry_of(entities)
     divergences = compare(derived, committed_registry(repo),
                           page_of={e.canonical_id: e.relpath for e in entities})
     return RegenerateOutcome(changed=bool(divergences), page_count=len(entities),

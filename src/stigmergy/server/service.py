@@ -142,6 +142,13 @@ class BrainService:
         # None = no write path wired; `submit` refuses cleanly so reads still serve.
         self.evidence = evidence
 
+    @property
+    def unrestricted(self) -> bool:
+        """Does this client's scope widen a queue read to every identity's rows? The spelling of
+        `audiences is None` lives here so the widening decision reads the same in every caller.
+        NOT an ACL decision: page visibility is `acl.visible()`'s alone, never this."""
+        return self.audiences is None
+
     # ── the service-layer wrapper (rate limit + audit), shared by every entry point ────────────
     def _call(self, tool: str, args: dict, fn, *, summarize=None):
         """`summarize`: an optional `(return_value) -> dict | None` callback, invoked only on a
@@ -158,11 +165,8 @@ class BrainService:
             outcome, error_class = "error", ex.__class__.__name__
             raise
         finally:
-            if self.audit is not None:
-                self.audit.write(identity=self.identity, tool=tool, args=_audit_args(args),
-                                 duration_ms=(time.monotonic() - start) * 1000,
-                                 outcome=outcome, error_class=error_class,
-                                 result=_result_for(summarize, value, outcome))
+            self._write_audit_row(tool=tool, args=args, start=start, outcome=outcome,
+                                  error_class=error_class, value=value, summarize=summarize)
 
     async def call_async(self, tool: str, args: dict, coro_fn, *, summarize=None):
         """The same wrapper, async. Public because `ask` lives one layer ABOVE this service and
@@ -178,11 +182,20 @@ class BrainService:
             outcome, error_class = "error", ex.__class__.__name__
             raise
         finally:
-            if self.audit is not None:
-                self.audit.write(identity=self.identity, tool=tool, args=_audit_args(args),
-                                 duration_ms=(time.monotonic() - start) * 1000,
-                                 outcome=outcome, error_class=error_class,
-                                 result=_result_for(summarize, value, outcome))
+            self._write_audit_row(tool=tool, args=args, start=start, outcome=outcome,
+                                  error_class=error_class, value=value, summarize=summarize)
+
+    def _write_audit_row(self, *, tool: str, args: dict, start: float, outcome: str,
+                         error_class: str, value, summarize) -> None:
+        """The audit tail both seams share — one row per call, whatever the outcome. It runs from a
+        `finally` and is deliberately NOT wrapped in a try of its own: `_audit_args` and
+        `_result_for` already absorb their own failures, and a raise from anywhere else here would
+        replace the caller's real result or exception."""
+        if self.audit is not None:
+            self.audit.write(identity=self.identity, tool=tool, args=_audit_args(args),
+                             duration_ms=(time.monotonic() - start) * 1000,
+                             outcome=outcome, error_class=error_class,
+                             result=_result_for(summarize, value, outcome))
 
     # ── capability guard ─────────────────────────────────────────────────────
     def require_embedder(self) -> None:
@@ -229,6 +242,8 @@ class BrainService:
     def _registry_aliases(self) -> dict[str, str]:
         """`load_aliases`, malformed file surfaced as `RegistryError`: the loader's `ValueError`
         names the registry PATH, and `search_brain` echoes `ValueError` verbatim."""
+        # The raw loader is reachable only from closures that collapse ValueError to a class name;
+        # adding ValueError to any of those echo sets would leak the registry path.
         try:
             return entity_aliases.load_aliases(self.settings.entity_registry_path)
         except ValueError as ex:
@@ -499,10 +514,11 @@ class BrainService:
         """Answer the librarian's one question about a `needs_input` capture. The audit row records
         the answer's SIZE and HASH, never its text — a reply can carry the same credential a
         capture can."""
-        digest, size = capture_schema.material_digest(answer if isinstance(answer, str) else "")
+        text = answer if isinstance(answer, str) else ""
+        digest, size = capture_schema.material_digest(text)
         return self._call(
-            "brain_reply",
-            {"submission_id": submission_id, "answer_chars": len(answer or ""),
+            capture_schema.REPLY_TOOL,
+            {"submission_id": submission_id, "answer_chars": len(text),
              "answer_bytes": size, "answer_sha256": digest if size else ""},
             lambda: self._reply(submission_id, answer))
 
@@ -516,8 +532,7 @@ class BrainService:
         # Read UNSCOPED, then decide: the only way to tell the identity cases apart internally
         # while telling nobody outside, and a scoped read would break reply-on-behalf.
         row = queue.get_submission_trace(self.conn, submission_id)
-        unrestricted = self.audiences is None
-        if row is None or not (unrestricted or row["submitted_by"] == self.identity):
+        if row is None or not (self.unrestricted or row["submitted_by"] == self.identity):
             raise ReplyRejected(NO_REPLY_WAITING)
         if row["status"] != capture_schema.NEEDS_INPUT:
             raise ReplyRejected(
@@ -539,7 +554,7 @@ class BrainService:
 
     def _submissions(self, limit: int, status: str | None) -> dict:
         statuses = [status] if status else None
-        unrestricted = self.audiences is None
+        unrestricted = self.unrestricted
         rows = (queue.list_all_submissions(self.conn, statuses=statuses, limit=limit)
                 if unrestricted
                 else queue.list_own_submissions(self.conn, self.identity, statuses=statuses,
@@ -671,27 +686,27 @@ def _ack_message(ack: dict) -> str:
 def _neutralize_report(report, depth: int = 0):
     """The librarian's report, made safe to hand a reader: every free-text field is DERIVED from
     captured material. Neutralized rather than fenced — that is what stops a value closing the
-    excerpt's fence in-band. Depth-bounded; beyond it the subtree is dropped."""
+    excerpt's fence in-band. Depth-bounded; beyond it the subtree is dropped.
+
+    The ONE string-leaf walker: `review._neutralize_leaves` delegates here rather than keeping a
+    second copy, which had already drifted apart from this one at the depth bound."""
     if depth > MAX_AUDIT_DEPTH:
         return None
     if isinstance(report, str):
         return neutralize_fence(report)
     if isinstance(report, dict):
         return {str(k): _neutralize_report(v, depth + 1) for k, v in report.items()}
-    if isinstance(report, list):
+    if isinstance(report, list | tuple):
         return [_neutralize_report(v, depth + 1) for v in report]
     return report
 
 
 def _without_operator_telemetry(report):
     """`cost_usd` stays on the STORED report and leaves the client wire here: per-item dollar
-    spend is operator telemetry."""
-    if isinstance(report, dict):
-        report.pop("cost_usd", None)
-    return report
-
-
-_fence = fence   # back-compat alias (tests/server/test_fence.py imports `_fence`)
+    spend is operator telemetry. A COPY: the caller's report may be a row read back out of
+    Postgres that another reader still holds."""
+    return ({k: v for k, v in report.items() if k != "cost_usd"}
+            if isinstance(report, dict) else report)
 
 
 def _shape_hit(h: dict) -> dict:
@@ -771,9 +786,9 @@ def build_service(settings: Settings, conn=None) -> BrainService:
     audiences = set(audiences_tuple) if audiences_tuple is not None else None
 
     ensure_audit_table(conn)
-    # `store_from_env` does no I/O, so a server whose bucket is unreachable still serves reads.
     ensure_capture_schema(conn)
     # unconditional: the review tools work on any server, knowledge repo configured or not.
     review.ensure_review_schema(conn)
+    # `store_from_env` does no I/O, so a server whose bucket is unreachable still serves reads.
     return BrainService(settings, conn, embedder, audiences, identity=settings.identity,
                         audit=AuditWriter(conn), evidence=evidence_plane.store_from_env())

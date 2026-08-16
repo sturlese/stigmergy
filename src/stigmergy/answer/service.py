@@ -216,7 +216,8 @@ class AnswerService:
             return shaped
         out = result.output
         usage = _usage_facts(result.usage)
-        verdict = verify(out, ctx.evidence_text(), self.brain.get_page, ctx.read_paths)
+        evidence = ctx.evidence_text()
+        verdict = verify(out, evidence, self.brain.get_page, ctx.read_paths)
         # The FIRST draft's verdict, kept whatever happens next — nothing else records what a
         # retry was for once `verdict` is rebound to the retry's.
         first_verdict = verdict
@@ -226,10 +227,9 @@ class AnswerService:
         # citation problem ships `partial` either way, so no second run is spent on it. Reading
         # the GATE's scan rather than the raw verdict keeps the trigger and the gate agreeing on
         # "would suppress", and names a quote-fabricated figure in the corrective brief.
-        # (Staging 2026-08: ~41 % of asks retried; ask medians 7.1 s clean, 17.3 s retried.)
         retried = False
         figs, gated = ((), verdict) if out.refused else \
-            strict_gate_findings(out, verdict, ctx.evidence_text())
+            strict_gate_findings(out, verdict, evidence)
         # `not out.refused` is STRUCTURAL, not redundant: a refusal is an answer, never a defect
         # to repair — the guard holds even if a future verifier learns to fail one.
         if not out.refused and _ship_rank(figs, gated) == _SUPPRESSES:
@@ -249,9 +249,10 @@ class AnswerService:
             else:
                 usage = _add_usage(usage, result2.usage)   # spent whether or not the retry wins
                 out2 = result2.output
-                v2 = verify(out2, ctx.evidence_text(), self.brain.get_page, ctx.read_paths)
+                retry_evidence = ctx.evidence_text()
+                v2 = verify(out2, retry_evidence, self.brain.get_page, ctx.read_paths)
                 figs2, gated2 = ((), v2) if out2.refused else \
-                    strict_gate_findings(out2, v2, ctx.evidence_text())
+                    strict_gate_findings(out2, v2, retry_evidence)
                 # The retry wins only if it improves WHAT WOULD SHIP — the gate's rank, never the
                 # raw verdicts', so no draft can win here and then lose at the gate.
                 if _ship_rank(figs2, gated2) < _ship_rank(figs, gated):

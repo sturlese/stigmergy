@@ -35,6 +35,18 @@ _DUMP = {"ensure_ascii": False, "indent": 1}
 log = logging.getLogger(__name__)
 
 
+def _error(message: str) -> str:
+    """The one error shape every tool returns. A plain helper, never a decorator: FastMCP reads the
+    decorated function object itself, so anything wrapping a closure changes the declared tool."""
+    return json.dumps({"error": message}, **_DUMP)
+
+
+def _failure(tool: str, ex: Exception, hint: str = "") -> str:
+    """The unanticipated-exception answer: CLASS NAME only, never `str(ex)` — a raw message can
+    carry a DSN fragment, a filesystem path or untrusted content. `hint` is server-authored text."""
+    return _error(f"{tool} failed ({ex.__class__.__name__}){hint}")
+
+
 def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_security=None,
               json_response: bool = False):
     """All three keyword flags are inert for stdio (`mcp.run()` never touches them) and set by
@@ -67,10 +79,10 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             # All server-authored and safe to echo verbatim; `CapabilityUnavailableError`
             # especially — collapsed to a class name it would read as an unexplained outage
             # instead of naming the missing capability.
-            return json.dumps({"error": str(ex)}, **_DUMP)
+            return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — class name only: an unanticipated str(ex) may
             # carry a DSN fragment, a path or another internal detail.
-            return json.dumps({"error": f"search_brain failed ({ex.__class__.__name__})"}, **_DUMP)
+            return _failure("search_brain", ex)
 
     @mcp.tool()
     def read_page(path: str) -> str:
@@ -80,14 +92,14 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         try:
             return json.dumps(service.read_page(path), **_DUMP)
         except RateLimitError as ex:
-            return json.dumps({"error": str(ex)}, **_DUMP)
+            return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — no bare `except ValueError`: it would also catch
             # a `pydantic_core.ValidationError` (a ValueError subclass) whose message can carry
             # untrusted LLM output or internal field paths. Only `check_arg_length`'s own marked
             # rejection is known-safe to echo; everything else is class name only.
             if getattr(ex, "is_arg_length_error", False):
-                return json.dumps({"error": str(ex)}, **_DUMP)
-            return json.dumps({"error": f"read_page failed ({ex.__class__.__name__})"}, **_DUMP)
+                return _error(str(ex))
+            return _failure("read_page", ex)
 
     @mcp.tool()
     def list_entities() -> str:
@@ -99,10 +111,10 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         try:
             return json.dumps(service.list_entities(), **_DUMP)
         except RateLimitError as ex:
-            return json.dumps({"error": str(ex)}, **_DUMP)
+            return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — class name only: a malformed entity registry
             # raises ValueError here and its str(ex) can carry a filesystem path.
-            return json.dumps({"error": f"list_entities failed ({ex.__class__.__name__})"}, **_DUMP)
+            return _failure("list_entities", ex)
 
     @mcp.tool()
     def describe_entity(entity: str) -> str:
@@ -118,11 +130,11 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         try:
             return json.dumps(service.describe_entity(entity), **_DUMP)
         except RateLimitError as ex:
-            return json.dumps({"error": str(ex)}, **_DUMP)
+            return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — same narrowing as read_page above
             if getattr(ex, "is_arg_length_error", False):
-                return json.dumps({"error": str(ex)}, **_DUMP)
-            return json.dumps({"error": f"describe_entity failed ({ex.__class__.__name__})"}, **_DUMP)
+                return _error(str(ex))
+            return _failure("describe_entity", ex)
 
     @mcp.tool()
     def brain_submit(kind: str, material: str, hints: dict | None = None,
@@ -149,9 +161,9 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         except (CaptureError, RateLimitError) as ex:
             # Safe to echo verbatim: this family names the caller's own field/hint keys or a
             # static limit; the evidence store's failures are reduced to a class name upstream.
-            return json.dumps({"error": str(ex)}, **_DUMP)
+            return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — class name only for anything unanticipated
-            return json.dumps({"error": f"brain_submit failed ({ex.__class__.__name__})"}, **_DUMP)
+            return _failure("brain_submit", ex)
 
     @mcp.tool()
     def brain_submissions(limit: int = DEFAULT_SUBMISSION_LIMIT, status: str = "") -> str:
@@ -172,10 +184,9 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         except (ValueError, CaptureError, RateLimitError) as ex:
             # ValueError here is the unknown-status rejection — the caller's own value plus a
             # static status list, safe to echo.
-            return json.dumps({"error": str(ex)}, **_DUMP)
+            return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — class name only
-            return json.dumps({"error": f"brain_submissions failed ({ex.__class__.__name__})"},
-                              **_DUMP)
+            return _failure("brain_submissions", ex)
 
     @mcp.tool()
     def review_queue(limit: int = 50) -> str:
@@ -186,10 +197,9 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         try:
             return json.dumps(service.review_queue(limit=limit), **_DUMP)
         except (CaptureError, RateLimitError) as ex:
-            return json.dumps({"error": str(ex)}, **_DUMP)
+            return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — class name only
-            return json.dumps({"error": f"review_queue failed ({ex.__class__.__name__})"},
-                              **_DUMP)
+            return _failure("review_queue", ex)
 
     @mcp.tool()
     def review_decide(item_kind: str, item_id: str, verdict: str, notes: str = "",
@@ -221,10 +231,9 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
                                       entity_id=entity_id, entity_type=entity_type,
                                       aliases=aliases, role=role, requeue=requeue), **_DUMP)
         except (CaptureError, RateLimitError, CapabilityUnavailableError) as ex:
-            return json.dumps({"error": str(ex)}, **_DUMP)
+            return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — class name only
-            return json.dumps({"error": f"review_decide failed ({ex.__class__.__name__})"},
-                              **_DUMP)
+            return _failure("review_decide", ex)
 
     # Mounted under `capture_schema.REPLY_TOOL`, never this function's name: the ask-back question
     # a submitter reads states `brain_reply(...)` verbatim from that same constant, so a rename
@@ -244,9 +253,9 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         except (CaptureError, RateLimitError) as ex:
             # Safe to echo verbatim: the identity refusal is a fixed sentence naming nothing, and
             # the state refusal is only raised for a caller already authorized to read the row.
-            return json.dumps({"error": str(ex)}, **_DUMP)
+            return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — class name only for anything unanticipated
-            return json.dumps({"error": f"brain_reply failed ({ex.__class__.__name__})"}, **_DUMP)
+            return _failure(capture_schema.REPLY_TOOL, ex)
 
     @mcp.tool()
     async def ask(question: str) -> str:
@@ -280,14 +289,14 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             result.pop("usage", None)
             return json.dumps(result, **_DUMP)
         except (RateLimitError, CapabilityUnavailableError) as ex:
-            return json.dumps({"error": str(ex)}, **_DUMP)
+            return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — never a traceback or a raw message (which can
             # echo untrusted content): class name + a fixed actionable hint only. The one
             # exception is check_arg_length's own marked rejection, same narrowing as read_page.
             if getattr(ex, "is_arg_length_error", False):
-                return json.dumps({"error": str(ex)}, **_DUMP)
-            return json.dumps({"error": f"ask failed ({ex.__class__.__name__}); check ANSWER_LLM / "
-                               "OPENAI_API_KEY and that the index is built"}, **_DUMP)
+                return _error(str(ex))
+            return _failure("ask", ex, "; check ANSWER_LLM / OPENAI_API_KEY and that the index "
+                                       "is built")
 
     return mcp
 

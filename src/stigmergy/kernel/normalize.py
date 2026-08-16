@@ -1,4 +1,4 @@
-"""Entity-name normalization + slug + noise detection. Deterministic, no LLM."""
+"""Entity-name normalization + slug. Deterministic, no LLM."""
 import re
 import unicodedata
 
@@ -9,7 +9,6 @@ _SUFFIXES = [
     "gmbh", "b.v.", "s.r.l.", "limited", "corp", "co", "sl", "sa",
 ]
 _SUFN = [re.sub(r"\s+", " ", re.sub(r"[.,]", " ", s)).strip() for s in _SUFFIXES]
-_INITIALS = re.compile(r"^[a-z](\s+[a-z])*$")   # "a b t", "a b" -> initials
 
 
 def normalize(name: str) -> str:
@@ -30,8 +29,3 @@ def normalize(name: str) -> str:
 def slugify(s: str) -> str:
     s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
     return re.sub(r"[^a-z0-9]+", "-", s).strip("-")[:60] or "x"
-
-
-def is_noise(norm_key: str) -> bool:
-    """Noise = initials/abbreviations, or too short to be a real entity."""
-    return len(norm_key) < 3 or bool(_INITIALS.match(norm_key))

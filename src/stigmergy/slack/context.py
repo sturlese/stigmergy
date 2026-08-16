@@ -8,8 +8,8 @@ import uuid
 from dataclasses import dataclass, field
 
 from stigmergy.server.service import SLACK_DOOR, BrainService
-from stigmergy.slack.gateway import SlackApiError
-from stigmergy.slack.identity import UsersInfoCache
+from stigmergy.slack.gateway import SlackApiError, SlackGateway
+from stigmergy.slack.identity import UsersInfoCache, resolve_slack_identity
 from stigmergy.slack.settings import SlackSettings, no_link_resolver
 
 log = logging.getLogger(__name__)
@@ -23,10 +23,16 @@ SHOW_IT_HERE_TOKEN_TTL_S = 3600
 SHOW_IT_HERE_MAX_TOKENS = 10_000
 
 
+def short_ref() -> str:
+    """An opaque correlation token for the server-error copy: logged alongside the real exception
+    so an operator can find it, safe to show a user (no path, no DSN, no traceback)."""
+    return uuid.uuid4().hex[:8]
+
+
 @dataclass
 class SlackContext:
     settings: SlackSettings
-    gateway: object                    # a SlackGateway
+    gateway: SlackGateway
     conn: object
     embedder: object
     rate_limiter: object = None
@@ -34,7 +40,6 @@ class SlackContext:
     evidence: object = None
     cache: UsersInfoCache = field(default_factory=UsersInfoCache)
     link_resolver: object = no_link_resolver
-    bot_user_id: str = ""
     # `token -> (path, owner_slack_user_id, expires_at)`. A button value is retrievable by any
     # workspace member via `conversations.history`, so it must never carry the path or an email in
     # cleartext — the token is an IDENTIFIER, not a credential, and `handle_show_it_here`
@@ -54,6 +59,17 @@ class SlackContext:
     # Injectable clock, the same seam `UsersInfoCache(clock=...)` uses; only
     # `doorbell._load_stewards_cached` reads it.
     _clock: object = time.monotonic
+
+    async def resolve_slack_identity(self, *, event_team_id: str, slack_user_id: str):
+        """The ONE identity call every handler makes before building a `BrainService`, with the
+        configured workspace and the identities file taken off these settings. `event_team_id` is
+        the EVENT's own workspace and is the caller's to source: passing the configured
+        `settings.team_id` here would make the workspace check `configured == configured`, a
+        tautology that can never fail (pinned in `tests/test_architecture.py`)."""
+        return await resolve_slack_identity(
+            self.gateway, self.cache, identities_path=self.settings.server.identities_path,
+            configured_team_id=self.settings.team_id, event_team_id=event_team_id,
+            slack_user_id=slack_user_id)
 
     def build_service(self, email: str, audiences, *, rate_limited: bool = True) -> BrainService:
         """A per-identity `BrainService` sharing every process-wide resource. `audiences` accepts

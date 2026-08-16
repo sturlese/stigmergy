@@ -293,6 +293,34 @@ def _depth(value, limit: int, seen: int = 1) -> None:
             _depth(item, limit, seen + 1)
 
 
+def _parse_anchoring(mapping: dict, *, field_name: str, shape: _Shape) -> dict:
+    """The `anchoring` outcome declared inside `mapping`, coerced. One anchoring shape for both
+    outcomes: the ordinary capture declares one at the top level, a meeting decision one apiece,
+    and `gates.gate_anchoring` reads the SAME three keys either way. `field_name` names the
+    CONTAINER's own field in a shape finding; the inner fields keep their `anchoring.*` spelling,
+    which is what both skills document and what a corrective pass has to be told to fix."""
+    raw_anchor = _mapping(mapping.get("anchoring"), field_name=field_name, shape=shape)
+    return {
+        "kind": _identifier(raw_anchor.get("kind"), field_name="anchoring.kind",
+                            shape=shape).strip().lower(),
+        "reason": _prose(raw_anchor.get("reason"), field_name="anchoring.reason", shape=shape),
+        "entities": [_identifier(e, field_name="anchoring.entities[]", shape=shape)
+                     for e in _list(raw_anchor.get("entities"),
+                                    field_name="anchoring.entities", shape=shape)],
+    }
+
+
+def _parse_findings(raw: dict, *, shape: _Shape) -> list[dict]:
+    """The `findings` list both outcomes carry: a CATEGORY per entry and deliberately nothing
+    else, so an agent reporting an injection attempt cannot carry the payload home with it."""
+    out = []
+    for entry in _list(raw.get("findings"), field_name="findings", shape=shape):
+        item = _mapping(entry, field_name="a findings entry", shape=shape)
+        out.append({"category": _identifier(item.get("category"),
+                                            field_name="a finding category", shape=shape)})
+    return out
+
+
 def parse_outcome(raw) -> Outcome:
     """Validate one raw outcome object into an `Outcome`, coercing every field to the type the
     rest of the system assumes it has. Raises `AgentError` for a STRUCTURAL fault and
@@ -311,15 +339,7 @@ def parse_outcome(raw) -> Outcome:
         shape.add("unknown-decision",
                   f"declares no usable decision (expected one of {', '.join(DECISIONS)})")
 
-    anchoring_raw = _mapping(raw.get("anchoring"), field_name="anchoring", shape=shape)
-    anchoring = {
-        "kind": _identifier(anchoring_raw.get("kind"), field_name="anchoring.kind",
-                            shape=shape).strip().lower(),
-        "reason": _prose(anchoring_raw.get("reason"), field_name="anchoring.reason", shape=shape),
-        "entities": [_identifier(e, field_name="anchoring.entities[]", shape=shape)
-                     for e in _list(anchoring_raw.get("entities"),
-                                    field_name="anchoring.entities", shape=shape)],
-    }
+    anchoring = _parse_anchoring(raw, field_name="anchoring", shape=shape)
 
     overlaps = []
     for entry in _list(raw.get("overlaps"), field_name="overlaps", shape=shape):
@@ -344,21 +364,14 @@ def parse_outcome(raw) -> Outcome:
                       "link": _identifier(item.get("link"), field_name="an edit link", shape=shape),
                       "note": _prose(item.get("note"), field_name="an edit note", shape=shape)})
 
-    findings = []
-    for entry in _list(raw.get("findings"), field_name="findings", shape=shape):
-        item = _mapping(entry, field_name="a findings entry", shape=shape)
-        findings.append({"category": _identifier(item.get("category"),
-                                                 field_name="a finding category", shape=shape)})
+    findings = _parse_findings(raw, shape=shape)
 
     triage_raw = _mapping(raw.get("triage"), field_name="triage", shape=shape)
-    # ONE shape downstream, BOTH shapes accepted here. `names` mirrors `parse_meeting_outcome`'s
-    # own plural field (issue #32) and is the only one an `Outcome` carries; a singular
-    # `triage.name` is still ACCEPTED and folded into a one-element list, because a model may send
-    # either — the knowledge repo's `librarian` skill offers both spellings, and this repo's own
-    # repair brief (`gates.anchoring_brief`'s PARK option) spells the singular. Inbound tolerance is
-    # not outbound duplication: nothing below this line has a singular slot to disagree with.
-    # The RAW list is held, not re-derived: `_list` records its own shape findings, so calling it a
-    # second time for the completeness check below would report one malformed list twice.
+    # ONE shape downstream, BOTH accepted here: a singular `triage.name` is folded into a
+    # one-element list — models send either spelling, the knowledge repo's `librarian` skill
+    # offers both, and the repair brief's PARK option spells the singular; the tolerance can only
+    # retire when all three stop. The RAW list is held, not re-derived: `_list` records its own
+    # shape findings, so a second call would report one malformed list twice.
     names_raw = _list(triage_raw.get("names"), field_name="triage.names", shape=shape)
     single = _identifier(triage_raw.get("name"), field_name="triage.name", shape=shape)
     names = [_identifier(n, field_name="triage.names[]", shape=shape) for n in names_raw]
@@ -412,12 +425,9 @@ def parse_outcome(raw) -> Outcome:
                       f"{', '.join(TRIAGE_KINDS)})")
         else:
             required = TRIAGE_REQUIRED_FIELD[triage["kind"]]
-            # Asked of the RAW values in BOTH spellings — the rule `_declared` documents, applied to
-            # the plural road too. A name that failed its own bound comes back `""`, and asking the
-            # COERCED list would earn that park a second, FALSE "never declared" finding on top of
-            # the bound one: two findings in one corrective brief, contradicting each other, for the
-            # single retry `OUTPUT_RETRIES` allows. A park naming two entities is not a park naming
-            # none, and neither is a park naming one the older way.
+            # Asked of the RAW values in BOTH spellings — a name that failed its own bound already
+            # earned its finding, and asking the COERCED list would add a second, contradicting one
+            # to the single corrective brief.
             declared = ((_declared(triage_raw.get("name")) or _any_declared(names_raw))
                         if triage["kind"] == TRIAGE_UNRESOLVED_ENTITY
                         else _declared(triage_raw.get(required)))
@@ -479,18 +489,6 @@ def parse_meeting_outcome(raw) -> MeetingOutcome:
         shape.add("unknown-decision",
                   f"declares no usable decision (expected one of {', '.join(DECISIONS)})")
 
-    def _anchoring_of(mapping: dict) -> dict:
-        raw_anchor = _mapping(mapping.get("anchoring"), field_name="a decision's anchoring",
-                              shape=shape)
-        return {
-            "kind": _identifier(raw_anchor.get("kind"), field_name="anchoring.kind",
-                                shape=shape).strip().lower(),
-            "reason": _prose(raw_anchor.get("reason"), field_name="anchoring.reason", shape=shape),
-            "entities": [_identifier(e, field_name="anchoring.entities[]", shape=shape)
-                        for e in _list(raw_anchor.get("entities"), field_name="anchoring.entities",
-                                       shape=shape)],
-        }
-
     decisions = []
     for entry in _list(raw.get("decisions"), field_name="decisions", shape=shape):
         item = _mapping(entry, field_name="a decisions entry", shape=shape)
@@ -499,7 +497,9 @@ def parse_meeting_outcome(raw) -> MeetingOutcome:
             shape.add("missing-field", "declares a decision with no `title`")
         body = _prose(item.get("body"), field_name="a decision body", shape=shape,
                      limit=MAX_PAGE_BODY_LEN)
-        decisions.append({"title": title, "body": body, "anchoring": _anchoring_of(item)})
+        decisions.append({"title": title, "body": body,
+                          "anchoring": _parse_anchoring(item, field_name="a decision's anchoring",
+                                                        shape=shape)})
 
     attendees = tuple(_identifier(a, field_name="an attendees entry", shape=shape)
                       for a in _list(raw.get("attendees"), field_name="attendees", shape=shape))
@@ -516,11 +516,7 @@ def parse_meeting_outcome(raw) -> MeetingOutcome:
             "done": bool(done_raw) if isinstance(done_raw, bool) else False,
         })
 
-    findings = []
-    for entry in _list(raw.get("findings"), field_name="findings", shape=shape):
-        item = _mapping(entry, field_name="a findings entry", shape=shape)
-        findings.append({"category": _identifier(item.get("category"),
-                                                 field_name="a finding category", shape=shape)})
+    findings = _parse_findings(raw, shape=shape)
 
     triage_raw = _mapping(raw.get("triage"), field_name="triage", shape=shape)
     names = [_identifier(n, field_name="triage.names[]", shape=shape)
@@ -555,33 +551,6 @@ def parse_meeting_outcome(raw) -> MeetingOutcome:
                           meeting_notes=meeting_notes, action_items=tuple(action_items),
                           decisions=tuple(decisions), summary=summary, findings=tuple(findings),
                           triage=triage)
-
-
-def read_meeting_outcome(worktree: str, *, delete: bool = True) -> MeetingOutcome:
-    """`read_outcome`'s sibling: same file, same channel, a different parse at the boundary."""
-    path = os.path.join(worktree, OUTCOME_FILENAME)
-    if not os.path.exists(path):
-        raise AgentError(f"the agent wrote no {OUTCOME_FILENAME}: there is no account of what "
-                         f"it did, so nothing can be filed")
-    try:
-        size = os.path.getsize(path)
-        if size > MAX_OUTCOME_BYTES:
-            raise AgentError(f"the agent's {OUTCOME_FILENAME} is {size} bytes, over the "
-                             f"{MAX_OUTCOME_BYTES}-byte ceiling")
-        with open(path, encoding="utf-8") as f:
-            raw = json.load(f)
-    except AgentError:
-        raise
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as ex:
-        raise AgentError(f"the agent's {OUTCOME_FILENAME} could not be read "
-                         f"({ex.__class__.__name__})") from ex
-    finally:
-        if delete:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-    return parse_meeting_outcome(raw)
 
 
 def read_outcome(worktree: str, *, delete: bool = True) -> Outcome:
@@ -822,12 +791,11 @@ def validate_skill(text: str, *, where: str) -> str:
     return text
 
 
-def read_skill(repo: str) -> str:
-    """The `librarian` skill's text, read out of the item's own WORKTREE, so the agent is briefed
-    with the version it works under. This reads the agent's SYSTEM PROMPT out of the repo it
-    operates on, held safe because the file is read as text, never loaded as configuration, AND
-    because the librarian cannot write `.claude/` at all."""
-    path = skill_path(repo)
+def _read_procedure(path: str, *, what: str, tail: str) -> str:
+    """One read of an operating procedure out of the item's own worktree — the size ceiling BEFORE
+    the bytes, then the content check. The two flows differ only in what the refusal calls the file
+    (`what`) and what it says the worker will not do without it (`tail`); the read itself, and the
+    `LibrarianConfigError` that says "the worker cannot run", are the same on both."""
     try:
         check_skill_size(os.path.getsize(path), path)
         with open(path, encoding="utf-8") as f:
@@ -836,10 +804,19 @@ def read_skill(repo: str) -> str:
         raise
     except (OSError, UnicodeDecodeError) as ex:
         raise LibrarianConfigError(
-            f"the librarian skill is missing or unreadable at {path} "
-            f"({ex.__class__.__name__}) — it is the agent's operating procedure and it will not "
-            f"file without it") from ex
+            f"{what} is missing or unreadable at {path} "
+            f"({ex.__class__.__name__}) — {tail}") from ex
     return validate_skill(text, where=path)
+
+
+def read_skill(repo: str) -> str:
+    """The `librarian` skill's text, read out of the item's own WORKTREE, so the agent is briefed
+    with the version it works under. This reads the agent's SYSTEM PROMPT out of the repo it
+    operates on, held safe because the file is read as text, never loaded as configuration, AND
+    because the librarian cannot write `.claude/` at all."""
+    return _read_procedure(
+        skill_path(repo), what="the librarian skill",
+        tail="it is the agent's operating procedure and it will not file without it")
 
 
 # ── the ordinary preamble, in four pieces because exactly ONE of them is per-backend ──────────
@@ -872,15 +849,20 @@ def build_filing_header(environment: str, *, override_note: str = "") -> str:
             + (override_note + "\n" if override_note else "") + ORDINARY_SKILL_SEPARATOR)
 
 
+def _compose_system_prompt(text: str, header: str, relpath: str) -> str:
+    """A caller's preamble plus a procedure's body. The YAML frontmatter is dropped — loader
+    metadata, and `allowed-tools` would be a second, unenforced tool list. `header` is REQUIRED of
+    both public callers because a default would brief one with another backend's environment.
+    `replace`, not `format`: `str.format` raises on any brace that is not `{relpath}`, so a
+    preamble containing a JSON example would take down the run at the last moment before the model
+    call."""
+    _, body = page_policy.split_frontmatter(text)
+    return header.replace("{relpath}", relpath) + body.strip() + "\n"
+
+
 def build_system_prompt(skill_text: str, *, header: str) -> str:
-    """The agent's system prompt: the caller's preamble plus the skill's body. The YAML
-    frontmatter is dropped — loader metadata, and `allowed-tools` would be a second, unenforced
-    tool list. `header` is REQUIRED because a default would brief a caller with another backend's
-    environment. `replace`, not `format`: `str.format` raises on any brace that is not
-    `{relpath}`, so a preamble containing a JSON example would take down the run at the last
-    moment before the model call."""
-    _, body = page_policy.split_frontmatter(skill_text)
-    return header.replace("{relpath}", SKILL_RELPATH) + body.strip() + "\n"
+    """The agent's system prompt: the caller's preamble plus the skill's body."""
+    return _compose_system_prompt(skill_text, header, SKILL_RELPATH)
 
 
 # A SIBLING system prompt: a meeting capture never sees the librarian skill's one-page procedure
@@ -918,10 +900,8 @@ def build_meeting_header(environment: str, *, override_note: str = "") -> str:
 
 
 def build_meeting_system_prompt(brief_text: str, *, header: str) -> str:
-    """`build_system_prompt` over the meeting brief instead of the librarian skill; `header` is
-    REQUIRED and it is `replace`, not `format`, for the same reasons stated there."""
-    _, body = page_policy.split_frontmatter(brief_text)
-    return header.replace("{relpath}", MEETING_BRIEF_RELPATH) + body.strip() + "\n"
+    """`build_system_prompt` over the meeting brief instead of the librarian skill."""
+    return _compose_system_prompt(brief_text, header, MEETING_BRIEF_RELPATH)
 
 
 # This builder's neutral default; a structured backend passes its own rather than being handed
@@ -972,19 +952,10 @@ def build_meeting_prompt(*, material: str, meeting_meta: dict, registry, source_
 def read_meeting_brief(repo: str) -> str:
     """The `meeting-distiller` brief's text — `read_skill`'s sibling, same validation. `repo` is
     the backend's own WORKTREE at the item's base commit, so this read IS a base-commit read."""
-    path = os.path.join(repo, *MEETING_BRIEF_RELPATH.split("/"))
-    try:
-        check_skill_size(os.path.getsize(path), path)
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
-    except LibrarianConfigError:
-        raise
-    except (OSError, UnicodeDecodeError) as ex:
-        raise LibrarianConfigError(
-            f"the meeting-distiller brief is missing or unreadable at {path} "
-            f"({ex.__class__.__name__}) — it is the meeting agent's operating procedure and it "
-            f"will not distil without it") from ex
-    return validate_skill(text, where=path)
+    return _read_procedure(
+        os.path.join(repo, *MEETING_BRIEF_RELPATH.split("/")),
+        what="the meeting-distiller brief",
+        tail="it is the meeting agent's operating procedure and it will not distil without it")
 
 
 def build_agent(settings) -> FilingAgent:

@@ -11,11 +11,20 @@ class BoltSlackGateway:
     def __init__(self, client) -> None:
         self._client = client   # a slack_sdk.web.async_client.AsyncWebClient
 
-    async def _call(self, method, **kwargs):
+    async def _call(self, method, *, tolerate: dict | None = None, **kwargs):
+        """`tolerate` maps a Slack ERROR CODE to the value that code should return instead of
+        raising — an honest negative (`users_not_found`) or an already-in-the-wanted-state
+        redelivery (`already_reacted`). Membership decides, never truthiness, so a tolerated code
+        whose value is `None` returns `None` rather than falling through to a raise. Every other
+        failure — the SDK's own or a timeout — still becomes this package's `SlackApiError`."""
         from slack_sdk.errors import SlackApiError as SdkSlackApiError
         try:
             return await method(**kwargs)
         except SdkSlackApiError as ex:
+            response = getattr(ex, "response", None)
+            code = response.get("error") if response is not None else None
+            if tolerate and code in tolerate:
+                return tolerate[code]
             raise SlackApiError(str(ex)) from ex
         except Exception as ex:  # noqa: BLE001 — a timeout/connection reset is an API failure too
             raise SlackApiError(f"{ex.__class__.__name__}: {ex}") from ex
@@ -55,44 +64,23 @@ class BoltSlackGateway:
         """`already_reacted` (an event redelivery reaches this) is Slack saying "already in the
         state we wanted" — translated to success; every OTHER failure still becomes
         `SlackApiError`."""
-        from slack_sdk.errors import SlackApiError as SdkSlackApiError
-        try:
-            return await self._client.reactions_add(channel=channel_id, timestamp=message_ts,
-                                                    name=name)
-        except SdkSlackApiError as ex:
-            if getattr(ex, "response", None) is not None and ex.response.get("error") == "already_reacted":
-                return {"ok": True}
-            raise SlackApiError(str(ex)) from ex
-        except Exception as ex:  # noqa: BLE001 — a timeout/connection reset is an API failure too
-            raise SlackApiError(f"{ex.__class__.__name__}: {ex}") from ex
+        return await self._call(self._client.reactions_add, channel=channel_id,
+                                timestamp=message_ts, name=name,
+                                tolerate={"already_reacted": {"ok": True}})
 
     async def reactions_remove(self, channel_id: str, message_ts: str, name: str) -> dict:
         """`no_reaction` (the reaction already gone — a previous cleanup, or a redelivery) is
         translated to success the same way `reactions_add` translates `already_reacted`."""
-        from slack_sdk.errors import SlackApiError as SdkSlackApiError
-        try:
-            return await self._client.reactions_remove(channel=channel_id, timestamp=message_ts,
-                                                       name=name)
-        except SdkSlackApiError as ex:
-            if getattr(ex, "response", None) is not None and ex.response.get("error") == "no_reaction":
-                return {"ok": True}
-            raise SlackApiError(str(ex)) from ex
-        except Exception as ex:  # noqa: BLE001 — a timeout/connection reset is an API failure too
-            raise SlackApiError(f"{ex.__class__.__name__}: {ex}") from ex
+        return await self._call(self._client.reactions_remove, channel=channel_id,
+                                timestamp=message_ts, name=name,
+                                tolerate={"no_reaction": {"ok": True}})
 
     async def users_lookup_by_email(self, email: str) -> dict | None:
         """`users_not_found` is Slack's honest "no workspace member has this email" — translated
         to `None`, the distinction `SlackGateway.users_lookup_by_email`'s contract requires; every
         OTHER SDK failure still becomes `SlackApiError`."""
-        from slack_sdk.errors import SlackApiError as SdkSlackApiError
-        try:
-            return await self._client.users_lookupByEmail(email=email)
-        except SdkSlackApiError as ex:
-            if getattr(ex, "response", None) is not None and ex.response.get("error") == "users_not_found":
-                return None
-            raise SlackApiError(str(ex)) from ex
-        except Exception as ex:  # noqa: BLE001 — a timeout/connection reset is an API failure too
-            raise SlackApiError(f"{ex.__class__.__name__}: {ex}") from ex
+        return await self._call(self._client.users_lookupByEmail, email=email,
+                                tolerate={"users_not_found": None})
 
     async def views_open(self, *, trigger_id: str, view: dict) -> dict:
         return await self._call(self._client.views_open, trigger_id=trigger_id, view=view)

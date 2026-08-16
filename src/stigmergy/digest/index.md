@@ -16,7 +16,7 @@ corpus health and corpus deltas. It owns no table — it reads `gardener_finding
 | Module | What it is |
 |---|---|
 | `cli.py` | `stigmergy-digest [--repo] [--channels] [--dsn] [--since] [--dry-run]` — one command. The only module here that imports `stigmergy.index.store`, `stigmergy.librarian.config` or `stigmergy.slack.bolt_gateway` |
-| `run.py` | `run_digest` — resolve the window, gather, build, post (or preview), record. Plus `parse_since`, `DigestResult`, the two job names |
+| `run.py` | `run_digest` — resolve the window, gather, build, post (or preview), record. Plus `parse_since`, `last_window_until` (the raw watermark, read by `admin`), `DigestResult`, the two job names |
 | `sections.py` | `gather_corpus_health` / `gather_corpus_deltas` (plain dicts), `_filed_page_paths` (capture-row -> every page it filed), `_visible_pages` (the ONE ACL seam) |
 | `render.py` | `build_body` — pure Slack-mrkdwn assembly from the section dicts. No DB, no clock |
 | `settings.py` | `DigestSettings.from_args` — `window_days`, `digest_channel_id`. Re-exports the channel/token env names from `gardener.settings`, the one funnel |
@@ -25,6 +25,9 @@ corpus health and corpus deltas. It owns no table — it reads `gardener_finding
 `cli.py` is not `run_digest`'s only caller: `stigmergy.admin.service` awaits it behind the
 console's preview and post buttons, reusing `DigestSettings.from_args` — a signature change lands
 in both places.
+
+`cli.py`'s `_connect`/`_gateway`/`_repo`/`main` are a deliberate twin of `gardener/cli.py` —
+change both or neither.
 
 ## Reuse
 
@@ -41,7 +44,9 @@ in both places.
 
 - Import edges are pinned (`tests/test_architecture.py`): never `stigmergy.views`, `.entities`,
   `.answer`, or `.librarian` beyond `config` (CLI only); `stigmergy.server` only through
-  `acl.visible` and the three named `review` symbols; no git plumbing, no `wiki/` path literal.
+  `acl.visible` and `errors.StartupError` — the governed-birth ledger is read through
+  `capture.decisions`, which sits below every door that writes it, never through the review lane;
+  no git plumbing, no `wiki/` path literal.
 - Never re-declare the channel/token env names — import them from `digest.settings`.
 - Never read the wall clock in `sections.py` or `render.py`; `run_digest` resolves `now` once.
 - Never move the dry-run marker lines into `build_body`'s returned string — they are `cli.py`'s,
@@ -58,8 +63,10 @@ in both places.
   window_days` (first run only).
 - `gather_corpus_health` returns one of three states (`never_run` / `stale` / `ok`, the last with
   `sweep_incomplete`); `gather_corpus_deltas` returns `pages_filed_count`/`pages_filed_titles`/
-  `entities_born_count` — an approval COUNT with no names, because not every mint has a ledger
-  row, and the copy says "approved" for that reason.
+  `entities_born_count` — an approval COUNT with no names: every minting door writes the
+  `review_decisions` row, but not all of them fill `extra`, so a list of names would read as
+  complete and would not be. The copy says "approved" for a second reason — the row records an
+  APPROVAL, and one can exist without a mint.
 - Post, then record — in that order: an interrupt between the two leaves a posted message with no
   watermark, a named risk both the interrupt copy and the `run_id is None` branch warn about.
 

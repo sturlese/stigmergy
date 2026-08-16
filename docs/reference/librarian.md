@@ -120,9 +120,10 @@ snapshot forever.
 gitleaks). `1` for a local error. `130` on Ctrl-C — except for `run`, which installs its own
 handlers and exits `0` after stopping cleanly, because supervisors' restart policies depend on that.
 
-Conventions are `stigmergy-queue`'s, imported rather than re-rendered: `capture.cli.depth_line` for
-the `queue: queued=3 · claimed=1` line, `capture.cli.format_ms` for every measured duration,
-`capture.cli.RECLAIM_NOW` for the recovery command.
+Conventions are `stigmergy-queue`'s, imported rather than re-rendered: they live in
+`capture.render` — `depth_line` for the `queue: queued=3 · claimed=1` line, `format_ms` for every
+measured duration, `RECLAIM_NOW` for the recovery command — and `capture.cli` re-exports them under
+the same names.
 
 ### `once`, and the preamble it prints first
 
@@ -783,7 +784,8 @@ refusal that somehow does is withheld rather than echoed.
 - `capture.queue.holds_lease` — ask "is this delivery still the live one" *before* an irreversible
   step. The fence refusing afterwards is no guarantee at all for a commit already on `main`.
 - `capture.queue.query_in_flight` / `filed_latencies_ms` — the two read surfaces `status` is built on.
-- `capture.cli.depth_line` / `format_ms` / `RECLAIM_NOW` — `stigmergy-queue`'s vocabulary, imported.
+- `capture.render.depth_line` / `format_ms` / `RECLAIM_NOW` — `stigmergy-queue`'s vocabulary,
+  imported (`capture.cli` re-exports the same names, which is how `cli.py` here takes them).
 - `report.py` — every sentence a person reads about a submission. The CLI never composes its own
   wording; `brain_submissions` and the terminal render the same fact set.
 - `latency.summarize` / `render` — pure, so the threshold behavior is testable with a list of floats.

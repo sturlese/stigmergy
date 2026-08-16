@@ -3,12 +3,15 @@ real Postgres. `$STIGMERGY_INDEX_DSN` is already pinned to the test database for
 (`tests/conftest.py::pytest_configure`), so no test here needs to pass `--dsn` explicitly. The
 `conn`/`repo` fixtures come from `tests/gardener/conftest.py`.
 """
+import ast
 import datetime
 import json
 import os
+import pathlib
 
 from pydantic_ai.exceptions import AgentRunError
 
+from stigmergy.digest import cli as digest_cli
 from stigmergy.gardener import cli, sweep
 from stigmergy.gardener.settings import SLACK_BOT_TOKEN_ENV
 from stigmergy.slack.bolt_gateway import BoltSlackGateway
@@ -70,6 +73,30 @@ def test_connect_ensures_every_schema_a_fresh_database_is_missing(conn, capsys, 
     with conn.cursor() as cur:
         cur.execute("SELECT to_regclass('review_decisions')")
         assert cur.fetchone()[0] == "review_decisions"
+
+
+# ── the twin both CLIs declare in prose (`gardener/cli.py::_connect`: "Same shape and order as
+# `digest/cli.py`", restated in both `index.md`s). Read off the AST rather than by running either
+# command, because the failure this guards is a schema added to ONE `_connect`: invisible against
+# every mature database, and an `UndefinedTable` the first time the sibling meets a fresh one. ────
+def _ensure_calls(module) -> set[str]:
+    """Every `ensure_*` function `module._connect` calls, by bare name — the two files import them
+    differently, so `capture_schema.ensure_x` and a plain `ensure_x` must count as one fact."""
+    tree = ast.parse(pathlib.Path(module.__file__).read_text(encoding="utf-8"))
+    connect = next(node for node in ast.walk(tree)
+                   if isinstance(node, ast.FunctionDef) and node.name == "_connect")
+    called = {call.func.attr if isinstance(call.func, ast.Attribute)
+              else getattr(call.func, "id", "")
+              for call in ast.walk(connect) if isinstance(call, ast.Call)}
+    return {name for name in called if name.startswith("ensure_")}
+
+
+def test_the_two_cli_connect_twins_ensure_the_same_schemas():
+    ensured = _ensure_calls(cli)
+    # Pinned before it is compared: two empty sets are equal, so an extractor that silently stopped
+    # seeing calls would otherwise read as agreement.
+    assert ensured == {"ensure_capture_schema", "ensure_decisions_schema", "ensure_gardener_schema"}
+    assert ensured == _ensure_calls(digest_cli)
 
 
 def test_connect_interrupted_exits_130_with_the_generic_message(capsys, monkeypatch):

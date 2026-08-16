@@ -247,7 +247,7 @@ def test_run_meeting_builds_its_agent_with_no_model_settings_at_all(tmp_path):
                                           backend="pydantic", model=ANTHROPIC_MODEL,
                                           prompt_cache="5m")
         deps = support.build_deps(env, settings)
-        agent = pydantic_backend.PydanticMeetingAgent(settings, model_factory=lambda: object())
+        agent = pydantic_backend.PydanticFilingAgent(settings, model_factory=lambda: object())
 
         with pytest.raises(AgentError):
             agent.run_meeting(worktree=env.repo, material="a transcript, padded past nothing",

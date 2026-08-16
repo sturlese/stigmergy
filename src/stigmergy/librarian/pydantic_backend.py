@@ -47,6 +47,21 @@ MAX_FAULT_MESSAGE_LEN = 200
 # captured material or PII verbatim. No fence-neutralize; a log is not a prompt.
 MAX_FAULT_LOG_LEN = 500
 
+
+def _log_fault(flow: str, ex: BaseException) -> None:
+    """What a fault actually said, in the operator's log. Only the exception's CLASS travels on the
+    wire — a provider error's message can carry the whole prompt back — so this line is the only
+    place the rest of it survives, and both halves are clamped for the same reason."""
+    log.warning("%s agent: %s: %s (cause=%s)", flow, ex.__class__.__name__,
+                textutil.one_line(str(ex), MAX_FAULT_LOG_LEN),
+                textutil.one_line(repr(ex.__cause__), MAX_FAULT_LOG_LEN))
+
+
+def _fault_line(ex: BaseException) -> str:
+    """The same message quoted back to the model in the corrective Finding: shorter, and
+    fence-neutralized because unlike the log line this one lands inside the next PROMPT."""
+    return textutil.one_line(textutil.neutralize_fence(str(ex)), MAX_FAULT_MESSAGE_LEN)
+
 # Read by the preflight that refuses a missing key BEFORE the first claim; an unknown prefix
 # simply gets no preflight.
 PROVIDER_KEY_ENV = {
@@ -102,6 +117,8 @@ def _needed(field: str, instead: str) -> str:
     `ValueError` back as the retry prompt, so this is the only text that can repair the
     account."""
     return f"`{field}` is required and came back empty. {instead}"
+
+
 class MeetingAnchoring(BaseModel):
     """One decision's own anchor. `kind` is `entity` (with `entities`) or `company` (with a written
     `reason`); the registry, not this schema, decides whether a name resolves."""
@@ -236,8 +253,7 @@ class OrdinaryFinding(BaseModel):
 
 # This docstring is the JSON-schema DESCRIPTION the structured model reads, not a note to a
 # reader here — which is why `names` has to be named in it, and why there is no longer a singular
-# field beside it to reach for. A field described nowhere is a field the model will not reach for,
-# and the whole of issue #32 was a model with nowhere to put a second name.
+# field beside it to reach for. A field described nowhere is a field the model will not reach for.
 class OrdinaryTriage(BaseModel):
     """Why the capture was parked, when `decision` is `triage`. For an `unresolved-entity` park,
     `names` carries every unresolved entity, each on its own — one name is a list of one. Never
@@ -250,24 +266,12 @@ class OrdinaryTriage(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _fold_a_singular_name_into_the_list(cls, data):
-        """Accept an inbound `name` and fold it into `names` — the same tolerance
-        `agent.parse_outcome` has always had on the file channel, brought to this road.
+        """The producer is a MODEL and pydantic DROPS unknown keys: a `name`-shaped account would
+        validate into an EMPTY `names`, be refused for "no `triage.names`", and burn the single
+        `OUTPUT_RETRIES` on a field-name mismatch.
 
-        The producer here is a MODEL, not a program. `name` is the spelling the world is full of,
-        the one an older brief used, and the one a model reaches for when a prompt is even slightly
-        stale — and pydantic DROPS an unknown keyword rather than raising. So without this, a
-        `name`-shaped account validates cleanly into an EMPTY `names`, is refused for "no
-        `triage.names`", and burns the single `OUTPUT_RETRIES` re-asking for a field the brief that
-        model was following never mentioned. The most expensive road, spent on a field-name
-        mismatch that carries no meaning either way.
-
-        INBOUND ONLY, and that is the whole design: no field is added, so `names` stays the one
-        thing anything downstream reads and the JSON schema still advertises exactly one place to
-        put a name. A second DECLARED field is how two spellings of one fact start disagreeing.
-
-        Never at the plural's expense: an account sending both keeps `names` untouched. `name` is
-        what a model reaches for when it has ONE thing to say, so a populated `names` beside it
-        means the model already found the field it was looking for.
+        INBOUND ONLY, and never at the plural's expense: no field is added, `names` stays the one
+        thing downstream reads, and an account sending both keeps `names` untouched.
         """
         if not isinstance(data, dict):
             return data
@@ -329,9 +333,9 @@ class FilingAccount(BaseModel):
                 "triage.kind",
                 f"Parking says WHY: one of {', '.join(agent_module.TRIAGE_KINDS)}."))
         # One table, one lookup, whichever SHAPE the required field has: an `unresolved-entity`
-        # park owes a `names` LIST (a capture can name more than one — issue #32 — and one name is
-        # a list of one, exactly as `MeetingAccount` has always required), an `unsupported-type`
-        # park owes a string. A list of blanks satisfies neither.
+        # park owes a `names` LIST (a capture can name more than one, and one name is a list of
+        # one, exactly as `MeetingAccount` requires), an `unsupported-type` park owes a string. A
+        # list of blanks satisfies neither.
         required = agent_module.TRIAGE_REQUIRED_FIELD[kind]
         value = getattr(self.triage, required, "")
         declared = ([v for v in value if (v or "").strip()] if isinstance(value, list)
@@ -817,22 +821,16 @@ class PydanticFilingAgent:
             # A SHAPE problem, so it travels as an `OutcomeShapeError` carrying a finding, like a
             # refused account from the file channel. Named in the Finding too, since a bare class
             # name is indistinguishable from every other UMB fault.
-            log.warning("filing agent: %s: %s (cause=%s)", ex.__class__.__name__,
-                       textutil.one_line(str(ex), MAX_FAULT_LOG_LEN),
-                       textutil.one_line(repr(ex.__cause__), MAX_FAULT_LOG_LEN))
+            _log_fault("filing", ex)
             run.cost_usd = self._fault_cost(usage, flow="filing")
-            fault = textutil.one_line(textutil.neutralize_fence(str(ex)), MAX_FAULT_MESSAGE_LEN)
+            fault = _fault_line(ex)
             raise priced(run, OutcomeShapeError([gates.Finding(
                 agent_module._OUTCOME_GATE, "framework-rejected",
                 f"the filing run ended badly ({ex.__class__.__name__}: {fault}): call the tools "
                 f"this run declares, with the arguments they declare, and write your account to "
                 f"{agent_module.OUTCOME_FILENAME} with `write_page`")])) from ex
         except Exception as ex:  # noqa: BLE001 — class name only: provider errors carry prompt text
-            # Class-only on the wire (a provider fault carries prompt text), so it is logged here
-            # or lost.
-            log.warning("filing agent: %s: %s (cause=%s)", ex.__class__.__name__,
-                       textutil.one_line(str(ex), MAX_FAULT_LOG_LEN),
-                       textutil.one_line(repr(ex.__cause__), MAX_FAULT_LOG_LEN))
+            _log_fault("filing", ex)
             run.cost_usd = self._fault_cost(usage, flow="filing")
             raise priced(run, AgentError(
                 f"the filing agent run failed ({ex.__class__.__name__})")) from ex
@@ -925,11 +923,9 @@ class PydanticFilingAgent:
         except UnexpectedModelBehavior as ex:
             # The framework exhausted its re-validations — a SHAPE problem, so it travels as an
             # `OutcomeShapeError`; a bare `AgentError` would finish the item with no brief.
-            log.warning("meeting agent: %s: %s (cause=%s)", ex.__class__.__name__,
-                       textutil.one_line(str(ex), MAX_FAULT_LOG_LEN),
-                       textutil.one_line(repr(ex.__cause__), MAX_FAULT_LOG_LEN))
+            _log_fault("meeting", ex)
             run.cost_usd = self._fault_cost(usage)
-            fault = textutil.one_line(textutil.neutralize_fence(str(ex)), MAX_FAULT_MESSAGE_LEN)
+            fault = _fault_line(ex)
             raise priced(run, OutcomeShapeError([gates.Finding(
                 # The file channel's gate name: one vocabulary for one class of problem.
                 agent_module._OUTCOME_GATE, "framework-rejected",
@@ -937,11 +933,7 @@ class PydanticFilingAgent:
                 f"{OUTPUT_RETRIES} re-validation attempt(s) ({ex.__class__.__name__}: {fault}); "
                 f"return every field the schema declares, in the shape the skill documents")])) from ex
         except Exception as ex:  # noqa: BLE001 — class name only: provider errors carry prompt text
-            # Class-only on the wire (a provider fault carries prompt text), so it is logged here
-            # or lost.
-            log.warning("meeting agent: %s: %s (cause=%s)", ex.__class__.__name__,
-                       textutil.one_line(str(ex), MAX_FAULT_LOG_LEN),
-                       textutil.one_line(repr(ex.__cause__), MAX_FAULT_LOG_LEN))
+            _log_fault("meeting", ex)
             run.cost_usd = self._fault_cost(usage)
             raise priced(run, AgentError(
                 f"the meeting agent run failed ({ex.__class__.__name__})")) from ex
@@ -992,7 +984,3 @@ class PydanticFilingAgent:
                  counts["input_tokens"], counts["cache_read_tokens"],
                  counts["cache_write_tokens"], counts["output_tokens"], cost, pricing.AS_OF)
         return cost
-
-
-# Compatibility alias; it goes when no module outside this file imports it.
-PydanticMeetingAgent = PydanticFilingAgent

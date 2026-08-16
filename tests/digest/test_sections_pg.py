@@ -9,7 +9,11 @@ severity-driven and generic, so they stay worth proving over the shape a check w
 """
 import datetime
 
+import pytest
+
 from stigmergy.digest import sections
+from stigmergy.gardener import notice
+from stigmergy.gardener import schema as gardener_schema
 from tests.digest import support
 
 UTC = datetime.UTC
@@ -250,6 +254,43 @@ def test_an_unlabelled_page_is_visible_regardless_of_audiences(conn, repo):
     deltas = sections.gather_corpus_deltas(conn, since=SINCE_7D, until=UNTIL_NOW, audiences=set())
 
     assert deltas["pages_filed_count"] == 1
+
+
+# ── the two fail-closed ACL seams, held to one rule ──────────────────────────────────────────────
+# Two packages resolve "which of these paths may this channel see" independently — this one for the
+# titles it prints, `gardener.notice` for the SLA wording it posts — and they broadcast to the SAME
+# channel. Neither may be provable only for itself: a path nothing indexed cannot be shown to be
+# visible, so both must omit it, and a label the audiences do not carry must exclude the page in
+# both. The pair is deliberate (each names the other in its own docstring) and this is where the
+# shared rule is stated once.
+def _digest_visible_paths(conn, paths, audiences):
+    return set(sections._visible_pages(conn, paths, audiences=audiences))
+
+
+def _notice_visible_paths(conn, paths, audiences):
+    findings = [{"check": "twin-probe", "severity": gardener_schema.SEVERITY_SLA, "subject": path,
+                 "detail": "d", "suggested_action": "a", "_notice_page_paths": [path]}
+                for path in paths]
+    return notice._visible_page_paths(conn, findings, audiences=audiences)
+
+
+@pytest.mark.parametrize("visible_paths", [_digest_visible_paths, _notice_visible_paths],
+                         ids=["digest.sections", "gardener.notice"])
+def test_both_broadcast_acl_seams_omit_an_unindexed_and_a_mislabelled_path(conn, repo,
+                                                                          visible_paths):
+    labelled = support.write_labelled_page(repo, "leadership/scope.md", title="Scope",
+                                           acl=["leadership"])
+    open_page = support.unlabelled_page(repo, "notes/open.md", title="Open")
+    support.rebuild_index(conn, repo)
+    never_indexed = "wiki/notes/never-indexed.md"
+
+    visible = visible_paths(conn, [labelled, open_page, never_indexed], {"finance"})
+
+    assert never_indexed not in visible
+    assert labelled not in visible
+    # The benign twin, in the same call: a seam that returned nothing at all would satisfy both
+    # assertions above and prove no scoping whatsoever.
+    assert open_page in visible
 
 
 # ── entities born — the governed-birth log ──────────────────────────────────────────────────────

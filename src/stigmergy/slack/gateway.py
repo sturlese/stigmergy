@@ -188,17 +188,17 @@ class FakeSlackGateway:
         self.opened_views: list[dict] = []
         self.fail_views_open_count = 0
 
-    def seed_email(self, email: str, user_id: str) -> None:
-        """The reverse of `seed_user`: a member findable by email; also seeds `users[user_id]` so
-        a subsequent `users_info` on the same id agrees."""
-        self.emails[email] = user_id
-        self.users.setdefault(user_id, email)
-
     # ── seeding helpers (tests set these up, then drive a handler) ───────────
     def seed_user(self, user_id: str, email: str | None, *, display_name: str = "") -> None:
         self.users[user_id] = email
         if display_name:
             self.display_names[user_id] = display_name
+
+    def seed_email(self, email: str, user_id: str) -> None:
+        """The reverse of `seed_user`: a member findable by email; also seeds `users[user_id]` so
+        a subsequent `users_info` on the same id agrees."""
+        self.emails[email] = user_id
+        self.users.setdefault(user_id, email)
 
     def seed_channel(self, channel_id: str, *, is_private: bool = False, is_im: bool = False,
                      is_mpim: bool = False, name: str = "") -> None:

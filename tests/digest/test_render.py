@@ -139,11 +139,11 @@ def test_health_the_benign_twin_a_completed_sweep_prints_no_note():
 
 
 # ── corpus deltas ───────────────────────────────────────────────────────────────────────────────
-# "N entities born" would overclaim: `entities_born_count` counts `review_decisions` APPROVALS,
-# and the mint itself is a separate, later `stigmergy-entities approve` git commit with no ledger
-# row (`sections.gather_corpus_deltas`'s own docstring), so an approved-never-minted proposal
-# would read as "born" forever. The wording is "N entity birth(s) approved" instead — the count is
-# the best available data either way; only the label changed.
+# "N entities born" would overclaim: `entities_born_count` counts `review_decisions` APPROVALS.
+# Every minting door writes that ledger, but they do not all fill `extra`
+# (`sections.gather_corpus_deltas`'s own docstring), so the row set is a count and never a list of
+# names. The wording is "N entity birth(s) approved" instead — the count is the best available
+# data either way; only the label changed.
 def test_deltas_populated():
     deltas = _deltas(pages_count=3, titles=["Q3 Pricing Floor", "Renewal Terms", "Beta Pilot"],
                      entities=1)

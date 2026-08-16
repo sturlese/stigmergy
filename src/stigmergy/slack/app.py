@@ -9,16 +9,15 @@ import asyncio
 import logging
 import re
 import sys
-import uuid
 
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
 from stigmergy.server.errors import StartupError, StigmergyServerError
 from stigmergy.server.ratelimit import RateLimiter
 from stigmergy.server.service import EmptyIndexError, evidence_plane, open_scoped_resources
 from stigmergy.slack import capture, doorbell, mention, poller, render, replies, review
-from stigmergy.slack.context import SlackContext
+from stigmergy.slack.context import SlackContext, short_ref
 from stigmergy.slack.gateway import SlackApiError
-from stigmergy.slack.identity import is_configured_workspace, is_ignorable_event, resolve_slack_identity
+from stigmergy.slack.identity import is_configured_workspace, is_ignorable_event
 from stigmergy.slack.render import SHOW_IT_HERE_ACTION_ID
 from stigmergy.slack.settings import SlackSettings, no_link_resolver
 from stigmergy.slack.store import ensure_write_path_schema
@@ -42,8 +41,6 @@ def build_context(settings: SlackSettings, *, gateway=None, conn=None) -> SlackC
         from stigmergy.slack.bolt_gateway import BoltSlackGateway
         gateway = BoltSlackGateway(AsyncWebClient(token=settings.bot_token))
 
-    # There is no browsable read surface for pages: every citation renders the "Show it here"
-    # affordance and no link. A future surface replaces this VALUE, never `render.py`'s contract.
     link_resolver = no_link_resolver
 
     return SlackContext(settings=settings, gateway=gateway, conn=conn, embedder=embedder,
@@ -65,11 +62,22 @@ def _event_team_id(event: dict, body: dict | None = None) -> str:
             or (body or {}).get("team_id") or "")
 
 
+def _interaction_actor(body: dict) -> tuple[str, str, str]:
+    """`(channel_id, user_id, event_team_id)` off an INTERACTION payload — a button click or a
+    `view_submission`. All three come from THIS interaction's own authoritative `body`, which is
+    Slack asserting who just acted and where; a modal's `private_metadata` carries WHAT the
+    decision is about and is never a source for WHO is making it. `team` is the interaction's own
+    workspace, never the installation's (see `_event_team_id`)."""
+    return ((body.get("channel") or {}).get("id", ""),
+            (body.get("user") or {}).get("id", ""),
+            (body.get("team") or {}).get("id", ""))
+
+
 def _log_listener_failure(listener_name: str) -> None:
     """The last-resort backstop every listener wraps its body in — the ack already happened, so an
     unexpected exception degrades to a logged incident with a correlation ref. Handlers' own
     guards cover every failure that can produce a user-facing reply."""
-    ref = uuid.uuid4().hex[:8]
+    ref = short_ref()
     log.error("slack: %s failed unexpectedly (ref=%s)", listener_name, ref, exc_info=True)
 
 
@@ -105,12 +113,6 @@ def build_bolt_app(ctx: SlackContext):
 
     app = AsyncApp(token=ctx.settings.bot_token)
 
-    async def _resolve(event_team_id: str, slack_user_id: str):
-        return await resolve_slack_identity(
-            ctx.gateway, ctx.cache, identities_path=ctx.settings.server.identities_path,
-            configured_team_id=ctx.settings.team_id, event_team_id=event_team_id,
-            slack_user_id=slack_user_id)
-
     @app.event("app_mention")
     async def on_app_mention(event, context, ack, body):
         await ack()
@@ -119,7 +121,8 @@ def build_bolt_app(ctx: SlackContext):
                 return
             team_id = _event_team_id(event, body)
             channel_id = event["channel"]
-            identity_result = await _resolve(team_id, event["user"])
+            identity_result = await ctx.resolve_slack_identity(event_team_id=team_id,
+                                                               slack_user_id=event["user"])
             await mention.handle_mention(
                 ctx, event_team_id=team_id, channel_id=channel_id,
                 thread_ts=event.get("thread_ts") or event["ts"],
@@ -145,7 +148,8 @@ def build_bolt_app(ctx: SlackContext):
             if _is_dm(channel_type=channel_type) and thread_ts is None:
                 # Any message in a DM with the bot is a question — treated exactly like a fresh
                 # mention, rooted in its own ts.
-                identity_result = await _resolve(team_id, event["user"])
+                identity_result = await ctx.resolve_slack_identity(event_team_id=team_id,
+                                                                   slack_user_id=event["user"])
                 await mention.handle_mention(
                     ctx, event_team_id=team_id, channel_id=channel_id, thread_ts=event["ts"],
                     is_dm=True, asker_slack_user_id=event["user"],
@@ -202,7 +206,8 @@ def build_bolt_app(ctx: SlackContext):
                 if reacted:
                     await capture.mark_in_progress(ctx.gateway, channel_id=channel_id,
                                                    message_ts=message_ts)
-                identity_result = await _resolve(team_id, slack_user_id)
+                identity_result = await ctx.resolve_slack_identity(
+                    event_team_id=team_id, slack_user_id=slack_user_id)
                 queued = await capture.handle_reaction_added(
                     ctx, reaction=event["reaction"], team_id=team_id, channel_id=channel_id,
                     message_ts=message_ts, slack_user_id=slack_user_id,
@@ -225,9 +230,7 @@ def build_bolt_app(ctx: SlackContext):
     async def on_show_it_here(ack, body, action):
         await ack()
         try:
-            channel_id = (body.get("channel") or {}).get("id", "")
-            user_id = (body.get("user") or {}).get("id", "")
-            event_team_id = (body.get("team") or {}).get("id", "")
+            channel_id, user_id, event_team_id = _interaction_actor(body)
             message = body.get("message") or {}
             thread_ts = message.get("thread_ts") or message.get("ts")
             is_dm = await _is_dm_channel(ctx, channel_id)
@@ -239,14 +242,13 @@ def build_bolt_app(ctx: SlackContext):
             _log_listener_failure("on_show_it_here")
 
     # Every button on a doorbell card (`review:<kind>:<verdict>` / `review-modal:<kind>:<verdict>`,
-    # `render.py`'s convention) — one regex matcher, since the set is named in exactly one place.
-    @app.action(re.compile(r"^(review|review-modal):"))
+    # `render.py`'s convention) — one regex matcher.
+    @app.action(re.compile("^(" + "|".join(
+        re.escape(p) for p in (render.DIRECT_ACTION_PREFIX, render.MODAL_ACTION_PREFIX)) + ")"))
     async def on_review_action(ack, body, action):
         await ack()
         try:
-            channel_id = (body.get("channel") or {}).get("id", "")
-            user_id = (body.get("user") or {}).get("id", "")
-            event_team_id = (body.get("team") or {}).get("id", "")
+            channel_id, user_id, event_team_id = _interaction_actor(body)
             trigger_id = body.get("trigger_id", "")
             await review.handle_block_action(
                 ctx, action_id=action.get("action_id", ""), value=action.get("value", ""),
@@ -262,8 +264,7 @@ def build_bolt_app(ctx: SlackContext):
             state_values = ((view or {}).get("state") or {}).get("values") or {}
             # WHO is submitting comes from this event's OWN authoritative `body` — never from the
             # modal's `private_metadata`, a value this package itself wrote when the modal opened.
-            user_id = (body.get("user") or {}).get("id", "")
-            event_team_id = (body.get("team") or {}).get("id", "")
+            _, user_id, event_team_id = _interaction_actor(body)
             await review.handle_note_modal_submission(
                 ctx, private_metadata=(view or {}).get("private_metadata", ""),
                 state_values=state_values, slack_user_id=user_id, event_team_id=event_team_id)
@@ -275,10 +276,7 @@ def build_bolt_app(ctx: SlackContext):
         await ack()
         try:
             state_values = ((view or {}).get("state") or {}).get("values") or {}
-            # Same rule as above: WHO submitted comes from this event's own authoritative `body`,
-            # never round-tripped through `private_metadata`.
-            user_id = (body.get("user") or {}).get("id", "")
-            event_team_id = (body.get("team") or {}).get("id", "")
+            _, user_id, event_team_id = _interaction_actor(body)
             await review.handle_entity_mint_modal_submission(
                 ctx, private_metadata=(view or {}).get("private_metadata", ""),
                 state_values=state_values, slack_user_id=user_id, event_team_id=event_team_id)

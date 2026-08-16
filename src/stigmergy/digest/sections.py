@@ -127,9 +127,8 @@ def _entities_born_count(conn, *, since, until) -> int:
 
 def gather_corpus_deltas(conn, *, since, until, audiences: set[str]) -> dict:
     """The section's two facts: pages filed (count + titles, ACL-scoped) and entities born — a
-    COUNT only. All three doors write the ledger now (issue #51), but they do not all fill `extra`
-    the same way, so naming entities would still read as a complete list and would not be one; an
-    honest count is what the data supports."""
+    COUNT only. Every door writes the ledger, but not all of them fill `extra`, so naming entities
+    would read as a complete list and would not be one."""
     pages = _pages_filed(conn, since=since, until=until, audiences=audiences)
     return {
         "pages_filed_count": pages["count"],

@@ -349,9 +349,9 @@ reads perfectly plausibly on its own.
   [`../../src/stigmergy/capture/index.md`](../../src/stigmergy/capture/index.md).
 - `librarian.processing.process_meeting_item` and its private helpers — the flow itself. See
   [`../../src/stigmergy/librarian/index.md`](../../src/stigmergy/librarian/index.md).
-- `librarian.agent.build_meeting_prompt` / `read_meeting_outcome` — the agent side: a different
+- `librarian.agent.build_meeting_prompt` / `parse_meeting_outcome` — the agent side: a different
   system prompt (the brief, not the librarian skill), no page-writing tool at all, and a different
-  outcome parse (`parse_meeting_outcome`, a page SET rather than one page). The single write an
+  outcome parse (a page SET rather than one page). The single write an
   agent is permitted on this flow is allowed by `confined_write`'s unconditional outcome-file
   exception, and code is the sole author of every page in the set. The backend holds no tool, so
   the no-page-writes property is structural rather than configured: one in-process call to a

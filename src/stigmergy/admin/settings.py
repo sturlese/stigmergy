@@ -5,6 +5,7 @@ Dockerfile `CMD`. `AdminSettings.from_env` is the one place the environment is c
 console is INERT until `$STIGMERGY_ADMIN_TOKEN_HASH` is set — `configured()` is what
 `routes.compose` checks before building a single route or running any DDL.
 """
+import os
 import re
 from dataclasses import dataclass
 
@@ -49,8 +50,6 @@ class AdminSettings:
     @classmethod
     def from_env(cls, env: dict | None = None) -> "AdminSettings":
         """`env` is injectable for tests; production passes nothing and reads `os.environ`."""
-        import os
-
         source = os.environ if env is None else env
         token_hash = (source.get(TOKEN_HASH_ENV) or "").strip().lower()
         if token_hash and not _SHA256_HEX.match(token_hash):

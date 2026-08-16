@@ -8,7 +8,7 @@
 the loop adds only when to stop. `status` writes nothing, including no DDL. Conventions are
 `stigmergy-queue`'s: exit 130 on Ctrl-C; `--json` emits the machine-readable value FIRST; the
 empty queue prints that tool's byte-identical sentence; the depth line and durations come from
-`capture.cli`, imported, never re-rendered; errors are local and specific.
+`capture.render`, imported, never re-rendered; errors are local and specific.
 
 **Exit 0 for every terminal state correctly reached** — `rejected`, `triage` and `failed` are
 the worker doing its job; non-zero is reserved for the TOOL failing to run. `run` is the one
@@ -25,7 +25,7 @@ import psycopg
 from stigmergy.capture import evidence as evidence_plane
 from stigmergy.capture import latency, schema
 from stigmergy.capture import queue as capture_queue
-from stigmergy.capture.cli import (  # imported, never retyped — see `_report_interrupt`, `_cmd_status`
+from stigmergy.capture.render import (  # imported, never retyped — see `_report_interrupt`, `_cmd_status`
     RECLAIM_NOW,
     depth_line,
     format_ms,
@@ -214,7 +214,7 @@ def _report_interrupt(args, settings) -> int:
 
     - **the duration is named**, from `settings` — the RESOLVED configuration, so a
       `--visibility-timeout` on this very command line is the number printed;
-    - **the recovery command is named**, from `capture.cli.RECLAIM_NOW` — imported rather than
+    - **the recovery command is named**, from `capture.render.RECLAIM_NOW` — imported rather than
       retyped, because two tools printing the same recovery advice must not disagree about it —
       with the caveat that makes it safe to follow: `--visibility-timeout 0` releases EVERY held
       claim, and a second worker mid-item would then double-file the capture;

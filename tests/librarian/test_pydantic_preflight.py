@@ -37,7 +37,7 @@ import pytest
 from stigmergy.librarian import agent as agent_module
 from stigmergy.librarian import config, pricing, pydantic_backend, worker
 from stigmergy.librarian.errors import LibrarianConfigError
-from stigmergy.librarian.pydantic_backend import PydanticMeetingAgent
+from stigmergy.librarian.pydantic_backend import PydanticFilingAgent
 from tests.librarian import support
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -504,7 +504,7 @@ def test_the_backend_object_still_refuses_to_be_built_around_a_model_nobody_pric
     _, deps = rig
 
     with pytest.raises(LibrarianConfigError) as exc_info:
-        PydanticMeetingAgent(_pydantic(deps, model="openai:gpt-9"))
+        PydanticFilingAgent(_pydantic(deps, model="openai:gpt-9"))
 
     message = str(exc_info.value)
     assert "openai:gpt-9" in message

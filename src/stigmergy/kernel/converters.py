@@ -29,6 +29,9 @@ def method_for_ext(ext: str) -> str:
     return EXT_METHOD.get(ext.lower(), "text")
 
 
+# `-layout` can hard-wrap a long token across a line break, so a credential can arrive
+# already split. `librarian.gates` scans adjacent line pairs rejoined to compensate —
+# changing this flag changes what that gate can see.
 def _pdftotext(path: str) -> str:
     r = subprocess.run(["pdftotext", "-layout", path, "-"], capture_output=True, text=True)
     if r.returncode != 0:

@@ -17,6 +17,8 @@ import json
 import os
 import posixpath
 
+from stigmergy.index.rank import chain_base
+
 FINDING_SEVERITIES = ("error", "warn")
 
 
@@ -39,8 +41,6 @@ def registry_ids(path: str | None) -> set[str] | None:
 
 def run_checks(conn, registry_path: str | None = None) -> list[dict]:
     """Every finding over the live `pages_index`, ordered errors-first then by check name."""
-    from stigmergy.index.rank import chain_base  # local: avoid import cycles at module load
-
     with conn.cursor() as cur:
         cur.execute("SELECT path, page_id, superseded_by, entity,"
                     "       embedding IS NULL AS no_embedding,"

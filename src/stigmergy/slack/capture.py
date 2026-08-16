@@ -25,7 +25,7 @@ PROGRESS_REACTION = "hourglass_flowing_sand"
 DONE_REACTION = "white_check_mark"
 
 
-def is_public_channel(channel_meta: dict) -> bool:
+def _is_public_channel(channel_meta: dict) -> bool:
     """Public-channel-only: neither private, nor a DM, nor a group DM."""
     return not (channel_meta.get("is_private") or channel_meta.get("is_im")
                or channel_meta.get("is_mpim"))
@@ -163,7 +163,7 @@ async def handle_reaction_added(ctx, *, reaction: str, team_id: str, channel_id:
             what=f"capture server-error ephemeral in {channel_id}")
         return False
 
-    if not is_public_channel(channel_meta):
+    if not _is_public_channel(channel_meta):
         await ctx.post_or_log(
             ctx.gateway.chat_post_ephemeral(channel_id, slack_user_id,
                                             blocks=render.render_private_channel_refusal(),

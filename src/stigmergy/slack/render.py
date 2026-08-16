@@ -99,16 +99,8 @@ def _show_it_here_button(path: str, asker_slack_user_id: str, mint_token) -> dic
     blocks share an explicit `block_id`, and a path-derived id collides the moment one page is
     cited twice; only `action_id` and the value token are ever read back."""
     token = mint_token(path, asker_slack_user_id)
-    return {
-        "type": "actions",
-        "block_id": f"show_it_here:{uuid.uuid4().hex}"[:255],
-        "elements": [{
-            "type": "button",
-            "text": {"type": "plain_text", "text": copy.SHOW_IT_HERE_LABEL},
-            "action_id": SHOW_IT_HERE_ACTION_ID,
-            "value": token,
-        }],
-    }
+    return _actions([_button(copy.SHOW_IT_HERE_LABEL, SHOW_IT_HERE_ACTION_ID, token)],
+                    block_id=f"show_it_here:{uuid.uuid4().hex}")
 
 
 def _citation_blocks(citations: list[dict], link_resolver, asker_slack_user_id: str,
@@ -258,11 +250,11 @@ REVIEW_NOTE_MODAL_BLOCK_ID = "note"
 REVIEW_NOTE_MODAL_ACTION_ID = "note_text"
 
 
-def direct_action_id(kind: str, verdict_token: str) -> str:
+def _direct_action_id(kind: str, verdict_token: str) -> str:
     return f"{DIRECT_ACTION_PREFIX}{kind}:{verdict_token}"
 
 
-def modal_action_id(kind: str, verdict_token: str) -> str:
+def _modal_action_id(kind: str, verdict_token: str) -> str:
     return f"{MODAL_ACTION_PREFIX}{kind}:{verdict_token}"
 
 
@@ -278,10 +270,6 @@ def _button(text: str, action_id: str, value: str, *, style: str | None = None) 
     return button
 
 
-def _link_button(text: str, url: str) -> dict:
-    return {"type": "button", "text": {"type": "plain_text", "text": text}, "url": url}
-
-
 def render_doorbell_parked_capture(*, item_id: str, summary: str) -> tuple[list[dict], str]:
     """`escape_mrkdwn` alone, never `_render_markdown`: `summary` derives from captured material,
     and `to_mrkdwn` would turn a `judged_type` of `[Approve now](https://attacker.example/steal)`
@@ -289,14 +277,14 @@ def render_doorbell_parked_capture(*, item_id: str, summary: str) -> tuple[list[
     text = copy.doorbell_triage(item_id=item_id, summary=summary)
     blocks = [_section(escape_mrkdwn(text)),
              _actions([
-                 _button(copy.REQUEUE_LABEL, direct_action_id(KIND_PARKED_CAPTURE, "requeue"),
+                 _button(copy.REQUEUE_LABEL, _direct_action_id(KIND_PARKED_CAPTURE, "requeue"),
                         item_id),
-                 _button(copy.RESOLVE_LABEL, modal_action_id(KIND_PARKED_CAPTURE, "resolve"),
+                 _button(copy.RESOLVE_LABEL, _modal_action_id(KIND_PARKED_CAPTURE, "resolve"),
                         item_id),
-                 _button(copy.REJECT_LABEL, modal_action_id(KIND_PARKED_CAPTURE, "reject"),
+                 _button(copy.REJECT_LABEL, _modal_action_id(KIND_PARKED_CAPTURE, "reject"),
                         item_id, style="danger"),
              ], block_id=f"review:{KIND_PARKED_CAPTURE}:{item_id}")]
-    return blocks, f"parked capture #{item_id} needs you"
+    return blocks, copy.doorbell_parked_capture_fallback(item_id=item_id)
 
 
 def render_doorbell_entity_proposal(*, item_id: str, submitter: str, name: str) -> tuple[list[dict], str]:
@@ -307,24 +295,21 @@ def render_doorbell_entity_proposal(*, item_id: str, submitter: str, name: str) 
     text = copy.doorbell_entity_proposal(item_id=item_id, submitter=submitter, name=name)
     blocks = [_section(escape_mrkdwn(text)),
              _actions([
-                 _button(copy.APPROVE_LABEL, modal_action_id(KIND_ENTITY_PROPOSAL, "approve"),
+                 _button(copy.APPROVE_LABEL, _modal_action_id(KIND_ENTITY_PROPOSAL, "approve"),
                         item_id, style="primary"),
-                 _button(copy.REJECT_LABEL, modal_action_id(KIND_ENTITY_PROPOSAL, "reject"),
+                 _button(copy.REJECT_LABEL, _modal_action_id(KIND_ENTITY_PROPOSAL, "reject"),
                         item_id, style="danger"),
              ], block_id=f"review:{KIND_ENTITY_PROPOSAL}:{item_id}")]
-    return blocks, f"entity proposal #{item_id} needs a decision"
+    return blocks, copy.doorbell_entity_proposal_fallback(item_id=item_id)
 
 
-def render_note_modal(*, trigger_id: str, private_metadata: str, title: str, label: str,
-                      placeholder: str = "", initial_context: str = "") -> dict:
+def render_note_modal(*, private_metadata: str, title: str, label: str,
+                      placeholder: str = "") -> dict:
     """One modal shape for every free-text collection this surface needs (a note, or a reason) —
     what is being recorded is a judgment, so the control is a composed sentence, never a checkbox.
     `private_metadata` carries which (item_kind, item_id, verdict) the submission is for — Slack's
     own round-trip mechanism, no server-side store needed."""
-    blocks = []
-    if initial_context:
-        blocks.append(_section(escape_mrkdwn(initial_context)))
-    blocks.append({
+    blocks = [{
         "type": "input",
         "block_id": REVIEW_NOTE_MODAL_BLOCK_ID,
         "label": {"type": "plain_text", "text": label},
@@ -333,7 +318,7 @@ def render_note_modal(*, trigger_id: str, private_metadata: str, title: str, lab
             "multiline": True,
             **({"placeholder": {"type": "plain_text", "text": placeholder}} if placeholder else {}),
         },
-    })
+    }]
     return {
         "type": "modal",
         "callback_id": REVIEW_NOTE_MODAL_CALLBACK_ID,
@@ -378,39 +363,13 @@ def _requeue_option() -> dict:
            "value": ENTITY_MINT_REQUEUE_OPTION_VALUE}
 
 
-def render_entity_mint_modal(*, trigger_id: str, private_metadata: str,
-                             unresolved_names: list[str] = (),
+def render_entity_mint_modal(*, private_metadata: str, unresolved_names: list[str] = (),
                              name_prefill: str = "") -> dict:
-    """The entity-proposal Approve modal: the metadata a mint needs, collected once.
-
-    `unresolved_names` is the proposal's own unresolved names (`situations.subjects_of`, NOT the
-    joined `subject_of` display string), and `name_prefill` is the value the review item already
-    carries as `mint_name_prefill` — the ONE decision, taken in `entities.situations` and read by
-    both mint doors. Submitting this modal MINTS (one entity, one signed commit), so this function
-    does not re-decide when a default is safe: it prefills what it was handed, and shows the names
-    exactly when it was handed nothing and names exist. This module may not import `entities`
-    (`tests/test_architecture.py`), which is why the decided value travels in the item dict.
-
-    Handed a prefill that contradicts `unresolved_names`, it obeys the prefill: there is no count
-    left here to consult. `""` is not "no decision supplied" — it is the decision's own answer for
-    "no default can be right" (several unresolved names, or none), which is why it is the default
-    for a bare call too.
-
-    What the shared decision guarantees is that this door and the console's Approve form offer a
-    default in the same cases and name the same name. Not the same bytes: this modal renders what
-    the item carries, while the console strips control characters out of everything it renders, so
-    a ragged name still reaches the two forms differently. It can no longer MINT differently in
-    silence — `entities.birth` refuses C0/C1 for every door — so accepting a ragged default here
-    costs a refusal naming the code point, not a garbled entity.
-
-    `entity_type` is a `static_select` over the closed list, so a submission can never carry a
-    type `entities.mint` would refuse. `aliases` is ONE comma-separated field
-    (`server.review._alias_list` splits it); `role` is one short field; both optional. `requeue`
-    is PRE-CHECKED — approve-then-requeue is the ordinary flow — and its block is `optional: True`
-    so an unchecked submit is valid Slack input. `entity_id` is deliberately NOT a field: the
-    server prefills it from `name`'s own slug, and a steward who needs a different one uses
-    `stigmergy-entities`/MCP, where `birth.prepare` runs a real collision check this form
-    cannot."""
+    """The entity-proposal Approve modal. Obeys `name_prefill` rather than counting: an empty
+    prefill with `unresolved_names` non-empty IS the several-names case, so the names are listed
+    and the field left empty. The decision lives in `entities.situations.mint_name_prefill`,
+    which this module may not import — the value travels in the item dict. `entity_id` is
+    deliberately not a field: only `birth.prepare` can run a real collision check."""
     names = [str(n) for n in (unresolved_names or []) if str(n).strip()]
     proposed_name = str(name_prefill or "")
     name_element = {"type": "plain_text_input", "action_id": ENTITY_MINT_NAME_ACTION_ID,

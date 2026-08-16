@@ -248,6 +248,24 @@ def test_list_prints_the_situation_and_the_subject_for_each_row(monkeypatch):
     assert "#42" in out and "Jordan Reyes" in out
 
 
+def test_list_clips_and_sanitizes_the_subject_the_way_show_already_did(monkeypatch):
+    """`_cmd_list` used to print `row["subject"]` RAW while `_cmd_show` put the same value through
+    `_clean` — so a subject carrying ANSI escapes and hundreds of characters of captured material
+    reached the terminal unsanitized and unclipped, on the screen a steward reads FIRST."""
+    hostile = "Acme \x1b[31mCorp\x07 " + "padding " * 80
+    rows = [{**_unresolved_row(hostile), "id": 41}]
+    monkeypatch.setattr(situations, "list_pending_situations", lambda conn, limit: rows)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        cli._cmd_list(None, Args(limit=50))
+    out = buf.getvalue()
+    cleaned = cli._clean(hostile, cli.MAX_SUBJECT_CHARS)
+    assert len(cleaned) < len(hostile), "the fixture must actually exceed the clip"
+    assert hostile not in out                              # never the raw bytes
+    assert "\x1b" not in out and "\x07" not in out         # control characters stripped
+    assert cleaned in out                                  # `_cmd_show`'s own rendering
+
+
 def test_list_says_so_plainly_when_nothing_is_parked(monkeypatch):
     monkeypatch.setattr(situations, "list_pending_situations", lambda conn, limit: [])
     buf = io.StringIO()

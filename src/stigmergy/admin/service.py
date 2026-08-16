@@ -40,7 +40,6 @@ from stigmergy.server.webhook import JOB_NAME as WEBHOOK_JOB
 log = logging.getLogger(__name__)
 
 PURGE_JOB, PURGE_DRY_RUN_JOB = "capture-purge", "capture-purge-dry-run"
-DIGEST_JOB, DIGEST_DRY_RUN_JOB = "digest", "digest-dry-run"
 
 # The crons tab's table: file, title, schedule, and WHERE the database truth for "did it run"
 # lives — `job_runs` for the two that write one, `index_meta.built_at` for the rebuild, which
@@ -159,13 +158,13 @@ class AdminService:
         except ValueError as ex:   # unknown status — the library's own sentence names the vocabulary
             raise AdminBadRequest(str(ex)) from ex
         return {"counts": queue.counts_by_status(self._conn),
-                "submissions": [self._listed(row) for row in rows]}
+                "submissions": [self._with_reply(row) for row in rows]}
 
     def queue_show(self, submission_id: int) -> dict:
         trace = queue.get_submission_trace(self._conn, submission_id)
         if trace is None:
             raise AdminNotFound(f"no submission {submission_id}")
-        return self._traced(trace)
+        return self._with_reply(trace)
 
     def queue_requeue(self, submission_id: int, *, actor: str, note: str = "") -> dict:
         return self._mutate("queue.requeue", actor, {"id": submission_id},
@@ -188,8 +187,7 @@ class AdminService:
     def queue_reject(self, submission_id: int, *, actor: str, reason: str) -> dict:
         # A rejected entity situation is a GOVERNANCE decision, so it also writes
         # `review_decisions` — the same ledger MCP and Slack write — or "who decided this
-        # identity" would answer from different tables per verdict. The Entities tab routes its
-        # Reject here rather than growing a second button.
+        # identity" would answer from different tables per verdict.
         situation = situations.get_situation(self._conn, submission_id)
         is_entity_proposal = bool(situation and situations.classify(situation))
         result = self._mutate("queue.reject", actor, {"id": submission_id},
@@ -201,8 +199,7 @@ class AdminService:
                 verdict="reject", actor=actor or self._admin.actor, notes=reason)
         return result
 
-    def queue_reclaim(self, *, actor: str, visibility_timeout_s: int | None = None,
-                      max_attempts: int = WORKER_MAX_ATTEMPTS) -> dict:
+    def queue_reclaim(self, *, actor: str, visibility_timeout_s: int | None = None) -> dict:
         # The WORKER's lease, never the queue CLI's shorter one: an unqualified Reclaim means
         # "recover whatever the worker abandoned", and the meter beside this button renders the
         # same number. The clamp wraps BOTH branches — the default carries operator-controlled
@@ -213,7 +210,7 @@ class AdminService:
         return self._mutate("queue.reclaim", actor, {"visibility_timeout_s": timeout},
                             lambda by: queue.release_expired(
                                 self._conn, visibility_timeout_s=timeout,
-                                max_attempts=max_attempts))
+                                max_attempts=WORKER_MAX_ATTEMPTS))
 
     def queue_purge(self, *, actor: str, older_than_days: int = retention.DEFAULT_RETENTION_DAYS,
                     dry_run: bool = False) -> dict:
@@ -237,7 +234,8 @@ class AdminService:
     def digest_state(self) -> dict:
         return {"pieces": self._digest_pieces(),
                 "last_window_until": self._digest_watermark(),
-                "history": self._job_runs((DIGEST_JOB, DIGEST_DRY_RUN_JOB), limit=10)}
+                "history": self._job_runs((digest_run.JOB_NAME, digest_run.JOB_NAME_DRY_RUN),
+                                          limit=10)}
 
     async def digest_preview(self) -> dict:
         result = await digest_run.run_digest(
@@ -292,9 +290,9 @@ class AdminService:
                 "warnings": sum(1 for f in findings if f["severity"] == "warn")}
 
     # ── entity situations (read, and a real Approve — ADR 030) ────────────────────────────────
-    def entities_list(self, *, limit: int = situations.DEFAULT_LIST_LIMIT) -> list[dict]:
-        return [self._situation(row) for row in
-                situations.list_pending_situations(self._conn, limit=limit)]
+    def entities_list(self) -> list[dict]:
+        return [self._situation(row) for row in situations.list_pending_situations(
+            self._conn, limit=situations.DEFAULT_LIST_LIMIT)]
 
     def entities_show(self, submission_id: int) -> dict:
         row = situations.get_situation(self._conn, submission_id)
@@ -305,34 +303,13 @@ class AdminService:
     def entity_approve(self, situation_id: int, *, actor: str, name: str, entity_type: str,
                        entity_id: str = "", aliases: str = "", role: str = "",
                        requeue: bool = True) -> dict:
-        """Mint the entity this situation names, through the same server-driven door the review
-        lane's `review_decide` walks — literally the same function, `server.review.
-        mint_and_record_approval` (mint -> `review_decisions` row -> requeue strictly after the
-        push), which reaches `entities.remote.mint_via_clone` -> `entities.mint.mint`
-        (ADR 030 D3/D4). The CLI reaches `entities.mint.mint` too, but from the steward's OWN
-        clone — `remote.py` is the throwaway-clone half only, and the shared seam is `mint.mint`,
-        one function below both. The shared sequence is entered directly rather than through
-        `review_decide` itself: the console mints under the admin token with `actor` as
-        ATTRIBUTION, the same trust model as every other console mutation and as the CLI it
-        replaces (D2). `review_decide`'s steward check and self-approval refusal are for a
-        RESOLVED identity (a bearer token, a Slack profile) and are deliberately not reached from
-        here — enforcing them against a free-text `actor` field would fake a second-human rule
-        this one shared credential cannot actually back. The asymmetry is stated, not hidden: this
-        is the same lane the console's Queue tab already writes through (`_mutate`), not a weaker
-        copy of MCP/Slack's.
+        """Mint the situation's entity through `server.review.mint_and_record_approval` (ADR 030) —
+        the same sequence the review lane runs.
 
-        Records TWO ledgers, like the other two doors: `admin_actions` (via `_mutate`, this
-        package's own bookkeeping, actor-attributed) and `review_decisions` (the append-only
-        governance record, written inside the shared sequence rather than re-implemented, so the
-        ledger never drifts between hand-written INSERTs on three different doors). This door
-        passes no `notes` — the form has no note field — so the row's note is `''`.
-
-        `name`/`entity_type` are validated — and the situation itself confirmed still pending —
-        before anything is attempted. `entity_id` defaults to `name`'s slug
-        (`generator.canonical_id_for`, the same default `review_decide` and the CLI's own `--id`
-        reuse) and is deliberately not its own form field: "one less field to mistype" (ADR 030
-        D5), the same call `slack.render`'s entity-mint modal already makes.
-        """
+        Order is load-bearing: name/type validation, then `require_situation`, then the shared
+        sequence. Nothing is caught inside `_do`, so `_mutate` records the library's own class name
+        before `EntityError` becomes `AdminRefused`. `review_decide`'s steward check is deliberately
+        not reached: it is for a resolved identity, and `actor` here is free text."""
         clean_name = " ".join(str(name or "").split())
         clean_type = str(entity_type or "").strip().lower()
         missing = [field for field, value in (("name", clean_name), ("entity_type", clean_type))
@@ -367,14 +344,9 @@ class AdminService:
         try:
             return self._mutate("entities.approve", actor, args, _do)
         except EntityError as ex:
-            # `entities.errors.EntityError` (a collision, drift, a missing template, a secret in
-            # the role/aliases text, a lost push race, no App credential/repo URL configured, or
-            # `require_situation`'s own three refusals) — this package's own domain refusal, the
-            # library's sentence carried verbatim, same posture as every other `AdminRefused`.
-            # Caught HERE, outside `_mutate`, rather than inside `_do`: `_mutate` already recorded
-            # `admin_actions` with the ORIGINAL exception's class name (its own `except Exception`
-            # branch) before re-raising, so converting a second time would only rename what the
-            # bookkeeping row already captured precisely.
+            # Caught HERE, outside `_mutate`: `_mutate` has already recorded admin_actions with the
+            # ORIGINAL class name, so converting inside `_do` would rename what the row already
+            # captured.
             raise AdminRefused(str(ex)) from ex
 
     # ── activity ──────────────────────────────────────────────────────────────────────────────
@@ -499,11 +471,7 @@ class AdminService:
                 os.path.exists(path)}
 
     def _digest_watermark(self) -> str | None:
-        with self._conn.cursor() as cur:
-            cur.execute("SELECT stats ->> 'until' FROM job_runs WHERE job = %s AND status = 'ok' "
-                        "ORDER BY started_at DESC LIMIT 1", (DIGEST_JOB,))
-            row = cur.fetchone()
-        return row[0] if row else None
+        return digest_run.last_window_until(self._conn)
 
     def _truth_jobs(self, workflow: dict) -> tuple[str, ...]:
         job = workflow["truth"].split(":", 1)[1]
@@ -582,14 +550,10 @@ class AdminService:
                 "suggested_action": _clean(finding["suggested_action"]),
                 "created_at": _iso(finding.get("created_at"))}
 
-    def _listed(self, row: dict) -> dict:
+    def _with_reply(self, row: dict) -> dict:
+        """A sanitized queue row plus the one field the list and the trace both owe a parked
+        submission: the exact call that answers its question (`capture.schema.reply_invocation`)."""
         shaped = self._traced_fields(row)
-        if row["status"] == capture_schema.NEEDS_INPUT:
-            shaped["reply_invocation"] = capture_schema.reply_invocation(row["id"])
-        return shaped
-
-    def _traced(self, trace: dict) -> dict:
-        shaped = self._traced_fields(trace)
         if shaped.get("status") == capture_schema.NEEDS_INPUT:
             shaped["reply_invocation"] = capture_schema.reply_invocation(shaped["id"])
         return shaped

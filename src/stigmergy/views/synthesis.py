@@ -6,7 +6,7 @@ on the page rather than letting silence read as a check. The one road to a page 
 a synthesis is `UsageLimitExceeded` against `VIEW_LIMITS`.
 """
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 from pydantic_ai import RunContext
@@ -39,14 +39,6 @@ class ViewContext:
     repo: str
     members: list[Member]
     page_reads: int = 0
-    evidence: list = field(default_factory=list)
-
-    def record(self, text: str) -> str:
-        self.evidence.append(text)
-        return text
-
-    def evidence_text(self) -> str:
-        return "\n".join(self.evidence)
 
 
 def read_page_impl(ctx: ViewContext, path: str) -> str:
@@ -62,7 +54,7 @@ def read_page_impl(ctx: ViewContext, path: str) -> str:
         return f"page file missing: {path}"
     # `stigmergy.text.fence` neutralizes an in-band fence token — a body carrying the literal
     # closing delimiter could otherwise close the fence early and be read as instructions.
-    return ctx.record(f"== {path} ==\n{fence(body[:PAGE_EXCERPT])}")
+    return f"== {path} ==\n{fence(body[:PAGE_EXCERPT])}"
 
 
 VIEW_SYS = """You write the SYNTHESIS section of a company knowledge-base view for one

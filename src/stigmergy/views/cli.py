@@ -27,8 +27,6 @@ EXIT_REFUSED = 1
 EXIT_CANNOT_RUN = 2
 EXIT_INTERRUPTED = 130
 
-REGISTRY_RELPATH = "ops/entity-registry.json"
-
 
 def _repo(args) -> str:
     repo = args.repo or os.environ.get(librarian_config.REPO_ENV) or librarian_config.REPO_DEFAULT
@@ -43,7 +41,7 @@ def _repo(args) -> str:
 
 
 def _registry(repo: str):
-    return load_registry(os.path.join(repo, *REGISTRY_RELPATH.split("/")))
+    return load_registry(os.path.join(repo, *librarian_config.REGISTRY_RELPATH.split("/")))
 
 
 def _connect(args):
@@ -58,6 +56,26 @@ def _who(entity_id: str, name: str) -> str:
 WITHHELD_SUMMARY = "synthesis withheld (ran out of budget before a draft was ready)"
 
 
+def _timeline_phrase(o: regenerate.RegenOutcome) -> str:
+    """The capped-timeline note, or `""` when nothing was capped — one sentence for both the batch
+    line and the single-entity report, which must not drift into two."""
+    if o.timeline_total <= o.timeline_shown:
+        return ""
+    return (f"timeline showing the {o.timeline_shown} most recent "
+            f"({o.timeline_total - o.timeline_shown} older not shown)")
+
+
+def _acl_note(o: regenerate.RegenOutcome) -> str:
+    """The view's audience, or `""` when it carries no ACL. `acl: []` is a DELIBERATE empty
+    audience, not an absent one, so it gets its own sentence rather than the listing."""
+    if o.acl is not None and len(o.acl) == 0:
+        return ("  acl: [] — its members' audiences have nothing in common, so this view is "
+               "visible to unrestricted clients only, nobody scoped")
+    if o.acl:
+        return f"  acl: [{', '.join(o.acl)}]"
+    return ""
+
+
 def _outcome_line(o: regenerate.RegenOutcome) -> str:
     who = _who(o.entity_id, o.entity_name)
     if o.action == "unchanged":
@@ -65,17 +83,10 @@ def _outcome_line(o: regenerate.RegenOutcome) -> str:
     if o.action == "removed":
         return f"  {who}  no anchored pages remain — view removed — committed {o.commit[:12]}"
     if o.action == "written":
-        shown = (f"{o.member_count} page(s), timeline showing the {o.timeline_shown} most recent "
-                f"({o.timeline_total - o.timeline_shown} older not shown)"
-                if o.timeline_total > o.timeline_shown else f"{o.member_count} page(s)")
+        phrase = _timeline_phrase(o)
+        shown = f"{o.member_count} page(s), {phrase}" if phrase else f"{o.member_count} page(s)"
         tail = WITHHELD_SUMMARY if not o.synthesis_shipped else "synthesis written"
-        acl_note = ""
-        if o.acl is not None and len(o.acl) == 0:
-            acl_note = ("  acl: [] — its members' audiences have nothing in common, so this "
-                       "view is visible to unrestricted clients only, nobody scoped")
-        elif o.acl:
-            acl_note = f"  acl: [{', '.join(o.acl)}]"
-        return f"  {who}  {shown} — {tail} — committed {o.commit[:12]}{acl_note}"
+        return f"  {who}  {shown} — {tail} — committed {o.commit[:12]}{_acl_note(o)}"
     return f"  {who}  refused: {o.message}"
 
 
@@ -98,7 +109,7 @@ def _cmd_regenerate(conn, args) -> int:
                  else regenerate.list_stale_entities(repo) if args.stale
                  else regenerate.list_all_anchored_entities(repo))
     checked_total = (len(regenerate.existing_view_ids(repo)) if args.stale
-                    else len(regenerate.list_all_anchored_entities(repo)))
+                    else len(entity_ids))
 
     result = asyncio.run(regenerate.run(repo, conn, entity_ids, registry=registry,
                                         branch=args.branch, force=args.force))
@@ -114,7 +125,7 @@ def _report_single(o: regenerate.RegenOutcome, args) -> int:
     elif o.action == "refused-unknown-entity":
         print(f'stigmergy-views: refusing to regenerate — "{o.entity_id}" is not a registered '
              f"entity. Check the id (`stigmergy-entities list` shows what's parked; the registry "
-             f"itself is `ops/entity-registry.json` in the knowledge repo), or mint it first with "
+             f"itself is `{librarian_config.REGISTRY_RELPATH}` in the knowledge repo), or mint it first with "
              f"`stigmergy-entities create`/`approve` if it should exist.", file=sys.stderr)
     elif o.action == "refused-no-members":
         print(f"stigmergy-views: refusing to regenerate {_who(o.entity_id, o.entity_name)} — "
@@ -132,9 +143,7 @@ def _report_single(o: regenerate.RegenOutcome, args) -> int:
              f"there is nothing left to summarize.")
         print(f"  committed {o.commit[:12]} (steward: App bot), pushed to {args.branch}")
     else:
-        shown = (f"timeline showing the {o.timeline_shown} most recent "
-                f"({o.timeline_total - o.timeline_shown} older not shown)"
-                if o.timeline_total > o.timeline_shown else "")
+        shown = _timeline_phrase(o)
         print(f"regenerated {o.path} — {o.member_count} page(s) anchored"
              + (f", {shown}" if shown else ""))
         if not o.synthesis_shipped:
@@ -142,11 +151,9 @@ def _report_single(o: regenerate.RegenOutcome, args) -> int:
                  "before a draft was ready; the page ships with its skeleton only (timeline, "
                  "backlinks — both deterministic and unaffected). Full explanation on the page "
                  "itself.")
-        if o.acl is not None and len(o.acl) == 0:
-            print("  acl: [] — its members' audiences have nothing in common, so this view is "
-                 "visible to unrestricted clients only, nobody scoped")
-        elif o.acl:
-            print(f"  acl: [{', '.join(o.acl)}]")
+        acl_note = _acl_note(o)
+        if acl_note:
+            print(acl_note)
         print(f"  committed {o.commit[:12]} (steward: App bot), pushed to {args.branch}")
     return EXIT_REFUSED if o.action.startswith("refused") else 0
 

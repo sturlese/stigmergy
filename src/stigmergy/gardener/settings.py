@@ -48,7 +48,14 @@ DEFAULT_SWEEP_SAMPLE = 10
 SLACK_BOT_TOKEN_ENV = "SLACK_BOT_TOKEN"
 
 
-def _int_setting(env_name: str, default: int) -> int:
+# What a zero or negative value would do to THIS package's arithmetic. `digest.settings` shares the
+# validator and passes its own, because one sentence general enough for both would say nothing an
+# operator could act on.
+_POSITIVE_COUNT_WHY = ("a zero or negative day/window count makes every page/filing instantly past "
+                       "threshold.")
+
+
+def int_setting(env_name: str, default: int, *, why: str = _POSITIVE_COUNT_WHY) -> int:
     raw = os.environ.get(env_name)
     if raw is None or raw == "":
         return default
@@ -60,8 +67,7 @@ def _int_setting(env_name: str, default: int) -> int:
             f"({default}) or set it to a positive whole number.") from None
     if value <= 0:
         raise StartupError(
-            f"${env_name}={value} must be a positive integer — a zero or negative day/window "
-            f"count makes every page/filing instantly past threshold. Unset it to use the "
+            f"${env_name}={value} must be a positive integer — {why} Unset it to use the "
             f"default ({default}) or set it to a positive integer.")
     return value
 
@@ -101,14 +107,14 @@ class GardenerSettings:
         """`args` is accepted, not consulted — env-tunable only; kept for the convention's
         shape."""
         return cls(
-            aging_seed_days=_int_setting(AGING_SEED_DAYS_ENV, DEFAULT_AGING_SEED_DAYS),
-            concentration_window=_int_setting(CONCENTRATION_WINDOW_ENV,
+            aging_seed_days=int_setting(AGING_SEED_DAYS_ENV, DEFAULT_AGING_SEED_DAYS),
+            concentration_window=int_setting(CONCENTRATION_WINDOW_ENV,
                                               DEFAULT_CONCENTRATION_WINDOW),
             concentration_share=_share_setting(CONCENTRATION_SHARE_ENV,
                                                DEFAULT_CONCENTRATION_SHARE),
-            company_window=_int_setting(COMPANY_WINDOW_ENV, DEFAULT_COMPANY_WINDOW),
+            company_window=int_setting(COMPANY_WINDOW_ENV, DEFAULT_COMPANY_WINDOW),
             company_share=_share_setting(COMPANY_SHARE_ENV, DEFAULT_COMPANY_SHARE),
             digest_channel_id=os.environ.get(DIGEST_CHANNEL_ID_ENV, ""),
             model=os.environ.get(MODEL_ENV) or DEFAULT_GARDENER_MODEL,
-            sweep_sample=_int_setting(SWEEP_SAMPLE_ENV, DEFAULT_SWEEP_SAMPLE),
+            sweep_sample=int_setting(SWEEP_SAMPLE_ENV, DEFAULT_SWEEP_SAMPLE),
         )

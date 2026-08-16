@@ -21,8 +21,9 @@ class Settings:
     identities_path: str = ""          # the versioned identities file
     # `ops/entity-registry.json`, read-only. An EXPLICIT `--entity-registry` path wins over the
     # `--repo` convention (the deployed server passes no `--repo` at all, so derivation alone
-    # would leave this permanently empty in production). Baked at server startup: base-commit
-    # semantics, never a live re-read of a working tree.
+    # would leave this permanently empty in production). The PATH is resolved once at startup; the
+    # file itself is read per call, so a deployment that must not track working-tree edits points
+    # this at a baked artifact.
     entity_registry_path: str = ""
     # A local checkout of the knowledge repo, fetchable from `origin` — only `review_decide`'s
     # steward resolution needs it; everything else works with it empty.
@@ -53,12 +54,10 @@ class Settings:
         identities_path = args.identities or identity.default_path(repo)
         entity_registry_path = (getattr(args, "entity_registry", None)
                                or entity_aliases.default_path(repo))
-        knowledge_repo = (getattr(args, "knowledge_repo", None)
-                         or os.environ.get("STIGMERGY_KNOWLEDGE_REPO") or repo or "")
+        knowledge_repo = os.environ.get("STIGMERGY_KNOWLEDGE_REPO") or repo or ""
         stewards_path = (getattr(args, "stewards", None)
                         or os.environ.get("STIGMERGY_STEWARDS_PATH") or "")
-        librarian_repo_url = (getattr(args, "librarian_repo_url", None)
-                             or os.environ.get(LIBRARIAN_REPO_URL_ENV, ""))
+        librarian_repo_url = os.environ.get(LIBRARIAN_REPO_URL_ENV, "")
 
         return cls(
             identity=args.identity or os.environ.get("STIGMERGY_IDENTITY"),

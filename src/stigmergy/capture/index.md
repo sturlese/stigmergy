@@ -27,7 +27,8 @@ capture's journey produces; it never decides what the material MEANS — that is
 | `ops.py` | `record_job_run`, `record_ingest_error`, the `job_run` context manager, and the written-down `job_runs.status` spec (`ok` / `error` / `partial`) |
 | `retention.py` | `purge` — payload/hints/outcome deletion on terminal rows past the window, plus the age-independent secret/PII reconciliation; `purge_secret_capture_immediately` |
 | `latency.py` | `percentile`, `LatencySummary`, `summarize`, `render` — capture→filed p50/p95, refusing to answer below `MIN_SAMPLES` |
-| `cli.py` | `stigmergy-queue` (list · show · claim · reclaim · requeue · resolve · reject · purge); the shared renderings other CLIs import (`depth_line`, `format_ms`, `format_age`, `RECLAIM_NOW`); the drop CLIs' shared pre-flight (`refuse_split_stores` / `add_split_stores_flag` / `EXIT_SPLIT_STORES`) |
+| `render.py` | The operator dialect every CLI prints in, and the home of these renderings: `depth_line`, `format_ms`, `format_age`, `clean_for_terminal`, `RECLAIM_NOW`. Below the CLIs because `latency.py` needs `format_ms` and `server.pilot_report` imports that; reaches nothing but `stigmergy.text` |
+| `cli.py` | `stigmergy-queue` (list · show · claim · reclaim · requeue · resolve · reject · purge); `render.py`'s names re-exported for the CLIs that already import them from here; the drop CLIs' shared pre-flight and runner (`refuse_split_stores` / `add_split_stores_flag` / `EXIT_SPLIT_STORES`, `connect`, `resolve_submitted_by` / `add_submitted_by_flag` / `OPERATOR_EMAIL_ENV`, `drop_main` / `drop_interrupted`) |
 | `meeting_cli.py` | `stigmergy-meeting drop` — the only door onto the meeting flow |
 | `drive_cli.py` | `stigmergy-drive drop` — the only door onto the drive flow: fetches with the operator's own Google auth, uploads the original bytes as `blob_refs[1]`, submits a deterministic manifest as the row's material; no model, no conversion |
 | `drive_client.py` | The Drive fetch seam: `GogDriveClient` (a `gog` subprocess), `DriveFile`, `file_id_from`. Never touches Postgres; tests inject a fake |
@@ -58,8 +59,12 @@ capture's journey produces; it never decides what the material MEANS — that is
   same lock; `IF NOT EXISTS` is a check, not a lock.
 - **`evidence.content_key` / `evidence.MemoryEvidenceStore`** — the pure key scheme and the
   offline double.
-- **`cli.depth_line` / `format_ms` / `format_age` / `RECLAIM_NOW`** — imported by other CLIs so
-  two tools in one terminal print one dialect.
+- **`render.depth_line` / `format_ms` / `format_age` / `clean_for_terminal` / `RECLAIM_NOW`** —
+  imported by other CLIs so two tools in one terminal print one dialect. `cli.py` re-exports them
+  under the same names; new callers take them from `render`, which no connection seam hangs off.
+- **`cli.drop_main` / `drop_interrupted` / `resolve_submitted_by` / `add_submitted_by_flag` /
+  `connect`** — a new drop door rides these; the two that exist share every sentence and every
+  exit code through them.
 
 ## Avoid
 
@@ -100,7 +105,8 @@ capture's journey produces; it never decides what the material MEANS — that is
 
 - `capture` is a store everyone who interprets its rows imports (`server`, `librarian`,
   `entities`, `admin`, `slack.store`, `gardener`, `digest`, `views.regenerate`), never the
-  reverse. The only crossings are downward: other CLIs import `cli.py`'s pure renderings.
+  reverse. The only crossings are downward: other packages' CLIs import `render.py`'s dialect —
+  `stigmergy-entities` straight from `render`, `stigmergy-librarian` through `cli.py`'s re-export.
 - Write order is deliberate and asymmetric: validate → evidence blob → queue row. An orphan blob
   is inert and content-addressed; a row pointing at an unwritten blob is a submission nothing
   can read. A refusal writes neither.

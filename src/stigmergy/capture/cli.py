@@ -11,12 +11,20 @@ environment: the library takes `conn` as an argument.
 """
 import argparse
 import json
+import os
 import sys
 import time
 
 from stigmergy import text as textutil
 from stigmergy.capture import dispositions, evidence, queue, retention, schema
-from stigmergy.capture.errors import CaptureError
+from stigmergy.capture.errors import CaptureError, SubmissionRejected
+from stigmergy.capture.render import (
+    RECLAIM_NOW,
+    clean_for_terminal,
+    depth_line,
+    format_age,
+    format_ms,
+)
 from stigmergy.index import store
 
 _DUMP = {"ensure_ascii": False, "indent": 2}
@@ -29,15 +37,15 @@ _KIND_WIDTH = max(len(k) for k in schema.KINDS)
 # Not 0: an interrupted `claim --hold` leaves a real orphaned lease behind.
 EXIT_INTERRUPTED = 130
 
-# How an operator gets a stranded claim back RIGHT NOW, written once because its argument is
-# subtle: `--visibility-timeout <lease>` releases nothing at second zero. `stigmergy-librarian`
-# imports this constant rather than retyping the command.
-RECLAIM_NOW = "stigmergy-queue reclaim --visibility-timeout 0"
-
 # ── the drop doors' shared configuration guard ────────────────────────────────────────────────
 # Below BOTH drop CLIs, so no future door can skip it. Distinct from `main`'s catch-all 2: a
 # wrapper must be able to tell "refused by policy, nothing happened" from "infrastructure down".
 EXIT_SPLIT_STORES = 3
+
+# The operator identity `--submitted-by` defaults to. Single-operator traffic: one env var is
+# the whole of "configured" — there is no identity service to resolve against, and every drop
+# door answers to the SAME one.
+OPERATOR_EMAIL_ENV = "STIGMERGY_MEETING_OPERATOR_EMAIL"
 
 
 def add_split_stores_flag(parser) -> None:
@@ -68,57 +76,73 @@ def refuse_split_stores(args, prog: str, ev) -> int:
     return 0
 
 
-def _connect(args):
-    conn = store.connect(args.dsn)
+def connect(dsn: str | None):
+    """The connection every operator CLI in this package opens, schema included: each of them may
+    be the first thing ever to run against this database."""
+    conn = store.connect(dsn)
     schema.ensure_capture_schema(conn)   # idempotent: the CLI may be the first thing to run
     return conn
 
 
-# ── shared renderings other CLIs import ───────────────────────────────────────────────────────
-# Public and here because this module IS `stigmergy-queue`: two tools in one operator's terminal
-# must print the same facts in the same dialect.
-def depth_line(counts: dict[str, int]) -> str:
-    """`queue: queued=3 · claimed=1` — non-zero statuses only, or `queue: empty`. Zeroes are
-    dropped on purpose: printing all eight statuses would bury the one or two that matter."""
-    depth = " · ".join(f"{status}={n}" for status, n in counts.items() if n)
-    return f"queue: {depth or 'empty'}"
+def _connect(args):
+    """`stigmergy-queue`'s own call, taking the parsed namespace its `main` holds."""
+    return connect(args.dsn)
 
 
-def format_ms(value) -> str:
-    """A MEASURED duration as one number a person reads: `4.2s`, or `—`. Not
-    `worker.human_duration`, which renders a CONFIGURED value and must keep the raw seconds."""
-    return "—" if value is None else f"{value / 1000:.1f}s"
+def add_submitted_by_flag(parser) -> None:
+    """`--submitted-by`, spelled once for every drop door — the flag and its default are the same
+    fact on all of them."""
+    parser.add_argument("--submitted-by", default="",
+                        help=f"defaults to ${OPERATOR_EMAIL_ENV}; who this drop is attributed to")
 
 
-def _clean(text: str, width: int = 0) -> str:
-    """Untrusted captured text on its way to a terminal: control characters stripped (a capture
-    can contain ANSI escapes), newlines flattened, clipped word-safe — a hard slice through
-    `brain_reply(...)` printed under "run this" is an invalid call, and a message containing a
-    command is an executable promise."""
-    return textutil.clamp(textutil.sanitize(text or "").replace("\n", " ⏎ "), width)
+def resolve_submitted_by(args) -> str:
+    """The operator identity a drop is attributed to, or a refusal. Attribution is never taken
+    from the material: an operator CLI has no identity service to resolve against, so the flag or
+    the environment is the whole of it."""
+    submitted_by = args.submitted_by or os.environ.get(OPERATOR_EMAIL_ENV, "")
+    if not submitted_by:
+        raise SubmissionRejected(
+            f"--submitted-by is required (or set ${OPERATOR_EMAIL_ENV}) — attribution comes from "
+            f"a resolved identity on every other capture surface, and this operator CLI has none "
+            f"to resolve. Nothing was uploaded and nothing was queued.")
+    return submitted_by
+
+
+def drop_interrupted(prog: str, during: str = "") -> int:
+    """Ctrl-C during a drop: what may and may not be left behind, in the one paragraph both doors
+    tell it in. The insert is a single statement, so the queue is never half-written; an upload
+    that already finished leaves an object no row points at, which is inert."""
+    said = f" {during}" if during else ""
+    print(f"{prog}: interrupted{said} — no queue row was written (the insert is a single "
+          f"statement), but if the upload had already finished, an evidence object with nothing "
+          f"pointing at it may exist; that costs nothing and nothing will ever read it without a "
+          f"row. Re-run `{prog} drop` when ready.", file=sys.stderr)
+    return EXIT_INTERRUPTED
+
+
+def drop_main(argv, *, parser: argparse.ArgumentParser, prog: str, during: str = "") -> int:
+    """Every drop door's entry point: parse, dispatch, and map the three failure classes to the
+    exit codes a wrapper reads — 1 a named refusal, 130 an interruption, 2 the stack being down.
+    `during` names what the door was in the middle of, for the interrupt sentence."""
+    args = parser.parse_args(argv)
+    try:
+        return args.fn(args)
+    except CaptureError as ex:
+        print(f"{prog}: {ex}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return drop_interrupted(prog, during)
+    except Exception as ex:  # noqa: BLE001 — a local operator needs the real reason
+        print(f"{prog}: cannot reach the queue database or evidence store ({ex}); is the stack up "
+              f"(`make db-up`)?", file=sys.stderr)
+        return 2
 
 
 # A steward's own words, headed for a submitter's report. The cleaning lives in
 # `dispositions.clean`, below every CLI, so no CLI can skip it; the local name keeps call sites
 # readable.
-_note = dispositions.clean
-
-
-def format_age(ms) -> str:
-    """How long something has been waiting, as a person says it: `12 min`, `3h`, `1d 2h`.
-    An AGE, where sub-second precision is noise — `format_ms` renders a measured latency,
-    `worker.human_duration` a configured value.
-    """
-    if ms is None:
-        return "—"
-    minutes = int(max(0.0, float(ms)) // 60000)
-    if minutes < 60:
-        return f"{minutes} min"
-    hours, minutes = divmod(minutes, 60)
-    if hours < 24:
-        return f"{hours}h" if not minutes else f"{hours}h {minutes} min"
-    days, hours = divmod(hours, 24)
-    return f"{days}d" if not hours else f"{days}d {hours}h"
+_steward_note = dispositions.clean
 
 
 # ── list ──────────────────────────────────────────────────────────────────────────────────────
@@ -146,7 +170,7 @@ def _cmd_list(conn, args) -> int:
         elif row["withheld_reason"]:
             body = f"({row['withheld_reason']})"
         else:
-            body = _clean(row["excerpt"], 100)
+            body = clean_for_terminal(row["excerpt"], 100)
         print(f"    {body}")
         _print_note(row, one_line=True)
     return 0
@@ -170,8 +194,8 @@ def _print_note(row: dict, *, one_line: bool) -> None:
             print(f"  answer with {invocation}")
         return
     if row["error"]:
-        print(f"    ! {_clean(row['error'], 200)}" if one_line else
-              f"  note        {_clean(row['error'], 300)}")
+        print(f"    ! {clean_for_terminal(row['error'], 200)}" if one_line else
+              f"  note        {clean_for_terminal(row['error'], 300)}")
 
 
 # ── show ──────────────────────────────────────────────────────────────────────────────────────
@@ -185,8 +209,10 @@ def _cmd_show(conn, args) -> int:
         return 0
     print(f"#{trace['id']} {trace['status']} ({trace['kind']}) by {trace['submitted_by']}")
     print(f"  created_at  {trace['created_at'] or '—'}")
-    print(f"  claimed_at  {trace['claimed_at'] or '—'}  (queue wait: {_ms(trace['queue_wait_ms'])})")
-    print(f"  finished_at {trace['finished_at'] or '—'}  (total: {_ms(trace['total_latency_ms'])})")
+    print(f"  claimed_at  {trace['claimed_at'] or '—'}  (queue wait: "
+          f"{format_ms(trace['queue_wait_ms'])})")
+    print(f"  finished_at {trace['finished_at'] or '—'}  (total: "
+          f"{format_ms(trace['total_latency_ms'])})")
     print(f"  attempts    {trace['attempts']}")
     print(f"  blob_refs   {', '.join(trace['blob_refs']) or '(none)'}")
     if trace["result_ref"]:
@@ -196,7 +222,7 @@ def _cmd_show(conn, args) -> int:
               f"{trace['waiting_on']}")
     _print_note(trace, one_line=False)
     if trace["reply"]:
-        print(f"  reply       {_clean(trace['reply'], 500)}")
+        print(f"  reply       {clean_for_terminal(trace['reply'], 500)}")
     elif trace["withheld_reason"]:
         # Say why the reply is suppressed: an unexplained empty line reads as "they never
         # answered" — a false story. The sentence is the queue's own; neither cleaned nor clipped.
@@ -206,8 +232,8 @@ def _cmd_show(conn, args) -> int:
         # disposing. The `asked` note IS the question — suppressed while the row is still
         # `needs_input`, because the block above just printed it in full.
         kind = str(event.get("event", ""))
-        print(f"  · {_clean(event.get('at', ''), 40)}  {_clean(kind, 20)}"
-              f"  by {_clean(event.get('actor', ''), 80) or '—'}")
+        print(f"  · {clean_for_terminal(event.get('at', ''), 40)}  {clean_for_terminal(kind, 20)}"
+              f"  by {clean_for_terminal(event.get('actor', ''), 80) or '—'}")
         if kind == schema.EVENT_ASKED and trace["status"] == schema.NEEDS_INPUT:
             print("      (the question, printed above)")
             continue
@@ -216,9 +242,6 @@ def _cmd_show(conn, args) -> int:
     if trace["payload_purged"]:
         print("  payload     (purged by retention; the evidence blob is unaffected)")
     return 0
-
-
-_ms = format_ms   # the local name `show` already reads with; one implementation, above
 
 
 # ── claim / reclaim ───────────────────────────────────────────────────────────────────────────
@@ -233,7 +256,9 @@ def _cmd_claim(conn, args) -> int:
     else:
         print(f"claimed #{item['id']} ({item['kind']}) by {item['submitted_by']} "
               f"attempts={item['attempts']}", flush=True)
-        print(f"    {_clean((item['payload'] or {}).get('text', ''), 200)}", flush=True)
+        # Deliberately outside the withheld rule: this hands the operator exactly what a WORKER
+        # receives; the secrets/PII gate runs downstream of delivery, not before it.
+        print(f"    {clean_for_terminal((item['payload'] or {}).get('text', ''), 200)}", flush=True)
     if args.hold:
         print(f"holding the claim for {args.hold}s — kill this process to simulate a dead worker; "
               f"the item returns to the queue {args.visibility_timeout}s after it was claimed",
@@ -306,7 +331,7 @@ def _cmd_reclaim(conn, args) -> int:
 # `--by` is ATTRIBUTION, not authorization: recorded, never checked — checking would be theatre
 # on a local CLI whose operator already has the DSN.
 def _cmd_requeue(conn, args) -> int:
-    result = dispositions.requeue(conn, args.id, actor=args.by, note=_note(args.note))
+    result = dispositions.requeue(conn, args.id, actor=args.by, note=_steward_note(args.note))
     if args.json:
         print(json.dumps(result, **_DUMP))
         return 0
@@ -322,7 +347,7 @@ def _cmd_resolve(conn, args) -> int:
     silent about where the material went, on the one state whose point is that it WAS used —
     warned about, never prompted for: a blocking prompt in a scriptable tool hangs automation.
     """
-    note = _note(args.note)
+    note = _steward_note(args.note)
     result = dispositions.resolve(conn, args.id, actor=args.by, note=note,
                                   page=args.page or "", commit=args.commit or "")
     warning = ("" if (args.page or args.commit) else
@@ -340,7 +365,7 @@ def _cmd_resolve(conn, args) -> int:
 
 
 def _cmd_reject(conn, args) -> int:
-    result = dispositions.reject(conn, args.id, actor=args.by, reason=_note(args.reason))
+    result = dispositions.reject(conn, args.id, actor=args.by, reason=_steward_note(args.reason))
     if args.json:
         print(json.dumps(result, **_DUMP))
         return 0
@@ -355,8 +380,9 @@ def _cmd_purge(conn, args) -> int:
         print(json.dumps(result, **_DUMP))
         return 0
     verb = "would purge" if args.dry_run else "purged"
-    print(f"{verb} payload+hints of {result['purged']} terminal submission(s) older than "
-          f"{args.older_than_days} days"
+    print(f"{verb} payload+hints of {result['purged']} terminal submission(s): the retention "
+          f"window ({args.older_than_days} days) plus any secrets/personal-data rejection, "
+          f"whatever its age"
           + (f": {', '.join(str(i) for i in result['ids'])}" if result["ids"] else ""))
     print("(id, submitter, timestamps, status and result_ref survive; the evidence blobs have "
           "their own lifecycle and were not touched)")

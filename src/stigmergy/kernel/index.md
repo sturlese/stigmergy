@@ -17,7 +17,7 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 | `frontmatter.py` | `split_frontmatter(text) -> (dict, body)` — tolerant: malformed or absent frontmatter degrades to `({}, text)`, never an exception |
 | `acl.py` | `load_acl_config` / `load_acl_config_text`, `resolve_acl` (first matching rule wins), `view_acl` (members INTERSECTION — a rollup must never widen access), `visible_to_view` (the non-member read gate) |
 | `registry.py` | `Registry`, `load_registry` / `save_registry` — `ops/entity-registry.json`'s one reader/writer, plus the `canonical_id` / `title` / `type_of` lookups. Missing file = empty registry; malformed = loud error |
-| `normalize.py` | `normalize(name)` (matching key: accents, case, punctuation and legal suffixes folded), `slugify(s)` (≤60 chars), `is_noise(norm_key)` |
+| `normalize.py` | `normalize(name)` (matching key: accents, case, punctuation and legal suffixes folded), `slugify(s)` (≤60 chars) |
 | `fsutil.py` | `write_text_atomic(path, text)` — tmp file + same-directory `os.replace`, so a concurrent reader never sees a partial |
 | `converters.py` | the document HANDS: `method_for_ext`, `extract` (pdf/sheet/docx/office/text → `{method, text}`), `sheet_rows`, `vision_extract` (Gemini OCR, lazy SDK import). Faithful text, no judgment |
 

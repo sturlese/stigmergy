@@ -28,9 +28,10 @@ Narrative doc: [`docs/reference/hybrid-index.md`](../../../docs/reference/hybrid
   `fts_expansion` (lexical arm only). Never add a raw `acl` filter — enforcement is above.
 - `store.py` — all SQL DDL and writes: `init_schema` drops `pages_index` BY NAME (the durable
   tables share the database), `create_search_indexes` (after the bulk load), the writers over the
-  one column list `_PAGE_COLUMNS` (`_UPSERT_SET` excludes `inlinks` so an update never clobbers
+  one column list `PAGE_COLUMNS` (`_UPSERT_SET` excludes `inlinks` so an update never clobbers
   the rebuild's count), the embedding cache, `read_meta`, autocommit `connect`, `dsn`,
-  `host_of_dsn`. Never a second column list, never a non-autocommit reader.
+  `host_of_dsn`. Never a second column list, never a non-autocommit reader — `search.fetch_pages`
+  SELECTs through this same `PAGE_COLUMNS`.
 - `build.py` — `rebuild()`: the one full-rebuild entry point, cache-aware, one transaction (a
   mid-rebuild failure leaves the previous index standing).
 - `check.py` — `run_checks()`: the substrate lint over the live index; errors exit 1 via the CLI.

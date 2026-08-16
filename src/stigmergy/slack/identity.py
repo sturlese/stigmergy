@@ -71,6 +71,38 @@ IdentityResult = Ignored | ForeignTeam | TransientFailure | NoAccess | Resolved
 DEFAULT_MAX_ENTRIES = 10_000
 
 
+class _TtlMap:
+    """One workspace-scoped TTL store: `(team_id, <something>) -> string`, bounded, positive
+    results only. `UsersInfoCache` holds THREE of these and never merges them — see its
+    docstring for why that separation is the security property."""
+
+    def __init__(self, ttl_seconds: int, clock, max_entries: int):
+        self._ttl = ttl_seconds
+        self._clock = clock
+        self._max_entries = max_entries
+        self._values: dict[tuple[str, str], tuple[float, str]] = {}
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def get(self, key: tuple[str, str]) -> str | None:
+        entry = self._values.get(key)
+        if entry is None:
+            return None
+        expires_at, value = entry
+        if self._clock() >= expires_at:
+            del self._values[key]
+            return None
+        return value
+
+    def put(self, key: tuple[str, str], value: str) -> None:
+        if not value:   # positive results only — see `UsersInfoCache`'s docstring
+            return
+        if key not in self._values and len(self._values) >= self._max_entries:
+            del self._values[next(iter(self._values))]   # oldest-first — see module comment
+        self._values[key] = (self._clock() + self._ttl, value)
+
+
 class UsersInfoCache:
     """THREE separate TTL maps, each keyed on a workspace-scoped pair — never the user id or the
     email alone, so a person can never resolve under the wrong workspace's cached value:
@@ -87,81 +119,39 @@ class UsersInfoCache:
 
     def __init__(self, ttl_seconds: int = DEFAULT_TTL_SECONDS, clock=time.monotonic,
                 max_entries: int = DEFAULT_MAX_ENTRIES):
-        self._ttl = ttl_seconds
-        self._clock = clock
-        self._max_entries = max_entries
-        self._entries: dict[tuple[str, str], tuple[float, str]] = {}
+        self._entries = _TtlMap(ttl_seconds, clock, max_entries)
         # The doorbell's REVERSE lookup shares this same object rather than a second store —
         # `users.lookupByEmail` is Tier-3 (~50/min), and uncached per-(item, steward)-per-pass
         # calls turn a transient 429 into a sustained one that reads every steward as having no
         # Slack identity. Same TTL/eviction shape, positive results only.
-        self._by_email: dict[tuple[str, str], tuple[float, str]] = {}
+        self._by_email = _TtlMap(ttl_seconds, clock, max_entries)
         # The 🧠 gesture's display names — a THIRD map, not a bigger value on `_entries`, so the
         # email lookup stays uncoupled from a decorative feature. Populated free of charge from
         # `resolve_slack_identity`'s own `users.info` response, and lazily by
         # `capture._display_name` for the other thread participants.
-        self._display_names: dict[tuple[str, str], tuple[float, str]] = {}
+        self._display_names = _TtlMap(ttl_seconds, clock, max_entries)
 
     def get(self, team_id: str, slack_user_id: str) -> str | None:
-        key = (team_id, slack_user_id)
-        entry = self._entries.get(key)
-        if entry is None:
-            return None
-        expires_at, email = entry
-        if self._clock() >= expires_at:
-            del self._entries[key]
-            return None
-        return email
+        return self._entries.get((team_id, slack_user_id))
 
     def put(self, team_id: str, slack_user_id: str, email: str) -> None:
-        if not email:   # positive results only — see class docstring
-            return
-        key = (team_id, slack_user_id)
-        if key not in self._entries and len(self._entries) >= self._max_entries:
-            del self._entries[next(iter(self._entries))]   # oldest-first — see module comment
-        self._entries[key] = (self._clock() + self._ttl, email)
+        self._entries.put((team_id, slack_user_id), email)
 
     def get_id_by_email(self, team_id: str, email: str) -> str | None:
         """`None` on a miss OR an expired entry, like `get` — a miss means "ask the API", never
         "this person has no Slack identity" (not this cache's fact to assert)."""
-        key = (team_id, email)
-        entry = self._by_email.get(key)
-        if entry is None:
-            return None
-        expires_at, slack_user_id = entry
-        if self._clock() >= expires_at:
-            del self._by_email[key]
-            return None
-        return slack_user_id
+        return self._by_email.get((team_id, email))
 
     def put_id_by_email(self, team_id: str, email: str, slack_user_id: str) -> None:
-        if not slack_user_id:   # positive results only — see class docstring
-            return
-        key = (team_id, email)
-        if key not in self._by_email and len(self._by_email) >= self._max_entries:
-            del self._by_email[next(iter(self._by_email))]   # oldest-first
-        self._by_email[key] = (self._clock() + self._ttl, slack_user_id)
+        self._by_email.put((team_id, email), slack_user_id)
 
     def get_display_name(self, team_id: str, slack_user_id: str) -> str | None:
         """The display-name sibling of `get` — same key shape, same TTL, same positive-only
         rule."""
-        key = (team_id, slack_user_id)
-        entry = self._display_names.get(key)
-        if entry is None:
-            return None
-        expires_at, name = entry
-        if self._clock() >= expires_at:
-            del self._display_names[key]
-            return None
-        return name
+        return self._display_names.get((team_id, slack_user_id))
 
     def put_display_name(self, team_id: str, slack_user_id: str, display_name: str) -> None:
-        if not display_name:   # positive results only — see class docstring
-            return
-        key = (team_id, slack_user_id)
-        if key not in self._display_names and len(self._display_names) >= self._max_entries:
-            del self._display_names[next(iter(self._display_names))]   # oldest-first
-        self._display_names[key] = (self._clock() + self._ttl, display_name)
+        self._display_names.put((team_id, slack_user_id), display_name)
 
 
 def is_ignorable_event(event: dict, *, bot_user_id: str | None) -> bool:

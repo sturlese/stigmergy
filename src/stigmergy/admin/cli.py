@@ -8,9 +8,7 @@ import argparse
 import secrets
 
 from stigmergy.admin.settings import TOKEN_HASH_ENV
-from stigmergy.server.identity import hash_token
-
-TOKEN_BYTES = 32   # 256 bits of entropy
+from stigmergy.server.identity import TOKEN_BYTES, hash_token
 
 
 def main(argv=None) -> int:
