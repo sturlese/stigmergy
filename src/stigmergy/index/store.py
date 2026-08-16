@@ -200,23 +200,24 @@ def store_embeddings(conn: psycopg.Connection, model: str, by_hash: dict[str, li
                         (model, h, json.dumps(emb)))
 
 
-# The one column list both writers share, and the one source `_INSERT_SQL` and `_UPSERT_SET` are
-# built from — exactly one column list, one params builder (`_page_params`) and one INSERT
-# template, so a `pages_index` column added anywhere else would diverge silently.
-_PAGE_COLUMNS = ("path", "page_id", "zone", "title", "body", "type", "status", "entity",
-                 "owner", "tier", "as_of", "updated",
-                 "superseded_by", "supersedes", "acl", "inlinks", "links",
-                 "generated_at", "content_hash")
+# The one column list both writers AND `search.fetch_pages` share, and the one source
+# `_INSERT_SQL` and `_UPSERT_SET` are built from — exactly one column list, one params builder
+# (`_page_params`) and one INSERT template, so a `pages_index` column added anywhere else would
+# diverge silently.
+PAGE_COLUMNS = ("path", "page_id", "zone", "title", "body", "type", "status", "entity",
+                "owner", "tier", "as_of", "updated",
+                "superseded_by", "supersedes", "acl", "inlinks", "links",
+                "generated_at", "content_hash")
 
 _INSERT_SQL = (
-    "INSERT INTO pages_index (" + ", ".join(_PAGE_COLUMNS) + ", tsv, embedding)"
-    " VALUES (" + ", ".join(f"%({c})s" for c in _PAGE_COLUMNS) + f", {_TSV_SQL}, %(embedding)s::halfvec)"
+    "INSERT INTO pages_index (" + ", ".join(PAGE_COLUMNS) + ", tsv, embedding)"
+    " VALUES (" + ", ".join(f"%({c})s" for c in PAGE_COLUMNS) + f", {_TSV_SQL}, %(embedding)s::halfvec)"
 )
 
 
 def _page_params(r, *, fts_config: str, embeddings: dict[str, list[float]]) -> dict:
     """One `corpus.PageRow` -> the params dict `_INSERT_SQL` (and its `ON CONFLICT` extension)
-    binds against. `tags`/`mentions`/`entity_meta` feed only `_TSV_SQL`, not `_PAGE_COLUMNS` —
+    binds against. `tags`/`mentions`/`entity_meta` feed only `_TSV_SQL`, not `PAGE_COLUMNS` —
     they compute the `tsv` column rather than being stored as columns of their own."""
     return {
         "path": r.path, "page_id": r.page_id, "zone": r.zone, "title": r.title,
@@ -250,7 +251,7 @@ def insert_pages(conn: psycopg.Connection, rows: list, embeddings: dict[str, lis
 # the incoming value is the freshest fact available — excluding it would freeze a webhook-edited
 # page's `links` at whatever the last full rebuild saw.
 _UPSERT_SET = ", ".join(f"{col} = EXCLUDED.{col}"
-                        for col in _PAGE_COLUMNS if col not in ("path", "inlinks"))
+                        for col in PAGE_COLUMNS if col not in ("path", "inlinks"))
 
 
 def current_content_hashes(conn: psycopg.Connection, paths: list[str]) -> dict[str, str]:

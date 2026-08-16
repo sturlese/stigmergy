@@ -8,11 +8,12 @@ to what the tools returned this run. Refusal is a first-class outcome: no eviden
 `fake` path must not drag the agent framework into the import graph (architecture-tested).
 """
 import re
-import types
 from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic import BaseModel, Field
+
+from stigmergy.kernel.result import fake_result
 
 # Plain numbers here; the UsageLimits object is built lazily so the fake path never imports
 # pydantic_ai.
@@ -50,16 +51,10 @@ class AnswerOutput(BaseModel):
     figure through — the strict gate scans the free-text channels (answer, citation quotes), and
     this field simply cannot carry prose.
 
-    **There is deliberately no `reason` field.** A model that writes its own refusal explanation
-    here leaves the server merely scanning it for smuggled figures before shipping it or swapping
-    in a neutral template. That is what produced a false explanation in practice ("only a quarterly
-    value exists, not monthly") — a *correct* refusal justified by a claim about the corpus nobody
-    verified. The shipped `reason` is composed ENTIRELY by the server, from
-    structured facts it recorded this run (`answer/service.py::run_facts_reason` — which queries
-    ran, which pages the tools actually returned), never from anything the model claims. Removing
-    the field rather than merely ignoring it closes the channel architecturally: there is no
-    longer a place on this model for a steered agent to write persuasive-but-unverified prose that
-    something might one day reconnect."""
+    No `reason` field, deliberately: a model-written refusal explanation is a claim about the
+    corpus no verifier can check (one shipped saying "only a quarterly value exists" — a correct
+    refusal with a false reason). The shipped `reason` is composed by
+    `answer/service.py::run_facts_reason` from server-recorded facts."""
     answer_markdown: str = Field("", description="the answer; concise; every figure from tool evidence")
     # Bounded: `check_citations` scans a page body per entry, synchronously inside `async def
     # ask` — an unbounded model-controlled list turns a slow page into a stalled process.
@@ -152,10 +147,9 @@ def build_synthesizer(settings):
 
     from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
 
-    # This builder does NOT go through `kernel.llm.build_model`, so the usage-extraction repair is
-    # installed here too — without it the pinned pydantic-ai reports zero tokens for OpenAI models
-    # carrying reasoning details, and `audit_log.result.usage` records zeros for every ask.
-    # Idempotent; see `kernel.usage_repair`.
+    # Deliberately not `kernel.llm.build_processor`: this call needs the per-question model AND
+    # reasoning effort from `AnswerSettings`, which `build_model`'s env-read signature cannot
+    # express; the usage repair is therefore installed here too.
     ensure_usage_extraction_repaired()
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
@@ -220,25 +214,24 @@ class FakeSynthesizer:
     async def run(self, question: str, *, deps: SynthesisContext = None, usage_limits=None,
                   message_history=None):
         svc = deps.service
-        out = None
-        if out is None:
-            listing = deps.record(svc.search_text(question, deps))
-            chosen = None
-            if "no results" not in listing:
-                for path in re.findall(r"^- (\S+)", listing, re.M):
-                    page = svc.get_page(path)
-                    if page and _lexically_relevant(question, page):
-                        chosen = page
-                        break
-            if chosen is not None:
-                path = chosen["path"]
-                deps.record(svc.page_text(path, deps))
-                body = re.sub(r"\s+", " ", (chosen.get("body") or "").strip())
-                sentence = body.split(". ")[0][:200] if body else ""
-                out = AnswerOutput(answer_markdown=sentence or "(empty page)",
-                                   citations=[Citation(path=path, quote=sentence)],
-                                   confidence="medium")
-            else:
-                out = AnswerOutput(refused=True, confidence="low")
-        usage = types.SimpleNamespace(input_tokens=0, output_tokens=0, cache_read_tokens=0, details={})
-        return types.SimpleNamespace(output=out, usage=usage, all_messages=lambda: [])
+        listing = deps.record(svc.search_text(question, deps))
+        chosen = None
+        if "no results" not in listing:
+            for path in re.findall(r"^- (\S+)", listing, re.M):
+                page = svc.get_page(path)
+                if page and _lexically_relevant(question, page):
+                    chosen = page
+                    break
+        if chosen is not None:
+            path = chosen["path"]
+            deps.record(svc.page_text(path, deps))
+            body = re.sub(r"\s+", " ", (chosen.get("body") or "").strip())
+            sentence = body.split(". ")[0][:200] if body else ""
+            out = AnswerOutput(answer_markdown=sentence or "(empty page)",
+                               citations=[Citation(path=path, quote=sentence)],
+                               confidence="medium")
+        else:
+            out = AnswerOutput(refused=True, confidence="low")
+        result = fake_result(out)
+        result.all_messages = lambda: []
+        return result

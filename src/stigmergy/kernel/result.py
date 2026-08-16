@@ -2,14 +2,16 @@
 back from any processor, real or fake. Nothing here is a backend or a test double.
 """
 import types
+from dataclasses import dataclass, field
 
 
+@dataclass
 class _Usage:
     """Mirrors the attributes worker.py reads from pydantic-ai's usage object."""
-    input_tokens = 0
-    output_tokens = 0
-    cache_read_tokens = 0
-    details: dict = {}
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    details: dict = field(default_factory=dict)
 
 
 def fake_result(output):

@@ -49,6 +49,8 @@ def evaluate(questions: list[dict], arm_rankings_fn, k: int = 5) -> dict:
     callback takes TWO arguments, REQUIRED: an optional-second-argument signature would let a
     caller silently drop a question's declared filters — measuring the wrong thing while
     reporting a number."""
+    if not questions:
+        raise ValueError("golden set is empty — nothing to score")
     detail = []
     sums = {arm: {"recall": 0.0, "hits": 0} for arm in ARMS}
     for item in questions:

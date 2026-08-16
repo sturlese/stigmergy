@@ -39,5 +39,10 @@ Call the loop through `service.call_async("ask", ..., summarize=audit_summary)` 
 display, never `str()` it. Entity-first search resolution lives in `BrainService._search`
 ([`server/index.md`](../server/index.md)), not in this package.
 
+`build_synthesizer` deliberately does not go through `kernel.llm.build_processor`: this call needs
+the per-question model AND reasoning effort from `AnswerSettings`, which `build_model`'s env-read
+signature cannot express; the usage repair is therefore installed here too. The offline double's
+result envelope is `kernel.result.fake_result` — never a hand-rolled `.output`/`.usage` namespace.
+
 Tests: `tests/answer/` (pure suites run keyless and DB-less; the rest use the fixture corpus in
 Postgres and skip without `make db-up`); the MCP round-trip is `tests/server/test_ask_mcp.py`.

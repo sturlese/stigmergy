@@ -15,7 +15,7 @@ from datetime import date
 from stigmergy.index import rank
 from stigmergy.index.backends.embedder import embedder_for_model
 from stigmergy.index.errors import EmptyIndexError
-from stigmergy.index.store import read_meta
+from stigmergy.index.store import PAGE_COLUMNS, read_meta
 
 # The only columns a caller may filter on.
 FILTER_COLUMNS = ("zone", "type", "status", "entity", "owner", "tier", "as_of")
@@ -90,10 +90,7 @@ def fetch_pages(conn, paths: list[str]) -> dict[str, dict]:
     # `links`/`generated_at` are fetched here so the serving surfaces (`read_page`,
     # `describe_entity`) share this ONE fetch; `rank.rank` ignores the extra keys — they change
     # what is SERVED, not what SCORES.
-    cols = ("path", "page_id", "zone", "title", "body", "type", "status", "entity", "owner",
-            "tier", "as_of", "updated",
-            "superseded_by", "supersedes", "acl", "inlinks", "links", "generated_at",
-            "content_hash")
+    cols = PAGE_COLUMNS
     with conn.cursor() as cur:
         cur.execute(f"SELECT {', '.join(cols)} FROM pages_index WHERE path = ANY(%s)", (paths,))
         return {row[0]: dict(zip(cols, row, strict=True)) for row in cur.fetchall()}

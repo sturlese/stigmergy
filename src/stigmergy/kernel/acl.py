@@ -45,13 +45,13 @@ def load_acl_config_text(text: str, *, label: str) -> dict | None:
             "rules": [{k: rule[k] for k in (*_MATCHERS, "audiences") if k in rule} for rule in rules]}
 
 
-def _check_labels(path: str, audiences: list) -> None:
+def _check_labels(label: str, audiences: list) -> None:
     """Labels can be CSV-serialized downstream: a comma inside one would silently split into two
     audiences at enforcement time, and an empty label would vanish in the same round-trip."""
     for a in audiences:
         s = str(a)
         if "," in s or not s.strip():
-            raise ValueError(f"acl config {path}: invalid audience label {s!r} "
+            raise ValueError(f"acl config {label}: invalid audience label {s!r} "
                              "(labels must be non-empty and must not contain ',')")
 
 
