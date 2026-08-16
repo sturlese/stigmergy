@@ -379,15 +379,27 @@ def _requeue_option() -> dict:
 
 
 def render_entity_mint_modal(*, trigger_id: str, private_metadata: str,
-                             unresolved_names: list[str] = ()) -> dict:
+                             unresolved_names: list[str] = (),
+                             name_prefill: str = "") -> dict:
     """The entity-proposal Approve modal: the metadata a mint needs, collected once.
 
     `unresolved_names` is the proposal's own unresolved names (`situations.subjects_of`, NOT the
-    joined `subject_of` display string). Submitting this modal MINTS — one entity, one signed
-    commit — so `name` prefills only when there is exactly ONE name to mean; several are listed
-    above the field instead and the field stays empty, because no single string is the right
-    answer and a prefilled compound is one accepted default away from a garbled entity in the
-    knowledge repo.
+    joined `subject_of` display string), and `name_prefill` is the value the review item already
+    carries as `mint_name_prefill` — the ONE decision, taken in `entities.situations` and read by
+    both mint doors. Submitting this modal MINTS (one entity, one signed commit), so this function
+    does not re-decide when a default is safe: it prefills what it was handed, and shows the names
+    exactly when it was handed nothing and names exist. This module may not import `entities`
+    (`tests/test_architecture.py`), which is why the decided value travels in the item dict.
+
+    Handed a prefill that contradicts `unresolved_names`, it obeys the prefill: there is no count
+    left here to consult. `""` is not "no decision supplied" — it is the decision's own answer for
+    "no default can be right" (several unresolved names, or none), which is why it is the default
+    for a bare call too.
+
+    What the shared decision guarantees is that this door and the console's Approve form offer a
+    default in the same cases and name the same name. Not the same bytes: this modal renders what
+    the item carries, while the console strips control characters out of everything it renders, so
+    a ragged name still reaches the two forms differently (issue #46).
 
     `entity_type` is a `static_select` over the closed list, so a submission can never carry a
     type `entities.mint` would refuse. `aliases` is ONE comma-separated field
@@ -398,11 +410,13 @@ def render_entity_mint_modal(*, trigger_id: str, private_metadata: str,
     `stigmergy-entities`/MCP, where `birth.prepare` runs a real collision check this form
     cannot."""
     names = [str(n) for n in (unresolved_names or []) if str(n).strip()]
-    proposed_name = names[0] if len(names) == 1 else ""
+    proposed_name = str(name_prefill or "")
     name_element = {"type": "plain_text_input", "action_id": ENTITY_MINT_NAME_ACTION_ID,
                     **({"initial_value": proposed_name} if proposed_name else {})}
+    # No second count: an empty prefill with names still to place IS the several-names case —
+    # that is what the one decision means by `""`.
     heading = ([_section(escape_mrkdwn(copy.entity_mint_several_unresolved(names=names)))]
-               if len(names) > 1 else [])
+               if not proposed_name and names else [])
     return {
         "type": "modal",
         "callback_id": ENTITY_MINT_MODAL_CALLBACK_ID,

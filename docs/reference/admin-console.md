@@ -99,10 +99,15 @@ gateway's own sentence (status code, never the token, never an echoed body) show
 - **Index** — built_at + pages per zone + webhook upsert health; Substrate check in-process;
   Rebuild-now dispatches the workflow.
 - **Entities** — pending identity situations with the material and the agent's reading, and a
-  real Approve form: name (prefilled only when the situation names exactly ONE unresolved entity;
-  with several the field stays empty and the names are listed above it, because one submission
-  mints one entity and the joined display string is none of their names — the rule the Slack mint
-  modal applies to the same data), type (the closed list, shipped from
+  real Approve form: name (prefilled from `mint_name_prefill`, the value
+  `entities.situations.mint_name_prefill` decides on the parked row and BOTH entity routes send
+  beside `subject` and `subjects` — the single unresolved name, or `""` when several or none are
+  unresolved; with an empty prefill and names left to place the field stays empty and those names
+  are listed above it, because one submission mints one entity and the joined display string is
+  none of their names — the same decided value the Slack mint modal reads, which makes the two
+  doors offer a default in the same cases and name the same name; the console additionally strips
+  control characters out of everything it renders, so the two forms can still differ in the bytes
+  of a ragged name), type (the closed list, shipped from
   `/admin/api/meta` so the page never hardcodes a second copy of it), optional aliases/role, a
   pre-checked requeue box. Approve mints through the same server-driven door the review lane
   (MCP, Slack) walks (`entities.remote.mint_via_clone` -> `entities.mint.mint`, ONE commit,

@@ -448,6 +448,55 @@ def test_a_multi_name_situation_reaches_the_console_as_a_per_name_list_not_only_
         "present on one path only is a key the next caller will find missing")
 
 
+# ── the shaper is a pass-through, not a second decider ────────────────────────────────────────
+# The two below hand `_situation` a row that CANNOT come out of `entities.situations`: its
+# `mint_name_prefill` disagrees with its own `subjects`. That is the point — on any real row the
+# decided field and a re-derivation agree, so every test above stays green if this shaper starts
+# computing the prefill itself, and the duplicate policy the consolidation removed is back with no
+# test able to see it. Fabricating the disagreement is the only instrument that can tell "passed
+# through" from "recomputed", and it needs the private `_situation` because the two public doors
+# both read the row out of Postgres, where the disagreement is unconstructible.
+def test_the_situation_shaper_passes_a_decided_prefill_through_even_when_it_contradicts_subjects(
+        service):
+    """The prefill arrives DECIDED and leaves only sanitized. This row says "several names" in
+    `subjects` and still carries a default no re-derivation could produce: every recomputation
+    shape — over the raw report, over the raw `subjects`, over the cleaned `subjects` — answers
+    `""` for a two-name park, so the decided string surviving is the proof the shaper never
+    recomputed. The control character proves the ONE transformation that is allowed still runs."""
+    row = {"id": 41, "status": capture_schema.TRIAGE, "situation": "unresolved-entity",
+           "subject": "Jack, Acme Capital", "subjects": ["Jack", "Acme Capital"],
+           "mint_name_prefill": "Nadia Okonk\x01wo"}
+
+    shaped = service._situation(row)
+
+    assert shaped["mint_name_prefill"] == "Nadia Okonkwo", (
+        "the console re-derived the prefill from the row it was handed instead of forwarding the "
+        "one `entities.situations.mint_name_prefill` decided — a second policy over the same "
+        "irreversible mint, which is what makes two doors offer two default names for one park")
+    assert shaped["subjects"] == ["Jack", "Acme Capital"], (
+        "the per-name listing must survive the same pass — it is what the Approve form shows when "
+        "no default is offered")
+
+
+def test_the_situation_shaper_never_fills_in_a_prefill_the_rule_declined_to_offer(service):
+    """The other direction, and the dangerous one: `mint_name_prefill == ""` is an INSTRUCTION —
+    leave the field empty — not a missing value waiting to be helpfully filled. A single-name
+    `subjects` beside an empty decision is exactly the shape an `or`-fallback
+    (`out.get("mint_name_prefill") or mint_name_prefill(row)`) would rewrite, and the test above
+    cannot see that fallback because its own prefill is truthy. A default the rule refused is a
+    name a steward submits unchanged into a signed commit."""
+    row = {"id": 42, "status": capture_schema.TRIAGE, "situation": "unresolved-entity",
+           "subject": "Solo Corp", "subjects": ["Solo Corp"], "mint_name_prefill": ""}
+
+    shaped = service._situation(row)
+
+    assert shaped["mint_name_prefill"] == "", (
+        "the console offered a default for a row whose decision was 'offer none' — an empty "
+        "prefill is the rule's answer, and treating it as an absent value puts a name into the "
+        "mint form that `entities.situations` deliberately withheld")
+    assert "mint_name_prefill" in shaped, "and it stays PRESENT: absent and empty are not the same"
+
+
 def test_entities_show_no_longer_carries_a_command_template(conn, service):
     """OLD BEHAVIOUR (ADR 029): `entities_show` returned a `commands` key — the exact
     `stigmergy-entities approve`/`reject` command, filled only when the name passed the shared

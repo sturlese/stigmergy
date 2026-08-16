@@ -666,6 +666,89 @@ def test_an_unsupported_type_item_carries_an_empty_subjects_list(env, conn):
     assert item["situation"] == capture_schema.SITUATION_UNSUPPORTED_TYPE
     assert item["subject"] == "a page about one specific person"
     assert item["subjects"] == []
+    # The type is not a name: the mint form must be told to default to nothing, or a steward is
+    # offered "a page about one specific person" as the name of an entity to create.
+    assert item["mint_name_prefill"] == ""
+
+
+# ── the decided mint prefill on the wire (real Postgres, the shape both mint doors read) ────────
+# `entities.situations.mint_name_prefill` is where the one-vs-several rule lives; these prove the
+# decision actually TRAVELS on this item, because a rule decided in one place and never emitted is
+# a rule each surface goes back to deriving. The pure function's own cases are in
+# `tests/entities/test_situations.py`; what is proved here is the wire.
+def test_a_multi_name_proposal_item_carries_an_empty_mint_prefill_beside_the_unchanged_subjects(
+        env, conn):
+    """Two unresolved names: the item says "no default is safe here" (`""`) while still carrying
+    everything a surface needs to explain that — the per-name `subjects` list to enumerate and the
+    joined `subject` to display. All three keys coexist; none replaced another."""
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY,
+                                names=["Jack", "Acme Capital"])
+    service = make_service(env, conn, identity_name=None, audiences=None, evidence=evidence)
+
+    item = {i["id"]: i for i in review.review_queue(service)["items"]}[str(proposal_id)]
+
+    assert item["mint_name_prefill"] == "", (
+        "a two-name park has no correct default — an item that prefills one of them mints it and "
+        "drops the other")
+    assert item["subject"] == "Jack, Acme Capital"       # unchanged by the consolidation
+    assert item["subjects"] == ["Jack", "Acme Capital"]  # unchanged by the consolidation
+    assert item["mint_name_prefill"] not in item["subjects"], (
+        "the empty decision must not be mistakable for one of the names")
+    # The doorbell is the road the Slack mint modal actually travels — unscoped, same base. A key
+    # present on `review_queue` and absent here is a key the modal falls back to deriving.
+    doorbell = {i["id"]: i for i in review.items_for_doorbell(conn)}[str(proposal_id)]
+    assert doorbell["mint_name_prefill"] == ""
+    assert doorbell["subjects"] == ["Jack", "Acme Capital"]
+
+
+def test_a_single_name_proposal_item_carries_that_name_as_its_mint_prefill(env, conn):
+    """The benign twin, and the case a prefill exists for: one unresolved name arrives as the
+    default, on both roads, with `subject`/`subjects` still saying what they always said. A
+    consolidation that blanked every prefill would pass the test above and fail here — which is
+    the whole point of having both."""
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY)
+    service = make_service(env, conn, identity_name=None, audiences=None, evidence=evidence)
+
+    item = {i["id"]: i for i in review.review_queue(service)["items"]}[str(proposal_id)]
+
+    assert item["mint_name_prefill"] == "Globex Robotics"
+    assert item["subject"] == "Globex Robotics"
+    assert item["subjects"] == ["Globex Robotics"]
+    doorbell = {i["id"]: i for i in review.items_for_doorbell(conn)}[str(proposal_id)]
+    assert doorbell["mint_name_prefill"] == "Globex Robotics"
+
+
+def test_an_item_carrying_the_decided_prefill_still_satisfies_an_old_shape_reader(env, conn):
+    """COEXISTENCE. The new key is ADDITIVE: a reader written before it existed — one that knows
+    only `kind`, `id`, `subject`, `subjects`, `situation`, `submitted_by` — must still find every
+    field it reads, unchanged in name, type and value. Asserted by consuming the item through such
+    a reader rather than by eyeballing the dict, so it fails if a key is renamed or retyped, not
+    only if it disappears."""
+    evidence = MemoryEvidenceStore()
+    proposal_id = _park_capture(conn, evidence, submitted_by=ALICE,
+                                situation=capture_schema.SITUATION_UNRESOLVED_ENTITY,
+                                names=["Jack", "Acme Capital"])
+    service = make_service(env, conn, identity_name=None, audiences=None, evidence=evidence)
+
+    item = {i["id"]: i for i in review.review_queue(service)["items"]}[str(proposal_id)]
+
+    def old_shape_reader(entry: dict) -> str:
+        """A pre-consolidation consumer of a review item, verbatim in spirit: it derives the
+        one-vs-several answer itself from `subjects` and renders the joined `subject`."""
+        names = [str(n) for n in entry["subjects"] if str(n).strip()]
+        return (f"{entry['kind']} {entry['id']} ({entry['situation']}) about "
+                f"{entry['subject']}: {names[0] if len(names) == 1 else ''}")
+
+    assert old_shape_reader(item) == (
+        f"{review.KIND_ENTITY_PROPOSAL} {proposal_id} (unresolved-entity) about "
+        "Jack, Acme Capital: ")
+    # And the reader that derived it and the item that decided it agree — which is what makes the
+    # old one safe to delete rather than merely still runnable.
+    assert old_shape_reader(item).endswith(item["mint_name_prefill"])
 
 
 def test_review_decide_refuses_a_secret_in_a_note(env, conn, require_gitleaks):

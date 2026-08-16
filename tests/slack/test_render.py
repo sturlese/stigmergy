@@ -563,9 +563,27 @@ def test_the_sources_context_block_is_clamped_too():
 # one signed commit through the governed door. The prefill is therefore not a convenience: it is
 # the value most stewards will submit unchanged, so whatever this function puts in `initial_value`
 # is, in practice, what gets minted.
-def _mint_view(names) -> dict:
+#
+# WHOSE DECISION IT IS. This renderer used to derive the one-vs-several answer itself from
+# `unresolved_names`, and these tests measured that derivation. It does not any more: the review
+# item carries `mint_name_prefill`, decided once in `entities.situations` (this module may not
+# import `entities` — `tests/test_architecture.py` — which is why the decided value travels in the
+# item), and `slack.review` hands it over. So every call below states the decision EXPLICITLY, and
+# what is asserted here is OBEDIENCE: the value handed in is the value rendered, and the listing
+# appears exactly when that value is empty and names remain.
+#
+# The decision's own cases — one name prefills, several do not, a blank entry does not count —
+# moved to `tests/entities/test_situations.py`, directly on the pure function; that the two ends
+# are actually wired together is proved on real Postgres in `tests/slack/test_review.py`, which
+# drives a parked row through `handle_block_action` to this payload. Nothing was dropped: what
+# changed is which layer each claim is made about.
+def _mint_view(names, prefill) -> dict:
+    """`prefill` is DELIBERATELY required. Defaulting it would leave these tests exercising the
+    renderer's own `name_prefill is None` fallback, which is the duplicate of the rule this
+    consolidation exists to remove — and would keep passing after the real caller stopped using
+    it."""
     return render.render_entity_mint_modal(trigger_id="T1", private_metadata="{}",
-                                           unresolved_names=names)
+                                           unresolved_names=names, name_prefill=prefill)
 
 
 def _name_element(view: dict) -> dict:
@@ -587,8 +605,12 @@ def test_a_two_name_proposal_prefills_no_name_and_lists_both_above_the_field():
     The contract: with more than one unresolved name there is no single string that is the right
     answer, so the field stays EMPTY and the names are listed above it for the steward to choose
     from. An empty required field cannot be submitted by accident; a wrong prefilled one can.
+
+    `""` is the decision this park carries (`situations.mint_name_prefill`, proved for this exact
+    row shape in `tests/entities/test_situations.py`); what is asserted here is that the renderer
+    honours it — empty field, both names listed, and the joined compound nowhere in the payload.
     """
-    view = _mint_view(["Jack", "Acme Capital"])
+    view = _mint_view(["Jack", "Acme Capital"], "")
 
     assert "initial_value" not in _name_element(view), (
         "no prefill can be correct for a multi-name proposal — one submission mints ONE entity")
@@ -608,8 +630,12 @@ def test_a_one_name_proposal_still_prefills_that_name_and_adds_no_extra_block():
     """The benign twin, and the specificity half of the fix: the common case — one unresolved
     name, the overwhelming majority of parks — must keep its prefill and its unchanged layout.
     A fix that blanked every prefill would trade a rare garbled mint for a retyped name on every
-    single approval, and a steward who retypes learns to stop reading the field."""
-    view = _mint_view(["Jack"])
+    single approval, and a steward who retypes learns to stop reading the field.
+
+    The decision handed over is "Jack"; the renderer must put it in the field VERBATIM and add
+    nothing. A renderer that re-derived instead would agree here by coincidence, which is why the
+    contradictory pair below exists."""
+    view = _mint_view(["Jack"], "Jack")
 
     assert _name_element(view)["initial_value"] == "Jack"
     assert _sections(view) == [], (
@@ -618,27 +644,73 @@ def test_a_one_name_proposal_still_prefills_that_name_and_adds_no_extra_block():
 
 def test_no_names_at_all_prefills_nothing_and_explains_nothing():
     """The third case, which is not an error: the item was decided or disposed of between the
-    doorbell DM and this click, so `_unresolved_names_for` finds nothing. The modal still opens
-    with an empty field a steward can fill by hand — `review_decide`'s own validation is what
-    enforces the field, exactly as it would for a steward who never saw a card."""
-    view = _mint_view([])
+    doorbell DM and this click, so `_mint_modal_inputs` finds nothing and hands over `([], "")`.
+    The modal still opens with an empty field a steward can fill by hand — `review_decide`'s own
+    validation is what enforces the field, exactly as it would for a steward who never saw a
+    card."""
+    view = _mint_view([], "")
 
     assert "initial_value" not in _name_element(view)
     assert _sections(view) == []
-    # The default argument is the same case, and it is what an un-updated caller would hit.
+    # Both defaults together are what an un-updated caller hits: no names, no decision. It must
+    # still open, and it must still offer nothing.
     bare = render.render_entity_mint_modal(trigger_id="T1", private_metadata="{}")
     assert "initial_value" not in _name_element(bare)
+    assert _sections(bare) == []
 
 
-def test_a_blank_entry_among_the_names_is_dropped_rather_than_offered():
-    """A list carrying one real name and one blank is a ONE-name proposal: the blank is dropped,
-    so the real name is still prefilled and the several-names copy does not fire. The alternative
-    — counting the blank — would show a steward a bullet for a name nobody wrote and blank the
-    field for the one name that was actually there."""
-    view = _mint_view(["Jack", "   "])
+def test_a_blank_entry_among_the_names_is_not_listed_beside_the_real_one():
+    """A list carrying one real name and one blank is a ONE-name proposal — the decision handed
+    over is "Jack" (pinned at its source in `tests/entities/test_situations.py`) — and the blank
+    must not surface here either: no bullet for a name nobody wrote."""
+    view = _mint_view(["Jack", "   "], "Jack")
 
     assert _name_element(view)["initial_value"] == "Jack"
     assert _sections(view) == []
+
+
+def test_a_names_list_that_is_nothing_but_blanks_explains_nothing_it_cannot_show():
+    """The renderer's own remaining filtering, at the only place it still changes an outcome: with
+    no decision (`""`) and a list holding only blanks, there is nothing to enumerate, so the
+    several-names block must NOT fire. A steward would otherwise be shown "this capture names 1
+    entities:" above an empty bullet list and an empty field — a riddle with no answer in it."""
+    view = _mint_view(["   ", ""], "")
+
+    assert "initial_value" not in _name_element(view)
+    assert _sections(view) == []
+
+
+def test_the_renderer_obeys_a_prefill_that_contradicts_the_names_and_never_re_derives_one():
+    """**The proof that the decision is no longer taken here.** Both pairs below are impossible
+    for the server to produce — `mint_name_prefill` and `subjects` always agree — and that is
+    exactly what makes them the instrument: a renderer that still counted `unresolved_names` would
+    answer differently from a renderer that obeys, on inputs no legitimate caller can produce, so
+    neither answer can be reached by coincidence.
+
+    Handed a name WITH several names: prefill it, and show no listing — the caller said a default
+    is safe. Handed nothing WITH a single name: leave the field empty and list that one name — the
+    caller said no default is safe. If this test ever fails, the rule has grown a second home in
+    this module; if it can no longer be written, the renderer started deciding again."""
+    obeys_a_prefill = render.render_entity_mint_modal(
+        trigger_id="T1", private_metadata="{}", name_prefill="X",
+        unresolved_names=["A", "B"])
+
+    assert _name_element(obeys_a_prefill)["initial_value"] == "X", (
+        "the renderer re-derived from the two names instead of obeying the decision it was handed")
+    assert _sections(obeys_a_prefill) == [], (
+        "a supplied prefill means the caller already decided a default is safe — the several-names "
+        "copy must not fire beside a filled field")
+
+    obeys_an_empty_decision = render.render_entity_mint_modal(
+        trigger_id="T1", private_metadata="{}", name_prefill="",
+        unresolved_names=["Solo"])
+
+    assert "initial_value" not in _name_element(obeys_an_empty_decision), (
+        "the renderer prefilled the one name it was NOT told to offer — it is counting again")
+    listed = "\n".join(_sections(obeys_an_empty_decision))
+    assert "Solo" in listed, (
+        "an empty decision with names left to place IS the several-names case — the names have to "
+        "be shown, or the empty required field has no explanation next to it")
 
 
 def test_the_names_listed_in_the_modal_are_escaped_for_mrkdwn():
@@ -650,7 +722,7 @@ def test_the_names_listed_in_the_modal_are_escaped_for_mrkdwn():
 
     The escaping already exists in `render.escape_mrkdwn`; this pins that the NEW block goes
     through it, which is the part a later edit can drop without any other test noticing."""
-    view = _mint_view(["R&D <Group>", "Acme Capital"])
+    view = _mint_view(["R&D <Group>", "Acme Capital"], "")
 
     listed = "\n".join(_sections(view))
     assert "R&amp;D &lt;Group&gt;" in listed
@@ -661,8 +733,8 @@ def test_the_mint_modals_own_structure_is_unchanged_by_the_several_names_block()
     """The heading is ADDITIVE: every field the mint needs is still there, in order, with the same
     block ids `_mint_state_values`/`views_submission` read — a modal that gained a block and lost a
     field would still open, and fail only at submit time."""
-    plural = _mint_view(["Jack", "Acme Capital"])
-    singular = _mint_view(["Jack"])
+    plural = _mint_view(["Jack", "Acme Capital"], "")
+    singular = _mint_view(["Jack"], "Jack")
 
     def ids(view):
         return [b["block_id"] for b in view["blocks"] if "block_id" in b]

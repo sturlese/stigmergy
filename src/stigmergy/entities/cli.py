@@ -136,6 +136,11 @@ def _cmd_show(conn, args) -> int:
         print(f"  material: {_clean(row['withheld_reason'], 200)}")
     if not situation:
         return 0
+    # The fallback cannot reach `subject_of`'s joined display string: that join runs only when
+    # `subjects_of` answered something, and this `or` fires only when it answered `[]`. What it
+    # reaches is the row's raw singular `SITUATION_NAME_KEY`, verbatim — pinned in
+    # `tests/entities/test_situations.py`, because every entry of this list is pasted into a
+    # printed `--name` a human is invited to run.
     _print_next_commands(row["id"], situation, row.get("subjects") or [subject])
     return 0
 

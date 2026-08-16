@@ -36,6 +36,10 @@ OBJECT_KEY = re.compile(r"([A-Za-z_$][\w$]*)\s*:")
 EXACTLY_ONE_TEST = re.compile(
     r"\.length\s*(?:===|==|!==|!=|>=|<=|>|<)\s*[12]\b"
     r"|\b[12]\s*(?:===|==|!==|!=|>=|<=|>|<)\s*[\w$.\[\]()]*\.length\b")
+# The decided prefill as it arrives on an entities row: `admin.service._situation` emits
+# `mint_name_prefill` (`entities.situations` decides it), and the console reads it instead of
+# deriving one. `row.subjects`/`row.subject` are different keys and do not match.
+DECIDED_PREFILL = re.compile(r"\.mint_name_prefill\b")
 
 
 def _element_props_objects(text):
@@ -293,20 +297,25 @@ def test_admin_console_docs_do_not_promise_an_unreachable_hover_reason():
 # The console's OTHER mint door. Submitting `entityApproveFlow`'s modal is, in that modal's own
 # words, "ONE commit to the knowledge repo … Not something cancelling after this point can undo",
 # so whatever sits in the `Name` field is in practice what gets minted — a prefill is the value
-# most stewards submit unchanged. The rule is the Slack surface's, pinned there on a real rendered
-# payload (`tests/slack/test_render.py`, `render_entity_mint_modal`): prefill only when there is
-# exactly ONE unresolved name; with several, no single string is the right answer, so the field
-# stays empty and the names are listed for the steward to choose from.
+# most stewards submit unchanged.
 #
-# WHAT THIS INSTRUMENT PROVES, AND WHAT IT CANNOT. These four tests read the SOURCE TEXT of a
-# shipped frontend asset. There is no JS runtime in this suite, so they cannot open the modal,
-# cannot see what a steward is shown, and cannot prove the submitted value. They prove exactly
-# two things — that no field prefill is wired to the joined display string, and that the mint
-# flow's prefill is still there and still guarded by an exactly-one condition — and they would
-# stay green against a fix that read the right data and still rendered the wrong field. That gap
-# is not closable from Python: it is the seam the developer is asked to add (a pure, exported
-# prefill decision — or, better, one server-side field both mint doors read), reported alongside
-# these tests rather than papered over by them.
+# The rule — prefill only when exactly ONE unresolved name could be meant; with several, no single
+# string is right, so the field stays empty and the names are listed — is no longer written in this
+# file, nor in the Slack renderer that used to state its own copy. It is decided once in
+# `entities.situations.mint_name_prefill`, pinned there directly on the pure function
+# (`tests/entities/test_situations.py`), and delivered as `mint_name_prefill` on both entity routes
+# (`tests/admin/test_routes_pg.py`) and on the review item the Slack door reads
+# (`tests/server/test_review.py`). That is the seam this section used to ask for, and it exists.
+#
+# WHAT THIS INSTRUMENT PROVES, AND WHAT IT CANNOT. Every test in this section reads the SOURCE TEXT
+# of a shipped frontend asset. There is no JS runtime in this suite, so none of them can open the
+# modal, see what a steward is shown, or prove the submitted value. What they can prove is WHICH
+# DATA this file wires into the mint form: that no prefill is wired to the joined display string,
+# that the `Name` prefill is the decided field and not a local re-derivation, and that the
+# several-names listing is still built. They would stay green against a change that read the right
+# field and rendered it in the wrong place — that residue is the untestable-from-Python part, and
+# it is smaller than it was, because the value's correctness is now provable where it is decided
+# instead of only inferable from a grep.
 def test_no_confirm_form_prefill_is_wired_to_the_joined_subject_display_string():
     """**The regression test.** `entities.situations.subject_of` returns ONE display string: for a
     park naming two unresolved entities it is `"Jack, Acme Capital"`, the two names joined with a
@@ -391,25 +400,154 @@ def test_the_mint_name_field_still_carries_a_prefill():
         "exactly one name, empty only when it holds several or none")
 
 
-def test_the_mint_prefill_is_decided_by_how_many_unresolved_names_there_are():
-    """The other half of the contract, and the one an empty-field fix would skip: the prefill must
-    be a DECISION over the per-name list, not an unconditional read of its first element.
-    `subjects[0]` alone is the same defect wearing the right field name — it prefills "Jack" for a
-    park about Jack AND Acme Capital, and a steward who accepts it mints one of the two and
-    silently drops the other, which the joined string at least made visible.
+def test_the_mint_flow_reads_the_per_name_list_and_never_counts_it_again():
+    """RETARGETED, and the direction of the change is the whole point.
 
-    A source-text proxy, honestly: it asserts the flow reads `subjects` and branches on a length
-    against 1 or 2, in whichever direction the fix writes it. It cannot prove the branch is the
-    right way round, and it cannot prove the several-names case lists the names for the steward
-    the way the Slack modal does — see this section's header for the seam that would."""
+    It used to REQUIRE a length comparison in this function: back then the prefill was decided
+    here, and a flow reading `subjects` without branching on its size was one that prefilled
+    `subjects[0]` for a park about Jack AND Acme Capital. The decision now lives in
+    `entities.situations.mint_name_prefill` and arrives as a field
+    (`tests/entities/test_situations.py` pins the rule, `tests/admin/test_routes_pg.py` pins its
+    delivery on both entity routes), so the same assertion has INVERTED: a count comparison
+    reappearing in this function is a second policy, and two policies over one irreversible mint
+    drift — which is the defect the consolidation removed.
+
+    The `subjects` half is unchanged and now guards the LISTING: with no default to offer, the
+    names still have to be enumerated for the steward, and `subjects` is the only source for that
+    (`test_the_several_names_case_still_lists_the_names_for_the_steward` pins the enumeration
+    itself). What the ban catches is a count compared against ONE, not every read of `.length`:
+    the banner is gated on `!proposed && names.length` — the server's decision, plus "is there
+    anything left to list" — which is a non-empty test and correctly does not match. The banner's
+    own sentence states no number at all, deliberately: the decision was taken on the raw row
+    while these bullets are the post-`_clean` survivors, so any count named there could contradict
+    the list it introduces on exactly the park the rule exists for."""
     views = (STATIC / "assets" / "views.js").read_text(encoding="utf-8")
     body = _function_body(views, "entityApproveFlow")
     assert re.search(r"\bsubjects\b", body), (
         "entityApproveFlow never reads `subjects` — the per-name list `admin.service._situation` "
-        "already sends beside the joined `subject`, and the only source that can tell one "
-        "unresolved name from several")
-    assert EXACTLY_ONE_TEST.search(body), (
-        "entityApproveFlow reads `subjects` but branches on nothing: no comparison of its length "
-        "against one. Prefilling `subjects[0]` unconditionally mints the first of several names "
-        "and drops the rest — with more than one name the field must stay EMPTY and the names be "
-        "listed, as slack/render.py::render_entity_mint_modal does")
+        "sends beside the joined `subject`, and the only source the several-names listing can be "
+        "built from")
+    offenders = [line.strip() for line in body.splitlines() if EXACTLY_ONE_TEST.search(line)]
+    assert not offenders, (
+        "entityApproveFlow compares a length against one again — the one-vs-several rule is "
+        "decided ONCE, in `entities.situations.mint_name_prefill`, and reaches this flow as "
+        "`row.mint_name_prefill`; a second derivation here is a second policy over the same "
+        "irreversible mint, and the two doors drift the moment either changes:\n  "
+        + "\n  ".join(offenders)
+        + "\nIf the decision is deliberately moving back into the browser, this test has done its "
+        "job by failing: say so, and move the Python proofs with it.")
+
+
+# The two below scope themselves to the `Name` descriptor's own `value:` expression, following it
+# through its `const` binding, rather than scanning the whole function the way the greps above do:
+# a body-wide scan is satisfied by anything anywhere in the flow, including the several-names
+# banner, so it cannot see what actually reaches the input a steward submits.
+#
+# THE DECISION MOVED, and these went red saying so — which is what they were for. Before the
+# consolidation they required the `Name` value expression to compare a name COUNT; the prefill is
+# now decided server-side, so they require it to be the decided FIELD instead, and the count
+# comparison is banned rather than demanded. Repointing them was a deliberate act with a new source
+# of truth to name (`entities.situations.mint_name_prefill`) and Python proofs landing beside it
+# (the pure function, both wires, the Slack modal). What must never happen is the decision moving
+# and this file staying quietly green — the failure that stopped that is on the record.
+def _resolved_value_expression(body, expression):
+    """`expression`, or — when it is a bare identifier bound in `body` — the initializer it is
+    bound to. One hop only: a prefill hidden behind two levels of aliasing is not something a
+    source scan should chase, and the assertion message says so."""
+    identifier = re.fullmatch(r"[A-Za-z_$][\w$]*", expression.strip())
+    if not identifier:
+        return expression
+    binding = re.search(r"\b(?:const|let|var)\s+" + re.escape(expression.strip()) + r"\s*=",
+                        body)
+    if not binding:
+        return expression
+    depth, quote, out, i = 0, None, [], binding.end()
+    while i < len(body):
+        ch = body[i]
+        if quote:
+            out.append(ch)
+            if ch == "\\":
+                out.append(body[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        elif ch in "\"'`":
+            quote = ch
+            out.append(ch)
+        elif ch in "([{":
+            depth += 1
+            out.append(ch)
+        elif ch in ")]}":
+            depth -= 1
+            out.append(ch)
+        elif ch == ";" and depth == 0:
+            break
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out).strip()
+
+
+def test_the_name_prefills_own_expression_is_the_decided_field_and_nothing_else():
+    """RETARGETED (see the block above). The `Name` field's `value:` — not the function around it —
+    is what a steward submits, so it is where the source of the prefill has to be visible. It used
+    to have to resolve to `names.length === 1 ? names[0] : ""`; it now has to resolve to a read of
+    `row.mint_name_prefill`, the value `entities.situations` decided and `admin.service._situation`
+    only sanitized and sent, and to nothing that decides again.
+
+    Both halves are needed and neither is redundant. Without the first, `value:` could become
+    `subjects[0]` — the C-3 defect wearing the right field name — and the sibling greps would stay
+    green, since they only ban the joined `subject` and only ask that `subjects` be read somewhere.
+    Without the second, the flow could read the decided field and then override it with its own
+    count, which is the duplicate policy this whole change removed.
+
+    The key string is asserted against the shaper that emits it, so a rename on either side fails
+    here instead of silently handing the browser `undefined` — a prefill that quietly becomes empty
+    for every park, with no listing either, is invisible from this side of the wire."""
+    views = (STATIC / "assets" / "views.js").read_text(encoding="utf-8")
+    body = _function_body(views, "entityApproveFlow")
+    descriptors = [d for _, d in _confirm_form_field_descriptors(body)
+                   if re.search(r"""name\s*:\s*["']name["']""", d)]
+    assert len(descriptors) == 1, (
+        f"expected exactly one `name` field descriptor in entityApproveFlow, found "
+        f"{len(descriptors)} — the mint form was restructured; repoint this check")
+    expression = _value_expression(descriptors[0])
+    resolved = _resolved_value_expression(body, expression or "")
+    assert DECIDED_PREFILL.search(resolved), (
+        f"the `Name` prefill expression ({expression!r} -> {resolved!r}) is not the decided "
+        "`row.mint_name_prefill` the API sends. Submitting this field mints one entity with one "
+        "irreversible commit, and the one-vs-several rule that says whether a default is safe at "
+        "all lives in `entities.situations.mint_name_prefill` — a prefill built from anything else "
+        "here is either the C-3 joined compound or a second copy of that rule.\n"
+        "If the decision deliberately moved again, this test has done its job by failing: repoint "
+        "it at the new source of truth and move the Python proofs "
+        "(tests/entities/test_situations.py, tests/admin/test_routes_pg.py) with it.")
+    assert not EXACTLY_ONE_TEST.search(resolved), (
+        f"the `Name` prefill expression ({expression!r} -> {resolved!r}) reads the decided field "
+        "AND compares a name count of its own — the browser is overriding, or second-guessing, the "
+        "one decision. One of the two wins on some input, and nobody knows which without reading "
+        "this expression, which is exactly the state the consolidation ended")
+    service = (ROOT / "src" / "stigmergy" / "admin" / "service.py").read_text(encoding="utf-8")
+    assert "mint_name_prefill" in service, (
+        "views.js prefills from `row.mint_name_prefill` but `admin/service.py` never mentions that "
+        "key — the shaper renamed or dropped it and the browser now reads `undefined`, which "
+        "prefills nothing AND lists nothing: an unexplained empty required field on every approval")
+
+
+def test_the_several_names_case_still_lists_the_names_for_the_steward():
+    """The half of the rule the prefill greps above do not check at all: an empty required field
+    with no explanation is a riddle, so with several unresolved names the console must SHOW them —
+    `tests/slack/test_render.py` pins exactly this for the other door on a real payload. Here it
+    can only be a proxy: the flow builds one list item per name from the per-name list.
+
+    It reds if the listing is dropped while the prefill is preserved, which is the plausible
+    accident now that this function reads a decided value and needs `names` for nothing else."""
+    views = (STATIC / "assets" / "views.js").read_text(encoding="utf-8")
+    body = _function_body(views, "entityApproveFlow")
+    assert re.search(r"\.map\s*\(", body), (
+        "entityApproveFlow no longer iterates anything — with several unresolved names the steward "
+        "is shown an empty required `Name` field and no indication of which names are waiting")
+    assert re.search(r"""["']li["']""", body), (
+        "entityApproveFlow builds no list items — the several-names case must still enumerate the "
+        "names for the steward, the way the Slack mint modal lists them above the empty field")

@@ -6,7 +6,10 @@ withheld-material rule; this module adds only "which parked rows are an ENTITY s
 `stigmergy-entities list` is OPERATIONAL (only rows this tool can act on — a list showing rows
 `approve` will refuse teaches its reader to ignore it), where `stigmergy-queue list` is
 MANAGEMENT; the filter is a named function here, never re-derived in a CLI. The read is not the
-permission: `require_situation` guards `approve`/`reject` before anything is written. Two kinds
+permission: `require_situation` guards `approve`/`reject` before anything is written. What a mint
+form may PREFILL is decided here too (`mint_name_prefill`), once, travels on the row
+(`_situation_view`) and is read by both mint doors — a surface that re-derives it from the name
+list is a second policy that can drift into minting a name nobody chose. Two kinds
 of situation: `unresolved-entity` (the ask-back's terminus) and `unsupported-type` ("this is a
 page about one specific person" is an identity claim). Legacy rows predating
 `schema.SITUATION_KEY` are classified by an `open_question` prefix fallback — a transition,
@@ -59,6 +62,33 @@ def subjects_of(row: dict) -> list[str]:
     return [single] if single else []
 
 
+def mint_name_prefill(row: dict) -> str:
+    """The ONE name a mint form may offer as its default, or `""` when no single string can be it.
+
+    Submitting either mint door — the Slack modal, the admin console's Approve form — writes one
+    entity as one signed commit, so the prefill is not a convenience: it is the value most stewards
+    submit unchanged. Exactly one unresolved name is the only case where a default can be right.
+    With several, `subject_of`'s joined display string is not any of their real names and each of
+    them is only one accepted default away from a garbled entity in the knowledge repo, so the
+    field is left EMPTY and the surfaces list the names instead; with none there is nothing to
+    offer. A surface renders that listing when this answers `""` and names exist — it never counts
+    again, or the rule is back to being decided per door.
+
+    What this makes identical across the doors is the DECISION — whether a default is offered at
+    all, and which name it is. Not the bytes: each transport still sanitizes what it renders on its
+    own terms (the admin console strips control characters, Slack and MCP do not), so a ragged name
+    can reach two forms differently. That gap is open (issue #46) and is not closed here.
+
+    Deliberately NOT tidied on the way out: `subjects_of` returns the plural key's entries
+    unstripped, and nothing de-duplicates them, so `["  Jack  "]` prefills with its padding and
+    `["Jack", "Jack"]` is a two-name park with an empty field. Both are pinned in
+    `tests/entities/test_situations.py`; changing either changes what gets minted, which is a
+    decision and not a consolidation.
+    """
+    names = subjects_of(row)
+    return names[0] if len(names) == 1 else ""
+
+
 def subject_of(row: dict) -> str:
     """What the situation is ABOUT: the unresolved name(s), or the type the fast lane will not
     file; `""` when the row records neither (a legacy row), answered honestly rather than parsed
@@ -76,9 +106,15 @@ def subject_of(row: dict) -> str:
 def _situation_view(row: dict) -> dict:
     """A listed row plus the facts this tool sorts and renders on. Additive: the row keeps every
     field `queue._shape_listed` gave it, so the two tools' `--json` describe one row the same
-    way."""
+    way.
+
+    `mint_name_prefill` travels HERE, beside `subject`/`subjects`, rather than being added by hand
+    on each surface: a shaper that computes it itself decides it on whatever row it happens to
+    hold, and two surfaces preprocessing that row differently is how one park ends up with two
+    default names for a mint nothing can cancel.
+    """
     return {**row, "situation": classify(row), "subject": subject_of(row),
-           "subjects": subjects_of(row)}
+           "subjects": subjects_of(row), "mint_name_prefill": mint_name_prefill(row)}
 
 
 # ── the two semantic entry points ─────────────────────────────────────────────────────────────
