@@ -29,7 +29,7 @@ import pytest
 
 from stigmergy.capture import queue, schema
 from stigmergy.librarian import cli, config, worker
-from tests import testdb
+from tests import childwatch, testdb
 from tests.librarian import support
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -46,7 +46,7 @@ def _librarian_command() -> list[str]:
 
 
 def _spawn(env, *extra: str) -> subprocess.Popen:
-    return subprocess.Popen(
+    return childwatch.spawn(
         [*_librarian_command(), "--dsn", testdb.dsn(), "--repo", env.repo,
          "run", "--poll-interval", "0.2", *extra],
         cwd=str(REPO_ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -250,7 +250,7 @@ def test_a_non_zero_flag_still_takes_effect_which_is_the_benign_twin(capsys, run
     `startup_checks` lets it through and the loop runs with it."""
     env, _, _ = run_rig
 
-    proc = subprocess.Popen(
+    proc = childwatch.spawn(
         [*_librarian_command(), "--dsn", testdb.dsn(), "--repo", env.repo,
          "run", "--poll-interval", "0.2", "--visibility-timeout", "1200"],
         cwd=str(REPO_ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

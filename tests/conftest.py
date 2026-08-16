@@ -31,12 +31,20 @@ import pytest
 
 from stigmergy.index import store
 from stigmergy.librarian import githubapp
-from tests import testdb
+from tests import childwatch, testdb
 
 
 def pytest_configure(config) -> None:
-    """Runs once, before collection — so it is in place before any test module is imported."""
+    """Runs once, before collection — so both of these are in place before any test module is
+    imported, and before any fixture has truncated anything.
+
+    `require_sole_test_run` is here rather than at the connection seam deliberately. The damage
+    two concurrent runs do is not done by CONNECTING, it is done by running at all, so the honest
+    place to refuse is the earliest point where a run is known to exist — and refusing here yields
+    one legible line instead of the same message repeated by every Postgres fixture in the tree.
+    """
     os.environ[store.DSN_ENV] = testdb.dsn()
+    testdb.require_sole_test_run()
 
 
 # The App's five environment variables — same tuple `tests/librarian/conftest.py::
@@ -111,3 +119,31 @@ def no_real_llm_anywhere(monkeypatch):
     credential one fixture up.
     """
     monkeypatch.setenv("CLEAN_LLM", "fake")
+
+
+@pytest.fixture(autouse=True)
+def no_spawned_child_outlives_its_test():
+    """**No test may leave a process running behind it** — the third reading of the same doctrine,
+    one resource over from the two fixtures above.
+
+    A leaked child is worse than a leaked variable, because it does not fail the test that leaked
+    it. A surviving `stigmergy-librarian` or `stigmergy-queue` keeps claiming rows from
+    `capture_queue` while some LATER test's fixture truncates the table under it, and the failures
+    that produces (`LeaseLostError`, "submission N does not exist") land in whatever package
+    happened to be running at the time, name no culprit, and move on the next run. That is the
+    inverse of a useful red, and this is the fixture that makes the leak fail where it happened.
+
+    Autouse and repo-wide, again for the reason `tests/childwatch.py` spells out: the suites that
+    spawn real processes live in `tests/librarian/` and `tests/capture/` today, and "which
+    packages spawn" is not a fact worth encoding anywhere.
+    """
+    childwatch.forget()
+    yield
+    strays = childwatch.reap(childwatch.strays())
+    childwatch.forget()          # even on failure — the next test must not inherit this one's mess
+    assert not strays, (
+        f"a child process outlived its test and is still running: {'; '.join(strays)}. It has been "
+        f"killed, but until this test reaps its own children the suite will keep producing "
+        f"LeaseLostError and 'submission N does not exist' failures in unrelated packages, "
+        f"because the survivor claims queue rows a later fixture is truncating. Wrap the spawn in "
+        f"`try:` / `finally:` and kill it there.")
