@@ -296,7 +296,7 @@ def test_entity_proposal_approve_button_opens_the_mint_modal_with_the_name_prefi
     name_element = blocks_by_id[render.ENTITY_MINT_NAME_BLOCK_ID]["element"]
     assert name_element["initial_value"] == "Globex Robotics"   # the proposal's own subject
     type_options = blocks_by_id[render.ENTITY_MINT_TYPE_BLOCK_ID]["element"]["options"]
-    # the closed six `entities.mint` actually accepts — never a hand-copied list this test could
+    # the closed list `entities.mint` actually accepts — never a hand-copied one this test could
     # drift from independently of the real one.
     assert [o["value"] for o in type_options] == list(entities_generator.ENTITY_TYPES)
     aliases_block = blocks_by_id[render.ENTITY_MINT_ALIASES_BLOCK_ID]

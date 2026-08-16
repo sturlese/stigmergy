@@ -2,7 +2,7 @@
 type: entity
 title: "<Entity Name>"
 status: developing        # seed|developing|mature|canonical (canonical requires `owner`)
-entity_type: organization # person|organization|product|tool|repository|place
+entity_type: organization # person|organization|product|tool|repository|place|project
 role: ""
 aliases: []
 created: <YYYY-MM-DD>
