@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from stigmergy.entities import generator
+from stigmergy.entities import birth, generator
 from stigmergy.entities.errors import EntityError
 from stigmergy.kernel.normalize import normalize
 from tests.entities import conftest as fx
@@ -96,6 +96,30 @@ def test_derive_registry_indexes_ids_names_and_aliases(repo):
 def test_committed_registry_of_a_missing_file_is_empty(tmp_path):
     reg = generator.committed_registry(str(tmp_path))
     assert reg.entities == {}
+
+
+def test_a_project_entity_round_trips_from_birth_to_the_registry(repo):
+    """The seventh entity type reaches the registry as itself (ADR 037 D3).
+
+    `project` is the first value added after `ENTITY_TYPES` shipped closed, and it crosses three
+    spellings of the vocabulary on the way to being resolvable: `birth.prepare` validates it
+    against the generator's tuple, `birth.render_page` writes it into the page's `entity_type`,
+    and `read_entity_pages` reads it back as the registry's `type`. A type accepted at the mint
+    gate but lost before the registry would mint a page nothing can anchor through — mentions
+    resolve against `ops/entity-registry.json`, never against the page. Written through the
+    real template the fixture repo carries, because the template is what a real mint renders.
+    """
+    _remote, clone = repo
+    with open(os.path.join(clone, "ops", "templates", "entity.md"), encoding="utf-8") as f:
+        template = f.read()
+    proposal = birth.prepare(canonical_id="atlas", name="Atlas", entity_type="project",
+                             registry=generator.derive_registry(clone))
+    with open(os.path.join(clone, "wiki", "entities", "Atlas.md"), "w", encoding="utf-8") as f:
+        f.write(birth.render_page(template, proposal, today="2026-08-16"))
+
+    reg = generator.derive_registry(clone)
+    assert reg.entities["atlas"]["type"] == "project"
+    assert reg.canonical_id("Atlas") == "atlas"
 
 
 # ── compare/check: every divergence names the fix command ────────────────────────────────────────

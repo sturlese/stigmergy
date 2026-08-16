@@ -219,7 +219,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
         discipline `stigmergy-entities approve` runs (resolve-before-mint, drift refusal, a secrets
         scan, never a force-push) — committed as the librarian App with an `Approved-by: you`
         trailer. That verdict needs `name` (the entity's page title) and `entity_type` (one of
-        person/organization/product/tool/repository/place); omitting either is refused, naming
+        person/organization/product/tool/repository/place/project); omitting either is refused, naming
         what is missing, and mints nothing. `entity_id` defaults to `name`'s slug; `aliases` (a
         list, or one comma-separated string) and `role` are optional. `requeue=true` sends the
         originating capture back to the librarian once the push lands, so it re-files anchored to

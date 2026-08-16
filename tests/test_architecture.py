@@ -1060,7 +1060,7 @@ def test_stigmergy_review_kinds_is_the_bottom_of_the_stack():
 def test_review_kinds_entity_types_matches_the_generators_closed_list():
     """`stigmergy.review_kinds.ENTITY_TYPES` is a RESTATEMENT of `entities.generator.ENTITY_TYPES`
     (never an import — `review_kinds` may depend on nothing, see the test above), so a Slack
-    `static_select` built from the restatement can silently drift from the six types
+    `static_select` built from the restatement can silently drift from the types
     `entities.mint` will actually accept. This is the drift guard `review_kinds.py`'s own docstring
     promises: if this ever fails, the fix is editing `review_kinds.ENTITY_TYPES` to match, never
     loosening this assertion."""

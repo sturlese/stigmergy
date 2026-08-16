@@ -421,8 +421,9 @@ source attachment each widen it for the duration of one item, never for the proc
 (`stigmergy-entities`), `meeting` the distiller, `source` the provenance writer
 (`processing._build_source_parts`), `view` the regenerator (`stigmergy-views`). A person, team,
 product, customer or project is an ENTITY, and an entity's own kind lives in the registry's `type`
-field (`person`, `organization`, `product`, `tool`, `repository`, `place` —
-`entities.generator.ENTITY_TYPES`, written on the page as `entity_type`).
+field (`person`, `organization`, `product`, `tool`, `repository`, `place`, `project` —
+`entities.generator.ENTITY_TYPES`, written on the page as `entity_type`). `project` is an entity
+kind and deliberately not a page type ([ADR 037](../decisions/037-second-brain-comparison.md) D3).
 
 The table is mirrored by the knowledge repo's own contract linter (`stigmergy_lint.py`'s
 `VALID_TYPES`), and the two must agree: a type this table knows and the linter does not is a page

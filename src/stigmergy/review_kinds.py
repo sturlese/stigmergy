@@ -9,9 +9,9 @@ KIND_ENTITY_PROPOSAL = "entity-proposal"
 KIND_PARKED_CAPTURE = "parked-capture"
 ITEM_KINDS = (KIND_ENTITY_PROPOSAL, KIND_PARKED_CAPTURE)
 
-# The six entity types a mint may declare, for the entity-mint modal's `static_select`. The one
-# true source is `entities.generator.ENTITY_TYPES`; this is a RESTATEMENT (this module may depend
-# on nothing), pinned against drift by `tests/test_architecture.py::
+# The entity types a mint may declare, for the entity-mint modal's `static_select`. The one true
+# source is `entities.generator.ENTITY_TYPES`; this is a RESTATEMENT (this module may depend on
+# nothing), pinned against drift by `tests/test_architecture.py::
 # test_review_kinds_entity_types_matches_the_generators_closed_list`. `stigmergy.server.review`
 # does not read this constant — it imports the generator's directly.
-ENTITY_TYPES = ("person", "organization", "product", "tool", "repository", "place")
+ENTITY_TYPES = ("person", "organization", "product", "tool", "repository", "place", "project")

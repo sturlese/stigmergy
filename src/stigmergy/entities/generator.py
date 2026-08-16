@@ -32,8 +32,10 @@ FIX_COMMAND = "stigmergy-entities regenerate"
 # `entity_type` on the page -> `type` in the registry. The vocabulary is `ops/templates/entity.md`'s
 # own comment (the human-facing source of truth); the linter does not enum-check the field, so this
 # is the only enforcement. `birth.prepare` refuses anything outside it; the generator is LENIENT on
-# read — one bad pre-existing page must not make the whole registry unregenerable.
-ENTITY_TYPES = ("person", "organization", "product", "tool", "repository", "place")
+# read — one bad pre-existing page must not make the whole registry unregenerable. `project` is a
+# governed identity like the rest (ADR 037 D3): an ongoing initiative earns birth-by-steward and a
+# regenerated view, which is why it is an entity here and NOT a page type.
+ENTITY_TYPES = ("person", "organization", "product", "tool", "repository", "place", "project")
 
 # `load_registry`'s own default, mirrored rather than re-decided, so a page with no `entity_type`
 # and a registry entry with no `type` describe the same entity after a round trip.
