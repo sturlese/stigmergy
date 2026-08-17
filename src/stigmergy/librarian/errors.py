@@ -55,6 +55,28 @@ class StaleBaseError(LibrarianConfigError):
     """
 
 
+# ── the three credential states `githubapp.authenticated_clone_url` distinguishes ─────────────
+# Siblings, never a chain: a caller re-words all three for its own audience, and a subclass here
+# would make one arm shadow another depending on the order they happen to be written in. They
+# exist because the shared clone-URL resolver has TWO callers with different vocabularies
+# (`entities.remote` re-words for a steward over MCP, `repair.remote` for the same steward), and
+# a caller cannot tell "nothing is configured" from "half of it is" from "GitHub said no" when
+# every one of them arrives as a bare `LibrarianConfigError`.
+class CloneCredentialUnavailable(LibrarianConfigError):
+    """Nothing to authenticate a clone WITH: no repo URL configured, or no App configured at all.
+    An absent capability, not a fault — the fix is "configure one"."""
+
+
+class CloneCredentialHalfSet(LibrarianConfigError):
+    """Some of the App's three environment variables are set and not all of them. Somebody meant
+    to configure this and got it wrong, which is a different sentence from "there is none"."""
+
+
+class CloneCredentialRefused(LibrarianConfigError):
+    """The App IS configured and GitHub would not issue a token for it — a revoked installation,
+    a rotated key. An operational fault: the fix is "check the App", not "configure one"."""
+
+
 class WorktreeError(LibrarianError):
     """An ephemeral worktree could not be created, diffed or removed."""
 

@@ -2,15 +2,21 @@
 they decided.
 
 `reject` and every `parked-capture` verdict are Postgres only, categorically. Approving an
-`entity-proposal` is the one path that touches git: exactly ONE commit through the governed door,
-authored as the librarian App with an `Approved-by: <caller>` trailer.
+`entity-proposal` or a `repair-proposal` are the two paths that touch git: exactly ONE commit
+through a governed door, authored as the librarian App with an `Approved-by: <caller>` trailer.
 
 Authorization runs FIRST — an `entity-proposal` needs a STEWARD, a `parked-capture` the steward OR
-the asked submitter — and a refusal never becomes more specific once a caller has failed it.
+the asked submitter, a `repair-proposal` a steward for EVERY page it would edit — and a refusal
+never becomes more specific once a caller has failed it.
+
+The two git-touching verdicts share a shape and not an implementation: each has ONE ordering
+function that both of its doors run (`mint_and_record_approval`, `apply_repair_and_record`), so
+"the ledger row is written, and written after the push" is a property of the code rather than of
+each surface remembering.
 """
 import logging
 import os
-from datetime import UTC, date
+from datetime import UTC, date, datetime
 
 from stigmergy.capture import decisions, dispositions
 from stigmergy.capture import ops as capture_ops
@@ -24,10 +30,15 @@ from stigmergy.entities.errors import EntityError
 from stigmergy.entities.generator import ENTITY_TYPES, canonical_id_for
 from stigmergy.librarian import base_inputs, gates, gitcmd
 from stigmergy.librarian.errors import LibrarianError
+from stigmergy.repair import remote as repair_remote
+from stigmergy.repair import schema as repair_schema
+from stigmergy.repair import store as repair_store
+from stigmergy.repair.errors import RepairError
 from stigmergy.review_kinds import (
     ITEM_KINDS,
     KIND_ENTITY_PROPOSAL,
     KIND_PARKED_CAPTURE,
+    KIND_REPAIR_PROPOSAL,
 )
 from stigmergy.server.errors import CapabilityUnavailableError
 
@@ -132,6 +143,31 @@ def _guard_parked_capture_decision(service, *, found: bool, submitted_by: str) -
     raise ReviewError(NOT_YOURS_TO_DECIDE)
 
 
+def _guard_repair_decision(service, *, found: bool, target_paths) -> None:
+    """`repair-proposal`'s rule: a steward at the scope of EVERY page the proposal would edit.
+
+    **This is the first verdict in this lane that can be asked a per-PATH question, and it must
+    be.** The other two kinds are anchored to no page — an entity proposal has no page yet, a
+    parked capture never got one — so `is_steward(service, "")` is the only scope they could
+    resolve, and it can only match the universal `"*"` key. A repair names the exact pages it would
+    edit, and `ops/stewards.json` exists to DELEGATE zones: the universal question would let the
+    general steward apply an edit inside a folder whose own steward never saw it, which is the
+    delegation being silently undone by the one verdict that writes to those folders.
+
+    `all(...)`, not `any(...)`: a contradiction repair edits both sides, so a proposal spanning two
+    zones needs somebody who stewards both. That is not a deadlock — either steward may still
+    REJECT it, and the pair can be proposed as two one-sided repairs.
+
+    An empty `target_paths` collapses to the universal scope. It cannot occur from the proposer
+    (`store.insert_proposal` derives the column from the ops, and a proposal with no ops is refused
+    before it is stored), so this is the fail-closed reading of a row that should not exist rather
+    than a supported shape.
+    """
+    paths = [str(p) for p in (target_paths or ()) if str(p)]
+    if not found or not all(is_steward(service, p) for p in (paths or [""])):
+        raise ReviewError(NOT_YOURS_TO_DECIDE)
+
+
 def _parse_id(item_id: str) -> int | None:
     """`int(item_id)`, or `None` — a malformed id is as "not found" as a nonexistent one."""
     try:
@@ -177,12 +213,52 @@ def _query_all_open_submissions(conn, *, submitted_by: str | None, limit: int) -
     return rows
 
 
+def _iso(value) -> str | None:
+    """`capture.queue._iso`'s rule, spelled here rather than imported: it is private to that module
+    and this is a two-line predicate, not a shared decision."""
+    return value.isoformat() if isinstance(value, datetime) else None
+
+
+def _repair_proposal_items(conn) -> list[dict]:
+    """Every pending `repair_proposals` row, as review-inbox items.
+
+    `ops_preview` is a COUNT and the set of op kinds, never the ops themselves: this list is a
+    scan, and the ops carry page paths and a free-text `note`. What a steward has to read before
+    approving is the `rationale` and the pages it would touch; the whole thing is one `review_queue`
+    entry away in the console, and one `stigmergy-repair show <id>` away in a terminal.
+    """
+    return [{
+        "kind": KIND_REPAIR_PROPOSAL, "id": str(row["id"]),
+        # ISO, like every other item's: `repair.store` hands back the driver's `datetime` and
+        # `mcp_server` serializes this whole structure with a plain `json.dumps`. `capture.queue`
+        # converts on the way out for the same reason, which is why the other two kinds already
+        # arrive as strings and nothing here noticed until a third writer joined them.
+        "created_at": _iso(row.get("created_at")), "rationale": row.get("rationale", ""),
+        "target_paths": list(row.get("target_paths") or ()),
+        "ops_preview": {"count": len(row.get("ops") or ()),
+                        "kinds": sorted({str(o.get(repair_schema.OP_KIND_KEY, ""))
+                                         for o in (row.get("ops") or ())})},
+        "model_id": row.get("model_id", ""),
+    } for row in repair_store.pending_proposals(conn)]
+
+
 def _collect_open_items(conn, *, submitted_by: str | None, limit: int) -> list[dict]:
-    """The shared base under both wrappers: everything parking on a human, both kinds, latest
-    decision attached. `submitted_by=None` is the MANAGEMENT read, never exposed to an MCP caller
-    directly. Kinds are disjoint by construction — `situations.classify` runs FIRST, and only a
-    non-entity-situation row reaches the `parked-capture` branch."""
+    """The shared base under both wrappers: everything parking on a human, latest decision
+    attached. `submitted_by=None` is the MANAGEMENT read, never exposed to an MCP caller directly.
+    The first two kinds are disjoint by construction — `situations.classify` runs FIRST, and only a
+    non-entity-situation row reaches the `parked-capture` branch.
+
+    **`repair-proposal` is in the MANAGEMENT read only**, and the asymmetry is the honest reading of
+    the ownership scope rather than an omission: a repair proposal has no submitter — a nightly job
+    derived it from the gardener's findings, nobody asked for it — so there is no "own" for an
+    ownership-scoped caller to be shown. Including it anyway would show every scoped caller every
+    proposal, and a proposal names the PAGE PATHS it would edit: `acl.visible()` decides who may
+    see that a page exists, and this list does not ask it. Fail closed; the steward guard on the
+    decide leg is a separate question and answers it separately.
+    """
     items: list[dict] = []
+    if submitted_by is None:
+        items += _repair_proposal_items(conn)
 
     rows = _query_all_open_submissions(conn, submitted_by=submitted_by, limit=limit)
     for row in rows:
@@ -493,8 +569,144 @@ def _alias_list(aliases) -> list[str]:
     return out
 
 
-# The knowledge repo's default branch; every mint through this door targets it.
-_MINT_BRANCH = "main"
+# The knowledge repo's default branch; every server-driven write through this module — a mint and
+# an approved repair alike — targets it.
+_KNOWLEDGE_BRANCH = "main"
+
+# What a door is told when this deployment cannot write to the knowledge repo at all. Asked BEFORE
+# the proposal leaves `pending`, which is the whole point: `remote.apply_approved` records a
+# refusal as `failed`, and a deployment that was never configured would burn a proposal per
+# approval for a reason that has nothing to do with the proposal. The entity door refuses the same
+# condition by name for the same reason (`entities.remote`'s own capability refusal).
+REPAIR_REPO_UNCONFIGURED = (
+    "no knowledge-repo URL is configured for a server-driven repair — set "
+    "$STIGMERGY_LIBRARIAN_REPO_URL to the same repo the librarian worker writes to. The proposal "
+    "is untouched and still pending")
+
+
+# The sentence the loser of two simultaneous decisions gets. Composed once: both verdicts can lose
+# the same race, and a steward reading two different explanations of one condition would reasonably
+# conclude they are two conditions.
+_LOST_THE_RACE = ("this proposal is no longer pending — somebody decided it between your reading "
+                  "of the queue and this decision. Re-read the queue; nothing was changed by your "
+                  "call")
+
+
+def _repair_proposal_or_refuse(conn, item_id) -> dict:
+    """The pending proposal at `item_id`, or the anonymous refusal. A malformed id, a nonexistent
+    one and an already-decided one are ONE sentence, exactly as they are for the other two kinds:
+    "there is nothing for you to decide at that id" is true of all three."""
+    proposal_id = _parse_id(str(item_id))
+    row = repair_store.proposal(conn, proposal_id) if proposal_id is not None else None
+    if row is None or row["status"] != repair_schema.STATUS_PENDING:
+        raise ReviewError(NOT_YOURS_TO_DECIDE)
+    return row
+
+
+def apply_repair_and_record(conn, *, repo_url: str, proposal: dict, actor: str,
+                            source: str) -> dict:
+    """Approve ONE repair proposal and apply it, in the one order that is correct — record the
+    steward's verdict, apply through the governed door, then write the governance ledger row.
+
+    Both doors that approve a repair run THIS: the review lane through `_decide_repair`, the admin
+    console through `admin.service.repair_approve`. It is `mint_and_record_approval`'s lesson
+    applied to the second irreversible verdict this module owns — two copies of an ordering rule
+    are two places for it to be reordered, and the reordering is invisible from either door's end
+    state.
+
+    The order, and why each step is where it is:
+
+    1. `mark_decided(approved)` FIRST, and it is a conditional UPDATE (`WHERE status = 'pending'`).
+       That is what makes a second Approve lose rather than clone: the loser sees zero rows and is
+       told so, and the winner holds a row nothing else can act on for the whole of the clone. No
+       lease is needed anywhere below because of this one line.
+    2. `remote.apply_approved` — clone, re-validate, gate, cross-check, commit, push, and record
+       the outcome (`applied` with the sha, or `failed` with the sentence). A `RepairError` out of
+       it has ALREADY been recorded as failed, and the approved status is deliberately NOT
+       restored: a silent revert to pending would hide that a gate refused.
+    3. The ledger row LAST, after the push, exactly as the mint sequence writes its own — a row
+       claiming a decision whose commit never landed is worse than a missing row, and the commit is
+       the irreversible half.
+
+    It takes NO authorization argument, on purpose and by the same rule ADR 030 D2 states for the
+    mint: authorization is per-surface (a resolved steward here, the operator token there), so the
+    CALLER SET is closed and pinned in `tests/test_architecture.py`.
+
+    `apply_approved` is reached as a MODULE ATTRIBUTE so it stays monkeypatchable, the same seam
+    `entities_remote.mint_via_clone` keeps one door over.
+    """
+    if not repo_url:
+        raise ReviewError(REPAIR_REPO_UNCONFIGURED)
+    if not repair_store.mark_decided(conn, proposal["id"], status=repair_schema.STATUS_APPROVED,
+                                     decided_by=actor, notes=""):
+        raise ReviewError(_LOST_THE_RACE)
+    result = repair_remote.apply_approved(
+        conn, repo_url, _KNOWLEDGE_BRANCH, os.environ, proposal=proposal, approved_by=actor)
+    record_decision(conn, item_kind=KIND_REPAIR_PROPOSAL, item_id=str(proposal["id"]),
+                    verdict=APPROVE, actor=actor, source=source, notes="",
+                    extra={"commit": result["commit"], "paths": result["paths"]})
+    return {"applied": True, "commit": result["commit"], "paths": result["paths"]}
+
+
+def reject_repair_and_record(conn, *, proposal: dict, actor: str, source: str,
+                             reason: str) -> dict:
+    """Decline ONE repair proposal — the same two writes, in the same order, for both doors.
+
+    A REJECTED row is the dismissal memory (`repair.schema`): the proposer skips a content key that
+    has any prior row, so "reviewed and declined" is a durable fact and a steward who says no once
+    is not asked again tomorrow. That is why the reason is stored on the proposal AND in the
+    ledger, and why this is shared rather than spelled twice: a door that wrote only the ledger row
+    would leave the proposer re-asking every night.
+    """
+    if not repair_store.mark_decided(conn, proposal["id"], status=repair_schema.STATUS_REJECTED,
+                                     decided_by=actor, notes=reason):
+        raise ReviewError(_LOST_THE_RACE)
+    record_decision(conn, item_kind=KIND_REPAIR_PROPOSAL, item_id=str(proposal["id"]),
+                    verdict=REJECT, actor=actor, source=source, notes=reason)
+    return {"rejected": True}
+
+
+def _decide_repair(service, item_id: str, verdict: str, notes: str, actor: str, *,
+                   source: str) -> dict:
+    """`approve` applies the repair; `reject` records the dismissal. Authorization runs before
+    anything else, so a nonexistent id is refused by the same sentence an unauthorized one is.
+
+    There is no `request_changes`: a proposal is a concrete set of edits, and the thing to change
+    about one is which edits it contains — which is a new proposal, not an amendment to this one.
+    The proposer will make it, because a rejected key is skipped and a re-derived DIFFERENT repair
+    is a different key.
+    """
+    proposal = _repair_proposal_or_refuse(service.conn, item_id)
+    _guard_repair_decision(service, found=True, target_paths=proposal["target_paths"])
+
+    if verdict not in (APPROVE, REJECT):
+        raise ReviewError(
+            f"a repair proposal takes {APPROVE!r} or {REJECT!r} only — there is nothing to "
+            f"'request changes' to: a proposal IS its edits, so a different set of edits is a "
+            f"different proposal")
+    _refuse_secret_note(notes)
+    if verdict == REJECT:
+        if not notes:
+            raise ReviewError("reject requires a reason")
+        result = reject_repair_and_record(service.conn, proposal=proposal, actor=actor,
+                                          source=source, reason=notes)
+        return {"recorded": verdict, "item_kind": KIND_REPAIR_PROPOSAL,
+                "item_id": str(proposal["id"]), "actor": actor,
+                "message": _recorded_message(KIND_REPAIR_PROPOSAL, verdict, proposal["id"], actor),
+                **result}
+    try:
+        result = apply_repair_and_record(
+            service.conn, repo_url=service.settings.librarian_repo_url, proposal=proposal,
+            actor=actor, source=source)
+    except RepairError as ex:
+        # Mapped HERE, under the rule this whole module holds: an exception type from below never
+        # leaves as itself, because `stigmergy.slack` is barred from importing it and could only
+        # catch it as an unanticipated fault whose text may not be shown. Every sentence
+        # `repair.remote` raises is written for a steward (its own module docstring), so `str(ex)`
+        # crosses verbatim — and the row it names is already recorded as `failed`.
+        raise ReviewError(str(ex)) from ex
+    return {"recorded": verdict, "item_kind": KIND_REPAIR_PROPOSAL,
+            "item_id": str(proposal["id"]), "actor": actor, **result}
 
 
 def mint_and_record_approval(conn, *, repo_url: str, submission_id: int, entity_id: str,
@@ -539,7 +751,7 @@ def mint_and_record_approval(conn, *, repo_url: str, submission_id: int, entity_
     `mint_via_clone` is reached as a MODULE ATTRIBUTE so it stays monkeypatchable.
     """
     mint_result = entities_remote.mint_via_clone(
-        repo_url, _MINT_BRANCH, os.environ,
+        repo_url, _KNOWLEDGE_BRANCH, os.environ,
         entity_id=entity_id, name=name, entity_type=entity_type, aliases=aliases, role=role,
         today=date.today().isoformat(), submission_id=submission_id, approved_by=actor)
     record_decision(conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(submission_id),
@@ -589,12 +801,14 @@ def review_decide(service, *, item_kind: str, item_id: str, verdict: str, source
     """Record a verdict, attributed to the caller's RESOLVED identity — never an argument.
 
     `reject` and every `parked-capture` verdict are Postgres only. Approving an `entity-proposal`
-    is the one path that touches git: one App-authored commit through the governed door; that
-    verdict alone needs `name` and `entity_type`, and `requeue` re-files the originating capture
-    AFTER the push lands.
+    or a `repair-proposal` are the two paths that touch git, one App-authored commit each through a
+    governed door: the entity verdict alone needs `name` and `entity_type`, and `requeue` re-files
+    the originating capture AFTER the push lands; the repair verdict needs nothing but the id,
+    because the proposal already IS the change.
 
     `entity-proposal` requires a STEWARD and refuses self-approval; `parked-capture` accepts the
-    row's own submitter OR a steward. "Not authorized" and "does not exist" are the SAME sentence.
+    row's own submitter OR a steward; `repair-proposal` requires a steward for EVERY page it would
+    edit. "Not authorized" and "does not exist" are the SAME sentence.
 
     `source` names the DOOR, not the caller — the caller is `service.identity`. It is required and
     undefaulted all the way down: this function serves two transports (an MCP client and a Slack
@@ -612,6 +826,8 @@ def review_decide(service, *, item_kind: str, item_id: str, verdict: str, source
     if item_kind == KIND_PARKED_CAPTURE:
         return _decide_parked_capture(service, item_id, verdict, clean_notes, identity,
                                       source=source)
+    if item_kind == KIND_REPAIR_PROPOSAL:
+        return _decide_repair(service, item_id, verdict, clean_notes, identity, source=source)
     return _decide_entity_proposal(service, item_id, verdict, clean_notes, identity, source=source,
                                    name=name, entity_id=entity_id, entity_type=entity_type,
                                    aliases=aliases, role=role, requeue=requeue)

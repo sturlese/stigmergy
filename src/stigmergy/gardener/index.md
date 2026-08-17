@@ -35,7 +35,8 @@ both or neither.
 ## Reuse
 
 - `checks.build_finding` — the one finding assembler; `**extra` carries keys the table lacks
-  (`model_id`, the `_notice_*` family).
+  (the `_notice_*` family). `subjects` is derived from `subject` unless a caller passes the list
+  it already has (`sweep.to_finding` does).
 - `store.latest_completed_run` — `status IN ('ok','partial')`; `sweep.previous_run_watermark` —
   `'ok'` only. The two readers disagree on purpose: a partial run's findings are trustworthy, its
   sweep baseline is not.
@@ -65,7 +66,10 @@ both or neither.
 ## Contracts
 
 - `gardener_findings`: `id`, `run_id`, `check_slug` (Python key `"check"`), `severity`, `source`,
-  `subject`, `detail`, `suggested_action`, `created_at`, `model_id`.
+  `subject`, `subjects`, `detail`, `suggested_action`, `created_at`, `model_id`. `subject` is the
+  display string (comma-joined when a sweep finding names two pages) and `subjects` the same fact
+  as a LIST — a consumer that acts on the pages reads the list, never re-splits the prose. Empty
+  when a finding names none (`check_company_wide_fraction` reports a corpus-wide fraction).
 - Check populations, severities and settings defaults live in `checks.py`/`sweep.py`/
   `settings.py` beside their code. No check currently emits `sla`, so the notice machinery has no
   producer — a check that adds one must also set `_notice_page_paths` (the ACL scoping key, a

@@ -1,0 +1,81 @@
+"""Runtime configuration for `stigmergy-repair` — env-tunable, read in ONE place.
+
+`RepairSettings.from_env` is the only function in this package that consults the environment, and
+modules never read it at import time (`tests/test_architecture.py`). `dsn` is deliberately not
+here: a connection argument, not tunable behaviour.
+
+The bounds below are the proposer's blast radius, and they belong to code rather than to the
+skill: a brief can be argued with and a constant cannot. `MAX_OPS_PER_PROPOSAL` is what keeps one
+approval from being a corpus-wide rewrite — a steward approves ONE proposal, and this is how much
+one proposal is allowed to be.
+"""
+import os
+from dataclasses import dataclass
+
+from stigmergy.librarian import config as librarian_config
+from stigmergy.server.errors import StartupError
+
+MODEL_ENV = "STIGMERGY_REPAIR_MODEL"
+
+# The librarian's own default, deliberately: the proposer reads pages and writes an edit
+# declaration in exactly the vocabulary the filing agent already uses, so a deployment that has
+# settled on a model for one has settled on it for the other. `$STIGMERGY_REPAIR_MODEL` is how an
+# operator disagrees.
+DEFAULT_REPAIR_MODEL = librarian_config.DEFAULT_MODEL
+
+MAX_OPS_ENV = "STIGMERGY_REPAIR_MAX_OPS"
+DEFAULT_MAX_OPS_PER_PROPOSAL = 6
+
+BATCH_SIZE_ENV = "STIGMERGY_REPAIR_BATCH"
+DEFAULT_BATCH_SIZE = 8
+
+# What a zero or negative value would do to THIS package's arithmetic — the sentence
+# `gardener.settings.int_setting` interpolates, written for the bounds it guards here.
+_POSITIVE_COUNT_WHY = ("a zero or negative bound would either refuse every proposal or send an "
+                       "empty batch to the model.")
+
+
+def _int_setting(env_name: str, default: int) -> int:
+    """`gardener.settings.int_setting`'s rules, spelled here rather than imported: importing it
+    would put a `stigmergy.gardener.settings` edge on this package for one validator, and this
+    package already reaches the gardener for findings only. Two callers, one shape, and if the
+    validation ever grows a third rule both should gain it."""
+    raw = os.environ.get(env_name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise StartupError(
+            f"${env_name}={raw!r} is not a valid integer — unset it to use the default "
+            f"({default}) or set it to a positive whole number.") from None
+    if value <= 0:
+        raise StartupError(
+            f"${env_name}={value} must be a positive integer — {_POSITIVE_COUNT_WHY} Unset it to "
+            f"use the default ({default}) or set it to a positive integer.")
+    return value
+
+
+@dataclass(frozen=True)
+class RepairSettings:
+    """`repo` is WHERE the proposer reads from — the same checkout every other tool here is
+    pointed at, resolved through the shared `librarian_config.repo_path`. It is paired with
+    `is_repo_checkout` because the proposer reads the entity registry, the pages and the skill at
+    a real clone's HEAD, and a bare directory of markdown would silently answer every question
+    with a different corpus than the one the apply will commit against."""
+
+    repo: str = ""
+    model: str = DEFAULT_REPAIR_MODEL
+    max_ops_per_proposal: int = DEFAULT_MAX_OPS_PER_PROPOSAL
+    batch_size: int = DEFAULT_BATCH_SIZE
+
+    @classmethod
+    def from_env(cls, args=None) -> "RepairSettings":
+        """`args` supplies `--repo` only; everything else is env-tunable, the convention
+        `GardenerSettings.from_args` already sets."""
+        return cls(
+            repo=librarian_config.repo_path(getattr(args, "repo", None) or ""),
+            model=os.environ.get(MODEL_ENV) or DEFAULT_REPAIR_MODEL,
+            max_ops_per_proposal=_int_setting(MAX_OPS_ENV, DEFAULT_MAX_OPS_PER_PROPOSAL),
+            batch_size=_int_setting(BATCH_SIZE_ENV, DEFAULT_BATCH_SIZE),
+        )

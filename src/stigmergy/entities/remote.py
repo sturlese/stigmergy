@@ -30,7 +30,13 @@ from stigmergy.entities.errors import (
     TemplateMissingError,
 )
 from stigmergy.librarian import gitcmd, githubapp
-from stigmergy.librarian.errors import GitError, LibrarianConfigError, LibrarianError
+from stigmergy.librarian.errors import (
+    CloneCredentialHalfSet,
+    CloneCredentialRefused,
+    CloneCredentialUnavailable,
+    GitError,
+    LibrarianError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -207,45 +213,34 @@ def _trailer_actor(approved_by: str) -> str:
 
 
 def _authenticated_url(repo_url: str, credential) -> str:
-    """`repo_url`, unchanged for anything that is not `https://`; tokenized otherwise
-    (`x-access-token:<token>@host`, a fresh installation token, used for one `git clone` and
-    discarded in this same process).
+    """This door's wording over `githubapp.authenticated_clone_url`, which owns the mechanism and
+    the residual-risk argument for every server-driven clone.
 
-    The residual, stated rather than denied: the token DOES reach the clone's argv and IS
-    persisted as `remote.origin.url` in the throwaway clone's `.git/config` — both bounded by the
-    `TemporaryDirectory` and the token's ~1h expiry. Accepted here and NOT in `librarian.gitcmd`
-    (a continuously-running path with a long-lived worktree); every error path is scrubbed by
-    `gitcmd._scrub` and no log line carries it. The stronger shape, if this residual ever stops
-    being acceptable: an `http.<url>.extraheader` config triple passed through `env=`.
+    Only the SENTENCES are here, because only they are this package's: `server.review` echoes an
+    `EntityError` from this module to a steward over MCP verbatim, so none of the three refusals
+    below may carry the librarian exception's own text (it names the App private-key FILE PATH).
+    Each is logged with `exc_info=True` — moved, not lost — and answered with a sentence written
+    for the reader who will see it.
+
+    The empty-URL check is asked HERE rather than read off the shared refusal, so this door keeps
+    naming its own environment variable: the resolver refuses the same state one sentence later,
+    for its own caller, exactly as `config.is_repo_checkout` shares a judgement and not a message.
     """
     if not repo_url:
         raise CapabilityUnavailableError(
             "no knowledge-repo URL is configured for a server-driven mint — set "
             "$STIGMERGY_LIBRARIAN_REPO_URL to the same repo the librarian worker writes to")
-    if not repo_url.startswith("https://"):
-        return repo_url
     try:
-        # `configured()` RAISES on a HALF-set App (some but not all of the three env vars):
-        # folding that into the plain "absent" refusal below would tell an operator to configure
-        # something that already half exists. Caught so no raw librarian type escapes (module
-        # docstring).
-        app_configured = bool(credential) and githubapp.configured(credential)
-    except LibrarianConfigError as ex:
-        log.error("the librarian GitHub App credential is half-configured", exc_info=True)
-        raise EntityError(APP_MISCONFIGURED_MESSAGE) from ex
-    if not app_configured:
+        return githubapp.authenticated_clone_url(repo_url, credential)
+    except CloneCredentialUnavailable as ex:
         raise CapabilityUnavailableError(
             f"minting against an https:// knowledge repo needs the librarian GitHub App credential "
             f"(${githubapp.APP_ID_ENV}, ${githubapp.INSTALLATION_ID_ENV} and "
             f"${githubapp.PRIVATE_KEY_ENV} or ${githubapp.PRIVATE_KEY_FILE_ENV}) — this server has "
-            f"none of them configured")
-    try:
-        token = githubapp.installation_token(credential)
-    except LibrarianConfigError as ex:
-        # The App IS configured but GitHub would not hand back a token (revoked installation,
-        # rotated key) — an operational fault, not an absent capability: the fix is "check the
-        # App", not "configure one".
+            f"none of them configured") from ex
+    except CloneCredentialHalfSet as ex:
+        log.error("the librarian GitHub App credential is half-configured", exc_info=True)
+        raise EntityError(APP_MISCONFIGURED_MESSAGE) from ex
+    except CloneCredentialRefused as ex:
         log.error("the librarian GitHub App would not issue an installation token", exc_info=True)
         raise EntityError(CREDENTIAL_FAULT_MESSAGE) from ex
-    scheme, rest = repo_url.split("://", 1)
-    return f"{scheme}://x-access-token:{token}@{rest}"

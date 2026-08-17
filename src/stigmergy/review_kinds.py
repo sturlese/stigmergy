@@ -1,13 +1,23 @@
-"""The `kind` strings the review inbox uses — `entity-proposal`, `parked-capture` — and nothing
-else. At the package ROOT, beside `stigmergy.text`, so `stigmergy.server.review` and the pure
-Block Kit consumers (`stigmergy.slack.render`/`doorbell`) agree on these exact strings without the
-renderer importing the server's whole import graph for a few literals. Nothing here imports
-anything from this project; if it ever does, it has stopped being the bottom of the stack.
+"""The `kind` strings the review inbox uses — `entity-proposal`, `parked-capture`,
+`repair-proposal` — and nothing else. At the package ROOT, beside `stigmergy.text`, so
+`stigmergy.server.review` and the pure Block Kit consumers (`stigmergy.slack.render`/`doorbell`)
+agree on these exact strings without the renderer importing the server's whole import graph for a
+few literals. Nothing here imports anything from this project; if it ever does, it has stopped
+being the bottom of the stack.
+
+A kind in this tuple is a kind `review_decide` accepts and the ledger records. It is NOT a promise
+that every surface renders it: `repair-proposal` has no Block Kit card, and `slack.doorbell` skips
+any kind it has no renderer for rather than guessing one (its `_EVENT_NAMES` is the list of kinds
+that ring). A kind is reviewed in the console and over MCP until somebody writes it a card.
 """
 
 KIND_ENTITY_PROPOSAL = "entity-proposal"
 KIND_PARKED_CAPTURE = "parked-capture"
-ITEM_KINDS = (KIND_ENTITY_PROPOSAL, KIND_PARKED_CAPTURE)
+# The gardener's findings, turned into a concrete additive edit by `stigmergy.repair` and waiting
+# on a steward. Unlike the other two it has no submitter — nobody asked for it — which is why it
+# appears in the MANAGEMENT read of the inbox only (`server.review._collect_open_items`).
+KIND_REPAIR_PROPOSAL = "repair-proposal"
+ITEM_KINDS = (KIND_ENTITY_PROPOSAL, KIND_PARKED_CAPTURE, KIND_REPAIR_PROPOSAL)
 
 # The entity types a mint may declare, for the entity-mint modal's `static_select`. The one true
 # source is `entities.generator.ENTITY_TYPES`; this is a RESTATEMENT (this module may depend on

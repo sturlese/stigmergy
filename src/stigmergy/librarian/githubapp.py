@@ -25,7 +25,12 @@ import time
 import urllib.error
 import urllib.request
 
-from stigmergy.librarian.errors import LibrarianConfigError
+from stigmergy.librarian.errors import (
+    CloneCredentialHalfSet,
+    CloneCredentialRefused,
+    CloneCredentialUnavailable,
+    LibrarianConfigError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -157,6 +162,49 @@ def push_config(token: str, repo_slug: str) -> dict[str, str]:
         "GIT_CONFIG_KEY_0": f"http.{push_url(repo_slug)}.extraheader",
         "GIT_CONFIG_VALUE_0": f"Authorization: Basic {basic}",
     }
+
+
+def authenticated_clone_url(repo_url: str, credential) -> str:
+    """`repo_url`, unchanged for anything that is not `https://`; tokenized otherwise
+    (`x-access-token:<token>@host`, a fresh installation token, used for one `git clone` and
+    discarded in this same process).
+
+    The ONE resolver for every server-driven clone — `entities.remote` mints through it and
+    `repair.remote` applies an approved proposal through it, so the two doors cannot come to
+    disagree about when a credential is needed. Each caller re-words the three refusals below for
+    its own audience; only the JUDGEMENT is shared, the same bargain `config.is_repo_checkout`
+    already strikes.
+
+    The residual, stated rather than denied: the token DOES reach the clone's argv and IS
+    persisted as `remote.origin.url` in the throwaway clone's `.git/config` — both bounded by the
+    caller's `TemporaryDirectory` and the token's ~1h expiry. Accepted here and NOT in
+    `librarian.gitcmd` (a continuously-running path with a long-lived worktree); every error path
+    is scrubbed by `gitcmd._scrub` and no log line carries it. The stronger shape, if this
+    residual ever stops being acceptable: an `http.<url>.extraheader` config triple passed
+    through `env=`.
+    """
+    if not repo_url:
+        raise CloneCredentialUnavailable(
+            "no knowledge-repo URL was given for a server-driven clone")
+    if not repo_url.startswith("https://"):
+        return repo_url
+    try:
+        # `configured()` RAISES on a HALF-set App (some but not all of the three env vars):
+        # folding that into the plain "absent" refusal below would tell an operator to configure
+        # something that already half exists.
+        app_configured = bool(credential) and configured(credential)
+    except LibrarianConfigError as ex:
+        raise CloneCredentialHalfSet(str(ex)) from ex
+    if not app_configured:
+        raise CloneCredentialUnavailable(
+            f"cloning an https:// knowledge repo needs the GitHub App credential (${APP_ID_ENV}, "
+            f"${INSTALLATION_ID_ENV} and ${PRIVATE_KEY_ENV} or ${PRIVATE_KEY_FILE_ENV})")
+    try:
+        token = installation_token(credential)
+    except LibrarianConfigError as ex:
+        raise CloneCredentialRefused(str(ex)) from ex
+    scheme, rest = repo_url.split("://", 1)
+    return f"{scheme}://x-access-token:{token}@{rest}"
 
 
 def identity(env: dict | None = None) -> tuple[str, str]:

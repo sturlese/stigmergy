@@ -66,6 +66,7 @@ const ICONS = {
   crons: ["M12 2v4", "M12 18v4", "M4.9 4.9l2.9 2.9", "M16.2 16.2l2.9 2.9", "M2 12h4", "M18 12h4",
           "M4.9 19.1l2.9-2.9", "M16.2 7.8l2.9-2.9"],
   gardener: ["M12 22c6-3 8-8 8-13V5l-8-3-8 3v4c0 5 2 10 8 13z"],
+  repairs: ["M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"],
   digest: ["M4 4h16v12H8l-4 4z"],
   index: ["M12 2c-5 0-8 1.5-8 3.5S7 9 12 9s8-1.5 8-3.5S17 2 12 2z", "M4 5.5v13c0 2 3 3.5 8 3.5s8-1.5 8-3.5v-13",
           "M4 12c0 2 3 3.5 8 3.5s8-1.5 8-3.5"],
@@ -124,6 +125,10 @@ const STATUS_TONE = {
   success: "good", failure: "critical", cancelled: "neutral", in_progress: "accent",
   active: "good", disabled_manually: "serious", disabled_inactivity: "serious",
   refused: "serious",
+  // repair_proposals' own lifecycle. None of these words collides with a status above, which is
+  // why they can share one map: `rejected` and `failed` already mean the same thing here that they
+  // mean for a capture, and `applied` is this table's `filed`.
+  pending: "warning", approved: "accent", applied: "good",
 };
 
 export function pill(text, tone) {

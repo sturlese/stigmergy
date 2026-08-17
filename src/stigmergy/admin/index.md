@@ -1,14 +1,15 @@
 # admin — code map
 
-The operations console: one web surface over what already runs — the steward drain, the three
-scheduled workflows, the gardener's findings, the digest, the index, pending entity situations,
-activity and the worker's lease. Mounted as an ASGI branch in front of the MCP transport, inside
+The operations console: one web surface over what already runs — the steward drain, the four
+scheduled workflows, the gardener's findings and the repairs proposed for them, the digest, the
+index, pending entity situations, activity and the worker's lease. Mounted as an ASGI branch in front of the MCP transport, inside
 the `app` process group, behind its own single credential.
 Narrative: [`docs/reference/admin-console.md`](../../../docs/reference/admin-console.md).
 
 **It is a skin, not a subsystem.** Every act lands on a seam another package owns and tests:
 `capture.dispositions`, `capture.retention`, `capture.queue.release_expired`, `gardener.store`,
-`digest.run`, `index.check`, `entities.situations`, `server.review.mint_and_record_approval`,
+`digest.run`, `index.check`, `entities.situations`, `repair.store`,
+`server.review.mint_and_record_approval`, `server.review.apply_repair_and_record`,
 `server.pilot_report`. The only state it owns is `admin_actions`.
 
 **It is not a read surface over the corpus** — no search, no `ask`, no page bodies.
@@ -62,6 +63,10 @@ cannot need a token to render).
 | GET | `/admin/api/entities` | `entities_list()`, wrapped as `{"situations": [...]}` | yes |
 | GET | `/admin/api/entities/{id:int}` | `entities_show()` | yes |
 | POST | `/admin/api/entities/{id:int}/approve` | `entity_approve()` — `name`/`entity_type` required, `entity_id`/`aliases`/`role` optional, `requeue` boolean (default `true`) | yes |
+| GET | `/admin/api/repairs` | `repairs_list()` — pending, recently decided, and the proposer's `job_runs` history | yes |
+| GET | `/admin/api/repairs/{id:int}` | `repair_show()` | yes |
+| POST | `/admin/api/repairs/{id:int}/approve` | `repair_approve()` — applies the proposal's ops as ONE commit through `server.review.apply_repair_and_record` | yes |
+| POST | `/admin/api/repairs/{id:int}/reject` | `repair_reject()` — non-blank `reason` required | yes |
 | GET | `/admin/api/activity` | `activity()` | yes |
 | GET | `/admin/api/worker` | `worker_status()` | yes |
 | GET | `/admin/api/crons` | `crons_state()` | yes |
@@ -89,6 +94,14 @@ must not depend on a converter, so an unlisted file is a 400 naming the allowed 
   after its own name/type validation, the review lane before) and the exception mapping — nothing
   is caught inside `_do`, so `_mutate` records the library's OWN class name in `admin_actions`
   before the `except EntityError` outside it raises `AdminRefused` with the library's sentence.
+  `server.review.apply_repair_and_record`/`reject_repair_and_record` — `repair_approve`/
+  `repair_reject`'s whole seam, and the SAME pair the MCP review lane decides a `repair-proposal`
+  with (ADR 039): record the verdict as a CONDITIONAL update, apply through the governed door,
+  write the `review_decisions` row after the push. `repair.remote` is reached by that sequence,
+  never from this package — its import allowlist grants `repair.store`, `repair.schema` and
+  `repair.errors` only, the same shape the entities edge has. The exception mapping stays HERE for
+  the same reason it does for a mint: nothing is caught inside `_do`, so `_mutate` records
+  `RepairError` in `admin_actions` before the `except` outside it raises `AdminRefused`.
   `server.review.record_decision` stays a direct reuse for the Queue tab's reject. Both writes name
   this door with `server.review.SOURCE_ADMIN` — required on every ledger write, so a console row is
   told apart from an MCP or Slack one on the row itself rather than by inference.
@@ -167,7 +180,8 @@ the transport's parser — importing it would close a cycle through the composit
 `referrer-policy: no-referrer` and `strict-transport-security: max-age=31536000;
 includeSubDomains`; `/admin/api/*` additionally `cache-control: no-store`.
 
-`CRON_WORKFLOWS` — `index-rebuild.yml`, `retention-purge.yml`, `gardener.yml`, each naming its
+`CRON_WORKFLOWS` — `index-rebuild.yml`, `retention-purge.yml`, `gardener.yml`,
+`repair-propose.yml`, each naming its
 `schedule_utc` and where the database truth lives (`job_runs:<job>`, or `index_meta.built_at` for
 the rebuild, which writes none). `retention-purge.yml` declares the only dispatch input
 (`dry_run`); an undeclared key is refused by name before the gateway is touched.
@@ -214,6 +228,12 @@ the only view returning a cleanup function.
   drives `capture.dispositions` — never through `review_decide`/`BrainService` (both banned
   imports), whose steward check and self-approval refusal are for a resolved identity, not a
   free-text `actor` field.
+- **`repair_approve` applies server-side on the same terms.** `review_decide`'s per-target-path
+  steward guard is likewise not reached: this console's authorization IS the operator token, and
+  `actor` is attribution. What it does NOT skip is anything the apply itself proves — the clone's
+  own re-validation, the eight gates, and the cross-check that the produced diff is exactly the
+  proposal's stored `target_paths`. A failed apply comes back as a 409 with the gate's own
+  sentence, and the row stays `failed` with its reason rather than returning to pending.
 
 ## Common tasks
 
@@ -225,7 +245,7 @@ the only view returning a cleanup function.
 | Reach a new package | add the SUBMODULE to `_ADMIN_ALLOWED_IMPORT_PREFIXES` with a stated reason, in the same diff |
 | Add a config knob | a field on `AdminSettings` + a `*_ENV` constant + a line in `from_env`. Never a CLI flag |
 | Change how untrusted text is cleaned | `service._clean` — never at a call site, and never by flattening newlines |
-| Add a frontend view | a `render(host)` export in `views.js`, a `ROUTES` entry in `app.js`, DOM built only through `ui.el` |
+| Add a frontend view | a `render(host)` export in `views.js`, a `ROUTES` entry in `app.js` (plus a `DETAIL_ROUTES` row and an `ICONS` key if it needs them), DOM built only through `ui.el` |
 | Rotate or revoke the credential | `stigmergy-admin-token`, then set the new hash. There is no store and no list |
 
 ## Tests

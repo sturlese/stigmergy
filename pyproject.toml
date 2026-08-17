@@ -54,6 +54,7 @@ stigmergy-pilot-report = "stigmergy.server.pilot_report:main"            # the p
 stigmergy-gardener = "stigmergy.gardener.cli:main"                       # eight deterministic corpus-health checks, findings + job_runs persisted, severity-grouped report, SLA notice
 stigmergy-admin-token = "stigmergy.admin.cli:main"                       # admin console (ADR 029): mint the console's ONE bearer credential — prints plaintext once + the STIGMERGY_ADMIN_TOKEN_HASH line, stores nothing
 stigmergy-digest = "stigmergy.digest.cli:main"                           # the week in one Slack post — corpus health and corpus deltas; --dry-run to preview
+stigmergy-repair = "stigmergy.repair.cli:main"                           # the governed repair loop: propose an additive repair for a gardener finding, list and show what waits on a steward — never applies
 
 # Last table in `[project]` on purpose: a sub-table ENDS the parent's key/value section, so
 # `[project.urls]` placed above `dependencies` silently swallows every key after it.

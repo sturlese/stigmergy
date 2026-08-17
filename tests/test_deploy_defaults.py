@@ -54,7 +54,7 @@ def test_the_committed_deploy_file_is_the_empty_default(name):
         f"deploy/{name} is not empty. {_RESYNC}")
 
 
-# The one directory `deploy/` is allowed to contain. It holds the three cron workflows an
+# The one directory `deploy/` is allowed to contain. It holds the four cron workflows an
 # operator copies into their own knowledge repo — deliberately NOT under `.github/workflows/`,
 # where GitHub would register them on this public repo and show three "Disabled" rows.
 #
@@ -186,7 +186,7 @@ def test_a_deploy_leaves_tracked_files_it_never_baked_untouched(tmp_path):
 
     OLD BEHAVIOUR: the script opened with `rm -rf "$DEPLOY_DIR"`, and `restore_deploy_defaults`
     knew only the four JSON files. So one `make deploy-staging` deleted `deploy/workflows/`
-    — a README and three cron templates, all tracked — from the working tree, with nothing in the
+    — a README and four cron templates, all tracked — from the working tree, with nothing in the
     script able to put them back. The next `git add -A` commits that deletion, and `git add -A`
     is exactly what someone runs after deploying.
 

@@ -1,11 +1,12 @@
 """The review lane, end to end: `review_queue`'s inbox and `review_decide`'s append-only record,
-over the two item kinds a human still has to decide — an entity proposal and a parked capture.
+over the three item kinds a human still has to decide — an entity proposal, a parked capture and a
+repair proposal.
 
 `reject` and every `parked-capture` verdict keep the categorical property this suite has always
-pinned: **that seam never writes to git**. Approving an `entity-proposal` is the one path that does
-(ADR 030) — its own section below proves the mint end to end against a real bare remote, and pins
-every refusal that must still leave git untouched (old-shape calls, authorization, drift, a missing
-credential).
+pinned: **that seam never writes to git**. Approving an `entity-proposal` (ADR 030) or a
+`repair-proposal` (ADR 039) are the two paths that do — each has its own section below, and each
+pins every refusal that must still leave git untouched (old-shape calls, authorization, drift, a
+missing credential; and for a repair, a scope the steward does not hold and a gate that vetoed).
 
 Real git + real Postgres (fixtures in `tests/server/conftest.py`): every git-touched or
 git-untouched claim here is only worth making against a real ref.
@@ -34,11 +35,15 @@ from stigmergy.entities.errors import (
 )
 from stigmergy.librarian import gitcmd
 from stigmergy.librarian.errors import LibrarianConfigError
+from stigmergy.repair import remote as repair_remote
+from stigmergy.repair import schema as repair_schema
+from stigmergy.repair import store as repair_store
+from stigmergy.repair.errors import RepairError
 from stigmergy.server import review
 from stigmergy.server.service import MAX_ARG_CHARS
 from tests import adversarial_payloads
 from tests.entities.conftest import assert_steward_facing
-from tests.server.conftest import ALICE, STEWARD
+from tests.server.conftest import ALICE, STEWARD, seed_stewards
 from tests.server.conftest import make_review_service as make_service
 
 
@@ -92,6 +97,55 @@ def _park_capture(conn, evidence, *, submitted_by=ALICE, situation=None, names=N
             ([key], submitted_by, capture_schema.TRIAGE,
              __import__("psycopg").types.json.Jsonb(report)))
         return cur.fetchone()[0]
+
+
+# ── the repair lane's own fixtures ─────────────────────────────────────────────────────────────
+# A second steward, with a scope of their own. `ops/stewards.json` in the fixture repo resolves
+# `"*"` to STEWARD, so a map that ALSO delegates one folder is the smallest honest picture of a
+# real deployment: a general steward, and a zone somebody else owns.
+DECISIONS_STEWARD = "decisions-steward@example.com"
+
+# The commit a monkeypatched apply reports. Deliberately not a real sha: nothing here inspects git,
+# and a plausible-looking fake would invite somebody to start.
+FAKE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+
+def _op(path, *, kind="backlink", link="Existing Note", note=""):
+    return {"op": kind, "path": path, "link": link, "note": note}
+
+
+def _propose(conn, ops, *, rationale="neither page links the other, and both discuss refunds"):
+    """One PENDING `repair_proposals` row, through the package's own writers — `target_paths` and
+    `content_key` are DERIVED here exactly as `proposer.py` derives them, so a test can never seed a
+    row whose two stored facts disagree (the disagreement `remote._cross_check` exists to catch is
+    worth reaching by tampering, never by a careless fixture)."""
+    return repair_store.insert_proposal(
+        conn, run_id=0, finding_ids=[1], target_paths=repair_schema.target_paths(ops), ops=ops,
+        rationale=rationale, content_key=repair_schema.content_key(ops), model_id="fake")
+
+
+def _apply_never_runs(monkeypatch):
+    """The apply door, replaced by a tripwire: a test asserting a REFUSAL must never reach git, and
+    a refusal that quietly did would otherwise pass by looking identical from the outside."""
+    def marker(*_a, **_k):
+        raise AssertionError("apply_via_clone ran — this call was supposed to be refused first")
+
+    monkeypatch.setattr(repair_remote, "apply_via_clone", marker)
+
+
+def _apply_records(monkeypatch, paths=("wiki/notes/Some Page.md",)):
+    """`apply_via_clone` replaced by a recorder — the mint tests' own pattern, one module over.
+    Patched as a MODULE ATTRIBUTE, which is why `repair.remote.apply_approved` calls it by that
+    name; the surrounding `mark_applied`/`mark_failed` bookkeeping is the real thing."""
+    calls = []
+
+    def fake(repo_url, branch, credential, *, proposal, approved_by, on_output=None):
+        calls.append({"repo_url": repo_url, "branch": branch, "proposal": proposal,
+                      "approved_by": approved_by})
+        return {"commit": FAKE_COMMIT, "paths": list(paths)}
+
+    monkeypatch.setattr(repair_remote, "apply_via_clone", fake)
+    return calls
 
 
 def test_review_queue_classifies_entity_situations_and_parked_captures_exclusively(env, conn):
@@ -261,12 +315,18 @@ def test_review_decide_never_writes_to_git(env, conn, kind, item_id, verdict):
 # below, and the ONE mint that must actually happen has its own end-to-end proof there too.
 # `reject` carries no such carve-out: rejecting an entity proposal never mints, on any input, so it
 # stays in the categorical set.
-_ENTITY_PROPOSAL_GIT_UNTOUCHED_VERDICTS = tuple(
-    v for v in review.GENERIC_VERDICTS if v != review.APPROVE)
+#
+# `repair-proposal` × `approve` is excluded for the SAME reason and by the same derivation: an
+# approved repair applies exactly the ops a steward read, as one App-authored commit. Its own
+# git-touching and git-untouched proofs are in the repair section at the end of this file, where the
+# apply door is monkeypatched deliberately rather than left to whatever a matrix cell happens to
+# supply.
+_GIT_UNTOUCHED_VERDICTS = tuple(v for v in review.GENERIC_VERDICTS if v != review.APPROVE)
 
 _KIND_VERDICTS = {
     review.KIND_PARKED_CAPTURE: dispositions.DISPOSITIONS,
-    review.KIND_ENTITY_PROPOSAL: _ENTITY_PROPOSAL_GIT_UNTOUCHED_VERDICTS,
+    review.KIND_ENTITY_PROPOSAL: _GIT_UNTOUCHED_VERDICTS,
+    review.KIND_REPAIR_PROPOSAL: _GIT_UNTOUCHED_VERDICTS,
 }
 
 
@@ -284,11 +344,12 @@ def test_kind_verdicts_mapping_is_derived_from_the_real_constants():
     WRONG set of pairs, silently, and every other assertion in this section is worthless."""
     assert set(_KIND_VERDICTS) == set(review.ITEM_KINDS)
     assert _KIND_VERDICTS[review.KIND_PARKED_CAPTURE] == dispositions.DISPOSITIONS
-    # `approve` is excluded on purpose (ADR 030 D5, see `_ENTITY_PROPOSAL_GIT_UNTOUCHED_VERDICTS`'s
-    # own comment) — still DERIVED from `GENERIC_VERDICTS` minus that one named exclusion, rather
-    # than hand-picked, so a THIRD verdict added to that vocabulary is still swept in automatically.
-    assert set(_KIND_VERDICTS[review.KIND_ENTITY_PROPOSAL]) == (
-        set(review.GENERIC_VERDICTS) - {review.APPROVE})
+    # `approve` is excluded on purpose for both governed kinds (ADR 030 D5 and ADR 039, see
+    # `_GIT_UNTOUCHED_VERDICTS`'s own comment) — still DERIVED from `GENERIC_VERDICTS` minus that
+    # one named exclusion, rather than hand-picked, so a THIRD verdict added to that vocabulary is
+    # still swept in automatically.
+    for kind in (review.KIND_ENTITY_PROPOSAL, review.KIND_REPAIR_PROPOSAL):
+        assert set(_KIND_VERDICTS[kind]) == set(review.GENERIC_VERDICTS) - {review.APPROVE}
 
 
 @pytest.mark.parametrize("item_kind,verdict", _ALL_KIND_VERDICT_PAIRS,
@@ -304,6 +365,12 @@ def test_review_decide_never_writes_to_git_the_full_matrix(env, conn, item_kind,
 
     if item_kind == review.KIND_PARKED_CAPTURE:
         item_id = str(_park_capture(conn, evidence))
+    elif item_kind == review.KIND_REPAIR_PROPOSAL:
+        # A REAL pending proposal, not a nonexistent id: the refusal every verdict here must reach
+        # is its own (a missing reason, an unusable verdict), and a row that was never there would
+        # be refused by the authorization guard first — which would make every cell of this row of
+        # the matrix a test of `NOT_YOURS_TO_DECIDE` wearing a verdict's name.
+        item_id = str(_propose(conn, [_op("wiki/notes/Renewals.md")]))
     else:
         item_id = str(_park_capture(conn, evidence,
                                     situation=capture_schema.SITUATION_UNRESOLVED_ENTITY))
@@ -1865,3 +1932,289 @@ def test_an_at_limit_mint_argument_reaches_the_mint(env, conn, mint_never_runs):
                     entity_type="organization", role="x" * MAX_ARG_CHARS)
 
     assert out == {"error": "review_decide failed (RuntimeError)"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# `repair-proposal` — the gardener's findings, one approvable edit at a time.
+#
+# The kind's whole authorization difference from the other two lives here: an entity proposal and a
+# parked capture are anchored to no page, so `is_steward(service, "")` is the only scope they could
+# be asked about. A repair proposal names the exact pages it would EDIT, which makes a per-path
+# question both possible and necessary — `ops/stewards.json` exists to delegate zones, and a repair
+# is the first verdict in this lane that can land inside one.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+def test_a_steward_cannot_approve_a_repair_outside_the_scope_they_steward(env, conn, monkeypatch):
+    """**The per-path guard.** STEWARD owns `"*"`; `wiki/decisions/` has been delegated to somebody
+    else. A proposal that would edit a page in the delegated zone is not STEWARD's to approve, even
+    though STEWARD is the general steward of everything else.
+
+    Observed RED before the guard landed: the first version of `_guard_repair_decision` asked
+    `is_steward(service, "")` alone — the question the other two kinds ask — which resolves the
+    `"*"` entry, admits STEWARD, and applies a repair inside a zone whose steward never saw it.
+    """
+    seed_stewards(env, {"*": [STEWARD], "wiki/decisions/": [DECISIONS_STEWARD]})
+    _apply_never_runs(monkeypatch)
+    proposal_id = _propose(conn, [_op("wiki/decisions/Refunds.md")])
+    steward = make_service(env, conn, identity_name=STEWARD)
+
+    with pytest.raises(review.ReviewError) as caught:
+        review.review_decide(steward, item_kind=review.KIND_REPAIR_PROPOSAL,
+                             item_id=str(proposal_id), verdict="approve",
+                             source=review.SOURCE_MCP)
+
+    assert str(caught.value) == review.NOT_YOURS_TO_DECIDE
+    assert repair_store.proposal(conn, proposal_id)["status"] == repair_schema.STATUS_PENDING
+
+
+def test_a_repair_touching_two_zones_needs_a_steward_for_both(env, conn, monkeypatch):
+    """The `all(...)` half, which a single-path test cannot reach: a contradiction repair edits BOTH
+    sides, and a proposal spanning two zones is approvable only by somebody who stewards both.
+    Neither steward here does, so neither may approve it — and that is the correct outcome, not a
+    deadlock: the proposal is rejectable by either, and the pair can be proposed as two."""
+    seed_stewards(env, {"*": [STEWARD], "wiki/decisions/": [DECISIONS_STEWARD]})
+    _apply_never_runs(monkeypatch)
+    proposal_id = _propose(conn, [_op("wiki/notes/Renewals.md", kind="contradiction",
+                                      link="Refunds", note="the two disagree about the window"),
+                                  _op("wiki/decisions/Refunds.md", kind="contradiction",
+                                      link="Renewals", note="the two disagree about the window")])
+
+    for identity in (STEWARD, DECISIONS_STEWARD):
+        service = make_service(env, conn, identity_name=identity)
+        with pytest.raises(review.ReviewError) as caught:
+            review.review_decide(service, item_kind=review.KIND_REPAIR_PROPOSAL,
+                                 item_id=str(proposal_id), verdict="approve",
+                                 source=review.SOURCE_MCP)
+        assert str(caught.value) == review.NOT_YOURS_TO_DECIDE, identity
+    assert repair_store.proposal(conn, proposal_id)["status"] == repair_schema.STATUS_PENDING
+
+
+def test_each_steward_may_approve_a_repair_inside_their_own_scope(env, conn, monkeypatch):
+    """**The benign twin of the two above**, and the half that measures the guard's SPECIFICITY: the
+    same map, the same two identities, each approving a proposal that lands in the zone they
+    actually steward. A guard that refused these would be a repair loop nobody can close."""
+    seed_stewards(env, {"*": [STEWARD], "wiki/decisions/": [DECISIONS_STEWARD]})
+    calls = _apply_records(monkeypatch)
+    notes_id = _propose(conn, [_op("wiki/notes/Renewals.md")])
+    decisions_id = _propose(conn, [_op("wiki/decisions/Refunds.md")])
+
+    for identity, proposal_id in ((STEWARD, notes_id), (DECISIONS_STEWARD, decisions_id)):
+        service = make_service(env, conn, identity_name=identity)
+        result = review.review_decide(service, item_kind=review.KIND_REPAIR_PROPOSAL,
+                                      item_id=str(proposal_id), verdict="approve",
+                                      source=review.SOURCE_MCP)
+        assert result["applied"] is True and result["commit"] == FAKE_COMMIT
+        row = repair_store.proposal(conn, proposal_id)
+        assert (row["status"], row["decided_by"], row["applied_commit"]) == (
+            repair_schema.STATUS_APPLIED, identity, FAKE_COMMIT)
+
+    assert [c["approved_by"] for c in calls] == [STEWARD, DECISIONS_STEWARD]
+    assert {c["repo_url"] for c in calls} == {env.bare}
+    ledger = review.latest_decisions(conn)
+    assert ledger[(review.KIND_REPAIR_PROPOSAL, str(notes_id))]["verdict"] == "approve"
+    assert ledger[(review.KIND_REPAIR_PROPOSAL, str(decisions_id))]["actor"] == DECISIONS_STEWARD
+
+
+def test_a_non_steward_gets_the_same_anonymous_sentence_a_missing_proposal_gets(env, conn,
+                                                                                monkeypatch):
+    """The kind's own instance of this file's oldest rule: "not authorized", "does not exist" and
+    "already decided" are ONE sentence. A caller who is refused learns nothing about which."""
+    _apply_never_runs(monkeypatch)
+    live = _propose(conn, [_op("wiki/notes/Renewals.md")])
+    decided = _propose(conn, [_op("wiki/notes/Others.md")])
+    assert repair_store.mark_decided(conn, decided, status=repair_schema.STATUS_REJECTED,
+                                     decided_by=STEWARD, notes="not worth it")
+    mallory = make_service(env, conn, identity_name=MALLORY)
+    steward = make_service(env, conn, identity_name=STEWARD)
+
+    for service, item_id in ((mallory, str(live)), (steward, str(decided)),
+                             (steward, "999999"), (steward, "not-a-number")):
+        with pytest.raises(review.ReviewError) as caught:
+            review.review_decide(service, item_kind=review.KIND_REPAIR_PROPOSAL, item_id=item_id,
+                                 verdict="approve", source=review.SOURCE_MCP)
+        assert str(caught.value) == review.NOT_YOURS_TO_DECIDE, item_id
+
+
+def test_rejecting_a_repair_records_the_dismissal_on_the_row_and_in_the_ledger(env, conn,
+                                                                               monkeypatch):
+    """A rejected row IS the dismissal memory (`repair.schema`): the proposer skips a content key
+    with any prior row, so the reason has to land on the PROPOSAL and not only in the ledger — a
+    door that wrote one of the two would leave the nightly run asking the same question forever."""
+    _apply_never_runs(monkeypatch)
+    proposal_id = _propose(conn, [_op("wiki/notes/Renewals.md")])
+    steward = make_service(env, conn, identity_name=STEWARD)
+
+    result = review.review_decide(steward, item_kind=review.KIND_REPAIR_PROPOSAL,
+                                  item_id=str(proposal_id), verdict="reject",
+                                  source=review.SOURCE_MCP,
+                                  notes="the two pages describe different quarters")
+
+    assert result["rejected"] is True
+    row = repair_store.proposal(conn, proposal_id)
+    assert (row["status"], row["decided_by"]) == (repair_schema.STATUS_REJECTED, STEWARD)
+    assert row["notes"] == "the two pages describe different quarters"
+    assert row["content_key"] in repair_store.known_content_keys(conn)
+    decision = review.latest_decisions(conn)[(review.KIND_REPAIR_PROPOSAL, str(proposal_id))]
+    assert (decision["verdict"], decision["actor"], decision["source"]) == (
+        "reject", STEWARD, review.SOURCE_MCP)
+
+
+def test_rejecting_a_repair_without_a_reason_is_refused_and_changes_nothing(env, conn, monkeypatch):
+    """`reject requires a reason` — the same rule the other two kinds hold, and here it is what
+    makes the dismissal memory readable months later: a `rejected` row with an empty `notes` tells
+    the next steward that somebody said no and nothing about why."""
+    _apply_never_runs(monkeypatch)
+    proposal_id = _propose(conn, [_op("wiki/notes/Renewals.md")])
+    steward = make_service(env, conn, identity_name=STEWARD)
+
+    with pytest.raises(review.ReviewError, match="reject requires a reason"):
+        review.review_decide(steward, item_kind=review.KIND_REPAIR_PROPOSAL,
+                             item_id=str(proposal_id), verdict="reject", source=review.SOURCE_MCP)
+
+    assert repair_store.proposal(conn, proposal_id)["status"] == repair_schema.STATUS_PENDING
+
+
+def test_request_changes_is_refused_by_name_for_a_repair(env, conn, monkeypatch):
+    """The third generic verdict has no meaning here and says so: a proposal IS its edits, so the
+    thing to change about one is which edits it contains — a different proposal."""
+    _apply_never_runs(monkeypatch)
+    proposal_id = _propose(conn, [_op("wiki/notes/Renewals.md")])
+    steward = make_service(env, conn, identity_name=STEWARD)
+
+    with pytest.raises(review.ReviewError, match="a different proposal"):
+        review.review_decide(steward, item_kind=review.KIND_REPAIR_PROPOSAL,
+                             item_id=str(proposal_id), verdict="request_changes",
+                             source=review.SOURCE_MCP, notes="link the other one instead")
+
+    assert repair_store.proposal(conn, proposal_id)["status"] == repair_schema.STATUS_PENDING
+
+
+def test_a_failed_apply_leaves_the_proposal_failed_with_the_reason_and_no_ledger_row(
+        env, conn, monkeypatch):
+    """The ordering `apply_repair_and_record` exists to own, seen from its failure edge: the row is
+    `failed` with the refusal ON it (`remote.apply_approved` records that), the approved status is
+    NOT restored, the steward gets the sentence verbatim, and NO ledger row claims an approval whose
+    commit never landed."""
+    def refuse(*_a, **_k):
+        raise RepairError("the gates refused this repair, so nothing was committed or pushed")
+
+    monkeypatch.setattr(repair_remote, "apply_via_clone", refuse)
+    proposal_id = _propose(conn, [_op("wiki/notes/Renewals.md")])
+    steward = make_service(env, conn, identity_name=STEWARD)
+
+    with pytest.raises(review.ReviewError, match="the gates refused this repair"):
+        review.review_decide(steward, item_kind=review.KIND_REPAIR_PROPOSAL,
+                             item_id=str(proposal_id), verdict="approve", source=review.SOURCE_MCP)
+
+    row = repair_store.proposal(conn, proposal_id)
+    assert row["status"] == repair_schema.STATUS_FAILED
+    assert "the gates refused this repair" in row["error"]
+    assert review.latest_decisions(conn).get((review.KIND_REPAIR_PROPOSAL, str(proposal_id))) is None
+
+
+def test_approving_an_already_applied_repair_is_the_anonymous_sentence(env, conn, monkeypatch):
+    """The SEQUENTIAL second Approve — somebody clicking twice, or two stewards a minute apart. It
+    never reaches the apply door, and it is refused by the same anonymous sentence a nonexistent id
+    gets: which of "applied", "rejected" and "never existed" it was is not a refused caller's
+    business, and `review_queue` is where an authorized one looks."""
+    calls = _apply_records(monkeypatch)
+    proposal_id = _propose(conn, [_op("wiki/notes/Renewals.md")])
+    steward = make_service(env, conn, identity_name=STEWARD)
+
+    review.review_decide(steward, item_kind=review.KIND_REPAIR_PROPOSAL, item_id=str(proposal_id),
+                         verdict="approve", source=review.SOURCE_MCP)
+    with pytest.raises(review.ReviewError) as caught:
+        review.review_decide(steward, item_kind=review.KIND_REPAIR_PROPOSAL,
+                             item_id=str(proposal_id), verdict="approve", source=review.SOURCE_MCP)
+
+    assert str(caught.value) == review.NOT_YOURS_TO_DECIDE
+    assert len(calls) == 1, "the loser must not reach the apply door at all"
+
+
+def test_two_doors_that_both_read_a_pending_repair_cannot_both_apply_it(env, conn, monkeypatch):
+    """The TRUE race, which the sequential test above cannot reach: both callers read the row while
+    it was still pending, so both get past the "is it pending" read and meet each other inside
+    `mark_decided`'s conditional UPDATE. That one `WHERE status = 'pending'` is the whole of the
+    concurrency story here — the loser sees zero rows and is told so, rather than a second
+    clone-and-push of a repair that already landed. It is also why no lease exists for repairs.
+
+    Driven at the shared function both doors run, with ONE `proposal` dict read once and handed to
+    both, which is exactly the interleaving two processes produce."""
+    calls = _apply_records(monkeypatch)
+    proposal_id = _propose(conn, [_op("wiki/notes/Renewals.md")])
+    proposal = repair_store.proposal(conn, proposal_id)
+
+    review.apply_repair_and_record(conn, repo_url=env.bare, proposal=proposal, actor=STEWARD,
+                                   source=review.SOURCE_MCP)
+    with pytest.raises(review.ReviewError, match="no longer pending"):
+        review.apply_repair_and_record(conn, repo_url=env.bare, proposal=proposal,
+                                       actor=DECISIONS_STEWARD, source=review.SOURCE_ADMIN)
+
+    assert len(calls) == 1
+    assert repair_store.proposal(conn, proposal_id)["decided_by"] == STEWARD
+
+
+def test_a_deployment_with_no_knowledge_repo_url_refuses_before_the_proposal_moves(env, conn,
+                                                                                   monkeypatch):
+    """Asked BEFORE `mark_decided`, on purpose. `apply_approved` records a refusal as `failed`, so a
+    deployment that was never configured would burn one proposal per approval for a reason that has
+    nothing to do with the proposal — and the steward would read "could not be cloned" where the
+    truth is "nobody set the URL"."""
+    _apply_never_runs(monkeypatch)
+    proposal_id = _propose(conn, [_op("wiki/notes/Renewals.md")])
+    steward = make_service(env, conn, identity_name=STEWARD, librarian_repo_url="")
+
+    with pytest.raises(review.ReviewError, match="STIGMERGY_LIBRARIAN_REPO_URL"):
+        review.review_decide(steward, item_kind=review.KIND_REPAIR_PROPOSAL,
+                             item_id=str(proposal_id), verdict="approve", source=review.SOURCE_MCP)
+
+    assert repair_store.proposal(conn, proposal_id)["status"] == repair_schema.STATUS_PENDING
+
+
+def test_a_pending_repair_is_in_the_unrestricted_queue_and_not_in_a_scoped_one(env, conn):
+    """A repair proposal has no submitter, so there is no "own" for an ownership-scoped caller — and
+    a proposal names the PAGE PATHS it would edit, which `acl.visible()` and not this list decides
+    who may see. The MANAGEMENT read carries it; the scoped read does not."""
+    proposal_id = _propose(conn, [_op("wiki/notes/Renewals.md", kind="overlap", link="Refunds",
+                                      note="the newer page carries the current terms")])
+    _park_capture(conn, MemoryEvidenceStore(), submitted_by=ALICE)
+
+    unrestricted = review.review_queue(make_service(env, conn, identity_name=STEWARD))
+    scoped = review.review_queue(make_service(env, conn, identity_name=ALICE, audiences={"all"}))
+
+    item = next(i for i in unrestricted["items"] if i["kind"] == review.KIND_REPAIR_PROPOSAL)
+    assert item["id"] == str(proposal_id)
+    assert item["target_paths"] == ["wiki/notes/Renewals.md"]
+    assert item["ops_preview"] == {"count": 1, "kinds": ["overlap"]}
+    assert "the newer page carries the current terms" not in json.dumps(item), (
+        "the ops themselves are not in the scan — a note is free text on a page")
+    assert not [i for i in scoped["items"] if i["kind"] == review.KIND_REPAIR_PROPOSAL]
+
+
+def test_a_decided_repair_leaves_the_queue_and_keeps_its_ledger_row(env, conn, monkeypatch):
+    """`pending_proposals` is the operational read, so a decided proposal stops being asked about —
+    while `review_decisions` keeps the answer forever. The inbox empties; the record does not."""
+    _apply_never_runs(monkeypatch)
+    proposal_id = _propose(conn, [_op("wiki/notes/Renewals.md")])
+    steward = make_service(env, conn, identity_name=STEWARD)
+
+    review.review_decide(steward, item_kind=review.KIND_REPAIR_PROPOSAL, item_id=str(proposal_id),
+                         verdict="reject", source=review.SOURCE_MCP, notes="already linked")
+
+    items = review.review_queue(steward)["items"]
+    assert not [i for i in items if i["kind"] == review.KIND_REPAIR_PROPOSAL]
+    assert review.latest_decisions(conn)[(review.KIND_REPAIR_PROPOSAL, str(proposal_id))]
+
+
+def test_a_repair_decision_over_the_mcp_wire(env, conn, monkeypatch):
+    """The client contract, exercised through the real tool rather than the function behind it: the
+    kind travels as a string, and `review_decide`'s docstring is what tells a client it may."""
+    calls = _apply_records(monkeypatch)
+    proposal_id = _propose(conn, [_op("wiki/notes/Renewals.md")])
+
+    out = _call_mcp(_mcp_for(env, conn), "review_decide", item_kind="repair-proposal",
+                    item_id=str(proposal_id), source=review.SOURCE_MCP, verdict="approve")
+
+    assert out["applied"] is True and out["commit"] == FAKE_COMMIT
+    assert len(calls) == 1
+    listed = _call_mcp(_mcp_for(env, conn), "review_queue")
+    assert not [i for i in listed["items"] if i["kind"] == "repair-proposal"]

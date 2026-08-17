@@ -4,9 +4,10 @@ Everything below is for the operator running the system. The live world this run
 **three zones** in the knowledge repo (`wiki/` · `sources/` · `views/`), the librarian's
 **8 gates**, **10 MCP tools** (`search_brain`/`read_page`/`list_entities`/`describe_entity`,
 `ask`, `brain_submit`/`brain_submissions`/`brain_reply`, `review_queue`/`review_decide`),
-**one Fly app** with three process groups (`app` · `slack` · `worker`), three GitHub Actions
-crons (`index-rebuild` · `retention-purge` · `gardener`), the optional `/admin` console on the
-`app` group, and the golden evals under `evals/` with the release gates (`make gates`) over them.
+**one Fly app** with three process groups (`app` · `slack` · `worker`), four GitHub Actions
+crons (`index-rebuild` · `retention-purge` · `gardener` · `repair-propose`), the optional `/admin`
+console on the `app` group, and the golden evals under `evals/` with the release gates
+(`make gates`) over them.
 
 Organized by OPERATION: Deploy · Wipe & re-seed · Capture from Drive · Index rebuild ·
 Recovery · Revocation · Release gates & drills · Troubleshooting.
@@ -80,26 +81,28 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
 3. **Supabase Postgres** must already have the index built at least once
    (`.venv/bin/stigmergy-index --rebuild --repo $STIGMERGY_REPO` against `STIGMERGY_INDEX_DSN`) — the
    server refuses to serve an empty index.
-4. **GitHub Actions secrets and variables** (for the three crons), on the **knowledge repo**:
+4. **GitHub Actions secrets and variables** (for the four crons), on the **knowledge repo**:
 
    **The crons run from the knowledge repo, not from this one, for privacy.** Actions logs on a
    PUBLIC repository are world-readable, and these jobs describe the corpus out loud —
-   `stigmergy-gardener` prints its whole report, entity ids and page paths included. Repository
-   *variables* are not masked either (only secrets are). This repo carries the three workflow files
-   as adopter templates, **disabled**; copy them into your private knowledge repo and run them there.
+   `stigmergy-gardener` prints its whole report, entity ids and page paths included, and
+   `stigmergy-repair propose` names every page it proposed an edit against. Repository *variables*
+   are not masked either (only secrets are). This repo carries the four workflow files as adopter
+   templates, **disabled**; copy them into your private knowledge repo and run them there.
 
    | Settings → Secrets → Actions | Used by |
    |---|---|
-   | `INDEX_DSN` | all three workflows |
-   | `OPENAI_API_KEY` | `index-rebuild`, `gardener` |
-   | `SLACK_BOT_TOKEN` | `gardener`, for the SLA notice |
+   | `INDEX_DSN` | all four workflows |
+   | `OPENAI_API_KEY` | `index-rebuild`, `gardener`, `repair-propose` |
+   | `SLACK_BOT_TOKEN` | `gardener`, for the SLA notice — and nothing else: the proposer posts nowhere, and it holds no GitHub App credential either, because it proposes and cannot apply |
 
    | Settings → Variables → Actions | Used by |
    |---|---|
-   | `STIGMERGY_CRONS_ENABLED` (`true`) | all three — **and it is the on/off switch** |
-   | `STIGMERGY_PLATFORM_REF` (a release tag; default `main`) | all three — which platform version `pip` installs |
+   | `STIGMERGY_CRONS_ENABLED` (`true`) | all four — **and it is the on/off switch** |
+   | `STIGMERGY_PLATFORM_REF` (a release tag; default `main`) | all four — which platform version `pip` installs |
    | `STIGMERGY_DIGEST_CHANNEL_ID`, `STIGMERGY_GARDENER_MODEL` | `gardener` (a channel id and a model name are not credentials) |
-   | `STIGMERGY_PLATFORM_REPO` (default `sturlese/stigmergy`) | all three — **set it if you forked.** Leave it unset on a fork and every cron silently `pip install`s the UPSTREAM CLI, so your crons run somebody else's code against your knowledge |
+   | `STIGMERGY_REPAIR_MODEL` | `repair-propose` (a model name, for the same reason: not a credential, and not masked — a second argument for a private repo) |
+   | `STIGMERGY_PLATFORM_REPO` (default `sturlese/stigmergy`) | all four — **set it if you forked.** Leave it unset on a fork and every cron silently `pip install`s the UPSTREAM CLI, so your crons run somebody else's code against your knowledge |
 
    **No cross-repo PAT is involved.** The knowledge repo is the workflow's own repository, so the
    job's read-only `GITHUB_TOKEN` covers the checkout; the CLI arrives by
@@ -264,25 +267,32 @@ fly deploy --image <that image ref>   # redeploy it directly
 
 (Fly also has `fly apps rollback` on recent CLI versions — either is a single command.)
 
-### Scheduled jobs — the three crons
+### Scheduled jobs — the four crons
 
 | Workflow | When (UTC) | What |
 |---|---|---|
 | `index-rebuild.yml` | nightly ~04:17 | full staging index rebuild from `@main` |
 | `retention-purge.yml` | nightly ~04:42 | `stigmergy-queue purge` (30-day terminal rows) |
 | `gardener.yml` | daily ~05:07 | `stigmergy-gardener` corpus-health run |
+| `repair-propose.yml` | daily ~06:07 | `stigmergy-repair propose` — the gardener's findings turned into proposals a steward decides |
+
+The last one runs an hour behind the gardener so the findings it reads are that morning's. It
+**proposes and cannot apply**: it holds no Slack token and no GitHub App credential, and every
+proposal lands PENDING until a steward approves it one at a time, in the console's Repairs tab or
+over MCP's `review_decide` ([repair.md](./repair.md)).
 
 They run from the **knowledge repo's** own `.github/workflows/`; this repository ships them as
 templates in [`deploy/workflows/`](../../deploy/workflows/README.md), outside `.github/` so that
 GitHub does not register them here.
 
-All three have `workflow_dispatch` for a manual run (`gh workflow run index-rebuild.yml`, etc.;
+All four have `workflow_dispatch` for a manual run (`gh workflow run index-rebuild.yml`, etc.;
 `retention-purge.yml` is the only one taking an input, `dry_run`) — and the admin console's Crons
 tab drives the same dispatch/enable/disable with buttons when its GitHub PAT and repo are
 configured ([admin-console.md](./admin-console.md)).
-`retention-purge` and `gardener` each write a `job_runs` row; `index-rebuild` writes none and its
-truth is `index_meta.built_at` instead. The Actions tab cannot tell you a scheduled job stopped (a
-job skipped for an unset `vars.STIGMERGY_CRONS_ENABLED` is *green*). The database can:
+`retention-purge`, `gardener` and `repair-propose` each write a `job_runs` row; `index-rebuild`
+writes none and its truth is `index_meta.built_at` instead. The Actions tab cannot tell you a
+scheduled job stopped (a job skipped for an unset `vars.STIGMERGY_CRONS_ENABLED` is *green*). The
+database can:
 
 ```sql
 SELECT job, status, finished_at, stats FROM job_runs
@@ -326,7 +336,7 @@ ORDER BY started_at DESC LIMIT 5;
 ### The admin console
 
 `/admin` on the `app` process group (ADR 029) — the daily loop (queue drain, crons, gardener,
-digest, index, activity) in a browser instead of a terminal. Inert 404s until
+repairs, digest, index, activity) in a browser instead of a terminal. Inert 404s until
 `STIGMERGY_ADMIN_TOKEN_HASH` is set; everything it can do, each degraded mode and the rotation
 drills are in [admin-console.md](./admin-console.md). It is management-only: nothing on it reads
 the corpus.
@@ -1012,8 +1022,8 @@ never a lost capture. Add the scope and reinstall the app to fix the feedback.
 
 ```sql
 SELECT job, status, finished_at, stats FROM job_runs
-WHERE job IN ('gardener', 'digest', 'digest-dry-run', 'capture-purge', 'capture-purge-dry-run',
-              'webhook-index-upsert')
+WHERE job IN ('gardener', 'repair-propose', 'digest', 'digest-dry-run', 'capture-purge',
+              'capture-purge-dry-run', 'webhook-index-upsert')
 ORDER BY started_at DESC LIMIT 10;
 ```
 

@@ -12,7 +12,7 @@ import logging
 
 import pytest
 
-from stigmergy.librarian import githubapp
+from stigmergy.librarian import errors, gitcmd, githubapp
 from stigmergy.librarian.errors import LibrarianConfigError
 
 
@@ -257,3 +257,83 @@ def test_an_absent_or_empty_slug_falls_back_to_the_default_rather_than_an_empty_
 
 
 
+
+
+# ── authenticated_clone_url: the ONE credential resolver both server-driven doors clone with ──
+# Extracted from `entities.remote._authenticated_url` when `stigmergy.repair` needed the identical
+# sequence. What travels with it is the MECHANISM and the residual-risk argument; what does NOT is
+# the WORDING — each door re-words the three refusals below for its own audience, because
+# `entities` publishes its sentences to a steward over MCP and this module's name the App's
+# private-key file. So these tests assert the TYPES, and `tests/entities/test_remote.py` still
+# asserts that door's own sentences, unchanged.
+def test_a_non_https_url_is_returned_unchanged_and_never_consults_the_credential(monkeypatch):
+    """The property both doors' Postgres suites rely on for every clone they prove for real: a
+    local path or `git://` remote authenticates nothing, so `None` is accepted without touching
+    the App at all."""
+    def fail_if_called(*a, **k):
+        raise AssertionError("configured() must not be consulted for a non-https remote")
+    monkeypatch.setattr(githubapp, "configured", fail_if_called)
+
+    for url in ("/tmp/some/bare.git", "git://localhost/repo.git", "file:///tmp/bare.git"):
+        assert githubapp.authenticated_clone_url(url, None) == url
+
+
+def test_an_empty_url_is_an_absent_capability_not_a_url_returned_unchanged():
+    """`""` is not `https://`, so a bare passthrough would hand git an empty remote and turn a
+    missing configuration into an unreadable clone failure two layers later."""
+    with pytest.raises(errors.CloneCredentialUnavailable):
+        githubapp.authenticated_clone_url("", None)
+
+
+@pytest.mark.parametrize("credential", [None, {}])
+def test_https_with_no_app_configured_at_all_is_an_absent_capability(credential):
+    with pytest.raises(errors.CloneCredentialUnavailable) as caught:
+        githubapp.authenticated_clone_url("https://github.com/acme/knowledge.git", credential)
+    assert not isinstance(caught.value, errors.CloneCredentialHalfSet)
+
+
+def test_a_half_configured_app_is_its_own_type_not_the_absent_one():
+    """The distinction each door re-words: "there is none" tells an operator to configure one,
+    "half of it is set" tells them somebody already tried. Sibling types, never a chain, so no
+    handler can shadow the other by being written first."""
+    partial = {githubapp.APP_ID_ENV: "123456"}
+    with pytest.raises(errors.CloneCredentialHalfSet) as caught:
+        githubapp.authenticated_clone_url("https://github.com/acme/knowledge.git", partial)
+    assert not isinstance(caught.value, errors.CloneCredentialUnavailable)
+
+
+def test_a_refused_token_exchange_is_its_own_type_and_keeps_githubs_words_for_the_log(monkeypatch):
+    """An operational fault, not an absent capability: the fix is "check the App", not "configure
+    one". GitHub's own words survive on the exception so a caller can log them — and each door's
+    published sentence is a constant, so they never reach a steward."""
+    def boom(env):
+        raise LibrarianConfigError("GitHub refused an installation token (HTTP 401)")
+    monkeypatch.setattr(githubapp, "installation_token", boom)
+
+    with pytest.raises(errors.CloneCredentialRefused, match="HTTP 401") as caught:
+        githubapp.authenticated_clone_url("https://github.com/acme/knowledge.git", FULL_ENV)
+    assert not isinstance(caught.value, errors.CloneCredentialUnavailable)
+
+
+def test_a_configured_app_yields_the_token_in_url_shape_gitcmd_already_scrubs(monkeypatch):
+    """The benign twin for all four refusals above, and the shape assertion that matters: what
+    this builds is EXACTLY what `gitcmd._scrub` redacts from any error message, proven against the
+    real regex rather than by inspection so the two halves cannot silently drift apart."""
+    monkeypatch.setattr(githubapp, "installation_token", lambda env: "ghs_stubtoken123")
+
+    url = githubapp.authenticated_clone_url("https://github.com/acme/knowledge.git", FULL_ENV)
+
+    assert url == "https://x-access-token:ghs_stubtoken123@github.com/acme/knowledge.git"
+    assert gitcmd._TOKEN_IN_URL.search(url), "not the user:pass@ shape _scrub matches"
+    assert "ghs_stubtoken123" not in gitcmd._scrub(url)
+
+
+def test_the_three_credential_states_are_siblings_so_no_handler_shadows_another():
+    """Both doors catch all three in one `try`. A subclass among them would make the arms
+    order-dependent — the failure `tests/entities/test_errors.py` pins one package over, for the
+    identical ladder."""
+    three = (errors.CloneCredentialUnavailable, errors.CloneCredentialHalfSet,
+             errors.CloneCredentialRefused)
+    for one in three:
+        assert issubclass(one, LibrarianConfigError)
+        assert not any(issubclass(one, other) for other in three if other is not one)

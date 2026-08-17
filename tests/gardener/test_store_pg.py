@@ -138,11 +138,13 @@ def test_latest_completed_run_picks_the_most_recent_among_ok_and_partial(conn):
 
 def test_insert_findings_never_persists_the_underscore_notice_only_keys(conn):
     """`_notice_detail`/`_notice_action` (`checks.py`'s SLA-notice-only fields) are never written
-    to `gardener_findings` — only the six columns the table actually has."""
+    to `gardener_findings` — only the columns the table actually has. `subjects` joined that set
+    when the repair proposer needed the subject pages as DATA rather than as a comma-joined
+    report line; the `_notice_*` keys still do not survive the round trip."""
     f = _finding(check="contradiction-sla-open", severity="sla",
                 _notice_detail="notice wording", _notice_action="notice action")
     store.insert_findings(conn, 400, [f])
 
     row = store.findings_for_run(conn, 400)[0]
     assert set(row) == {"id", "run_id", "check", "severity", "source", "subject", "detail",
-                        "suggested_action", "created_at", "model_id"}
+                        "suggested_action", "created_at", "model_id", "subjects"}

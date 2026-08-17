@@ -1,4 +1,4 @@
-// The eleven views. Every one follows the same contract: `render(host, params)` fills a cleared
+// The thirteen views. Every one follows the same contract: `render(host, params)` fills a cleared
 // container from the JSON API and returns an optional cleanup function (used by views that poll).
 // All text lands via textContent (ui.el) — untrusted queue/finding strings are inert here.
 
@@ -347,6 +347,7 @@ function cronCard(w, live) {
     "index-rebuild.yml": "runs a FULL staging index rebuild in GitHub Actions — real embedder, real spend, against the staging database.",
     "retention-purge.yml": "runs the capture-queue retention purge in GitHub Actions against staging.",
     "gardener.yml": "runs the eight deterministic checks AND the model editorial sweep in GitHub Actions — real model spend; findings persist to staging.",
+    "repair-propose.yml": "reads the latest gardener findings and proposes repairs in GitHub Actions — real model spend. It applies nothing: every proposal lands pending, for the Repairs tab.",
   }[w.file];
   return el("div", { class: "card" },
     el("div", { class: "card-head" },
@@ -709,6 +710,150 @@ async function entityApproveFlow(row) {
     window.location.hash = "#/entities";
   } catch (ex) {
     toast(ex.message, "error");
+  }
+}
+
+// ── repairs ───────────────────────────────────────────────────────────────────────────────────
+// The gardener's findings, one approvable edit at a time (ADR 039). The list is a SCAN and the
+// detail is the read: nothing here renders the ops as prose, because the applier's own callout
+// wording lives in `librarian.page` and a second copy of it here would show a steward a change
+// that is not quite the one they are authorizing. The ops table IS the stored ops.
+function opsTable(ops) {
+  return table(["op", "page it edits", "links to", "note"],
+    (ops || []).map((o) => ({
+      cells: [el("span", { class: "mono" }, o.op), el("span", { class: "mono" }, o.path),
+        el("span", { class: "mono" }, o.link), o.note || "—"],
+    })), { empty: "no ops — nothing would change" });
+}
+
+function opsSummary(ops) {
+  const kinds = [...new Set((ops || []).map((o) => o.op))].sort();
+  return `${(ops || []).length} op(s) · ${kinds.join(", ") || "none"}`;
+}
+
+export async function repairsView(host) {
+  await loading(host, async () => {
+    const data = await api.get("repairs");
+    render(host,
+      el("div", { class: "card" },
+        el("h2", {}, `${data.pending.length} proposal(s) waiting on a steward`),
+        el("div", { class: "sub", style: "margin-bottom:10px" },
+          "each one is approved or declined on its own — an approve applies exactly its edits as "
+          + "one commit through the librarian's own gates."),
+        table(["id", "ops", "pages", "why"],
+          data.pending.map((row) => ({
+            row,
+            cells: [`#${row.id}`, opsSummary(row.ops),
+              el("span", { class: "mono" }, row.target_paths.join(" · ")), row.rationale],
+          })),
+          { empty: "nothing pending — the last proposer run found no repair worth asking about",
+            onRow: (row) => { window.location.hash = `#/repairs/${row.id}`; } })),
+      el("div", { class: "card" },
+        el("h2", {}, "Recently decided"),
+        el("div", { class: "sub", style: "margin-bottom:10px" },
+          "a declined proposal is why the nightly run stops suggesting that repair; a failed one is "
+          + "an apply a gate refused, left visible with its reason rather than quietly retried."),
+        table(["id", "status", "decided by", "when", "pages", "outcome"],
+          data.recent.map((row) => ({
+            row,
+            cells: [`#${row.id}`, pill(row.status), row.decided_by || "—", fmtWhen(row.decided_at),
+              el("span", { class: "mono" }, row.target_paths.join(" · ")),
+              row.error || row.notes || (row.applied_commit
+                ? el("span", { class: "mono" }, row.applied_commit.slice(0, 12)) : "—")],
+          })),
+          { empty: "nothing decided yet",
+            onRow: (row) => { window.location.hash = `#/repairs/${row.id}`; } })),
+      el("div", { class: "card" },
+        el("h2", {}, "Proposer runs"),
+        jobRunsTable(data.history)),
+    );
+  });
+}
+
+export async function repairDetailView(host, id) {
+  await loading(host, async () => {
+    const row = await api.get(`repairs/${id}`);
+    const pending = row.status === "pending";
+    render(host,
+      el("div", { class: "card" },
+        el("div", { class: "card-head" },
+          el("h2", {}, `proposal #${row.id}`),
+          pill(row.status),
+          el("span", { class: "sub mono" }, row.kind)),
+        kv([
+          ["why", row.rationale || "(nothing recorded)"],
+          ["pages it would edit", row.target_paths.join(" · ") || "(none)"],
+          ["from findings", (row.finding_ids || []).map((f) => `#${f}`).join(", ") || "(none)"],
+          ["proposed", fmtWhen(row.created_at)],
+          ["proposed by", row.model_id || "(no model recorded)"],
+          ["decided by", row.decided_by || null],
+          ["decided", row.decided_at ? fmtWhen(row.decided_at) : null],
+          ["reason given", row.notes || null],
+          ["commit", row.applied_commit || null],
+          ["why it failed", row.error || null],
+        ])),
+      el("div", { class: "card" },
+        el("h2", {}, "What it would change"),
+        el("div", { class: "sub", style: "margin-bottom:10px" },
+          "every op is additive: a link added to that page's related list, and for overlap and "
+          + "contradiction a one-sentence callout below it. Nothing is rewritten or deleted."),
+        opsTable(row.ops)),
+      pending
+        ? el("div", { class: "card" },
+            el("div", { class: "card-head" },
+              el("h2", {}, "Decide"),
+              el("div", { class: "spacer" }),
+              el("button", { class: "btn small", onclick: () => repairRejectFlow(row) }, "Decline"),
+              el("button", { class: "btn small primary", onclick: () => repairApproveFlow(row) },
+                "Approve & apply")),
+            el("div", { class: "sub" },
+              "approving pushes ONE commit to the knowledge repo, authored by the librarian App "
+              + "with your name in an Approved-by trailer (attribution, not a second authorization "
+              + "check — the token is this console's). The MCP review lane additionally requires "
+              + "you to be a steward for every page listed above."))
+        : el("div", { class: "card" },
+            el("div", { class: "sub" },
+              "already decided — this proposal is a record now. If the repair is still worth "
+              + "making, the next proposer run has to propose it again.")),
+    );
+  });
+}
+
+async function repairApproveFlow(row) {
+  const answer = await confirmForm({
+    title: `Approve #${row.id} — apply ${row.ops.length} edit(s)`,
+    consequence: "applies exactly these edits and pushes ONE commit to the knowledge repo. It is "
+      + "re-validated and re-gated against the repo as it stands right now, so it can still be "
+      + "refused — but if it lands, nothing here can undo it.",
+    note: banner("info",
+      el("div", {}, "the pages this would edit:"),
+      el("ul", { class: "names" }, row.target_paths.map((p) => el("li", { class: "mono" }, p)))),
+    fields: [actorField()],
+    confirmLabel: "Approve & apply",
+  });
+  if (!answer) return;
+  try {
+    const result = await api.post(`repairs/${row.id}/approve`, answer.values);
+    toast(`applied #${row.id} — commit ${result.commit.slice(0, 12)}`, "good");
+    window.location.hash = "#/repairs";
+  } catch (ex) {
+    toast(ex.message, "error");
+  }
+}
+
+async function repairRejectFlow(row) {
+  const answer = await confirmForm({
+    title: `Decline #${row.id}`,
+    consequence: "records the decision and, because a declined proposal is the proposer's memory "
+      + "of having asked, stops this exact repair being suggested again. Nothing is written to the "
+      + "knowledge repo.",
+    fields: [actorField(),
+      { name: "reason", label: "Reason", kind: "textarea", required: true,
+        hint: "the whole of what a later steward will know about why this was declined" }],
+    confirmLabel: "Decline", danger: true,
+  });
+  if (answer && await mutate(`repairs/${row.id}/reject`, answer.values, `declined #${row.id}`)) {
+    window.location.hash = "#/repairs";
   }
 }
 

@@ -15,6 +15,7 @@ from stigmergy.server.settings import Settings
 from tests.admin.conftest import (
     ADMIN_TOKEN,
     park,
+    propose_repair,
     submit_one,
     unresolved_entity_names_report,
     unresolved_entity_report,
@@ -489,3 +490,69 @@ def test_an_unexpected_failure_names_the_class_only(conn, app, monkeypatch):
     response = _request(app, "GET", "/admin/api/worker")
     assert response.status_code == 500
     assert response.json() == {"error": "the operation failed (RuntimeError)"}
+
+
+# ── repairs over HTTP (ADR 039) ───────────────────────────────────────────────────────────────
+def test_repairs_list_and_show_over_http(conn, app):
+    proposal_id = propose_repair(conn)
+
+    listed = _request(app, "GET", "/admin/api/repairs")
+    shown = _request(app, "GET", f"/admin/api/repairs/{proposal_id}")
+
+    assert listed.status_code == 200
+    assert [row["id"] for row in listed.json()["pending"]] == [proposal_id]
+    assert shown.status_code == 200
+    assert shown.json()["ops"][0]["path"] == "wiki/notes/Renewals.md"
+    assert _request(app, "GET", "/admin/api/repairs/999999").status_code == 404
+
+
+def test_repairs_reject_requires_a_reason_and_records_it(conn, app):
+    proposal_id = propose_repair(conn)
+
+    blank = _request(app, "POST", f"/admin/api/repairs/{proposal_id}/reject",
+                     json_body={"actor": "steward@example.com", "reason": "   "})
+    given = _request(app, "POST", f"/admin/api/repairs/{proposal_id}/reject",
+                     json_body={"actor": "steward@example.com", "reason": "already linked"})
+
+    assert blank.status_code == 400
+    assert given.status_code == 200
+    with conn.cursor() as cur:
+        cur.execute("SELECT status, notes FROM repair_proposals WHERE id = %s", (proposal_id,))
+        assert cur.fetchone() == ("rejected", "already linked")
+
+
+def test_repairs_approve_requires_the_token_and_never_reaches_the_apply_without_it(conn, app,
+                                                                                   monkeypatch):
+    """The benign twin lives at the service level (`test_repair_approve_applies_and_records_both_
+    ledgers`); what THIS pins is that an unauthorized POST is refused by the gate, before any of it
+    — no clone, no decision, no ledger row."""
+    from stigmergy.repair import remote as repair_remote
+
+    def never(*_a, **_k):
+        raise AssertionError("apply_via_clone ran on an unauthorized request")
+
+    monkeypatch.setattr(repair_remote, "apply_via_clone", never)
+    proposal_id = propose_repair(conn)
+
+    refused = _request(app, "POST", f"/admin/api/repairs/{proposal_id}/approve", token=None,
+                       json_body={"actor": "mallory"})
+
+    assert refused.status_code == 401
+    with conn.cursor() as cur:
+        cur.execute("SELECT status FROM repair_proposals WHERE id = %s", (proposal_id,))
+        assert cur.fetchone()[0] == "pending"
+        cur.execute("SELECT count(*) FROM review_decisions")
+        assert cur.fetchone()[0] == 0
+
+
+def test_repairs_approve_on_an_unconfigured_deployment_is_the_409(conn, app):
+    """`app` carries a default `Settings()` — no `librarian_repo_url` — so this is the deployment
+    shape an operator meets before configuring one, and it must read as a refusal with the reason
+    rather than a 500 naming a class."""
+    proposal_id = propose_repair(conn)
+
+    response = _request(app, "POST", f"/admin/api/repairs/{proposal_id}/approve",
+                        json_body={"actor": "steward@example.com"})
+
+    assert response.status_code == 409
+    assert "STIGMERGY_LIBRARIAN_REPO_URL" in response.json()["error"]
