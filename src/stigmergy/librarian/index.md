@@ -67,6 +67,11 @@ repo parser — nothing here touches `pages_index`); `stigmergy.index.store` is 
   attachment) widen the instance they build, never a module constant: a new flow is out of
   bounds by default. `edits_allowed` is the one field no caller declares any more: the meeting
   flow set it `False` until it gained the same declared-edit mechanism (ADR 038).
+  `body_rewrite_allowed` is the newest of them and the only one no flow in THIS package declares:
+  it names the single page whose body a governed repair may replace, and it is set by
+  `repair/remote.py` alone (ADR 039's amendment, pinned both directions in
+  `tests/test_architecture.py`). Empty, it changes nothing — every capture still meets
+  `gate_body_rewrite`'s additive proof unchanged.
 - **Wording for humans lives in `report.py` only**; a read path branches on `reason_code`
   (`capture.schema.REJECTION_REASONS`), never on prose and never on `stage`, which is
   `failed_system`'s alone. An unresolved-entity park gets ONE pair of builders (`needs_input` /

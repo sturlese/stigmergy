@@ -12,8 +12,12 @@ table.
 
 What it deliberately is NOT: a brain client. No search, no page rendering, no `ask` — the
 architecture tests enforce that boundary on the package. It reads page *paths* in three places
-(the substrate check, the gardener's findings and a repair proposal's target paths) and page
-*bodies* nowhere — a repair proposal included: its ops name a page and a link, never a line of it.
+(the substrate check, the gardener's findings and a repair proposal's target paths), and it reads
+no page out of the corpus at all: what it renders comes from rows in this database, never from the
+knowledge repo. The one thing on it that LOOKS like a page body is an `entity-body` proposal's
+draft — text a model wrote, sitting in `repair_proposals`, shown because approving it without
+reading it would be approving prose nobody has read. It is not a page yet, and it is not a page
+this console fetched.
 
 **The one thing that boundary does not cover, said plainly:** the Activity tab renders the `ask` QUESTIONS in `audit_log`. No answer, no page, no snippet — but a question is user content, and it sits behind the console's single shared credential with a free-text actor. Read "never a read surface over the corpus" as being about pages, because that is what it is about.
 
@@ -103,8 +107,10 @@ gateway's own sentence (status code, never the token, never an echoed body) show
   history. The decided list is not decoration — a **rejected** row is the dismissal memory the
   proposer skips against, so "why has the nightly run stopped proposing this" is only answerable
   there, and a **failed** row is an apply a gate refused, kept visible with its reason rather than
-  quietly returning to the queue. A proposal's detail shows the ops table — one line per declared
-  edit, page and link — with Approve and Decline; Decline demands a non-blank reason, because the
+  quietly returning to the queue. A proposal's detail shows what that KIND would change — the ops
+  table for the additive kinds, one line per declared edit, page and link; the drafted body in full,
+  as plain text, for an `entity-body` proposal, because for that kind reading the draft IS the
+  check — with Approve and Decline; Decline demands a non-blank reason, because the
   reason is the whole of what stops the same repair being re-derived tomorrow. Approve runs
   `server.review.apply_repair_and_record`, the SAME ordering MCP's review lane runs, for the reason
   the Entities tab shares its mint sequence: it applies exactly the approved ops through the

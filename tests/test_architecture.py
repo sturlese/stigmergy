@@ -2604,6 +2604,12 @@ _REPAIR_ALLOWED_PREFIXES = (
     "stigmergy.librarian.edits",         # validate / apply_declared / page_names / EDIT_KINDS
     "stigmergy.librarian.gather",        # load_corpus / search_candidates / confined_page
     "stigmergy.librarian.gates",         # GateContext / run_gates / ALL_GATES / ensure_scanner
+    "stigmergy.librarian.page",          # the frontmatter LINE machinery `entity_body` writes one
+                                       # page's `updated:`/`role:` through, plus the containment
+                                       # and symlink rules `edits.validate` asks of a target. One
+                                       # owner for "what lines does a top-level key occupy", or
+                                       # the writer and `gate_body_rewrite`'s comparison could
+                                       # come to disagree about the same two lines
     "stigmergy.librarian.gitcmd",        # diff_entries / added_lines / commit / push
     "stigmergy.librarian.githubapp",     # authenticated_clone_url / identity / push_config
     "stigmergy.librarian.config",        # repo_path / is_repo_checkout / the three relpaths
@@ -2720,14 +2726,24 @@ def test_the_repair_prefix_pruning_check_can_go_red():
 
 
 def test_the_repair_op_vocabulary_is_exactly_the_librarians_edit_kinds():
-    """v1's whole safety argument: every op is a shape `edits.apply_declared` performs and the
-    eight gates already judge. A fourth kind is a new gate question, not a bigger tuple — the
-    pin is here rather than in the package's own suite because it is a CROSS-package promise."""
+    """The additive road's whole safety argument: every op the `edits` kind can carry is a shape
+    `edits.apply_declared` performs and the eight gates already judge. A fourth ADDITIVE kind is a
+    new gate question, not a bigger tuple — the pin is here rather than in the package's own suite
+    because it is a CROSS-package promise.
+
+    The repair loop's second proposal kind (`entity-body`, ADR 039's amendment) does not widen this
+    tuple and must not: it is a different kind with its own validator, its own writer and its own
+    branch in `gate_body_rewrite`, precisely because it could not be judged by the proof these
+    three are admitted under."""
     from stigmergy.librarian import edits as _edits
     from stigmergy.librarian import page as _page
+    from stigmergy.repair import schema as _repair_schema
 
     assert _edits.EDIT_KINDS == _page.EDIT_KINDS
     assert set(_edits.EDIT_KINDS) == {"backlink", "overlap", "contradiction"}
+    assert _repair_schema.KIND_ENTITY_BODY not in _edits.EDIT_KINDS
+    assert set(_repair_schema.KINDS) == {_repair_schema.KIND_EDITS,
+                                         _repair_schema.KIND_ENTITY_BODY}
 
 
 def test_the_repair_preview_renders_every_callout_kind_the_applier_performs():
@@ -3212,6 +3228,64 @@ def test_the_repair_apply_caller_pin_can_go_red_in_both_directions(tmp_path):
     caller_b.write_text("def approve(conn, **kw):\n    raise NotImplementedError\n",
                         encoding="utf-8")
     assert observed() == ["handlers.py", "review.py"]                 # a stale grant
+
+
+# ── ADR 039 amendment: who may tell the gates to permit a body rewrite ─────────────────────────
+# `GateContext.body_rewrite_allowed` is the ONE exception to `gate_body_rewrite`'s additive proof,
+# and it is a TOLD fact. The set of modules that tell it is therefore the set of ways a page's prose
+# can be replaced in this system, and it must be readable in one place.
+#
+# A dedicated predicate rather than `_names_symbol`: granting the permission is passing a KEYWORD
+# ARGUMENT, and an `ast.keyword`'s name is a plain string on the Call node, not a `Name` the shared
+# walker sees. Reading the field (`ctx.body_rewrite_allowed`, inside the gate itself) is not
+# granting it, and this predicate deliberately does not count it.
+_BODY_REWRITE_PERMISSION = "body_rewrite_allowed"
+# `repair/remote.py` builds the GateContext for an approved `entity-body` apply and names the ONE
+# path that proposal was approved for. Nothing in the librarian's own flows is here, and that is the
+# claim: a capture never permits a rewrite, so the additive proof it has always faced is the one it
+# still faces.
+_BODY_REWRITE_PERMISSION_GRANTERS = ("repair/remote.py",)
+
+
+def _grants_body_rewrite(path: pathlib.Path) -> bool:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return any(isinstance(node, ast.keyword) and node.arg == _BODY_REWRITE_PERMISSION
+               for node in ast.walk(tree))
+
+
+def test_only_the_declared_surfaces_may_permit_a_body_rewrite():
+    """Set EQUALITY, both directions, this file's house rule.
+
+    A NEW entry is a second road by which a page's existing prose can be replaced — the property
+    `gate_body_rewrite` exists to hold, and the one whose absence let a model rewrite a human's
+    page twice before `edits.py` was split out. A MISSING entry means the repair apply stopped
+    telling the gate which path it approved, which does not fail open (the gate would veto the
+    rewrite as `body-rewrite`) but does mean the kind is dead — worth knowing either way.
+    """
+    granters = sorted(_rel(p) for p in ALL_STIGMERGY_SOURCES if _grants_body_rewrite(p))
+    assert granters == sorted(_BODY_REWRITE_PERMISSION_GRANTERS), (
+        f"{_BODY_REWRITE_PERMISSION} is granted by {granters}, not by "
+        f"{sorted(_BODY_REWRITE_PERMISSION_GRANTERS)}. Permission to replace a page's prose is a "
+        "decision with an ADR behind it (039), not a keyword argument a new flow may pass")
+
+
+def test_the_body_rewrite_permission_pin_can_go_red(tmp_path):
+    """**Proves the pin above can go red**, and that it tells granting from reading: a module that
+    only READS `ctx.body_rewrite_allowed` — which is what the gate itself does — must not be
+    counted as a grant, or the pin would name `librarian/gates.py` forever and stop meaning
+    anything."""
+    grants = tmp_path / "grants.py"
+    grants.write_text("def build(ctx_cls, path):\n"
+                      "    return ctx_cls(worktree='', body_rewrite_allowed=frozenset({path}))\n",
+                      encoding="utf-8")
+    reads_only = tmp_path / "reads.py"
+    reads_only.write_text("def gate(ctx):\n"
+                          "    return [p for p in ctx.body_rewrite_allowed]\n", encoding="utf-8")
+
+    assert _grants_body_rewrite(grants)
+    assert not _grants_body_rewrite(reads_only), (
+        "reading the field is not granting it — a predicate that conflated the two would pin the "
+        "gate module itself and never see a real second granter")
 
 
 def test_the_repair_apply_primitive_pin_tells_defining_it_from_calling_it(tmp_path):

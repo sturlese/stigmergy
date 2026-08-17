@@ -36,6 +36,10 @@ EXIT_INTERRUPTED = 130
 # How much of a rationale a list line shows before it is cut. A list is a scan, not a read.
 LIST_RATIONALE_CHARS = 90
 
+# The kind column, DERIVED from the vocabulary (`capture/cli.py::_KIND_WIDTH`'s own precedent) so
+# a kind added to `schema.KINDS` widens the column instead of shifting every row after it.
+KIND_WIDTH = max(len(kind) for kind in schema.KINDS)
+
 
 def _err(message: str) -> None:
     print(f"stigmergy-repair: {message}", file=sys.stderr)
@@ -94,7 +98,7 @@ def _cmd_list(conn, args) -> int:
     else:
         print(f"{len(pending)} proposal(s) waiting on a steward\n")
         for row in pending:
-            print(f"  #{row['id']:<5} {row['kind']:<7} {len(row['ops'])} op(s) on "
+            print(f"  #{row['id']:<5} {row['kind']:<{KIND_WIDTH}} {len(row['ops'])} op(s) on "
                   f"{', '.join(row['target_paths']) or '(none)'}")
             print(f"        {_clip(row['rationale'], LIST_RATIONALE_CHARS)}")
     if decided:
@@ -137,22 +141,41 @@ def preview(row: dict) -> list[str]:
     network. A steward reading this is deciding whether to authorize it, so it is rendered from
     exactly the stored fact the apply will act on, never from a re-derivation that could differ.
 
-    Additive by construction, so every line is a `+`: `backlink` adds one `related:` entry, and a
-    callout kind adds that entry AND the callout block `page.with_callout` appends.
+    Two shapes, because there are two kinds. The additive ops are additive by construction, so
+    every line is a `+`: `backlink` adds one `related:` entry, and a callout kind adds that entry
+    AND the callout block `page.with_callout` appends. An `entity-body` op REPLACES the body below
+    the page's own `# Title`, so its preview says so with a `-` line and then shows the draft in
+    full — for that kind the draft IS what a steward is judging, and a preview that summarised it
+    would be hiding the only thing worth reading.
     """
     lines: list[str] = []
     for op in row.get("ops") or ():
         kind = str(op.get(schema.OP_KIND_KEY, ""))
-        # Sanitized again HERE, though `proposer.validate_batch` already did it on the way in:
-        # this function renders a row read back from the database, and a row is not proof of the
-        # path it arrived by. An ANSI escape in somebody's terminal is the cost of assuming.
+        # Sanitized again HERE, though the proposer already did it on the way in: this function
+        # renders a row read back from the database, and a row is not proof of the path it arrived
+        # by. An ANSI escape in somebody's terminal is the cost of assuming.
         path, link, note = (sanitize(str(op.get(key) or "")) for key in ("path", "link", "note"))
         lines.append(f"--- {path}")
+        if kind == schema.KIND_ENTITY_BODY:
+            lines += _body_preview(op)
+            continue
         lines.append(f"+   related: [[{link}]]")
         if kind in _CALLOUT_PHRASES:
             callout, phrase = _CALLOUT_PHRASES[kind]
             lines.append(f"+   > [!{callout}] {phrase} [[{link}]]")
             lines.append(f"+   > {' '.join(str(note).split())}")
+    return lines
+
+
+def _body_preview(op: dict) -> list[str]:
+    """One drafted body, as the diff it is. The frontmatter and the `# Title` line are not shown
+    because they do not change — the apply rewrites `updated:` and, when the page declares an
+    empty one, `role:`, and nothing else."""
+    role = " ".join(sanitize(str(op.get("role") or "")).split())
+    lines = ["-   (the body below this page's `# Title` line, replaced)"]
+    if role:
+        lines.append(f'+   role: "{role}"')
+    lines += [f"+   {line}" for line in sanitize(str(op.get("body_markdown") or "")).splitlines()]
     return lines
 
 

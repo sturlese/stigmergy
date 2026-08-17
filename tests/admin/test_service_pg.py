@@ -31,6 +31,7 @@ from stigmergy.server import review as server_review
 from stigmergy.server.settings import Settings
 from tests.admin.conftest import (
     park,
+    propose_entity_body,
     propose_repair,
     submit_one,
     unresolved_entity_report,
@@ -1134,6 +1135,34 @@ def test_repair_show_sanitizes_every_untrusted_string_and_404s_on_nothing(conn, 
     assert row["ops"][0]["note"] == "covers the same ground"
     with pytest.raises(AdminNotFound):
         service.repair_show(999_999)
+
+
+def test_a_body_draft_reaches_the_console_readable_and_whole(conn, service):
+    """OLD BEHAVIOUR: `_proposal` reshaped every op into `{op, path, link, note}`, so an
+    `entity-body` op arrived at the console with its `body_markdown` and `role` DROPPED — the
+    steward reading the draft is the check for this kind, and the console showed them a row with
+    an empty `link` where the draft should have been.
+
+    Newlines survive `_clean` by design (control characters die, structure does not): a body
+    flattened to one line is a body nobody can read as the page it would become."""
+    proposal_id = propose_entity_body(conn, body="## What / Who\n\nA freight\x07 broker.\n",
+                                      role="A freight broker in the north-west.")
+
+    row = service.repair_show(proposal_id)
+
+    assert row["kind"] == repair_schema.KIND_ENTITY_BODY
+    assert row["ops"][0]["body_markdown"] == "## What / Who\n\nA freight broker.\n"
+    assert row["ops"][0]["role"] == "A freight broker in the north-west."
+
+
+def test_an_additive_op_keeps_exactly_the_fields_it_had(conn, service):
+    """The benign twin for the reshaping change: a second kind's fields must not appear on the
+    first kind's ops, where a console table would render an empty column for every repair."""
+    proposal_id = propose_repair(conn, kind="overlap", note="the same ground")
+
+    (op,) = service.repair_show(proposal_id)["ops"]
+
+    assert sorted(op) == ["link", "note", "op", "path"]
 
 
 def test_repair_approve_applies_and_records_both_ledgers(conn, repair_service, monkeypatch):

@@ -1,8 +1,9 @@
 # The governed repair loop — `stigmergy.repair`
 
-A finding's path to zero. `stigmergy-repair propose` turns the gardener's findings into concrete,
-strictly additive edits a steward can approve one at a time; the review lane and the admin console
-are where one is approved; and only then does code perform exactly the approved ops, through the
+A finding's path to zero. `stigmergy-repair propose` turns the gardener's findings into concrete
+changes a steward can approve one at a time — additive edits to pages that already exist, and a
+drafted BODY for an entity page that has never had one; the review lane and the admin console are
+where one is approved; and only then does code perform exactly the approved ops, through the
 librarian's own validator, its eight gates and its governed commit.
 Design record: [ADR 039](../decisions/039-governed-repair-loop.md) — it holds the decisions this
 document only shows the results of.
@@ -17,44 +18,46 @@ having passed all four.
 
 ```
   gardener findings                stigmergy-repair propose            a steward, one at a time
-  (the latest COMPLETED run)         ├─ filter to the three               ├─ review_queue / review_decide
-   model-unlinked-mention            │    proposable checks               │    (MCP, item_kind
-   model-contradiction               ├─ drop keys already reviewed        │     "repair-proposal")
-   orphan-page                       ├─ the model, 2 READ tools           └─ the console's Repairs tab
-        │                            ├─ validate: vocabulary, paths,              │
-        └────────── read ───────────>│    links, notes, bounds                    │  approve
-                                     ├─ validate: edits.validate                  v
-                                     │    against the real checkout      server.review.apply_repair_and_record
-                                     └─ INSERT ... status='pending'        ├─ mark_decided (WHERE pending)
-                                          content_key = what it would do   ├─ clone → edits.apply_declared
-                                                                           ├─ the cross-check: the diff's
-                                                                           │    paths == target_paths, all M
-                                                                           ├─ run_gates(ALL_GATES)
-                                                                           ├─ gitcmd.commit(gated_entries=…)
-                                                                           │    + push, App-authored
-                                                                           └─ mark_applied + review_decisions
+  (the latest COMPLETED run)         ├─ split by check into TWO roads      ├─ review_queue / review_decide
+   model-unlinked-mention            │   edits:  batch → 1 call/batch      │    (MCP, item_kind
+   model-contradiction               │   entity-body: 1 page → 1 call,     │     "repair-proposal")
+   orphan-page                       │     and only with >= 2 anchored     └─ the console's Repairs tab
+   entity-placeholder-body           ├─ drop keys already reviewed                 │
+        │                            ├─ the model, 2 READ tools                    │  approve
+        └────────── read ───────────>├─ validate the answer, one retry             v
+                                     ├─ validate against the real         server.review.apply_repair_and_record
+                                     │    checkout (the kind's own          ├─ mark_decided (WHERE pending)
+                                     │    validator, the applier's)         ├─ clone → the kind's applier
+                                     └─ INSERT ... status='pending'         ├─ the cross-check: the diff's
+                                          content_key = kind + what it      │    paths == target_paths, all M
+                                          would do                          ├─ run_gates(ALL_GATES), told the
+                                                                            │    lane and the permitted path
+                                                                            ├─ gitcmd.commit(gated_entries=…)
+                                                                            │    + push, App-authored
+                                                                            └─ mark_applied + review_decisions
 ```
 
-## The three checks a repair can answer
+## The four checks a repair can answer
 
-Only findings a link or a callout could actually close reach the proposer. The other five are
+Only findings one of the two kinds could actually close reach the proposer. The other five are
 absent by NAME rather than by oversight: an aging seed needs somebody to write, a stale view needs a
 regeneration, an anchor that no longer fits is a judgment about a page's subject. None of them is an
-edit this vocabulary can express.
+edit or a body this vocabulary can express.
 
 | check | what it says | the repair |
 |---|---|---|
 | `model-unlinked-mention` | two pages cover the same ground with no link between them | a `backlink` on one of them, or on each |
 | `model-contradiction` | two pages assert things that disagree | a `contradiction` callout on BOTH sides |
 | `orphan-page` | nothing in the corpus links to this page | a `backlink` on the page that ought to link to it — which the proposer has to FIND |
+| `entity-placeholder-body` | an entity page still carries the placeholders it was minted with | an `entity-body` draft of that page's body, written from the pages anchored to the entity |
 
 A contradiction repair FLAGS the disagreement and never resolves it. Deciding which of two pages is
 right is not something this loop does, and it could not express the edit if it were.
 
-## The op vocabulary is the librarian's, and it is closed
+## Two kinds, and both vocabularies are closed
 
-Three shapes, all of them additive, all of them performed by `edits.apply_declared` — the same
-function a filing capture's declared edits go through:
+A proposal's `kind` says which question it is. `edits` is three additive shapes, all performed by
+`edits.apply_declared` — the same function a filing capture's declared edits go through:
 
 - **`backlink`** — adds `[[link]]` to that page's `related:` list.
 - **`overlap`** — the same link, plus a `> [!NOTE] Overlaps with [[link]]` callout carrying a
@@ -66,11 +69,44 @@ that CHANGES and must be in one of the fast lane's three folders (`wiki/notes/`,
 `wiki/decisions/`, `wiki/concepts/`); `link` is a bare page name and may resolve to any page,
 including an entity page. Editing `wiki/entities/`, `sources/` or `views/` is refused.
 
-Nothing here rewrites a sentence, deletes anything, moves anything, or creates or removes a page.
-That is the safety argument rather than a coincidence: the eight gates were written to judge these
-shapes, and `gate_body_rewrite` is what proves a diff is additive rather than promising it. A fourth
-op kind is a new question nobody has asked the gates — `tests/test_architecture.py` pins the
-vocabulary equal to `page.EDIT_KINDS`.
+Nothing in that kind rewrites a sentence, deletes anything, moves anything, or creates or removes a
+page. That is the safety argument rather than a coincidence: the eight gates were written to judge
+these shapes, and `gate_body_rewrite` is what proves a diff is additive rather than promising it. A
+fourth ADDITIVE op is a new question nobody has asked the gates —
+`tests/test_architecture.py` pins that vocabulary equal to `page.EDIT_KINDS`.
+
+`entity-body` is the second kind, and the only one that REPLACES text
+([ADR 039's amendment](../decisions/039-governed-repair-loop.md)). It carries exactly ONE op:
+
+```json
+{"op": "entity-body", "path": "wiki/entities/<Name>.md", "body_markdown": "…", "role": ""}
+```
+
+- **What it may touch.** Everything down to and including the page's own `# Title` survives byte
+  for byte — the frontmatter block, the template's comment, the title line. Exactly two frontmatter
+  lines may differ, rewritten in place: `updated:` (the apply date) and `role:`, the latter only
+  when the page declares an EMPTY one. A role somebody wrote is a statement of identity.
+- **When it is proposed at all.** Only for a page the gardener flagged, and only when at least two
+  wiki pages are anchored to that entity — the floor is checked BEFORE the model call, so an entity
+  nothing has been written about costs nothing every night. Anchored pages come from the CHECKOUT
+  (`entity:` frontmatter, canonicalized through the registry), never from `pages_index`.
+- **What the draft may contain.** Markdown sections and nothing else: no `---` line, no H1 of its
+  own, no placeholder line left in it, every `[[wikilink]]` resolving to a page that exists (the
+  knowledge repo's linter treats a dead link as an error, so a draft carrying one could never be
+  applied), at most `MAX_BODY_BYTES` bytes and `MAX_BODY_LINES` lines, and a `role` of at most
+  `MAX_ROLE_CHARS` on one line. Every rule is checked at propose time AND against the fresh clone
+  at apply time, by the same function.
+- **How the gates judge it.** `gate_body_rewrite`'s additive proof cannot admit a replaced body, so
+  the apply TELLS the gates two caller-scoped facts: `write_prefixes=("wiki/entities/",)` — the
+  lane this apply owns — and `body_rewrite_allowed={the one page}`. For a path in that set the
+  additive proof is replaced by three dedicated checks (frontmatter unchanged but for those two
+  keys, the page is an entity page, the path is in the lane); for every other path the gate is
+  byte-identical to what it was. The librarian's own flows name no path, and
+  `tests/test_architecture.py` pins the granting set to `repair/remote.py` alone.
+- **Where the injection surface is.** A drafted body is model-written prose that becomes the page,
+  where an additive op only ever contributed one callout sentence. The secrets, PII and contract
+  gates run over it exactly as they run over a filed page, and a credential in a draft is vetoed at
+  apply time with nothing pushed.
 
 ## `stigmergy-repair`
 
@@ -81,15 +117,18 @@ stigmergy-repair [--dsn DSN] [--repo PATH] [--json] show <id>
 ```
 
 - **`propose`** — the pass a cron runs. Reads the latest COMPLETED gardener run, keeps the
-  proposable findings, drops the ones whose repair has already been reviewed, batches the rest to
-  the model with the subject pages' bodies fenced, validates, and inserts one pending row per
-  surviving proposal. Stops at `STIGMERGY_REPAIR_MAX_PROPOSALS` — an answer carrying more than that
+  proposable findings, drops the ones whose repair has already been reviewed, and sends what is
+  left down whichever road its check belongs to — the additive findings in batches, each entity
+  page on its own — then validates and inserts one pending row per surviving proposal. Both roads
+  share ONE run ceiling: it is how many decisions a night may ask a person for. Stops at `STIGMERGY_REPAIR_MAX_PROPOSALS` — an answer carrying more than that
   is refused whole so the model re-cuts it, and a run that fills the ceiling stops batching and
   records what it left for the next pass. Records a `job_runs` row under the job `repair-propose`
   with `findings_seen` / `proposed` / `skipped_known` / `skipped_invalid`. Exits 0 when it proposes
   nothing — an ordinary outcome, not a failure.
 - **`list`** — what waits on a steward, plus what was recently decided.
-- **`show <id>`** — what one proposal would change, rendered from the ops without touching git.
+- **`show <id>`** — what one proposal would change, rendered from the ops without touching git. For
+  an `entity-body` proposal that is the drafted body in full: the draft is the whole of what a
+  steward judges, so a preview that summarised it would hide the only thing worth reading.
 
 **There is no `apply`, and there will not be one.** A terminal knows who is typing and not what they
 are allowed to approve; applying goes through a door that decides. `--repo` (or `$STIGMERGY_REPO`)
@@ -127,8 +166,8 @@ become the system prompt.
 
 A pending proposal appears in the review inbox as `repair-proposal`, alongside `entity-proposal` and
 `parked-capture`, and in the console's Repairs tab. It carries its rationale, the pages it would
-edit, and a count of its ops — never the ops themselves, because a list is a scan; the ops are one
-click, or one `stigmergy-repair show`, away.
+edit, and a count of its ops with their kinds — never the ops themselves, because a list is a scan;
+the ops, and a body draft in full, are one click or one `stigmergy-repair show` away.
 
 - **Verdicts are `approve` and `reject` only.** A proposal IS its edits, so the thing to change
   about one is which edits it contains, which is a different proposal.
@@ -190,7 +229,9 @@ repair again — which is the only way back for a repair somebody actually wante
 
 `note` is deliberately excluded from the key: two proposals adding the same callout to the same page
 with differently-worded sentences are the same question asked twice, and a rephrasing of a declined
-repair is not a new one. The UNIQUE index is narrower than the skip rule — one PENDING row per key,
+repair is not a new one. The drafted body is excluded for the identical reason — **a re-drafted body
+is the same question**, and a steward who decided a page needs writing by a person should not meet
+another draft of it tomorrow. The UNIQUE index is narrower than the skip rule — one PENDING row per key,
 not one row ever — so re-proposing after a rejection stays a human decision rather than a database
 error.
 

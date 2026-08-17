@@ -37,7 +37,7 @@ def test_no_findings_is_one_honest_line_never_silence():
 def test_header_names_the_run_and_the_corpus_counts():
     text = _render([])
     assert "# Gardener report — run #128, completed 2026-07-31T05:07:03Z" in text
-    assert "checked 412 pages, 38 entities — 8 deterministic checks" in text
+    assert "checked 412 pages, 38 entities — 9 deterministic checks" in text
 
 
 def test_sweep_summary_is_absent_when_the_caller_supplies_none():
@@ -47,7 +47,7 @@ def test_sweep_summary_is_absent_when_the_caller_supplies_none():
 
 def test_sweep_summary_extends_the_corpus_line_when_a_caller_supplies_one():
     text = _render([], sweep_summary="a model sweep over 3 changed page(s)")
-    assert ("8 deterministic checks, plus a model sweep over 3 changed page(s)") in text
+    assert ("9 deterministic checks, plus a model sweep over 3 changed page(s)") in text
 
 
 # ── severity counts and the judgment-call preamble ──────────────────────────────────────────────

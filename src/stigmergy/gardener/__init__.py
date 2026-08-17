@@ -1,4 +1,4 @@
-"""`stigmergy.gardener` — corpus health on demand: eight deterministic checks plus a bounded model
+"""`stigmergy.gardener` — corpus health on demand: nine deterministic checks plus a bounded model
 editorial sweep, persisted as findings + a `job_runs` row, printed as a severity-grouped report.
 
 Findings-only, structurally: this package imports no git plumbing and holds no path under `wiki/`

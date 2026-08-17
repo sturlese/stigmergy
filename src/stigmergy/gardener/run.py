@@ -80,6 +80,7 @@ def _run_all_checks(conn, repo: str, registry: Registry, settings: GardenerSetti
         population_stats=filing_population_stats)
     findings += checks.check_dead_vocabulary(repo, registry)
     findings += checks.check_date_bearing_body_links(repo)
+    findings += checks.check_entity_placeholder_bodies(repo)
     findings += checks.check_company_wide_fraction(
         conn, window=settings.company_window, share_threshold=settings.company_share,
         population_stats=filing_population_stats)

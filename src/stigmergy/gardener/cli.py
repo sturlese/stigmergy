@@ -64,7 +64,7 @@ def _gateway():
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="stigmergy-gardener",
-        description="Eight deterministic corpus-health checks, run on demand: findings persisted, "
+        description="Nine deterministic corpus-health checks, run on demand: findings persisted, "
                     "a severity-grouped report printed, an SLA notice posted for anything urgent.")
     ap.add_argument("--dsn", default=None,
                     help=f"Postgres DSN (default: ${store.DSN_ENV} or {store.DSN_DEFAULT})")

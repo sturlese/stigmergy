@@ -478,7 +478,10 @@ performs it. Three kinds, and each is an append:
 edit is not attempted. Nothing here is exempt from the gates: code's edits land in the same diff and
 `gate_body_rewrite` judges them exactly as it judged the agent's — proven against the BASE COMMIT's
 own blob, never against a rendered diff, and a `related:` change is admitted only when its link set
-strictly GROWS. `findings[].category` is filtered to a fixed set (`declare-canonical`,
+strictly GROWS. (That proof has exactly one caller-declared exception, `GateContext
+.body_rewrite_allowed`, and no flow in this package declares it: it belongs to the governed repair
+loop's `entity-body` kind — see [`repair.md`](./repair.md). For every diff the librarian produces
+the gate is byte-identical to what it has always been.) `findings[].category` is filtered to a fixed set (`declare-canonical`,
 `write-outside-lane`, `reveal-credentials`); a category the agent invented is dropped rather than
 echoed, which is what keeps "the report never quotes the payload back" a property.
 

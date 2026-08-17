@@ -16,12 +16,14 @@ The two twins this file exists for are the ones that must be observed REFUSING:
 Each has a benign twin beside it, because a check that only ever fires measures its sensitivity
 and never its specificity — and both of these can bounce a steward's real decision.
 """
+import datetime
 import os
 
 import pytest
 
 from stigmergy.librarian import gitcmd
-from stigmergy.repair import remote, schema, store
+from stigmergy.librarian import page as page_policy
+from stigmergy.repair import entity_body, remote, schema, store
 from stigmergy.repair.errors import ProposalStateError, RepairError
 from tests import adversarial_payloads
 from tests.entities import conftest as entities_conftest
@@ -36,11 +38,13 @@ pytestmark = pytest.mark.usefixtures("require_gitleaks")
 APPROVER = "steward@example.com"
 
 
-def _proposal(conn, ops, *, finding_ids=(1,), rationale="the pages should point at each other"):
+def _proposal(conn, ops, *, finding_ids=(1,), kind=schema.KIND_EDITS,
+              rationale="the pages should point at each other"):
     """One APPROVED proposal on the table — the state `apply_via_clone` is only ever called in."""
     proposal_id = store.insert_proposal(
         conn, run_id=1, finding_ids=list(finding_ids), target_paths=schema.target_paths(ops),
-        ops=ops, rationale=rationale, content_key=schema.content_key(ops), model_id="fixture")
+        ops=ops, rationale=rationale, content_key=schema.content_key(ops, kind=kind), kind=kind,
+        model_id="fixture")
     store.mark_decided(conn, proposal_id, status=schema.STATUS_APPROVED, decided_by=APPROVER)
     return store.proposal(conn, proposal_id)
 
@@ -413,3 +417,172 @@ def test_the_refusals_raised_at_runtime_meet_the_same_bar(conn, repo_env):
     assert len(said) == 3
     for message in said:
         entities_conftest.assert_steward_facing(message)
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# The second kind: `entity-body` — the one apply that REPLACES prose (ADR 039 amendment)
+#
+# Everything here runs against the same real remote, the same eight gates and the same real
+# gitleaks as the additive kinds above. That is the point: the new kind buys its safety from the
+# SAME machinery, plus one told fact (`GateContext.body_rewrite_allowed`) naming the single page
+# this approval covers.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+DRAFTED_BODY = ("## What / Who\n\nA freight broker the renewal pipeline runs through.\n\n"
+                "## Facts\n\n- It renewed in Q3 — [[Existing Note]]\n")
+
+
+def _body_ops(path=support.ENTITY_PAGE, body=DRAFTED_BODY, role=""):
+    return [{"op": schema.KIND_ENTITY_BODY, "path": path, "body_markdown": body, "role": role}]
+
+
+def _body_proposal(conn, ops, **over):
+    return _proposal(conn, ops, kind=schema.KIND_ENTITY_BODY,
+                     rationale="the entity page is still its own template", **over)
+
+
+def test_an_approved_entity_body_lands_with_the_frontmatter_and_the_h1_untouched(conn, repo_env):
+    """The whole kind in one assertion set: the prose is replaced, and everything a steward did
+    NOT approve — the frontmatter's identity fields, the page's own title — is byte-identical on
+    the remote."""
+    support.seed_entity(repo_env)
+    before = _remote_page(repo_env.bare, support.ENTITY_PAGE)
+    proposal = _body_proposal(conn, _body_ops())
+
+    result = remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                                    approved_by=APPROVER)
+
+    assert result["paths"] == [support.ENTITY_PAGE]
+    landed = _remote_page(repo_env.bare, support.ENTITY_PAGE)
+    assert "A freight broker" in landed
+    assert "<One clear paragraph" not in landed
+    assert f"# {support.ENTITY_STEM}" in landed
+    for line in ('entity: ["meridian-partners"]', "status: developing", "type: entity"):
+        assert line in landed, f"{line} is not this proposal's to change"
+    assert before.split("\n# ")[0].replace("updated: 2026-01-01", "") != "", "fixture sanity"
+
+
+def test_the_updated_line_moves_to_the_apply_date_and_no_other_frontmatter_line_moves(
+        conn, repo_env):
+    support.seed_entity(repo_env)
+    proposal = _body_proposal(conn, _body_ops())
+
+    remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal, approved_by=APPROVER)
+
+    landed = _remote_page(repo_env.bare, support.ENTITY_PAGE)
+    before = page_policy.frontmatter_lines(support.page_text(repo_env.repo, support.ENTITY_PAGE))
+    after = page_policy.frontmatter_lines(landed)
+    assert f"updated: {datetime.date.today().isoformat()}" in after
+    assert set(before) - set(after) == {"updated: 2026-01-01"}
+
+
+def test_a_credential_in_a_drafted_body_is_vetoed_and_nothing_is_pushed(conn, repo_env):
+    """The injection surface this kind adds: a body draft is model-written PROSE that becomes the
+    page, where the additive kinds only ever contributed one callout sentence. It validates
+    perfectly at propose time — `entity_body.validate` asks about shape, not content — so the
+    secrets gate is what has to catch it, over the same gitleaks pass the librarian's filings go
+    through."""
+    support.seed_entity(repo_env)
+    body = (f"## Facts\n\n- the deploy token is {adversarial_payloads.GITHUB_PAT}\n"
+            f"- see [[Existing Note]]\n")
+    proposal = _body_proposal(conn, _body_ops(body=body))
+    before = _remote_head(repo_env.bare)
+
+    with pytest.raises(RepairError) as caught:
+        remote.apply_approved(conn, repo_env.bare, "main", None, proposal=proposal,
+                              approved_by=APPROVER)
+
+    assert "secrets/" in str(caught.value)
+    assert adversarial_payloads.GITHUB_PAT not in str(caught.value)
+    assert _remote_head(repo_env.bare) == before
+    assert adversarial_payloads.GITHUB_PAT not in _remote_page(repo_env.bare, support.ENTITY_PAGE)
+    assert store.proposal(conn, proposal["id"])["status"] == schema.STATUS_FAILED
+
+
+def test_an_entity_body_op_naming_a_page_outside_the_entity_zone_is_refused(conn, repo_env):
+    """The lane is not a suggestion. This kind's permission is granted per PATH, so an op that
+    named a note page would be asking the gate to permit a rewrite of somebody's prose — refused
+    by the validator, before a gate is asked."""
+    support.seed_entity(repo_env)
+    proposal = _body_proposal(conn, _body_ops(path=support.NOTE_A))
+    before = _remote_head(repo_env.bare)
+
+    with pytest.raises(RepairError, match="outside-lane"):
+        remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                               approved_by=APPROVER)
+    assert _remote_head(repo_env.bare) == before
+
+
+def test_the_cross_check_governs_this_kind_too(conn, repo_env):
+    """`target_paths` is a second stored fact for every kind, not only the additive ones."""
+    support.seed_entity(repo_env)
+    proposal = _body_proposal(conn, _body_ops())
+    with conn.cursor() as cur:
+        cur.execute("UPDATE repair_proposals SET target_paths = '[\"wiki/notes/x.md\"]'::jsonb "
+                    "WHERE id = %s", (proposal["id"],))
+    tampered = store.proposal(conn, proposal["id"])
+    before = _remote_head(repo_env.bare)
+
+    with pytest.raises(RepairError, match="not the change that was approved"):
+        remote.apply_via_clone(repo_env.bare, "main", None, proposal=tampered,
+                               approved_by=APPROVER)
+    assert _remote_head(repo_env.bare) == before
+
+
+def test_the_additive_kinds_are_still_judged_by_the_additive_proof(conn, repo_env):
+    """The benign twin for the whole exception: an `edits` proposal builds a context with an EMPTY
+    `body_rewrite_allowed`, so the page it edits is judged exactly as it was before this kind
+    existed. Observed by RECORDING the context the door builds, never by replacing the gates."""
+    seen = {}
+    real_run_gates = remote.gates.run_gates
+
+    def recording(ctx):
+        seen["permitted"] = ctx.body_rewrite_allowed
+        seen["lane"] = ctx.write_prefixes
+        return real_run_gates(ctx)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(remote.gates, "run_gates", recording)
+        remote.apply_via_clone(repo_env.bare, "main", None, proposal=_proposal(conn, BACKLINK_OPS),
+                               approved_by=APPROVER)
+
+    assert seen["permitted"] == frozenset()
+    assert seen["lane"] == remote.gates.ALLOWED_WRITE_PREFIXES
+
+
+def test_an_entity_body_apply_permits_exactly_the_page_it_was_approved_for(conn, repo_env):
+    """The told fact, asserted where it is told. A lane narrowed to the entity zone and a
+    permission naming ONE page is what stands between "replace this page's prose" and "replace a
+    page's prose"."""
+    support.seed_entity(repo_env)
+    seen = {}
+    real_run_gates = remote.gates.run_gates
+
+    def recording(ctx):
+        seen["permitted"] = ctx.body_rewrite_allowed
+        seen["lane"] = ctx.write_prefixes
+        return real_run_gates(ctx)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(remote.gates, "run_gates", recording)
+        remote.apply_via_clone(repo_env.bare, "main", None,
+                               proposal=_body_proposal(conn, _body_ops()), approved_by=APPROVER)
+
+    assert seen["permitted"] == frozenset({support.ENTITY_PAGE})
+    assert seen["lane"] == (entity_body.ENTITY_ZONE_PREFIX,)
+
+
+def test_a_drafted_role_lands_on_the_remote_and_nothing_else_in_the_frontmatter_does(conn,
+                                                                                     repo_env):
+    """The second permitted line, end to end through the real gates. `role:` is the one identity
+    field this kind may fill in, and only when the page declares an empty one — so the assertion is
+    both halves at once: the role landed, and every other frontmatter line is the one that was
+    there before."""
+    support.seed_entity(repo_env)
+    before = page_policy.frontmatter_lines(support.page_text(repo_env.repo, support.ENTITY_PAGE))
+    proposal = _body_proposal(conn, _body_ops(role="A freight broker in the north-west."))
+
+    remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal, approved_by=APPROVER)
+
+    after = page_policy.frontmatter_lines(_remote_page(repo_env.bare, support.ENTITY_PAGE))
+    assert 'role: "A freight broker in the north-west."' in after
+    assert set(before) - set(after) == {'role: ""', "updated: 2026-01-01"}

@@ -346,7 +346,7 @@ function cronCard(w, live) {
   const dispatchConsequence = {
     "index-rebuild.yml": "runs a FULL staging index rebuild in GitHub Actions — real embedder, real spend, against the staging database.",
     "retention-purge.yml": "runs the capture-queue retention purge in GitHub Actions against staging.",
-    "gardener.yml": "runs the eight deterministic checks AND the model editorial sweep in GitHub Actions — real model spend; findings persist to staging.",
+    "gardener.yml": "runs the nine deterministic checks AND the model editorial sweep in GitHub Actions — real model spend; findings persist to staging.",
     "repair-propose.yml": "reads the latest gardener findings and proposes repairs in GitHub Actions — real model spend. It applies nothing: every proposal lands pending, for the Repairs tab.",
   }[w.file];
   return el("div", { class: "card" },
@@ -431,7 +431,7 @@ export async function gardenerView(host) {
             class: "btn small primary", disabled: !META.github.configured,
             onclick: () => dispatchFlow(
               gardenerWorkflow,
-              "runs the eight deterministic checks AND the model editorial sweep in GitHub Actions — real model spend; findings persist to staging."),
+              "runs the nine deterministic checks AND the model editorial sweep in GitHub Actions — real model spend; findings persist to staging."),
           }, icon("play", 14), "Run now")),
         !META.github.configured
           ? el("div", { class: "sub" }, "needs the GitHub token — or run `stigmergy-gardener` locally")
@@ -718,12 +718,40 @@ async function entityApproveFlow(row) {
 // detail is the read: nothing here renders the ops as prose, because the applier's own callout
 // wording lives in `librarian.page` and a second copy of it here would show a steward a change
 // that is not quite the one they are authorizing. The ops table IS the stored ops.
+//
+// TWO kinds, two renderers. An `entity-body` op carries a page's whole drafted body, and the
+// steward reading that draft IS the check for that kind — squeezed into a table cell it is
+// unreadable, and dropped from the table it is invisible.
+const KIND_ENTITY_BODY = "entity-body";
+
 function opsTable(ops) {
   return table(["op", "page it edits", "links to", "note"],
     (ops || []).map((o) => ({
       cells: [el("span", { class: "mono" }, o.op), el("span", { class: "mono" }, o.path),
         el("span", { class: "mono" }, o.link), o.note || "—"],
     })), { empty: "no ops — nothing would change" });
+}
+
+// The drafted body, whole and unrendered — plain text in a <pre>, never markdown turned into DOM:
+// what lands in the repo is these bytes, so these bytes are what a steward should be judging.
+function bodyDraft(ops) {
+  return el("div", {},
+    ...(ops || []).map((o) => el("div", { style: "margin-bottom:14px" },
+      el("div", { class: "sub mono", style: "margin-bottom:6px" }, o.path),
+      o.role
+        ? el("div", { class: "sub", style: "margin-bottom:6px" }, `role: ${o.role}`)
+        : null,
+      el("pre", { class: "mono", style: "white-space:pre-wrap;margin:0" },
+        o.body_markdown || "(the draft is empty)"))));
+}
+
+function changeSummary(kind) {
+  return kind === KIND_ENTITY_BODY
+    ? "this replaces the page's body BELOW its own title line. Its frontmatter is preserved "
+      + "byte for byte apart from `updated:` (and `role:`, when the page has none), and the "
+      + "title line itself does not change. Read the draft: it is what the page will say."
+    : "every op is additive: a link added to that page's related list, and for overlap and "
+      + "contradiction a one-sentence callout below it. Nothing is rewritten or deleted here.";
 }
 
 function opsSummary(ops) {
@@ -794,10 +822,8 @@ export async function repairDetailView(host, id) {
         ])),
       el("div", { class: "card" },
         el("h2", {}, "What it would change"),
-        el("div", { class: "sub", style: "margin-bottom:10px" },
-          "every op is additive: a link added to that page's related list, and for overlap and "
-          + "contradiction a one-sentence callout below it. Nothing is rewritten or deleted."),
-        opsTable(row.ops)),
+        el("div", { class: "sub", style: "margin-bottom:10px" }, changeSummary(row.kind)),
+        row.kind === KIND_ENTITY_BODY ? bodyDraft(row.ops) : opsTable(row.ops)),
       pending
         ? el("div", { class: "card" },
             el("div", { class: "card-head" },

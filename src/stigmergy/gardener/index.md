@@ -4,7 +4,7 @@ Narrative doc: [`docs/reference/gardener-digest.md`](../../../docs/reference/gar
 Siblings that read the findings store and never recompute a check: [`digest`](../digest/index.md)
 and [`admin`](../admin/index.md).
 
-`stigmergy-gardener` runs two passes — eight deterministic checks plus a bounded model editorial
+`stigmergy-gardener` runs two passes — nine deterministic checks plus a bounded model editorial
 sweep — and emits **findings only**, persisted to `gardener_findings` with a `job_runs` row and
 printed as a severity-grouped report. It fixes nothing, writes nothing, vetoes nothing: no git
 plumbing, no literal path under `wiki/`, both pinned by `tests/test_architecture.py`, which also
@@ -16,7 +16,7 @@ pins every import edge and the threshold-literal ban.
 |---|---|
 | `cli.py` | `stigmergy-gardener [--repo] [--dsn] [--channels] [--json]` — one command. The only module here that imports `stigmergy.index.store`, `stigmergy.librarian.config` or `stigmergy.slack.bolt_gateway` |
 | `run.py` | `run_gardener` — the one function the CLI calls: run everything, persist findings + a `job_runs` row in ONE transaction, re-fetch, post the SLA notice. Owns `RunResult` |
-| `checks.py` | The eight deterministic checks, `ALL_CHECK_SLUGS`, `build_finding` (the one finding-dict assembler, shared with the sweep), `count_indexed_pages`, `_recent_filed_pages` |
+| `checks.py` | The nine deterministic checks, `ALL_CHECK_SLUGS`, `build_finding` (the one finding-dict assembler, shared with the sweep), `count_indexed_pages`, `_recent_filed_pages` |
 | `sweep.py` | The model sweep: schema, prompt, validation + one retry, `run_sweep`, `build_judge`, `to_finding`, `FakeGardenerSweep`, page selection (`previous_run_watermark`, `select_pages`) |
 | `store.py` | `gardener_findings` persistence: `insert_findings`, `findings_for_run`, `latest_completed_run` |
 | `report.py` | The terminal report: `render_report`, `render_json`, `sweep_summary_text`. Pure text from plain data |
@@ -71,7 +71,10 @@ both or neither.
   as a LIST — a consumer that acts on the pages reads the list, never re-splits the prose. Empty
   when a finding names none (`check_company_wide_fraction` reports a corpus-wide fraction).
 - Check populations, severities and settings defaults live in `checks.py`/`sweep.py`/
-  `settings.py` beside their code. No check currently emits `sla`, so the notice machinery has no
+  `settings.py` beside their code. `entity-placeholder-body` is the one check with a REPAIR of its
+  own (`repair.schema.KIND_ENTITY_BODY`): its finding names an entity page and the repair proposer
+  drafts that page's body. This package still fixes nothing — it does not import the repair loop,
+  and the repair loop reads findings from `store` and nothing else. No check currently emits `sla`, so the notice machinery has no
   producer — a check that adds one must also set `_notice_page_paths` (the ACL scoping key, a
   LIST) and `_notice_detail`/`_notice_action`.
 - `job_runs.status`: `'ok'`, `'partial'` (sweep failed, deterministic findings intact), `'error'`.
