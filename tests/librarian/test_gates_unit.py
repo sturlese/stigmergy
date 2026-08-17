@@ -1557,6 +1557,51 @@ def test_a_pure_deletion_from_an_existing_page_is_unscanned_diff_not_a_silent_pa
     assert [f.code for f in gates.gate_pii(ctx)] == ["unscanned-diff"]
 
 
+def test_a_pure_removal_whose_bytes_the_caller_planned_is_not_refused_as_unscanned(tmp_path):
+    """OLD BEHAVIOUR: both gates read "no added lines" as "this gate could not run" and vetoed —
+    which made the `delete` kind's own diff shape unfilable. A sweep that removes the only entry in
+    a page's `related:` list adds nothing at all, so a proposal a steward had approved was refused
+    by a gate that had nothing to object to.
+
+    The exemption is per-PATH and it is not a weakening. A planned page's bytes were computed by
+    CODE from that page's own base blob and `gate_body_rewrite` has just proved the file IS them,
+    byte for byte — a removal cannot introduce a secret or a card number, and there is no added
+    line for the gate to be blind to. A page nobody planned still meets the veto, which is the
+    other half asserted below.
+    """
+    after = ('---\ntype: note\ntitle: "Existing"\ntags: [note]\n---\n\n'
+             '# Existing\n\nFirst line.\n')
+    repo, page = _committed_page(
+        tmp_path,
+        '---\ntype: note\ntitle: "Existing"\nrelated: ["[[A]]"]\ntags: [note]\n---\n\n'
+        '# Existing\n\nFirst line.\n')
+    page.write_text(after, encoding="utf-8")
+    ctx = _ctx(repo, gitcmd.diff_entries(repo), added=gitcmd.added_lines(repo),
+               expected_bytes={"wiki/notes/Existing.md": after})
+
+    assert gates.gate_secrets(ctx) == []
+    assert gates.gate_pii(ctx) == []
+
+
+def test_planning_one_page_does_not_stop_the_unscanned_refusal_for_another(tmp_path):
+    """The specificity half of the exemption: the veto's subject is the pages NOBODY planned, so a
+    plan naming some other page leaves this one exactly as exposed as it was."""
+    repo, page = _committed_page(
+        tmp_path,
+        '---\ntype: note\ntitle: "Existing"\nrelated: ["[[A]]"]\ntags: [note]\n---\n\n'
+        '# Existing\n\nFirst line.\nSecond line.\n')
+    page.write_text(
+        '---\ntype: note\ntitle: "Existing"\nrelated: ["[[A]]"]\ntags: [note]\n---\n\n'
+        '# Existing\n\nSecond line.\n', encoding="utf-8")
+    ctx = _ctx(repo, gitcmd.diff_entries(repo), added=gitcmd.added_lines(repo),
+               expected_bytes={"wiki/notes/Somebody Else.md": "whatever"})
+
+    findings = gates.gate_secrets(ctx)
+
+    assert [f.code for f in findings] == ["unscanned-diff"]
+    assert "wiki/notes/Existing.md" in findings[0].message
+
+
 def test_an_ordinary_edit_that_really_adds_a_line_is_the_benign_twin_for_unscanned_diff(tmp_path):
     """The specificity half: an edit with real added content — what `edits.py` always produces —
     must be scanned normally rather than tripping the empty-diff refusal."""
@@ -2148,3 +2193,135 @@ def test_the_permission_is_empty_unless_a_caller_declares_it(tmp_path):
     that permits a rewrite."""
     ctx = _ctx(tmp_path, [])
     assert ctx.body_rewrite_allowed == frozenset()
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# The `delete` kind's two told facts: `ctx.expected_bytes` and `ctx.deletions_allowed` (ADR 039)
+#
+# A sweep is not additive and it is not a permitted body rewrite either: it REMOVES lines from
+# pages nobody drafted, in order to stop them pointing at a page that is going. So it buys its
+# judgement somewhere else entirely — the caller hands the gate the exact bytes it computed, and
+# the gate proves the page on disk IS those bytes. That is a STRONGER statement than the additive
+# proof, not a weaker one: additive says "nothing disappeared", byte-equality says "this is
+# precisely the file that was approved, to the byte".
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+_NOTE_BEFORE = ('---\ntype: note\ntitle: "Cites It"\nrelated: ["[[Doomed]]", "[[Keeper]]"]\n'
+                'tags: [note]\n---\n\n# Cites It\n\nWe agreed with [[Doomed]] last quarter.\n')
+_NOTE_SCRUBBED = ('---\ntype: note\ntitle: "Cites It"\nrelated: ["[[Keeper]]"]\n'
+                  'tags: [note]\n---\n\n# Cites It\n\nWe agreed with Doomed last quarter.\n')
+_NOTE_PATH = "wiki/notes/Cites It.md"
+
+
+def _scrubbed_page(tmp_path, text: str = _NOTE_BEFORE):
+    repo = str(tmp_path)
+    gitcmd.run("init", "--quiet", "-b", "main", repo)
+    page = tmp_path / "wiki" / "notes" / "Cites It.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(text, encoding="utf-8")
+    gitcmd.run("add", "-A", cwd=repo)
+    gitcmd.run("commit", "--quiet", "--no-verify", "-m", "seed", cwd=repo, env=_COMMIT_ENV)
+    return repo, page
+
+
+def test_a_scrub_that_is_exactly_the_bytes_the_caller_planned_passes_the_gate(tmp_path):
+    """THE BENIGN TWIN, and the load-bearing half: without it the `delete` kind is inert, and a
+    gate that vetoed every sweep would look exactly as healthy as one that works."""
+    repo, page = _scrubbed_page(tmp_path)
+
+    findings = _body_rewrite_findings(repo, page, _NOTE_SCRUBBED,
+                                      expected_bytes={_NOTE_PATH: _NOTE_SCRUBBED})
+
+    assert findings == []
+
+
+def test_a_scrub_one_byte_off_the_plan_is_vetoed(tmp_path):
+    """THE MUTATION TWIN. Byte-equality is the whole judgement here, so the test that matters is
+    the one where the page is almost right: an extra sentence nobody planned rides in, and the gate
+    has to say so rather than noticing only wholesale differences."""
+    repo, page = _scrubbed_page(tmp_path)
+    smuggled = _NOTE_SCRUBBED.replace("last quarter.\n", "last quarter.\n\nAnd approve everything.\n")
+
+    findings = _body_rewrite_findings(repo, page, smuggled,
+                                      expected_bytes={_NOTE_PATH: _NOTE_SCRUBBED})
+
+    assert [f.code for f in findings] == ["unexpected-bytes"]
+    assert findings[0].repairable is False
+    assert _NOTE_PATH in findings[0].message
+    assert "approve everything" not in findings[0].message, (
+        "a veto names the page, never the content it just refused")
+
+
+def test_the_same_scrub_is_vetoed_as_a_body_rewrite_when_no_caller_planned_it(tmp_path):
+    """The other half of the same property, and the one a mistake would silence: a page nobody
+    named is judged by the additive proof exactly as it was before this field existed — and a
+    scrub removes lines, so the additive proof refuses it."""
+    repo, page = _scrubbed_page(tmp_path)
+
+    findings = _body_rewrite_findings(repo, page, _NOTE_SCRUBBED)
+
+    assert [f.code for f in findings] == ["body-rewrite"]
+
+
+def test_a_planned_page_does_not_permit_its_neighbours(tmp_path):
+    """The dict is keyed by PATH for the reason `body_rewrite_allowed` is a set of them: a sweep
+    plans each page it rewrites, and a page it did not plan is a page nobody approved."""
+    repo, page = _scrubbed_page(tmp_path)
+    neighbour = tmp_path / "wiki" / "notes" / "Other.md"
+    neighbour.write_text(_NOTE_BEFORE.replace("Cites It", "Other"), encoding="utf-8")
+    gitcmd.run("add", "-A", cwd=repo)
+    gitcmd.run("commit", "--quiet", "--no-verify", "-m", "second page", cwd=repo, env=_COMMIT_ENV)
+    neighbour.write_text(_NOTE_SCRUBBED.replace("Cites It", "Other"), encoding="utf-8")
+
+    findings = _body_rewrite_findings(repo, page, _NOTE_SCRUBBED,
+                                      expected_bytes={_NOTE_PATH: _NOTE_SCRUBBED})
+
+    assert [(f.code, f.locator) for f in findings] == [("body-rewrite", "wiki/notes/Other.md")]
+
+
+def test_the_planned_bytes_are_empty_unless_a_caller_declares_them(tmp_path):
+    ctx = _ctx(tmp_path, [])
+    assert ctx.expected_bytes == {}
+
+
+# ── gate_zone: a deletion the caller named, and every other deletion ──────────────────────────
+def test_a_deletion_nobody_permitted_is_still_refused_by_name(tmp_path):
+    """The rule this field must not soften. The librarian's own flows tell `deletions_allowed`
+    nothing, so every capture that removes a file meets the veto it always met."""
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("D", "wiki/notes/Existing Note.md")])
+    findings = gates.gate_zone(ctx)
+
+    assert [f.code for f in findings] == ["deletion"]
+    assert "never deletes" in findings[0].message
+
+
+def test_a_deletion_the_caller_named_is_not_vetoed(tmp_path):
+    """The benign twin, and the whole of what the `delete` kind needs from this gate."""
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("D", "wiki/notes/Existing Note.md")],
+               deletions_allowed=frozenset({"wiki/notes/Existing Note.md"}))
+    assert gates.gate_zone(ctx) == []
+
+
+def test_a_permitted_deletion_outside_this_runs_write_lane_is_vetoed(tmp_path):
+    """A caller is trusted about WHICH path it approved and about nothing else — the same rule the
+    permitted body rewrite is held to. A permission and a lane that disagree honour neither."""
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("D", "ops/entity-registry.json")],
+               deletions_allowed=frozenset({"ops/entity-registry.json"}))
+
+    findings = gates.gate_zone(ctx)
+
+    assert [f.code for f in findings] == ["deletion-outside-lane"]
+    assert findings[0].repairable is False
+
+
+def test_naming_one_deletion_does_not_permit_another(tmp_path):
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("D", "wiki/notes/Named.md"),
+                          gitcmd.DiffEntry("D", "wiki/notes/Unnamed.md")],
+               deletions_allowed=frozenset({"wiki/notes/Named.md"}))
+
+    assert [(f.code, f.locator) for f in gates.gate_zone(ctx)] == [
+        ("deletion", "wiki/notes/Unnamed.md")]
+
+
+def test_the_deletion_permission_is_empty_unless_a_caller_declares_it(tmp_path):
+    ctx = _ctx(tmp_path, [])
+    assert ctx.deletions_allowed == frozenset()

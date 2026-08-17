@@ -132,9 +132,11 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
   will never let it edit again. `mark_notified` PRESERVES the coordinates on a state-only re-mark;
   `open_notifications` is the reader that skips both prefixed namespaces and every row missing
   either coordinate (a pre-change row — nothing can recover where its message went).
-- `stigmergy.review_kinds.ITEM_KINDS` — `entity-proposal` and `parked-capture`, the two kinds a
-  human decides on directly. `ENTITY_TYPES` is the closed list the entity-mint modal offers,
-  restated here and held honest by a drift test against `entities.generator`.
+- `stigmergy.review_kinds.ITEM_KINDS` — `entity-proposal`, `parked-capture` and
+  `repair-proposal`, the three kinds a human decides on directly; the doorbell deliberately
+  rings for only the first two (ADR-039's no-ring decision for repairs). `ENTITY_TYPES` is the
+  closed list the entity-mint modal offers, restated here and held honest by a drift test
+  against `entities.generator`.
 - `doorbell._state_signature` — the per-(item, steward) fingerprint; it folds in `attempts` so a
   requeue that parks a row back into the same status is still a detectable change.
 - `doorbell.LOOKUP_FOUND` / `LOOKUP_NOT_FOUND` / `LOOKUP_FAILED` — a transient API failure must

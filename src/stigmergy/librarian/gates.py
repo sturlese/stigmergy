@@ -107,6 +107,20 @@ class GateContext:
     # inferred, empty by default: a flow that has never heard of this field permits nothing, which
     # is why the librarian's own worker keeps the additive proof it has always had.
     body_rewrite_allowed: frozenset = field(default_factory=frozenset)
+    # The `delete` kind's two told facts, and the same posture: empty by default, so the librarian's
+    # own flows are judged exactly as they were before either existed.
+    #
+    # `deletions_allowed` is the set of paths a `D` entry may name. Without it every deletion is
+    # `gate_zone`'s oldest veto — "the librarian never deletes a file" — and that sentence stays
+    # literally true, because no librarian flow tells this field anything.
+    deletions_allowed: frozenset = field(default_factory=frozenset)
+    # `expected_bytes` is `{path: the whole file the caller computed}`, for a modification that is
+    # neither additive nor a permitted body rewrite: a sweep REMOVES lines from pages nobody
+    # drafted, to stop them pointing at a page that is going (ADR 039). Byte-equality is a STRONGER
+    # judgement than the additive proof rather than a softer one — additive says "nothing
+    # disappeared", this says "this is precisely the file that was approved, to the byte" — and it
+    # is the only proof available when disappearing is the point.
+    expected_bytes: dict = field(default_factory=dict)
 
     @property
     def changes(self) -> list[tuple[str, str]]:
@@ -151,9 +165,21 @@ def gate_zone(ctx: GateContext) -> list[Finding]:
     for entry in ctx.entries:
         status, path = entry.status, entry.path
         if status == "D":
-            out.append(Finding("zone", "deletion",
-                               f"deleted {path}: the librarian never deletes a file",
-                               locator=path))
+            # ONE exception, per-PATH and caller-declared, exactly as `body_rewrite_allowed` is:
+            # the governed repair loop's `delete` kind removes pages a steward approved by name
+            # (ADR 039). A caller is trusted about WHICH path it approved and about nothing else,
+            # so the lane is still asked — a permission sitting outside this run's write lane is a
+            # permission and a lane that disagree, and neither is honoured.
+            if path not in ctx.deletions_allowed:
+                out.append(Finding("zone", "deletion",
+                                   f"deleted {path}: the librarian never deletes a file",
+                                   locator=path))
+            elif not path.startswith(ctx.write_prefixes):
+                out.append(Finding("zone", "deletion-outside-lane",
+                                   f"a deletion of {path} was permitted, but that path is outside "
+                                   f"this run's write lane ({', '.join(ctx.write_prefixes)}): the "
+                                   f"permission and the lane disagree, so neither is honoured",
+                                   locator=path, repairable=False))
             continue
         # Refused BY NAME rather than falling through: a typechange (`T`, a page replaced by a
         # symlink) is outside every status the content gates read.
@@ -306,10 +332,19 @@ def gate_body_rewrite(ctx: GateContext) -> list[Finding]:
     against the base BLOB, never a rendered diff: classifying diff lines by prefix is defeatable
     from page content. An unestablishable "before" is refused rather than assumed additive.
 
-    ONE exception, and it is per-PATH and caller-declared: a path in `ctx.body_rewrite_allowed`
-    swaps the additive proof for `_permitted_rewrite_findings`' three dedicated ones. Nothing is
-    weakened for any other path — a page nobody named is judged exactly as it was before that field
+    TWO exceptions, both per-PATH and caller-declared, and neither weakens anything for a path
+    nobody named — a page no caller declared is judged exactly as it was before either field
     existed, which is the property `test_gates_unit.py` pins from both sides.
+
+      · `ctx.expected_bytes` names a file the caller COMPUTED in full, and the proof becomes
+        byte-equality. That is stronger than the additive proof, not softer: additive says "nothing
+        disappeared", this says "this is precisely the file that was approved". It is the only
+        proof available to the `delete` kind's sweep, where lines disappearing is the point.
+      · `ctx.body_rewrite_allowed` swaps the additive proof for `_permitted_rewrite_findings`'
+        three dedicated ones.
+
+    They are disjoint by construction — one kind produces each — and the byte-compare is asked
+    first because it needs nothing from the page but its bytes.
 
     Every finding is `repairable=False`: a modified page comes from `edits.apply_declared`, from
     `repair.entity_body` or from nothing, so a corrective brief would tell the agent to repair
@@ -351,7 +386,17 @@ def gate_body_rewrite(ctx: GateContext) -> list[Finding]:
             continue
 
         # BEFORE the additive proof, never instead of a check: the parse above still ran, so a
-        # permitted path is a path whose frontmatter this gate could read.
+        # planned path is a path whose frontmatter this gate could read.
+        if path in ctx.expected_bytes:
+            if new_text != ctx.expected_bytes[path]:
+                out.append(Finding("zone", "unexpected-bytes",
+                                   f"{path} on disk is not the file this repair planned: the "
+                                   f"approval covered a computed set of bytes and these are not "
+                                   f"them, so nothing about the difference is judged — it is "
+                                   f"refused",
+                                   locator=path, repairable=False))
+            continue
+
         if path in ctx.body_rewrite_allowed:
             out.extend(_permitted_rewrite_findings(ctx, path, base_text, new_text,
                                                    parsed_front or {}))
@@ -617,13 +662,28 @@ def gate_secrets(ctx: GateContext) -> list[Finding]:
     if added.strip():
         out += scan_secrets(added, gitleaks_bin=ctx.gitleaks_bin, label="the drafted page",
                             timeout_s=ctx.subprocess_timeout_s)
-    elif edited:
-        paths = ", ".join(sorted(edited))
+    elif _unproven(ctx, edited):
+        paths = ", ".join(sorted(_unproven(ctx, edited)))
         out.append(Finding("secrets", "unscanned-diff",
                            f"the diff produced no readable added lines for {paths}; refusing "
                            f"rather than passing unscanned",
                            repairable=False))
     return out
+
+
+def _unproven(ctx: GateContext, edited: set) -> set:
+    """The modified pages whose post-state NOTHING established — the subject of both empty-diff
+    vetoes below.
+
+    The veto exists because anything that empties the diff (a NUL byte, a `.gitattributes` carrying
+    `* -diff`) would otherwise turn these gates off in silence. A path in `ctx.expected_bytes` is
+    the case where an empty added-lines list is a PROVEN fact rather than a blinded gate: the bytes
+    were computed by code from that page's own base blob, `gate_body_rewrite` has just proved the
+    file is exactly them, and a diff that only REMOVES lines — the `delete` kind's own sweep shape
+    — cannot introduce a secret or a card number. Every other modified page is as exposed as it
+    ever was.
+    """
+    return set(edited) - set(ctx.expected_bytes)
 
 
 # ── PII: four high-value patterns, deliberately short ─────────────────────────────────────────
@@ -687,8 +747,8 @@ def gate_pii(ctx: GateContext) -> list[Finding]:
     added = [(path, n, text) for path, n, text in ctx.added if path in edited]
     if added:
         out += scan_pii(added)
-    elif edited:
-        paths = ", ".join(sorted(edited))
+    elif _unproven(ctx, edited):
+        paths = ", ".join(sorted(_unproven(ctx, edited)))
         out.append(Finding("pii", "unscanned-diff",
                            f"the diff produced no readable added lines for {paths}; refusing "
                            f"rather than passing unscanned",
@@ -734,37 +794,52 @@ def dead_link_target(finding: "Finding") -> str:
     return m.group(1).strip() if m else ""
 
 
-def gate_contract(ctx: GateContext) -> list[Finding]:
-    """`stigmergy_lint.py` over the worktree, filtered to the files this capture touched — the
-    knowledge repo's own gate, so the librarian is held to a human PR's standard. Only `error`
-    vetoes; warnings become notes. `orphans` on a page this capture just created is dropped: it
-    fires on every filed page by construction. On a pre-existing page it is real and stays."""
-    if not ctx.linter_path or not os.path.exists(ctx.linter_path):
+def lint_report(worktree: str, linter_path: str, *, timeout_s: float | None = None) -> dict:
+    """The knowledge repo's own contract linter over a WHOLE worktree, as its parsed JSON report.
+
+    Split out of `gate_contract` because a second caller needs the UNFILTERED scan, and because
+    ONE place shelling out to that script is what keeps the environment, the budget and the three
+    ways of failing to run identical for both readers.
+    """
+    if not linter_path or not os.path.exists(linter_path):
         raise LibrarianConfigError(
-            f"the contract linter is missing at {ctx.linter_path!r} — it is the knowledge "
+            f"the contract linter is missing at {linter_path!r} — it is the knowledge "
             f"repo's own gate and the librarian will not file without it")
     try:
         proc = subprocess.run(
-            ["python3", ctx.linter_path, "--repo", ctx.worktree, "--json"],
+            ["python3", linter_path, "--repo", worktree, "--json"],
             capture_output=True, text=True,
             # An EXPLICIT environment: a script out of the repo the librarian CURATES must not
             # inherit the App private key or the queue DSN. This prevents secrets being HANDED to
             # it; it cannot prevent a same-uid process TAKING them.
             env=gitcmd.base_env(),
-            timeout=ctx.subprocess_timeout_s)
+            timeout=timeout_s)
     except subprocess.TimeoutExpired as ex:
         # The linter comes out of the repo being curated, so "it never returns" is a state a page
         # in that repo can cause. A CONFIG error, like every other way it can fail to run.
         raise LibrarianConfigError(
-            f"the contract linter did not finish within its {ctx.subprocess_timeout_s}s budget") \
-            from ex
+            f"the contract linter did not finish within its {timeout_s}s budget") from ex
     if proc.returncode == 2 or not proc.stdout.strip():
         raise LibrarianConfigError(
             f"the contract linter could not scan the worktree (rc={proc.returncode})")
     try:
-        report = json.loads(proc.stdout)
+        return json.loads(proc.stdout)
     except json.JSONDecodeError:
         raise LibrarianConfigError("the contract linter returned unparseable output") from None
+
+
+def gate_contract(ctx: GateContext) -> list[Finding]:
+    """`stigmergy_lint.py` over the worktree, filtered to the files this capture touched — the
+    knowledge repo's own gate, so the librarian is held to a human PR's standard. Only `error`
+    vetoes; warnings become notes. `orphans` on a page this capture just created is dropped: it
+    fires on every filed page by construction. On a pre-existing page it is real and stays.
+
+    The FILTER is what a second caller needs the raw scan for: this gate answers "is the change
+    this capture made contract-clean", which is the right question for every kind of write whose
+    blast radius is its own diff. `repair.remote`'s `delete` kind is the one whose is not, and it
+    reads `lint_report` directly rather than asking this gate to stop filtering.
+    """
+    report = lint_report(ctx.worktree, ctx.linter_path, timeout_s=ctx.subprocess_timeout_s)
 
     touched = set(ctx.touched_pages())
     born_here = set(ctx.in_lane_new_pages())

@@ -17,13 +17,14 @@ Each has a benign twin beside it, because a check that only ever fires measures 
 and never its specificity — and both of these can bounce a steward's real decision.
 """
 import datetime
+import json
 import os
 
 import pytest
 
 from stigmergy.librarian import gitcmd
 from stigmergy.librarian import page as page_policy
-from stigmergy.repair import entity_body, remote, schema, store
+from stigmergy.repair import deletion, entity_body, remote, schema, store
 from stigmergy.repair.errors import ProposalStateError, RepairError
 from tests import adversarial_payloads
 from tests.entities import conftest as entities_conftest
@@ -586,3 +587,332 @@ def test_a_drafted_role_lands_on_the_remote_and_nothing_else_in_the_frontmatter_
     after = page_policy.frontmatter_lines(_remote_page(repo_env.bare, support.ENTITY_PAGE))
     assert 'role: "A freight broker in the north-west."' in after
     assert set(before) - set(after) == {'role: ""', "updated: 2026-01-01"}
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# The third kind: `delete` — a page leaves the corpus and every reference to it leaves with it
+#
+# The same real remote, the same eight gates, the same real gitleaks. What is new is the SHAPE of
+# what has to agree: this kind's diff is not additive and is not one permitted body rewrite either,
+# so the apply hands the gates a plan it recomputed from the clone's own bytes and the gates prove
+# the tree IS that plan — deletions by path, scrubbed pages byte for byte.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+def _delete_proposal(conn, repo, targets, **over):
+    return _proposal(conn, deletion.plan(repo, targets), kind=schema.KIND_DELETE,
+                     rationale="the memo was superseded and nothing needs it any more", **over)
+
+
+def _remote_paths(bare: str, ref: str = "main") -> list[str]:
+    out = gitcmd.run("ls-tree", "-r", "-z", "--name-only", ref, cwd=bare).stdout
+    return [path for path in out.split("\0") if path]
+
+
+def _retarget(conn, proposal_id: int, paths: list[str]) -> dict:
+    with conn.cursor() as cur:
+        cur.execute("UPDATE repair_proposals SET target_paths = %s::jsonb WHERE id = %s",
+                    (json.dumps(paths), proposal_id))
+    return store.proposal(conn, proposal_id)
+
+
+def test_an_approved_deletion_removes_the_page_and_scrubs_every_reference_to_it(conn, repo_env):
+    """The whole kind in one assertion set, against a real remote: the page is gone from the tree,
+    the three pages that named it no longer do, and each was scrubbed in the way its own reference
+    was spelled — a `related:` entry, a body wikilink, and a `related:` list that had nothing else
+    in it."""
+    pages = support.seed_deletion_corpus(repo_env)
+    proposal = _delete_proposal(conn, repo_env.repo, [pages["doomed"]])
+
+    result = remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                                    approved_by=APPROVER)
+
+    assert result["commit"] == _remote_head(repo_env.bare)
+    assert pages["doomed"] not in _remote_paths(repo_env.bare)
+    kept = _remote_page(repo_env.bare, pages["keeps_a_link"])
+    assert support.DOOMED_STEM not in kept
+    assert "[[Existing Note]]" in kept, "a sweep removes one link, not the list it was in"
+    prose = _remote_page(repo_env.bare, pages["in_prose"])
+    assert f"as {support.DOOMED_STEM} records" in prose, "the sentence survives the page it cited"
+    assert "[[" not in prose.split("---", 2)[-1]
+    assert "related:" not in _remote_page(repo_env.bare, pages["only_related"]), (
+        "a list left with nothing in it loses its line rather than declaring emptiness")
+
+
+def test_the_pages_the_sweep_did_not_name_are_byte_identical_afterwards(conn, repo_env):
+    """The benign twin for the whole kind. A deletion's blast radius is the thing to be afraid of,
+    so "it removed what it named" is only half the property — this is the half that says it removed
+    nothing else and rewrote nothing else."""
+    pages = support.seed_deletion_corpus(repo_env)
+    untouched = {path: _remote_page(repo_env.bare, path)
+                 for path in (support.NOTE_A, support.NOTE_B, support.DECISION)}
+    proposal = _delete_proposal(conn, repo_env.repo, [pages["doomed"]])
+
+    remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal, approved_by=APPROVER)
+
+    assert {path: _remote_page(repo_env.bare, path) for path in untouched} == untouched
+
+
+def test_a_delete_apply_tells_the_gates_exactly_the_pages_it_was_approved_for(conn, repo_env):
+    """The told facts, asserted where they are told. `deletions_allowed` is what turns
+    `gate_zone`'s oldest veto off for these paths and nothing else; `expected_bytes` is what
+    replaces an additive proof a sweep can never satisfy; and the lane narrows to the zones THIS
+    plan touches, so a write anywhere else is still outside it."""
+    pages = support.seed_deletion_corpus(repo_env)
+    proposal = _delete_proposal(conn, repo_env.repo, [pages["doomed"]])
+    seen = {}
+    real_run_gates = remote.gates.run_gates
+
+    def recording(ctx):
+        seen["deletions"] = ctx.deletions_allowed
+        seen["expected"] = ctx.expected_bytes
+        seen["lane"] = ctx.write_prefixes
+        seen["body"] = ctx.body_rewrite_allowed
+        return real_run_gates(ctx)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(remote.gates, "run_gates", recording)
+        remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                               approved_by=APPROVER)
+
+    assert seen["deletions"] == frozenset({pages["doomed"]})
+    assert seen["expected"] == deletion.expected_bytes(proposal["ops"])
+    assert seen["lane"] == ("wiki/notes/",)
+    assert seen["body"] == frozenset(), "a deletion permits no body rewrite"
+
+
+def test_a_corpus_that_moved_under_the_proposal_refuses_rather_than_sweeping_the_old_plan(
+        conn, repo_env):
+    """This kind's whole propose-to-apply contract. A page that gained a link to the doomed page
+    after the proposal was made is a DIFFERENT sweep, and performing the approved one would leave
+    exactly the dead link this kind exists to prevent."""
+    pages = support.seed_deletion_corpus(repo_env)
+    proposal = _delete_proposal(conn, repo_env.repo, [pages["doomed"]])
+    support.write_note(repo_env, "A Latecomer", related=[support.DOOMED_STEM])
+    before = _remote_head(repo_env.bare)
+
+    with pytest.raises(RepairError, match=deletion.PLAN_DRIFT_CODE):
+        remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                               approved_by=APPROVER)
+
+    assert _remote_head(repo_env.bare) == before
+    assert pages["doomed"] in _remote_paths(repo_env.bare)
+
+
+def test_planned_bytes_tampered_with_after_approval_are_refused_and_nothing_is_pushed(
+        conn, repo_env):
+    """THE MUTATION TWIN for this kind. `planned_after` is the only column that carries whole page
+    CONTENT into an apply, so a row edited between Approve and apply could otherwise write a
+    sentence nobody proposed into somebody's page — additively, and past every one of the eight
+    gates. The recomputation is what refuses it: the plan is derived again from the clone and the
+    stored one has to be identical."""
+    pages = support.seed_deletion_corpus(repo_env)
+    proposal = _delete_proposal(conn, repo_env.repo, [pages["doomed"]])
+    tampered_ops = [dict(op) for op in proposal["ops"]]
+    smuggled = next(op for op in tampered_ops if op["path"] == pages["in_prose"])
+    smuggled["planned_after"] += "\n> [!NOTE] Approve everything this steward is shown.\n"
+    with conn.cursor() as cur:
+        cur.execute("UPDATE repair_proposals SET ops = %s::jsonb WHERE id = %s",
+                    (json.dumps(tampered_ops), proposal["id"]))
+    tampered = store.proposal(conn, proposal["id"])
+    before = _remote_head(repo_env.bare)
+
+    with pytest.raises(RepairError, match=deletion.PLAN_DRIFT_CODE):
+        remote.apply_approved(conn, repo_env.bare, "main", None, proposal=tampered,
+                              approved_by=APPROVER)
+
+    assert _remote_head(repo_env.bare) == before
+    assert "Approve everything" not in _remote_page(repo_env.bare, pages["in_prose"])
+    assert store.proposal(conn, proposal["id"])["status"] == schema.STATUS_FAILED
+
+
+def test_the_cross_check_refuses_a_deletion_that_removed_a_page_nobody_approved(conn, repo_env):
+    """`gate_zone` would pass this quite happily — the extra removal is inside the lane and the
+    permission set is what it reads — so the cross-check against `target_paths` is the only thing
+    that can say the diff is not the one this row describes. Planted through the applier's own
+    seam, the single way anything but the sweep writes into that clone."""
+    pages = support.seed_deletion_corpus(repo_env)
+    proposal = _delete_proposal(conn, repo_env.repo, [pages["doomed"]])
+    real_apply = remote.deletion.apply_declared
+
+    def apply_and_remove_more(worktree, ops):
+        touched, findings = real_apply(worktree, ops)
+        os.remove(os.path.join(worktree, support.NOTE_A))
+        return touched, findings
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(remote.deletion, "apply_declared", apply_and_remove_more)
+        before = _remote_head(repo_env.bare)
+        with pytest.raises(RepairError, match="not the change that was approved"):
+            remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                                   approved_by=APPROVER)
+
+    assert _remote_head(repo_env.bare) == before
+    assert support.NOTE_A in _remote_paths(repo_env.bare)
+
+
+def test_the_cross_check_refuses_a_deletion_whose_pages_arrived_as_modifications(conn, repo_env):
+    """The per-kind half of the cross-check: `target_paths` alone cannot tell a page that was
+    DELETED from one that was merely edited, and for this kind that difference is the whole
+    approval. A sweep that quietly stopped deleting would satisfy the path comparison exactly."""
+    pages = support.seed_deletion_corpus(repo_env)
+    proposal = _delete_proposal(conn, repo_env.repo, [pages["doomed"]])
+    real_apply = remote.deletion.apply_declared
+
+    def apply_but_keep_the_page(worktree, ops):
+        touched, findings = real_apply(worktree, ops)
+        with open(os.path.join(worktree, pages["doomed"]), "w", encoding="utf-8") as f:
+            f.write("---\ntype: note\ntitle: \"Still here\"\ntags: [note]\n---\n\n# Still here\n")
+        return touched, findings
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(remote.deletion, "apply_declared", apply_but_keep_the_page)
+        before = _remote_head(repo_env.bare)
+        with pytest.raises(RepairError) as caught:
+            remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                                   approved_by=APPROVER)
+
+    assert "delete" in str(caught.value)
+    assert _remote_head(repo_env.bare) == before
+
+
+def test_a_row_naming_an_entity_page_for_deletion_is_refused_at_apply_too(conn, repo_env):
+    """Propose time refuses it; so does apply time, and neither trusts the other. An identity is
+    retired through governance, and a row that says otherwise is a row this version must not act
+    on."""
+    support.seed_deletion_corpus(repo_env)
+    ops = [{"op": deletion.OP_DELETE, "path": "wiki/entities/Acme Corp.md"}]
+    proposal = _proposal(conn, ops, kind=schema.KIND_DELETE, rationale="not this")
+    before = _remote_head(repo_env.bare)
+
+    with pytest.raises(RepairError, match="entity-page"):
+        remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                               approved_by=APPROVER)
+
+    assert _remote_head(repo_env.bare) == before
+
+
+def test_a_dead_link_the_sweep_missed_is_caught_by_the_repos_own_linter(conn, repo_env):
+    """The independent ground truth. `gate_contract` filters the linter's findings to the pages a
+    diff TOUCHED, which is right for every other kind and blind for this one: a deletion's blast
+    radius is the whole graph, and a page the sweep never planned is exactly where a missed
+    reference would sit.
+
+    The sabotage is the sweep's own scanner going blind on one page — which is the failure this
+    check exists for, since that scanner is hand-mirrored from the linter and could drift from it.
+    Everything else is real: the real linter, over the real clone, after the real sweep.
+    """
+    pages = support.seed_deletion_corpus(repo_env)
+    real_scrubbed = remote.deletion.scrubbed
+
+    def blind_on_one_page(text, stems):
+        if "Mentions It In Prose" in text:
+            return text, ""
+        return real_scrubbed(text, stems)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(remote.deletion, "scrubbed", blind_on_one_page)
+        proposal = _delete_proposal(conn, repo_env.repo, [pages["doomed"]])
+        before = _remote_head(repo_env.bare)
+        with pytest.raises(RepairError) as caught:
+            remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                                   approved_by=APPROVER)
+
+    assert pages["in_prose"] in str(caught.value)
+    assert support.DOOMED_STEM in str(caught.value)
+    assert _remote_head(repo_env.bare) == before
+
+
+def test_the_commit_message_says_what_was_deleted_and_who_approved_it(conn, repo_env):
+    pages = support.seed_deletion_corpus(repo_env)
+    proposal = _delete_proposal(conn, repo_env.repo, [pages["doomed"]])
+
+    remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal, approved_by=APPROVER)
+
+    message = gitcmd.run("log", "-1", "--format=%B", cwd=repo_env.bare).stdout
+    assert message.startswith(f"chore(repair): delete 1 page(s) — {support.DOOMED_STEM}")
+    assert "the memo was superseded" in message
+    assert f"Approved-by: {APPROVER}" in message
+
+
+def test_an_applied_deletion_reports_what_it_removed_and_how_much_it_rewrote(conn, repo_env):
+    """What the governance ledger records beside the commit. `paths` alone cannot tell a steward
+    whether an approval removed one page or eleven, and the ledger row is where that question is
+    answered months later."""
+    pages = support.seed_deletion_corpus(repo_env)
+    proposal = _delete_proposal(conn, repo_env.repo, [pages["doomed"]])
+
+    result = remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                                    approved_by=APPROVER)
+
+    assert result["deleted"] == [pages["doomed"]]
+    assert result["scrubbed_pages"] == 3
+
+
+def test_the_delete_kinds_own_refusals_are_written_for_a_steward(conn, repo_env):
+    """Every sentence this kind raises crosses to a steward through the review lane, so none of
+    them may name this host's throwaway clone or hand out a command to run."""
+    pages = support.seed_deletion_corpus(repo_env)
+    proposal = _delete_proposal(conn, repo_env.repo, [pages["doomed"]])
+    support.write_note(repo_env, "A Latecomer", related=[support.DOOMED_STEM])
+    said = []
+
+    with pytest.raises(RepairError) as caught:
+        remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                               approved_by=APPROVER)
+    said.append(str(caught.value))
+    with pytest.raises(RepairError) as caught:
+        remote.apply_via_clone(repo_env.bare, "main", None,
+                               proposal=_retarget(conn, proposal["id"], ["wiki/notes/x.md"]),
+                               approved_by=APPROVER)
+    said.append(str(caught.value))
+
+    assert len(said) == 2
+    for message in said:
+        entities_conftest.assert_steward_facing(message)
+
+
+def test_a_sweep_whose_only_rewrite_removes_a_line_lands(conn, repo_env):
+    """The diff shape this kind produces that no other kind can: a page whose single `related:`
+    entry named the doomed page loses the whole line and gains nothing, so the diff has no added
+    lines at all. Both scanning gates read an empty added-lines list as "this gate could not run"
+    — the defence against a `.gitattributes` that blinds them — and vetoed a repair a steward had
+    approved. The unit twins are in `tests/librarian/test_gates_unit.py`; this is the road."""
+    doomed = support.write_note(repo_env, "Nothing Else Cites It", push=False)
+    support.write_note(repo_env, "Its Only Reader", related=["Nothing Else Cites It"], push=False)
+    librarian_support.commit_and_push(repo_env.repo, "test: a reference nothing else shares")
+    proposal = _delete_proposal(conn, repo_env.repo, [doomed])
+    assert not gitcmd.added_lines(repo_env.repo), "fixture sanity: the checkout is clean"
+
+    result = remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                                    approved_by=APPROVER)
+
+    assert result["scrubbed_pages"] == 1
+    assert doomed not in _remote_paths(repo_env.bare)
+    assert "related:" not in _remote_page(repo_env.bare, "wiki/notes/Its Only Reader.md")
+
+
+def test_a_sources_page_that_cites_a_removed_page_is_scrubbed_and_not_vetoed(conn, repo_env):
+    """OLD BEHAVIOUR: `gate_frontmatter` refuses `content_hash`/`tier`/`extracted_at` on any
+    in-lane modified page unless the caller declared it a provenance page — and a sweep is the
+    first thing in this system that MODIFIES a `sources/` page at all. So a deletion of a note some
+    source page cited was vetoed three times over for fields the librarian itself stamped when it
+    filed that page, and the steward's approval died on a rule about a capture asserting server-owned
+    fields, which no sweep can do: it only ever removes.
+
+    The apply tells the gates which touched pages are provenance pages, exactly as the librarian's
+    own source-attachment flow does — a fact the caller declares and no gate infers."""
+    doomed = support.write_note(repo_env, "Cited By A Source", push=False)
+    support.write_source(
+        repo_env, "Renewal Transcript", content_hash="c" * 64, push=False,
+        body_link="Cited By A Source")
+    librarian_support.commit_and_push(repo_env.repo, "test: a source page that cites a note")
+    proposal = _delete_proposal(conn, repo_env.repo, [doomed])
+
+    result = remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                                    approved_by=APPROVER)
+
+    assert result["scrubbed_pages"] == 1
+    landed = _remote_page(repo_env.bare, "sources/Renewal Transcript.md")
+    assert "[[Cited By A Source]]" not in landed
+    assert "Cited By A Source" in landed, "the sentence survives the page it cited"
+    for line in ('content_hash: "sha256:', "tier: 1"):
+        assert line in landed, f"{line} is the librarian's own stamp and not this sweep's to remove"

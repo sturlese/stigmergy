@@ -2,9 +2,10 @@
 
 A finding's path to zero. `stigmergy-repair propose` turns the gardener's findings into concrete
 changes a steward can approve one at a time — additive edits to pages that already exist, and a
-drafted BODY for an entity page that has never had one; the review lane and the admin console are
-where one is approved; and only then does code perform exactly the approved ops, through the
-librarian's own validator, its eight gates and its governed commit.
+drafted BODY for an entity page that has never had one — while `stigmergy-repair delete` is where a
+person proposes removing a page and everything that points at it. The review lane and the admin
+console are where one is approved; and only then does code perform exactly the approved ops,
+through the librarian's own validator, its eight gates and its governed commit.
 Design record: [ADR 039](../decisions/039-governed-repair-loop.md) — it holds the decisions this
 document only shows the results of.
 The findings themselves are covered in [`gardener-digest.md`](./gardener-digest.md), the review lane
@@ -14,33 +15,38 @@ in [`server.md`](./server.md#the-review-tools) and the console's panel in
 
 **The covenant, in one sentence: a MODEL proposes, CODE validates twice, a HUMAN approves one at a
 time, and code applies exactly what was approved.** Nothing reaches the knowledge repo without
-having passed all four.
+having passed all four. Deletion is the one kind whose first clause reads differently, and
+deliberately: a model may never propose one in any spelling, so the proposer there is a person at a
+terminal, or — for exact-duplicate `sources/` pages, where the decision is a lookup rather than a
+judgment — code itself.
 
 ```
   gardener findings                stigmergy-repair propose            a steward, one at a time
-  (the latest COMPLETED run)         ├─ split by check into TWO roads      ├─ review_queue / review_decide
-   model-unlinked-mention            │   edits:  batch → 1 call/batch      │    (MCP, item_kind
-   model-contradiction               │   entity-body: 1 page → 1 call,     │     "repair-proposal")
-   orphan-page                       │     and only with >= 2 anchored     └─ the console's Repairs tab
-   entity-placeholder-body           ├─ drop keys already reviewed                 │
-        │                            ├─ the model, 2 READ tools                    │  approve
-        └────────── read ───────────>├─ validate the answer, one retry             v
-                                     ├─ validate against the real         server.review.apply_repair_and_record
-                                     │    checkout (the kind's own          ├─ mark_decided (WHERE pending)
-                                     │    validator, the applier's)         ├─ clone → the kind's applier
-                                     └─ INSERT ... status='pending'         ├─ the cross-check: the diff's
-                                          content_key = kind + what it      │    paths == target_paths, all M
-                                          would do                          ├─ run_gates(ALL_GATES), told the
-                                                                            │    lane and the permitted path
-                                                                            ├─ gitcmd.commit(gated_entries=…)
+  (the latest COMPLETED run)         ├─ split by check into TWO model       ├─ review_queue / review_decide
+   model-unlinked-mention            │    roads, plus one that asks none    │    (MCP, item_kind
+   model-contradiction               │   edits:  batch → 1 call/batch       │     "repair-proposal")
+   orphan-page                       │   entity-body: 1 page → 1 call,      └─ the console's Repairs tab
+   entity-placeholder-body           │     and only with >= 2 anchored              │
+        │                            │   delete: duplicate sources/ pages,          │  approve
+        └────────── read ───────────>│     derived by CODE, no model                v
+                                     ├─ drop keys already reviewed        server.review.apply_repair_and_record
+  a person, at a terminal            ├─ the model, 2 READ tools             ├─ mark_decided (WHERE pending)
+   stigmergy-repair delete ─────────>├─ validate the answer, one retry      ├─ clone → the kind's applier
+     <path>... --why "…"             ├─ validate against the real           ├─ the cross-check: the diff's
+   (the ONLY door for a deletion     │    checkout (the kind's own          │    paths == target_paths, and
+    a person judged; a model may     │    validator, the applier's)         │    its SHAPE, per kind
+    never propose one)               └─ INSERT ... status='pending'         ├─ run_gates(ALL_GATES), told the
+                                          content_key = kind + what it      │    lane and what it may suspend
+                                          would do                          ├─ gitcmd.commit(gated_entries=…)
                                                                             │    + push, App-authored
                                                                             └─ mark_applied + review_decisions
 ```
 
 ## The four checks a repair can answer
 
-Only findings one of the two kinds could actually close reach the proposer. The other five are
-absent by NAME rather than by oversight: an aging seed needs somebody to write, a stale view needs a
+Only findings one of the two MODEL-proposed kinds could actually close reach the proposer — the
+third kind, `delete`, answers no finding at all and is proposed by a person or derived from
+duplicate content hashes. The other five checks are absent by NAME rather than by oversight: an aging seed needs somebody to write, a stale view needs a
 regeneration, an anchor that no longer fits is a judgment about a page's subject. None of them is an
 edit or a body this vocabulary can express.
 
@@ -54,7 +60,7 @@ edit or a body this vocabulary can express.
 A contradiction repair FLAGS the disagreement and never resolves it. Deciding which of two pages is
 right is not something this loop does, and it could not express the edit if it were.
 
-## Two kinds, and both vocabularies are closed
+## Three kinds, and every vocabulary is closed
 
 A proposal's `kind` says which question it is. `edits` is three additive shapes, all performed by
 `edits.apply_declared` — the same function a filing capture's declared edits go through:
@@ -76,7 +82,7 @@ fourth ADDITIVE op is a new question nobody has asked the gates —
 `tests/test_architecture.py` pins that vocabulary equal to `page.EDIT_KINDS`.
 
 `entity-body` is the second kind, and the only one that REPLACES text
-([ADR 039's amendment](../decisions/039-governed-repair-loop.md)). It carries exactly ONE op:
+([ADR 039's first amendment](../decisions/039-governed-repair-loop.md)). It carries exactly ONE op:
 
 ```json
 {"op": "entity-body", "path": "wiki/entities/<Name>.md", "body_markdown": "…", "role": ""}
@@ -108,12 +114,62 @@ fourth ADDITIVE op is a new question nobody has asked the gates —
   gates run over it exactly as they run over a filed page, and a credential in a draft is vetoed at
   apply time with nothing pushed.
 
+`delete` is the third kind, and the only one that removes anything
+([ADR 039's second amendment](../decisions/039-governed-repair-loop.md)). Its unit is a SWEEP, not
+a file, so it carries two op shapes:
+
+```json
+{"op": "delete-page", "path": "wiki/notes/<Name>.md"}
+{"op": "scrub-page",  "path": "wiki/decisions/<Other>.md",
+ "expected_before_hash": "<sha256 of the bytes the plan was computed from>",
+ "planned_after": "<the whole page, as it would be written>"}
+```
+
+- **Who may propose one.** A person, at `stigmergy-repair delete <path>... --why "<reason>"` — and
+  nothing else, except the one deterministic road below. **A model may never propose a deletion in
+  any spelling**: `validate_batch` drops such an op by name with a sentence saying the road does
+  not exist. Judging that a page is stale is the judgment that is neither code's nor a model's.
+- **The one automatic road.** Two `sources/` pages declaring the same `content_hash:` are the same
+  document filed twice, and the nightly propose run derives a deletion for the copy that goes: the
+  page the corpus CITES survives, on a tie the OLDER filing survives, on a tie in both the
+  lexicographically first path survives. All three rules are total lookups, so no model is asked —
+  the one deliberate exception to "a model proposes", and the rationale a steward reads is composed
+  by code from the two facts that decided it.
+- **What may be deleted.** `wiki/notes/`, `wiki/decisions/`, `wiki/concepts/`, `sources/`,
+  `views/`. Never `wiki/entities/` — an identity is retired through governance (ADR 016), and it is
+  absent by CONSTRUCTION rather than by rule: the entity type carries no folder, so it is not in the
+  lane the deletable set extends. Never `ops/` or `.claude/`, and never anything outside the three
+  content zones. A whitelist, so tomorrow's zone is undeletable by default.
+- **What the sweep does to everything else.** For each page that mentions a page that is going:
+  `related:`/`sources:` entries naming it are dropped (an emptied field's line goes with it),
+  `supersedes:`/`superseded_by:` pointers at it are removed, and body wikilinks are UNLINKED —
+  `[[X]]` becomes `X` and `[[X|alias]]` becomes `alias`, so the sentence that cited a page survives
+  the page. Every link question is asked exactly as the knowledge repo's contract linter asks it
+  (code fences and inline code blanked first, alias and anchor split off, `Path(target).stem`). A
+  reference the sweep cannot rewrite — a `[[wikilink]]` in some other frontmatter field — refuses
+  the whole plan at propose time rather than becoming a question a gate would later veto.
+- **What a steward is authorizing.** `target_paths` carries the FULL touched set, deleted and
+  scrubbed alike, so the review lane's per-path steward guard covers the whole blast radius: the
+  steward of the page being removed is not automatically the steward of every page the sweep would
+  rewrite. `STIGMERGY_REPAIR_MAX_PLAN_BYTES` bounds how much one approval may be.
+- **How the apply proves it.** The plan is RECOMPUTED from the fresh clone and refused unless it is
+  identical to the stored one, op for op and byte for byte — a page that gained a link since the
+  proposal was made is a different sweep, and performing the old one would leave the dead link this
+  kind exists to prevent. Then the gates are told `deletions_allowed={the pages that go}` and
+  `expected_bytes={path: the planned file}`; for a planned path the additive proof is replaced by
+  byte-equality, which is a STRONGER statement than it (additive says "nothing disappeared";
+  byte-equality says "this is precisely the file that was approved"). Finally the knowledge repo's
+  own linter runs over the WHOLE clone — `gate_contract` filters to the pages a diff touched, which
+  is blind to a deletion's global blast radius — and any surviving link to a removed page refuses
+  the commit.
+
 ## `stigmergy-repair`
 
 ```
 stigmergy-repair [--dsn DSN] [--repo PATH] [--json] propose
 stigmergy-repair [--dsn DSN] [--repo PATH] [--json] list
 stigmergy-repair [--dsn DSN] [--repo PATH] [--json] show <id>
+stigmergy-repair [--dsn DSN] [--repo PATH] [--json] delete <path>... --why "<reason>"
 ```
 
 - **`propose`** — the pass a cron runs. Reads the latest COMPLETED gardener run, keeps the
@@ -128,7 +184,17 @@ stigmergy-repair [--dsn DSN] [--repo PATH] [--json] show <id>
 - **`list`** — what waits on a steward, plus what was recently decided.
 - **`show <id>`** — what one proposal would change, rendered from the ops without touching git. For
   an `entity-body` proposal that is the drafted body in full: the draft is the whole of what a
-  steward judges, so a preview that summarised it would hide the only thing worth reading.
+  steward judges, so a preview that summarised it would hide the only thing worth reading. For a
+  `delete` proposal it is the pages that stop existing and the pages that get rewritten — never the
+  planned bytes, which are the apply's contract with its own recomputation and not something a
+  person reads.
+- **`delete <path>... --why "<reason>"`** — the only verb that CREATES a proposal from a terminal,
+  at the same authority level as `propose`: it computes the sweep, refuses everything wrong with it
+  before a row exists (an entity page, a path outside the corpus, a reference it cannot rewrite, a
+  plan over its ceiling, a deletion already waiting on somebody), inserts ONE pending row and prints
+  the plan in plain English. `--why` is required — it is what a steward reads beside Approve and
+  what `git log` carries afterwards — and the row's `model_id` is empty, which is the durable
+  statement that no model proposed it.
 
 **There is no `apply`, and there will not be one.** A terminal knows who is typing and not what they
 are allowed to approve; applying goes through a door that decides. `--repo` (or `$STIGMERGY_REPO`)
@@ -141,6 +207,7 @@ committed there.
 | `STIGMERGY_REPAIR_MAX_OPS` | `6` | how much ONE approval is allowed to be |
 | `STIGMERGY_REPAIR_MAX_PROPOSALS` | `20` | how many approvals one RUN may ask for |
 | `STIGMERGY_REPAIR_BATCH` | `8` | findings per model call |
+| `STIGMERGY_REPAIR_MAX_PLAN_BYTES` | `100000` | how much ONE deletion may be, in the bytes its stored plan carries |
 | `STIGMERGY_REPO` | — | the checkout to propose against |
 | `STIGMERGY_INDEX_DSN` | — | where the proposals live |
 
@@ -166,12 +233,14 @@ become the system prompt.
 
 A pending proposal appears in the review inbox as `repair-proposal`, alongside `entity-proposal` and
 `parked-capture`, and in the console's Repairs tab. It carries its rationale, the pages it would
-edit, and a count of its ops with their kinds — never the ops themselves, because a list is a scan;
-the ops, and a body draft in full, are one click or one `stigmergy-repair show` away.
+touch, and a count of its ops with their kinds — never the ops themselves, because a list is a scan;
+the ops, a body draft in full, and a deletion's two lists are one click or one
+`stigmergy-repair show` away. For a deletion the op kinds are what tell a steward, from the scan
+alone, that a page would be REMOVED rather than edited.
 
 - **Verdicts are `approve` and `reject` only.** A proposal IS its edits, so the thing to change
   about one is which edits it contains, which is a different proposal.
-- **Approving needs a steward for EVERY page the proposal would edit.** `ops/stewards.json` exists
+- **Approving needs a steward for EVERY page the proposal would touch.** `ops/stewards.json` exists
   to delegate zones, and this is the first verdict in the lane that can land inside one, so the
   question is asked per path rather than universally. A proposal spanning two zones needs somebody
   who stewards both — either steward may still reject it, and the pair can be proposed as two
@@ -194,12 +263,16 @@ push" is a property of the code rather than of each surface remembering.
 
 Three independent checks, each chosen because the other two cannot see what it sees:
 
-1. **`edits.apply_declared` against a fresh clone.** The propose-time validation ran against a
-   checkout that may be hours old; a page deleted since then refuses here.
+1. **The kind's own applier against a fresh clone.** The propose-time validation ran against a
+   checkout that may be hours old; a page deleted since then refuses here. For `delete` this step
+   is a full RECOMPUTATION of the sweep, refused unless it is byte-identical to the stored plan.
 2. **`run_gates(ALL_GATES)`** judges the resulting diff exactly as it judges the librarian's own —
-   all eight, not a subset.
-3. **The cross-check**: the diff's paths must EQUAL the proposal's stored `target_paths`, and every
-   entry must be a modification. The gates would pass a diff touching some other page quite
+   all eight, not a subset. A `delete` apply additionally runs the knowledge repo's own linter over
+   the WHOLE clone, because that kind's blast radius is the graph rather than the diff.
+3. **The cross-check**: the diff's paths must EQUAL the proposal's stored `target_paths`, and its
+   SHAPE must be the one this kind produces — every entry a modification for the two editing kinds;
+   for `delete`, removals exactly equal to the pages the plan named and modifications exactly equal
+   to the pages it planned to scrub. The gates would pass a diff touching some other page quite
    happily — it is additive and well-formed — so this is the only thing that can say the diff is
    not the one the row describes. Its reach, stated exactly: an `ops` blob that disagrees with
    `target_paths` cannot reach `main`. Content is not compared, and a tamper that edited both
@@ -229,8 +302,10 @@ repair again — which is the only way back for a repair somebody actually wante
 
 `note` is deliberately excluded from the key: two proposals adding the same callout to the same page
 with differently-worded sentences are the same question asked twice, and a rephrasing of a declined
-repair is not a new one. The drafted body is excluded for the identical reason — **a re-drafted body
-is the same question**, and a steward who decided a page needs writing by a person should not meet
+repair is not a new one. A deletion's SCRUB set is excluded for a sharper version of the same
+reason — a page that gained a link to the doomed page overnight changes the plan and changes
+nothing a steward was asked, so a deletion is keyed on the pages that GO and nothing else. The
+drafted body is excluded for the identical reason — **a re-drafted body is the same question**, and a steward who decided a page needs writing by a person should not meet
 another draft of it tomorrow. The UNIQUE index is narrower than the skip rule — one PENDING row per key,
 not one row ever — so re-proposing after a rejection stays a human decision rather than a database
 error.

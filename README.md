@@ -249,7 +249,7 @@ beside it in the source; the two bare modules at the top are small enough to be 
 | Module | What it is |
 |---|---|
 | `text.py` | the bottom of the stack: the hardened UNTRUSTED-DATA fence, sanitize, clamp, and the one parser for a capture's `<path>@<sha>` result ref |
-| `review_kinds.py` | the review inbox's TWO kind constants (entity-proposal, parked-capture) — dependency-free, so a Block Kit renderer can name them without importing the server |
+| `review_kinds.py` | the review inbox's THREE kind constants (entity-proposal, parked-capture, repair-proposal) — dependency-free, so a Block Kit renderer can name them without importing the server |
 | `kernel/` | a LIBRARY that imports nothing from this project: the model dispatch, the page contract's cap + scalar emitter, frontmatter parsing, the ACL resolver, the entity registry, and the document converters the Drive door runs — text extraction plus the vision OCR fallback |
 | `index/` | the hybrid derived index: postgres+pgvector, reciprocal rank fusion, contract ranking |
 | `server/` | the single MCP server — the ONLY API over the brain; HTTP transport with per-request bearer auth, audit log, rate limits, the capture surface, the incremental-index webhook, entity navigation and the review lane |
@@ -260,7 +260,7 @@ beside it in the source; the two bare modules at the top are small enough to be 
 | `slack/` | the Slack transport: 🧠 capture, Q&A, the steward doorbell |
 | `views/` | per-entity rollups: a deterministic skeleton + a bounded synthesis |
 | `gardener/` | corpus health on demand: nine deterministic checks + a bounded model editorial sweep, findings persisted and reported — fixes nothing, writes nothing, vetoes nothing |
-| `repair/` | the governed repair loop: an agent PROPOSES a repair for a finding — an additive edit, or a drafted body for an entity page that has never had one — code validates it at propose time and again at apply time through the same eight gates, a steward approves one at a time, and code applies exactly that as one App-authored commit |
+| `repair/` | the governed repair loop: an agent PROPOSES a repair for a finding — an additive edit, or a drafted body for an entity page that has never had one — and a person proposes the third kind, removing a page and sweeping every reference to it out of the corpus. Code validates each at propose time and again at apply time through the same eight gates, a steward approves one at a time, and code applies exactly that as one App-authored commit |
 | `digest/` | the week's activity in one Slack post |
 | `admin/` | the ops console: `/admin` on the same app process group — queue drain, cron remote-control, gardener/digest/index panels, activity. INERT until its token hash is configured, and never a read surface over pages — though its Activity tab does show the QUESTIONS people asked, which is user content behind one shared credential |
 

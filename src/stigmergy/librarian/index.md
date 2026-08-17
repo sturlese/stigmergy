@@ -67,11 +67,16 @@ repo parser — nothing here touches `pages_index`); `stigmergy.index.store` is 
   attachment) widen the instance they build, never a module constant: a new flow is out of
   bounds by default. `edits_allowed` is the one field no caller declares any more: the meeting
   flow set it `False` until it gained the same declared-edit mechanism (ADR 038).
-  `body_rewrite_allowed` is the newest of them and the only one no flow in THIS package declares:
-  it names the single page whose body a governed repair may replace, and it is set by
-  `repair/remote.py` alone (ADR 039's amendment, pinned both directions in
-  `tests/test_architecture.py`). Empty, it changes nothing — every capture still meets
-  `gate_body_rewrite`'s additive proof unchanged.
+  FOUR of them SUSPEND a proof rather than narrowing a lane, and each has its granting surface
+  pinned both directions in `tests/test_architecture.py`. Three are `repair/remote.py`'s alone (ADR
+  039's two amendments): `body_rewrite_allowed` names the single page whose body a governed repair
+  may replace, `deletions_allowed` the paths a governed sweep may remove, and `expected_bytes` the
+  exact file a caller computed for a page it rewrites. Empty, each changes nothing — every capture
+  still meets `gate_body_rewrite`'s additive proof unchanged, and `gate_zone`'s "the librarian never
+  deletes a file" stays literally true. The fourth, `provenance_pages`, has two granters making the
+  same claim: `processing.py` for the source pages one capture just wrote, and `repair/remote.py`
+  for the machine-zone pages a sweep rewrites — those stamps are the librarian's own, and neither
+  flow is the thing that asserted one.
 - **Wording for humans lives in `report.py` only**; a read path branches on `reason_code`
   (`capture.schema.REJECTION_REASONS`), never on prose and never on `stage`, which is
   `failed_system`'s alone. An unresolved-entity park gets ONE pair of builders (`needs_input` /

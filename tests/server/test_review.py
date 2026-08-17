@@ -2451,3 +2451,116 @@ def test_approving_a_body_draft_needs_a_steward_for_the_entity_page_itself(env, 
 
     assert str(caught.value) == review.NOT_YOURS_TO_DECIDE
     assert repair_store.proposal(conn, proposal_id)["status"] == repair_schema.STATUS_PENDING
+
+
+# ── the third repair kind in the review lane: `delete` ────────────────────────────────────────
+def _delete_ops(*, doomed="wiki/notes/Old Memo.md", scrubbed="wiki/decisions/Refunds.md"):
+    return [{"op": repair_schema.DELETE_OP_NAME, "path": doomed},
+            {"op": repair_schema.SCRUB_OP_NAME, "path": scrubbed,
+             "expected_before_hash": "0" * 64,
+             "planned_after": "---\ntype: decision\n---\n\n# Refunds\n\nNo link any more.\n"}]
+
+
+def _propose_delete(conn, ops=None):
+    ops = ops if ops is not None else _delete_ops()
+    return repair_store.insert_proposal(
+        conn, run_id=0, finding_ids=[], target_paths=repair_schema.target_paths(ops), ops=ops,
+        rationale="the memo was superseded and nothing needs it any more",
+        kind=repair_schema.KIND_DELETE,
+        content_key=repair_schema.content_key(ops, kind=repair_schema.KIND_DELETE), model_id="")
+
+
+def test_a_deletion_names_both_of_its_op_kinds_in_the_scan_without_carrying_the_planned_bytes(
+        env, conn):
+    """The inbox is a SCAN, and this kind is the one where that rule earns most: a sweep's ops
+    carry WHOLE PAGES, and putting them in every listing would bury every other item. What a
+    steward needs here is that a page would be REMOVED and that others would be rewritten — which
+    is exactly what the two op names say."""
+    proposal_id = _propose_delete(conn)
+
+    queue = review.review_queue(make_service(env, conn, identity_name=STEWARD))
+
+    item = next(i for i in queue["items"] if i["kind"] == review.KIND_REPAIR_PROPOSAL)
+    assert item["id"] == str(proposal_id)
+    assert item["ops_preview"] == {"count": 2,
+                                   "kinds": [repair_schema.DELETE_OP_NAME,
+                                             repair_schema.SCRUB_OP_NAME]}
+    assert item["target_paths"] == ["wiki/decisions/Refunds.md", "wiki/notes/Old Memo.md"]
+    assert "No link any more" not in json.dumps(item), (
+        "the planned bytes are not in the scan — they are the apply's contract, not the list")
+
+
+def test_approving_a_deletion_needs_a_steward_for_every_page_the_sweep_touches(env, conn,
+                                                                               monkeypatch):
+    """**The per-path guard, on the kind whose blast radius is widest.** The steward of the page
+    being DELETED is not automatically the steward of every page the sweep would rewrite — and the
+    rewrite is a real change to somebody else's zone, made in their absence, which is precisely
+    what `ops/stewards.json` exists to prevent. It works because `target_paths` carries the FULL
+    touched set, deleted and scrubbed alike."""
+    proposal_id = _propose_delete(conn)
+    seed_stewards(env, {"wiki/notes/": [STEWARD], "wiki/decisions/": [DECISIONS_STEWARD]})
+    _apply_never_runs(monkeypatch)
+
+    with pytest.raises(review.ReviewError) as caught:
+        review.review_decide(make_service(env, conn, identity_name=STEWARD),
+                             item_kind=review.KIND_REPAIR_PROPOSAL, item_id=str(proposal_id),
+                             verdict="approve", source=review.SOURCE_MCP)
+
+    assert str(caught.value) == review.NOT_YOURS_TO_DECIDE
+    assert repair_store.proposal(conn, proposal_id)["status"] == repair_schema.STATUS_PENDING
+
+
+def test_a_steward_of_every_page_the_sweep_touches_may_approve_it(env, conn, monkeypatch):
+    """The benign twin. A guard that refused both stewards would look identical from outside and
+    make the kind unusable."""
+    proposal_id = _propose_delete(conn)
+    _apply_records(monkeypatch, paths=("wiki/notes/Old Memo.md", "wiki/decisions/Refunds.md"))
+
+    result = review.review_decide(make_service(env, conn, identity_name=STEWARD),
+                                  item_kind=review.KIND_REPAIR_PROPOSAL, item_id=str(proposal_id),
+                                  verdict="approve", source=review.SOURCE_MCP)
+
+    assert result["applied"] is True
+    assert repair_store.proposal(conn, proposal_id)["status"] == repair_schema.STATUS_APPLIED
+
+
+def test_the_ledger_records_what_a_deletion_removed_and_how_much_it_rewrote(env, conn,
+                                                                            monkeypatch):
+    """`paths` alone cannot tell a reader whether an approval removed one page or eleven, and the
+    governance ledger is where that question is answered months later — when the pages themselves
+    are gone and `git log` is the only other place it is written down."""
+    proposal_id = _propose_delete(conn)
+
+    def fake(repo_url, branch, credential, *, proposal, approved_by, on_output=None):
+        return {"commit": FAKE_COMMIT, "paths": ["wiki/notes/Old Memo.md"],
+                "deleted": ["wiki/notes/Old Memo.md"], "scrubbed_pages": 1}
+
+    monkeypatch.setattr(repair_remote, "apply_via_clone", fake)
+
+    review.review_decide(make_service(env, conn, identity_name=STEWARD),
+                         item_kind=review.KIND_REPAIR_PROPOSAL, item_id=str(proposal_id),
+                         verdict="approve", source=review.SOURCE_MCP)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT extra FROM review_decisions WHERE item_kind = %s AND item_id = %s",
+                    (review.KIND_REPAIR_PROPOSAL, str(proposal_id)))
+        extra = cur.fetchone()[0]
+    assert extra["deleted"] == ["wiki/notes/Old Memo.md"]
+    assert extra["scrubbed_pages"] == 1
+    assert extra["commit"] == FAKE_COMMIT
+
+
+def test_an_additive_repairs_ledger_row_gains_no_empty_deletion_columns(env, conn, monkeypatch):
+    """The benign twin for the row above: a ledger that carried two always-empty keys on every
+    additive repair would teach a reader that the loop deletes things, which it mostly does not."""
+    proposal_id = _propose(conn, [_op("wiki/notes/Renewals.md")])
+    _apply_records(monkeypatch)
+
+    review.review_decide(make_service(env, conn, identity_name=STEWARD),
+                         item_kind=review.KIND_REPAIR_PROPOSAL, item_id=str(proposal_id),
+                         verdict="approve", source=review.SOURCE_MCP)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT extra FROM review_decisions WHERE item_kind = %s AND item_id = %s",
+                    (review.KIND_REPAIR_PROPOSAL, str(proposal_id)))
+        assert sorted(cur.fetchone()[0]) == ["commit", "paths", "source"]

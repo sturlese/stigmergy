@@ -218,6 +218,85 @@ def write_anchored_note(env, title: str, *, entity_id: str = ENTITY_ID, body: st
     return relpath
 
 
+# ── the `delete` kind's fixtures: a page worth removing, and pages that mention it ─────────────
+# Deliberately NO `entity:` declaration on either, exactly as the fixture repo's own hand-authored
+# pages have none: an anchor would make every deletion test depend on the entity registry as well,
+# and `gate_contract` would then surface a registry finding on any page a sweep touched.
+DOOMED_STEM = "Superseded Renewal Memo"
+DOOMED_PAGE = f"wiki/notes/{DOOMED_STEM}.md"
+
+
+def write_note(env, title: str, *, related=(), body: str = "", push: bool = True) -> str:
+    """One hand-authored `wiki/notes/` page with the `related:` list a test needs.
+
+    The body is padded past the contract linter's thirty-line floor the same way the fixture repo's
+    own pages are: a `size` warning is only a note, but a fixture that trips one teaches a reader
+    to skim the gate output, which is where a real veto hides.
+    """
+    front = ["type: note", f'title: "{title}"', "status: developing", "created: 2026-02-01",
+             "updated: 2026-02-01", "tags: [note]",
+             f"related: {json.dumps([f'[[{name}]]' for name in related], ensure_ascii=False)}",
+             "sources: []"]
+    filler = "\n".join(f"- line {n} of the padding this page carries so the contract linter's "
+                       f"thirty-line floor is met without a warning." for n in range(1, 26))
+    relpath = f"wiki/notes/{title}.md"
+    path = os.path.join(env.repo, *relpath.split("/"))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    text = body or f"# {title}\n\n## What it says\n\n{filler}\n"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("---\n" + "\n".join(front) + "\n---\n\n" + text)
+    if push:
+        librarian_support.commit_and_push(env.repo, f"test: add {title}")
+    return relpath
+
+
+def write_source(env, title: str, *, content_hash: str, extracted_at: str = "2026-02-01T00:00:00Z",
+                 body_link: str = "", push: bool = True) -> str:
+    """One `sources/` page, shaped the way `page.stamp_source_fields` writes a real one — the
+    provenance group the contract linter requires of that zone, and nothing an authored page has.
+
+    `content_hash` is the whole point: two pages sharing one are the same captured document filed
+    twice, which is the ONE deletion this system derives without asking a model.
+    """
+    front = ["type: source", f'title: "{title}"', "tags: [source]", "source_kind: upload",
+             "status: developing", f'content_hash: "sha256:{content_hash}"',
+             f'extracted_at: "{extracted_at}"', "tier: 1"]
+    filler = "\n".join(f"- extracted line {n} of the document this page records."
+                       for n in range(1, 31))
+    if body_link:
+        filler = f"- as [[{body_link}]] records, the volumes held.\n" + filler
+    relpath = f"sources/{title}.md"
+    path = os.path.join(env.repo, *relpath.split("/"))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("---\n" + "\n".join(front) + "\n---\n\n" + f"# {title}\n\n{filler}\n")
+    if push:
+        librarian_support.commit_and_push(env.repo, f"test: add {title}")
+    return relpath
+
+
+def seed_deletion_corpus(env) -> dict[str, str]:
+    """The shape every deletion test needs: one doomed page and three that mention it three
+    different ways — a `related:` entry beside a surviving one, a body wikilink, and a page whose
+    ONLY reference is a `related:` entry (so its scrub removes a line and adds none).
+
+    Returns `{label: relpath}` so a test names the page by what it is FOR.
+    """
+    doomed = write_note(env, DOOMED_STEM, push=False)
+    write_note(env, "Keeps A Link", related=[DOOMED_STEM, "Existing Note"], push=False)
+    write_note(env, "Mentions It In Prose", push=False,
+               body=f"# Mentions It In Prose\n\n## What it says\n\nThe broker agreed, as "
+                    f"[[{DOOMED_STEM}]] records, and the volumes held.\n\n"
+                    + "\n".join(f"- padding line {n} so the linter's floor is met."
+                                for n in range(1, 26)) + "\n")
+    write_note(env, "Only A Related Entry", related=[DOOMED_STEM], push=False)
+    librarian_support.commit_and_push(env.repo, "test: seed the deletion corpus")
+    return {"doomed": doomed,
+            "keeps_a_link": "wiki/notes/Keeps A Link.md",
+            "in_prose": "wiki/notes/Mentions It In Prose.md",
+            "only_related": "wiki/notes/Only A Related Entry.md"}
+
+
 def stem(path: str) -> str:
     return path.rsplit("/", 1)[-1].removesuffix(".md")
 

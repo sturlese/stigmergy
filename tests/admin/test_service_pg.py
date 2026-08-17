@@ -31,6 +31,7 @@ from stigmergy.server import review as server_review
 from stigmergy.server.settings import Settings
 from tests.admin.conftest import (
     park,
+    propose_delete,
     propose_entity_body,
     propose_repair,
     submit_one,
@@ -1259,3 +1260,20 @@ def test_repair_approve_and_reject_404_on_a_proposal_that_does_not_exist(conn, r
         with pytest.raises(AdminNotFound):
             call()
     assert _actions(conn) == [], "a 404 is not an attempted mutation — no admin_actions row"
+
+
+def test_a_deletion_reaches_the_console_as_the_pages_it_would_remove(conn, service):
+    """The third kind's shape, and the one field it must NOT carry across: `planned_after` is a
+    whole page per scrubbed page, and it is the apply's contract with its own recomputation — not
+    something a steward reads. What the console needs is which pages stop existing and which get
+    rewritten, which is exactly what the two op names and their paths say."""
+    proposal_id = propose_delete(conn)
+
+    row = service.repair_show(proposal_id)
+
+    assert row["kind"] == repair_schema.KIND_DELETE
+    assert [op["op"] for op in row["ops"]] == [repair_schema.DELETE_OP_NAME,
+                                               repair_schema.SCRUB_OP_NAME]
+    assert sorted(row["ops"][0]) == ["op", "path"]
+    assert sorted(row["ops"][1]) == ["op", "path"]
+    assert "No link any more" not in json.dumps(row)

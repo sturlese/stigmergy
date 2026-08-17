@@ -718,9 +718,15 @@ def apply_repair_and_record(conn, *, repo_url: str, proposal: dict, actor: str, 
         raise ReviewError(_LOST_THE_RACE)
     result = repair_remote.apply_approved(
         conn, repo_url, _KNOWLEDGE_BRANCH, os.environ, proposal=proposal, approved_by=actor)
+    # The apply's own account of what it did, projected through a NAMED key list rather than
+    # copied whole: the result is a dict a lower layer composes, and a ledger row is append-only
+    # governance history. Keys the apply did not produce are simply absent — a `delete` records
+    # what it removed and how much it rewrote, and an additive repair gains no empty columns
+    # teaching a reader that this loop deletes things.
     record_decision(conn, item_kind=KIND_REPAIR_PROPOSAL, item_id=str(proposal["id"]),
                     verdict=APPROVE, actor=actor, source=source, notes=notes,
-                    extra={"commit": result["commit"], "paths": result["paths"]})
+                    extra={key: result[key] for key in repair_remote.LEDGER_RESULT_KEYS
+                           if key in result})
     return {"applied": True, "commit": result["commit"], "paths": result["paths"]}
 
 

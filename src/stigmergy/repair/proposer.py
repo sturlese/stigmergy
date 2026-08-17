@@ -44,7 +44,7 @@ from stigmergy.kernel.result import fake_result
 from stigmergy.librarian import config as librarian_config
 from stigmergy.librarian import edits, gather
 from stigmergy.librarian import page as page_policy
-from stigmergy.repair import entity_body, schema, store
+from stigmergy.repair import deletion, entity_body, schema, store
 from stigmergy.repair.errors import RepairError
 from stigmergy.text import clamp, fence, sanitize
 
@@ -545,6 +545,24 @@ def _retry_prompt(original: str, rejected: list[dict], *, max_ops: int, max_prop
 # the model on the retry, and a model can only act on a bound it can read as one.
 BATCH_CEILING_REASON = "batch-exceeds-ceiling({n}>{ceiling})"
 
+# What a model asking to remove something is told, and why it is a SENTENCE rather than the generic
+# "not one of the three kinds". The generic reason is true and useless: it reads as a spelling
+# mistake, so the one corrective retry gets spent hunting for the right word for a road that does
+# not exist. This closes the door instead (ADR 039's second amendment).
+NO_MODEL_DELETIONS = (
+    "deletion is not something you can propose, in any spelling: judging that a page is stale is a "
+    "person's decision and it is typed at `stigmergy-repair delete`. Propose an additive repair or "
+    "propose nothing")
+
+# The word this rule watches for, in every spelling a model might reach for. A prefix test rather
+# than a set, because the point is to catch the INTENT — `delete`, `delete-page`, `delete_page`,
+# `deletion` — and to say the same thing to each.
+_DELETION_WORDS = ("delete", "remove", "scrub", "drop")
+
+
+def _looks_like_deletion(name: str) -> bool:
+    return any(word in str(name or "").strip().lower() for word in _DELETION_WORDS)
+
 
 def validate_batch(output: ProposalBatch, *, corpus_paths: set[str], link_names: set[str],
                    finding_ids: set[int], max_ops: int,
@@ -576,7 +594,9 @@ def validate_batch(output: ProposalBatch, *, corpus_paths: set[str], link_names:
         if len(spec.ops) > max_ops:
             reasons.append(f"{len(spec.ops)} ops (max {max_ops} in one proposal)")
         for op in spec.ops:
-            if op.op not in edits.EDIT_KINDS:
+            if _looks_like_deletion(op.op):
+                reasons.append(f"{NO_MODEL_DELETIONS} (you asked for {op.op!r})")
+            elif op.op not in edits.EDIT_KINDS:
                 reasons.append(f"op {op.op!r} is not one of {edits.EDIT_KINDS}")
             if op.path not in corpus_paths:
                 reasons.append(f"path {op.path!r} is not a page in this checkout")
@@ -876,6 +896,17 @@ async def propose_from_findings(conn, *, settings, repo: str = "") -> ProposeRes
         accepted += got
         skip_reasons += reasons
 
+    # The deterministic road runs LAST and outside the findings check, because it reads no findings
+    # at all — a corpus can hold a duplicate filing on a night the gardener found nothing. Last for
+    # two reasons: it costs no model call, so nothing is saved by running it first; and if the
+    # ceiling is already full, a deletion nobody has been asked for yet is the safest thing to
+    # defer to tomorrow.
+    got, reasons = _propose_duplicate_sources(
+        repo=repo, settings=settings, answered_page_sets=answered_page_sets,
+        budget=ceiling - len(accepted), ceiling=ceiling)
+    accepted += got
+    skip_reasons += reasons
+
     proposal_ids, refused = _store_valid_proposals(
         conn, repo, accepted, run_id=run["id"], model_id=settings.model,
         # What each candidate finding NAMED, so a stored proposal remembers the question and not
@@ -987,6 +1018,60 @@ async def _propose_entity_bodies(deps: ProposerContext, fresh: list[dict], *, re
     return accepted, skip_reasons
 
 
+# What a duplicate the sweep could not clear is recorded as. NOT a raise: a nightly job that died
+# on one awkward page would stop proposing anything at all, and the additive road running beside
+# this one has nothing to do with the problem.
+DUPLICATE_REFUSED_REASON = "duplicate-sources refused for {path}: {reason}"
+
+
+def _propose_duplicate_sources(*, repo: str, settings, answered_page_sets: set,
+                               budget: int, ceiling: int) -> tuple[list[dict], list[str]]:
+    """The one road that asks no model: exact-duplicate `sources/` pages, one proposal per group.
+
+    Plainly synchronous, where the other two roads are coroutines, and the signature is the point:
+    there is nothing here to await, because there is nobody to ask.
+
+    The dismissal memory is asked with the DELETED pages as the page set, which is also what the
+    proposal stores as its `finding_subjects`. A duplicate pair does not stop being a duplicate
+    pair because a steward said no, so without that check it would be the one question this loop
+    asked every single night forever.
+    """
+    accepted: list[dict] = []
+    skip_reasons: list[str] = []
+    groups = deletion.duplicate_source_groups(repo)
+    for index, (survivor, doomed) in enumerate(groups):
+        if len(accepted) >= budget:
+            skip_reasons.append(RUN_CEILING_REASON.format(
+                ceiling=ceiling, dropped=0, unseen=len(groups) - index))
+            break
+        if _page_set_key(doomed) in answered_page_sets:
+            continue
+        try:
+            ops = deletion.plan(repo, doomed)
+        except RepairError as ex:
+            # The sentence names the page whose reference the sweep cannot rewrite, which is the
+            # actionable half; the operator reads it in `job_runs.stats`.
+            skip_reasons.append(DUPLICATE_REFUSED_REASON.format(path=doomed[0], reason=str(ex)))
+            continue
+        oversize = deletion.oversize_reason(ops, settings.max_delete_plan_bytes)
+        if oversize:
+            skip_reasons.append(oversize)
+            continue
+        accepted.append({
+            "finding_ids": [], "ops": ops, "kind": schema.KIND_DELETE,
+            "rationale": clamp(deletion.duplicate_rationale(repo, survivor, doomed[0]),
+                               MAX_RATIONALE_CHARS),
+            # The pages that GO are the question this proposal stands for — never the pages the
+            # sweep would also rewrite, which move with the corpus and would re-ask a declined
+            # deletion every time somebody added a link.
+            "finding_subjects": [list(doomed)],
+            # No model was asked. Stamping the run's model here would attribute a code decision to
+            # something that never saw it, and this column is where that stays true afterwards.
+            "model_id": "",
+        })
+    return accepted, skip_reasons
+
+
 def _store_valid_proposals(conn, repo: str, accepted: list[dict], *, run_id: int, model_id: str,
                            subjects_by_finding: dict) -> tuple[list[int], list[str]]:
     """The last gate before the table: `edits.validate` against the real checkout, for real.
@@ -1022,21 +1107,30 @@ def _store_valid_proposals(conn, repo: str, accepted: list[dict], *, run_id: int
         stored.append(store.insert_proposal(
             conn, run_id=run_id, finding_ids=spec["finding_ids"],
             target_paths=schema.target_paths(ops), ops=ops, rationale=spec["rationale"],
-            content_key=key, kind=kind, model_id=model_id,
+            content_key=key, kind=kind,
+            # PER SPEC, falling back to the run's model. The deterministic duplicate road sets it
+            # to `""` deliberately: no model was asked, and this column is where that stays true.
+            model_id=spec.get("model_id", model_id),
             # One group per finding ANSWERED, never their union: a proposal answering two findings
             # has to dismiss each of them, and a union dismisses only a third finding naming every
-            # one of those pages at once — which is not a finding anything produces.
-            finding_subjects=[subjects_by_finding.get(int(i), []) for i in spec["finding_ids"]]))
+            # one of those pages at once — which is not a finding anything produces. A road that
+            # answers no finding says what its question WAS instead, or it has no dismissal memory
+            # at all.
+            finding_subjects=(spec.get("finding_subjects")
+                              or [subjects_by_finding.get(int(i), [])
+                                  for i in spec["finding_ids"]])))
     return stored, reasons
 
 
 def _validate_for_kind(repo: str, kind: str, ops: list) -> list:
-    """The LAST propose-time proof, dispatched on kind — and in both cases it is the very function
-    the applier will run against its own clone. Two trees, one validator per kind; a proposal that
-    would not apply is never stored, so a steward is never shown a question whose answer cannot be
-    carried out."""
+    """The LAST propose-time proof, dispatched on kind — and in every case it is the very function
+    the applier will run against its own clone. Three trees' worth of questions, one validator per
+    kind; a proposal that would not apply is never stored, so a steward is never shown a question
+    whose answer cannot be carried out."""
     if kind == schema.KIND_ENTITY_BODY:
         return entity_body.validate(repo, ops)
+    if kind == schema.KIND_DELETE:
+        return deletion.validate(repo, ops)
     return edits.validate(repo, schema.declared_edits(ops), new_pages=())
 
 

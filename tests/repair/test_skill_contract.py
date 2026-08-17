@@ -134,6 +134,12 @@ def test_the_knowledge_repo_carries_the_skill_where_the_code_looks_for_it():
     "one sentence of identity",
     # park by omission, in this road's own spelling — an empty body proposes nothing
     "return an empty body",
+    # ── the third kind (ADR 039's second amendment), and the only row here that is about a road
+    # the model does NOT have. `validate_batch` drops an op naming a deletion in any spelling, so a
+    # brief that never mentioned deletion would let the model spend its one retry discovering that
+    # — and, worse, would leave "why can I not remove this stale page" an open question in the
+    # procedure a model reasons from ────────────────────────────────────────────────────────────
+    "never propose a deletion",
 ])
 def test_the_skill_still_covers_every_clause_the_frame_assumes(phrase):
     """A contract TABLE rather than one "the file is long enough" check, because each row is a

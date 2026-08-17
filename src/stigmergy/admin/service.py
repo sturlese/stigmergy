@@ -33,8 +33,8 @@ from stigmergy.index.errors import StigmergyIndexError
 from stigmergy.librarian import config as librarian_config
 from stigmergy.repair import store as repair_store
 from stigmergy.repair.errors import RepairError
+from stigmergy.repair.schema import DELETE_OP_NAME, KIND_ENTITY_BODY, SCRUB_OP_NAME
 from stigmergy.repair.schema import JOB_NAME as REPAIR_JOB
-from stigmergy.repair.schema import KIND_ENTITY_BODY
 from stigmergy.review_kinds import KIND_ENTITY_PROPOSAL
 from stigmergy.server import pilot_report
 from stigmergy.server import review as server_review
@@ -42,6 +42,11 @@ from stigmergy.server.errors import StartupError
 from stigmergy.server.webhook import JOB_NAME as WEBHOOK_JOB
 
 log = logging.getLogger(__name__)
+
+# The `delete` kind's two op names, as the ONE set `_op` reshapes on: a sweep is the only proposal
+# whose ops are two different shapes, and matching them one at a time is how one of the two gets a
+# link column nobody asked for.
+DELETE_OP_NAMES = (DELETE_OP_NAME, SCRUB_OP_NAME)
 
 PURGE_JOB, PURGE_DRY_RUN_JOB = "capture-purge", "capture-purge-dry-run"
 
@@ -673,12 +678,20 @@ class AdminService:
         kind removes the only thing a steward has to judge — and it would do it silently, since a
         missing key renders as an empty cell. Every value goes through `_clean`, which strips
         control characters and KEEPS newlines: a body flattened to one line is a body nobody can
-        read as the page it would become."""
+        read as the page it would become.
+
+        A `delete` op is the one shape that reaches the console with LESS than it was stored with:
+        `planned_after` is a whole page per scrubbed page, and it is the apply's contract with its
+        own recomputation rather than something a steward reads. What the console owes here is
+        which pages stop existing and which get rewritten, and the op NAME plus the path is all of
+        it."""
         kind = _clean(op.get("op"))
         common = {"op": kind, "path": _clean(op.get("path"))}
         if kind == KIND_ENTITY_BODY:
             return {**common, "body_markdown": _clean(op.get("body_markdown")),
                     "role": _clean(op.get("role"))}
+        if kind in DELETE_OP_NAMES:
+            return common
         return {**common, "link": _clean(op.get("link")), "note": _clean(op.get("note"))}
 
     def _with_reply(self, row: dict) -> dict:
