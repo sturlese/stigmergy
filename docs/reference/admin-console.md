@@ -110,7 +110,11 @@ gateway's own sentence (status code, never the token, never an echoed body) show
   quietly returning to the queue. A proposal's detail shows what that KIND would change — the ops
   table for the additive kinds, one line per declared edit, page and link; the drafted body in full,
   as plain text, for an `entity-body` proposal, because for that kind reading the draft IS the
-  check — with Approve and Decline; Decline demands a non-blank reason, because the
+  check; and for a `delete` proposal two lists, the pages that STOP EXISTING and the pages rewritten
+  so they no longer link to them, with the consequence sentence and the confirm dialog both saying
+  "remove" rather than "apply N edit(s)". A deletion's stored `planned_after` bytes deliberately do
+  not reach the console at all: they are the apply's contract with its own recomputation, not
+  something a person reads — with Approve and Decline; Decline demands a non-blank reason, because the
   reason is the whole of what stops the same repair being re-derived tomorrow. Approve runs
   `server.review.apply_repair_and_record`, the SAME ordering MCP's review lane runs, for the reason
   the Entities tab shares its mint sequence: it applies exactly the approved ops through the

@@ -6,11 +6,16 @@ Sibling that produces the findings and fixes nothing: [`gardener`](../gardener/i
 time, and code applies exactly what was approved.** Nothing here can write to the knowledge repo
 without having passed through all four.
 
-TWO proposal kinds, and a finding rides exactly one road. `edits` is the librarian's own
+THREE proposal kinds, and a finding rides exactly one road. `edits` is the librarian's own
 declared-edit vocabulary and nothing else — `backlink`, `overlap`, `contradiction` — three strictly
 additive shapes the eight gates already know how to judge. `entity-body` is the one kind that
 REPLACES text: one drafted body for one entity page still carrying its template, judged by
-`gate_body_rewrite`'s permitted-rewrite branch instead of its additive proof (ADR 039's amendment).
+`gate_body_rewrite`'s permitted-rewrite branch instead of its additive proof (ADR 039's first
+amendment). `delete` is the one kind that REMOVES anything, and the one the covenant's first clause
+reads differently for: **no model may propose it in any spelling.** A person types it at
+`stigmergy-repair delete`, or code derives it for exact-duplicate `sources/` pages, where the
+decision is a lookup rather than a judgment (ADR 039's second amendment).
+
 The proposer's judgment (which finding is worth repairing, which shape fits, what an entity page
 should say, when a finding has gone stale and deserves nothing) lives in a skill in the KNOWLEDGE
 repo, read at run time from the checkout; a missing skill is a named refusal, never a default.
@@ -19,13 +24,14 @@ repo, read at run time from the checkout; a missing skill is a named refusal, ne
 
 | Module | What it is |
 |---|---|
-| `cli.py` | `stigmergy-repair propose \| list \| show <id>` — the only module that opens a connection or imports `stigmergy.index.store`. **No `apply`**: a terminal knows who is typing, not what they may approve. Owns `preview`, the git-free rendering of what a proposal would change |
+| `cli.py` | `stigmergy-repair propose \| list \| show <id> \| delete <path>... --why` — the only module that opens a connection or imports `stigmergy.index.store`. **No `apply`**: a terminal knows who is typing, not what they may approve. `delete` is the one verb that CREATES a proposal here, at `propose`'s authority level, because a deletion is the one repair no model may propose. Owns `preview`, the git-free rendering of what a proposal would change |
 | `proposer.py` | The agent seam, BOTH roads: `ProposerContext` and its two READ tools; `ProposalBatch`/`ProposalSpec`/`EditOp` + `validate_batch` for the additive road; `EntityBodyDraft` + `anchored_pages`/`draft_entity_body`/`validate_draft` for the body road; one retry each, `read_skill`, `propose_from_findings`, and the two offline doubles. The only module here that loads a model stack |
 | `entity_body.py` | The `entity-body` writer and its validator — `validate`, `apply_declared`, `rewritten`, and the bounds a draft lives inside. Pure of the model stack, because the APPLY runs it inside the MCP server process |
-| `remote.py` | `apply_via_clone` (clone → the kind's applier → the cross-check → `run_gates` → gated commit → push) and `apply_approved`, the door that also records the outcome. Owns `commit_message`, and `_lane_and_permission` — the two caller-scoped facts the gates are told |
+| `deletion.py` | The `delete` kind, whole: `plan` (the sweep, a pure function of a worktree's bytes), `scrubbed` (one page's planned bytes), `validate`/`apply_declared` (recompute, byte-compare, perform), the readers every other surface goes through (`deleted_paths`, `scrubbed_paths`, `expected_bytes`, `lane_for`), and `duplicate_source_groups` — the one automatic road, which asks no model. Its link scanner is hand-mirrored from the frozen contract linter and must stay that way |
+| `remote.py` | `apply_via_clone` (clone → the kind's applier → the per-kind cross-check → `run_gates` → gated commit → push) and `apply_approved`, the door that also records the outcome. Owns `commit_message`, `LEDGER_RESULT_KEYS`, the delete kind's whole-tree dead-link check, and `_lane_and_permission` — the four caller-scoped facts the gates are told |
 | `store.py` | `repair_proposals` persistence: `insert_proposal`, `pending_proposals`, `recent_decided`, `proposal`, `mark_decided`, `mark_applied`, `mark_failed`, `known_content_keys`. Pure — decides nothing, authorizes nothing |
-| `schema.py` | The DDL behind `startup_ddl_lock`, `JOB_NAME`, the kind/status vocabularies, and the op record: `declared_edits`, `target_paths`, `content_key` |
-| `settings.py` | `RepairSettings.from_env` — the model and the three bounds. The ONE place this package reads the environment for configuration |
+| `schema.py` | The DDL behind `startup_ddl_lock`, `JOB_NAME`, the kind/status/op-name vocabularies, and the op record: `declared_edits`, `target_paths`, `content_key` |
+| `settings.py` | `RepairSettings.from_env` — the model and the four bounds. The ONE place this package reads the environment for configuration |
 | `errors.py` | `RepairError`, and `ProposalStateError` for "somebody got there first / there is nothing to do" |
 
 **Two doors decide who may approve, and neither is here.** `server/review.py` reaches `store`,
@@ -39,13 +45,15 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
 ## Reuse
 
 - `librarian.edits.validate` / `apply_declared` — the SAME validator both ends run for the `edits`
-  kind, and `entity_body.validate` / `apply_declared` is its twin for the other. Propose time
-  proves a proposal is storable; apply time proves it still applies to the clone. Neither trusts
-  the other: they are asking about two different trees.
-- `librarian.page` — the frontmatter LINE machinery (`top_level_key_line`, `frontmatter_lines`,
-  `strip_key_lines`, `yaml_scalar`) that `entity_body` rewrites `updated:`/`role:` through, and
-  `gate_body_rewrite` compares the before and after with. ONE owner for "what lines does a
-  top-level key occupy", or the writer and the gate could disagree about the same two lines.
+  kind; `entity_body` and `deletion` each own their kind's twin. Propose time proves a proposal is
+  storable; apply time proves it still applies to the clone. Neither trusts the other: they are
+  asking about two different trees. `deletion.apply_declared` goes one step further and RECOMPUTES
+  its plan, because a sweep's content depends on every other page in the corpus.
+- `librarian.page` — the frontmatter LINE machinery (`top_level_key_line`, `top_level_key_span`,
+  `frontmatter_lines`, `strip_key_lines`, `yaml_scalar`, `yaml_list`, `parse_list_value`) that
+  `entity_body` rewrites `updated:`/`role:` through, `deletion` removes list entries and pointer
+  lines with, and `gate_body_rewrite` compares the before and after with. ONE owner for "what lines
+  does a top-level key occupy", or two writers and a gate could disagree about the same block.
 - `librarian.gates.run_gates(ALL_GATES)` — a repair goes through the librarian's own eight gates,
   not a subset. `GateContext(material="", outcome=None)` is honest: nothing was captured and no
   agent wrote here, and every gate that reads either is scoped to CREATED pages, of which a repair
@@ -69,13 +77,24 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   and its inability to write is structural, not promised.
 - Never extend the ADDITIVE op vocabulary past `page.EDIT_KINDS` — a new shape there is a new gate
   question. A new KIND is a bigger decision, not a smaller one: it needs its own validator, its own
-  writer, its own branch in `gate_body_rewrite` and its own ADR record, which is what `entity-body`
-  has.
-- Never widen `GateContext.body_rewrite_allowed` past the ONE page a proposal names, and never set
-  it from anywhere but `remote.py` (pinned in `tests/test_architecture.py`, both directions). A
-  permission wide enough for a second page is a permission for a page nobody approved.
+  writer, its own branch in the gates and its own ADR record, which is what `entity-body` and
+  `delete` each have.
+- Never let a MODEL reach the `delete` kind. `validate_batch` refuses an op naming a deletion in any
+  spelling, by name, and the deterministic duplicate road is CODE — not a model call whose answer
+  happens to be checked. Judging that a page is stale is a person's decision.
+- Never widen `GateContext.body_rewrite_allowed`, `deletions_allowed`, `expected_bytes` or
+  `provenance_pages` past what the proposal names, and never set one from anywhere but `remote.py`
+  (pinned in `tests/test_architecture.py`, both directions, plus a classification check over every
+  keyword any module passes to a `GateContext`). A permission wide enough for a second page is a
+  permission for a page nobody approved.
+- Never let `deletion`'s link scanner drift from the frozen contract linter's. It is hand-mirrored
+  on purpose (this package talks to that linter through FILES): a scanner that sees MORE links
+  edits prose nobody asked about, and one that sees FEWER leaves a dead link and a veto at apply
+  time. `index.corpus.link_targets` answers a deliberately DIFFERENT question — the index's edge
+  graph — and is the wrong one to copy.
 - Never apply without the cross-check: `run_gates` would happily pass a well-formed additive diff
-  that is not the one a steward approved, and only the stored `target_paths` can say so.
+  that is not the one a steward approved, and only the stored `target_paths` can say so. Its SHAPE
+  half is per kind — a sweep that quietly stopped deleting satisfies the path comparison exactly.
 - Never restore `approved` after a failed apply. `failed` + the `error` column is the record; a
   silent revert hides that a gate refused.
 - Never compose a refusal from a caught exception's text. Every sentence raised from `remote.py`
@@ -86,13 +105,15 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
 
 - `repair_proposals`: `id`, `created_at`, `run_id`, `finding_ids`, `finding_subjects`, `kind`,
   `target_paths`, `ops`, `rationale`, `content_key`, `status`, `decided_by`, `decided_at`, `notes`,
-  `applied_commit`, `error`, `model_id`. `kind ∈ ('edits', 'entity-body')`; `status ∈ (pending,
+  `applied_commit`, `error`, `model_id`. `kind ∈ ('edits', 'entity-body', 'delete')`; `status ∈ (pending,
   approved, rejected, applied, failed)`. The kind CHECK is swapped by a guarded `DO` block, not
   carried by `CREATE TABLE IF NOT EXISTS` alone — a table that already exists never gains a value,
   and a kind the code writes and the column refuses is an IntegrityError in production at night. `finding_subjects` is a list of LISTS — one sorted page set per
   finding answered, what each one NAMED as against what the answer would edit.
 - **A REJECTED row is the dismissal memory.** `content_key` identifies a proposal by what it would
-  DO (kind + sorted `op:path:link`, `note` excluded), and the proposer skips a key held by a
+  DO (kind + sorted `op:path:link`, `note` excluded — and for `delete`, the removals ALONE, since
+  which pages must also be scrubbed is a fact about the rest of the corpus rather than about the
+  question), and the proposer skips a key held by a
   pending, approved, rejected or applied row. "Reviewed and declined" is a durable fact, and a
   steward is not asked the same question every night. `failed` is deliberately NOT remembered — a
   failed apply is a steward's YES that hit a fault, and the next run must be able to derive it
@@ -103,7 +124,10 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
 - `EDIT_PROPOSABLE_CHECKS` = `model-unlinked-mention`, `model-contradiction`, `orphan-page`;
   `BODY_PROPOSABLE_CHECKS` = `entity-placeholder-body`; `PROPOSABLE_CHECKS` is their union. The
   other checks are absent by NAME, not by oversight: none of them is answered by a link, a callout
-  or a body.
+  or a body. `delete` answers no check at all — it has no finding behind it, which is why its rows
+  carry an empty `finding_ids` and say what their question WAS in `finding_subjects` instead.
+- **An empty `model_id` on a `delete` row is a statement, not a gap**: no model proposed it, and
+  that kind is the only one for which that can be true.
 - `job_runs` job `repair-propose`, `stats`: `findings_seen`, `proposed`, `skipped_known`,
   `skipped_invalid`, `skip_reasons`.
 - Bounds: `settings.max_ops_per_proposal` (6) is how much ONE approval may be;
@@ -115,7 +139,9 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   `MAX_ANCHORED_PAGES` (10 per prompt), and `entity_body`'s own `MAX_BODY_BYTES` (6000),
   `MAX_BODY_LINES` (110) and `MAX_ROLE_CHARS` (200). Those three are CONSTANTS rather than env
   settings on purpose: the real ceiling is the knowledge repo's contract linter, so an operator
-  raising them could only produce proposals the gates then refuse.
+  raising them could only produce proposals the gates then refuse. The delete road adds
+  `settings.max_delete_plan_bytes` (100000) — a SIZE rather than an op count, because that kind's
+  ops carry whole pages so the apply can recompute and byte-compare them.
 - The proposer's skill: `.claude/skills/repair-proposer/SKILL.md` in the knowledge repo, read at
   run time, refused if the leaf is a symlink, and size-capped before the bytes.
 
@@ -126,8 +152,9 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   rendered as another kind's.
 
 Tests live in `tests/repair/` (real git, real Postgres, real gates, the offline double for the
-agent) and, for the two doors, in `tests/server/test_review.py` and `tests/admin/`; the layering,
-the module-scope, the connection-seam and the closed apply-caller pins in
-`tests/test_architecture.py`. Narrative:
+agent; `test_deletion.py` is the sweep's plan computation as pure functions, with no database and
+no git at all) and, for the two doors, in `tests/server/test_review.py` and `tests/admin/`; the
+layering, the module-scope, the connection-seam, the closed apply-caller pins and the three
+granting-surface pins in `tests/test_architecture.py`. Narrative:
 [`docs/reference/repair.md`](../../../docs/reference/repair.md), decisions:
 [ADR 039](../../../docs/decisions/039-governed-repair-loop.md).

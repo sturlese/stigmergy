@@ -90,7 +90,7 @@ lives in `capture.decisions`, below both packages, and this package only re-expo
   `approve` (through `apply_repair_and_record`), and nothing else.
 - `repair-proposal`'s steward guard asks a PER-TARGET-PATH question — `all(is_steward(service, p)
   for p in target_paths)` — and it is the only kind that can. The other two are anchored to no page,
-  so the empty scope is the only one they could resolve; a repair names the pages it would edit, and
+  so the empty scope is the only one they could resolve; a repair names the pages it would touch — including, for a deletion, every page rewritten to stop pointing at the pages that go — and
   `ops/stewards.json` exists to delegate zones. The universal question would let the general steward
   write inside a delegated folder whose own steward never saw the change.
 - `mint_and_record_approval` is the ONE mint sequence for both SERVER-SIDE doors — the review lane

@@ -37,6 +37,14 @@ DEFAULT_BATCH_SIZE = 8
 MAX_PROPOSALS_ENV = "STIGMERGY_REPAIR_MAX_PROPOSALS"
 DEFAULT_MAX_PROPOSALS_PER_RUN = 20
 
+# How much ONE deletion may be, measured in the bytes its stored plan carries. The `delete` kind is
+# the only one whose ops hold whole PAGES — every page the sweep would rewrite, in full, so the
+# apply can recompute the plan and byte-compare it — so its natural bound is a size rather than a
+# count of ops. Around thirty average pages at the default, which is already more of a corpus
+# change than one Approve button should stand for.
+MAX_PLAN_BYTES_ENV = "STIGMERGY_REPAIR_MAX_PLAN_BYTES"
+DEFAULT_MAX_DELETE_PLAN_BYTES = 100_000
+
 # What a zero or negative value would do to THIS package's arithmetic — the sentence
 # `gardener.settings.int_setting` interpolates, written for the bounds it guards here.
 _POSITIVE_COUNT_WHY = ("a zero or negative bound would either refuse every proposal or send an "
@@ -77,6 +85,7 @@ class RepairSettings:
     max_ops_per_proposal: int = DEFAULT_MAX_OPS_PER_PROPOSAL
     batch_size: int = DEFAULT_BATCH_SIZE
     max_proposals_per_run: int = DEFAULT_MAX_PROPOSALS_PER_RUN
+    max_delete_plan_bytes: int = DEFAULT_MAX_DELETE_PLAN_BYTES
 
     @classmethod
     def from_env(cls, args=None) -> "RepairSettings":
@@ -88,4 +97,6 @@ class RepairSettings:
             max_ops_per_proposal=_int_setting(MAX_OPS_ENV, DEFAULT_MAX_OPS_PER_PROPOSAL),
             batch_size=_int_setting(BATCH_SIZE_ENV, DEFAULT_BATCH_SIZE),
             max_proposals_per_run=_int_setting(MAX_PROPOSALS_ENV, DEFAULT_MAX_PROPOSALS_PER_RUN),
+            max_delete_plan_bytes=_int_setting(MAX_PLAN_BYTES_ENV,
+                                               DEFAULT_MAX_DELETE_PLAN_BYTES),
         )

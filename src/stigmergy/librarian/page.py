@@ -432,12 +432,24 @@ def _parse_list_value(text: str) -> list[str]:
     return []
 
 
-def _related_span(front_lines: list[str]) -> tuple[int, int]:
-    """`(start, end)` of the top-level `related:` block in a frontmatter body, `(-1, -1)` when
-    there is none. `end` is exclusive and covers block-sequence continuation lines."""
+def top_level_key_span(front_lines: list[str], key: str) -> tuple[int, int]:
+    """`(start, end)` of a top-level `key:` block in a frontmatter body, `(-1, -1)` when there is
+    none. `end` is exclusive and covers block-sequence continuation lines.
+
+    The SPAN half of `top_level_key_line`, and it compares the same way — on `normalize_key`,
+    because the line a YAML parser reads as `related` is the line a rewriter must replace, whatever
+    case or homoglyph it is spelled in. A rewriter that missed a re-cased spelling would leave the
+    page declaring the field twice.
+
+    Parameterized by key rather than fixed to `related:` because `repair.deletion` removes entries
+    from `sources:` and drops `supersedes:`/`superseded_by:` through the same rule. ONE
+    implementation of "what lines does a top-level key occupy", or two writers come to disagree
+    about the same block.
+    """
+    wanted = normalize_key(key)
     for index, line in enumerate(front_lines):
         matched = _match_key(line)
-        if not matched or line[:1].isspace() or matched[0] != _RELATED_KEY:
+        if not matched or line[:1].isspace() or normalize_key(matched[0]) != wanted:
             continue
         end = index + 1
         while end < len(front_lines) and (front_lines[end][:1].isspace()
@@ -447,6 +459,10 @@ def _related_span(front_lines: list[str]) -> tuple[int, int]:
             end += 1
         return index, end
     return -1, -1
+
+
+def _related_span(front_lines: list[str]) -> tuple[int, int]:
+    return top_level_key_span(front_lines, _RELATED_KEY)
 
 
 def related_links(text: str) -> list[str]:
@@ -555,9 +571,12 @@ def _yaml_scalar(value: str) -> str:
     return json.dumps(str(value), ensure_ascii=False)
 
 
-# Public alias for `repair.entity_body`, which writes one frontmatter scalar of its own and must
-# quote it the way every other writer here does.
+# Public aliases for `repair.entity_body` and `repair.deletion`, which write one frontmatter scalar
+# and one frontmatter LIST of their own: a page whose `related:` line was re-emitted by a different
+# escaper is a page the contract linter reads differently from the one this module wrote.
 yaml_scalar = _yaml_scalar
+yaml_list = _yaml_list
+parse_list_value = _parse_list_value
 
 
 CALLOUT_STYLES = {

@@ -719,10 +719,14 @@ async function entityApproveFlow(row) {
 // wording lives in `librarian.page` and a second copy of it here would show a steward a change
 // that is not quite the one they are authorizing. The ops table IS the stored ops.
 //
-// TWO kinds, two renderers. An `entity-body` op carries a page's whole drafted body, and the
+// THREE kinds, three renderers. An `entity-body` op carries a page's whole drafted body, and the
 // steward reading that draft IS the check for that kind — squeezed into a table cell it is
-// unreadable, and dropped from the table it is invisible.
+// unreadable, and dropped from the table it is invisible. A `delete` proposal carries two
+// different op shapes, and the one thing that must be legible before Approve is which pages STOP
+// EXISTING: rendered as a row in the additive table it reads as an edit with two empty columns.
 const KIND_ENTITY_BODY = "entity-body";
+const KIND_DELETE = "delete";
+const OP_DELETE_PAGE = "delete-page";
 
 function opsTable(ops) {
   return table(["op", "page it edits", "links to", "note"],
@@ -745,13 +749,42 @@ function bodyDraft(ops) {
         o.body_markdown || "(the draft is empty)"))));
 }
 
+// The pages that go, and the pages that change because they go. Two lists rather than one table,
+// because they are two different things to agree to: one is irreversible from this console, and
+// the other is a rewrite of pages a steward may not have opened.
+function deletionPlan(ops) {
+  const removed = (ops || []).filter((o) => o.op === OP_DELETE_PAGE).map((o) => o.path);
+  const scrubbed = (ops || []).filter((o) => o.op !== OP_DELETE_PAGE).map((o) => o.path);
+  const list = (paths) => el("ul", { class: "mono", style: "margin:4px 0 0 18px" },
+    ...paths.map((p) => el("li", {}, p)));
+  return el("div", {},
+    el("div", { class: "sub" }, `${removed.length} page(s) removed`),
+    list(removed),
+    el("div", { class: "sub", style: "margin-top:12px" },
+      `${scrubbed.length} page(s) rewritten so they no longer link to them`),
+    scrubbed.length ? list(scrubbed) : el("div", { class: "sub" }, "— nothing else refers to them"));
+}
+
 function changeSummary(kind) {
-  return kind === KIND_ENTITY_BODY
-    ? "this replaces the page's body BELOW its own title line. Its frontmatter is preserved "
+  if (kind === KIND_ENTITY_BODY) {
+    return "this replaces the page's body BELOW its own title line. Its frontmatter is preserved "
       + "byte for byte apart from `updated:` (and `role:`, when the page has none), and the "
-      + "title line itself does not change. Read the draft: it is what the page will say."
-    : "every op is additive: a link added to that page's related list, and for overlap and "
-      + "contradiction a one-sentence callout below it. Nothing is rewritten or deleted here.";
+      + "title line itself does not change. Read the draft: it is what the page will say.";
+  }
+  if (kind === KIND_DELETE) {
+    return "the pages in the first list STOP EXISTING, and the pages in the second are rewritten "
+      + "to take out every link to them — the sentences that cited them survive, unlinked, and "
+      + "nothing else in those pages changes. Undoing it means a revert in the knowledge repo.";
+  }
+  return "every op is additive: a link added to that page's related list, and for overlap and "
+    + "contradiction a one-sentence callout below it. Nothing is rewritten or deleted here.";
+}
+
+// ONE dispatch, so the renderer and the sentence above it can never describe different kinds.
+function repairChange(row) {
+  if (row.kind === KIND_ENTITY_BODY) return bodyDraft(row.ops);
+  if (row.kind === KIND_DELETE) return deletionPlan(row.ops);
+  return opsTable(row.ops);
 }
 
 function opsSummary(ops) {
@@ -823,7 +856,7 @@ export async function repairDetailView(host, id) {
       el("div", { class: "card" },
         el("h2", {}, "What it would change"),
         el("div", { class: "sub", style: "margin-bottom:10px" }, changeSummary(row.kind)),
-        row.kind === KIND_ENTITY_BODY ? bodyDraft(row.ops) : opsTable(row.ops)),
+        repairChange(row)),
       pending
         ? el("div", { class: "card" },
             el("div", { class: "card-head" },
@@ -846,16 +879,28 @@ export async function repairDetailView(host, id) {
 }
 
 async function repairApproveFlow(row) {
+  // The last sentence anybody reads before a page stops existing, so it says REMOVE rather than
+  // "apply N edit(s)" — the generic wording would be the one place in the console that describes
+  // a deletion as an edit.
+  const removing = row.kind === KIND_DELETE
+    ? (row.ops || []).filter((o) => o.op === OP_DELETE_PAGE).length
+    : 0;
   const answer = await confirmForm({
-    title: `Approve #${row.id} — apply ${row.ops.length} edit(s)`,
-    consequence: "applies exactly these edits and pushes ONE commit to the knowledge repo. It is "
-      + "re-validated and re-gated against the repo as it stands right now, so it can still be "
-      + "refused — but if it lands, nothing here can undo it.",
+    title: removing
+      ? `Approve #${row.id} — remove ${removing} page(s)`
+      : `Approve #${row.id} — apply ${row.ops.length} edit(s)`,
+    consequence: removing
+      ? "removes those pages from the knowledge repo and rewrites every page that links to them, "
+        + "in ONE commit. It is re-computed and re-gated against the repo as it stands right now, "
+        + "so it can still be refused — but if it lands, nothing here can undo it."
+      : "applies exactly these edits and pushes ONE commit to the knowledge repo. It is "
+        + "re-validated and re-gated against the repo as it stands right now, so it can still be "
+        + "refused — but if it lands, nothing here can undo it.",
     note: banner("info",
-      el("div", {}, "the pages this would edit:"),
+      el("div", {}, removing ? "the pages this would remove or rewrite:" : "the pages this would edit:"),
       el("ul", { class: "names" }, row.target_paths.map((p) => el("li", { class: "mono" }, p)))),
     fields: [actorField()],
-    confirmLabel: "Approve & apply",
+    confirmLabel: removing ? "Approve & remove" : "Approve & apply",
   });
   if (!answer) return;
   try {

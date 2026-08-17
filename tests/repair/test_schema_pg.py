@@ -7,7 +7,7 @@ string that was meant to create them.
 import psycopg
 import pytest
 
-from stigmergy.repair import schema, store
+from stigmergy.repair import deletion, schema, store
 
 
 def test_ensure_repair_schema_is_idempotent(conn):
@@ -186,11 +186,44 @@ def test_the_two_kinds_are_two_questions_about_the_same_page():
 
 
 def test_each_kinds_stored_op_shape_is_named_and_they_do_not_overlap():
-    """The two shapes, pinned where they are declared. Four readers reshape an op — the CLI
+    """The three shapes, pinned where they are declared. Four readers reshape an op — the CLI
     preview, the console's cleaner, the review lane's `ops_preview` and the applier — and a reader
     that assumed the additive shape for a body draft rendered an empty cell where the draft
     should have been."""
     assert schema.EDIT_OP_FIELDS[0] == schema.ENTITY_BODY_OP_FIELDS[0] == schema.OP_KIND_KEY
+    assert schema.DELETE_OP_FIELDS[0] == schema.SCRUB_OP_FIELDS[0] == schema.OP_KIND_KEY
     assert set(schema.EDIT_OP_FIELDS) & set(schema.ENTITY_BODY_OP_FIELDS) == {"op", "path"}
+    assert set(schema.EDIT_OP_FIELDS) & set(schema.SCRUB_OP_FIELDS) == {"op", "path"}
     assert "body_markdown" not in schema.EDIT_OP_FIELDS
     assert "link" not in schema.ENTITY_BODY_OP_FIELDS
+    assert "planned_after" not in schema.DELETE_OP_FIELDS, (
+        "a removal names a page and stores no bytes — there is nothing left to write")
+
+
+# ── the third kind's key: the question is WHICH PAGES GO ──────────────────────────────────────
+def _delete_ops(*paths, scrubbed=()):
+    return ([{"op": deletion.OP_DELETE, "path": p} for p in paths]
+            + [{"op": deletion.OP_SCRUB, "path": p, "expected_before_hash": "h",
+                "planned_after": "bytes"} for p in scrubbed])
+
+
+def test_a_deletion_is_the_same_question_however_the_corpus_has_moved_around_it():
+    """OLD BEHAVIOUR: `content_key` hashed every op, so the SCRUB set was part of a deletion's
+    identity — and the scrub set is a fact about the rest of the corpus, not about the question.
+    A steward who declined "delete this page" would have been asked again the moment somebody
+    added a link to it, under a key that had silently changed."""
+    before = _delete_ops("wiki/notes/Doomed.md", scrubbed=["wiki/notes/A.md"])
+    after = _delete_ops("wiki/notes/Doomed.md", scrubbed=["wiki/notes/A.md", "wiki/notes/B.md"])
+
+    assert (schema.content_key(before, kind=schema.KIND_DELETE)
+            == schema.content_key(after, kind=schema.KIND_DELETE))
+
+
+def test_deleting_a_different_page_is_a_different_question():
+    """The benign twin: the key still separates deletion sets, or one declined sweep would silence
+    every deletion in the corpus."""
+    assert (schema.content_key(_delete_ops("wiki/notes/A.md"), kind=schema.KIND_DELETE)
+            != schema.content_key(_delete_ops("wiki/notes/B.md"), kind=schema.KIND_DELETE))
+    assert (schema.content_key(_delete_ops("wiki/notes/A.md"), kind=schema.KIND_DELETE)
+            != schema.content_key(_delete_ops("wiki/notes/A.md", "wiki/notes/B.md"),
+                                  kind=schema.KIND_DELETE))

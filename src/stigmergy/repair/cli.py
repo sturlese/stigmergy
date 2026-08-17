@@ -3,11 +3,18 @@
     stigmergy-repair [--dsn DSN] [--repo PATH] [--json] propose
     stigmergy-repair [...] list
     stigmergy-repair [...] show <id>
+    stigmergy-repair [...] delete <path>... --why "<reason>"
 
-Three READ-or-PROPOSE commands and deliberately no fourth: **there is no `apply` here.** A
-proposal is applied only through a door that decides who may authorize it, and a terminal knows
-who is typing but not what they are allowed to approve. `show` renders what a proposal WOULD do
-so a steward can read it before answering somewhere that can.
+Four READ-or-PROPOSE commands and deliberately no fifth: **there is no `apply` here.** A proposal
+is applied only through a door that decides who may authorize it, and a terminal knows who is
+typing but not what they are allowed to approve. `show` renders what a proposal WOULD do so a
+steward can read it before answering somewhere that can.
+
+`delete` is the same authority level as `propose` — it inserts a PENDING row and nothing else — and
+it exists as a command because a deletion is the one repair a MODEL may never propose (ADR 039's
+second amendment). Judging that a page is stale is exactly the judgment that is not code's and not
+a model's; computing what has to happen to the rest of the corpus afterwards is exactly the
+judgment that is.
 
 The only module in this package that reads the environment beyond one setting resolver, opens a
 connection, or imports `stigmergy.index.store` — every other module takes `conn` and settings as
@@ -21,7 +28,7 @@ import sys
 from stigmergy.capture import schema as capture_schema
 from stigmergy.index import store as index_store
 from stigmergy.librarian import config as librarian_config
-from stigmergy.repair import proposer, schema, store
+from stigmergy.repair import deletion, proposer, schema, store
 from stigmergy.repair.errors import RepairError
 from stigmergy.repair.settings import RepairSettings
 from stigmergy.server.errors import StartupError
@@ -86,6 +93,69 @@ def _cmd_propose(conn, args) -> int:
     return 0
 
 
+# ── delete ────────────────────────────────────────────────────────────────────────────────────
+def _cmd_delete(conn, args) -> int:
+    """Compute the sweep for the pages named, and store it as one pending proposal.
+
+    Everything a person could get wrong is refused BEFORE the row exists — an entity page, a path
+    outside the corpus, a reference the sweep cannot rewrite, a plan over its ceiling, a deletion
+    already waiting on somebody — because a stored proposal is a question a steward has to answer,
+    and a question whose answer cannot be carried out is worse than a refusal here.
+    """
+    settings = _settings(args)
+    why = one_line(str(args.why or ""), proposer.MAX_RATIONALE_CHARS)
+    if not why:
+        raise RepairError(
+            "a deletion needs a reason: `--why \"<what makes this page stale>\"`. It is what a "
+            "steward reads beside Approve, and what `git log` will carry afterwards")
+
+    ops = deletion.plan(settings.repo, list(args.paths))
+    oversize = deletion.oversize_reason(ops, settings.max_delete_plan_bytes)
+    if oversize:
+        raise RepairError(oversize)
+    key = schema.content_key(ops, kind=schema.KIND_DELETE)
+    waiting = next((row for row in store.pending_proposals(conn) if row["content_key"] == key),
+                   None)
+    if waiting is not None:
+        raise RepairError(
+            f"this exact deletion is already waiting on a steward as proposal #{waiting['id']} — "
+            f"decide that one rather than adding a second question about the same pages")
+
+    proposal_id = store.insert_proposal(
+        conn, run_id=0, finding_ids=[], target_paths=schema.target_paths(ops), ops=ops,
+        rationale=why, content_key=key, kind=schema.KIND_DELETE,
+        # Empty on purpose, and the only kind for which it can be: no model proposed this, and
+        # stamping one here would attribute a person's judgment to a model that was never asked.
+        model_id="",
+        # The deleted pages ARE the question, so they are what a later run recognises as already
+        # asked. The scrubbed pages are a consequence and move with the corpus.
+        finding_subjects=[deletion.deleted_paths(ops)])
+    if args.json:
+        print(json.dumps({"proposal_id": proposal_id, "deleted": deletion.deleted_paths(ops),
+                          "scrubbed": deletion.scrubbed_paths(ops)}, **_DUMP))
+        return 0
+    _print_plan(ops)
+    print(f"\nstored as proposal #{proposal_id}, waiting on a steward — nothing has changed in "
+          f"the knowledge repo.")
+    print(f"  stigmergy-repair show {proposal_id}   read it back")
+    return 0
+
+
+def _print_plan(ops) -> None:
+    """The sweep in plain English, for the person who just typed the command."""
+    removed, scrubbed = deletion.deleted_paths(ops), deletion.scrubbed_paths(ops)
+    print(f"this would remove {len(removed)} page(s):")
+    for path in removed:
+        print(f"  {sanitize(path)}")
+    if not scrubbed:
+        print("nothing in the corpus refers to them, so no other page changes.")
+        return
+    print(f"and rewrite {len(scrubbed)} page(s) that refer to them, taking out the links and "
+          f"leaving the rest of each page alone:")
+    for path in scrubbed:
+        print(f"  {sanitize(path)}")
+
+
 # ── list ──────────────────────────────────────────────────────────────────────────────────────
 def _cmd_list(conn, args) -> int:
     pending = store.pending_proposals(conn)
@@ -141,12 +211,15 @@ def preview(row: dict) -> list[str]:
     network. A steward reading this is deciding whether to authorize it, so it is rendered from
     exactly the stored fact the apply will act on, never from a re-derivation that could differ.
 
-    Two shapes, because there are two kinds. The additive ops are additive by construction, so
+    Three shapes, because there are three kinds. The additive ops are additive by construction, so
     every line is a `+`: `backlink` adds one `related:` entry, and a callout kind adds that entry
     AND the callout block `page.with_callout` appends. An `entity-body` op REPLACES the body below
     the page's own `# Title`, so its preview says so with a `-` line and then shows the draft in
     full — for that kind the draft IS what a steward is judging, and a preview that summarised it
-    would be hiding the only thing worth reading.
+    would be hiding the only thing worth reading. A `delete` op's two shapes both say what STOPS
+    being true, and the scrub deliberately does NOT show its planned bytes: they are the apply's
+    contract with itself, not the thing a steward is judging, and a whole page per scrubbed page
+    would bury the one line that matters — which pages cease to exist.
     """
     lines: list[str] = []
     for op in row.get("ops") or ():
@@ -159,12 +232,23 @@ def preview(row: dict) -> list[str]:
         if kind == schema.KIND_ENTITY_BODY:
             lines += _body_preview(op)
             continue
+        if kind in _DELETE_PHRASES:
+            lines.append(f"-   {_DELETE_PHRASES[kind]}")
+            continue
         lines.append(f"+   related: [[{link}]]")
         if kind in _CALLOUT_PHRASES:
             callout, phrase = _CALLOUT_PHRASES[kind]
             lines.append(f"+   > [!{callout}] {phrase} [[{link}]]")
             lines.append(f"+   > {' '.join(str(note).split())}")
     return lines
+
+
+# What each of the `delete` kind's two ops does to one page, in the words a steward needs. Both are
+# `-` lines: one page stops existing, and the other stops saying something it used to say.
+_DELETE_PHRASES = {
+    deletion.OP_DELETE: "(the whole page is removed)",
+    deletion.OP_SCRUB: "(every link to the removed page(s) taken out; nothing else changes here)",
+}
 
 
 def _body_preview(op: dict) -> list[str]:
@@ -223,6 +307,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_show = sub.add_parser("show", help="one proposal, and what it would change")
     p_show.add_argument("id", type=int)
     p_show.set_defaults(fn=_cmd_show)
+
+    p_delete = sub.add_parser(
+        "delete",
+        help="propose removing one or more corpus pages, with every reference to them swept out")
+    p_delete.add_argument("paths", nargs="+",
+                          help="repo-relative page paths, e.g. 'wiki/notes/Old Memo.md'")
+    p_delete.add_argument("--why", required=True,
+                          help="why these pages should go — a steward reads it beside Approve, and "
+                               "the commit carries it afterwards")
+    p_delete.set_defaults(fn=_cmd_delete)
     return ap
 
 

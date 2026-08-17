@@ -33,9 +33,16 @@ JOB_NAME = "repair-propose"
 # The string doubles as the OP name inside such a proposal's single op, deliberately: one
 # vocabulary word for one shape means `ops_preview.kinds` in the review lane names the thing a
 # steward is being asked about without a second lookup table.
+#
+# `delete` is the ONE kind that breaks that doubling, and deliberately: one approval performs two
+# different actions — pages removed, pages rewritten to stop pointing at them — so its ops carry
+# `delete-page`/`scrub-page` (`repair.deletion.OP_NAMES`) and `ops_preview.kinds` tells a steward
+# which is which. A single word there would hide the half of the blast radius that is not the
+# pages they named (ADR 039, "delete: the third kind").
 KIND_EDITS = "edits"
 KIND_ENTITY_BODY = "entity-body"
-KINDS = (KIND_EDITS, KIND_ENTITY_BODY)
+KIND_DELETE = "delete"
+KINDS = (KIND_EDITS, KIND_ENTITY_BODY, KIND_DELETE)
 
 # ── status — the lifecycle. `failed` is terminal for the ROW, never for the finding: a steward
 # may propose again, and the `error` column says what went wrong. An approved proposal whose
@@ -172,6 +179,16 @@ OP_KIND_KEY = "op"
 # steward an empty cell where the draft should have been.
 EDIT_OP_FIELDS = (OP_KIND_KEY, "path", "link", "note")
 ENTITY_BODY_OP_FIELDS = (OP_KIND_KEY, "path", "body_markdown", "role")
+# The `delete` kind's two op names and two shapes. A removal names only the page; a scrub carries
+# the bytes it was computed FROM (so "the corpus moved" is a fact rather than a guess) and the bytes
+# it would write (so the apply's recomputation has something to byte-compare against).
+#
+# The NAMES live here rather than in `repair.deletion` because `content_key` below has to tell one
+# from the other, and this module is the bottom of this package: it imports nothing of its own.
+DELETE_OP_NAME = "delete-page"
+SCRUB_OP_NAME = "scrub-page"
+DELETE_OP_FIELDS = (OP_KIND_KEY, "path")
+SCRUB_OP_FIELDS = (OP_KIND_KEY, "path", "expected_before_hash", "planned_after")
 
 
 def declared_edits(ops) -> list[dict]:
@@ -196,11 +213,19 @@ def content_key(ops, *, kind: str = KIND_EDITS) -> str:
     question asked twice, and a steward who declined it once should not meet a rephrasing of it
     tomorrow.
 
-    The same exclusion does the same work for the other kind, and it matters more there: an
+    The same exclusion does the same work for the other kinds, and it matters more there: an
     `entity-body` op has no `link`, so its key is `kind + path` and the DRAFTED BODY is not part of
     it. **A re-drafted body is the same question** — a steward who read a draft for a page and
     decided it needs writing by a person is not asked again tomorrow with the prose rearranged.
+
+    `delete` needs one step more than an exclusion, and it is the only kind that does: its key is
+    built from the DELETIONS alone. The scrubs are a fact about the rest of the corpus rather than
+    about the question — a page that gained a link to the doomed page overnight changes the plan
+    and changes nothing a steward was asked — so keying on them would re-ask a declined deletion
+    every time somebody linked to it.
     """
+    keyed = [o for o in (ops or ())
+             if kind != KIND_DELETE or str(o.get(OP_KIND_KEY, "")) == DELETE_OP_NAME]
     body = "|".join(sorted(f"{o.get(OP_KIND_KEY, '')}:{o.get('path', '')}:{o.get('link', '')}"
-                           for o in (ops or ())))
+                           for o in keyed))
     return hashlib.sha256(f"{kind}|{body}".encode()).hexdigest()

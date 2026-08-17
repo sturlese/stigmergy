@@ -248,6 +248,20 @@ def propose_entity_body(conn, *, path="wiki/entities/Meridian Partners.md",
         model_id="fake")
 
 
+def propose_delete(conn, *, doomed="wiki/notes/Old Memo.md",
+                   scrubbed="wiki/decisions/Refunds.md",
+                   rationale="the memo was superseded") -> int:
+    """One PENDING `delete` row — the third kind, whose ops carry whole PAGES. Derived through the
+    same writers for the same reason as its two siblings above."""
+    ops = [{"op": repair_schema.DELETE_OP_NAME, "path": doomed},
+           {"op": repair_schema.SCRUB_OP_NAME, "path": scrubbed, "expected_before_hash": "0" * 64,
+            "planned_after": "---\ntype: decision\n---\n\n# Refunds\n\nNo link any more.\n"}]
+    return repair_store.insert_proposal(
+        conn, run_id=0, finding_ids=[], target_paths=repair_schema.target_paths(ops), ops=ops,
+        rationale=rationale, kind=repair_schema.KIND_DELETE,
+        content_key=repair_schema.content_key(ops, kind=repair_schema.KIND_DELETE), model_id="")
+
+
 @pytest.fixture()
 def entity_mint_repo(tmp_path) -> str:
     """The bare remote path — see `build_bare_knowledge_repo`. Fresh per test."""

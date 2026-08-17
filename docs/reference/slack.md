@@ -242,8 +242,9 @@ parks on a human — a capture in `triage` or a new entity proposal. It never cl
 mutates a queue row: every read goes through
 `stigmergy.server.review.items_for_doorbell`, the management-shaped, unscoped sibling of
 `review_queue` documented in [server.md](./server.md#the-review-tools).
-What rings the bell is exactly the two kinds `stigmergy.review_kinds.ITEM_KINDS` carries:
-`parked-capture` and `entity-proposal`.
+What rings the bell is two of the three kinds `stigmergy.review_kinds.ITEM_KINDS` carries —
+`parked-capture` and `entity-proposal`; `repair-proposal` is deliberately silent (ADR-039's
+no-ring decision: repairs are bounded, non-urgent, and reviewed from the queue).
 
 Five properties, each enforced structurally rather than left to discipline:
 

@@ -3,8 +3,10 @@
 - **Status**: accepted
 - **Date**: 2026-08-17
 - **Closes**: issues #39 (findings accumulate with no way to close one, and no memory of having
-  declined) and #40 (the gardener detects and nothing acts); the amendment at the foot of this
-  document closes #36 (an entity page is minted with a body nothing ever writes)
+  declined) and #40 (the gardener detects and nothing acts); the first amendment at the foot of
+  this document closes #36 (an entity page is minted with a body nothing ever writes) and the
+  second closes #38 (nothing in this system can remove a page, so the only way to is by hand,
+  outside every gate)
 - **Related**: [ADR 024](./024-gardener-digest.md) (the gardener, which produces the findings this
   loop answers and still fixes nothing), [ADR 015](./015-librarian.md) (the write path this reuses
   whole: declared-not-performed edits, the eight gates, the App as committer),
@@ -336,3 +338,142 @@ entity.
   way to reach one.
 - **No body for `sources/`, `views/`, or any other zone.** The lane is narrowed to
   `wiki/entities/` for this kind's apply, and the permission names one page inside it.
+
+## Amendment — `delete`: the third kind (2026-08-17, closes #38)
+
+The decisions above stand as written; this section records what the repair loop grew, and the one
+place where the covenant's first clause had to be stated more precisely than "a model proposes".
+
+**The problem it answers.** Nothing in this system can remove a page. `gate_zone`'s oldest veto —
+*"deleted {path}: the librarian never deletes a file"* — is right about the librarian and wrong as
+a property of the whole system, because a corpus with no way to remove anything accumulates
+superseded memos, duplicate filings of the same document and pages whose subject no longer exists.
+The only alternative available until now was a human editing the knowledge repo by hand, outside
+every gate this system has: no steward check, no secrets scan, no contract lint, no record of who
+decided it — the one change with the largest blast radius, made in the one way with the least
+governance.
+
+### B1 — supersession and deletion are different questions, and this answers only the second
+
+D8's `supersedes:`/`superseded_by:` fields already answer "this page has been overtaken": the old
+page STAYS, demoted in search and reachable from the new one, because knowing what was believed in
+March is often the point. That is history, and history is not deletion's business.
+
+What this kind is for is the page that should never have been a page: a memo filed twice, a
+document captured under two names, a note whose subject was a mistake. The test is not "is it
+current" — supersession answers that — but "does the corpus lose anything if this is gone". A page
+that has been superseded is not a candidate for deletion by virtue of having been superseded, and
+nothing here proposes one.
+
+**Entity pages are refused structurally, not by rule.** `wiki/entities/` is absent from the
+deletable set because an entity page has no folder in `page.FOLDER_BY_TYPE` and therefore is not in
+`gates.ALLOWED_WRITE_PREFIXES`, which the deletable set extends. An identity is retired through
+governance (ADR 016): the pages anchored to a deleted entity would lose the thing they are about,
+and a sweep that unlinked them would quietly rewrite somebody's understanding of the corpus. So
+does `ops/`, `.claude/` and everything else outside the three content zones — the deletable set is
+a whitelist, so a zone added tomorrow is undeletable by default.
+
+### B2 — the deterministic duplicate road is the ONE exception to "a model proposes"
+
+Two `sources/` pages declaring the same `content_hash:` are the same captured document filed twice.
+Which one goes is not judgment — it is a lookup: the copy the corpus cites survives (deleting it
+would scrub the citation off every page that made it), on a tie the older filing survives (the
+later one is the accident), and on a tie in both the lexicographically first path survives so the
+answer cannot depend on the order a directory was walked in. All three rules are total and
+deterministic, so **the decision belongs to code**, and asking a model would be asking it to
+re-derive a fact the frontmatter already states — sometimes wrongly.
+
+Every OTHER deletion is typed by a person at `stigmergy-repair delete <path>... --why`. Judging
+that a page is stale is exactly the judgment that is neither code's nor a model's, and the model
+road is closed to it structurally: `validate_batch` drops an op naming a deletion in any spelling,
+by name, with a sentence saying the road does not exist rather than the generic "not one of the
+three kinds" — which reads as a spelling mistake and would send the one corrective retry hunting
+for the right word.
+
+Creation stays CLI-only in v1. The console and the review lane approve and reject a deletion
+exactly as they do every other repair; what they do not have is a "propose a deletion" button,
+because the CLI already reaches everybody who has a checkout and a button is a surface with its own
+authorization question.
+
+### B3 — the unit of approval is a SWEEP, not a file
+
+Removing the file is the trivial part. What is not trivial is that the corpus afterwards still has
+to be a graph: the knowledge repo's contract linter treats an unresolvable `[[wikilink]]` as an
+ERROR, and `gate_contract` turns that into a veto. So a deletion proposal stores a PLAN — the pages
+that go, and the **full planned bytes** of every page that mentions one of them, with its
+`related:`/`sources:` entries dropped, its body wikilinks unlinked to the text they carried, and
+its `supersedes:`/`superseded_by:` pointers removed.
+
+`target_paths` therefore carries the FULL touched set, deleted and scrubbed alike, which is what
+makes the review lane's existing per-path steward guard cover the whole blast radius: the steward
+of the page being removed is not automatically the steward of every page the sweep would rewrite,
+and that rewrite is a real change to somebody else's zone made in their absence.
+
+The sweep unlinks rather than deletes: `[[X]]` becomes `X` and `[[X|alias]]` becomes `alias`, so
+the sentence that cited a page survives the page. That is the whole difference between a sweep and
+a shredder. And the link question is asked EXACTLY as the frozen contract linter asks it — code
+fences and inline code blanked first, alias and anchor split off, `Path(target).stem` — because a
+scanner that sees more links than the linter edits prose nobody asked about, and one that sees
+fewer leaves a dead link and a veto at apply time.
+
+### B4 — the plan is RECOMPUTED at apply time and refused unless it is identical
+
+`entity-body` can re-run its validator against the fresh clone and know the draft still applies. A
+sweep cannot, because what it would write depends on every OTHER page in the corpus: a page that
+gained a link to the doomed page after the proposal was made is a DIFFERENT sweep, and performing
+the approved one would leave exactly the dead link this kind exists to prevent.
+
+So the apply derives the plan again from the clone's own bytes and refuses unless it is identical
+to the stored one, op for op and byte for byte. The corpus moved — propose again. That single rule
+is also what makes the stored `planned_after` bytes safe to hold at all: they are the only column
+in this system that carries whole page CONTENT into an apply, so a row edited between Approve and
+apply could otherwise write a sentence nobody proposed into somebody's page, additively, past every
+one of the eight gates.
+
+### B5 — byte-equality REPLACES the additive proof, and is stronger than it
+
+`gate_body_rewrite` proves an edit additive: nothing that was there disappeared. A scrub answers
+that "yes, deliberately" by construction, so for the pages a sweep rewrites the apply tells the
+gates `expected_bytes` — `{path: the whole file it planned}` — and the gate proves the file on disk
+IS those bytes. **That is a stronger statement than the additive proof, not a softer one**:
+additive says "nothing disappeared", byte-equality says "this is precisely the file that was
+approved, to the byte", and it is the only proof available when disappearing is the point.
+
+`gate_zone` gains the sibling exception, `deletions_allowed`, a set of PATHS rather than a flag for
+the reason `body_rewrite_allowed` is one: a flag would say "this run may delete", and the approval
+a steward gave was for named pages. A sweep is also the first thing in this system that MODIFIES a
+`sources/` or `views/` page, so it declares those as `provenance_pages` — the field the librarian's
+own source-attachment flow already sets, making exactly the same claim: `content_hash`, `tier` and
+`extracted_at` on those pages are the librarian's own stamps from when it filed them, and a scrub
+only ever removes. Every one of them is empty by default; the two new ones are told only by
+`repair/remote.py` and `provenance_pages` by that module and the librarian's own filing flow, and
+`tests/test_architecture.py` pins the granting surface of each — plus a
+classification check over every keyword any module passes to a `GateContext`, so a further exception
+cannot arrive looking like the seventeen ordinary ones beside it. The librarian's own flows tell
+neither, which is why *"the librarian never deletes a file"* is still literally true.
+
+The one gate that could not be reused as it stands is `gate_contract`. It filters the linter's
+findings to the pages a diff TOUCHED — right for every other kind, and blind for this one, because
+a deletion's blast radius is the whole graph and a page the sweep never planned is exactly where a
+missed reference would sit. So the delete apply pays for a second scan of the same clone and asks
+the unfiltered report one question: does anything still link to a page this sweep removed? Scoped
+to those stems rather than vetoing on any error, deliberately — a corpus that already carries an
+unrelated contract error is not this steward's problem, and refusing their deletion for it would be
+a gate bouncing work they cannot fix from there.
+
+### B6 — what is deliberately NOT here
+
+- **No new write path.** The sweep lands through the same clone, the same eight gates, the same
+  cross-check and the same `gitcmd.commit(gated_entries=…)` as every other repair. The kind
+  branches at exactly three points — which applier performs the ops, which caller-scoped facts the
+  gates are told, and what shape the cross-check expects of the diff — plus the one extra lint.
+- **No deletion a model can reach.** Not "does not today": `validate_batch` refuses it by name in
+  every spelling, so a compromised skill or a confused model reaches nothing.
+- **No entity page, no `ops/`, no `.claude/`, no page outside the three content zones.** A
+  whitelist, so tomorrow's zone is undeletable until somebody decides otherwise.
+- **No partial sweep.** A reference the sweep cannot rewrite — a `[[wikilink]]` in a frontmatter
+  field this kind does not know, for instance — refuses the whole plan at propose time rather than
+  becoming a question whose answer a gate would later veto.
+- **No in-corpus deletion log.** What was removed lives in the commit message, the governance
+  ledger row and `git log`, exactly where ADR 037's D2 put the same question: a page recording what
+  used to be a page is a page, and it would be indexed, retrieved and cited.

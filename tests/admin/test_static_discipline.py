@@ -580,3 +580,30 @@ def test_the_repair_detail_no_longer_promises_that_nothing_is_ever_rewritten():
     assert "Nothing is rewritten or deleted." not in js, (
         "the repairs detail still claims nothing is ever rewritten — true of the additive kinds "
         "and false of `entity-body`; say it per kind or not at all")
+
+
+def test_the_repair_detail_renders_a_deletion_as_the_pages_that_would_go():
+    """A `delete` proposal's ops are two DIFFERENT shapes — a page removed and a page rewritten —
+    and the additive table would render both as edits with an empty "links to" column. The one
+    consequence no other kind has is that a page STOPS EXISTING, and it has to be legible as that
+    before anybody presses Approve."""
+    js = REPAIRS_VIEW.read_text(encoding="utf-8")
+    assert "deletionPlan" in js, (
+        "the console's repair detail has no renderer for a deletion — the third kind would be "
+        "shown as a table of additive edits with two empty columns")
+    assert "KIND_DELETE" in js
+
+
+def test_the_additive_summary_still_says_nothing_is_deleted_only_for_the_additive_kinds():
+    """The same defect as the `entity-body` sentence, one kind later: the per-kind consequence
+    line is the last thing a steward reads before Approve, and a deletion falling through to the
+    additive branch would tell them nothing is deleted while deleting a page."""
+    js = REPAIRS_VIEW.read_text(encoding="utf-8")
+    start = js.index("function changeSummary")
+    summary = js[start:js.index("\n}\n", start)]
+    assert "KIND_DELETE" in summary, (
+        "`changeSummary` does not branch on the delete kind, so a deletion is described by "
+        "whichever sentence happens to be the fallback")
+    assert summary.index("KIND_DELETE") < summary.index("Nothing is rewritten or deleted here"), (
+        "the additive sentence is reached before the delete branch, so a deletion would be "
+        "described as a change that deletes nothing")

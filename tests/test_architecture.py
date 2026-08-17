@@ -2731,10 +2731,11 @@ def test_the_repair_op_vocabulary_is_exactly_the_librarians_edit_kinds():
     new gate question, not a bigger tuple — the pin is here rather than in the package's own suite
     because it is a CROSS-package promise.
 
-    The repair loop's second proposal kind (`entity-body`, ADR 039's amendment) does not widen this
-    tuple and must not: it is a different kind with its own validator, its own writer and its own
-    branch in `gate_body_rewrite`, precisely because it could not be judged by the proof these
-    three are admitted under."""
+    Neither of the repair loop's other two proposal kinds widens this tuple, and neither may:
+    `entity-body` (ADR 039's first amendment) REPLACES prose and `delete` (its second) removes
+    pages, and each has its own validator, its own writer and its own branch in the gates precisely
+    because it could not be judged by the proof these three are admitted under. The KINDS set is
+    pinned too, so a fourth is a decision somebody states here rather than a tuple that grew."""
     from stigmergy.librarian import edits as _edits
     from stigmergy.librarian import page as _page
     from stigmergy.repair import schema as _repair_schema
@@ -2742,8 +2743,10 @@ def test_the_repair_op_vocabulary_is_exactly_the_librarians_edit_kinds():
     assert _edits.EDIT_KINDS == _page.EDIT_KINDS
     assert set(_edits.EDIT_KINDS) == {"backlink", "overlap", "contradiction"}
     assert _repair_schema.KIND_ENTITY_BODY not in _edits.EDIT_KINDS
+    assert _repair_schema.KIND_DELETE not in _edits.EDIT_KINDS
     assert set(_repair_schema.KINDS) == {_repair_schema.KIND_EDITS,
-                                         _repair_schema.KIND_ENTITY_BODY}
+                                         _repair_schema.KIND_ENTITY_BODY,
+                                         _repair_schema.KIND_DELETE}
 
 
 def test_the_repair_preview_renders_every_callout_kind_the_applier_performs():
@@ -3230,62 +3233,155 @@ def test_the_repair_apply_caller_pin_can_go_red_in_both_directions(tmp_path):
     assert observed() == ["handlers.py", "review.py"]                 # a stale grant
 
 
-# ── ADR 039 amendment: who may tell the gates to permit a body rewrite ─────────────────────────
-# `GateContext.body_rewrite_allowed` is the ONE exception to `gate_body_rewrite`'s additive proof,
-# and it is a TOLD fact. The set of modules that tell it is therefore the set of ways a page's prose
-# can be replaced in this system, and it must be readable in one place.
+# ── ADR 039's amendments: who may tell the gates to suspend one of their proofs ────────────────
+# THREE `GateContext` fields are exceptions the caller declares, and each one is the whole of how a
+# thing that is otherwise impossible becomes possible in this system:
 #
-# A dedicated predicate rather than `_names_symbol`: granting the permission is passing a KEYWORD
-# ARGUMENT, and an `ast.keyword`'s name is a plain string on the Call node, not a `Name` the shared
-# walker sees. Reading the field (`ctx.body_rewrite_allowed`, inside the gate itself) is not
-# granting it, and this predicate deliberately does not count it.
-_BODY_REWRITE_PERMISSION = "body_rewrite_allowed"
-# `repair/remote.py` builds the GateContext for an approved `entity-body` apply and names the ONE
-# path that proposal was approved for. Nothing in the librarian's own flows is here, and that is the
-# claim: a capture never permits a rewrite, so the additive proof it has always faced is the one it
-# still faces.
-_BODY_REWRITE_PERMISSION_GRANTERS = ("repair/remote.py",)
+#   · `body_rewrite_allowed` — a page's existing prose may be replaced;
+#   · `deletions_allowed`    — a file may be removed at all, which `gate_zone`'s oldest veto exists
+#                              to make impossible;
+#   · `expected_bytes`       — a modification is judged by byte-equality against a caller's plan
+#                              instead of by the additive proof;
+#   · `provenance_pages`     — a page may carry `content_hash`/`tier`/`extracted_at`, which
+#                              `gate_frontmatter` otherwise refuses outright.
+#
+# The set of modules that TELL each one is therefore the set of ways that thing can happen, and it
+# has to be readable in one place. A dedicated predicate rather than `_names_symbol`: granting is
+# passing a KEYWORD ARGUMENT, and an `ast.keyword`'s name is a plain string on the Call node, not a
+# `Name` the shared walker sees. READING a field (`ctx.deletions_allowed`, inside the gate itself)
+# is not granting it, and the predicate deliberately does not count it.
+#
+# `repair/remote.py` builds the GateContext for an approved repair and names exactly what that one
+# proposal covers. Nothing in the librarian's own flows is here, for any of the three, and that is
+# the claim: a capture permits nothing, so "the librarian never deletes a file" and the additive
+# proof it has always faced are both still literally true.
+_TOLD_PERMISSIONS = {
+    "body_rewrite_allowed": ("repair/remote.py",),
+    "deletions_allowed": ("repair/remote.py",),
+    "expected_bytes": ("repair/remote.py",),
+    # The one with two granters, and both are the same claim: these fields were stamped by the
+    # librarian when it FILED the page. `processing.py` says so for the source pages one capture
+    # just wrote; `repair/remote.py` says so for the machine-zone pages a sweep rewrites, which is
+    # the first thing in this system that modifies one at all.
+    "provenance_pages": ("librarian/processing.py", "repair/remote.py"),
+}
 
 
-def _grants_body_rewrite(path: pathlib.Path) -> bool:
+def _grants_keyword(path: pathlib.Path, keyword: str) -> bool:
+    """Does this module GRANT `keyword` — as a keyword argument, or by assigning the attribute on
+    a context it already holds?
+
+    Both, because both happen: `repair/remote.py` passes these to the `GateContext` constructor,
+    and `librarian/processing.py` sets `ctx.provenance_pages` on an object it built earlier. A
+    predicate that saw only the constructor would call the second one a non-granter and pin an
+    empty set for it — which is the shape of hole that makes an allowlist read as coverage.
+    READING the attribute is still not granting it, and that is what the twin below proves.
+    """
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    return any(isinstance(node, ast.keyword) and node.arg == _BODY_REWRITE_PERMISSION
-               for node in ast.walk(tree))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.keyword) and node.arg == keyword:
+            return True
+        targets = (node.targets if isinstance(node, ast.Assign)
+                   else [node.target] if isinstance(node, (ast.AugAssign, ast.AnnAssign)) else [])
+        if any(isinstance(t, ast.Attribute) and t.attr == keyword for t in targets):
+            return True
+    return False
 
 
-def test_only_the_declared_surfaces_may_permit_a_body_rewrite():
+@pytest.mark.parametrize("permission, granters", sorted(_TOLD_PERMISSIONS.items()))
+def test_only_the_declared_surfaces_may_suspend_a_gate_proof(permission, granters):
     """Set EQUALITY, both directions, this file's house rule.
 
-    A NEW entry is a second road by which a page's existing prose can be replaced — the property
-    `gate_body_rewrite` exists to hold, and the one whose absence let a model rewrite a human's
-    page twice before `edits.py` was split out. A MISSING entry means the repair apply stopped
-    telling the gate which path it approved, which does not fail open (the gate would veto the
-    rewrite as `body-rewrite`) but does mean the kind is dead — worth knowing either way.
+    A NEW entry is a second road by which a page's prose can be replaced, a file removed, or a
+    modification judged against somebody's stored plan instead of the additive proof — and the
+    absence of the first of those is what let a model rewrite a human's page twice, before
+    `edits.py` was split out. A MISSING entry means the repair apply stopped telling the gate what
+    its approval covered, which does not fail open (the gate vetoes instead) but does mean that
+    kind is dead — worth knowing either way.
     """
-    granters = sorted(_rel(p) for p in ALL_STIGMERGY_SOURCES if _grants_body_rewrite(p))
-    assert granters == sorted(_BODY_REWRITE_PERMISSION_GRANTERS), (
-        f"{_BODY_REWRITE_PERMISSION} is granted by {granters}, not by "
-        f"{sorted(_BODY_REWRITE_PERMISSION_GRANTERS)}. Permission to replace a page's prose is a "
-        "decision with an ADR behind it (039), not a keyword argument a new flow may pass")
+    found = sorted(_rel(p) for p in ALL_STIGMERGY_SOURCES if _grants_keyword(p, permission))
+    assert found == sorted(granters), (
+        f"{permission} is granted by {found}, not by {sorted(granters)}. Permission to suspend one "
+        "of the gates' proofs is a decision with an ADR behind it (039), not a keyword argument a "
+        "new flow may pass")
 
 
-def test_the_body_rewrite_permission_pin_can_go_red(tmp_path):
-    """**Proves the pin above can go red**, and that it tells granting from reading: a module that
-    only READS `ctx.body_rewrite_allowed` — which is what the gate itself does — must not be
-    counted as a grant, or the pin would name `librarian/gates.py` forever and stop meaning
-    anything."""
+@pytest.mark.parametrize("permission", sorted(_TOLD_PERMISSIONS))
+def test_the_told_permission_pins_can_go_red(tmp_path, permission):
+    """**Proves the pins above can go red**, and that they tell granting from reading: a module
+    that only READS the field — which is what the gate itself does — must not be counted as a
+    grant, or a pin would name `librarian/gates.py` forever and stop meaning anything."""
     grants = tmp_path / "grants.py"
-    grants.write_text("def build(ctx_cls, path):\n"
-                      "    return ctx_cls(worktree='', body_rewrite_allowed=frozenset({path}))\n",
-                      encoding="utf-8")
+    grants.write_text(f"def build(ctx_cls, value):\n"
+                      f"    return ctx_cls(worktree='', {permission}=value)\n", encoding="utf-8")
+    grants_later = tmp_path / "grants_later.py"
+    grants_later.write_text(f"def build(ctx, value):\n"
+                            f"    ctx.{permission} = value\n"
+                            f"    return ctx\n", encoding="utf-8")
     reads_only = tmp_path / "reads.py"
-    reads_only.write_text("def gate(ctx):\n"
-                          "    return [p for p in ctx.body_rewrite_allowed]\n", encoding="utf-8")
+    reads_only.write_text(f"def gate(ctx):\n"
+                          f"    return [p for p in ctx.{permission}]\n", encoding="utf-8")
 
-    assert _grants_body_rewrite(grants)
-    assert not _grants_body_rewrite(reads_only), (
+    assert _grants_keyword(grants, permission)
+    assert _grants_keyword(grants_later, permission), (
+        "a module that sets the attribute AFTER building the context grants it just as much — "
+        "`librarian/processing.py` does exactly that for one of these fields")
+    assert not _grants_keyword(reads_only, permission), (
         "reading the field is not granting it — a predicate that conflated the two would pin the "
         "gate module itself and never see a real second granter")
+
+
+# Every OTHER keyword this system passes when it builds a `GateContext`: the evidence a gate reads
+# (`entries`, `added`, the linter and scanner paths) and the facts that NARROW what a caller may do
+# (`write_prefixes`, `creatable_types`, `edits_allowed`). None of them suspends a proof, which is
+# what makes the classification below meaningful rather than a second copy of the field list.
+_GATE_CONTEXT_DATA_KEYWORDS = frozenset({
+    "worktree", "entries", "added", "material", "outcome", "registry", "linter_path",
+    "gitleaks_bin", "subprocess_timeout_s", "stamped", "findings", "write_prefixes",
+    "creatable_types", "extra_folder_types", "page_declared", "stamped_by_path", "edits_allowed",
+})
+
+
+def _gate_context_keywords() -> set[str]:
+    """Every keyword argument any module in this system passes to `GateContext(...)`."""
+    out: set[str] = set()
+    for path in ALL_STIGMERGY_SOURCES:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = (func.attr if isinstance(func, ast.Attribute)
+                    else func.id if isinstance(func, ast.Name) else "")
+            if name == "GateContext":
+                out |= {kw.arg for kw in node.keywords if kw.arg}
+    return out
+
+
+def test_every_gate_context_keyword_is_either_evidence_or_a_pinned_permission():
+    """The pruning half, and the direction that actually goes wrong: a FOURTH caller-declared
+    exception passed to the gates with no entry above would be a way to suspend a proof that
+    nothing in this file watches — and it would arrive looking exactly like the other seventeen
+    keywords at the same call site. Derived from the CALL SITES, so the question is asked of the
+    code rather than of somebody's memory."""
+    used = _gate_context_keywords()
+    assert "entries" in used, "no GateContext construction found — this check has gone blind"
+    unclassified = sorted(used - _GATE_CONTEXT_DATA_KEYWORDS - set(_TOLD_PERMISSIONS))
+    assert not unclassified, (
+        f"these GateContext keywords are neither declared evidence nor pinned permissions: "
+        f"{unclassified}. If one suspends a gate's proof it belongs in _TOLD_PERMISSIONS with the "
+        f"surfaces that may set it; if it does not, say so in _GATE_CONTEXT_DATA_KEYWORDS")
+
+
+def test_the_gate_context_keyword_classification_names_only_real_fields():
+    """An entry naming a field that no longer exists is a licence left lying around for a future
+    field of the same name — this file's rule for every allowlist it holds."""
+    import dataclasses
+
+    from stigmergy.librarian import gates as _gates
+
+    declared = {f.name for f in dataclasses.fields(_gates.GateContext)}
+    stale = sorted((_GATE_CONTEXT_DATA_KEYWORDS | set(_TOLD_PERMISSIONS)) - declared)
+    assert not stale, f"these classified keywords are not GateContext fields any more: {stale}"
 
 
 def test_the_repair_apply_primitive_pin_tells_defining_it_from_calling_it(tmp_path):

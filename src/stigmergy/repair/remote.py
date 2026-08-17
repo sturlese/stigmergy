@@ -38,12 +38,13 @@ actionable content of a veto.
 import logging
 import os
 import tempfile
+from dataclasses import dataclass, field
 
 from stigmergy.kernel import registry as registry_module
 from stigmergy.librarian import config as librarian_config
 from stigmergy.librarian import edits, gates, gitcmd, githubapp
 from stigmergy.librarian.errors import LibrarianError
-from stigmergy.repair import entity_body, schema, store
+from stigmergy.repair import deletion, entity_body, schema, store
 from stigmergy.repair.errors import ProposalStateError, RepairError
 
 log = logging.getLogger(__name__)
@@ -157,11 +158,12 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
             "was pushed — the corpus already carries the answer the finding asked for")
 
     entries = gitcmd.diff_entries(clone)
-    _cross_check(entries, proposal)
+    _cross_check(entries, proposal, kind=kind, ops=ops)
 
     gitleaks_bin = os.environ.get(GITLEAKS_BIN_ENV) or librarian_config.Settings.gitleaks_bin
     gates.ensure_scanner(gitleaks_bin)
-    lane, permitted = _lane_and_permission(kind, ops)
+    told = _lane_and_permission(kind, ops)
+    linter_path = os.path.join(clone, *librarian_config.LINTER_RELPATH.split("/"))
     ctx = gates.GateContext(
         worktree=clone, entries=entries, added=gitcmd.added_lines(clone),
         # No material and no outcome: nothing was captured and no agent wrote here — the ops came
@@ -172,24 +174,29 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
             os.path.join(clone, *librarian_config.REGISTRY_RELPATH.split("/"))),
         # The clone IS the base commit, so its own checked-out linter is the one that governs —
         # no materialization from git needed, unlike the worker's detached worktrees.
-        linter_path=os.path.join(clone, *librarian_config.LINTER_RELPATH.split("/")),
+        linter_path=linter_path,
         gitleaks_bin=gitleaks_bin,
         # TOLD, not inferred by the gates: this apply runs inside an HTTP request, unlike the
         # worker's. A `LibrarianConfigError` out of an elapsed budget meets the `except
         # LibrarianError` seam above and the row lands `failed` with a sentence, not a hung thread.
         subprocess_timeout_s=REPAIR_SUBPROCESS_TIMEOUT_S,
-        # The other two TOLD facts, and the only place in this system that grants either: which
-        # zone THIS apply owns, and which single page its approval covers. Both are derived from
-        # the ops that were just performed, never from `target_paths` — the two are cross-checked
-        # against each other a few lines above, so deriving the permission from the same fact the
-        # cross-check judges would make one stored column able to widen the other.
-        write_prefixes=lane, body_rewrite_allowed=permitted)
+        # The four TOLD facts, and the only place in this system that grants any of them: which
+        # zones THIS apply owns, which single page's prose its approval covers, which paths it may
+        # remove, and — for the pages a sweep rewrites — the exact bytes it planned. Every one is
+        # derived from the ops that were just performed, never from `target_paths` — the two are
+        # cross-checked against each other a few lines above, so deriving a permission from the
+        # same fact the cross-check judges would make one stored column able to widen the other.
+        write_prefixes=told.lane, body_rewrite_allowed=told.body_rewrite_allowed,
+        deletions_allowed=told.deletions_allowed, expected_bytes=told.expected_bytes,
+        provenance_pages=told.provenance_pages)
     veto = gates.vetoes(gates.run_gates(ctx))
     if veto:
         raise RepairError(
             f"the gates refused this repair, so nothing was committed or pushed: "
             f"{'; '.join(f'{f.gate}/{f.code}' for f in veto)}. The proposal has been recorded as "
             f"failed and the corpus is unchanged")
+    if kind == schema.KIND_DELETE:
+        _refuse_surviving_dead_links(clone, linter_path, ops)
 
     sha = gitcmd.commit(clone, message=commit_message(proposal, approved_by=approver),
                         author_name=author[0], author_email=author[1],
@@ -211,7 +218,58 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
     landed = gitcmd.push(clone, branch=branch, remote_url=remote_url, config_env=config_env,
                          author_name=author[0], author_email=author[1],
                          timeout_s=REPAIR_GIT_TIMEOUT_S)
-    return {"commit": landed, "paths": list(edited)}
+    return {"commit": landed, "paths": list(edited), **_outcome_detail(kind, ops)}
+
+
+# What an applied repair records BEYOND the commit and the paths, per kind. `paths` alone cannot
+# tell a steward reading the governance ledger months later whether an approval removed one page or
+# eleven — and for a deletion that is the whole of what was approved.
+LEDGER_RESULT_KEYS = ("commit", "paths", "deleted", "scrubbed_pages")
+
+
+def _outcome_detail(kind: str, ops: list) -> dict:
+    """The kind-specific half of an apply's result. Empty for the kinds whose `paths` says
+    everything: a ledger row carrying two always-empty columns teaches nobody anything."""
+    if kind != schema.KIND_DELETE:
+        return {}
+    return {"deleted": deletion.deleted_paths(ops),
+            "scrubbed_pages": len(deletion.scrubbed_paths(ops))}
+
+
+def _refuse_surviving_dead_links(clone: str, linter_path: str, ops: list) -> None:
+    """The knowledge repo's OWN linter, over the whole clone, asked one question: does anything
+    still link to a page this sweep removed?
+
+    `gate_contract` filters the linter's findings to the pages a diff TOUCHED, which is right for
+    every other kind and blind for this one — a deletion's blast radius is the whole graph, and a
+    page the sweep never planned is exactly where a missed reference would sit. So the delete road
+    pays for a second scan of the same clone and asks the unfiltered report itself.
+
+    It is scoped to the deleted stems rather than vetoing on ANY error, deliberately: a corpus that
+    already carries an unrelated contract error is not this steward's problem, and refusing their
+    deletion for it would be a gate bouncing somebody's real work for something they cannot fix
+    from here. What this catches is the one thing the sweep could get wrong that nothing else sees:
+    its reference scanner is hand-mirrored from that linter and could drift from it.
+    """
+    stems = {deletion.page_stem(path) for path in deletion.deleted_paths(ops)}
+    report = gates.lint_report(clone, linter_path, timeout_s=REPAIR_SUBPROCESS_TIMEOUT_S)
+    surviving = set()
+    for finding in report.get("findings", []):
+        if finding.get("check") != gates.DEAD_LINKS_CHECK or finding.get("severity") != "error":
+            continue
+        # `gates.dead_link_target` is the ONE reader of that message's shape, so the raw report row
+        # is wrapped in the `Finding` it expects rather than re-parsed with a second regex here.
+        target = gates.dead_link_target(
+            gates.Finding("contract", gates.DEAD_LINKS_CHECK, str(finding.get("message", ""))))
+        if target and deletion.link_stem(target) in stems:
+            surviving.add((str(finding.get("file", "")), target))
+    surviving = sorted(surviving)
+    if surviving:
+        named = ", ".join(f"{path} still links [[{target}]]" for path, target in surviving)
+        raise RepairError(
+            f"this deletion would leave the corpus with a dead link, so nothing was committed or "
+            f"pushed: {named}. The sweep did not plan a rewrite of that page — propose again, and "
+            f"if it happens twice the reference is spelled in a shape the sweep does not read")
 
 
 def _perform(clone: str, kind: str, ops: list) -> tuple[list[str], list]:
@@ -225,26 +283,56 @@ def _perform(clone: str, kind: str, ops: list) -> tuple[list[str], list]:
     """
     if kind == schema.KIND_ENTITY_BODY:
         return entity_body.apply_declared(clone, ops)
+    if kind == schema.KIND_DELETE:
+        return deletion.apply_declared(clone, ops)
     return edits.apply_declared(clone, schema.declared_edits(ops), new_pages=())
 
 
-def _lane_and_permission(kind: str, ops: list) -> tuple[tuple, frozenset]:
-    """`(write_prefixes, body_rewrite_allowed)` for this apply — the two caller-scoped facts the
-    gates are TOLD and never infer.
+@dataclass(frozen=True)
+class _ToldFacts:
+    """The caller-scoped facts one apply hands the gates. A record rather than a tuple because
+    there are four of them now and three are permissions — a positional mix-up between two
+    frozensets is a permission granted for the wrong thing, and it would type-check."""
 
-    For the additive kinds both are the default: the librarian's whole write lane, and no page
-    whose prose may be replaced. For `entity-body` the lane NARROWS to the entity zone (this apply
-    has no business anywhere else) and the permission names the one page the ops declared — never
-    the whole zone, because a permission wide enough for a second page is a permission for a page
-    nobody approved.
+    lane: tuple
+    body_rewrite_allowed: frozenset = frozenset()
+    deletions_allowed: frozenset = frozenset()
+    expected_bytes: dict = field(default_factory=dict)
+    provenance_pages: frozenset = frozenset()
+
+
+def _lane_and_permission(kind: str, ops: list) -> _ToldFacts:
+    """The caller-scoped facts for this apply — TOLD to the gates, and never inferred by them.
+
+    For the additive kinds every one is the default: the librarian's whole write lane, no page
+    whose prose may be replaced, no page that may be removed, no page whose bytes were computed
+    ahead of time. That is the property the other two kinds are measured against.
+
+    `entity-body` narrows the lane to the entity zone (this apply has no business anywhere else)
+    and names the ONE page the ops declared — never the whole zone, because a permission wide
+    enough for a second page is a permission for a page nobody approved.
+
+    `delete` names its deletions and hands over the exact bytes it planned for every page it
+    rewrites. Its lane is DERIVED from the plan rather than fixed, because a sweep legitimately
+    spans several zones; what confines it is `deletion.validate`, and `lane_for` explains the
+    division of labour. It is also the first flow here that MODIFIES a machine-zone page, so it
+    names the provenance pages among them — the same fact the librarian's source-attachment flow
+    declares, for the same reason: those stamps are the librarian's own and a scrub only removes.
     """
-    if kind != schema.KIND_ENTITY_BODY:
-        return gates.ALLOWED_WRITE_PREFIXES, frozenset()
-    return ((entity_body.ENTITY_ZONE_PREFIX,),
-            frozenset(str(o.get("path", "")) for o in ops if str(o.get("path", ""))))
+    if kind == schema.KIND_ENTITY_BODY:
+        return _ToldFacts(
+            lane=(entity_body.ENTITY_ZONE_PREFIX,),
+            body_rewrite_allowed=frozenset(str(o.get("path", "")) for o in ops
+                                           if str(o.get("path", ""))))
+    if kind == schema.KIND_DELETE:
+        return _ToldFacts(lane=deletion.lane_for(ops),
+                          deletions_allowed=frozenset(deletion.deleted_paths(ops)),
+                          expected_bytes=deletion.expected_bytes(ops),
+                          provenance_pages=deletion.provenance_scrubs(ops))
+    return _ToldFacts(lane=gates.ALLOWED_WRITE_PREFIXES)
 
 
-def _cross_check(entries, proposal: dict) -> None:
+def _cross_check(entries, proposal: dict, *, kind: str, ops: list) -> None:
     """The diff must be EXACTLY what the row says, and nothing else.
 
     Two stored facts have to agree: `ops` produced the diff, `target_paths` says which pages it was
@@ -254,8 +342,12 @@ def _cross_check(entries, proposal: dict) -> None:
     this read is out of scope: write access to `repair_proposals` is the prerequisite either way,
     and this is a consistency check, not a defense against it.
 
-    Every entry must be `M`: this vocabulary edits pages that already exist, so an addition or a
-    deletion is not a repair that got out of hand, it is a diff nothing here can have produced.
+    The SHAPE of the diff is checked per kind, because `target_paths` cannot express it. For the
+    two editing kinds every entry must be `M`: they edit pages that already exist, so an addition
+    or a deletion is not a repair that got out of hand, it is a diff nothing here can have
+    produced. For `delete` the removals must be exactly the pages the plan named and the
+    modifications exactly the pages it planned to scrub — a sweep that quietly stopped deleting, or
+    that deleted a page it had only planned to rewrite, satisfies the path comparison perfectly.
     """
     touched = {e.path for e in entries}
     approved = {str(p) for p in (proposal.get("target_paths") or ())}
@@ -270,6 +362,9 @@ def _cross_check(entries, proposal: dict) -> None:
             + (f"pages the approval named that it did not touch: {', '.join(missing)}. "
                if missing else "")
             + "Propose again and approve the new proposal")
+    if kind == schema.KIND_DELETE:
+        _cross_check_delete(entries, ops)
+        return
     off_shape = sorted(f"{e.path} ({e.status})" for e in entries if e.status != "M")
     if off_shape:
         raise RepairError(
@@ -278,19 +373,50 @@ def _cross_check(entries, proposal: dict) -> None:
             f"page that already exists")
 
 
+def _cross_check_delete(entries, ops: list) -> None:
+    """The sweep's own shape: removals == the plan's deletions, modifications == its scrubs, and no
+    third status anywhere."""
+    removed = sorted({e.path for e in entries if e.status == "D"})
+    modified = sorted({e.path for e in entries if e.status == "M"})
+    off_shape = sorted(f"{e.path} ({e.status})" for e in entries if e.status not in ("D", "M"))
+    if off_shape:
+        raise RepairError(
+            f"this deletion did something other than remove and rewrite existing pages, so nothing "
+            f"was committed or pushed: {', '.join(off_shape)}")
+    if removed != deletion.deleted_paths(ops) or modified != deletion.scrubbed_paths(ops):
+        raise RepairError(
+            f"the pages this deletion actually removed are not the pages it was approved to "
+            f"remove, so nothing was committed or pushed. approved to delete: "
+            f"{', '.join(deletion.deleted_paths(ops)) or 'nothing'}; actually deleted: "
+            f"{', '.join(removed) or 'nothing'}. Propose again and approve the new proposal")
+
+
 def commit_message(proposal: dict, *, approved_by: str) -> str:
     """The commit an approved repair lands as. `Approved-by:` is half of how `git log` answers who
     authorized a change to the corpus, so the actor is collapsed to one line: the console passes a
     free-text one by design, and a newline in it would inject arbitrary commit-message lines — a
     second, forged trailer among them."""
-    targets = [str(p) for p in (proposal.get("target_paths") or ())]
     ops = proposal.get("ops") or ()
     findings = ", ".join(str(i) for i in (proposal.get("finding_ids") or ())) or "none recorded"
-    subject = (f"chore(repair): {proposal.get('kind', schema.KIND_EDITS)} — {len(ops)} edit(s) on "
-               f"{targets[0] if targets else 'the knowledge repo'}")
-    return (f"{subject}\n\n{(proposal.get('rationale') or '').strip()}\n\n"
+    return (f"{_commit_subject(proposal, ops)}\n\n{(proposal.get('rationale') or '').strip()}\n\n"
             f"Proposal #{proposal.get('id')}; findings {findings}.\n"
             f"Approved-by: {_trailer_actor(approved_by)}")
+
+
+def _commit_subject(proposal: dict, ops) -> str:
+    """One line of `git log` saying what an approval did. A deletion says so in the verb: the whole
+    point of reading `git log` after one is finding out which pages left, and "3 edit(s) on
+    wiki/notes/…" would name a page that no longer exists."""
+    kind = str(proposal.get("kind") or schema.KIND_EDITS)
+    if kind == schema.KIND_DELETE:
+        removed = deletion.deleted_paths(ops)
+        stems = [deletion.page_stem(path) for path in removed]
+        first = stems[0] if stems else "the knowledge repo"
+        return (f"chore(repair): delete {len(removed)} page(s) — {first}"
+                + ("…" if len(stems) > 1 else ""))
+    targets = [str(p) for p in (proposal.get("target_paths") or ())]
+    return (f"chore(repair): {kind} — {len(ops)} edit(s) on "
+            f"{targets[0] if targets else 'the knowledge repo'}")
 
 
 def _trailer_actor(approved_by: str) -> str:
