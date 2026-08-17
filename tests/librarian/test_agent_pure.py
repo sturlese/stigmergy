@@ -701,6 +701,54 @@ def test_a_meeting_park_keeps_a_name_that_merely_CONTAINS_whitespace():
     assert outcome.triage["names"] == ["Acme  Capital", " Jack "]
 
 
+# ── `edits`: ONE parser, so the two flows cannot mean different things by a declaration ─────────
+# `agent._parse_edits` is shared by `parse_outcome` and `parse_meeting_outcome` because the same
+# `edits.apply_declared` performs the result and the same `gate_body_rewrite` judges it. These two
+# tests are the pair that keeps the sharing honest: the vocabulary is one vocabulary, and the
+# findings a model reads on its one corrective pass are the SAME TEXT for the same mistake, so a
+# distiller and a librarian are not told different things about an identical bad declaration.
+def _one_edit(entry) -> tuple:
+    """The same declaration through both parsers, as `(ordinary, meeting)`."""
+    return (agent.parse_outcome({"decision": "file", "title": "T", "page_path": "wiki/notes/T.md",
+                                 "edits": [entry]}),
+            agent.parse_meeting_outcome({"decision": "file", "meeting_title": "T",
+                                         "edits": [entry]}))
+
+
+def test_a_declared_edit_parses_identically_on_both_flows():
+    """The benign twin first: a well-formed declaration survives both parsers as the same dict, so
+    `edits.validate` and `edits.apply` receive one shape whichever flow produced it."""
+    entry = {"path": "wiki/decisions/Refunds.md", "kind": "Overlap", "link": "Refund Policy v2",
+             "note": "earlier version of the same policy"}
+    ordinary, meeting = _one_edit(entry)
+
+    assert ordinary.edits == meeting.edits
+    assert meeting.edits == ({"path": "wiki/decisions/Refunds.md", "kind": "overlap",
+                              "link": "Refund Policy v2",
+                              "note": "earlier version of the same policy"},)
+
+
+def test_an_unknown_edit_kind_is_refused_with_the_SAME_sentence_on_both_flows():
+    """The vocabulary half. `kind` outside `page.EDIT_KINDS` is a correctable shape fault on both
+    flows, and the message is byte-identical — a second copy of this parser would be a second
+    sentence, and the one a model reads would then depend on which skill it was running."""
+    entry = {"path": "wiki/decisions/Refunds.md", "kind": "rewrite", "link": "Refund Policy v2"}
+    messages = []
+    for parse, raw in ((agent.parse_outcome,
+                        {"decision": "file", "title": "T", "page_path": "wiki/notes/T.md",
+                         "edits": [entry]}),
+                       (agent.parse_meeting_outcome,
+                        {"decision": "file", "meeting_title": "T", "edits": [entry]})):
+        with pytest.raises(OutcomeShapeError) as raised:
+            parse(raw)
+        codes = {f.code for f in raised.value.findings}
+        assert "unknown-edit-kind" in codes, codes
+        messages.append([f.message for f in raised.value.findings if f.code == "unknown-edit-kind"])
+
+    assert messages[0] == messages[1], messages
+    assert "rewrite" in messages[0][0]
+
+
 def test_nesting_past_the_depth_ceiling_stays_a_plain_agent_error():
     """No amount of telling makes a resource bound negotiable, so it does NOT become a finding."""
     deep = {"a": {"b": {"c": {"d": {"e": {"f": {"g": {"h": {"i": 1}}}}}}}}}

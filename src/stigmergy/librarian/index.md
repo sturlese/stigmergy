@@ -30,9 +30,9 @@ repo parser — nothing here touches `pages_index`); `stigmergy.index.store` is 
 | `pydantic_backend.py` | `PydanticFilingAgent` — the real backend, serving both flows: an iterating ordinary run (five confined tools, an outcome file, it writes its own page) and one structured meeting call. `FilingToolbox` holds the tool bodies so every confinement rule is testable with no model; `_register_tools` writes the model-facing docstrings, which ARE the tool schema |
 | `double.py` | `DoubleAgent` — the offline, directive-driven backend the whole keyless suite runs against; misbehaves on demand, behaves perfectly on ordinary material, and writes through `agent.confined_write` like the real one |
 | `filing_port.py` | `FilingAgent` — the port `processing.py` is written against: the two calls, the `AgentRun` envelope, `priced()`, the fault contract, the per-flow side-effect rules, and the two declared capabilities (`structured_ordinary`, `wants_gathered`). Imports `errors` and nothing else |
-| `gather.py` | the deterministic gatherer — a pure function of `(worktree, registry, material)` producing the ordinary agent's seeded context, and the bodies its search/read tools share (`load_corpus`, `search_candidates`, `confined_page`). Reads the checkout, never `pages_index` |
+| `gather.py` | the deterministic gatherer — a pure function of `(worktree, registry, material)` producing the seeded context BOTH flows get (the ordinary agent's seed, and the tool-less meeting agent's whole view of the corpus), and the bodies the ordinary search/read tools share (`load_corpus`, `search_candidates`, `confined_page`). Reads the checkout, never `pages_index` |
 | `page.py` | the placement table (`PAGE_TYPES`: SEVEN types known, THREE creatable — `note`, `decision`, `concept`; every derived list and regex computes from it), path identity (`path_key`, `is_inside`), server-owned frontmatter (`SERVER_OWNED_KEYS`, `stamp_server_fields`, `stamp_source_fields`), page-name policy (`unnameable_reason`), the additive-edit primitives |
-| `edits.py` | declared edits to existing pages: the agent declares, `validate`/`apply` perform — all-or-nothing, judged by the gates like any other write |
+| `edits.py` | declared edits to existing pages, on BOTH flows: the agent declares, `validate`/`apply` perform — all-or-nothing, judged by the gates like any other write. Its editable set is `page.FOLDER_BY_TYPE`'s three folders; a caller whose own lane is narrower (the meeting flow) sees the difference refused by `gate_zone` |
 | `report.py` | the ONLY place a sentence a human reads about a fast-lane outcome is composed; the CLI (`render_prose`) and `brain_submissions` render the same fact set. Its shape (`base_report`) and `SEARCHABILITY_NOTE` live in `capture.schema`, re-exported. A steward-authored sentence belongs in `capture.dispositions` instead |
 | `dedup.py` | the two DB-backed pre-agent levels: `find_retry` (retry collapse) and `find_already_filed` (exact re-file), keyed on the queue's own content hash |
 | `base_inputs.py` | the ONLY way the fast lane reads the ACL config, the entity registry, the contract linter and `ops/stewards.json` — at `base.sha`, never off the working tree (a working-tree read is a read around the governed steward flow) |
@@ -65,7 +65,8 @@ repo parser — nothing here touches `pages_index`); `stigmergy.index.store` is 
 - **A gate is TOLD a fact, it never infers one** — the flow-scoped `GateContext` fields default
   to the ordinary lane, and the two callers that widen them (the meeting flow, the source
   attachment) widen the instance they build, never a module constant: a new flow is out of
-  bounds by default.
+  bounds by default. `edits_allowed` is the one field no caller declares any more: the meeting
+  flow set it `False` until it gained the same declared-edit mechanism (ADR 038).
 - **Wording for humans lives in `report.py` only**; a read path branches on `reason_code`
   (`capture.schema.REJECTION_REASONS`), never on prose and never on `stage`, which is
   `failed_system`'s alone. An unresolved-entity park gets ONE pair of builders (`needs_input` /

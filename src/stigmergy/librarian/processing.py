@@ -1276,6 +1276,13 @@ def _outcome_to_raw(outcome) -> dict:
         "action_items": [dict(a) for a in outcome.action_items],
         "decisions": [{"title": d.get("title", ""), "body": d.get("body", ""),
                        "anchoring": dict(d.get("anchoring") or {})} for d in outcome.decisions],
+        # Carried, not dropped: a re-file that silently lost the declared cross-links would file a
+        # different set from the one that parked. A row written before this key existed simply has
+        # no `edits`, which `parse_meeting_outcome` reads as none declared, and a stale declaration
+        # is re-validated against the CURRENT graph by `edits.validate` like any other.
+        "edits": [{"path": e.get("path", ""), "kind": e.get("kind", ""),
+                   "link": e.get("link", ""), "note": e.get("note", "")}
+                  for e in (outcome.edits or ())],
         "summary": outcome.summary,
         "findings": [dict(f) for f in outcome.findings],
         "triage": dict(outcome.triage or {}),
@@ -1672,6 +1679,42 @@ def _write_meeting_pages(worktree: str, outcome, meeting_meta: dict, material: s
     }
 
 
+def _edits_with_resolved_links(outcome, written: dict) -> list:
+    """The declared edits, with any `link` naming one of THIS capture's own decisions replaced by
+    the stem the worker actually filed that decision under.
+
+    **The agent cannot spell the filename, and must not have to.** It declares a decision's
+    `title`; `_decision_stems` slugifies that title into the page's basename, and a wikilink
+    resolves by basename — so `[[<the title>]]` resolves to nothing. Without this translation a
+    perfectly correct declaration is refused by `edits.validate` as a dead link, which refuses the
+    WHOLE set and spends the capture's one corrective retry on a naming convention the agent was
+    never shown. Observed: `linking [[Q3 sync — decision 1]], which resolves to no page in the
+    graph`, twice, then `failed`.
+
+    Telling the brief to slugify instead was the alternative and it is the weaker one: `slugify`
+    strips accents, folds punctuation AND truncates at 60 characters, so for a real title the rule
+    is a guess, and a wrong guess costs the same retry. The worker names the page, so the worker
+    resolves the name — the same reason it, not the agent, builds the meeting page's own
+    `## Decisions` links out of `decision_stems`.
+
+    A `link` that is already a resolvable page name is passed through untouched, so both spellings
+    work and an existing page is never shadowed by a decision that merely shares its title:
+    lookup is by the capture's declared titles only, and a miss keeps what the agent wrote.
+    """
+    declared = list(outcome.edits or ())
+    if not declared:
+        return declared
+    stem_by_title = {}
+    for decision, stem in zip(outcome.decisions or (), written.get("decision_stems") or (),
+                              strict=False):
+        title = str(decision.get("title", "")).strip()
+        if title:
+            stem_by_title.setdefault(title, stem)
+    return [{**edit, "link": stem_by_title.get(str(edit.get("link", "")).strip(),
+                                               edit.get("link", ""))}
+            for edit in declared]
+
+
 def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, corrective, *,
                       passes: "AgentPasses | None" = None,
                       linter_path: str = "", reused=None, reuse=None) -> tuple:
@@ -1682,15 +1725,27 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
     source_page_path = f"{MEETING_SOURCE_PREFIX}{source_stem}.md"
     if reused is not None:
         # A previous park's distillation, re-filed with NO agent call: `deps.registry` was loaded
-        # at THIS item's base commit, so the minted entity changed, not the content.
+        # at THIS item's base commit, so the minted entity changed, not the content. Nothing is
+        # gathered here either — a re-file asks nobody anything, so a context would be built for a
+        # prompt that is never composed.
         outcome = reused
     else:
+        # Built HERE, never inside a backend — `_one_pass`' own reason: both flows must share one
+        # context builder and one fence discipline. Unconditional, unlike the ordinary flow's
+        # `wants_gathered` branch: no backend on this flow holds a tool, so `render_gathered`'s
+        # no-tools defaults are simply the truth here and there is no second shape to declare.
+        # Re-run on the corrective pass, because `_reset_for_retry` resets the tree.
+        gathered = agent_module.render_gathered(
+            gather.gather(worktree, deps.registry, material,
+                          top_k=settings.gather_top_k,
+                          excerpt_lines=settings.gather_excerpt_lines))
         try:
             run = deps.agent.run_meeting(worktree=worktree, material=material,
                                          meeting_meta=meeting_meta, registry=deps.registry,
                                          source_page_path=source_page_path,
                                          corrective=corrective,
-                                         reply=item.get("reply") or "")
+                                         reply=item.get("reply") or "",
+                                         gathered=gathered)
         except AgentError as ex:
             if passes is not None:
                 passes.cost_usd += getattr(ex, "run_cost_usd", 0.0)
@@ -1713,6 +1768,9 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
     if isinstance(written, list):
         return None, written, outcome
 
+    # `edits_allowed` keeps its `True` default: this flow HAS an edit mechanism now, the same one
+    # the fast lane has — declared in the account, performed by `edits.apply_declared` below,
+    # judged additive by `gate_body_rewrite` like any other modification.
     ctx = gates.GateContext(
         worktree=worktree,
         entries=gitcmd.diff_entries(worktree),
@@ -1720,22 +1778,33 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
         material=material, outcome=outcome, registry=deps.registry,
         linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin,
         write_prefixes=MEETING_WRITE_PREFIXES, creatable_types=MEETING_CREATABLE_TYPES,
-        extra_folder_types=MEETING_EXTRA_FOLDER_TYPES, edits_allowed=False)
+        extra_folder_types=MEETING_EXTRA_FOLDER_TYPES)
 
     if not ctx.entries:
         raise AgentError("the meeting flow wrote nothing and did not park the capture")
 
-    # The meeting flow files only NEW pages: `edits.apply_declared` is not invoked, and
-    # `edits_allowed=False` above makes `gate_zone` refuse a status-M entry that arrived any other
-    # way — enforced, not merely true because a call is absent.
+    # Code's own additive edits, from the agent's DECLARATION — `_one_pass`' call, unchanged, on
+    # the set's own new pages. `edits.validate` admits the three EDITABLE folders (`page.
+    # FOLDER_BY_TYPE`), which is a wider set than this flow's own lane: an edit to `wiki/notes/` or
+    # `wiki/concepts/` passes there and is then refused by `gate_zone` as out-of-lane, so
+    # `wiki/decisions/` is the one folder a meeting can really edit. The lane is deliberately NOT
+    # widened to match — it is the BUILDER's range and `test_gates_unit.py` pins it as such — and
+    # the brief tells the agent which pages it may name.
+    edited, edit_findings = edits.apply_declared(
+        worktree, _edits_with_resolved_links(outcome, written),
+        new_pages=ctx.in_lane_new_pages())
+    ctx.entries = gitcmd.diff_entries(worktree)
+    ctx.added = gitcmd.added_lines(worktree)
+
     _stamp_meeting(ctx, deps, item, outcome, meeting_meta, written)
 
     ctx.entries = gitcmd.diff_entries(worktree)
     ctx.added = gitcmd.added_lines(worktree)
-    findings = gates.run_gates(ctx) + _cross_check_meeting_outcome(ctx, outcome)
+    findings = (gates.run_gates(ctx) + edit_findings
+                + _cross_check_meeting_outcome(ctx, outcome))
     if not gates.vetoes(findings):
         return (_file_meeting(conn, item, deps, ctx, outcome, findings, worktree,
-                              written, reuse=reuse),
+                              written, edited=edited, reuse=reuse),
                 [], outcome)
     return None, findings, outcome
 
@@ -1853,9 +1922,11 @@ def _meeting_commit_message(item: dict, outcome, n_decisions: int) -> str:
 
 
 def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
-                  *, reuse=None) -> Result:
+                  *, edited=(), reuse=None) -> Result:
     """The gates passed over the whole SET: one commit, push, report. `written` carries the
-    code-computed source parts and the decision-path-to-anchoring map."""
+    code-computed source parts and the decision-path-to-anchoring map; `edited` is what
+    `edits.apply_declared` actually changed on pages that already existed — the one surface a human
+    reads that names a page this capture touched without creating it."""
     meeting_pages, decision_pages = _meeting_pages(ctx), sorted(_decision_pages(ctx))
     # In PART order, not alphabetical — `-p2` sorts before the bare stem's `.md`.
     source_pages = [f"{MEETING_SOURCE_PREFIX}{stem}.md" for stem in written["source_stems"]]
@@ -1889,7 +1960,7 @@ def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
     return Result(
         schema.FILED, f"{meeting_page}@{sha}",
         report.filed_meeting(source_pages=source_pages, meeting_page=meeting_page,
-                             decisions=decisions, commit=sha,
+                             decisions=decisions, commit=sha, pages_edited=list(edited),
                              agent_rationale=getattr(outcome, "summary", ""),
                              registry=deps.registry,
                              reuse=_reuse_note(reuse, outcome)),

@@ -44,12 +44,14 @@ capture_queue row, kind="meeting" (claimed by the SAME librarian worker, same fe
        │    exactly 1 meeting page     wiki/meetings/YYYY-MM-DD-<slug>.md  (provenance only)
        │    N >= 0 decision pages      wiki/decisions/<slug>.md   (each its OWN anchor)
        │
+       ├─ edits.apply_declared: the account's DECLARED additive edits, performed by code on pages
+       │     that already exist — all-or-nothing, the fast lane's own call (ADR 038)
        ├─ _stamp_meeting: PER-PAGE server stamp (source parts get the provenance group;
        │     meeting page gets no entity/acl; each decision page gets its OWN entity:/acl)
        ├─ gates.run_gates(ctx) over the WHOLE diff, ctx scoped to the meeting flow's own lane
        │     (GateContext.write_prefixes/creatable_types/extra_folder_types/page_declared/
-       │     stamped_by_path/provenance_pages/edits_allowed=False — every DEFAULT reproduces the
-       │     unattached fast lane byte-for-byte; a caller widens them on the ctx, never globally)
+       │     stamped_by_path/provenance_pages — every DEFAULT reproduces the unattached fast lane
+       │     byte-for-byte; a caller widens them on the ctx, never globally)
        ├─ _cross_check_meeting_outcome: the SET's own atomicity contract (below)
        │
        │   any veto survives one corrective retry?  →  refuse the WHOLE capture, zero pages
@@ -264,14 +266,31 @@ are:
 | `decision-count-mismatch` | the outcome describes N decisions and a different number of decision pages was written — again, code disagreeing with itself |
 | `existing-page-collision` | a computed path for this set already exists in the repo; raised by `_write_meeting_pages` before anything is written |
 
-There is also **one gate finding only this flow can produce**: `zone/meeting-edit-refused`. This
-flow builds its `GateContext` with `edits_allowed=False`, because it has no additive-edit mechanism
-at all (`edits.apply_declared` is never invoked here — the meeting page's own `## Decisions` section
-is what links the set together). A status-`M` entry in this diff therefore has no producer inside
-the flow, so `gate_zone` refuses it outright rather than composing a corrective brief for work
-nothing here could have done. It is `repairable=False` for the reason every member of that class is:
-the refused diff is preserved only on the terminal path, and a retry's `reset --hard` would erase
-the only evidence of an unexplained write into the worktree.
+**Declared edits** ([ADR 038](../decisions/038-meeting-distiller-corpus-context.md)). The account
+may name additive edits to pages that already exist, in the ordinary flow's exact vocabulary
+(`backlink`, `overlap`, `contradiction`), bounded by the parser both flows share
+(`agent._parse_edits`) and performed by `edits.apply_declared` between the write phase and the
+stamp — so they land in the same diff every gate judges, and `gate_body_rewrite` proves each one
+additive. All-or-nothing: one bad declaration refuses the whole set and its findings join the gate
+findings. The lane is what narrows the target: `edits.validate` admits the three fast-lane folders
+while `MEETING_WRITE_PREFIXES` admits three different ones, so the editable set for a meeting is
+the intersection — `wiki/decisions/` — and an edit named anywhere else is refused by `gate_zone` as
+out-of-lane. `report.filed_meeting`'s `pages_edited` names whatever actually changed.
+
+The one piece of translation this needed: `_edits_with_resolved_links` maps a `link` naming one of
+this capture's own decisions onto the stem the worker filed it under. The agent declares a `title`
+and never a filename, `_decision_stems` slugifies that title, and a wikilink resolves by basename —
+so without the mapping a correct declaration is a dead link that refuses the whole set and spends
+the retry. A `link` that already names a page passes through untouched.
+
+`zone/meeting-edit-refused` is still in `gate_zone`, and **no flow declares the
+`GateContext.edits_allowed=False` that fires it** any more — this one did until ADR 038 gave it the
+mechanism. The field stays because which caller grants an edit mechanism is a caller's declaration
+rather than a fact about which flows exist, and the finding keeps a code that names the flow that
+motivated it because preserved refused diffs on deployed stacks already carry it in their
+`# refused by:` header. It is `repairable=False` for the reason every member of that class is: the
+refused diff is preserved only on the terminal path, and a retry's `reset --hard` would erase the
+only evidence of an unexplained write into the worktree.
 
 Routing a refused capture: `_refuse_meeting` mirrors the ordinary flow's cause-based routing
 (`rejected` for a secret, a PII match, or steering with a traceable injection category;
@@ -351,7 +370,12 @@ reads perfectly plausibly on its own.
   [`../../src/stigmergy/librarian/index.md`](../../src/stigmergy/librarian/index.md).
 - `librarian.agent.build_meeting_prompt` / `parse_meeting_outcome` — the agent side: a different
   system prompt (the brief, not the librarian skill), no page-writing tool at all, and a different
-  outcome parse (a page SET rather than one page). The single write an
+  outcome parse (a page SET rather than one page) — sharing `_parse_edits` with the ordinary
+  parser since [ADR 038](../decisions/038-meeting-distiller-corpus-context.md), so a declared edit
+  is bounded identically whichever flow produced it. The prompt carries the WORKER's gathered
+  block (`gather.gather` → `agent.render_gathered`, no-tools defaults, fenced) between the registry
+  and the transcript: context above the thing it is context for, and the governed registry above
+  page titles people wrote. The single write an
   agent is permitted on this flow is allowed by `confined_write`'s unconditional outcome-file
   exception, and code is the sole author of every page in the set. The backend holds no tool, so
   the no-page-writes property is structural rather than configured: one in-process call to a
@@ -362,9 +386,10 @@ reads perfectly plausibly on its own.
 - `librarian.gates.GateContext`'s seven flow-scoped fields (`write_prefixes`, `creatable_types`,
   `extra_folder_types`, `page_declared`, `stamped_by_path`, `provenance_pages`, `edits_allowed`) —
   the mechanism that lets one gate suite serve this flow, the plain fast lane and the fast lane's
-  own source attachment without a conditional inside any individual gate. `edits_allowed=False` is
-  the one this flow alone sets; the other six are also widened, differently, by an attached
-  fast-lane capture ([librarian.md](./librarian.md#the-source-attachment-a-parameter-never-a-third-flow)).
+  own source attachment without a conditional inside any individual gate. Six of them are widened
+  by this flow and, differently, by an attached fast-lane capture
+  ([librarian.md](./librarian.md#the-source-attachment-a-parameter-never-a-third-flow));
+  `edits_allowed` is declared by neither and keeps its permissive default everywhere since ADR 038.
 - `librarian.pydantic_backend.PydanticFilingAgent` — the flow's SECOND real backend
   ([ADR 032](../decisions/032-filing-port-and-pricing-seam.md)). It was the only flow that had one
   until [ADR 033](../decisions/033-structured-filing-flow.md) gave the ORDINARY flow this flow's
@@ -396,7 +421,9 @@ reads perfectly plausibly on its own.
   planted in the transcript itself: `DOUBLE:decisions=<n>`, the four
   `DOUBLE:meeting-hallucinate*` variants (first decision, first pass only, LAST decision, the
   meeting page's own notes), `DOUBLE:meeting-triage=a,b,c`, `DOUBLE:meeting-anchor=<name>`,
-  `DOUBLE:meeting-company[=n]`, `DOUBLE:meeting-body-date-link` and `DOUBLE:meeting-collide`. Every
+  `DOUBLE:meeting-company[=n]`, `DOUBLE:meeting-body-date-link`, `DOUBLE:meeting-collide` and the
+  three declared-edit ones — `DOUBLE:meeting-backlink=<path>`, `DOUBLE:meeting-overlap=<path>` and
+  `DOUBLE:meeting-bad-edit[=<path>]`, which put an edit in the outcome and never on a page. Every
   sabotage this document names above has a directive that reproduces it offline, keylessly.
   **There are deliberately no declared-vs-written mismatch directives**: with the agent holding no
   page-writing tool and code building every page from the same structured outcome, a disagreement
