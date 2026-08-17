@@ -358,6 +358,24 @@ def test_with_related_link_inserts_a_block_item_without_touching_the_existing_on
         assert line in out.splitlines()
 
 
+def test_a_non_ascii_stem_lands_in_the_page_verbatim_never_as_an_escape():
+    """`_yaml_list` used `json.dumps` with its `ensure_ascii` DEFAULT, so a stem like
+    `sesión-de-planificación` was written as `sesi\\u00f3n-…` — valid JSON, but the contract
+    linter resolves `[[…]]` targets literally, so every non-ASCII backlink it wrote was read as a
+    dead link and the whole capture refused. A Spanish corpus hits this on the first accent."""
+    out, changed = page_policy.with_related_link(FLOW_PAGE, "sesión-de-planificación")
+    assert changed is True
+    assert "[[sesión-de-planificación]]" in out
+    assert "\\u" not in out
+
+    stamped = page_policy.stamp_server_fields(
+        FLOW_PAGE, as_of="2026-08-17", submitted_by="marc@example.com",
+        entity=["maría-lópez"], acl=["team:año-fiscal"])
+    assert "maría-lópez" in stamped
+    assert "año-fiscal" in stamped
+    assert "\\u" not in stamped
+
+
 def test_with_related_link_appends_the_field_when_the_page_declares_none():
     out, changed = page_policy.with_related_link(NO_RELATED_PAGE, "New Page")
     assert changed is True

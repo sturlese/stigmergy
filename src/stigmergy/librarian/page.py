@@ -265,8 +265,10 @@ def _strip_keys(front: str, keys) -> list[str]:
 
 def _yaml_list(values) -> str:
     """A YAML/JSON flow-sequence literal. `json.dumps` is a real escaper; a bare `f'"{v}"'`
-    produces unparseable YAML for any value containing a quote or backslash."""
-    return "[" + ", ".join(json.dumps(str(v)) for v in values) + "]"
+    produces unparseable YAML for any value containing a quote or backslash. `ensure_ascii=False`
+    because these lines are read back LITERALLY, not JSON-decoded: the contract linter resolves a
+    `[[sesión]]` backlink by its bytes, and the `\\uXXXX` spelling of it is a dead link."""
+    return "[" + ", ".join(json.dumps(str(v), ensure_ascii=False) for v in values) + "]"
 
 
 def _rebuild(front_matter: str, body: str) -> str:
@@ -527,7 +529,9 @@ def with_related_link(text: str, name: str) -> tuple[str, bool]:
 
 
 def _yaml_scalar(value: str) -> str:
-    return f'"{value}"'
+    """One quoted scalar, through the same real escaper as `_yaml_list` — this was the bare
+    `f'"{v}"'` that function's docstring warns about, two definitions above it."""
+    return json.dumps(str(value), ensure_ascii=False)
 
 
 CALLOUT_STYLES = {
