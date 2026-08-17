@@ -645,3 +645,67 @@ def test_the_offline_double_reads_the_prompts_structure_and_never_its_content():
 
     assert [f["id"] for f in parsed] == [5], "a header inside the fence was read as a real finding"
     assert parsed[0]["pages"] == [support.NOTE_A, support.NOTE_B]
+
+
+# ── the run records its own failure, and a lapsed usage budget is a batch, not the run ────────
+class _BudgetBlown:
+    """An agent whose every run raises the SDK's own budget exception, as the real one did on
+    staging 2026-08-17: 29 real findings, `request_limit=6`, and the first batch died exploring."""
+
+    async def run(self, prompt, *, deps=None, usage_limits=None):
+        from pydantic_ai.exceptions import UsageLimitExceeded
+        raise UsageLimitExceeded("the next request would exceed the request_limit of 6")
+
+
+def test_a_run_that_dies_still_records_itself_in_job_runs(conn, repo_env, monkeypatch):
+    """Red before the fix: `record_job_run` sat on the success path only, so any exception left NO
+    row — while the CLI's failure message says "see job_runs for this run's recorded outcome".
+    Observed verbatim on staging 2026-08-17: `UsageLimitExceeded`, no repair-propose row, a
+    promise pointing at nothing."""
+    settings = RepairSettings(repo=repo_env.repo)
+    run_id = support.seed_gardener_run(conn)
+    support.seed_unlinked_mention(conn, run_id)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(proposer, "_propose_edits", boom)
+    with pytest.raises(RuntimeError):
+        _propose(conn, settings)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT status, error FROM job_runs WHERE job = %s ORDER BY id DESC LIMIT 1",
+                    (proposer.JOB_NAME,))
+        row = cur.fetchone()
+    assert row is not None, "the failed run left no job_runs row — the CLI's pointer is a lie"
+    assert row[0] == "error"
+    assert "RuntimeError" in row[1]
+
+
+def test_a_lapsed_usage_budget_skips_the_batch_and_the_run_completes(conn, repo_env, monkeypatch):
+    """Red before the fix: `UsageLimitExceeded` out of one batch's `agent.run` killed the WHOLE
+    run — every later batch and the entire body road unproposed, nothing recorded. A budget lapse
+    is a fact about one batch; the run records it and moves on, and the next night retries."""
+    settings = RepairSettings(repo=repo_env.repo, batch_size=1)
+    run_id = support.seed_gardener_run(conn)
+    support.seed_unlinked_mention(conn, run_id, pages=(support.NOTE_A, support.NOTE_B))
+    support.seed_unlinked_mention(conn, run_id, pages=(support.DECISION, support.NOTE_A))
+    _model(monkeypatch, _BudgetBlown())
+
+    result = _propose(conn, settings)
+
+    assert result.proposed == 0
+    budget_reasons = [r for r in result.skip_reasons if "usage-budget-exhausted" in r]
+    assert len(budget_reasons) == 2, result.skip_reasons
+    with conn.cursor() as cur:
+        cur.execute("SELECT status FROM job_runs WHERE job = %s ORDER BY id DESC LIMIT 1",
+                    (proposer.JOB_NAME,))
+        assert cur.fetchone()[0] == "ok"
+
+
+def test_the_request_budget_cannot_bind_before_the_tool_budget():
+    """`tool_calls_limit` is the WORK ceiling; `request_limit` exists only as a runaway bound. A
+    conservative model spends one request per tool call, so a request budget below the tool budget
+    (it was 6 against 24) starves a legitimate batch before its work bound is reached — observed
+    on staging 2026-08-17 with the first real 29-finding night."""
+    assert proposer.PROPOSER_LIMITS.request_limit >= proposer.PROPOSER_LIMITS.tool_calls_limit + 2

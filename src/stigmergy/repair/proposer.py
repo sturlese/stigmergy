@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 from pydantic_ai import RunContext
+from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.usage import UsageLimits
 
 from stigmergy.capture import ops as capture_ops
@@ -54,7 +55,17 @@ JOB_NAME = schema.JOB_NAME
 
 # Two tools, a handful of reads each, one retry. Bounded structurally rather than by asking: a
 # proposer that searched its way through the whole corpus would be re-running the gardener.
-PROPOSER_LIMITS = UsageLimits(request_limit=6, tool_calls_limit=24)
+# `tool_calls_limit` is the WORK ceiling; `request_limit` is only the runaway bound above it, and
+# it must not be the one that binds — a conservative model spends one request per tool call, so a
+# request budget below the tool budget starves a legitimate batch before its work bound is
+# reached. It was 6 against 24, and the first real 29-finding night on staging died on it
+# (2026-08-17) — pinned by test to stay dominated.
+PROPOSER_LIMITS = UsageLimits(request_limit=26, tool_calls_limit=24)
+
+# A lapsed usage budget is a fact about ONE batch or one draft, never a verdict on the run: the
+# work is skipped, the reason lands in `job_runs.stats`, and the next night retries it.
+USAGE_BUDGET_REASON = ("usage-budget-exhausted: {what} — the model spent its request budget "
+                       "mid-work; the next run retries it")
 
 # ── which findings have a path to zero at all ─────────────────────────────────────────────────
 # TWO roads, and a finding rides exactly one of them: the check decides, and the vocabularies do
@@ -846,6 +857,22 @@ def already_proposed(conn) -> tuple[set[int], set[str]]:
 
 
 async def propose_from_findings(conn, *, settings, repo: str = "") -> ProposeResult:
+    """`_propose_run`, plus the one write that must survive any exception: the job row.
+
+    The CLI's failure message points a reader at `job_runs` — so a run that dies has to leave a
+    row there, or the pointer is a lie. It was one: the first real 29-finding night on staging
+    (2026-08-17) died on `UsageLimitExceeded` with no row anywhere. Class name only, for the same
+    reason `repair.remote.apply_approved` records one: an arbitrary fault's text quotes prompts
+    and page paths, and `job_runs.error` is operator-facing.
+    """
+    try:
+        return await _propose_run(conn, settings=settings, repo=repo)
+    except Exception as ex:
+        capture_ops.record_job_run(conn, JOB_NAME, status="error", error=ex.__class__.__name__)
+        raise
+
+
+async def _propose_run(conn, *, settings, repo: str = "") -> ProposeResult:
     """The whole run: the latest completed gardener run's findings -> proposals on the table.
 
     Order matters and is the covenant made mechanical. `already_proposed` filters BEFORE the model
@@ -951,10 +978,16 @@ async def _propose_edits(deps: ProposerContext, fresh: list[dict], *, repo: str,
     asked = 0
     for batch in _batched(fresh, settings.batch_size):
         batch_pages = {p: pages[p] for f in batch for p in (f.get("subjects") or []) if p in pages}
-        got, reasons = await run_proposer(
-            agent, deps, build_prompt(batch, batch_pages), corpus_paths=corpus_paths,
-            link_names=link_names, finding_ids={int(f["id"]) for f in batch},
-            max_ops=settings.max_ops_per_proposal, max_proposals=ceiling)
+        try:
+            got, reasons = await run_proposer(
+                agent, deps, build_prompt(batch, batch_pages), corpus_paths=corpus_paths,
+                link_names=link_names, finding_ids={int(f["id"]) for f in batch},
+                max_ops=settings.max_ops_per_proposal, max_proposals=ceiling)
+        except UsageLimitExceeded:
+            skip_reasons.append(USAGE_BUDGET_REASON.format(
+                what=f"batch of {len(batch)} finding(s) skipped"))
+            asked += len(batch)
+            continue
         accepted += [{**spec, "kind": schema.KIND_EDITS} for spec in got]
         skip_reasons += reasons
         asked += len(batch)
@@ -1004,10 +1037,15 @@ async def _propose_entity_bodies(deps: ProposerContext, fresh: list[dict], *, re
         if agent is None:
             agent = build_entity_body_drafter(skill_text, model_name=settings.model)
             link_names = edits.page_names(repo)
-        op, reasons = await draft_entity_body(
-            agent, deps, build_entity_body_prompt(path, _page_body(deps, path),
-                                                  {p: _page_body(deps, p) for p in sources}),
-            repo=repo, path=path, link_names=link_names)
+        try:
+            op, reasons = await draft_entity_body(
+                agent, deps, build_entity_body_prompt(path, _page_body(deps, path),
+                                                      {p: _page_body(deps, p) for p in sources}),
+                repo=repo, path=path, link_names=link_names)
+        except UsageLimitExceeded:
+            skip_reasons.append(USAGE_BUDGET_REASON.format(
+                what=f"body draft for {path} skipped"))
+            continue
         if op is None:
             skip_reasons.append(DRAFT_REFUSED_REASON.format(path=path,
                                                             reasons="; ".join(reasons)))
