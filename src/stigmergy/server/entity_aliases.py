@@ -1,5 +1,11 @@
-"""Entity-alias resolution for entity-first retrieval, reading `ops/entity-registry.json`
-directly: `stigmergy.server` may not import `stigmergy.entities` (packages talk through files).
+"""Entity-alias resolution for entity-first retrieval over `ops/entity-registry.json`:
+`stigmergy.server` may not import `stigmergy.entities` (packages talk through files).
+
+READING and PARSING are separate here, and that is the point: the registry reaches the service
+from two places — the index's snapshot (refreshed by the push webhook, so a freshly minted entity
+is served immediately) and the file a process was started with (the fallback) — and both must mean
+exactly the same thing. So the TEXT is the unit: `aliases_from_text`/`registry_from_text` are the
+one parser, and the path-taking `load_aliases`/`load_registry` are `read_file` plus that parser.
 
 `_norm` is deliberately NOT `kernel.normalize.normalize`: that one is the registry's stricter
 folding for resolve-before-mint collision detection, where a false negative lets a duplicate
@@ -10,14 +16,16 @@ import os
 import re
 import unicodedata
 
-ENTITY_REGISTRY_RELATIVE = os.path.join("ops", "entity-registry.json")
+# POSIX, because a webhook's changed-path list is POSIX — `server.webhook` matches this string
+# against it verbatim. `default_path` re-splits it for the local filesystem.
+ENTITY_REGISTRY_RELPATH = "ops/entity-registry.json"
 
 
 def default_path(repo_dir: str | None) -> str:
-    """Same `--repo` convention as `identity.default_path`. The PATH is resolved once at startup;
-    the file itself is read per call, so a deployment that must not track working-tree edits points
-    this at a baked artifact."""
-    return os.path.join(repo_dir, ENTITY_REGISTRY_RELATIVE) if repo_dir else ""
+    """Same `--repo` convention as `identity.default_path`. The PATH is resolved once at startup,
+    and it is the FALLBACK source: wherever the index carries a registry snapshot, that snapshot is
+    what the service answers from (see `service.BrainService._registry_source`)."""
+    return os.path.join(repo_dir, *ENTITY_REGISTRY_RELPATH.split("/")) if repo_dir else ""
 
 
 def _norm(text: str) -> str:
@@ -28,19 +36,37 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
-def _load_entities(path: str | None) -> dict:
-    """`id -> raw registry record dict` — the ONE JSON read both `load_aliases` and
-    `load_registry` share, so missing and malformed files behave identically for both readers.
-    Missing path -> `{}` (fail-open: resolution finds nothing). Malformed JSON or a top level
-    that is not `{"entities": {...}}` RAISES: silently degrading retrieval has no signal anywhere
-    an operator or a golden run would see it."""
+def read_file(path: str | None) -> str | None:
+    """The registry file's TEXT, or `None` when there is no file to read (an unset path, or a path
+    nothing exists at). `None` is the "no registry here" answer every reader fails open on, and it
+    is what lets a caller choosing between sources — snapshot or file — do so without knowing how
+    either one is parsed."""
     if not path or not os.path.exists(path):
-        return {}
+        return None
     with open(path, encoding="utf-8") as f:
-        data = json.load(f)
+        return f.read()
+
+
+def _entities_from_text(text: str | None, origin: str) -> dict:
+    """`id -> raw registry record dict` — the ONE parse every reader shares, so a snapshot and a
+    file behave identically for both readers. No registry at all (`None`) -> `{}` (fail-open:
+    resolution finds nothing). Malformed JSON or a top level that is not `{"entities": {...}}`
+    RAISES: silently degrading retrieval has no signal anywhere an operator or a golden run would
+    see it. `origin` only names the source in that message, for the operator who has to fix it —
+    it is why the message must not reach a tool caller (`errors.RegistryError`)."""
+    if text is None:
+        return {}
+    data = json.loads(text)
+    # Wording mirrored from `kernel.registry.load_registry`, deliberately: two parsers over one
+    # file format must not disagree about what a registry IS. Without this, valid JSON whose top
+    # level is a list/string/number/null reached `.get` and raised `AttributeError`, which the
+    # service converts to nothing — so the ONE malformed shape that skipped `RegistryError` was
+    # also the one a truncated snapshot is likeliest to produce.
+    if not isinstance(data, dict):
+        raise ValueError(f"entity registry {origin}: top level must be an object")
     entities = data.get("entities")
     if not isinstance(entities, dict):
-        raise ValueError(f"entity registry {path}: top-level 'entities' object is required")
+        raise ValueError(f"entity registry {origin}: top-level 'entities' object is required")
     return entities
 
 
@@ -61,11 +87,12 @@ def _record_aliases(record: dict) -> list[str]:
     return [str(a) for a in aliases if isinstance(a, str | int | float)]
 
 
-def load_aliases(path: str | None) -> dict[str, str]:
-    """Normalized alias/name/id text -> canonical entity id. Shares `_load_entities` and the
-    per-field helpers with `load_registry`, so neither reader can be hardened without the other."""
+def aliases_from_text(text: str | None, origin: str) -> dict[str, str]:
+    """Normalized alias/name/id text -> canonical entity id. Shares `_entities_from_text` and the
+    per-field helpers with `registry_from_text`, so neither reader can be hardened without the
+    other."""
     aliases: dict[str, str] = {}
-    for cid, e in _load_entities(path).items():
+    for cid, e in _entities_from_text(text, origin).items():
         if not isinstance(e, dict):
             continue
         for alias in (cid, _record_name(e), *_record_aliases(e)):
@@ -75,11 +102,12 @@ def load_aliases(path: str | None) -> dict[str, str]:
     return aliases
 
 
-def load_registry(path: str | None) -> dict[str, dict]:
+def registry_from_text(text: str | None, origin: str) -> dict[str, dict]:
     """`id -> {id, name, type, aliases}` — the full records `list_entities`/`describe_entity`
-    serve. Same loader and per-field helpers as `load_aliases`; a non-mapping record is skipped."""
+    serve. Same parse and per-field helpers as `aliases_from_text`; a non-mapping record is
+    skipped."""
     out: dict[str, dict] = {}
-    for cid, e in _load_entities(path).items():
+    for cid, e in _entities_from_text(text, origin).items():
         if not isinstance(e, dict):
             continue
         out[cid] = {
@@ -89,6 +117,17 @@ def load_registry(path: str | None) -> dict[str, dict]:
             "aliases": _record_aliases(e),
         }
     return out
+
+
+def load_aliases(path: str | None) -> dict[str, str]:
+    """`aliases_from_text` over a FILE — for a caller that holds only a path (`evals/run_qa.py`,
+    and any process with no index connection to ask for a snapshot)."""
+    return aliases_from_text(read_file(path), path or "")
+
+
+def load_registry(path: str | None) -> dict[str, dict]:
+    """`registry_from_text` over a FILE, the path-only half of `load_aliases` above."""
+    return registry_from_text(read_file(path), path or "")
 
 
 def resolve_entity(aliases: dict[str, str], question: str) -> str | None:

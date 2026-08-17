@@ -21,6 +21,7 @@ from stigmergy.capture.errors import CaptureError
 from stigmergy.gardener.schema import JOB_NAME as GARDENER_JOB
 from stigmergy.gardener.schema import ensure_gardener_schema
 from stigmergy.gardener.store import insert_findings
+from stigmergy.index import store as index_store
 from stigmergy.librarian import config as librarian_config
 from stigmergy.librarian import gitcmd
 from stigmergy.repair import remote as repair_remote
@@ -485,6 +486,11 @@ def test_a_registry_the_loader_refuses_reads_as_a_refusal_not_a_500(conn, admin_
     It is a refusal, not a fault: the substrate the console was pointed at is broken, the loader's
     own sentence names the file and the entity, and `AdminRefused` is what carries an
     operator-actionable sentence to the console (409)."""
+    # ARRANGE the precondition rather than inherit it. Since #74 the console lints the copy the
+    # SERVER serves, and a snapshot left in the shared singleton by any earlier module would be
+    # that copy — so this test would lint a perfectly good registry and never reach the refusal it
+    # is about. Whether it passes must not depend on collection order.
+    index_store.clear_entity_registry(conn)
     registry = tmp_path / "entity-registry.json"
     registry.write_text(json.dumps({"entities": {"acme": {"aliases": []}}}))   # no 'name'
     broken = AdminService(conn, server_settings=Settings(entity_registry_path=str(registry)),

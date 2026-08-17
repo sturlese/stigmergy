@@ -87,8 +87,11 @@ def main() -> int:
 
 def _settings_for(args, identity_name: str) -> Settings:
     """The measured server's settings — one construction site, so what the instrument runs is
-    inspectable. `entity_registry_path` must stay set or entity-first resolution is off under
-    measurement while live on the deployed server."""
+    inspectable. `entity_registry_path` is the FALLBACK source, exactly as on a real server: where
+    the measured database carries an `entity_registry_snapshot`, the service answers from that and
+    this path is never read (`BrainService._registry_source`). It must still be set for a database
+    that has none, or entity-first resolution is off under measurement while live on the deployed
+    server."""
     return Settings(identity=identity_name, identities_path=args.identities,
                     entity_registry_path=(args.entity_registry
                                           or entity_aliases.default_path(args.repo)),
@@ -104,6 +107,13 @@ def _run(args, golden) -> int:
         meta = store.read_meta(conn)
         if meta is None:
             sys.exit("the index is empty — pass --rebuild --repo <dir> or build it first")
+        if args.entity_registry and store.read_entity_registry(conn) is not None:
+            # A flag that silently does nothing is worse than no flag: this database carries a
+            # registry snapshot, and the service prefers it, so the run measures the registry the
+            # INDEX was built from — not the file named here. `--rebuild --repo <dir>` is what
+            # makes the two the same.
+            print(f"note: --entity-registry {args.entity_registry} is IGNORED — this index carries "
+                  f"a registry snapshot and the service answers from it", file=sys.stderr)
         embedder = (build_embedder(args.embedder) if args.embedder
                     else embedder_for_model(meta["model"]))
 

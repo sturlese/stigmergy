@@ -32,6 +32,7 @@ from starlette.responses import JSONResponse
 from stigmergy.admin import routes as admin_routes
 from stigmergy.capture import evidence as evidence_plane
 from stigmergy.capture.schema import ensure_capture_schema
+from stigmergy.index import store
 from stigmergy.server import review, webhook
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
 from stigmergy.server.errors import IdentityError
@@ -238,6 +239,9 @@ def build_http_app(settings, *, token_store: dict[str, str]):
     ensure_audit_table(conn)
     ensure_capture_schema(conn)   # the durable write-path tables, same startup as the audit one
     review.ensure_review_schema(conn)   # the review lane's table, same startup pattern
+    # Created here rather than only on the webhook's write path: `CREATE TABLE IF NOT EXISTS` is
+    # not race-free, and losing that race INSIDE phase 2 rolls the pushed pages back with it.
+    store.ensure_entity_registry_table(conn)
     audit = AuditWriter(conn)
     rate_limiter = RateLimiter()
     # One evidence store for the whole process: constructing it does no I/O, and its boto3 client

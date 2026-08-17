@@ -545,6 +545,7 @@ export async function indexView(host) {
   await loading(host, async () => {
     const data = await api.get("index");
     const meta = data.meta;
+    const registry = data.entity_registry;
     const checkHost = el("div", {});
     const zoneTiles = Object.entries(data.zones).map(([zone, n]) => tile(zone + "/", String(n), "pages"));
     // a variable, not an inline object literal — see the matching comment in gardenerView.
@@ -554,6 +555,12 @@ export async function indexView(host) {
         tile("Index built", meta && meta.built_at ? fmtAge(agoFrom(meta.built_at)) + " ago" : "never",
           meta ? `at ${fmtWhen(meta.built_at)}` : "the server refuses to serve an empty index"),
         tile("Embedding model", meta ? meta.model : "—", meta ? `dim ${meta.dim}` : null),
+        // which registry every process group is serving, and how stale it is — the deployed groups
+        // hold no checkout, so this row is the only place that question has an answer.
+        tile("Entity registry",
+          registry ? fmtAge(agoFrom(registry.refreshed_at)) + " ago" : "no snapshot",
+          registry ? `from ${registry.source}`
+            : "every server falls back to its own --entity-registry file"),
         ...zoneTiles),
       el("div", { class: "card" },
         el("div", { class: "card-head" },

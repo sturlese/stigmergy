@@ -147,8 +147,10 @@ def test_list_entities_takes_no_arguments_and_returns_the_service_payload(fake_s
 
 
 def test_list_entities_maps_an_unanticipated_exception_to_class_name_only(fake_service):
-    """A malformed entity registry raises ValueError with a message that can carry a filesystem
-    path — never echoed verbatim, same posture as every other unanticipated exception."""
+    """A `ValueError` whose message can carry a filesystem path — the shape the registry loader
+    itself raises before the service converts it (`RegistryError`) — is never echoed verbatim, the
+    same posture as every other unanticipated exception. The conversion is the service's promise;
+    this is the closure's own net under it."""
     fake_service.list_entities.side_effect = ValueError(
         "entity registry /repo/ops/entity-registry.json: top-level 'entities' object "
         "is required")

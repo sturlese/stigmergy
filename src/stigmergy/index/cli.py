@@ -3,7 +3,6 @@ argument parsing over the library; the server consumes the same seams, nothing h
 """
 import argparse
 import json
-import os
 from datetime import date
 
 from stigmergy.index import build, check, search, store
@@ -46,14 +45,17 @@ def index_main(argv=None) -> None:
     args = ap.parse_args(argv)
 
     if args.check:
-        registry = (os.path.join(args.repo, "ops", "entity-registry.json")
-                    if args.repo else None)
+        registry_file = build.registry_path(args.repo) if args.repo else None
         try:
             with store.connect(args.dsn) as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT count(*) FROM pages_index")
                     pages = cur.fetchone()[0]
-                findings = check.run_checks(conn, registry_path=registry)
+                # The copy the SERVER serves, never `--repo`'s file by default: an index carrying a
+                # snapshot is answering from it, and linting the working tree instead would report
+                # coverage nobody's server has.
+                findings = check.run_checks(
+                    conn, registry=check.served_registry(conn, registry_file))
         except StigmergyIndexError as ex:
             raise SystemExit(str(ex)) from ex
         print(check.render(findings, pages))

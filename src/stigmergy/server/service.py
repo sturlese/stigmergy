@@ -43,6 +43,10 @@ MAX_ARG_CHARS = 8192
 
 DEFAULT_SUBMISSION_LIMIT = 20
 
+# What a malformed registry's message names when the bytes came from the index rather than from a
+# file — an operator reading it needs to know WHICH copy to fix, and there is no path to give.
+_SNAPSHOT_ORIGIN = f"snapshot in the index ({entity_aliases.ENTITY_REGISTRY_RELPATH})"
+
 # Bounds on the audit row's SHAPE, where `MAX_ARG_CHARS` bounds each individual string.
 MAX_AUDIT_HINT_KEYS = 32
 MAX_AUDIT_DEPTH = 20
@@ -141,6 +145,8 @@ class BrainService:
         self.door = door
         # None = no write path wired; `submit` refuses cleanly so reads still serve.
         self.evidence = evidence
+        # `_registry_source`'s memo, dropped at every `_call`/`call_async` — see its docstring.
+        self._registry_memo: tuple[str | None, str] | None = None
 
     @property
     def unrestricted(self) -> bool:
@@ -154,6 +160,7 @@ class BrainService:
         """`summarize`: an optional `(return_value) -> dict | None` callback, invoked only on a
         SUCCESSFUL call, whose result is written to `audit_log.result` — a summary, never a
         transcript."""
+        self._registry_memo = None      # see `_registry_source`: the memo lives for this call
         start = time.monotonic()
         outcome, error_class, value = "ok", "", None
         try:
@@ -171,6 +178,7 @@ class BrainService:
     async def call_async(self, tool: str, args: dict, coro_fn, *, summarize=None):
         """The same wrapper, async. Public because `ask` lives one layer ABOVE this service and
         `service.py` may never import `stigmergy.answer`."""
+        self._registry_memo = None      # see `_registry_source`: the memo lives for this call
         start = time.monotonic()
         outcome, error_class, value = "ok", "", None
         try:
@@ -239,20 +247,51 @@ class BrainService:
         return self._run_search(query, filters, max_results, include_superseded,
                                 entity_hint=entity_id)
 
+    def _registry_source(self) -> tuple[str | None, str]:
+        """The registry TEXT this service answers from, and the origin naming it in the parser's
+        operator-facing error. The index's snapshot WINS wherever the database has one; the
+        `--entity-registry` file is the fallback.
+
+        That order is the whole of issue #74. The deployed `app` and `slack` groups hold no
+        checkout — their registry is a copy baked into the image at deploy time — so an entity
+        minted after a rollout was served with no name, no type and no aliases, and its aliases
+        resolved nowhere, until the next deploy. The snapshot is refreshed by the same push webhook
+        that refreshes `pages_index` and reconciled by the same nightly `--rebuild`, so both groups
+        see a mint within seconds of the push. The file road stays for a database with no snapshot:
+        a local `stigmergy-server --repo`, or an index built before that table existed.
+
+        Memoized between `_call`/`call_async` RESETS, which is not the same as once per tool call
+        and must not be read as it: `ask` rides `call_async` and its inner `_call`s (every
+        `service.search` it runs) drop the memo again, so one `ask` can resolve against a registry
+        the webhook replaced mid-answer. That is a rank perturbation at worst — the alternative,
+        pinning the registry for a whole `ask`, would trade it for a memo whose lifetime nothing
+        bounds. What the memo IS for: one `describe_entity` reading the source once instead of
+        three times. The reset is what keeps that true on the stdio door too, where `build_service`
+        builds ONE service for the whole process (HTTP and Slack build one per request, so there
+        the memo would have expired anyway).
+        """
+        if self._registry_memo is None:
+            snapshot = store.read_entity_registry(self.conn)
+            path = self.settings.entity_registry_path
+            self._registry_memo = ((snapshot, _SNAPSHOT_ORIGIN) if snapshot is not None
+                                   else (entity_aliases.read_file(path), path or ""))
+        return self._registry_memo
+
     def _registry_aliases(self) -> dict[str, str]:
-        """`load_aliases`, malformed file surfaced as `RegistryError`: the loader's `ValueError`
-        names the registry PATH, and `search_brain` echoes `ValueError` verbatim."""
-        # The raw loader is reachable only from closures that collapse ValueError to a class name;
+        """`aliases_from_text` over `_registry_source`, malformed content surfaced as
+        `RegistryError`: the parser's `ValueError` names the registry PATH, and `search_brain`
+        echoes `ValueError` verbatim."""
+        # The raw parser is reachable only from closures that collapse ValueError to a class name;
         # adding ValueError to any of those echo sets would leak the registry path.
         try:
-            return entity_aliases.load_aliases(self.settings.entity_registry_path)
+            return entity_aliases.aliases_from_text(*self._registry_source())
         except ValueError as ex:
             raise RegistryError("the entity registry could not be read") from ex
 
     def _registry_records(self) -> dict[str, dict]:
-        """`load_registry`, same posture as `_registry_aliases` above."""
+        """`registry_from_text`, same source and same posture as `_registry_aliases` above."""
         try:
-            return entity_aliases.load_registry(self.settings.entity_registry_path)
+            return entity_aliases.registry_from_text(*self._registry_source())
         except ValueError as ex:
             raise RegistryError("the entity registry could not be read") from ex
 
@@ -377,11 +416,12 @@ class BrainService:
     # ── entity navigation ──────────────────────────────────────────────────────
     def list_entities(self) -> dict:
         """The ACL-scoped entity vocabulary: `scoped_entities()`'s ids, enriched from the registry;
-        an id absent from it (or a missing registry) serves as `{id}` alone, malformed raises."""
+        an id absent from it (or a missing registry) serves as `{id}` alone, a malformed registry
+        raises `RegistryError`."""
         return self._call("list_entities", {}, lambda: self._list_entities())
 
     def _list_entities(self) -> dict:
-        registry = entity_aliases.load_registry(self.settings.entity_registry_path)
+        registry = self._registry_records()
         entities = []
         for eid in self.scoped_entities():
             record = registry.get(eid)
@@ -400,7 +440,7 @@ class BrainService:
         # Computed UNCONDITIONALLY, before resolution: paying for the DB read in only one branch
         # is a timing oracle — latency alone would tell a caller which case applied.
         scoped = set(self.scoped_entities())
-        aliases = entity_aliases.load_aliases(self.settings.entity_registry_path)
+        aliases = self._registry_aliases()
         # Registry match first, falling back to EXACT membership of `scoped`. The registry hit
         # only WINS when in scope: a bare `or` would refuse a scoped raw id the registry folds to
         # an out-of-scope canonical id.
@@ -410,7 +450,7 @@ class BrainService:
         if entity_id is None or entity_id not in scoped:
             return absence
 
-        registry = entity_aliases.load_registry(self.settings.entity_registry_path)
+        registry = self._registry_records()
         record = _neutralize_entity_record(
             registry.get(entity_id) or {"id": entity_id, "name": "", "type": "", "aliases": []})
 
@@ -795,6 +835,9 @@ def build_service(settings: Settings, conn=None) -> BrainService:
     ensure_capture_schema(conn)
     # unconditional: the review tools work on any server, knowledge repo configured or not.
     review.ensure_review_schema(conn)
+    # Created single-threaded here so the webhook's own `IF NOT EXISTS` has nothing left to race:
+    # losing that race inside its phase-2 transaction would roll the pushed pages back with it.
+    store.ensure_entity_registry_table(conn)
     # `store_from_env` does no I/O, so a server whose bucket is unreachable still serves reads.
     return BrainService(settings, conn, embedder, audiences, identity=settings.identity,
                         audit=AuditWriter(conn), evidence=evidence_plane.store_from_env())

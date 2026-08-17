@@ -44,7 +44,7 @@ says what a corrective retry was for) — never a question or an answer, by cons
 | `transport_http.py` | the streamable-HTTP transport — the bearer-auth ASGI middleware, per-request identity resolution, and the one shared FastMCP app (`stateless_http=True`, mandatory — see "HTTP transport" below) every identity serves through. It mounts `webhook.py`'s route via FastMCP's `custom_route` and exempts its EXACT path from the bearer middleware, and it composes the admin console ([admin-console.md](./admin-console.md)) in FRONT as an ASGI branch — `/admin*` never reaches the bearer middleware at all, which is what keeps the webhook exemption meaning exactly one path |
 | `issue_token.py` | `stigmergy-issue-token <email>` — the operator token-issuance CLI |
 | `webhook.py` | `POST /webhook/github` — HMAC-verified incremental index upsert on merge; the one declared, narrow exception to "the server never imports the librarian" (`githubapp`'s App-credential primitives, reused rather than reimplemented). It reuses `corpus.page_row` and `store.upsert_pages`/`delete_pages` rather than growing a second writer, and re-resolves outbound `links` against the index's own existing paths. `_propagate_split_chain_supersession` knows both part-id conventions the codebase has written (`-p<n>` and the historical `#p<n>`) and only ever propagates from a chain PRIMARY to parts sitting in that primary's own directory, so an id-less `-p2`-stemmed twin in another folder never inherits. Failure here never breaks the write path: the page is already committed to git, and the nightly rebuild reconciles regardless |
-| `entity_aliases.py` | reads `ops/entity-registry.json` as a plain file contract of its own (never imports `stigmergy.kernel.registry`'s reader/writer — a deliberate second parser, not a shared one) and resolves a registered alias inside a free-text query (`load_aliases`/`resolve_entity`), used by entity-first search at the SERVICE layer. `load_registry` (full `{id,name,type,aliases}` records) and `resolve_exact` (input names one entity, not a substring search) are `list_entities`/`describe_entity`'s resolution |
+| `entity_aliases.py` | reads `ops/entity-registry.json` as a plain contract of its own (never imports `stigmergy.kernel.registry`'s reader/writer — a deliberate second parser, not a shared one) and resolves a registered alias inside a free-text query (`aliases_from_text`/`resolve_entity`), used by entity-first search at the SERVICE layer. `registry_from_text` (full `{id,name,type,aliases}` records) and `resolve_exact` (input names one entity, not a substring search) are `list_entities`/`describe_entity`'s resolution. TEXT is the unit because the bytes arrive from two places — the index's snapshot, else the `--entity-registry` file (see "Which registry the server serves") — and `load_aliases`/`load_registry` are the same parser over `read_file` for a caller that holds only a path |
 | `pilot_report.py` | `stigmergy-pilot-report` — questions/identity/week, answered-with-citation vs honest refusal, capture→filed and capture→searchable latency, from real `audit_log`/`capture_queue` rows. Reads only |
 
 The server may import `stigmergy.index` and `stigmergy.capture` freely. It may **not** import
@@ -244,7 +244,8 @@ STIGMERGY_TOKEN_STORE='{"<sha256hex>":"steward@example.com"}' \
 
 `--repo` defaults `--identities` to `<repo>/ops/identities.json` **and** `--entity-registry` to
 `<repo>/ops/entity-registry.json` (the registry entity-first search, `list_entities` and
-`describe_entity` all resolve through), and it is also the fallback for the knowledge-repo checkout
+`describe_entity` all resolve through — where the index carries no snapshot of it; see below), and
+it is also the fallback for the knowledge-repo checkout
 `review_decide`'s steward resolution reads `ops/stewards.json` from — that one can be set on its
 own with `$STIGMERGY_KNOWLEDGE_REPO`, since there is no flag for the checkout itself. All of them
 need an explicit value in production, where no `--repo` is passed at all. The DSN comes from
@@ -258,6 +259,32 @@ and no `--repo` at all. Where a checkout exists, the copy read at the base commi
 never consulted. Where one does not and this is unset, the steward map resolves EMPTY: the doorbell
 rings for nobody and every entity-proposal decision fails closed — on a server whose
 `ops/stewards.json` is perfectly correct in git.
+
+**Which registry the server serves — and why `--entity-registry` is only the fallback.**
+`ops/entity-registry.json` had the same shape of problem and a different answer. A baked copy in a
+process with no checkout goes stale the moment a governed mint pushes a new entity: the push
+webhook refreshed `pages_index` so the entity's PAGE was served within seconds, while
+`describe_entity` answered `{"name": "", "type": "", "aliases": []}` and every alias of that entity
+resolved nowhere — silently, until the next deploy re-baked the file (issue #74). So the registry
+is now cached in the derived index (`entity_registry_snapshot`), refreshed by the same webhook that
+refreshes the pages and reconciled by the same nightly rebuild — which covers the `slack` group
+too, a process with neither a checkout nor a webhook of its own.
+`BrainService._registry_source` reads that snapshot wherever the database has one and falls back to
+the `--entity-registry` file where it does not (a local `--repo` run, an index built before the
+table existed). The memo behind it is dropped at every `_call`/`call_async` seam, so one
+`describe_entity` reads the registry once instead of three times — but "once per tool call" is not
+a promise the shape can keep: `ask` rides `call_async` and each `search` inside it drops the memo
+again, so a webhook landing mid-answer can leave one `ask` resolving against two registries (a rank
+perturbation, never a wrong answer). Both roads parse through the same `entity_aliases` functions,
+so a malformed registry raises identically whichever one it came from.
+
+**The inversion this creates for local development.** A `stigmergy-server --repo <checkout>` used to
+pick up a working-tree edit to `ops/entity-registry.json` on the very next call — the file was read
+per call. It no longer does: if that database carries a snapshot, the snapshot wins and the edited
+file is never read. `stigmergy-index --rebuild --repo <checkout>` is how a developer applies the
+edit (it rewrites the snapshot from the checkout), and a checkout with no registry at all clears the
+snapshot, which puts `--entity-registry` back in charge. `stigmergy-index --check` reads the same
+served copy, so the lint and the server never disagree about which registry exists.
 
 **Both review kinds resolve stewards at the UNIVERSAL scope, and only there.** `stewards.json`
 keys may be zone path prefixes, but neither kind has a page path to match one against — an entity
@@ -420,7 +447,7 @@ Every response body an HTTP client can receive from this server, and what it can
 | `ask` — any OTHER exception (a `pydantic_core.ValidationError` out of the agent/verifier stack, e.g. — a `ValueError` subclass, which is why the catch is narrowed by the `is_arg_length_error` marker rather than by type) | `{"error": "ask failed (<ExceptionClassName>); check ANSWER_LLM / OPENAI_API_KEY and that the index is built"}` | No — class name plus a fixed, value-free hint; `str(ex)` is never included, so untrusted LLM output cannot ride out through it |
 | `read_page` / `ask` — a marker `ValueError` (`check_arg_length`'s own rejection) | `{"error": "<arg> too long (max 8192 characters)"}` | No — the argument NAME and a static limit, never the oversized value |
 | `read_page` — unknown or out-of-scope path | `{"error": "unknown page: <path>"}` | No — `<path>` is the CLIENT's own request echoed back; existence itself stays scoped (identical body whichever reason applies) |
-| `list_entities` — any exception (a malformed entity registry raises `ValueError` naming the registry's file PATH) | `{"error": "list_entities failed (<ExceptionClassName>)"}` | **No** — class name only, always; unlike `search_brain`'s unknown-filter `ValueError` (safe to echo — it names only the caller's own input), a registry-malformed message names a server-side filesystem path and must never reach the wire |
+| `list_entities` — any exception (a malformed entity registry arrives as `RegistryError`, the service's conversion of a loader `ValueError` that names the registry's PATH) | `{"error": "list_entities failed (<ExceptionClassName>)"}` | **No** — class name only, always; unlike `search_brain`'s unknown-filter `ValueError` (safe to echo — it names only the caller's own input), a registry-malformed message names a server-side filesystem path and must never reach the wire |
 | `describe_entity` — a marker `ValueError` (`check_arg_length`'s own rejection) vs any other exception | marker: `{"error": "entity too long (max 8192 characters)"}`; other: `{"error": "describe_entity failed (<ExceptionClassName>)"}` | No — same narrowing as `read_page`: only the length-check's own known-safe message echoes verbatim |
 | `describe_entity` — unknown or out-of-scope entity | `{"error": "unknown entity: <input>"}` | No — `<input>` is the CLIENT's own request echoed back; existence itself stays scoped (byte-identical whichever reason applies, mirroring `read_page`'s own rule) |
 | Any unhandled exception inside the auth middleware or the ASGI app itself (a genuine bug, not a designed path) | Starlette's default `ServerErrorMiddleware` response, HTTP 500 | No — `debug=False` (the `FastMCP`/`Starlette` default here), so Starlette's own handler returns a fixed generic body with no traceback |
@@ -582,6 +609,7 @@ else ([operator-runbook.md](./operator-runbook.md#the-two-databases)):
 | `test_entity_tools_pg.py` | `list_entities`/`describe_entity` — scoped vocabulary, registry postures, the description layers, id/name/alias resolution, byte-identical absence |
 | `test_entity_first_search_pg.py` | entity-first resolution at `BrainService.search` AND through the real `search_brain` MCP surface |
 | `test_entity_aliases.py` | `entity_aliases` as a pure file contract: `load_aliases`/`load_registry`/`resolve_entity`/`resolve_exact`, registry-missing fail-open vs registry-malformed raise |
+| `test_registry_freshness_pg.py` | an entity minted after the rollout is served with its name, type and aliases: the webhook refreshes the registry snapshot, and a push that does not touch the registry (or a database with no snapshot) leaves the `--entity-registry` file answering |
 | `test_entity_tools_neutralization_pg.py` | a hostile registry/page title never escapes through `list_entities`/`describe_entity` |
 | `test_settings_entity_registry.py` | the `--entity-registry` precedence: an explicit path beats the `--repo` convention, and production passes no `--repo` at all |
 | `test_keyless_capability.py` | a keyless process still starts, `read_page` and the capture tools still work, and `search_brain`/`ask` say which capability is missing |

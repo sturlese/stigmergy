@@ -29,6 +29,7 @@ from stigmergy.capture import ops
 from stigmergy.index import corpus, store
 from stigmergy.librarian import githubapp
 from stigmergy.librarian.errors import LibrarianConfigError
+from stigmergy.server import entity_aliases
 
 log = logging.getLogger(__name__)
 
@@ -134,6 +135,18 @@ def in_zone_changes(changes: dict[str, str]) -> dict[str, str]:
             if path.startswith(prefixes) and corpus.is_indexable_page(path)}
 
 
+def registry_was_pushed(changes: dict[str, str]) -> bool:
+    """Does this push carry a new `ops/entity-registry.json` to cache?
+
+    Asked of the RAW changed paths, never of `in_zone_changes`: `ops/` is not one of `corpus.ZONES`,
+    so the registry is invisible to every filter written for pages — precisely how issue #74 stayed
+    hidden. A `removed` status is False: no governed door deletes this file, so a removal is either
+    a rename away (the nightly rebuild reconciles from the checkout) or an accident, and blanking
+    every entity's name the moment one lands is the worse of the two answers.
+    """
+    return changes.get(entity_aliases.ENTITY_REGISTRY_RELPATH) in ("added", "modified")
+
+
 def _fetch_file_content(repo_slug: str, path: str, sha: str, token: str, *, opener=None) -> str:
     """One file's text AT THE PUSHED SHA, via the GitHub Contents API — no clone, no checkout.
     `Accept: application/vnd.github.raw+json` asks GitHub to hand back the raw bytes directly
@@ -192,17 +205,25 @@ def process_push(conn, embedder, payload: dict, settings: WebhookSettings, *, op
     Returns the stats dict written to `job_runs`.
 
     Bounded: above `settings.file_cap` in-zone changed files the push is deferred wholesale — a
-    half-applied bulk change is worse than a stale one. Two phases for the same reason: phase 1
+    half-applied bulk change is worse than a stale one, and the ENTITY REGISTRY rides that same
+    deferral even though it is not an in-zone file: the cap's promise is that a push lands whole or
+    not at all, and the nightly rebuild that reconciles the pages now reconciles the registry with
+    them. (A mint's own push is two files, so it never approaches the cap; a registry-only push
+    counts zero in-zone files and cannot trip it at all, which is why the registry carries its own
+    bound — a SIZE, `store.MAX_ENTITY_REGISTRY_BYTES`, since what an oversized one costs is a parse
+    on every tool call rather than one ingest.) Two phases for the same reason: phase 1
     is every network call and read-only lookup with NO database write; phase 2 is exactly one
-    `with conn.transaction():` around delete + fresh embeddings + upsert. A phase-1 failure never
-    touches `pages_index`; a phase-2 failure rolls the delete back WITH the upsert, so a rename
-    that fails mid-run loses NEITHER page.
+    `with conn.transaction():` around delete + fresh embeddings + upsert + the registry snapshot. A
+    phase-1 failure never touches `pages_index`; a phase-2 failure rolls the delete back WITH the
+    upsert, so a rename that fails mid-run loses NEITHER page.
 
     GitHub does NOT auto-redeliver on a 5xx — the 500 is operator visibility (and manual
     redelivery), never a retry mechanism; the nightly rebuild is the only automatic reconciler.
     """
     sha = payload.get("after") or (payload.get("head_commit") or {}).get("id") or ""
-    changes = in_zone_changes(changed_paths_from_push(payload))
+    raw_changes = changed_paths_from_push(payload)
+    changes = in_zone_changes(raw_changes)
+    refresh_registry = registry_was_pushed(raw_changes)
     stats = {"sha": sha, "upserted": 0, "deleted": 0, "skipped": 0, "embedded": 0}
 
     if len(changes) > settings.file_cap:
@@ -222,9 +243,14 @@ def process_push(conn, embedder, payload: dict, settings: WebhookSettings, *, op
     embeddings: dict[str, list[float]] = {}
     fresh: dict[str, list[float]] = {}
     skipped = 0
+    registry_text: str | None = None
+    # ONE token per delivery, minted only when something will actually be fetched. It is minted
+    # here rather than beside the page fetches because a push can carry the registry and no page at
+    # all (a registry regenerate, or a re-mint of an already-indexed entity page), and that push
+    # must still be able to fetch.
+    token = githubapp.installation_token() if (to_upsert_paths or refresh_registry) else ""
     if to_upsert_paths:
         before_hashes = store.current_content_hashes(conn, to_upsert_paths)   # SELECT only
-        token = githubapp.installation_token()
         for path in to_upsert_paths:
             zone = path.split("/", 1)[0]
             text = _fetch_file_content(settings.repo, path, sha, token, opener=opener)  # network
@@ -249,6 +275,23 @@ def process_push(conn, embedder, payload: dict, settings: WebhookSettings, *, op
             fresh = dict(zip(keys, vectors, strict=True))
         embeddings = {**cached, **fresh}
 
+    if refresh_registry:
+        fetched = _fetch_file_content(                                        # network
+            settings.repo, entity_aliases.ENTITY_REGISTRY_RELPATH, sha, token, opener=opener)
+        size = len(fetched.encode("utf-8"))
+        if size > store.MAX_ENTITY_REGISTRY_BYTES:
+            # Refused, not raised: the PAGES in this same push must still land, and this endpoint's
+            # failure mode is never to break the write path. The previous snapshot stays — the
+            # honest floor is a registry that is stale, not one that costs every identity a
+            # multi-megabyte parse on every tool call (see `store.MAX_ENTITY_REGISTRY_BYTES`).
+            log.error("webhook: %s at %s is %d bytes, above the %d-byte cap — NOT cached; the "
+                      "previously cached registry stands and the nightly rebuild reconciles",
+                      entity_aliases.ENTITY_REGISTRY_RELPATH, sha, size,
+                      store.MAX_ENTITY_REGISTRY_BYTES)
+            stats["registry_refused_bytes"] = size
+        else:
+            registry_text = fetched
+
     # ── phase 2: one transaction — delete + store any fresh embeddings + upsert, or none of it ──
     with conn.transaction():
         if to_delete:
@@ -262,7 +305,15 @@ def process_push(conn, embedder, payload: dict, settings: WebhookSettings, *, op
             # everything else phase 2 already guards.
             _propagate_split_chain_supersession(conn, rows)
             stats["upserted"] = len(rows)
+        if registry_text is not None:
+            # In the SAME transaction as the entity page a mint pushes beside it: the two land
+            # together or neither does, so no reader ever sees the page without its metadata.
+            store.write_entity_registry(conn, registry_text, sha)
 
+    if registry_text is not None:
+        # Only when a refresh actually happened — an ordinary page push's stats dict stays exactly
+        # what it has always been, and `job_runs` says which deliveries touched the registry.
+        stats["registry_refreshed"] = True
     stats["skipped"] = skipped
     stats["embedded"] = len(fresh)
     return stats
@@ -272,7 +323,9 @@ def process_push(conn, embedder, payload: dict, settings: WebhookSettings, *, op
 # unauthenticated caller can throw large concurrent bodies at, on the same small single-process
 # machine serving every identity. Sized to what this handler will ever ACT on (a file-cap'd path
 # list; a real push is kilobytes), NOT to GitHub's 25 MB delivery ceiling — a bound on the
-# protocol instead of the work is an OOM amplifier.
+# protocol instead of the work is an OOM amplifier. The same reasoning bounds the one FILE this
+# endpoint fetches and stores whole — `store.MAX_ENTITY_REGISTRY_BYTES`, which lives beside its
+# table because the rebuild road has to refuse exactly what this one refuses.
 MAX_BODY_BYTES = 1024 * 1024
 
 

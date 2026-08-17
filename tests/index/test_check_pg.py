@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-from stigmergy.index import build, check
+from stigmergy.index import build, check, store
 from stigmergy.index.backends.embedder import build_embedder
 from tests import testdb
 
@@ -45,6 +45,11 @@ def checked(tmp_path):
     conn = _connect_or_skip()
     build.rebuild(conn, root, build_embedder("fake"))
     yield conn, registry_path
+    # This repo CARRIES `ops/entity-registry.json`, so the rebuild above cached it into the
+    # `entity_registry_snapshot` singleton every suite shares — and `check.served_registry` prefers
+    # that snapshot over the file a caller names. Left behind, it decides what an unrelated
+    # module's substrate check lints, by collection order.
+    store.clear_entity_registry(conn)
     conn.close()
 
 

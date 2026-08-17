@@ -34,19 +34,33 @@ class Registry:
 def load_registry(path: str | None) -> Registry:
     """Missing path/file -> empty registry (the graph works unregistered); malformed -> error,
     loudly — a broken identity file must never silently degrade to wrong entities."""
-    reg = Registry()
     if not path or not os.path.exists(path):
-        return reg
+        return Registry()
     with open(path, encoding="utf-8") as f:
-        data = json.load(f)
+        return registry_from_text(f.read(), path)
+
+
+def registry_from_text(text: str | None, origin: str) -> Registry:
+    """`load_registry` over TEXT — the same reader, for bytes that never were a local file.
+
+    The registry reaches a reader from two places now: the file this module has always read, and
+    the copy the derived index caches for the deployed server (`index.store`'s
+    `entity_registry_snapshot`, issue #74). Splitting the read from the parse is what keeps ONE
+    answer to "does this registry load": a lint that read the served copy through a second,
+    laxer parse would bless a substrate the server refuses. `origin` only names the source in the
+    error, since there is no path to give when the bytes came from the index."""
+    reg = Registry()
+    if text is None:
+        return reg
+    data = json.loads(text)
     if not isinstance(data, dict):
-        raise ValueError(f"registry {path}: top level must be an object")
+        raise ValueError(f"registry {origin}: top level must be an object")
     entities = data.get("entities")
     if not isinstance(entities, dict):
-        raise ValueError(f"registry {path}: top-level 'entities' object is required")
+        raise ValueError(f"registry {origin}: top-level 'entities' object is required")
     for cid, e in entities.items():
         if not isinstance(e, dict) or not e.get("name"):
-            raise ValueError(f"registry {path}: entity {cid!r} needs at least a 'name'")
+            raise ValueError(f"registry {origin}: entity {cid!r} needs at least a 'name'")
         reg.entities[cid] = {"name": e["name"], "type": e.get("type", "organization"),
                              "aliases": list(e.get("aliases", []))}
         for alias in (cid, e["name"], *e.get("aliases", [])):
