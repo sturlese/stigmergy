@@ -1594,6 +1594,24 @@ def test_an_ordinary_note_is_not_refused(require_gitleaks):
     assert review._refuse_secret_note("") is None
 
 
+def test_the_note_scan_carries_a_budget_because_it_runs_inside_a_decide(monkeypatch):
+    """The note scan is a `gitleaks` SUBPROCESS on the request path of every `review_decide` with a
+    note — the same class as the linter, the apply-time gitleaks, the push and the stewards fetch,
+    each of which is bounded. It used to be the one member of that class with no budget: the call
+    passed no `timeout_s`, so a scanner that never returned pinned the decide until the process was
+    restarted."""
+    recorded = {}
+
+    def recording_scan(text, **kwargs):
+        recorded.update(kwargs)
+        return []
+
+    monkeypatch.setattr(review.gates, "scan_secrets", recording_scan)
+    review._refuse_secret_note("an ordinary note that reaches the scanner")
+    assert recorded.get("timeout_s") == review.NOTE_SCAN_TIMEOUT_S
+    assert recorded["timeout_s"] is not None
+
+
 # ── a deployment with no checkout still has stewards ───────────────────────────────────────────
 # `fly.toml` starts the `app` and `slack` groups with baked identities and registry and NO
 # `--repo`, so `load_stewards`' read at `origin/main` had nothing to read. Observed on staging:
@@ -1943,6 +1961,28 @@ def test_an_at_limit_mint_argument_reaches_the_mint(env, conn, mint_never_runs):
 # question both possible and necessary — `ops/stewards.json` exists to delegate zones, and a repair
 # is the first verdict in this lane that can land inside one.
 # ══════════════════════════════════════════════════════════════════════════════════════════════
+def test_resolving_stewards_bounds_the_fetch_it_runs_inside_an_authorization_check(env,
+                                                                                   monkeypatch):
+    """`load_stewards` reads `ops/stewards.json` at `origin/main`'s FRESH tip, and getting there is
+    a `git fetch` — run inside the authorization step of an MCP request.
+
+    Red before the fix: that fetch carried no budget, so "is this caller a steward" could stall on
+    an unreachable remote instead of failing closed. Observed by recording and delegating: the real
+    `base_ref` still runs against the real checkout."""
+    seen = {}
+    real = gitcmd.base_ref
+
+    def recording(repo, branch, **kwargs):
+        seen.update(kwargs)
+        return real(repo, branch)
+
+    monkeypatch.setattr(review.gitcmd, "base_ref", recording)
+
+    review.load_stewards(env.repo)
+
+    assert seen == {"timeout_s": review.STEWARDS_FETCH_TIMEOUT_S}
+
+
 def test_a_steward_cannot_approve_a_repair_outside_the_scope_they_steward(env, conn, monkeypatch):
     """**The per-path guard.** STEWARD owns `"*"`; `wiki/decisions/` has been delegated to somebody
     else. A proposal that would edit a page in the delegated zone is not STEWARD's to approve, even
@@ -1986,6 +2026,79 @@ def test_a_repair_touching_two_zones_needs_a_steward_for_both(env, conn, monkeyp
                                  source=review.SOURCE_MCP)
         assert str(caught.value) == review.NOT_YOURS_TO_DECIDE, identity
     assert repair_store.proposal(conn, proposal_id)["status"] == repair_schema.STATUS_PENDING
+
+
+# ── resolve_stewards_for_scope: a key is a PATH BOUNDARY, not a string prefix ──────────────────
+_OTHER = "someone-else@example.com"
+
+
+def test_a_steward_key_is_not_a_bare_string_prefix():
+    """Red before the fix: the match was `scope_path.startswith(key)`, so the key `wiki/note`
+    matched the page `wiki/notes/x.md` — a delegation for one folder silently governing a
+    DIFFERENT folder whose name it happens to be a prefix of, and (longest-match) beating the
+    general steward to it.
+
+    A key names a path, and a path boundary is a `/`."""
+    resolved = review.resolve_stewards_for_scope(
+        {"*": [STEWARD], "wiki/note": [_OTHER]}, "wiki/notes/x.md")
+
+    assert resolved == [STEWARD], "a prefix that is not a path boundary must not resolve"
+
+
+@pytest.mark.parametrize("stewards_map, scope, expected", [
+    # the benign twin of the case above: the REAL folder key still governs its own pages
+    ({"*": [STEWARD], "wiki/notes": [_OTHER]}, "wiki/notes/x.md", [_OTHER]),
+    # the fixture repo's own spelling — a key written with a trailing slash
+    ({"*": [STEWARD], "wiki/decisions/": [_OTHER]}, "wiki/decisions/Refunds.md", [_OTHER]),
+    # a key naming one exact page
+    ({"*": [STEWARD], "wiki/notes/x.md": [_OTHER]}, "wiki/notes/x.md", [_OTHER]),
+    # longest match still wins between two keys that BOTH match
+    ({"wiki": [STEWARD], "wiki/notes": [_OTHER]}, "wiki/notes/x.md", [_OTHER]),
+    # the universal fallback, for a page no key names
+    ({"*": [STEWARD], "wiki/notes": [_OTHER]}, "sources/anything.md", [STEWARD]),
+    # the doorbell's own call: an empty scope can only ever match `"*"` — byte-identical
+    ({"*": [STEWARD], "wiki/notes": [_OTHER]}, "", [STEWARD]),
+    # …and with no `"*"` at all, an empty scope resolves nobody
+    ({"wiki/notes": [_OTHER]}, "", []),
+])
+def test_the_boundary_rule_keeps_every_resolution_that_was_already_right(stewards_map, scope,
+                                                                        expected):
+    """The specificity half. This rule can only make a map resolve FEWER stewards, and every case
+    it must keep resolving is here — a tightening that also broke real delegation would show up as
+    "nobody may approve anything" and be read as a stuck queue."""
+    assert review.resolve_stewards_for_scope(stewards_map, scope) == expected
+
+
+def test_one_repair_decision_reads_the_stewards_map_exactly_once(env, conn, monkeypatch):
+    """Red before the fix: `_guard_repair_decision` called `is_steward` per target path, and each
+    call re-ran `load_stewards` — a `git fetch` and a file read PER PAGE. A six-op proposal was six
+    fetches, and an unauthorized caller could trigger all of them by asking.
+
+    It is also a correctness property, not only a cost one: an authorization decision is made
+    against ONE map. N reads mean N maps, and a `ops/stewards.json` landing mid-decision could have
+    a proposal approved against two different answers to the same question."""
+    # STEWARD holds everything except the LAST path in sorted order, so `all(...)` walks all three
+    # before refusing — the shape that makes the old N-reads-per-decision visible.
+    seed_stewards(env, {"*": [STEWARD], "wiki/notes/b.md": [DECISIONS_STEWARD]})
+    _apply_never_runs(monkeypatch)
+    proposal_id = _propose(conn, [_op("wiki/notes/a.md"), _op("wiki/notes/b.md"),
+                                  _op("wiki/decisions/c.md")])
+    calls = []
+    real = review.load_stewards
+
+    def counting(repo, baked_path=""):
+        calls.append(repo)
+        return real(repo, baked_path)
+
+    monkeypatch.setattr(review, "load_stewards", counting)
+    service = make_service(env, conn, identity_name=STEWARD)
+
+    with pytest.raises(review.ReviewError):
+        review.review_decide(service, item_kind=review.KIND_REPAIR_PROPOSAL,
+                             item_id=str(proposal_id), verdict="approve",
+                             source=review.SOURCE_MCP)
+
+    assert len(calls) == 1, f"the map was loaded {len(calls)} times for one decision"
 
 
 def test_each_steward_may_approve_a_repair_inside_their_own_scope(env, conn, monkeypatch):
@@ -2032,6 +2145,33 @@ def test_a_non_steward_gets_the_same_anonymous_sentence_a_missing_proposal_gets(
             review.review_decide(service, item_kind=review.KIND_REPAIR_PROPOSAL, item_id=item_id,
                                  verdict="approve", source=review.SOURCE_MCP)
         assert str(caught.value) == review.NOT_YOURS_TO_DECIDE, item_id
+
+
+def test_approving_a_repair_with_a_note_records_it_on_the_row_and_in_the_ledger(env, conn,
+                                                                                monkeypatch):
+    """Red before the fix: `apply_repair_and_record` passed a hardcoded `""` to both writes, so a
+    steward's note on an APPROVE vanished — while the same steward's note on a REJECT was kept in
+    both places. The note is the only record of why a repair was worth applying, and
+    `mint_and_record_approval` already carries one from this same door.
+
+    It is the CLEANED note the secrets scan already passed: `_decide_repair` runs
+    `_refuse_secret_note` before either branch, and both destinations are append-only."""
+    _apply_records(monkeypatch)
+    proposal_id = _propose(conn, [_op("wiki/notes/Renewals.md")])
+    steward = make_service(env, conn, identity_name=STEWARD)
+
+    review.review_decide(steward, item_kind=review.KIND_REPAIR_PROPOSAL, item_id=str(proposal_id),
+                         verdict="approve", source=review.SOURCE_MCP,
+                         notes="checked both pages first; the link is right")
+
+    assert repair_store.proposal(conn, proposal_id)["notes"] == (
+        "checked both pages first; the link is right")
+    # The ledger's own column, read directly: `latest_decisions` is a rendering convenience and
+    # projects `notes` away, so asserting through it would prove nothing about what was WRITTEN.
+    with conn.cursor() as cur:
+        cur.execute("SELECT notes FROM review_decisions WHERE item_kind = %s AND item_id = %s",
+                    (review.KIND_REPAIR_PROPOSAL, str(proposal_id)))
+        assert cur.fetchone()[0] == "checked both pages first; the link is right"
 
 
 def test_rejecting_a_repair_records_the_dismissal_on_the_row_and_in_the_ledger(env, conn,
@@ -2108,6 +2248,32 @@ def test_a_failed_apply_leaves_the_proposal_failed_with_the_reason_and_no_ledger
     row = repair_store.proposal(conn, proposal_id)
     assert row["status"] == repair_schema.STATUS_FAILED
     assert "the gates refused this repair" in row["error"]
+    assert review.latest_decisions(conn).get((review.KIND_REPAIR_PROPOSAL, str(proposal_id))) is None
+
+
+def test_a_fault_that_is_not_a_repair_error_still_leaves_the_row_failed(env, conn, monkeypatch):
+    """Red before the fix: `apply_approved` caught `RepairError` and NOTHING ELSE, so any other
+    exception — a driver fault, a bug, an `OSError` out of the temp directory — left the row stuck
+    in `approved` forever. A steward could not re-approve it (it is no longer pending), the proposer
+    would never re-propose it (its key is remembered), and the runbook had nothing to say about it.
+
+    The `error` column carries the CLASS NAME only. It is steward-facing, and an arbitrary
+    exception's message is written for a log — it may name a path, a DSN or a row's content."""
+    def blow_up(*_a, **_k):
+        raise RuntimeError("psycopg: connection unexpectedly closed at /tmp/stigmergy-xyz")
+
+    monkeypatch.setattr(repair_remote, "apply_via_clone", blow_up)
+    proposal_id = _propose(conn, [_op("wiki/notes/Renewals.md")])
+    steward = make_service(env, conn, identity_name=STEWARD)
+
+    with pytest.raises(RuntimeError):
+        review.review_decide(steward, item_kind=review.KIND_REPAIR_PROPOSAL,
+                             item_id=str(proposal_id), verdict="approve", source=review.SOURCE_MCP)
+
+    row = repair_store.proposal(conn, proposal_id)
+    assert row["status"] == repair_schema.STATUS_FAILED
+    assert row["error"] == "RuntimeError"
+    assert "/tmp/stigmergy-xyz" not in row["error"], "an arbitrary fault's message is not publishable"
     assert review.latest_decisions(conn).get((review.KIND_REPAIR_PROPOSAL, str(proposal_id))) is None
 
 
@@ -2188,6 +2354,21 @@ def test_a_pending_repair_is_in_the_unrestricted_queue_and_not_in_a_scoped_one(e
     assert "the newer page carries the current terms" not in json.dumps(item), (
         "the ops themselves are not in the scan — a note is free text on a page")
     assert not [i for i in scoped["items"] if i["kind"] == review.KIND_REPAIR_PROPOSAL]
+
+
+def test_the_inboxs_limit_bounds_the_repair_half_of_it_too(env, conn):
+    """Red before the fix: repair items were collected BEFORE the limit and outside it, so
+    `_collect_open_items(limit=n)` answered with every pending proposal on the table however small
+    `n` was — the one item kind a nightly job can produce in bulk was the one kind nothing bounded.
+
+    Oldest first, so a bounded read is the front of the queue rather than an arbitrary slice."""
+    first = _propose(conn, [_op("wiki/notes/Renewals.md")])
+    _propose(conn, [_op("wiki/notes/Other.md")])
+
+    bounded = review._collect_open_items(conn, submitted_by=None, limit=1)
+
+    repairs = [i for i in bounded if i["kind"] == review.KIND_REPAIR_PROPOSAL]
+    assert [i["id"] for i in repairs] == [str(first)]
 
 
 def test_a_decided_repair_leaves_the_queue_and_keeps_its_ledger_row(env, conn, monkeypatch):

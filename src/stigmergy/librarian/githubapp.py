@@ -11,6 +11,9 @@ logged: the key signs a 9-minute JWT and is dropped; the token is used once, nev
 disk, never into git config, and never into a command line (argv is readable by every process
 on the box — that is what `push_config` is for).
 
+`repo_slug` lives here too, and only here: it feeds `push_url`/`push_config` and nothing else, and
+it is the one place that reads a checkout's origin — the only reason this module touches `gitcmd`.
+
 Absent configuration is not an error here: `configured()` answers whether the App is set up,
 and a run without it pushes to `origin` as whoever the process is — what the tests and the
 docker e2e do against a bare local remote. What is deliberately NOT built is a
@@ -25,6 +28,7 @@ import time
 import urllib.error
 import urllib.request
 
+from stigmergy.librarian import gitcmd
 from stigmergy.librarian.errors import (
     CloneCredentialHalfSet,
     CloneCredentialRefused,
@@ -138,6 +142,21 @@ def installation_token(env: dict | None = None, *, opener=None) -> str:
     if not token:
         raise LibrarianConfigError("GitHub returned no token in the installation response")
     return token
+
+
+def repo_slug(clone: str) -> str:
+    """`owner/name` from a checkout's `origin`, for the two functions below. `""` when it has no
+    remote — every caller asks only after `configured()` has said an App push is happening.
+
+    Both GitHub dialects, because both are real: a deployed clone's `https://` URL and the `git@`
+    form an operator's own checkout usually carries. It lives HERE, beside its only consumers, and
+    it is the ONE implementation: the librarian's filing push, the views writer and the repair
+    applier each carried a copy, and three copies of a URL parser is three places for one dialect
+    to be forgotten.
+    """
+    url = gitcmd.origin_url(clone)
+    slug = url.rsplit(":", 1)[-1] if url.startswith("git@") else url.split("github.com/")[-1]
+    return slug.removesuffix(".git")
 
 
 def push_url(repo_slug: str) -> str:

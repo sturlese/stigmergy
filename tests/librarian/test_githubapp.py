@@ -212,6 +212,37 @@ def test_push_config_carries_the_token_in_a_scoped_git_config_env_triple():
     assert "ghs_abc123" not in config["GIT_CONFIG_KEY_0"]
 
 
+# ── repo_slug: the ONE parser, feeding the two functions above ────────────────────────────────
+# It lived in three places at once — `librarian/processing.py`, `views/writer.py` and
+# `repair/remote.py` — and each copy fed `push_url`/`push_config` right beside it. Three copies of
+# a parser is three places for one dialect to be forgotten, which is the failure this consolidation
+# is about: `views/writer.py`'s copy even said in its own docstring that it was a duplicate.
+@pytest.mark.parametrize("origin, expected", [
+    ("https://github.com/acme/knowledge.git", "acme/knowledge"),
+    ("https://github.com/acme/knowledge", "acme/knowledge"),
+    # the dialect an operator's own checkout usually carries — `worker._check_push_identity`
+    # depends on this one being understood
+    ("git@github.com:acme/knowledge.git", "acme/knowledge"),
+    ("git@github.com:acme/knowledge", "acme/knowledge"),
+])
+def test_repo_slug_reads_both_github_url_dialects(tmp_path, origin, expected):
+    repo = str(tmp_path / "repo")
+    gitcmd.run("init", "--quiet", "-b", "main", repo)
+    gitcmd.run("remote", "add", "origin", origin, cwd=repo)
+
+    assert githubapp.repo_slug(repo) == expected
+
+
+def test_repo_slug_of_a_checkout_with_no_remote_is_empty(tmp_path):
+    """A local-only clone — the shape the whole suite and the docker e2e run against. It must come
+    back empty rather than raising, because every caller asks this question only after
+    `configured()` has already said an App push is happening."""
+    repo = str(tmp_path / "repo")
+    gitcmd.run("init", "--quiet", "-b", "main", repo)
+
+    assert githubapp.repo_slug(repo) == ""
+
+
 # ── commit identity: the App's own convention when configured, a fallback otherwise ────────────
 def test_identity_uses_the_bot_convention_when_the_app_id_is_set():
     name, email = githubapp.identity(FULL_ENV)

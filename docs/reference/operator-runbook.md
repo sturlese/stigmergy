@@ -627,6 +627,43 @@ secrets are app-wide. A server missing either — a local stdio MCP server, most
 mint by naming exactly what is absent (`no knowledge-repo URL is configured for a server-driven
 mint`, or `... needs the librarian GitHub App credential`) rather than degrading.
 
+### A repair proposal stuck in `approved`
+
+Every ordinary apply outcome writes itself down: it lands as `applied` with a commit, or as
+`failed` with the reason. One residual cannot be written down from inside — the server process
+dying between the `pending → approved` transition and the failure bookkeeping. The symptom is a row
+that is `approved` with **both** `applied_commit` and `error` empty, and it is stuck: a steward
+cannot decide it (it is no longer pending) and the proposer will not re-derive it (its key is
+remembered while it is not `failed`).
+
+```sql
+SELECT id, decided_by, decided_at, target_paths
+FROM repair_proposals
+WHERE status='approved' AND applied_commit='' AND error='';
+```
+
+**Verify nothing landed before touching the row.** The apply may have pushed and died on the way to
+recording it, in which case the corpus already carries the edit and marking the row `failed` would
+be a lie an operator later acts on. In the knowledge repo:
+
+```sh
+git -C <knowledge repo> log --oneline -5 -- <the row's target_paths>
+```
+
+No commit naming that proposal id means nothing landed. Then mark it failed — the `WHERE` clause is
+the guard, not decoration: it refuses a row that has moved on since you read it, so running this
+twice, or against a proposal that landed while you were looking, cannot overwrite an applied commit.
+
+```sql
+UPDATE repair_proposals
+SET status='failed', error='operator: process died mid-apply'
+WHERE id=<id> AND status='approved' AND applied_commit='';
+```
+
+`0 rows` means the guard did its job — re-read the row before doing anything else. Once it is
+`failed`, the next `stigmergy-repair propose` may derive the same repair again, because a failed
+apply is not a dismissal.
+
 ### A view that did not catch up
 
 ```sh

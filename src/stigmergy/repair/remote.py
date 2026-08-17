@@ -17,10 +17,13 @@ the other two cannot see what it sees:
      An additive edit is what the ops are supposed to produce, and `gate_body_rewrite` is what
      proves they did rather than what promises they would.
   3. The cross-check: the diff's paths must equal the proposal's own stored `target_paths` and
-     every entry must be a MODIFICATION. This is the one that catches a TAMPERED proposal — a row
-     edited after a steward approved it, whose ops would now touch a page the steward never saw.
-     The gates would pass such a diff quite happily; it is additive and well-formed. What makes it
-     wrong is that it is not what was approved, and only a second stored fact can say so.
+     every entry must be a MODIFICATION. The gates would pass a diff touching some other page
+     quite happily — it is additive and well-formed — so this is the only thing that can say the
+     diff is not the one this row describes. State its reach exactly: an `ops` blob INCONSISTENT
+     with `target_paths` cannot reach `main`; content is not compared, and a tamper that edited
+     both columns consistently before this row was read is out of scope. Write access to the table
+     is the prerequisite for either, so this is a consistency check between two stored facts and
+     never a defense against a database an attacker already writes to.
 
 Then `gitcmd.commit(gated_entries=...)` closes the last window: the diff the gates approved is the
 diff that lands, bytes included.
@@ -46,6 +49,12 @@ log = logging.getLogger(__name__)
 # an HTTP worker indefinitely — `entities.remote.MINT_GIT_TIMEOUT_S`'s figure, for the identical
 # situation.
 REPAIR_GIT_TIMEOUT_S = 60
+
+# The other subprocess budget: the eight gates shell out to the contract linter and to gitleaks,
+# and both run HERE on the thread a steward's Approve arrived on. Longer than the git one because
+# it is not a network leg — it is a whole-repo lint and a whole-scratch-directory scan — and short
+# enough that neither can pin an HTTP worker until the process is restarted.
+REPAIR_SUBPROCESS_TIMEOUT_S = 120
 
 # The same env var `librarian.config.Settings.gitleaks_bin` reads. Spelled here rather than
 # imported for the reason `entities.mint` spells it: this package must not construct a worker's
@@ -159,7 +168,11 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
         # The clone IS the base commit, so its own checked-out linter is the one that governs —
         # no materialization from git needed, unlike the worker's detached worktrees.
         linter_path=os.path.join(clone, *librarian_config.LINTER_RELPATH.split("/")),
-        gitleaks_bin=gitleaks_bin)
+        gitleaks_bin=gitleaks_bin,
+        # TOLD, not inferred by the gates: this apply runs inside an HTTP request, unlike the
+        # worker's. A `LibrarianConfigError` out of an elapsed budget meets the `except
+        # LibrarianError` seam above and the row lands `failed` with a sentence, not a hung thread.
+        subprocess_timeout_s=REPAIR_SUBPROCESS_TIMEOUT_S)
     veto = gates.vetoes(gates.run_gates(ctx))
     if veto:
         raise RepairError(
@@ -176,7 +189,7 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
 
     remote_url, config_env = "", {}
     if credential and githubapp.configured(credential):
-        slug = _repo_slug(clone)
+        slug = githubapp.repo_slug(clone)
         remote_url = githubapp.push_url(slug)
         # Minted as late as possible and handed over in the ENVIRONMENT, never in argv.
         config_env = githubapp.push_config(githubapp.installation_token(credential), slug)
@@ -185,18 +198,23 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
     # nothing else is racing for this proposal, because the row moved out of `pending` before the
     # clone was made.
     landed = gitcmd.push(clone, branch=branch, remote_url=remote_url, config_env=config_env,
-                         author_name=author[0], author_email=author[1])
+                         author_name=author[0], author_email=author[1],
+                         timeout_s=REPAIR_GIT_TIMEOUT_S)
     return {"commit": landed, "paths": list(edited)}
 
 
 def _cross_check(entries, proposal: dict) -> None:
-    """The diff must be EXACTLY what the approved row says, and nothing else.
+    """The diff must be EXACTLY what the row says, and nothing else.
 
-    Two stored facts have to agree — `ops` produced the diff, `target_paths` says which pages it
-    was allowed to touch — so an `ops` blob edited after approval cannot reach `main` unless
-    `target_paths` was edited to match it in the same breath. Every entry must be `M`: this
-    vocabulary edits pages that already exist, so an addition or a deletion is not a repair that
-    got out of hand, it is a diff nothing here can have produced.
+    Two stored facts have to agree: `ops` produced the diff, `target_paths` says which pages it was
+    allowed to touch. So an `ops` blob that DISAGREES with `target_paths` cannot reach `main` —
+    that, and no more. Content is not compared, and nothing re-reads the row between the
+    pending→approved transition and here, so a tamper that edited both columns consistently before
+    this read is out of scope: write access to `repair_proposals` is the prerequisite either way,
+    and this is a consistency check, not a defense against it.
+
+    Every entry must be `M`: this vocabulary edits pages that already exist, so an addition or a
+    deletion is not a repair that got out of hand, it is a diff nothing here can have produced.
     """
     touched = {e.path for e in entries}
     approved = {str(p) for p in (proposal.get("target_paths") or ())}
@@ -243,12 +261,6 @@ def _trailer_actor(approved_by: str) -> str:
     return collapsed
 
 
-def _repo_slug(clone: str) -> str:
-    url = gitcmd.origin_url(clone)
-    slug = url.rsplit(":", 1)[-1] if url.startswith("git@") else url.split("github.com/")[-1]
-    return slug.removesuffix(".git")
-
-
 def apply_approved(conn, repo_url: str, branch: str, credential, *, proposal: dict,
                    approved_by: str, on_output=None) -> dict:
     """`apply_via_clone` plus the two status writes that must never be forgotten around it.
@@ -257,6 +269,12 @@ def apply_approved(conn, repo_url: str, branch: str, credential, *, proposal: di
     property of the code rather than of each caller remembering. The approved status is NOT
     restored on failure: `error` says what went wrong, the row stays visible as `failed`, and a
     steward may propose again — a silent revert to pending would hide that a gate refused.
+
+    **Both arms exist because either one alone strands the row.** A row left in `approved` after a
+    fault is unreachable from every direction at once: a steward cannot decide it (it is not
+    pending), the proposer will not re-derive it (its key is remembered), and nothing reports it.
+    The residual — this process dying between `mark_decided` and the bookkeeping below — is what
+    `docs/reference/operator-runbook.md` carries a guarded UPDATE for.
     """
     try:
         result = apply_via_clone(repo_url, branch, credential, proposal=proposal,
@@ -265,6 +283,16 @@ def apply_approved(conn, repo_url: str, branch: str, credential, *, proposal: di
         # `str(ex)` is safe to persist and to publish: every sentence raised above is written for
         # a steward and names no path of this host's (module docstring).
         store.mark_failed(conn, proposal["id"], str(ex))
+        raise
+    except Exception as ex:
+        # The CLASS NAME only, and that is the difference from the arm above: this arm catches
+        # everything nobody wrote a steward-facing sentence for, and an arbitrary exception's
+        # message names paths, DSNs and row content. `error` is a steward-facing column. The
+        # exception itself is re-raised untouched — each door maps it, and the console records the
+        # original class in `admin_actions`.
+        log.error("repair apply: an unanticipated fault; the proposal is recorded as failed",
+                  exc_info=True)
+        store.mark_failed(conn, proposal["id"], ex.__class__.__name__)
         raise
     store.mark_applied(conn, proposal["id"], result["commit"])
     return result

@@ -545,6 +545,47 @@ def test_repairs_approve_requires_the_token_and_never_reaches_the_apply_without_
         assert cur.fetchone()[0] == 0
 
 
+# ── the two approvals that clone, and where they run ──────────────────────────────────────────
+# Both Approve handlers reach code that clones a repo, runs the eight gates and pushes — seconds of
+# blocking work, and `gitleaks`/`git` are subprocesses. On the event loop that stalls EVERY other
+# request the process is serving, the MCP tools included, for as long as the push takes.
+def _on_the_event_loop_probe(monkeypatch, method: str):
+    """Replace one `AdminService` method with a probe that reports whether it was called ON the
+    asyncio event loop. It answers a fact about the CALLER, so it works identically for a handler
+    that awaits it directly and for one that hands it to a worker thread."""
+    from stigmergy.admin.service import AdminService
+
+    def probe(*_a, **_k):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return {"on_the_event_loop": False}
+        return {"on_the_event_loop": True}
+
+    monkeypatch.setattr(AdminService, method, probe)
+
+
+@pytest.mark.parametrize("method, path, body", [
+    ("repair_approve", "/admin/api/repairs/{id}/approve", {"actor": "steward@example.com"}),
+    ("entity_approve", "/admin/api/entities/{id}/approve",
+     {"actor": "steward@example.com", "name": "Globex Robotics", "entity_type": "organization"}),
+])
+def test_an_approve_that_clones_never_runs_on_the_event_loop(conn, app, monkeypatch, method, path,
+                                                             body):
+    """Red before the fix: both handlers awaited nothing and called the blocking service method
+    inline, so the whole clone-gate-push sat on the loop and every concurrent request waited on it.
+
+    The response SHAPE is asserted too: moving the call to a worker thread must not change what the
+    route returns, or the console's own JavaScript stops reading it."""
+    proposal_id = propose_repair(conn)
+    _on_the_event_loop_probe(monkeypatch, method)
+
+    response = _request(app, "POST", path.format(id=proposal_id), json_body=body)
+
+    assert response.status_code == 200
+    assert response.json() == {"on_the_event_loop": False}
+
+
 def test_repairs_approve_on_an_unconfigured_deployment_is_the_409(conn, app):
     """`app` carries a default `Settings()` — no `librarian_repo_url` — so this is the deployment
     shape an operator meets before configuring one, and it must read as a refusal with the reason

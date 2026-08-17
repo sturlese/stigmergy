@@ -83,8 +83,10 @@ stigmergy-repair [--dsn DSN] [--repo PATH] [--json] show <id>
 - **`propose`** — the pass a cron runs. Reads the latest COMPLETED gardener run, keeps the
   proposable findings, drops the ones whose repair has already been reviewed, batches the rest to
   the model with the subject pages' bodies fenced, validates, and inserts one pending row per
-  surviving proposal. Records a `job_runs` row under the job `repair-propose` with
-  `findings_seen` / `proposed` / `skipped_known` / `skipped_invalid`. Exits 0 when it proposes
+  surviving proposal. Stops at `STIGMERGY_REPAIR_MAX_PROPOSALS` — an answer carrying more than that
+  is refused whole so the model re-cuts it, and a run that fills the ceiling stops batching and
+  records what it left for the next pass. Records a `job_runs` row under the job `repair-propose`
+  with `findings_seen` / `proposed` / `skipped_known` / `skipped_invalid`. Exits 0 when it proposes
   nothing — an ordinary outcome, not a failure.
 - **`list`** — what waits on a steward, plus what was recently decided.
 - **`show <id>`** — what one proposal would change, rendered from the ops without touching git.
@@ -98,6 +100,7 @@ committed there.
 |---|---|---|
 | `STIGMERGY_REPAIR_MODEL` | the librarian's own default model | which model proposes |
 | `STIGMERGY_REPAIR_MAX_OPS` | `6` | how much ONE approval is allowed to be |
+| `STIGMERGY_REPAIR_MAX_PROPOSALS` | `20` | how many approvals one RUN may ask for |
 | `STIGMERGY_REPAIR_BATCH` | `8` | findings per model call |
 | `STIGMERGY_REPO` | — | the checkout to propose against |
 | `STIGMERGY_INDEX_DSN` | — | where the proposals live |
@@ -115,7 +118,10 @@ page body is data somebody wrote and never an instruction. A knowledge repo cann
 proposer's powers by rewriting its procedure.
 
 A missing or empty skill is a NAMED refusal and the pass does not run. A proposer briefed only by
-the header would know what it may not do and nothing at all about what is worth doing.
+the header would know what it may not do and nothing at all about what is worth doing. A `SKILL.md`
+that is a SYMLINK is refused the same way: both `getsize` and `open` follow one, so the size ceiling
+would measure the target instead of guarding it, and whatever the link pointed at on the host would
+become the system prompt.
 
 ## Deciding one
 
@@ -132,6 +138,8 @@ click, or one `stigmergy-repair show`, away.
   who stewards both — either steward may still reject it, and the pair can be proposed as two
   one-sided repairs.
 - **Rejecting requires a reason**, and the reason lands on the proposal as well as in the ledger.
+  A note on an APPROVE is optional and lands in both places too — it is the only record of why a
+  repair was worth applying.
 - **A repair proposal is listed for an unrestricted identity only.** It has no submitter, so there
   is no "own" for an ownership-scoped caller — and a proposal names page PATHS, which is
   `acl.visible()`'s question and not the inbox's.
@@ -152,10 +160,13 @@ Three independent checks, each chosen because the other two cannot see what it s
 2. **`run_gates(ALL_GATES)`** judges the resulting diff exactly as it judges the librarian's own —
    all eight, not a subset.
 3. **The cross-check**: the diff's paths must EQUAL the proposal's stored `target_paths`, and every
-   entry must be a modification. This is the one that catches a TAMPERED proposal, whose ops were
-   edited after a steward approved it. The gates would pass such a diff quite happily — it is
-   additive and well-formed; what makes it wrong is that it is not what was approved, and only a
-   second stored fact can say so.
+   entry must be a modification. The gates would pass a diff touching some other page quite
+   happily — it is additive and well-formed — so this is the only thing that can say the diff is
+   not the one the row describes. Its reach, stated exactly: an `ops` blob that disagrees with
+   `target_paths` cannot reach `main`. Content is not compared, and a tamper that edited both
+   columns consistently before the row was read is out of scope — write access to
+   `repair_proposals` is the prerequisite either way, so this is a consistency check between two
+   stored facts, not a defense against a database somebody else writes to.
 
 Then `gitcmd.commit(gated_entries=…)` closes the last window: the diff the gates approved is the
 diff that lands, bytes included. The commit is authored by the librarian App, its message names the
@@ -168,15 +179,28 @@ to pending would hide that a gate refused, which is the outcome an operator most
 ## The dismissal memory
 
 A proposal is identified by WHAT IT WOULD DO — its kind plus its sorted `op:path:link` lines, hashed
-into `content_key` — and the proposer skips a key that has ANY prior row: pending, rejected or
-applied. "Reviewed and declined" is a durable fact, and a steward who says no once is not asked the
+into `content_key` — and the proposer skips a key held by a pending, approved, rejected or applied
+row. "Reviewed and declined" is a durable fact, and a steward who says no once is not asked the
 same question by the next night's run.
+
+**A `failed` row is not a dismissal.** It is the one status the memory does not hold: a rejection is
+a human saying no, while a failed apply is a human having said yes to something that then hit a
+gate, a race or a fault. The row stays visible with its reason, and the next run may derive the same
+repair again — which is the only way back for a repair somebody actually wanted.
 
 `note` is deliberately excluded from the key: two proposals adding the same callout to the same page
 with differently-worded sentences are the same question asked twice, and a rephrasing of a declined
 repair is not a new one. The UNIQUE index is narrower than the skip rule — one PENDING row per key,
 not one row ever — so re-proposing after a rejection stays a human decision rather than a database
 error.
+
+**There are two halves and they answer different questions.** `content_key` is the authoritative
+one and runs AFTER the model, so a declined repair is never queued twice. A cheap skip runs BEFORE
+the model, so a declined repair does not cost a call every night either, and it keys on what the
+finding NAMED — the `finding_subjects` column, one sorted page set per finding a proposal answers.
+`target_paths` alone was not enough: an `orphan-page` finding names the page nothing links to while
+the repair edits the page that ought to link to it, and a one-sided answer to a two-page finding
+names one page of two.
 
 ## The cron
 

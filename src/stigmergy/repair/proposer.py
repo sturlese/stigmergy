@@ -245,8 +245,17 @@ def read_skill(repo: str) -> str:
     A missing or empty skill raises: this is the agent's whole operating procedure, and a
     proposer running without it would be one briefed only by the header above — which says what it
     may not do and nothing at all about what is worth doing.
+
+    The LEAF is judged before anything resolves it, `gather.confined_page`'s own ordering: both
+    `getsize` and `open` follow a link, so the size ceiling would measure the target instead of
+    guarding it, and whatever the link pointed at would become the system prompt.
     """
     path = skill_path(repo)
+    if os.path.islink(path):
+        raise RepairError(
+            f"the repair-proposer skill at {SKILL_RELPATH} is a symlink — it is read as the "
+            f"proposer's entire operating procedure and must be a real file committed in the "
+            f"knowledge repo, not a pointer at something else on the host")
     try:
         size = os.path.getsize(path)
         if size > MAX_SKILL_BYTES:
@@ -324,6 +333,18 @@ DETAILS_MARKER = "## the findings' own words, and the pages they name"
 _PAGE_LINE = "page: "
 
 
+def _one_line(path: str) -> bool:
+    """A path that cannot be named on ONE line is not named at all.
+
+    `text.sanitize` strips control characters and deliberately keeps `\\n` — it defends terminals,
+    not line structure — so a page whose FILENAME carries one would emit a second line inside the
+    unfenced index, and a second line there is a forged `### finding` header the model reads as a
+    real finding. Filenames may contain newlines on every filesystem this runs on.
+    """
+    text = str(path or "")
+    return "\n" not in text and "\r" not in text
+
+
 def build_prompt(findings: list[dict], pages: dict[str, str]) -> str:
     """The index, the marker, then the fenced halves.
 
@@ -336,21 +357,24 @@ def build_prompt(findings: list[dict], pages: dict[str, str]) -> str:
     for f in findings:
         lines.append(f"### finding id={f['id']} check={ps(f['check'])}")
         for subject in (f.get("subjects") or ()):
-            lines.append(f"{_PAGE_LINE}{ps(subject)}")
+            if _one_line(subject):
+                lines.append(f"{_PAGE_LINE}{ps(subject)}")
         lines.append("")
     lines += [DETAILS_MARKER, ""]
     for f in findings:
         lines.append(f"### detail of finding id={f['id']}")
         lines.append(fence(sanitize(str(f.get("detail") or ""))))
         lines.append("")
-    for path in sorted(pages):
+    # Dropped from BOTH halves or from neither: a body under no header belongs to whatever page
+    # was named last, which is a worse answer than not showing it.
+    for path in sorted(p for p in pages if _one_line(p)):
         lines.append(f"### page {ps(path)}")
         lines.append(fence(pages[path]))
         lines.append("")
     return "\n".join(lines)
 
 
-def _retry_prompt(original: str, rejected: list[dict], *, max_ops: int) -> str:
+def _retry_prompt(original: str, rejected: list[dict], *, max_ops: int, max_proposals: int) -> str:
     """The retry's brief IS the validation error — the model is told exactly what it got wrong,
     the shape `gardener.sweep` already established."""
     lines = ["", "--- VALIDATION ERROR (your previous answer had these problems) ---"]
@@ -360,13 +384,19 @@ def _retry_prompt(original: str, rejected: list[dict], *, max_ops: int) -> str:
         f"Return a corrected batch: every op's kind must be one of "
         f"{', '.join(edits.EDIT_KINDS)}, every `path` a page that exists in this checkout, every "
         f"`link` a page name that resolves, a `note` on every overlap/contradiction, at most "
-        f"{max_ops} ops per proposal, and every finding id one from THIS batch. Omit a proposal "
-        f"entirely rather than guess.")
+        f"{max_ops} ops per proposal, at most {max_proposals} proposals in the batch, and every "
+        f"finding id one from THIS batch. Omit a proposal entirely rather than guess.")
     return original + "\n" + "\n".join(lines)
 
 
+# The reason a whole batch is refused for being too long, named rather than described: it reaches
+# the model on the retry, and a model can only act on a bound it can read as one.
+BATCH_CEILING_REASON = "batch-exceeds-ceiling({n}>{ceiling})"
+
+
 def validate_batch(output: ProposalBatch, *, corpus_paths: set[str], link_names: set[str],
-                   finding_ids: set[int], max_ops: int) -> tuple[list[dict], list[dict]]:
+                   finding_ids: set[int], max_ops: int,
+                   max_proposals: int) -> tuple[list[dict], list[dict]]:
     """`(accepted, rejected)` — the application-level check on top of pydantic's, mirroring
     `sweep._validate`'s posture exactly: the op kind is a bare `str` and not a `Literal`, so an
     out-of-vocabulary kind is a NAMED rejection reason the model can act on rather than a schema
@@ -375,9 +405,18 @@ def validate_batch(output: ProposalBatch, *, corpus_paths: set[str], link_names:
     This is the FIRST of the propose-time proofs; `edits.validate` against the real checkout is
     the second and the final one. Both run — this one so the retry has something specific to say,
     that one because it is the same function the applier will use.
+
+    A batch over `max_proposals` is refused WHOLE rather than truncated: which proposals to keep is
+    a judgment, and code taking the first N would pick them by the order a model happened to emit
+    them in. The model is told the count it exceeded and re-cuts the batch itself.
     """
     accepted: list[dict] = []
     rejected: list[dict] = []
+    if len(output.proposals) > max_proposals:
+        return [], [{"spec": None, "reasons": [
+            BATCH_CEILING_REASON.format(n=len(output.proposals), ceiling=max_proposals)
+            + f": one answer may carry at most {max_proposals} proposals — return the "
+              f"{max_proposals} most worth a steward's attention and drop the rest"]}]
     for spec in output.proposals:
         reasons: list[str] = []
         if not spec.ops:
@@ -425,8 +464,8 @@ def validate_batch(output: ProposalBatch, *, corpus_paths: set[str], link_names:
 
 
 async def run_proposer(agent, deps: ProposerContext, prompt: str, *, corpus_paths: set[str],
-                       link_names: set[str], finding_ids: set[int], max_ops: int
-                       ) -> tuple[list[dict], list[str]]:
+                       link_names: set[str], finding_ids: set[int], max_ops: int,
+                       max_proposals: int) -> tuple[list[dict], list[str]]:
     """`(accepted, skip_reasons)` for ONE batch: one call, one retry carrying the reasons, then
     SKIP — never insert unvalidated.
 
@@ -437,13 +476,13 @@ async def run_proposer(agent, deps: ProposerContext, prompt: str, *, corpus_path
     result = await agent.run(prompt, deps=deps, usage_limits=PROPOSER_LIMITS)
     accepted, rejected = validate_batch(result.output, corpus_paths=corpus_paths,
                                         link_names=link_names, finding_ids=finding_ids,
-                                        max_ops=max_ops)
+                                        max_ops=max_ops, max_proposals=max_proposals)
     if rejected:
-        retry = _retry_prompt(prompt, rejected, max_ops=max_ops)
+        retry = _retry_prompt(prompt, rejected, max_ops=max_ops, max_proposals=max_proposals)
         result2 = await agent.run(retry, deps=deps, usage_limits=PROPOSER_LIMITS)
         accepted, rejected = validate_batch(result2.output, corpus_paths=corpus_paths,
                                             link_names=link_names, finding_ids=finding_ids,
-                                            max_ops=max_ops)
+                                            max_ops=max_ops, max_proposals=max_proposals)
     return accepted, ["; ".join(entry["reasons"]) for entry in rejected]
 
 
@@ -487,21 +526,37 @@ def _page_set_key(paths) -> str:
 
 
 def already_proposed(conn) -> tuple[set[int], set[str]]:
-    """`(finding ids, page-set keys)` every stored proposal already stands for, whatever its
-    status — the half of the dismissal memory that runs BEFORE the model, so a repair a steward
-    declined does not cost a call every night.
+    """`(finding ids, page-set keys)` every stored proposal already stands for — the half of the
+    dismissal memory that runs BEFORE the model, so a repair a steward declined does not cost a
+    call every night.
+
+    FAILED rows are excluded, exactly as `store.known_content_keys` excludes them: this filter is
+    an OPTIMISATION of that memory, and one that remembers more than the thing it optimises is not
+    an optimisation — it would suppress before the model what the authoritative check has decided
+    to forgive.
 
     TWO EXACT RULES, deliberately not one fuzzy one. A finding this table has already answered by
     ID is the same finding (a second `propose` against the same gardener run). A finding naming
-    exactly the pages some proposal already targets is the same repair rediscovered under a new
-    id in a later run. Anything looser — "any page in common" — would suppress a legitimate second
+    exactly the pages some stored row stands for is the same repair rediscovered under a new id in
+    a later run. Anything looser — "any page in common" — would suppress a legitimate second
     repair on a page that already has one, which is the failure mode this is not allowed to have:
     an over-eager skip is invisible, and a missed skip only costs a model call that
     `schema.content_key` then throws away.
+
+    "Stands for" is TWO page sets per row, and it needs both: `finding_subjects` (what each
+    answered finding NAMED) and `target_paths` (what the answer would EDIT). They are routinely
+    different — an `orphan-page` finding names the page nothing links to and the repair edits the
+    page that ought to link to it — and matching only the second is why that shape, and a one-sided
+    answer to a two-page finding, went to the model every night after being declined.
     """
-    rows = store.pending_proposals(conn) + store.recent_decided(conn, limit=DISMISSAL_MEMORY_ROWS)
+    rows = [row for row in (store.pending_proposals(conn)
+                            + store.recent_decided(conn, limit=DISMISSAL_MEMORY_ROWS))
+            if row["status"] != schema.STATUS_FAILED]
     ids = {int(i) for row in rows for i in (row["finding_ids"] or ())}
-    return ids, {_page_set_key(row["target_paths"]) for row in rows}
+    page_sets = {_page_set_key(row["target_paths"]) for row in rows}
+    page_sets |= {_page_set_key(group) for row in rows
+                  for group in (row.get("finding_subjects") or ()) if group}
+    return ids, page_sets
 
 
 async def propose_from_findings(conn, *, settings, repo: str = "") -> ProposeResult:
@@ -513,6 +568,10 @@ async def propose_from_findings(conn, *, settings, repo: str = "") -> ProposeRes
     dismissal memory. `edits.validate` runs last and is the FINAL propose-time proof — a proposal
     that would not apply is never stored, so a steward is never shown a question whose answer
     cannot be carried out. Nothing here writes to the repo.
+
+    `settings.max_proposals_per_run` bounds the whole pass — both what one answer may contain and
+    how much a run accumulates — so a gardener night that suddenly reports hundreds of findings
+    costs a bounded number of model calls and produces an inbox a person can still read.
     """
     repo = repo or settings.repo
     skill_text = read_skill(repo)                # a named refusal BEFORE any work is done
@@ -531,6 +590,7 @@ async def propose_from_findings(conn, *, settings, repo: str = "") -> ProposeRes
              and _page_set_key(f.get("subjects")) not in answered_page_sets]
     skipped_known = len(candidates) - len(fresh)
 
+    ceiling = settings.max_proposals_per_run
     accepted: list[dict] = []
     skip_reasons: list[str] = []
     if fresh:
@@ -540,18 +600,41 @@ async def propose_from_findings(conn, *, settings, repo: str = "") -> ProposeRes
         pages = {p: _page_body(deps, p)
                  for f in fresh for p in (f.get("subjects") or []) if p in corpus_paths}
         agent = build_proposer(skill_text, model_name=settings.model)
+        asked = 0
         for batch in _batched(fresh, settings.batch_size):
             batch_pages = {p: pages[p] for f in batch for p in (f.get("subjects") or [])
                            if p in pages}
             got, reasons = await run_proposer(
                 agent, deps, build_prompt(batch, batch_pages), corpus_paths=corpus_paths,
                 link_names=link_names, finding_ids={int(f["id"]) for f in batch},
-                max_ops=settings.max_ops_per_proposal)
+                max_ops=settings.max_ops_per_proposal, max_proposals=ceiling)
             accepted += got
             skip_reasons += reasons
+            asked += len(batch)
+            if len(accepted) >= ceiling:
+                # STOP, and say so. The remaining findings are not lost — the next run sees them,
+                # by which time these have been decided; a run that quietly proposed less than it
+                # saw would read as "the corpus is nearly clean" in `job_runs.stats`.
+                dropped, unseen = len(accepted) - ceiling, len(fresh) - asked
+                accepted = accepted[:ceiling]
+                if dropped or unseen:
+                    # Only when something WAS left out: a run that filled the ceiling exactly and
+                    # had nothing else to look at skipped nothing, and saying otherwise would send
+                    # an operator hunting for findings that do not exist.
+                    skip_reasons.append(
+                        f"run-ceiling-reached({ceiling}): this run stopped at its proposal ceiling "
+                        f"— {dropped} proposal(s) from the last batch and {unseen} further "
+                        f"finding(s) were not proposed; the next run will see them")
+                break
 
     proposal_ids, refused = _store_valid_proposals(
-        conn, repo, accepted, run_id=run["id"], model_id=settings.model)
+        conn, repo, accepted, run_id=run["id"], model_id=settings.model,
+        # What each candidate finding NAMED, so a stored proposal remembers the question and not
+        # only its own answer. Built from `candidates` rather than `fresh`: a batch's finding ids
+        # are validated against the batch, but reading the wider set costs nothing and cannot
+        # silently produce an empty group.
+        subjects_by_finding={int(f["id"]): sorted({str(p) for p in (f.get("subjects") or []) if p})
+                             for f in candidates})
     skip_reasons += refused
 
     result = ProposeResult(
@@ -564,8 +647,8 @@ async def propose_from_findings(conn, *, settings, repo: str = "") -> ProposeRes
     return result
 
 
-def _store_valid_proposals(conn, repo: str, accepted: list[dict], *, run_id: int,
-                           model_id: str) -> tuple[list[int], list[str]]:
+def _store_valid_proposals(conn, repo: str, accepted: list[dict], *, run_id: int, model_id: str,
+                           subjects_by_finding: dict) -> tuple[list[int], list[str]]:
     """The last gate before the table: `edits.validate` against the real checkout, for real.
 
     A proposal that does not survive it is DROPPED with a recorded reason, never stored and never
@@ -595,7 +678,11 @@ def _store_valid_proposals(conn, repo: str, accepted: list[dict], *, run_id: int
         stored.append(store.insert_proposal(
             conn, run_id=run_id, finding_ids=spec["finding_ids"],
             target_paths=schema.target_paths(ops), ops=ops, rationale=spec["rationale"],
-            content_key=key, model_id=model_id))
+            content_key=key, model_id=model_id,
+            # One group per finding ANSWERED, never their union: a proposal answering two findings
+            # has to dismiss each of them, and a union dismisses only a third finding naming every
+            # one of those pages at once — which is not a finding anything produces.
+            finding_subjects=[subjects_by_finding.get(int(i), []) for i in spec["finding_ids"]]))
     return stored, reasons
 
 

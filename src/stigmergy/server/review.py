@@ -93,6 +93,35 @@ SELF_APPROVAL_REFUSED = (
     "review it; you may still record reject or request_changes on your own submission yourself")
 
 
+def _stewards_snapshot(service) -> dict | None:
+    """The stewards map this server resolves against, or `None` when it cannot be read at all.
+
+    ONE loader, because a decision is made against ONE map. `is_steward` answers a single scope and
+    calls this once; `_guard_repair_decision` asks about several PATHS and calls it once for all of
+    them. Splitting the load out is what makes that possible without a second copy of the
+    fail-closed reasoning below.
+
+    `None` is "no answer", distinct from `{}` ("an answer, and it names nobody") — the caller turns
+    either into a refusal, but only this shape lets it.
+    """
+    repo = service.settings.knowledge_repo or ""
+    baked = service.settings.stewards_path or ""
+    if not repo and not baked:
+        return None
+    try:
+        return load_stewards(repo, baked)
+    except (LibrarianError, OSError):
+        # The promise `is_steward`'s docstring makes, kept here rather than at each call site. A
+        # malformed `ops/stewards.json` raises `LibrarianConfigError` and a broken checkout raises
+        # out of `gitcmd`; the DECIDE leg's own `except Exception` would absorb either, but the
+        # READ leg in `slack.review` has nothing to absorb them and a steward's click would vanish
+        # with no feedback at all. Fail closed — and log the fault, because the caller only ever
+        # sees an ordinary refusal and this is the operator's only copy of the diagnosis.
+        log.error("steward resolution failed — treating the caller as not a steward",
+                  exc_info=True)
+        return None
+
+
 def is_steward(service, scope_path: str) -> bool:
     """Is the caller's resolved identity a steward for `scope_path`? Fails closed with `False`,
     never an exception, when this server has neither a checkout nor a baked snapshot.
@@ -100,22 +129,12 @@ def is_steward(service, scope_path: str) -> bool:
     PUBLIC because it is also the READ-side gate: a surface that shows review material BEFORE a
     decision (`slack.review`'s entity-mint modal renders a proposal's unresolved names) has to ask
     the same question the decide leg asks, at the same scope, or the decide leg's own guard arrives
-    after the material has already been served."""
-    repo = service.settings.knowledge_repo or ""
-    baked = service.settings.stewards_path or ""
-    if not repo and not baked:
-        return False
-    try:
-        stewards = load_stewards(repo, baked)
-    except (LibrarianError, OSError):
-        # The promise in the docstring, kept here rather than at each call site. A malformed
-        # `ops/stewards.json` raises `LibrarianConfigError` and a broken checkout raises out of
-        # `gitcmd`; the DECIDE leg's own `except Exception` would absorb either, but the READ leg
-        # in `slack.review` has nothing to absorb them and a steward's click would vanish with no
-        # feedback at all. Fail closed — and log the fault, because the caller only ever sees an
-        # ordinary refusal and this is the operator's only copy of the diagnosis.
-        log.error("steward resolution failed — treating the caller as not a steward",
-                  exc_info=True)
+    after the material has already been served.
+
+    ONE scope, ONE load. A caller asking about several paths must call `_stewards_snapshot` itself
+    rather than this in a loop — see `_guard_repair_decision`."""
+    stewards = _stewards_snapshot(service)
+    if stewards is None:
         return False
     return bool(service.identity) and service.identity in resolve_stewards_for_scope(
         stewards, scope_path)
@@ -158,13 +177,30 @@ def _guard_repair_decision(service, *, found: bool, target_paths) -> None:
     zones needs somebody who stewards both. That is not a deadlock — either steward may still
     REJECT it, and the pair can be proposed as two one-sided repairs.
 
+    **There is no self-approval refusal here, and its absence is a decision** (ADR 039 D5). The
+    `entity-proposal` rule exists because a human submitted that row and a second human has to
+    agree; a repair proposal has no submitter at all — a nightly job derived it from the gardener's
+    findings, and the model that wrote it approves nothing. The one steward IS the second party.
+    Asking "did you file this?" of a machine-authored row would refuse nobody and imply a submitter
+    that does not exist.
+
     An empty `target_paths` collapses to the universal scope. It cannot occur from the proposer
     (`store.insert_proposal` derives the column from the ops, and a proposal with no ops is refused
     before it is stored), so this is the fail-closed reading of a row that should not exist rather
     than a supported shape.
+
+    **The map is read ONCE for the whole decision**, not once per path. Both halves of that matter:
+    an authorization decision is made against one map, and N reads mean N maps, so a
+    `ops/stewards.json` landing mid-decision could have one proposal approved against two different
+    answers to the same question. The other half is that each read is a `git fetch` plus a file
+    read, and an unauthorized caller could trigger one per op just by asking.
     """
     paths = [str(p) for p in (target_paths or ()) if str(p)]
-    if not found or not all(is_steward(service, p) for p in (paths or [""])):
+    stewards = _stewards_snapshot(service)
+    if not found or stewards is None or not service.identity:
+        raise ReviewError(NOT_YOURS_TO_DECIDE)
+    if not all(service.identity in resolve_stewards_for_scope(stewards, p)
+               for p in (paths or [""])):
         raise ReviewError(NOT_YOURS_TO_DECIDE)
 
 
@@ -219,8 +255,12 @@ def _iso(value) -> str | None:
     return value.isoformat() if isinstance(value, datetime) else None
 
 
-def _repair_proposal_items(conn) -> list[dict]:
-    """Every pending `repair_proposals` row, as review-inbox items.
+def _repair_proposal_items(conn, *, limit: int) -> list[dict]:
+    """The first `limit` pending `repair_proposals` rows, as review-inbox items.
+
+    `limit` is not optional and has no default: this list is the one item kind a NIGHTLY JOB
+    produces in bulk, and a caller that forgot to bound it would read the whole pending table into
+    an MCP response.
 
     `ops_preview` is a COUNT and the set of op kinds, never the ops themselves: this list is a
     scan, and the ops carry page paths and a free-text `note`. What a steward has to read before
@@ -239,7 +279,7 @@ def _repair_proposal_items(conn) -> list[dict]:
                         "kinds": sorted({str(o.get(repair_schema.OP_KIND_KEY, ""))
                                          for o in (row.get("ops") or ())})},
         "model_id": row.get("model_id", ""),
-    } for row in repair_store.pending_proposals(conn)]
+    } for row in repair_store.pending_proposals(conn, limit=limit)]
 
 
 def _collect_open_items(conn, *, submitted_by: str | None, limit: int) -> list[dict]:
@@ -258,7 +298,10 @@ def _collect_open_items(conn, *, submitted_by: str | None, limit: int) -> list[d
     """
     items: list[dict] = []
     if submitted_by is None:
-        items += _repair_proposal_items(conn)
+        # `limit` bounds THIS read as well as the submissions one below. It was outside the bound
+        # once, which made the caller's ceiling advisory over exactly the kind a cron can produce
+        # a thousand of overnight.
+        items += _repair_proposal_items(conn, limit=limit)
 
     rows = _query_all_open_submissions(conn, submitted_by=submitted_by, limit=limit)
     for row in rows:
@@ -328,6 +371,12 @@ def items_for_doorbell(conn, *, limit: int = DOORBELL_ITEM_LIMIT) -> list[dict]:
 
 
 # ── the doorbell's steward resolution ───────────────────────────────────────────────────────────
+# `base_ref` FETCHES, and this runs inside an authorization check on a request — an unreachable
+# remote must make the decision FAIL (closed, through `is_steward`'s own `except`) rather than
+# stall it. The worker's own callers pass none; this one cannot.
+STEWARDS_FETCH_TIMEOUT_S = 30
+
+
 def load_stewards(repo: str, baked_path: str = "") -> dict:
     """`ops/stewards.json` — from the REPO at `origin/main`'s fresh tip wherever a checkout exists
     (never the working tree: a revoked steward must not resolve off a stale read), from the
@@ -336,22 +385,35 @@ def load_stewards(repo: str, baked_path: str = "") -> dict:
     EMPTY map, never an error, and every decision downstream fails closed.
     """
     if repo:
-        return base_inputs.load_stewards(repo, gitcmd.base_ref(repo, "main"))
+        return base_inputs.load_stewards(
+            repo, gitcmd.base_ref(repo, "main", timeout_s=STEWARDS_FETCH_TIMEOUT_S))
     return base_inputs.load_stewards_file(baked_path) if baked_path else {}
 
 
 def resolve_stewards_for_scope(stewards_map: dict, scope_path: str) -> list[str]:
-    """Longest-matching zone-path-prefix key wins; `"*"` is the fallback, never compared as a
-    prefix, so `scope_path=""` can only match it."""
+    """Longest-matching zone-path key wins; `"*"` is the fallback, never compared as a prefix, so
+    `scope_path=""` can only match it.
+
+    A key names a PATH, and the match is on a path BOUNDARY: the key itself, or the key followed by
+    `/`. A bare `startswith` made the key `wiki/note` govern `wiki/notes/x.md` — a delegation for
+    one folder silently deciding a different folder whose name it is a prefix of, and, being the
+    longer key, beating the general steward to it. Keys are accepted with or without a trailing
+    slash because `ops/stewards.json` is hand-written both ways.
+    """
     best_key, best_len = None, -1
     for key in (stewards_map or {}):
         if key == "*":
             continue
-        if scope_path and scope_path.startswith(key) and len(key) > best_len:
+        if scope_path and _covers(key, scope_path) and len(key) > best_len:
             best_key, best_len = key, len(key)
     if best_key is not None:
         return _as_list(stewards_map[best_key])
     return _as_list((stewards_map or {}).get("*"))
+
+
+def _covers(key: str, scope_path: str) -> bool:
+    """Does a stewards-map key govern this page path? The key exactly, or the folder it names."""
+    return scope_path == key or scope_path.startswith(key.rstrip("/") + "/")
 
 
 def _as_list(value) -> list[str]:
@@ -414,13 +476,20 @@ def _already_decided_suffix(conn, item_kind: str, submission_id) -> str:
             f"{decision['source'] or 'an unrecorded door'} at {when:%Y-%m-%d %H:%M}Z")
 
 
+# The note scan is a subprocess on the decide path, like the stewards fetch above — a scanner
+# that never returns must fail the decide (as a config fault), not pin the request. The note
+# itself is length-clamped upstream, so the budget is generous for the input it can ever see.
+NOTE_SCAN_TIMEOUT_S = 30
+
+
 def _refuse_secret_note(notes: str) -> None:
     """The secrets scan over a steward note, here at the CALL SITE because `stigmergy.capture` may
     never import `stigmergy.librarian`. Runs before `notes` reaches `clean` or a report."""
     if not (notes or "").strip():
         return
     gitleaks_bin = os.environ.get("STIGMERGY_GITLEAKS_BIN", "gitleaks")
-    hits = gates.scan_secrets(notes, gitleaks_bin=gitleaks_bin, label="a review note")
+    hits = gates.scan_secrets(notes, gitleaks_bin=gitleaks_bin, label="a review note",
+                              timeout_s=NOTE_SCAN_TIMEOUT_S)
     if hits:
         # the rule id comes structurally from `Finding.values`, never re-parsed out of prose
         _line, rule = hits[0].values
@@ -603,8 +672,8 @@ def _repair_proposal_or_refuse(conn, item_id) -> dict:
     return row
 
 
-def apply_repair_and_record(conn, *, repo_url: str, proposal: dict, actor: str,
-                            source: str) -> dict:
+def apply_repair_and_record(conn, *, repo_url: str, proposal: dict, actor: str, source: str,
+                            notes: str = "") -> dict:
     """Approve ONE repair proposal and apply it, in the one order that is correct — record the
     steward's verdict, apply through the governed door, then write the governance ledger row.
 
@@ -634,16 +703,23 @@ def apply_repair_and_record(conn, *, repo_url: str, proposal: dict, actor: str,
 
     `apply_approved` is reached as a MODULE ATTRIBUTE so it stays monkeypatchable, the same seam
     `entities_remote.mint_via_clone` keeps one door over.
+
+    `notes` reaches BOTH writes, exactly as `reject_repair_and_record` already does with its
+    reason — it is the only record of why a repair was worth applying, and it used to be dropped on
+    approve while being kept on reject. It is `mint_and_record_approval`'s asymmetry too: the review
+    lane carries the steward's cleaned note, the console has no note field and passes nothing. It
+    goes VERBATIM into an append-only table, so a caller supplying a non-empty one must already
+    have run `_refuse_secret_note` — `review_decide` does, before either branch.
     """
     if not repo_url:
         raise ReviewError(REPAIR_REPO_UNCONFIGURED)
     if not repair_store.mark_decided(conn, proposal["id"], status=repair_schema.STATUS_APPROVED,
-                                     decided_by=actor, notes=""):
+                                     decided_by=actor, notes=notes):
         raise ReviewError(_LOST_THE_RACE)
     result = repair_remote.apply_approved(
         conn, repo_url, _KNOWLEDGE_BRANCH, os.environ, proposal=proposal, approved_by=actor)
     record_decision(conn, item_kind=KIND_REPAIR_PROPOSAL, item_id=str(proposal["id"]),
-                    verdict=APPROVE, actor=actor, source=source, notes="",
+                    verdict=APPROVE, actor=actor, source=source, notes=notes,
                     extra={"commit": result["commit"], "paths": result["paths"]})
     return {"applied": True, "commit": result["commit"], "paths": result["paths"]}
 
@@ -697,7 +773,7 @@ def _decide_repair(service, item_id: str, verdict: str, notes: str, actor: str, 
     try:
         result = apply_repair_and_record(
             service.conn, repo_url=service.settings.librarian_repo_url, proposal=proposal,
-            actor=actor, source=source)
+            actor=actor, source=source, notes=notes)
     except RepairError as ex:
         # Mapped HERE, under the rule this whole module holds: an exception type from below never
         # leaves as itself, because `stigmergy.slack` is barred from importing it and could only

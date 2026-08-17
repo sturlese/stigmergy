@@ -21,7 +21,7 @@ the checkout; a missing skill is a named refusal, never a default.
 | `remote.py` | `apply_via_clone` (clone → `edits.apply_declared` → the cross-check → `run_gates` → gated commit → push) and `apply_approved`, the door that also records the outcome. Owns `commit_message` |
 | `store.py` | `repair_proposals` persistence: `insert_proposal`, `pending_proposals`, `recent_decided`, `proposal`, `mark_decided`, `mark_applied`, `mark_failed`, `known_content_keys`. Pure — decides nothing, authorizes nothing |
 | `schema.py` | The DDL behind `startup_ddl_lock`, `JOB_NAME`, the kind/status vocabularies, and the op record: `declared_edits`, `target_paths`, `content_key` |
-| `settings.py` | `RepairSettings.from_env` — the model and the two bounds. The ONE place this package reads the environment for configuration |
+| `settings.py` | `RepairSettings.from_env` — the model and the three bounds. The ONE place this package reads the environment for configuration |
 | `errors.py` | `RepairError`, and `ProposalStateError` for "somebody got there first / there is nothing to do" |
 
 **Two doors decide who may approve, and neither is here.** `server/review.py` reaches `store`,
@@ -48,7 +48,9 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
 - `librarian.gather.load_corpus` / `search_candidates` / `confined_page` — one lexical ranking and
   one containment rule behind the proposer's tools and the filing agent's.
 - `gardener.store.latest_completed_run` / `findings_for_run` — findings are READ, never
-  recomputed; `subjects` is the LIST, never the display string re-split.
+  recomputed; `subjects` is the LIST, never the display string re-split. The same list is stored
+  on the proposal as `finding_subjects`, which is what lets the pre-model skip recognise the same
+  question under a new finding id.
 - `kernel.llm.build_processor` — the one fake/real dispatch, `CLEAN_LLM`-driven offline.
 - `capture.ops.record_job_run` — one `job_runs` row per propose pass.
 
@@ -67,24 +69,32 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
 
 ## Contracts
 
-- `repair_proposals`: `id`, `created_at`, `run_id`, `finding_ids`, `kind`, `target_paths`, `ops`,
-  `rationale`, `content_key`, `status`, `decided_by`, `decided_at`, `notes`, `applied_commit`,
-  `error`, `model_id`. `kind ∈ ('edits',)` in v1; `status ∈ (pending, approved, rejected, applied,
-  failed)`.
+- `repair_proposals`: `id`, `created_at`, `run_id`, `finding_ids`, `finding_subjects`, `kind`,
+  `target_paths`, `ops`, `rationale`, `content_key`, `status`, `decided_by`, `decided_at`, `notes`,
+  `applied_commit`, `error`, `model_id`. `kind ∈ ('edits',)` in v1; `status ∈ (pending, approved,
+  rejected, applied, failed)`. `finding_subjects` is a list of LISTS — one sorted page set per
+  finding answered, what each one NAMED as against what the answer would edit.
 - **A REJECTED row is the dismissal memory.** `content_key` identifies a proposal by what it would
-  DO (kind + sorted `op:path:link`, `note` excluded), and the proposer skips a key with ANY prior
-  row. "Reviewed and declined" is a durable fact, and a steward is not asked the same question
-  every night. The UNIQUE index is narrower on purpose — pending only — so re-proposing after a
-  rejection stays a human decision rather than a constraint violation.
+  DO (kind + sorted `op:path:link`, `note` excluded), and the proposer skips a key held by a
+  pending, approved, rejected or applied row. "Reviewed and declined" is a durable fact, and a
+  steward is not asked the same question every night. `failed` is deliberately NOT remembered — a
+  failed apply is a steward's YES that hit a fault, and the next run must be able to derive it
+  again; both halves of the memory (`store.known_content_keys` and the pre-model
+  `proposer.already_proposed`) exclude it, or the optimisation would suppress what the
+  authoritative check forgives. The UNIQUE index is narrower on purpose — pending only — so
+  re-proposing after a rejection stays a human decision rather than a constraint violation.
 - `PROPOSABLE_CHECKS` = `model-unlinked-mention`, `model-contradiction`, `orphan-page`. The other
   checks are absent by NAME, not by oversight: none of them is answered by a link or a callout.
 - `job_runs` job `repair-propose`, `stats`: `findings_seen`, `proposed`, `skipped_known`,
   `skipped_invalid`, `skip_reasons`.
 - Bounds: `settings.max_ops_per_proposal` (6) is how much ONE approval may be;
-  `MAX_RATIONALE_CHARS` 400, `MAX_NOTE_CHARS` 300, `MAX_PAGE_BODY_CHARS` 12000,
-  `MAX_SKILL_BYTES` 256 KiB; `PROPOSER_LIMITS` 6 requests / 24 tool calls.
+  `settings.max_proposals_per_run` (20) is how many approvals one NIGHT may ask for — a batch over
+  it is refused whole with a named reason the retry carries, and the run stops batching once it is
+  full, recording what it left for the next pass; `MAX_RATIONALE_CHARS` 400, `MAX_NOTE_CHARS` 300,
+  `MAX_PAGE_BODY_CHARS` 12000, `MAX_SKILL_BYTES` 256 KiB; `PROPOSER_LIMITS` 6 requests / 24 tool
+  calls.
 - The proposer's skill: `.claude/skills/repair-proposer/SKILL.md` in the knowledge repo, read at
-  run time and size-capped before the bytes.
+  run time, refused if the leaf is a symlink, and size-capped before the bytes.
 
 - The review lane's own kind is `repair-proposal` (`stigmergy.review_kinds`), decided with
   `approve`/`reject` only, authorized by a steward for EVERY page in `target_paths`, and listed in

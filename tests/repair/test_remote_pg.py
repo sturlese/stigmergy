@@ -71,6 +71,35 @@ def _remote_head(bare: str, ref: str = "main") -> str:
     return gitcmd.run("rev-parse", ref, cwd=bare).stdout.strip()
 
 
+# ── every subprocess this door reaches is bounded, because it runs inside a request ───────────
+def test_the_apply_bounds_the_gates_subprocesses_and_the_push(conn, repo_env, monkeypatch):
+    """Red before the fix: the `GateContext` this door builds carried no subprocess budget and
+    `gitcmd.push` accepted none, so a hung contract linter, a hung gitleaks or a stalled remote
+    pinned an HTTP worker inside the MCP server for as long as it liked.
+
+    Observed by RECORDING and delegating, never by replacing: the real gates run, the real push
+    runs, and what is asserted is the budget each was handed."""
+    seen = {}
+    real_run_gates, real_push = remote.gates.run_gates, remote.gitcmd.push
+
+    def recording_run_gates(ctx):
+        seen["gates"] = ctx.subprocess_timeout_s
+        return real_run_gates(ctx)
+
+    def recording_push(*args, **kwargs):
+        seen["push"] = kwargs.get("timeout_s")
+        return real_push(*args, **kwargs)
+
+    monkeypatch.setattr(remote.gates, "run_gates", recording_run_gates)
+    monkeypatch.setattr(remote.gitcmd, "push", recording_push)
+    proposal = _proposal(conn, BACKLINK_OPS)
+
+    remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal, approved_by=APPROVER)
+
+    assert seen == {"gates": remote.REPAIR_SUBPROCESS_TIMEOUT_S,
+                    "push": remote.REPAIR_GIT_TIMEOUT_S}
+
+
 # ── the approve path, end to end ──────────────────────────────────────────────────────────────
 def test_an_approved_backlink_lands_on_the_remote_as_one_app_authored_commit(conn, repo_env):
     proposal = _proposal(conn, BACKLINK_OPS)

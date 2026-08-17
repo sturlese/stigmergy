@@ -709,9 +709,9 @@ def test_the_librarian_index_rule_can_actually_see_an_offender(tmp_path):
 # Symbol-scoped (`_imported_symbols`'s granularity — `from stigmergy.librarian import githubapp`
 # resolves to the symbol `stigmergy.librarian.githubapp`, distinct from any OTHER `from
 # stigmergy.librarian import X`), not a wider "anything in librarian": these two symbols carry no
-# capture-queue/gates/worktree logic at all — `githubapp` is App-credential minting and nothing
-# else (its own module docstring), and `LibrarianConfigError` is the exception class `githubapp`
-# itself raises on a half-configured App.
+# capture-queue/gates/worktree logic at all — `githubapp` is App-credential minting plus the one
+# `repo_slug` parser that feeds its own push URL (its own module docstring), and
+# `LibrarianConfigError` is the exception class `githubapp` itself raises on a half-configured App.
 _WEBHOOK_ALLOWED_LIBRARIAN_SYMBOLS = (
     "stigmergy.librarian.githubapp",
     "stigmergy.librarian.errors.LibrarianConfigError",
@@ -3122,6 +3122,11 @@ def test_the_mint_sequence_caller_pin_can_go_red_in_both_directions(tmp_path):
 # copy of an AST walker is a second place for the prose-is-not-a-call subtlety to be got wrong.
 _REPAIR_APPLY_DOOR = "apply_approved"
 _REPAIR_APPLY_SEQUENCE = "apply_repair_and_record"
+# The PRIMITIVE under the door: the function that actually clones with the App credential, applies
+# the ops, gates, commits and pushes. It writes no status row of its own, so a surface reaching it
+# directly would push to the corpus and leave `repair_proposals` claiming the proposal is still
+# approved — the exact strand `apply_approved`'s two arms exist to prevent.
+_REPAIR_APPLY_PRIMITIVE = "apply_via_clone"
 
 # `repair/remote.py` DEFINES the door and never calls it (an `ast.FunctionDef` carries its name as
 # a plain string, so a definition is not a reference); `server/review.py` calls it as
@@ -3132,6 +3137,9 @@ _REPAIR_APPLY_DOOR_CALLERS = ("server/review.py",)
 # absent and must stay absent: it reaches the review lane through `review_decide_safe`, which walks
 # the per-path steward guard first.
 _REPAIR_APPLY_SEQUENCE_CALLERS = ("admin/service.py", "server/review.py")
+# `repair/remote.py` defines the primitive AND calls it, from `apply_approved` — the ONE place that
+# is allowed to, because that function is what records `applied`/`failed` around it.
+_REPAIR_APPLY_PRIMITIVE_CALLERS = ("repair/remote.py",)
 
 
 def _names_symbol(path: pathlib.Path, symbol: str) -> bool:
@@ -3148,7 +3156,8 @@ def _names_symbol(path: pathlib.Path, symbol: str) -> bool:
 @pytest.mark.parametrize("symbol,declared", [
     (_REPAIR_APPLY_DOOR, _REPAIR_APPLY_DOOR_CALLERS),
     (_REPAIR_APPLY_SEQUENCE, _REPAIR_APPLY_SEQUENCE_CALLERS),
-], ids=[_REPAIR_APPLY_DOOR, _REPAIR_APPLY_SEQUENCE])
+    (_REPAIR_APPLY_PRIMITIVE, _REPAIR_APPLY_PRIMITIVE_CALLERS),
+], ids=[_REPAIR_APPLY_DOOR, _REPAIR_APPLY_SEQUENCE, _REPAIR_APPLY_PRIMITIVE])
 def test_the_governed_repair_apply_is_entered_from_exactly_the_declared_surfaces(symbol, declared):
     """Set EQUALITY, both directions, this file's house rule for every caller pin.
 
@@ -3203,6 +3212,24 @@ def test_the_repair_apply_caller_pin_can_go_red_in_both_directions(tmp_path):
     caller_b.write_text("def approve(conn, **kw):\n    raise NotImplementedError\n",
                         encoding="utf-8")
     assert observed() == ["handlers.py", "review.py"]                 # a stale grant
+
+
+def test_the_repair_apply_primitive_pin_tells_defining_it_from_calling_it(tmp_path):
+    """**The anti-vacuity probe for the primitive's pin**, and the one subtlety it turns on: the
+    single declared caller is the module that also DEFINES the function, so if the predicate counted
+    a `def` as a reference, the pin would resolve `repair/remote.py` from the definition alone and
+    stay green forever — including after `apply_approved` stopped calling it, which is precisely the
+    drift that would leave a pushed commit with no status row behind it."""
+    defines_only = tmp_path / "defines.py"
+    defines_only.write_text("def apply_via_clone(url, branch, credential, **kw):\n"
+                            "    return {'commit': '', 'paths': []}\n", encoding="utf-8")
+    calls_it = tmp_path / "calls.py"
+    calls_it.write_text("def apply_approved(conn, *args, **kw):\n"
+                        "    return apply_via_clone(*args, **kw)\n", encoding="utf-8")
+
+    assert not _names_symbol(defines_only, _REPAIR_APPLY_PRIMITIVE), (
+        "a definition is not a call — counting it would make this pin permanently green")
+    assert _names_symbol(calls_it, _REPAIR_APPLY_PRIMITIVE)
 
 
 # ── the pruning rule, applied to the per-package import allow-lists ────────────────────────────

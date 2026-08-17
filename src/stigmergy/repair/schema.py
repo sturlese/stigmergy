@@ -5,11 +5,16 @@ posture `gardener/schema.py` takes, and for the same reason: two processes may s
 
 The one design decision worth stating here rather than in prose elsewhere: **a REJECTED row is
 the dismissal memory.** `content_key` identifies a proposal by what it would DO, not by which
-finding suggested it, and the proposer skips a key that has ANY prior row — pending, rejected or
-applied. "Reviewed and declined" therefore finally exists as a durable fact, and a steward who
+finding suggested it, and the proposer skips a key held by a pending, approved, rejected or
+applied row. "Reviewed and declined" therefore finally exists as a durable fact, and a steward who
 says no once is not asked the same question again the next night. The UNIQUE index is narrower on
 purpose (pending only): re-proposing after a rejection is a decision a human makes, and the index
 must not turn it into a database error.
+
+`failed` is the one status the memory does NOT hold, and the asymmetry is the point: a rejection is
+a human saying no, while a failed apply is a human having said YES to something that then hit a
+gate, a race or a fault. The row stays as the operator-visible record; the SKIP does not, or the
+one repair a steward actively wanted would be the one the loop can never offer again.
 """
 import hashlib
 
@@ -59,9 +64,29 @@ CREATE TABLE IF NOT EXISTS repair_proposals (
     notes TEXT NOT NULL DEFAULT '',
     applied_commit TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT '',
-    model_id TEXT NOT NULL DEFAULT ''
+    model_id TEXT NOT NULL DEFAULT '',
+    finding_subjects JSONB NOT NULL DEFAULT '[]'::jsonb
 )
 """
+
+# WHAT THE FINDINGS NAMED, as against `target_paths` (what the answer would EDIT). The two are
+# routinely different — an `orphan-page` finding names the page nothing links to, and the repair
+# edits the page that ought to link to it — so a dismissal memory keyed only on `target_paths`
+# recognised neither that shape nor a one-sided answer to a two-page finding, and sent the same
+# declined repair to the model every night under each new finding id.
+#
+# A LIST OF LISTS, one entry per finding answered, and never their union: a proposal answering two
+# findings has to dismiss BOTH, while a union would dismiss only a hypothetical third finding
+# naming all of those pages at once, which is not a finding anything produces.
+#
+# `ADD COLUMN IF NOT EXISTS` for the reason `gardener/schema.py` states: `CREATE TABLE IF NOT
+# EXISTS` never adds a column to a table that already exists, and the `'[]'` default fills every
+# pre-existing row — a proposal stored before this column reads as "named no subject", which falls
+# back to the `target_paths` half exactly as it did before.
+_REPAIR_PROPOSALS_FINDING_SUBJECTS_COLUMN = (
+    "ALTER TABLE repair_proposals ADD COLUMN IF NOT EXISTS finding_subjects JSONB NOT NULL "
+    "DEFAULT '[]'::jsonb"
+)
 
 # One PENDING proposal per content key — a second propose run that re-derives the same edit is a
 # no-op, not a second question. Deliberately NOT unique across every status: the dismissal memory
@@ -75,8 +100,8 @@ _REPAIR_PROPOSALS_STATUS_INDEX = (
     "CREATE INDEX IF NOT EXISTS repair_proposals_status_idx ON repair_proposals (status, id)"
 )
 
-_ALL_DDL = (_REPAIR_PROPOSALS_DDL, _REPAIR_PROPOSALS_PENDING_KEY_INDEX,
-            _REPAIR_PROPOSALS_STATUS_INDEX)
+_ALL_DDL = (_REPAIR_PROPOSALS_DDL, _REPAIR_PROPOSALS_FINDING_SUBJECTS_COLUMN,
+            _REPAIR_PROPOSALS_PENDING_KEY_INDEX, _REPAIR_PROPOSALS_STATUS_INDEX)
 
 
 def ensure_repair_schema(conn) -> None:

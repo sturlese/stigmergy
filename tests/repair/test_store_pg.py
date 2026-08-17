@@ -5,6 +5,9 @@ The store decides nothing and authorizes nothing, so what is worth pinning is ex
 things a caller cannot see for itself: that a row comes back the way it went in, and that a
 transition which is no longer legal reports so instead of happening quietly.
 """
+import pathlib
+import re
+
 import pytest
 
 from stigmergy.repair import schema, store
@@ -47,6 +50,17 @@ def test_pending_proposals_lists_only_what_waits_on_a_steward(conn):
 
     assert [row["id"] for row in store.pending_proposals(conn)] == [waiting]
     assert [row["id"] for row in store.recent_decided(conn)] == [decided]
+
+
+def test_pending_proposals_can_be_asked_for_a_bounded_page(conn):
+    """Red before the fix: `pending_proposals` took no `limit` and always returned the WHOLE
+    pending table, so a caller with a bound of its own — the review inbox — could not apply it to
+    the repair half of the list. Oldest first, so a bounded read is the front of the queue."""
+    first = _insert(conn, key="one")
+    _insert(conn, key="two")
+
+    assert [row["id"] for row in store.pending_proposals(conn, limit=1)] == [first]
+    assert len(store.pending_proposals(conn)) == 2, "an absent limit still reads the whole table"
 
 
 def test_marking_decided_records_the_verdict_the_actor_and_the_reason(conn):
@@ -117,7 +131,7 @@ def test_a_failed_apply_keeps_the_reason_and_does_not_go_back_to_pending(conn):
     assert row["decided_by"] == "s", "the approval itself is history and must not be erased"
 
 
-def test_known_content_keys_is_the_dismissal_memory_and_holds_every_status(conn):
+def test_known_content_keys_is_the_dismissal_memory_and_holds_every_decided_status(conn):
     """The point of the whole column: a REJECTED key is remembered exactly as an applied one is,
     which is what makes "reviewed and declined" a durable fact rather than a shrug."""
     rejected = _insert(conn, key="rejected-key")
@@ -128,3 +142,63 @@ def test_known_content_keys_is_the_dismissal_memory_and_holds_every_status(conn)
     _insert(conn, key="pending-key")
 
     assert store.known_content_keys(conn) == {"rejected-key", "applied-key", "pending-key"}
+
+
+def test_a_failed_apply_is_not_remembered_as_a_dismissal(conn):
+    """Red before the fix: `known_content_keys` scanned the whole table, so a key whose apply
+    FAULTED was remembered exactly as a rejection was — and a rejection is a steward saying no.
+
+    A `failed` row is the opposite: a steward said YES and the apply hit a gate, a race or a fault.
+    Remembering it as a dismissal is how a repair somebody wanted becomes unproposable forever, with
+    nothing in the loop able to notice."""
+    failed = _insert(conn, key="failed-key")
+    store.mark_decided(conn, failed, status=schema.STATUS_APPROVED, decided_by="s")
+    store.mark_failed(conn, failed, "the gates refused this repair: secrets/secret")
+
+    assert store.known_content_keys(conn) == set()
+    assert store.proposal(conn, failed)["status"] == schema.STATUS_FAILED, (
+        "the row itself stays — it is the operator-visible record, only the SKIP is dropped")
+
+
+# ── the stranded-row runbook entry, run verbatim ──────────────────────────────────────────────
+# `docs/reference/operator-runbook.md` hands an operator a guarded UPDATE for the one residual this
+# design has: a process that dies between the pending->approved transition and the failure
+# bookkeeping. A message containing a command is an executable promise, so the command is RUN here,
+# byte for byte out of the document.
+_RUNBOOK = pathlib.Path(__file__).resolve().parents[2] / "docs/reference/operator-runbook.md"
+_STRANDED_UPDATE_RE = re.compile(
+    r"(UPDATE repair_proposals\s+SET status='failed'[^;]*?WHERE id=[^;]*?applied_commit='';)",
+    re.DOTALL)
+
+
+def _documented_stranded_update() -> str:
+    match = _STRANDED_UPDATE_RE.search(_RUNBOOK.read_text(encoding="utf-8"))
+    assert match, ("the operator runbook no longer carries the stranded-approved UPDATE — this "
+                   "test has lost its source of truth and would pass by matching nothing")
+    return match.group(1)
+
+
+def test_the_runbooks_stranded_row_recovery_runs_and_is_guarded(conn):
+    """The residual `apply_approved` cannot close: the process dies between `mark_decided` and the
+    failure bookkeeping, leaving `approved` with an empty commit and an empty error.
+
+    Both halves are proved: the documented statement RECOVERS such a row, and its guard REFUSES a
+    row that has moved on — an operator running it a second time, or against a proposal that landed
+    while they were reading, must not overwrite an applied commit with `failed`."""
+    stranded = _insert(conn, key="stranded")
+    store.mark_decided(conn, stranded, status=schema.STATUS_APPROVED, decided_by="s")
+    landed = _insert(conn, key="landed")
+    store.mark_decided(conn, landed, status=schema.STATUS_APPROVED, decided_by="s")
+    store.mark_applied(conn, landed, "cafebabe")
+    statement = _documented_stranded_update()
+
+    with conn.cursor() as cur:
+        cur.execute(statement.replace("<id>", str(stranded)))
+        assert cur.rowcount == 1
+        cur.execute(statement.replace("<id>", str(landed)))
+        assert cur.rowcount == 0, "the guard must refuse a row that already landed"
+
+    recovered = store.proposal(conn, stranded)
+    assert recovered["status"] == schema.STATUS_FAILED
+    assert "operator" in recovered["error"]
+    assert store.proposal(conn, landed)["status"] == schema.STATUS_APPLIED

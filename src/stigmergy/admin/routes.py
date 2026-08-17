@@ -8,6 +8,14 @@ else (lifespan included) flows to the inner app untouched.
 
 Gate order on the admin side: foreign `Host` -> 421, `/admin/api/*` without the admin bearer
 token -> generic 401, security headers on every response, static assets included.
+
+**The two Approve handlers run their service call in a worker thread** (`run_in_threadpool`), and
+they are the only ones that do. Both reach code that clones the knowledge repo, runs the eight
+gates — `git` and `gitleaks` subprocesses — and pushes: seconds of blocking work, on the event loop
+of a process that is also serving the MCP tools. The rejects stay inline because each is one
+statement. `AdminService`'s "no cursor across an `await`" invariant is untouched: the whole
+synchronous call happens inside the one thread, and the connection is the same autocommit one
+`slack.review` already reaches through `asyncio.to_thread`.
 """
 import json
 import logging
@@ -15,6 +23,7 @@ import os
 import pathlib
 
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
@@ -318,7 +327,8 @@ def _build_admin_app(service: AdminService) -> Starlette:
         requeue = data.get("requeue", True)
         if not isinstance(requeue, bool):
             raise AdminBadRequest("'requeue' must be a boolean")
-        return service.entity_approve(
+        return await run_in_threadpool(
+            service.entity_approve,
             request.path_params["id"], actor=_str(data, "actor"), name=_str(data, "name"),
             entity_type=_str(data, "entity_type"), entity_id=_str(data, "entity_id"),
             aliases=_str(data, "aliases"), role=_str(data, "role"), requeue=requeue)
@@ -334,7 +344,8 @@ def _build_admin_app(service: AdminService) -> Starlette:
     @_json_endpoint
     async def repairs_approve(request):
         data = await _body(request)
-        return service.repair_approve(request.path_params["id"], actor=_str(data, "actor"))
+        return await run_in_threadpool(service.repair_approve, request.path_params["id"],
+                                       actor=_str(data, "actor"))
 
     @_json_endpoint
     async def repairs_reject(request):

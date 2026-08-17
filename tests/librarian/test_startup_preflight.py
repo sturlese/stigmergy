@@ -71,7 +71,7 @@ def test_a_github_remote_without_the_app_is_refused_naming_what_git_blame_would_
 
 def test_an_ssh_github_remote_is_refused_too(rig):
     """`git@github.com:owner/name.git` is the same destination in a different dialect, and
-    `processing._repo_slug` already parses both — a check that only understood https would let the
+    `githubapp.repo_slug` already parses both — a check that only understood https would let the
     form the operator's own checkout uses straight through."""
     env, _ = rig
     _remote(env.repo, "git@github.com:acme/knowledge.git")

@@ -25,7 +25,7 @@ the one withheld road is the agent's budget (`UsageLimitExceeded`).
 | `skeleton.py` | The deterministic half: `members_of`, `member_hash`, timeline and backlinks rendering, `entity_own_page` |
 | `synthesis.py` | The bounded agent: `build_view_agent`, `write_synthesis`, `FakeViewWriter`, `ViewContext` and its `read_page` tool |
 | `render.py` | Assembles skeleton + synthesis into one page; owns the frontmatter shape, `WITHHELD_BLOCK`, `SYNTHESIS_CAPTION` |
-| `writer.py` | The one commit path: `commit_and_push` (App-bot authored), the steward-clone guards `ensure_on_branch`/`ensure_clean`, `repo_slug` |
+| `writer.py` | The one commit path: `commit_and_push` (App-bot authored), the steward-clone guards `ensure_on_branch`/`ensure_clean`. The origin's `owner/name` comes from `librarian.githubapp.repo_slug`, the ONE parser, never a copy here |
 | `errors.py` | `ViewError`. `writer.ViewWriteError` is a `librarian.errors.GitError` subclass, caught via `LibrarianError` |
 
 Downstream: `librarian.processing` imports `views.regenerate` (post-meeting trigger);

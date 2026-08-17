@@ -85,9 +85,26 @@ is not a thing this loop does.
 ### D3 — a REJECTED row is the dismissal memory, and `content_key` is what identifies a proposal (#39)
 
 A proposal is identified by WHAT IT WOULD DO — its kind plus its sorted `op:path:link` lines,
-hashed — and the proposer skips a `content_key` that has ANY prior row: pending, rejected or
-applied. "Reviewed and declined" is therefore a durable fact for the first time, and a steward who
+hashed — and the proposer skips a `content_key` held by a pending, approved, rejected or applied
+row. "Reviewed and declined" is therefore a durable fact for the first time, and a steward who
 says no once is not asked the same question by the next night's run.
+
+The claim is worth stating precisely, because it has two halves and they answer different
+questions. `content_key` is the AUTHORITATIVE memory and runs after the model: a declined repair
+is never queued twice. It does not stop the finding reaching the model, though, and the cheap
+pre-model skip that does needs its own key — which is why a proposal also stores
+`finding_subjects`, the sorted page set each answered finding NAMED. `target_paths` alone was not
+enough: an `orphan-page` finding names the page nothing links to while the repair edits the page
+that ought to link to it, and a one-sided answer to a two-page finding names one page of two. Both
+shapes matched nothing, so a declined repair cost a model call every night, invisibly. It is a list
+of LISTS, one per finding answered rather than their union, because a proposal answering two
+findings has to dismiss both.
+
+`failed` is the one status neither half remembers, and the asymmetry is deliberate (D2's
+consequence, made explicit): a rejection is a human saying no, while a failed apply is a human
+having said YES to something that then hit a gate, a race or a fault. The row stays as the
+operator-visible record; the SKIP does not, or the one repair a steward actively wanted would be
+the one the loop can never offer again.
 
 Three details of that are load-bearing:
 
@@ -142,6 +159,13 @@ steward may still reject it, and the pair can be proposed as two one-sided repai
 A repair proposal is listed in the MANAGEMENT read of the inbox only. It has no submitter, so there
 is no "own" for an ownership-scoped caller to be shown, and a proposal names page PATHS —
 `acl.visible()` decides who may know a page exists, and the inbox does not ask it.
+
+**Self-approval is not asked of this kind, and that is a decision rather than an omission.** The
+`entity-proposal` rule (a second, different steward) exists because a HUMAN submitted that row and
+a second human has to agree with them. A repair proposal has no human submitter: a nightly job
+derived it from the gardener's findings, and the model that wrote it approves nothing and is nobody
+to be a second party to. The one steward IS the second party. Asking "did you file this?" of a
+machine-authored row would refuse nobody and imply a submitter that does not exist.
 
 ### D6 — one apply ordering, two doors
 

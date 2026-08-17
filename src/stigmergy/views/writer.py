@@ -45,14 +45,6 @@ def ensure_clean(repo: str) -> None:
         f"(`git -C {repo} status` to see what is pending), then re-run this command")
 
 
-def repo_slug(repo: str) -> str:
-    """`owner/name` from the checkout's `origin`, for the App's push URL. Deliberately
-    duplicates `librarian.processing._repo_slug` — three lines, private there."""
-    url = gitcmd.origin_url(repo)
-    slug = url.rsplit(":", 1)[-1] if url.startswith("git@") else url.split("github.com/")[-1]
-    return slug.removesuffix(".git")
-
-
 def commit_and_push(repo: str, *, branch: str, message: str) -> str:
     """Stage and commit everything as the App bot, then push. Returns the sha that actually
     landed — `gitcmd.push` rebases and retries on a race, so it may differ from the one
@@ -61,7 +53,7 @@ def commit_and_push(repo: str, *, branch: str, message: str) -> str:
     gitcmd.commit(repo, message=message, author_name=author_name, author_email=author_email)
     remote_url, config_env = "", {}
     if githubapp.configured():
-        slug = repo_slug(repo)
+        slug = githubapp.repo_slug(repo)
         remote_url = githubapp.push_url(slug)
         config_env = githubapp.push_config(githubapp.installation_token(), slug)
     return gitcmd.push(repo, branch=branch, remote_url=remote_url, config_env=config_env,

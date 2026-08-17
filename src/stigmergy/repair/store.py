@@ -19,7 +19,8 @@ from stigmergy.repair.schema import (
 # Every column a reader needs, in one place: three queries return the same shape, and a row that
 # means one thing in the CLI and another in the review lane is exactly the drift this avoids.
 _COLUMNS = ("id, created_at, run_id, finding_ids, kind, target_paths, ops, rationale, "
-            "content_key, status, decided_by, decided_at, notes, applied_commit, error, model_id")
+            "content_key, status, decided_by, decided_at, notes, applied_commit, error, "
+            "model_id, finding_subjects")
 
 
 def _row(r) -> dict:
@@ -27,25 +28,32 @@ def _row(r) -> dict:
             "kind": r[4], "target_paths": list(r[5] or []), "ops": list(r[6] or []),
             "rationale": r[7], "content_key": r[8], "status": r[9], "decided_by": r[10],
             "decided_at": r[11], "notes": r[12], "applied_commit": r[13], "error": r[14],
-            "model_id": r[15]}
+            "model_id": r[15], "finding_subjects": [list(g or []) for g in (r[16] or [])]}
 
 
 _INSERT_PROPOSAL = """
 INSERT INTO repair_proposals
-    (run_id, finding_ids, kind, target_paths, ops, rationale, content_key, model_id)
+    (run_id, finding_ids, kind, target_paths, ops, rationale, content_key, model_id,
+     finding_subjects)
 VALUES (%(run_id)s, %(finding_ids)s, %(kind)s, %(target_paths)s, %(ops)s, %(rationale)s,
-        %(content_key)s, %(model_id)s)
+        %(content_key)s, %(model_id)s, %(finding_subjects)s)
 RETURNING id
 """
 
 
 def insert_proposal(conn, *, run_id: int, finding_ids, target_paths, ops, rationale: str,
-                    content_key: str, kind: str = KIND_EDITS, model_id: str = "") -> int:
+                    content_key: str, kind: str = KIND_EDITS, model_id: str = "",
+                    finding_subjects=()) -> int:
     """One pending proposal. Returns its id.
 
     `target_paths` is stored SEPARATELY from `ops` even though it is derivable from them, and that
     redundancy is the point: `remote.apply_via_clone` cross-checks the diff it produced against
-    this column, so a tampered `ops` blob has to agree with a second stored fact to get through.
+    this column, so an `ops` blob that disagrees with it cannot reach `main`. That is the whole of
+    the property — two stored facts kept consistent, not a defense against a writer who can edit
+    both.
+
+    `finding_subjects` is what the findings NAMED, one sorted list per finding answered — the other
+    half of the dismissal memory, and not derivable from anything else here (`schema.py`).
     """
     with conn.cursor() as cur:
         cur.execute(_INSERT_PROPOSAL, {
@@ -55,6 +63,8 @@ def insert_proposal(conn, *, run_id: int, finding_ids, target_paths, ops, ration
             "target_paths": Jsonb([str(p) for p in (target_paths or ())]),
             "ops": Jsonb([dict(o) for o in (ops or ())]),
             "rationale": rationale or "", "content_key": content_key, "model_id": model_id or "",
+            "finding_subjects": Jsonb([[str(p) for p in group]
+                                       for group in (finding_subjects or ()) if group]),
         })
         return cur.fetchone()[0]
 
@@ -64,10 +74,18 @@ SELECT {_COLUMNS} FROM repair_proposals WHERE status = '{STATUS_PENDING}' ORDER 
 """
 
 
-def pending_proposals(conn) -> list[dict]:
-    """Every proposal waiting on a steward, oldest first."""
+def pending_proposals(conn, limit: int | None = None) -> list[dict]:
+    """Every proposal waiting on a steward, oldest first — or the first `limit` of them.
+
+    The bound is the CALLER's to apply, because they do not share one: the propose pass needs the
+    whole set to skip against, and a request-scoped reader needs its own ceiling. Oldest first
+    either way, so a bounded read is the front of the queue and not an arbitrary slice.
+    """
     with conn.cursor() as cur:
-        cur.execute(_PENDING_PROPOSALS)
+        if limit is None:
+            cur.execute(_PENDING_PROPOSALS)
+        else:
+            cur.execute(_PENDING_PROPOSALS + " LIMIT %s", (max(int(limit), 0),))
         return [_row(r) for r in cur.fetchall()]
 
 
@@ -152,10 +170,22 @@ def mark_failed(conn, proposal_id: int, error: str) -> bool:
         return cur.rowcount == 1
 
 
+_KNOWN_CONTENT_KEYS = f"""
+SELECT DISTINCT content_key FROM repair_proposals WHERE status <> '{STATUS_FAILED}'
+"""
+
+
 def known_content_keys(conn) -> set[str]:
-    """Every content key this table has EVER held, whatever its status — the dismissal memory the
+    """Every content key this table holds that is NOT a failed apply — the dismissal memory the
     proposer skips against. Rejected keys are in here on purpose (`schema.py`'s docstring): a
-    steward who declined a repair once is not asked again by the next night's run."""
+    steward who declined a repair once is not asked again by the next night's run.
+
+    `failed` is excluded, and that exclusion is the whole difference between a memory and a
+    graveyard. `rejected` is a human saying no; `pending`/`approved` are in flight; a FAILED row is
+    a human having said YES to something that then hit a gate, a race or a fault. Remembering it
+    as a dismissal would make the one repair a steward actively wanted the one repair the loop can
+    never offer again. The row itself stays — it is the operator-visible record of the failure.
+    """
     with conn.cursor() as cur:
-        cur.execute("SELECT DISTINCT content_key FROM repair_proposals")
+        cur.execute(_KNOWN_CONTENT_KEYS)
         return {r[0] for r in cur.fetchall()}

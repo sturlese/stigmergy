@@ -646,9 +646,12 @@ class AdminService:
     def _proposal(self, row: dict) -> dict:
         """A `repair_proposals` row, cleaned for the web. **Everything here is untrusted**, and by a
         longer road than most: `rationale` and every `note` were written by a model that had just
-        read pages somebody else wrote, and `path`/`link` are filenames. `**row` carries every
-        column forward, so each string is named rather than left to a default — the mistake
-        `_finding` records having made when a new column arrived.
+        read pages somebody else wrote, and `path`/`link` are filenames.
+
+        `**row` carries every column forward and the free-text ones are then named and cleaned over
+        the top. The columns NOT named here ride through unsanitized on purpose — `kind`, `status`
+        and `content_key` are constrained or derived, and `model_id` is operator configuration —
+        so a new free-text column is a new line in the override list, not a silent pass-through.
 
         `error` is the sentence `repair.remote` raised, which is written to be published; it is
         cleaned anyway, on the same reasoning every other operator-facing string here is."""

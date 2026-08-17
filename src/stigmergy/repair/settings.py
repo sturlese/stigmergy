@@ -29,6 +29,14 @@ DEFAULT_MAX_OPS_PER_PROPOSAL = 6
 BATCH_SIZE_ENV = "STIGMERGY_REPAIR_BATCH"
 DEFAULT_BATCH_SIZE = 8
 
+# What ONE run may put in front of stewards. `MAX_OPS_PER_PROPOSAL` bounds one approval; this
+# bounds how many approvals a night can ask for, which is the other half of the same argument: a
+# gardener run that suddenly reports four hundred findings would otherwise cost four hundred model
+# calls and produce an inbox nobody reads. The surplus is not lost — it is proposed by the next
+# run, once these have been decided.
+MAX_PROPOSALS_ENV = "STIGMERGY_REPAIR_MAX_PROPOSALS"
+DEFAULT_MAX_PROPOSALS_PER_RUN = 20
+
 # What a zero or negative value would do to THIS package's arithmetic — the sentence
 # `gardener.settings.int_setting` interpolates, written for the bounds it guards here.
 _POSITIVE_COUNT_WHY = ("a zero or negative bound would either refuse every proposal or send an "
@@ -68,6 +76,7 @@ class RepairSettings:
     model: str = DEFAULT_REPAIR_MODEL
     max_ops_per_proposal: int = DEFAULT_MAX_OPS_PER_PROPOSAL
     batch_size: int = DEFAULT_BATCH_SIZE
+    max_proposals_per_run: int = DEFAULT_MAX_PROPOSALS_PER_RUN
 
     @classmethod
     def from_env(cls, args=None) -> "RepairSettings":
@@ -78,4 +87,5 @@ class RepairSettings:
             model=os.environ.get(MODEL_ENV) or DEFAULT_REPAIR_MODEL,
             max_ops_per_proposal=_int_setting(MAX_OPS_ENV, DEFAULT_MAX_OPS_PER_PROPOSAL),
             batch_size=_int_setting(BATCH_SIZE_ENV, DEFAULT_BATCH_SIZE),
+            max_proposals_per_run=_int_setting(MAX_PROPOSALS_ENV, DEFAULT_MAX_PROPOSALS_PER_RUN),
         )
