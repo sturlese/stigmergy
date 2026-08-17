@@ -2060,6 +2060,12 @@ def test_a_steward_key_is_not_a_bare_string_prefix():
     ({"*": [STEWARD], "wiki/notes": [_OTHER]}, "", [STEWARD]),
     # …and with no `"*"` at all, an empty scope resolves nobody
     ({"wiki/notes": [_OTHER]}, "", []),
+    # the entity zone, which the `entity-body` repair kind is the first verdict to land inside:
+    # the SAME boundary rule, asserted for the folder a body draft targets
+    ({"*": [STEWARD], "wiki/entities": [_OTHER]}, "wiki/entities/Meridian Partners.md", [_OTHER]),
+    ({"*": [STEWARD], "wiki/entities/": [_OTHER]}, "wiki/entities/Meridian Partners.md", [_OTHER]),
+    # a page whose folder name merely STARTS with the key is not inside it
+    ({"*": [STEWARD], "wiki/entities": [_OTHER]}, "wiki/entities-archive/Old.md", [STEWARD]),
 ])
 def test_the_boundary_rule_keeps_every_resolution_that_was_already_right(stewards_map, scope,
                                                                         expected):
@@ -2399,3 +2405,49 @@ def test_a_repair_decision_over_the_mcp_wire(env, conn, monkeypatch):
     assert len(calls) == 1
     listed = _call_mcp(_mcp_for(env, conn), "review_queue")
     assert not [i for i in listed["items"] if i["kind"] == "repair-proposal"]
+
+
+# ── the second repair kind in the review lane ─────────────────────────────────────────────────
+def _propose_body(conn, path="wiki/entities/Meridian Partners.md"):
+    ops = [{"op": repair_schema.KIND_ENTITY_BODY, "path": path,
+            "body_markdown": "## What / Who\n\nA freight broker.\n", "role": ""}]
+    return repair_store.insert_proposal(
+        conn, run_id=0, finding_ids=[1], target_paths=repair_schema.target_paths(ops), ops=ops,
+        rationale="the entity page is still its own template",
+        kind=repair_schema.KIND_ENTITY_BODY,
+        content_key=repair_schema.content_key(ops, kind=repair_schema.KIND_ENTITY_BODY),
+        model_id="fake")
+
+
+def test_a_body_proposal_names_its_kind_in_the_scan_without_carrying_the_draft(env, conn):
+    """The inbox is a SCAN, and that rule does not bend for the kind whose ops are prose. What a
+    steward needs here is which page and what KIND of change; the draft itself is one
+    `review_queue` entry away in the console, and putting a page's whole drafted body in every
+    inbox listing would bury the other items."""
+    proposal_id = _propose_body(conn)
+
+    queue = review.review_queue(make_service(env, conn, identity_name=STEWARD))
+
+    item = next(i for i in queue["items"] if i["kind"] == review.KIND_REPAIR_PROPOSAL)
+    assert item["id"] == str(proposal_id)
+    assert item["target_paths"] == ["wiki/entities/Meridian Partners.md"]
+    assert item["ops_preview"] == {"count": 1, "kinds": [repair_schema.KIND_ENTITY_BODY]}
+    assert "A freight broker" not in json.dumps(item), (
+        "the drafted body is not in the scan — it is the read, not the list")
+
+
+def test_approving_a_body_draft_needs_a_steward_for_the_entity_page_itself(env, conn, monkeypatch):
+    """The per-path guard, on the zone this kind is the first verdict to write into. A general
+    steward must not be able to rewrite a page inside a folder whose own steward never saw the
+    draft — that delegation is exactly what `ops/stewards.json` exists to express."""
+    proposal_id = _propose_body(conn)
+    seed_stewards(env, {"*": [STEWARD], "wiki/entities/": [ALICE]})
+    _apply_never_runs(monkeypatch)
+
+    with pytest.raises(review.ReviewError) as caught:
+        review.review_decide(make_service(env, conn, identity_name=STEWARD),
+                             item_kind=review.KIND_REPAIR_PROPOSAL, item_id=str(proposal_id),
+                             verdict="approve", source=review.SOURCE_MCP)
+
+    assert str(caught.value) == review.NOT_YOURS_TO_DECIDE
+    assert repair_store.proposal(conn, proposal_id)["status"] == repair_schema.STATUS_PENDING

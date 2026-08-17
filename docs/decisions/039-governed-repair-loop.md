@@ -3,7 +3,8 @@
 - **Status**: accepted
 - **Date**: 2026-08-17
 - **Closes**: issues #39 (findings accumulate with no way to close one, and no memory of having
-  declined) and #40 (the gardener detects and nothing acts)
+  declined) and #40 (the gardener detects and nothing acts); the amendment at the foot of this
+  document closes #36 (an entity page is minted with a body nothing ever writes)
 - **Related**: [ADR 024](./024-gardener-digest.md) (the gardener, which produces the findings this
   loop answers and still fixes nothing), [ADR 015](./015-librarian.md) (the write path this reuses
   whole: declared-not-performed edits, the eight gates, the App as committer),
@@ -75,8 +76,10 @@ rewrites a sentence, deletes anything, moves anything, or creates or removes a p
 That is the whole safety argument, and it is why the vocabulary is closed rather than merely small.
 The eight gates were written to judge these shapes; `gate_body_rewrite` is what proves a diff is
 additive rather than promising it. A fourth op kind is not a bigger tuple, it is a new question
-nobody has asked the gates yet — so `tests/test_architecture.py` pins the repair vocabulary equal
-to `page.EDIT_KINDS`, and widening it is a decision with its own record.
+nobody has asked the gates yet, so widening the vocabulary is a decision with its own record —
+which is exactly what the AMENDMENT at the foot of this document is: `entity-body` is a second
+proposal KIND with its own validator, its own writer and its own gate branch, and the three
+additive shapes above are untouched by it.
 
 The corollary a reader should not have to derive: a `model-contradiction` finding is answered by
 FLAGGING the disagreement on both pages, never by correcting either. Deciding which page is right
@@ -246,3 +249,90 @@ fact to reach `main`.
   the row, and the console gains a Repairs panel.
 - The knowledge repo gains `.claude/skills/repair-proposer/SKILL.md` and its own copy of the
   workflow.
+
+## Amendment — `entity-body`: the second kind (2026-08-17, closes #36)
+
+The decisions above stand as written; this section records what the repair loop grew, and why the
+one-sentence covenant did not have to change to accommodate it.
+
+**The problem it answers.** ADR 016 made entity birth identity-only on purpose: a steward decides
+that an entity exists, and `stigmergy-entities create` copies `ops/templates/entity.md` verbatim
+into `wiki/entities/<Name>.md`. Nothing writes that page's body, and nothing ever counted the
+pages that still carry the template's angle-marked placeholders — the gardener's orphan check
+exempts entity pages by type, and no other check reads a body at all. So a brain accumulates
+identities that say nothing about themselves, invisibly, and the one lane that could fix it is the
+one a capture may never write into.
+
+### A1 — birth stays identity-only; CONTENT gets a second owner
+
+The alternative was to draft the body AT MINT TIME, and it is wrong for the reason ADR 016 gives:
+a mint is a steward saying an entity EXISTS, and it happens at the moment the corpus knows least
+about it — usually one capture, often before the first page about it is filed. A body drafted then
+is a paraphrase of the capture that triggered the mint. So birth keeps its one job, and content
+gets a second owner in the repair loop, where the drafting happens when there is something to
+draft FROM and lands through a steward's approval rather than beside one.
+
+The gardener gains `entity-placeholder-body` (deterministic, `info`) and the repair loop gains
+`KIND_ENTITY_BODY`. The check is the producer, the kind is the answer, and they are the only pair
+in the system where one check has a repair of its own.
+
+### A2 — at least two anchored pages, or no model is asked at all
+
+A body drafted from one page is that page's summary wearing an entity's name; from none it is the
+placeholder with better grammar. The floor is enforced BEFORE the model call, not after — a run
+that asked and then discarded the answer would reach the same outcome and pay for it every night.
+Two is a floor and not a wall: demanding more would leave every young entity with a placeholder
+forever, and the drafter's own instruction is to return an EMPTY body when the anchored pages turn
+out not to say what the entity is.
+
+Anchored pages are resolved from the CHECKOUT — the corpus rows whose `entity:` frontmatter
+canonicalizes to this entity's id — and never from `pages_index`. Two reasons, and either is
+sufficient: the index is a different tree from the one an apply commits against, and every reader
+of `pages_index` must name an ACL predicate, which a nightly proposer has no business holding.
+
+### A3 — the frontmatter is preserved byte for byte, minus two lines
+
+This is the one op in the loop that REPLACES text, so it buys its safety by being unable to touch
+anything else. Everything down to and including the page's own `# Title` survives byte for byte —
+the frontmatter block, the template's comment, the H1 — and exactly two frontmatter lines may
+differ, rewritten IN PLACE: `updated:` (the apply date) and `role:`, and `role:` only when the page
+declares an EMPTY one. A role somebody wrote is a statement of identity and replacing it is not a
+body draft.
+
+`gate_body_rewrite` cannot judge this diff with its additive proof — the diff is not additive, by
+design — so it gains ONE caller-declared exception: `GateContext.body_rewrite_allowed`, a set of
+PATHS, empty by default and told by the apply. For a path in that set the additive proof is
+replaced (never weakened) by three dedicated checks: the frontmatter is unchanged but for those two
+keys, the page declares `type: entity`, and the path is inside this run's write lane. A path
+nobody named is judged exactly as it was before the field existed, and the librarian's own flows
+name none — `tests/test_architecture.py` pins the granting set to `repair/remote.py` alone, both
+directions.
+
+Why a set of paths rather than a flag: a flag would say "this run may rewrite bodies", and the
+approval a steward gave was for ONE page. The permission is the thing that was approved.
+
+### A4 — a rejection dismisses future drafts of the same page
+
+`content_key` already hashes the kind with the ops, so a body draft and an additive edit about the
+same page are two different questions. Within the kind, the key is `kind + path`: the body text is
+not part of it, exactly as a callout's `note` is not part of an additive key. That is deliberate
+and it is the same argument — **a re-drafted body is the SAME question**. A steward who read a
+draft for a page and said no should not meet another draft of that page tomorrow; if the answer is
+"this page needs writing by a person", saying it once has to be enough. `finding_subjects` is
+`[[the entity page]]`, so the cheap pre-model skip recognises the question under a new finding id
+too, which matters more here than on the additive road because this road's model call is per
+entity.
+
+### A5 — what is deliberately NOT here
+
+- **No new write path.** The draft lands through the same clone, the same eight gates, the same
+  cross-check and the same `gitcmd.commit(gated_entries=…)` as every other repair. The kind
+  branches at exactly two points — which validator performs the ops, and which two caller-scoped
+  facts the gates are told — and nowhere else.
+- **No second op in a proposal.** One page, one draft, one approval: two drafts behind one button
+  is two judgments a steward cannot separate.
+- **No rewriting a page that already has a body.** The producer is a check that fires on
+  placeholder lines. An entity page somebody has written is not a finding, and this kind has no
+  way to reach one.
+- **No body for `sources/`, `views/`, or any other zone.** The lane is narrowed to
+  `wiki/entities/` for this kind's apply, and the permission names one page inside it.

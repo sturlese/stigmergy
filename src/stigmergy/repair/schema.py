@@ -22,9 +22,20 @@ from stigmergy.capture.schema import startup_ddl_lock
 
 JOB_NAME = "repair-propose"
 
-# ── kind — what a proposal WOULD DO. v1 has exactly one; PR-6/7 extend the tuple ──────────────
+# ── kind — what a proposal WOULD DO ──────────────────────────────────────────────────────────
+# `edits` is the librarian's three additive declared-edit shapes, applied by `edits.apply_declared`
+# and proven additive by `gate_body_rewrite`. `entity-body` is the one kind that REPLACES text, and
+# it is a separate kind rather than a fourth op precisely because it is a different question for
+# the gates: it may only touch a page in the entity zone, only below that page's own H1, and only
+# with the apply telling `GateContext.body_rewrite_allowed` which path was authorized (ADR 039,
+# "entity-body: the second kind").
+#
+# The string doubles as the OP name inside such a proposal's single op, deliberately: one
+# vocabulary word for one shape means `ops_preview.kinds` in the review lane names the thing a
+# steward is being asked about without a second lookup table.
 KIND_EDITS = "edits"
-KINDS = (KIND_EDITS,)
+KIND_ENTITY_BODY = "entity-body"
+KINDS = (KIND_EDITS, KIND_ENTITY_BODY)
 
 # ── status — the lifecycle. `failed` is terminal for the ROW, never for the finding: a steward
 # may propose again, and the `error` column says what went wrong. An approved proposal whose
@@ -100,8 +111,39 @@ _REPAIR_PROPOSALS_STATUS_INDEX = (
     "CREATE INDEX IF NOT EXISTS repair_proposals_status_idx ON repair_proposals (status, id)"
 )
 
+# The name Postgres itself gives the inline column CHECK above, spelled out so the swap below can
+# reach the constraint on a table created before this constant existed.
+KIND_CHECK_NAME = "repair_proposals_kind_check"
+
+# The one non-additive migration, and `capture.schema`'s `_CAPTURE_QUEUE_STATUS_CHECK` verbatim in
+# shape because the problem is identical: `CREATE TABLE IF NOT EXISTS` never touches a table that
+# already exists, so a KIND added to `KINDS` and to nothing else would be refused by every deployed
+# database — an IntegrityError on the first proposal of the new kind, in production, at night.
+#
+# ONE `DO` statement, never a DROP-then-ADD pair: as two statements the table is briefly
+# unconstrained, every process start takes an ACCESS EXCLUSIVE lock, and two concurrent starters
+# race into `DuplicateObject`. The guard skips the swap once the existing definition already names
+# every kind (`quote_literal`, so one name cannot match inside another).
+_REPAIR_PROPOSALS_KIND_CHECK = f"""
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint c
+        WHERE c.conrelid = 'repair_proposals'::regclass
+          AND c.conname = '{KIND_CHECK_NAME}'
+          AND (SELECT bool_and(pg_get_constraintdef(c.oid) LIKE '%' || quote_literal(k) || '%')
+               FROM unnest(ARRAY[{_KIND_SQL_LIST}]) AS k)
+    ) THEN
+        ALTER TABLE repair_proposals DROP CONSTRAINT IF EXISTS {KIND_CHECK_NAME};
+        ALTER TABLE repair_proposals ADD CONSTRAINT {KIND_CHECK_NAME}
+            CHECK (kind IN ({_KIND_SQL_LIST}));
+    END IF;
+END $$
+"""
+
 _ALL_DDL = (_REPAIR_PROPOSALS_DDL, _REPAIR_PROPOSALS_FINDING_SUBJECTS_COLUMN,
-            _REPAIR_PROPOSALS_PENDING_KEY_INDEX, _REPAIR_PROPOSALS_STATUS_INDEX)
+            _REPAIR_PROPOSALS_KIND_CHECK, _REPAIR_PROPOSALS_PENDING_KEY_INDEX,
+            _REPAIR_PROPOSALS_STATUS_INDEX)
 
 
 def ensure_repair_schema(conn) -> None:
@@ -123,7 +165,13 @@ def ensure_repair_schema(conn) -> None:
 # between the two vocabularies, and both validations run on its output, so propose time and apply
 # time cannot come to judge different things.
 OP_KIND_KEY = "op"
-OP_FIELDS = (OP_KIND_KEY, "path", "link", "note")
+# The stored op shape, PER KIND — every reader of an op (the CLI preview, the console's cleaner,
+# the review lane's `ops_preview`) is shaped by which of these it is looking at, so the two are
+# named rather than left implicit in four separate reshapes. `entity-body` carries PROSE where the
+# additive kinds carry a link and a note, and a reader that assumed one shape for both showed a
+# steward an empty cell where the draft should have been.
+EDIT_OP_FIELDS = (OP_KIND_KEY, "path", "link", "note")
+ENTITY_BODY_OP_FIELDS = (OP_KIND_KEY, "path", "body_markdown", "role")
 
 
 def declared_edits(ops) -> list[dict]:
@@ -147,6 +195,11 @@ def content_key(ops, *, kind: str = KIND_EDITS) -> str:
     that add the same callout to the same page with differently-worded sentences are the same
     question asked twice, and a steward who declined it once should not meet a rephrasing of it
     tomorrow.
+
+    The same exclusion does the same work for the other kind, and it matters more there: an
+    `entity-body` op has no `link`, so its key is `kind + path` and the DRAFTED BODY is not part of
+    it. **A re-drafted body is the same question** — a steward who read a draft for a page and
+    decided it needs writing by a person is not asked again tomorrow with the prose rearranged.
     """
     body = "|".join(sorted(f"{o.get(OP_KIND_KEY, '')}:{o.get('path', '')}:{o.get('link', '')}"
                            for o in (ops or ())))

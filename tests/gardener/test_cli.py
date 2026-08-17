@@ -165,7 +165,7 @@ def test_happy_path_prints_the_severity_grouped_report_and_exits_zero(conn, caps
     out = capsys.readouterr().out
     assert rc == 0
     assert out.startswith("# Gardener report — run #")
-    assert "checked 1 pages, 0 entities — 8 deterministic checks" in out
+    assert "checked 1 pages, 0 entities — 9 deterministic checks" in out
     assert "1 finding(s): 0 sla, 0 warn, 1 info" in out
     assert "## SLA (0)" in out
     assert "orphan-page" in out

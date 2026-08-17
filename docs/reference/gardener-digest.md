@@ -13,7 +13,7 @@ commands add on top of them. Code maps, one per command:
 
 ```
 stigmergy-gardener                                  stigmergy-digest
-  ├─ 8 deterministic checks   (checks.py)            ├─ corpus health          (the LATEST
+  ├─ 9 deterministic checks   (checks.py)            ├─ corpus health          (the LATEST
   │    pages_index / capture_queue / the registry /  │    completed gardener run's findings —
   │    the repo checkout                             │    reused, never re-derived)
   ├─ model editorial sweep    (sweep.py)             └─ corpus deltas          (capture_queue
@@ -45,13 +45,13 @@ package still detects and fixes nothing, and it neither imports nor calls the on
 The narrative is [repair.md](./repair.md), decided in
 [ADR 039](../decisions/039-governed-repair-loop.md).
 
-## The eight deterministic checks
+## The nine deterministic checks
 
 `checks.ALL_CHECK_SLUGS` is the list, and the report prints `len()` of it rather than a
 hand-written number, so the count in this document is the only copy that can go stale. Each check
 is a query over `pages_index`, `capture_queue`, the entity registry or the repo checkout — none
 interprets meaning. The five thresholds named below are settings, env-tunable
-(`gardener.settings.GardenerSettings`), and they cover three of the eight checks; the other five
+(`gardener.settings.GardenerSettings`), and they cover three of the nine checks; the other six
 have no threshold to tune, because staleness is a hash mismatch and an orphan is a zero, not an
 amount.
 
@@ -65,8 +65,9 @@ amount.
 | Company-wide fraction (`company-wide-fraction`) | the last `STIGMERGY_GARDENER_COMPANY_WINDOW` (default 20) filed pages, by share declaring `entity: []` | share exceeds `STIGMERGY_GARDENER_COMPANY_SHARE` (default 0.3) | warn |
 | Company page naming an entity (`company-page-names-entity`) | every company-wide, non-provenance page's body, tested against every registered name/id/alias (word-bounded, case-insensitive) | any verbatim match | warn |
 | Date-bearing body link (`date-bearing-body-link`) | every `wiki/`, `sources/`, `views/` page's BODY prose, read from the repo checkout, for a `[[YYYY-MM-DD-…]]` wikilink target | any match — one finding per page, naming the first offending stem | warn |
+| Entity placeholder body (`entity-placeholder-body`) | every `wiki/entities/` page's BODY, read from the repo checkout, for a line that is wholly angle-marked (`<…>`) — the entity template's unwritten spans | any such line survives — the identity exists and says nothing about itself | info |
 
-**Check 8 is a veto that was demoted, and the demotion is the point.** Only a meeting page's own
+**The date-bearing check is a veto that was demoted, and the demotion is the point.** Only a meeting page's own
 filename carries a calendar date (`wiki/meetings/YYYY-MM-DD-<slug>.md`), so a date-bearing wikilink
 in body prose is a pointer that belongs in `sources:`/`related:` frontmatter. The meeting flow used
 to REFUSE a whole capture over it (`processing._cross_check_meeting_outcome`) — a style convention
@@ -74,7 +75,18 @@ holding a veto. It lives here now under the same slug — deliberately the same
 string, so an operator's grep finds both eras — and the line it draws is the house rule: **gates veto
 the irreversible, the gardener flags conventions.**
 
-**None of the eight checks is `sla` severity.** The `sla` severity band itself exists — the schema
+**`entity-placeholder-body` is the one check with a repair kind of its own.** Entity birth is
+identity-only by design (ADR 016): `stigmergy-entities create` copies `ops/templates/entity.md`
+verbatim, so a minted page carries the template's angle-marked placeholders until somebody writes
+it. Nothing counted those pages before — the orphan check exempts entity pages by type, and no
+other check reads a body — so an identity with no content was invisible to every health pass. The
+finding is `info` and its repair is `entity-body` ([repair.md](./repair.md)): the proposer drafts
+that page's body from the pages anchored to the entity, and a steward approves the draft. The rule
+is deliberately literal — a body line that is wholly wrapped in angle brackets — so a one-line HTML
+element (`<details>`) reads as a placeholder. That false positive is accepted: the finding is
+`info`, and the repair it invites is a draft a human reads before it lands.
+
+**None of the nine checks is `sla` severity.** The `sla` severity band itself exists — the schema
 carries it (`SEVERITIES`), the report prints an `sla` section and the notice-composing code is
 live — but nothing produces one, so in practice the SLA notice has **no producer**: see "The SLA
 notice", below.
@@ -100,7 +112,7 @@ property of the check, not a gap in its copy.
 
 ## The model editorial sweep — "only what the tool can't see"
 
-The eight checks stay exact and model-free; the sweep is the judgment half, built on a
+The nine checks stay exact and model-free; the sweep is the judgment half, built on a
 PydanticAI structured-extraction pattern: one
 prompt, one structured call through `stigmergy.kernel.llm.build_processor`, one retry
 carrying the validation error as its brief, then log-and-skip — never insert unvalidated.
@@ -183,7 +195,7 @@ opposite convention from the digest, below.
 
 ## The SLA notice
 
-**Stated plainly: this mechanism has no producer.** Every one of the eight
+**Stated plainly: this mechanism has no producer.** Every one of the nine
 deterministic checks is `info` or `warn`, and so is every one of the sweep's four model
 slugs. Nothing in this codebase constructs a finding with `SEVERITY_SLA`. The machinery below is
 therefore live code with a dead input — and not by accident: the

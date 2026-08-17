@@ -259,8 +259,8 @@ beside it in the source; the two bare modules at the top are small enough to be 
 | `entities/` | governed entity birth: proposal → approve → registry regenerate — the ONE path-scoped writer of the knowledge repo's `ops/entity-registry.json` and `wiki/entities/` |
 | `slack/` | the Slack transport: 🧠 capture, Q&A, the steward doorbell |
 | `views/` | per-entity rollups: a deterministic skeleton + a bounded synthesis |
-| `gardener/` | corpus health on demand: eight deterministic checks + a bounded model editorial sweep, findings persisted and reported — fixes nothing, writes nothing, vetoes nothing |
-| `repair/` | the governed repair loop: an agent PROPOSES an additive repair for a finding, code validates it at propose time and again at apply time through the same eight gates, a steward approves one at a time, and code applies exactly that as one App-authored commit |
+| `gardener/` | corpus health on demand: nine deterministic checks + a bounded model editorial sweep, findings persisted and reported — fixes nothing, writes nothing, vetoes nothing |
+| `repair/` | the governed repair loop: an agent PROPOSES a repair for a finding — an additive edit, or a drafted body for an entity page that has never had one — code validates it at propose time and again at apply time through the same eight gates, a steward approves one at a time, and code applies exactly that as one App-authored commit |
 | `digest/` | the week's activity in one Slack post |
 | `admin/` | the ops console: `/admin` on the same app process group — queue drain, cron remote-control, gardener/digest/index panels, activity. INERT until its token hash is configured, and never a read surface over pages — though its Activity tab does show the QUESTIONS people asked, which is user content behind one shared credential |
 

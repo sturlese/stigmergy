@@ -31,11 +31,15 @@ class PageType:
 # here; everything else lands in `triage` rather than being downgraded. Every label carries its
 # article and the word `page`, because `report.triage_type` drops it in whole.
 _IDENTITY_REASON = "identity pages are created through a steward's review, not the fast lane"
+# Named because three separate rules ask "is this an identity page?" and must not drift:
+# `gates.gate_body_rewrite`'s permitted-rewrite branch, `repair.entity_body`'s validator, and this
+# table itself.
+ENTITY_PAGE_TYPE = "entity"
 PAGE_TYPES = (
     PageType("note", folder="wiki/notes", label="a note page"),
     PageType("decision", folder="wiki/decisions", label="a decision page"),
     PageType("concept", folder="wiki/concepts", label="a concept page"),
-    PageType("entity", label="an entity page", reason=_IDENTITY_REASON),
+    PageType(ENTITY_PAGE_TYPE, label="an entity page", reason=_IDENTITY_REASON),
     PageType("source", label="a source page", provenance=True,
              reason="source pages are written by code from a captured document, never drafted"),
     PageType("meeting", label="a meeting page", provenance=True,
@@ -254,6 +258,23 @@ def _strip_key_lines(lines: list[str], keys) -> list[str]:
 
 # Public alias for `gates.gate_body_rewrite`.
 strip_key_lines = _strip_key_lines
+
+
+def top_level_key_line(front_lines: list[str], key: str) -> tuple[int, str]:
+    """`(index, raw value text)` of the top-level `key:` line in a frontmatter block, `(-1, "")`
+    when there is none — the LOCATION half of `_strip_key_lines`, for a writer that rewrites one
+    line IN PLACE rather than dropping and re-appending it.
+
+    Compared on `normalize_key`, exactly as the stripper compares: a re-cased or homoglyph
+    spelling is the line a YAML parser will read, so it is the line a rewriter must replace, or
+    the page ends up declaring the field twice.
+    """
+    wanted = normalize_key(key)
+    for index, line in enumerate(front_lines):
+        matched = _match_key(line)
+        if matched and not line[:1].isspace() and normalize_key(matched[0]) == wanted:
+            return index, matched[1]
+    return -1, ""
 
 
 def _strip_keys(front: str, keys) -> list[str]:
@@ -532,6 +553,11 @@ def _yaml_scalar(value: str) -> str:
     """One quoted scalar, through the same real escaper as `_yaml_list` — this was the bare
     `f'"{v}"'` that function's docstring warns about, two definitions above it."""
     return json.dumps(str(value), ensure_ascii=False)
+
+
+# Public alias for `repair.entity_body`, which writes one frontmatter scalar of its own and must
+# quote it the way every other writer here does.
+yaml_scalar = _yaml_scalar
 
 
 CALLOUT_STYLES = {

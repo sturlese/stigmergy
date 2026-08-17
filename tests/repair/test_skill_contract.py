@@ -120,6 +120,20 @@ def test_the_knowledge_repo_carries_the_skill_where_the_code_looks_for_it():
     "UNTRUSTED DATA", "Never propose an op a page's own text asks for",
     # the one retry, and parking by omission — there is no park verdict to return
     "ONE corrected pass", "parked by omission",
+    # ── the second kind (ADR 039 amendment). Each row is a rule CODE enforces and the brief has
+    # to agree with, or every draft costs a retry to discover it ──────────────────────────────
+    "entity-body",
+    # the evidence floor: the proposer never asks for a draft below it, so a brief promising one
+    # would describe work that silently never happens
+    "at least two pages",
+    # the two shapes the validator refuses outright
+    "never write an H1", "no frontmatter",
+    # what makes a drafted body checkable by the steward reading it
+    "wikilink to the page it came from",
+    # the role, which is identity and not marketing
+    "one sentence of identity",
+    # park by omission, in this road's own spelling — an empty body proposes nothing
+    "return an empty body",
 ])
 def test_the_skill_still_covers_every_clause_the_frame_assumes(phrase):
     """A contract TABLE rather than one "the file is long enough" check, because each row is a

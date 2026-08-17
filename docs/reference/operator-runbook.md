@@ -1064,7 +1064,7 @@ WHERE job IN ('gardener', 'repair-propose', 'digest', 'digest-dry-run', 'capture
 ORDER BY started_at DESC LIMIT 10;
 ```
 
-A `gardener` row with `status='partial'` means the eight deterministic checks' findings are
+A `gardener` row with `status='partial'` means the nine deterministic checks' findings are
 complete and trustworthy and the model sweep failed (`stats->'sweep'->>'error'` names the class);
 only `status='error'` means the run cannot be trusted. Gardener exit codes: 0 clean, 1 failed or
 partial, 2 precondition (bad `--repo`, bad threshold, no database), 130 interrupted.

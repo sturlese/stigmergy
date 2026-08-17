@@ -76,6 +76,27 @@ def test_run_gardener_persists_findings_and_a_job_runs_row(conn, repo):
     assert stats["entities_checked"] == 0
 
 
+def test_the_entity_placeholder_check_runs_in_the_pass_and_is_counted_by_name(conn, repo):
+    """The wiring, not the rule: a check the runner never calls is a check that does not exist,
+    and `stats["findings_by_check"]` is derived from whatever the pass produced — so one assertion
+    covers the call site and the aggregate counters at once."""
+    _seed_minimal_corpus(conn, repo)
+    support.write_page(repo, "wiki", "entities/Meridian Partners.md",
+                       frontmatter={"type": "entity", "title": "Meridian Partners",
+                                   "entity": ["meridian-partners"], "status": "developing"},
+                       body="# Meridian Partners\n\n<One clear paragraph: what this entity is.>\n")
+    support.rebuild_index(conn, repo)
+
+    result = _run(conn, repo)
+
+    placeholder = [f for f in result.findings if f["check"] == "entity-placeholder-body"]
+    assert [f["subject"] for f in placeholder] == ["wiki/entities/Meridian Partners.md"]
+    with conn.cursor() as cur:
+        cur.execute("SELECT stats FROM job_runs WHERE id = %s", (result.run_id,))
+        (stats,) = cur.fetchone()
+    assert stats["findings_by_check"]["entity-placeholder-body"] == 1
+
+
 def test_run_gardener_returned_findings_match_what_is_actually_persisted(conn, repo):
     """`store.py`'s own "what a reader sees is never allowed to drift from what is stored" rule,
     proven end to end: the returned findings are the RE-FETCHED rows, not the in-memory list."""

@@ -234,6 +234,20 @@ def propose_repair(conn, *, path="wiki/notes/Renewals.md", link="Existing Note",
         rationale=rationale, content_key=repair_schema.content_key(ops), model_id="fake")
 
 
+def propose_entity_body(conn, *, path="wiki/entities/Meridian Partners.md",
+                        body="## What / Who\n\nA freight broker.\n", role="",
+                        rationale="the page is still its template") -> int:
+    """One PENDING `entity-body` row — the second kind, whose op carries PROSE rather than a link.
+    Derived through the same writers for the same reason as its sibling above."""
+    ops = [{"op": repair_schema.KIND_ENTITY_BODY, "path": path, "body_markdown": body,
+            "role": role}]
+    return repair_store.insert_proposal(
+        conn, run_id=0, finding_ids=[1], target_paths=repair_schema.target_paths(ops), ops=ops,
+        rationale=rationale, kind=repair_schema.KIND_ENTITY_BODY,
+        content_key=repair_schema.content_key(ops, kind=repair_schema.KIND_ENTITY_BODY),
+        model_id="fake")
+
+
 @pytest.fixture()
 def entity_mint_repo(tmp_path) -> str:
     """The bare remote path — see `build_bare_knowledge_repo`. Fresh per test."""

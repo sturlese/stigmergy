@@ -551,3 +551,32 @@ def test_the_several_names_case_still_lists_the_names_for_the_steward():
     assert re.search(r"""["']li["']""", body), (
         "entityApproveFlow builds no list items — the several-names case must still enumerate the "
         "names for the steward, the way the Slack mint modal lists them above the empty field")
+
+
+# ── the repairs detail, once a second kind exists ─────────────────────────────────────────────
+# Source-text checks, with the same reach and the same limits the section above states: there is no
+# JS runtime here, so what these prove is WHICH DATA the detail view wires in and WHICH CLAIM it
+# makes about it — not what a steward sees. That is enough for the one regression that matters,
+# because the defect was a SENTENCE: the panel promised every op was additive and nothing was
+# rewritten, which stopped being true the day `entity-body` landed.
+REPAIRS_VIEW = STATIC / "assets" / "views.js"
+
+
+def test_the_repair_detail_wires_in_the_drafted_body_itself():
+    """For an `entity-body` proposal the DRAFT is the whole of what a steward judges. A detail
+    view that rendered only `op`/`path`/`link`/`note` would show an empty row where the page's
+    new prose should be, and an empty cell reads as "nothing to see"."""
+    js = REPAIRS_VIEW.read_text(encoding="utf-8")
+    assert "body_markdown" in js, (
+        "the console's repair detail never mentions `body_markdown` — the one field an "
+        "`entity-body` proposal exists to show a steward")
+
+
+def test_the_repair_detail_no_longer_promises_that_nothing_is_ever_rewritten():
+    """The false sentence, pinned as absent. `entity-body` REPLACES a page's body below its H1,
+    so a panel telling a steward "Nothing is rewritten or deleted" beside an Approve button is
+    telling them the opposite of what they are authorizing."""
+    js = REPAIRS_VIEW.read_text(encoding="utf-8")
+    assert "Nothing is rewritten or deleted." not in js, (
+        "the repairs detail still claims nothing is ever rewritten — true of the additive kinds "
+        "and false of `entity-body`; say it per kind or not at all")

@@ -34,6 +34,7 @@ from stigmergy.librarian import config as librarian_config
 from stigmergy.repair import store as repair_store
 from stigmergy.repair.errors import RepairError
 from stigmergy.repair.schema import JOB_NAME as REPAIR_JOB
+from stigmergy.repair.schema import KIND_ENTITY_BODY
 from stigmergy.review_kinds import KIND_ENTITY_PROPOSAL
 from stigmergy.server import pilot_report
 from stigmergy.server import review as server_review
@@ -661,9 +662,24 @@ class AdminService:
                 "rationale": _clean(row.get("rationale")), "notes": _clean(row.get("notes")),
                 "error": _clean(row.get("error")), "decided_by": _clean(row.get("decided_by")),
                 "target_paths": [_clean(p) for p in (row.get("target_paths") or ())],
-                "ops": [{"op": _clean(o.get("op")), "path": _clean(o.get("path")),
-                         "link": _clean(o.get("link")), "note": _clean(o.get("note"))}
-                        for o in (row.get("ops") or ())]}
+                "ops": [self._op(o) for o in (row.get("ops") or ())]}
+
+    @staticmethod
+    def _op(op: dict) -> dict:
+        """One op, cleaned — and shaped by its own KIND rather than by one fixed field list.
+
+        The additive kinds carry a link and a note; `entity-body` carries the drafted prose and,
+        sometimes, a role. A single four-field reshape dropped the draft entirely, which for that
+        kind removes the only thing a steward has to judge — and it would do it silently, since a
+        missing key renders as an empty cell. Every value goes through `_clean`, which strips
+        control characters and KEEPS newlines: a body flattened to one line is a body nobody can
+        read as the page it would become."""
+        kind = _clean(op.get("op"))
+        common = {"op": kind, "path": _clean(op.get("path"))}
+        if kind == KIND_ENTITY_BODY:
+            return {**common, "body_markdown": _clean(op.get("body_markdown")),
+                    "role": _clean(op.get("role"))}
+        return {**common, "link": _clean(op.get("link")), "note": _clean(op.get("note"))}
 
     def _with_reply(self, row: dict) -> dict:
         """A sanitized queue row plus the one field the list and the trace both owe a parked

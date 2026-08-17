@@ -1084,10 +1084,14 @@ def test_a_real_superset_growth_is_the_benign_twin_and_passes_clean(tmp_path):
 # capture)" — but every capture (the \U0001f9e0 gesture included) reaches an EXISTING page only
 # through `edits.apply_declared`, which this gate judges, and rule 3 admits exactly ONE
 # frontmatter change: `related:` growth (the benign twin just above,
-# `test_a_real_superset_growth_is_the_benign_twin_and_passes_clean`). `entity:` gets no
-# carve-out — this function's own docstring: "Rule 3 has no carve-out at all: every frontmatter
-# line but the one `related:` block survives byte for byte, with no caller entitled to declare an
-# exception." ────────────────────────────────────────────────────────────────────────────────
+# `test_a_real_superset_growth_is_the_benign_twin_and_passes_clean`). `entity:` gets no carve-out:
+# every frontmatter line but the one `related:` block survives byte for byte.
+#
+# ONE caller-declared exception exists now, and it never reaches this rule — a path in
+# `ctx.body_rewrite_allowed` leaves this road entirely for `_permitted_rewrite_findings`, where
+# `entity:` is refused just as flatly (the mutation twins at the end of this file). No capture flow
+# declares such a path, so for every diff the librarian's own worker produces the sentence above is
+# exactly as true as it was. ─────────────────────────────────────────────────────────────────
 def test_an_entity_only_change_to_an_existing_page_is_vetoed_as_body_rewrite_not_repairable(
         tmp_path):
     """A capture that changes nothing but `entity: []` -> `entity: ["acme-corp"]` on an
@@ -2010,3 +2014,137 @@ class TestSecretsAcrossALineBreak:
         body = "\n".join(f"word{i} continues the sentence across a narrow column" for i in range(40))
         assert gates.scan_secrets(body, gitleaks_bin="gitleaks",
                                   label="the captured material") == []
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# gate_body_rewrite's ONE caller-declared exception: `ctx.body_rewrite_allowed` (ADR 039)
+#
+# The additive proof cannot judge an entity-body repair — that diff REPLACES prose, which is the
+# whole point of it — so for a path the caller NAMED, the gate swaps that proof for three dedicated
+# ones instead of weakening it. Everything below is about the two halves being genuinely separate:
+# a named path is judged by the new rules, and a path nobody named is judged exactly as before.
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+_ENTITY_BEFORE = ('---\ntype: entity\ntitle: "Meridian Partners"\nstatus: developing\n'
+                  'role: ""\nupdated: 2026-01-01\nentity: ["meridian-partners"]\ntags: [entity]\n'
+                  '---\n\n# Meridian Partners\n\n<One clear paragraph: what this entity is.>\n')
+_ENTITY_AFTER = ('---\ntype: entity\ntitle: "Meridian Partners"\nstatus: developing\n'
+                 'role: ""\nupdated: 2026-08-17\nentity: ["meridian-partners"]\ntags: [entity]\n'
+                 '---\n\n# Meridian Partners\n\n## What / Who\n\nA freight broker.\n')
+_ENTITY_LANE = ("wiki/entities/",)
+
+
+def _entity_page(tmp_path, text: str = _ENTITY_BEFORE):
+    repo = str(tmp_path)
+    gitcmd.run("init", "--quiet", "-b", "main", repo)
+    page = tmp_path / "wiki" / "entities" / "Meridian Partners.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(text, encoding="utf-8")
+    gitcmd.run("add", "-A", cwd=repo)
+    gitcmd.run("commit", "--quiet", "--no-verify", "-m", "seed", cwd=repo, env=_COMMIT_ENV)
+    return repo, page
+
+
+_ENTITY_PATH = "wiki/entities/Meridian Partners.md"
+
+
+def _permitted(**over):
+    base = {"write_prefixes": _ENTITY_LANE, "body_rewrite_allowed": frozenset({_ENTITY_PATH})}
+    base.update(over)
+    return base
+
+
+def test_a_permitted_entity_body_rewrite_passes_the_gate(tmp_path):
+    """The BENIGN TWIN, and it is the load-bearing half: without it the whole kind is inert, and a
+    gate that vetoed every drafted body would look exactly as healthy as one that works."""
+    repo, page = _entity_page(tmp_path)
+    assert _body_rewrite_findings(repo, page, _ENTITY_AFTER, **_permitted()) == []
+
+
+def test_the_role_line_is_the_second_permitted_line_and_only_the_second(tmp_path):
+    repo, page = _entity_page(tmp_path)
+    with_role = _ENTITY_AFTER.replace('role: ""', 'role: "A freight broker."')
+
+    assert _body_rewrite_findings(repo, page, with_role, **_permitted()) == []
+
+
+def test_the_identical_rewrite_is_vetoed_when_no_caller_permitted_that_path(tmp_path):
+    """The other half of the same property, and the one a mistake would silence: permission is
+    per-PATH and told by the caller, so the same bytes with an empty `body_rewrite_allowed` must be
+    refused exactly as they were before this field existed."""
+    repo, page = _entity_page(tmp_path)
+
+    findings = _body_rewrite_findings(repo, page, _ENTITY_AFTER, write_prefixes=_ENTITY_LANE)
+
+    assert [f.code for f in findings] == ["body-rewrite"]
+    assert findings[0].repairable is False
+
+
+def test_a_permitted_path_does_not_permit_its_neighbours(tmp_path):
+    """The set is the unit, not the folder: an apply names ONE page, and a second entity page in
+    the same diff is a page nobody approved."""
+    repo, page = _entity_page(tmp_path)
+    neighbour = tmp_path / "wiki" / "entities" / "Somebody Else.md"
+    neighbour.write_text(_ENTITY_BEFORE.replace("Meridian Partners", "Somebody Else"),
+                         encoding="utf-8")
+    gitcmd.run("add", "-A", cwd=repo)
+    gitcmd.run("commit", "--quiet", "--no-verify", "-m", "second page", cwd=repo, env=_COMMIT_ENV)
+    neighbour.write_text(_ENTITY_AFTER.replace("Meridian Partners", "Somebody Else"),
+                         encoding="utf-8")
+
+    findings = _body_rewrite_findings(repo, page, _ENTITY_AFTER, **_permitted())
+
+    assert [(f.code, f.locator) for f in findings] == [
+        ("body-rewrite", "wiki/entities/Somebody Else.md")]
+
+
+# ── the MUTATION TWIN: a frontmatter tamper riding inside a permitted rewrite ──────────────────
+@pytest.mark.parametrize("tamper, label", [
+    ('status: developing', 'status: mature'),
+    ('entity: ["meridian-partners"]', 'entity: ["somebody-elses-entity"]'),
+    ('title: "Meridian Partners"', 'title: "Meridian Partners Ltd"'),
+], ids=["status", "entity", "title"])
+def test_a_frontmatter_change_riding_inside_a_permitted_rewrite_is_vetoed(tmp_path, tamper, label):
+    """A hand-built diff, not a weakened comparison: the exception grants a BODY rewrite, and the
+    failure mode it must not have is granting a frontmatter one along with it. `status:` is the
+    sharpest of the three — it is the maturity axis a reader trusts, and nothing about drafting a
+    body is a reason to move it."""
+    repo, page = _entity_page(tmp_path)
+
+    findings = _body_rewrite_findings(repo, page, _ENTITY_AFTER.replace(tamper, label),
+                                      **_permitted())
+
+    assert [f.code for f in findings] == ["rewrite-frontmatter"]
+    assert findings[0].repairable is False
+    assert _ENTITY_PATH in findings[0].message
+
+
+def test_a_permitted_path_that_is_not_an_entity_page_is_vetoed(tmp_path):
+    """The zone is a folder and the type is a declaration. A caller that named a path is trusted
+    about WHICH page it approved, never about what that page is."""
+    repo, page = _entity_page(tmp_path, _ENTITY_BEFORE.replace("type: entity", "type: note"))
+
+    findings = _body_rewrite_findings(repo, page,
+                                      _ENTITY_AFTER.replace("type: entity", "type: note"),
+                                      **_permitted())
+
+    assert [f.code for f in findings] == ["rewrite-not-an-entity"]
+
+
+def test_a_permitted_path_outside_this_runs_write_lane_is_vetoed(tmp_path):
+    """Two caller-scoped facts that must agree. `write_prefixes` says which lane this apply owns
+    and `body_rewrite_allowed` which page it may rewrite; when they disagree the gate believes
+    neither — a permission is only as good as the lane it sits in."""
+    repo, page = _entity_page(tmp_path)
+
+    findings = _body_rewrite_findings(repo, page, _ENTITY_AFTER,
+                                      **_permitted(write_prefixes=("wiki/notes/",)))
+
+    assert "rewrite-outside-lane" in [f.code for f in findings]
+
+
+def test_the_permission_is_empty_unless_a_caller_declares_it(tmp_path):
+    """TOLD, never inferred — the same posture `write_prefixes` and `creatable_types` take. A
+    default that granted anything would make every flow that never heard of this field a flow
+    that permits a rewrite."""
+    ctx = _ctx(tmp_path, [])
+    assert ctx.body_rewrite_allowed == frozenset()

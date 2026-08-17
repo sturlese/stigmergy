@@ -1,4 +1,4 @@
-"""The eight deterministic checks. Each returns a list of finding dicts, never touches
+"""The nine deterministic checks. Each returns a list of finding dicts, never touches
 `gardener_findings` (`store.py`'s job) and never prints (`report.py`'s).
 
 Population invariants: the two windowed checks resolve "the last N filings" out of
@@ -33,11 +33,14 @@ CHECK_COMPANY_PAGE_NAMES_ENTITY = "company-page-names-entity"
 # A style convention, not a safety property — a finding here, never a filing veto.
 # `librarian.processing` names the same slug where it declines to veto it; one grep finds both.
 CHECK_DATE_BEARING_BODY_LINK = "date-bearing-body-link"
+# The one check with a repair kind of its own (`repair.schema.KIND_ENTITY_BODY`): the finding names
+# an entity page, and the repair proposer drafts that page's body from the pages anchored to it.
+CHECK_ENTITY_PLACEHOLDER_BODY = "entity-placeholder-body"
 
 ALL_CHECK_SLUGS = (
     CHECK_ORPHAN_PAGE, CHECK_AGING_SEED, CHECK_STALE_VIEW, CHECK_ANCHOR_CONCENTRATION,
     CHECK_DEAD_VOCABULARY, CHECK_COMPANY_WIDE_FRACTION, CHECK_COMPANY_PAGE_NAMES_ENTITY,
-    CHECK_DATE_BEARING_BODY_LINK,
+    CHECK_DATE_BEARING_BODY_LINK, CHECK_ENTITY_PLACEHOLDER_BODY,
 )
 
 # The tail of every "this page may be anchored wrong" action — `check_company_page_names_entity`
@@ -441,4 +444,68 @@ def check_date_bearing_body_links(repo: str) -> list[dict]:
                         "move the pointer into the page's `sources:` (or `related:`) frontmatter "
                         "list and reword the sentence without the bracketed date-bearing name"),
                 ))
+    return findings
+
+
+# ── entity pages that are still their own template ────────────────────────────────────────────
+# `ops/templates/entity.md` marks every unwritten span with angle brackets, and the birth door
+# copies the template VERBATIM into the committed page — so a minted identity says nothing about
+# itself until somebody writes it, and nothing counted those pages before this check: the orphan
+# check exempts entity pages by type, and no other check reads a body at all.
+#
+# The zone folder is spelled in TWO segments on purpose: the gardener package may hold no literal
+# path fragment under the knowledge checkout (`tests/test_architecture.py`), because it never
+# writes and must not read as though it could address a file.
+_ENTITY_ZONE = ("wiki", "entities")
+
+
+def is_placeholder_line(line: str) -> bool:
+    """The template's angle-marker convention: a line that IS a placeholder, start to end.
+
+    Deliberately literal, and it has a known false positive: a body line that is a whole one-line
+    HTML element (`<details>`, `<!-- a comment -->`) reads as a placeholder here. That is ACCEPTED
+    v1 behaviour rather than engineered around — the finding is `info`, the repair it invites is a
+    drafted body a steward reads before approving, and a heuristic that tried to tell markup from
+    a placeholder would be a second, worse parser of somebody's prose. The mirror-image gap is
+    equally deliberate: a placeholder carried under a list bullet (`- <fact…>`) is not a
+    placeholder LINE and does not fire.
+    """
+    stripped = line.strip()
+    return stripped.startswith("<") and stripped.endswith(">")
+
+
+def check_entity_placeholder_bodies(repo: str) -> list[dict]:
+    """Population: every page in the entity zone of the repo checkout, read from disk — never
+    `pages_index`, which stores the body with its frontmatter already parsed away but is a
+    different tree from the one a repair would be applied to. One INFO finding per page whose body
+    still carries at least one placeholder line."""
+    findings = []
+    root = pathlib.Path(repo)
+    zone_dir = root.joinpath(*_ENTITY_ZONE)
+    if not zone_dir.is_dir():
+        return findings
+    for path in sorted(zone_dir.rglob("*.md")):
+        if path.name.startswith("."):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        _front, body = page_policy.split_frontmatter(text)
+        placeholders = [line for line in body.splitlines() if is_placeholder_line(line)]
+        if not placeholders:
+            continue
+        findings.append(build_finding(
+            check=CHECK_ENTITY_PLACEHOLDER_BODY, severity=SEVERITY_INFO,
+            subject=str(path.relative_to(root)),
+            # The COUNT, never the lines themselves: a finding's detail reaches a model's prompt
+            # and a Slack digest, and this one has nothing to say that the page's own text says
+            # better to whoever opens it.
+            detail=(f"its body still carries {len(placeholders)} unwritten placeholder line"
+                    f"{'' if len(placeholders) == 1 else 's'} from the entity template — this "
+                    f"identity exists and says nothing about itself"),
+            suggested_action=(
+                "no command — the repair proposer drafts a body from the pages anchored to this "
+                "entity; approve it in the review lane, or edit the page by hand"),
+        ))
     return findings

@@ -1,7 +1,8 @@
-"""The file-based checks: stale views, dead vocabulary, and date-bearing body links. All three
-read the repo directly (`views.staleness.list_stale_entities`/`list_all_anchored_entities`,
-reused verbatim — NOT `views.regenerate`, which would load that module's own git write path) and
-need no Postgres at all — no `_pg` suffix, no `conn` fixture, fast."""
+"""The file-based checks: stale views, dead vocabulary, date-bearing body links, and entity pages
+still carrying their template's placeholders. All four read the repo directly (the first two
+through `views.staleness.list_stale_entities`/`list_all_anchored_entities`, reused verbatim — NOT
+`views.regenerate`, which would load that module's own git write path) and need no Postgres at
+all — no `_pg` suffix, no `conn` fixture, fast."""
 import os
 
 from stigmergy.gardener import checks
@@ -171,3 +172,63 @@ def test_a_dateless_body_wikilink_is_also_benign(repo):
                        body="See [[Acme Corp]] and [[q3-sync-notes]] for context.\n")
 
     assert checks.check_date_bearing_body_links(repo) == []
+
+
+# ── entity pages that are still their own template ──────────────────────────────────────────────
+# The template's placeholders are angle-marked (`ops/templates/entity.md`), and `stigmergy-entities
+# create` copies it VERBATIM: a minted entity page says nothing until somebody writes it. Before
+# this check nothing counted those pages, so an identity with no content was invisible to every
+# corpus-health pass — the gardener's orphan check exempts entity pages by type, and no other check
+# reads their bodies at all.
+PLACEHOLDER_ENTITY = {"type": "entity", "title": "Meridian Partners",
+                      "entity": ["meridian-partners"], "status": "developing", "role": ""}
+
+
+def test_entity_placeholder_body_fires_for_a_page_that_is_still_the_template(repo):
+    support.write_page(repo, "wiki", "entities/Meridian Partners.md",
+                       frontmatter=PLACEHOLDER_ENTITY,
+                       body="# Meridian Partners\n\n## What / Who\n\n"
+                            "<One clear paragraph: what this entity is and why it's in the "
+                            "brain.>\n")
+
+    findings = checks.check_entity_placeholder_bodies(repo)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f["check"] == checks.CHECK_ENTITY_PLACEHOLDER_BODY
+    assert f["severity"] == "info"
+    assert f["subject"] == "wiki/entities/Meridian Partners.md"
+    assert f["subjects"] == ["wiki/entities/Meridian Partners.md"]
+    assert "repair" in f["suggested_action"]
+
+
+def test_a_written_entity_page_is_the_benign_twin(repo):
+    """The half that says the check does not fire on everything. It runs over every entity page
+    in the corpus and its finding asks a steward to read a drafted body, so a check that flagged
+    written pages would fill the review lane with rewrites of pages somebody already wrote."""
+    support.write_page(repo, "wiki", "entities/Meridian Partners.md",
+                       frontmatter=PLACEHOLDER_ENTITY,
+                       body="# Meridian Partners\n\n## What / Who\n\nA freight broker the "
+                            "renewal pipeline runs through.\n")
+
+    assert checks.check_entity_placeholder_bodies(repo) == []
+
+
+def test_a_placeholder_on_a_note_page_is_not_this_checks_business(repo):
+    """Population: `wiki/entities/` and nothing else. A note drafted around an angle-marked
+    placeholder is a filing question, not an identity with no content."""
+    support.write_page(repo, "wiki", "notes/draft.md",
+                       frontmatter={"type": "note", "title": "Draft", "status": "developing"},
+                       body="# Draft\n\n<the paragraph nobody wrote>\n")
+
+    assert checks.check_entity_placeholder_bodies(repo) == []
+
+
+def test_a_placeholder_inside_the_frontmatter_is_not_a_body_placeholder(repo):
+    """The template's own `created: <YYYY-MM-DD>` lines live in the frontmatter, and a page whose
+    frontmatter is unfinished is the contract linter's finding, not this one."""
+    support.write_page(repo, "wiki", "entities/Meridian Partners.md",
+                       frontmatter={**PLACEHOLDER_ENTITY, "created": "<YYYY-MM-DD>"},
+                       body="# Meridian Partners\n\n## What / Who\n\nA freight broker.\n")
+
+    assert checks.check_entity_placeholder_bodies(repo) == []

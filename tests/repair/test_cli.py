@@ -177,3 +177,48 @@ def test_the_command_the_propose_output_names_is_one_the_parser_accepts(conn, re
     (row,) = store.pending_proposals(conn)
     args = cli.build_parser().parse_args(["show", str(row["id"])])
     assert args.fn(conn, args) == 0
+
+
+# ── the second kind renders as what it is, not as a mangled edit ──────────────────────────────
+BODY_OPS = [{"op": schema.KIND_ENTITY_BODY, "path": "wiki/entities/Meridian Partners.md",
+             "body_markdown": "## What / Who\n\nA freight broker.\n", "role": "A freight broker."}]
+
+
+def test_a_body_draft_previews_as_the_draft_a_steward_would_be_approving():
+    """The steward reading the draft IS the check for this kind, so the preview has to SHOW it.
+    Rendered from the ops alone, like every other preview — no git, no clone: a preview derived
+    some other way could differ from the thing the apply performs."""
+    lines = cli.preview({"kind": schema.KIND_ENTITY_BODY, "ops": BODY_OPS})
+
+    assert lines[0] == "--- wiki/entities/Meridian Partners.md"
+    assert any("A freight broker." in line for line in lines)
+    assert any("role:" in line for line in lines)
+    assert all(line.startswith(("+", "-", " ")) for line in lines)
+
+
+def test_a_body_preview_never_renders_the_additive_shape():
+    """The defect this exists to prevent: `preview` emitted `related: [[…]]` for EVERY op, so a
+    body draft previewed as a link to nothing — a steward approving what the preview showed would
+    be approving a change that does not exist."""
+    lines = cli.preview({"kind": schema.KIND_ENTITY_BODY, "ops": BODY_OPS})
+    assert not any("related: [[" in line for line in lines)
+
+
+def test_the_list_column_fits_every_kind_the_code_can_write():
+    """A column width narrower than a value is a value that shifts every row after it. Derived
+    from `schema.KINDS`, so a third kind widens the column instead of breaking the alignment."""
+    assert max(len(kind) for kind in schema.KINDS) == cli.KIND_WIDTH
+
+
+def test_the_list_prints_a_body_proposal_on_one_aligned_line(conn, capsys, monkeypatch):
+    proposal_id = store.insert_proposal(
+        conn, run_id=1, finding_ids=[], target_paths=["wiki/entities/Meridian Partners.md"],
+        ops=BODY_OPS, rationale="the page is still its template", content_key="body-key",
+        kind=schema.KIND_ENTITY_BODY)
+
+    assert _run(conn, ["list"], monkeypatch) == 0
+
+    out = capsys.readouterr().out
+    assert f"#{proposal_id}" in out
+    assert schema.KIND_ENTITY_BODY in out
+    assert "1 op(s) on wiki/entities/Meridian Partners.md" in out

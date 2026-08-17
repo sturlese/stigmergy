@@ -11,11 +11,14 @@ is needed.
 **Three independent things have to agree before anything is pushed**, and each was chosen because
 the other two cannot see what it sees:
 
-  1. `edits.apply_declared` re-validates the ops against THIS clone. The propose-time validation
-     ran against a checkout that may be hours old; a page deleted since then must refuse here.
+  1. The kind's own validator re-runs against THIS clone — `edits.apply_declared` for the additive
+     kinds, `entity_body.apply_declared` for a body draft. The propose-time validation ran against
+     a checkout that may be hours old; a page deleted since then must refuse here.
   2. `run_gates(ALL_GATES)` judges the resulting DIFF, exactly as it judges the librarian's own.
-     An additive edit is what the ops are supposed to produce, and `gate_body_rewrite` is what
-     proves they did rather than what promises they would.
+     What the ops are supposed to produce is an additive edit, or — for `entity-body`, and only on
+     the ONE page this apply names in `body_rewrite_allowed` — a replaced body below that page's
+     own H1 with its frontmatter otherwise intact. `gate_body_rewrite` is what proves they did
+     rather than what promises they would, and the permission is told to it here, per path.
   3. The cross-check: the diff's paths must equal the proposal's own stored `target_paths` and
      every entry must be a MODIFICATION. The gates would pass a diff touching some other page
      quite happily — it is additive and well-formed — so this is the only thing that can say the
@@ -40,7 +43,7 @@ from stigmergy.kernel import registry as registry_module
 from stigmergy.librarian import config as librarian_config
 from stigmergy.librarian import edits, gates, gitcmd, githubapp
 from stigmergy.librarian.errors import LibrarianError
-from stigmergy.repair import schema, store
+from stigmergy.repair import entity_body, schema, store
 from stigmergy.repair.errors import ProposalStateError, RepairError
 
 log = logging.getLogger(__name__)
@@ -136,7 +139,8 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
                     author: tuple[str, str], approver: str, on_output) -> dict:
     """Everything between a fresh clone and a pushed sha. Split out so the `LibrarianError` seam
     above wraps the WHOLE of it and this function can read as the sequence it is."""
-    edited, findings = edits.apply_declared(clone, schema.declared_edits(ops), new_pages=())
+    kind = str(proposal.get("kind") or schema.KIND_EDITS)
+    edited, findings = _perform(clone, kind, ops)
     if findings:
         # The edit validator's codes, not its sentences: its messages are written for a worker's
         # log and name the worktree. The codes (`missing-target`, `dead-link`, …) are stable
@@ -149,14 +153,15 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
         # Every op was already there. Honest, and NOT an error the steward caused — but there is
         # nothing to commit, and an empty commit would claim a repair that did not happen.
         raise ProposalStateError(
-            "this repair changes nothing: every link and callout it proposes is already on the "
-            "pages. Nothing was pushed — the corpus already says what the finding asked for")
+            "this repair changes nothing: the pages already say exactly what it proposes. Nothing "
+            "was pushed — the corpus already carries the answer the finding asked for")
 
     entries = gitcmd.diff_entries(clone)
     _cross_check(entries, proposal)
 
     gitleaks_bin = os.environ.get(GITLEAKS_BIN_ENV) or librarian_config.Settings.gitleaks_bin
     gates.ensure_scanner(gitleaks_bin)
+    lane, permitted = _lane_and_permission(kind, ops)
     ctx = gates.GateContext(
         worktree=clone, entries=entries, added=gitcmd.added_lines(clone),
         # No material and no outcome: nothing was captured and no agent wrote here — the ops came
@@ -172,7 +177,13 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
         # TOLD, not inferred by the gates: this apply runs inside an HTTP request, unlike the
         # worker's. A `LibrarianConfigError` out of an elapsed budget meets the `except
         # LibrarianError` seam above and the row lands `failed` with a sentence, not a hung thread.
-        subprocess_timeout_s=REPAIR_SUBPROCESS_TIMEOUT_S)
+        subprocess_timeout_s=REPAIR_SUBPROCESS_TIMEOUT_S,
+        # The other two TOLD facts, and the only place in this system that grants either: which
+        # zone THIS apply owns, and which single page its approval covers. Both are derived from
+        # the ops that were just performed, never from `target_paths` — the two are cross-checked
+        # against each other a few lines above, so deriving the permission from the same fact the
+        # cross-check judges would make one stored column able to widen the other.
+        write_prefixes=lane, body_rewrite_allowed=permitted)
     veto = gates.vetoes(gates.run_gates(ctx))
     if veto:
         raise RepairError(
@@ -201,6 +212,36 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
                          author_name=author[0], author_email=author[1],
                          timeout_s=REPAIR_GIT_TIMEOUT_S)
     return {"commit": landed, "paths": list(edited)}
+
+
+def _perform(clone: str, kind: str, ops: list) -> tuple[list[str], list]:
+    """The ops, performed — ONE branch per proposal kind, and the only one in this module.
+
+    Each kind has its own validator and its own writer, and both run against THIS clone: the
+    propose-time run judged a checkout that may be hours old. An unknown kind falls through to the
+    edits road deliberately, where `edits.validate` refuses it by name (`unknown-kind`) rather
+    than being silently performed by whichever branch happened to be last — a row whose `kind` the
+    code does not know is a row this version must not act on.
+    """
+    if kind == schema.KIND_ENTITY_BODY:
+        return entity_body.apply_declared(clone, ops)
+    return edits.apply_declared(clone, schema.declared_edits(ops), new_pages=())
+
+
+def _lane_and_permission(kind: str, ops: list) -> tuple[tuple, frozenset]:
+    """`(write_prefixes, body_rewrite_allowed)` for this apply — the two caller-scoped facts the
+    gates are TOLD and never infer.
+
+    For the additive kinds both are the default: the librarian's whole write lane, and no page
+    whose prose may be replaced. For `entity-body` the lane NARROWS to the entity zone (this apply
+    has no business anywhere else) and the permission names the one page the ops declared — never
+    the whole zone, because a permission wide enough for a second page is a permission for a page
+    nobody approved.
+    """
+    if kind != schema.KIND_ENTITY_BODY:
+        return gates.ALLOWED_WRITE_PREFIXES, frozenset()
+    return ((entity_body.ENTITY_ZONE_PREFIX,),
+            frozenset(str(o.get("path", "")) for o in ops if str(o.get("path", ""))))
 
 
 def _cross_check(entries, proposal: dict) -> None:

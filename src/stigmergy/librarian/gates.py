@@ -99,6 +99,14 @@ class GateContext:
     # branch is exercised by `test_gates_unit.py`'s explicit contexts, which is where its red proof
     # lives now that no production flow reaches it.
     edits_allowed: bool = True
+    # The ONE exception to `gate_body_rewrite`'s additive proof, and it is a set of PATHS rather
+    # than a flag: the governed repair loop's `entity-body` kind replaces one entity page's prose
+    # below its own H1 (ADR 039), which no additive proof can admit. A path in here is judged by
+    # the dedicated checks instead — frontmatter unchanged but for `PERMITTED_REWRITE_KEYS`, the
+    # page is an entity page, the path is inside this run's lane. TOLD by the caller and never
+    # inferred, empty by default: a flow that has never heard of this field permits nothing, which
+    # is why the librarian's own worker keeps the additive proof it has always had.
+    body_rewrite_allowed: frozenset = field(default_factory=frozenset)
 
     @property
     def changes(self) -> list[tuple[str, str]]:
@@ -285,13 +293,27 @@ def _related_growth_ok(base_text: str, new_text: str) -> bool:
     return set(base_links) < set(new_links)
 
 
+# The two frontmatter lines a permitted rewrite may change, and the ONLY two. `updated:` is the
+# apply date; `role:` is one sentence of identity a drafted body may fill in when the page declares
+# an empty one — the "only when empty" half is the WRITER's rule (`repair.entity_body`, checked at
+# both propose and apply time), not this gate's: a gate reads a diff and cannot see what a proposal
+# claimed. What this gate owns is that nothing ELSE moved.
+PERMITTED_REWRITE_KEYS = ("updated", "role")
+
+
 def gate_body_rewrite(ctx: GateContext) -> list[Finding]:
     """An existing page may gain `related:` links and callouts — never a rewritten body. Proven
     against the base BLOB, never a rendered diff: classifying diff lines by prefix is defeatable
     from page content. An unestablishable "before" is refused rather than assumed additive.
 
-    Every finding is `repairable=False`: a modified page comes from `edits.apply_declared` or
-    from nothing, so a corrective brief would tell the agent to repair somebody else's action.
+    ONE exception, and it is per-PATH and caller-declared: a path in `ctx.body_rewrite_allowed`
+    swaps the additive proof for `_permitted_rewrite_findings`' three dedicated ones. Nothing is
+    weakened for any other path — a page nobody named is judged exactly as it was before that field
+    existed, which is the property `test_gates_unit.py` pins from both sides.
+
+    Every finding is `repairable=False`: a modified page comes from `edits.apply_declared`, from
+    `repair.entity_body` or from nothing, so a corrective brief would tell the agent to repair
+    somebody else's action.
     """
     out = []
     for path in sorted({e.path for e in ctx.entries if e.status == "M"}):
@@ -328,6 +350,13 @@ def gate_body_rewrite(ctx: GateContext) -> list[Finding]:
             out.append(Finding("zone", "unparseable", message, locator=path, repairable=False))
             continue
 
+        # BEFORE the additive proof, never instead of a check: the parse above still ran, so a
+        # permitted path is a path whose frontmatter this gate could read.
+        if path in ctx.body_rewrite_allowed:
+            out.extend(_permitted_rewrite_findings(ctx, path, base_text, new_text,
+                                                   parsed_front or {}))
+            continue
+
         if not _appended_callout_only(page_policy.body_lines(base_text),
                                       page_policy.body_lines(new_text)):
             out.append(Finding("zone", "body-rewrite",
@@ -354,6 +383,44 @@ def gate_body_rewrite(ctx: GateContext) -> list[Finding]:
                                f"changed the `related:` field of {path} without adding to it: an "
                                f"edit to a page that already exists may only GROW its link list",
                                locator=path, repairable=False))
+    return out
+
+
+def _permitted_rewrite_findings(ctx: GateContext, path: str, base_text: str, new_text: str,
+                                parsed_front: dict) -> list[Finding]:
+    """The three checks that replace the additive proof for a path the caller permitted.
+
+    They are not a softer version of it — they are a different question. The additive proof asks
+    "did anything disappear?", which a drafted body answers "yes" to by construction. These ask
+    the question that still has to be true: this is an ENTITY page, in THIS run's lane, and every
+    frontmatter line but the two permitted ones survived. A caller is trusted about WHICH path it
+    approved and about nothing else, so each of the three is asked of the diff rather than assumed
+    from the permission.
+    """
+    out = []
+    if not path.startswith(ctx.write_prefixes):
+        out.append(Finding("zone", "rewrite-outside-lane",
+                           f"a body rewrite of {path} was permitted, but that path is outside this "
+                           f"run's write lane ({', '.join(ctx.write_prefixes)}): the permission and "
+                           f"the lane disagree, so neither is honoured",
+                           locator=path, repairable=False))
+    page_type = str(parsed_front.get("type") or "").strip().lower()
+    if page_type != page_policy.ENTITY_PAGE_TYPE:
+        out.append(Finding("zone", "rewrite-not-an-entity",
+                           f"a body rewrite of {path} was permitted, but the page declares type "
+                           f"{page_type!r}: only an entity page's body may be replaced, and the "
+                           f"folder does not make one",
+                           locator=path, repairable=False))
+    base_rest = page_policy.strip_key_lines(page_policy.frontmatter_lines(base_text),
+                                            PERMITTED_REWRITE_KEYS)
+    new_rest = page_policy.strip_key_lines(page_policy.frontmatter_lines(new_text),
+                                           PERMITTED_REWRITE_KEYS)
+    if base_rest != new_rest:
+        out.append(Finding("zone", "rewrite-frontmatter",
+                           f"rewrote frontmatter in {path} beyond "
+                           f"{'/'.join(f'`{k}:`' for k in PERMITTED_REWRITE_KEYS)}: permission to "
+                           f"replace a body is not permission to change what the page declares",
+                           locator=path, repairable=False))
     return out
 
 
