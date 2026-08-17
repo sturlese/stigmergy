@@ -13,10 +13,10 @@ import pytest
 import yaml
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-# `ci.yml` is this repository's own CI and lives where GitHub runs it. The three operational
+# `ci.yml` is this repository's own CI and lives where GitHub runs it. The four operational
 # crons deliberately do NOT: they are templates an operator copies into their (private)
 # knowledge repo, and a file under `.github/workflows/` is REGISTERED by GitHub whether or not
-# it is enabled — three greyed-out "Disabled" rows on a public repo's Actions tab read as a
+# it is enabled — a column of greyed-out "Disabled" rows on a public repo's Actions tab reads as a
 # broken project rather than as a deliberate handoff. Moving them out of that directory is what
 # makes them invisible there; `deploy/workflows/README.md` is the handoff.
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -25,6 +25,7 @@ RETENTION = CRON_TEMPLATES / "retention-purge.yml"
 INDEX_REBUILD = CRON_TEMPLATES / "index-rebuild.yml"
 CI = WORKFLOWS / "ci.yml"
 GARDENER = CRON_TEMPLATES / "gardener.yml"
+REPAIR = CRON_TEMPLATES / "repair-propose.yml"
 
 
 def _workflow(path: pathlib.Path) -> dict:
@@ -138,27 +139,34 @@ def test_gardener_is_scheduled_with_workflow_dispatch():
     assert "workflow_dispatch" in triggers, "no manual on-demand trigger — an operator cannot re-run it"
 
 
-def test_gardener_runs_after_index_rebuild_and_retention_purge():
-    """The gardener runs daily, AFTER `index-rebuild` and `retention-purge` — pinned as an ordered
-    comparison of the three cron entries' own minute-of-day, not merely as three separately
-    plausible-looking strings, so a future edit that moves any ONE of the three schedules out of
-    order is caught here rather than only in a 3 a.m. reading race."""
-    def _minute_of_day(cron_expr: str) -> int:
-        minute, hour = cron_expr.split()[:2]
-        return int(hour) * 60 + int(minute)
+def _minute_of_day(cron_expr: str) -> int:
+    minute, hour = cron_expr.split()[:2]
+    return int(hour) * 60 + int(minute)
 
-    def _schedule_cron(config: dict) -> str:
-        # the same `on:` -> `True` YAML gotcha this file already reads around elsewhere.
-        triggers = config.get("on") or config.get(True)
-        return triggers["schedule"][0]["cron"]
 
-    gd_cron = _schedule_cron(_workflow(GARDENER))
-    retention_cron = _schedule_cron(_workflow(RETENTION))
-    rebuild_cron = _schedule_cron(_workflow(INDEX_REBUILD))
+def _schedule_cron(config: dict) -> str:
+    # the same `on:` -> `True` YAML gotcha this file already reads around elsewhere.
+    triggers = config.get("on") or config.get(True)
+    return triggers["schedule"][0]["cron"]
 
-    assert _minute_of_day(rebuild_cron) < _minute_of_day(retention_cron) < _minute_of_day(gd_cron), (
-        f"expected index-rebuild ({rebuild_cron!r}) < retention-purge ({retention_cron!r}) < "
-        f"gardener ({gd_cron!r}) in time-of-day order")
+
+def test_the_four_crons_are_scheduled_in_the_order_each_ones_inputs_require():
+    """Every cron here reads what an earlier one wrote, and the chain is pinned as an ordered
+    comparison of the four entries' own minute-of-day — not as four separately plausible-looking
+    strings — so an edit that moves any ONE of them out of order is caught here rather than only
+    in a 3 a.m. reading race.
+
+    The chain, and why each link is a real dependency: `index-rebuild` refreshes the corpus view
+    `retention-purge` and the gardener both read; the gardener's findings are the repair
+    proposer's only input, so a proposer running first would propose against yesterday's."""
+    order = [("index-rebuild", INDEX_REBUILD), ("retention-purge", RETENTION),
+             ("gardener", GARDENER), ("repair-propose", REPAIR)]
+    crons = [(name, _schedule_cron(_workflow(path))) for name, path in order]
+    minutes = [_minute_of_day(cron) for _name, cron in crons]
+
+    assert minutes == sorted(minutes) and len(set(minutes)) == len(minutes), (
+        "expected " + " < ".join(f"{name} ({cron!r})" for name, cron in crons)
+        + " in time-of-day order, with no two sharing a minute")
 
 
 def test_gardener_declares_read_only_contents_permission():
@@ -243,7 +251,75 @@ def test_gardener_carries_its_own_slack_and_channel_configuration():
     assert "vars.STIGMERGY_DIGEST_CHANNEL_ID" in text
 
 
-# BOTH directories, and that is the point: when the three crons moved out of `.github/workflows/`
+# ── the repair proposer's cron ─────────────────────────────────────────────────────────────────
+# The sibling coverage `gardener.yml` earned above, applied to the fourth cron in the same change
+# that added it — this file's own header records what happens otherwise. What is DIFFERENT here and
+# worth tests of its own: this job proposes and cannot apply, so its secret surface must stay
+# strictly smaller than the gardener's, and a future edit that hands it a push credential is exactly
+# what `test_the_repair_proposer_carries_no_credential_that_could_write` is watching for.
+def test_repair_propose_workflow_exists_and_is_scheduled_with_workflow_dispatch():
+    assert REPAIR.is_file(), "repair-propose.yml is missing — the daily repair-proposal cron"
+    config = _workflow(REPAIR)
+    assert "jobs" in config
+    triggers = config.get("on") or config.get(True)
+    assert triggers["schedule"], "no cron entry under `schedule`"
+    assert "workflow_dispatch" in triggers, "no manual on-demand trigger — an operator cannot re-run it"
+
+
+def test_repair_propose_declares_read_only_contents_permission():
+    """Least privilege, and here it is not merely hygiene: this job's whole design is that it
+    proposes and cannot apply. Write permission on `contents` would be the first step towards a
+    workflow that fixes the corpus by itself, which is the thing ADR 039 exists to refuse."""
+    assert _workflow(REPAIR).get("permissions", {}).get("contents") == "read"
+
+
+def test_repair_propose_serializes_concurrent_runs_without_cancelling_an_in_flight_one():
+    """`gardener.yml`'s posture, for the same collision (schedule + a manual dispatch landing close
+    together) — and one extra consequence worth naming: two overlapping passes would re-derive the
+    same repairs and meet each other on the pending-key unique index, which is bounded but noisy."""
+    concurrency = _workflow(REPAIR).get("concurrency")
+    assert concurrency is not None, "no top-level concurrency: block"
+    assert concurrency.get("group") == "repair-propose"
+    assert concurrency.get("cancel-in-progress") is False
+
+
+def test_repair_propose_invokes_the_propose_command_and_never_an_apply():
+    """`stigmergy-repair` HAS no `apply`, and this asserts the workflow does not reach for one
+    anyway — a benign-looking `run:` line is how a scheduled job would quietly become the
+    autonomous fixer this loop is built not to be."""
+    text = REPAIR.read_text(encoding="utf-8")
+    assert "stigmergy-repair propose" in text
+    assert "stigmergy-repair apply" not in text
+
+
+def test_the_repair_proposer_carries_no_credential_that_could_write():
+    """The secret surface is strictly SMALLER than the gardener's, and that is a property of the
+    design rather than an accident of what it happened to need: the proposer reads pages and writes
+    rows in Postgres, so it needs the DSN and a model key and nothing else. No Slack token (it
+    notifies nobody) and, above all, no GitHub App credential — the apply happens in the server
+    process, behind a human, and a push credential on this job would put one in a machine's hands."""
+    text = REPAIR.read_text(encoding="utf-8")
+    assert "secrets.INDEX_DSN" in text
+    assert "secrets.OPENAI_API_KEY" in text
+    assert "SLACK_BOT_TOKEN" not in text
+    for app_credential in ("STIGMERGY_LIBRARIAN_APP_ID", "STIGMERGY_LIBRARIAN_PRIVATE_KEY",
+                           "STIGMERGY_LIBRARIAN_INSTALLATION_ID"):
+        assert app_credential not in text, (
+            f"{app_credential} reached the proposer's env — this job proposes and cannot apply")
+
+
+def test_every_cron_template_is_gated_on_the_same_crons_enabled_switch():
+    """One switch for every cron template, so an operator adopting the platform turns them on
+    together rather than discovering a fourth one later. Globbed, not listed: a fifth template
+    added without the gate is a job that starts firing on a repo that never opted in."""
+    templates = sorted(CRON_TEMPLATES.glob("*.yml"))
+    assert len(templates) == 4, f"expected four cron templates, found {[p.name for p in templates]}"
+    for path in templates:
+        assert "vars.STIGMERGY_CRONS_ENABLED == 'true'" in path.read_text(encoding="utf-8"), (
+            f"{path.name} is not gated on STIGMERGY_CRONS_ENABLED")
+
+
+# BOTH directories, and that is the point: when the crons moved out of `.github/workflows/`
 # this parametrization silently went from four cases to one — the templates kept their pinned
 # SHAs by luck, not by check, which is the same silent-coverage-loss this test's own history
 # below is about. A glob that follows the files is the fix; the suite count moving is what

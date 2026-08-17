@@ -15,6 +15,8 @@ from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.evidence import MemoryEvidenceStore
 from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.librarian import githubapp
+from stigmergy.repair import schema as repair_schema
+from stigmergy.repair import store as repair_store
 from stigmergy.server import review
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
 from stigmergy.server.settings import Settings
@@ -46,6 +48,10 @@ def connect_or_skip():
     conn = testdb.connect_or_skip("doorbell")
     capture_schema.ensure_capture_schema(conn)
     review.ensure_review_schema(conn)
+    # The third review kind's table. The doorbell reads `review.items_for_doorbell`, which is the
+    # MANAGEMENT read over ALL kinds — so this suite meets `repair_proposals` whether or not it
+    # seeds one, and a missing table would be an `UndefinedTable` in every test here.
+    repair_schema.ensure_repair_schema(conn)
     ensure_audit_table(conn)
     from stigmergy.slack.store import ensure_slack_schema
     ensure_slack_schema(conn)
@@ -61,6 +67,7 @@ def conn():
         cur.execute("DELETE FROM job_runs")
         cur.execute("DELETE FROM steward_notifications")
         cur.execute("DELETE FROM audit_log")
+        cur.execute("DELETE FROM repair_proposals")
     yield c
     c.close()
 
@@ -1012,3 +1019,72 @@ def test_a_re_parked_capture_gets_a_LIVE_card_again_not_one_the_old_decision_clo
     assert len(gw.updated) == 2
     assert (gw.updated[1].channel_id, gw.updated[1].ts) == (gw.posted[1].channel_id,
                                                             gw.posted[1].ts)
+
+
+# ── a kind with no renderer must not ring ──────────────────────────────────────────────────────
+def _propose_repair(conn, path="wiki/notes/Renewals.md") -> int:
+    ops = [{"op": "backlink", "path": path, "link": "Existing Note", "note": ""}]
+    return repair_store.insert_proposal(
+        conn, run_id=0, finding_ids=[1], target_paths=repair_schema.target_paths(ops), ops=ops,
+        rationale="neither page links the other", content_key=repair_schema.content_key(ops),
+        model_id="fake")
+
+
+def test_a_pending_repair_proposal_does_not_ring_the_doorbell(env, conn):
+    """**The kind-skip.** `repair-proposal` is in `review.items_for_doorbell`'s output — it is the
+    MANAGEMENT read over every kind, and the console and MCP both need it there — but this module
+    has no card for it: no `_EVENT_NAMES` noun, no `render.render_doorbell_*`, and no Approve/Reject
+    block that could carry a repair's ops.
+
+    Observed RED before the skip landed: `_render_for_item`'s dispatch is `if kind ==
+    KIND_PARKED_CAPTURE ... else <entity proposal>`, so an unfiltered repair proposal DID ring —
+    as an entity-proposal card, whose buttons would call `review_decide` with the wrong item kind
+    on an id belonging to another table. Silence is the correct behaviour until somebody writes the
+    card; a wrong card is worse than none.
+    """
+    _write_stewards(env, f'{{"*": ["{STEWARD}"]}}')
+    gw = FakeSlackGateway()
+    gw.seed_email(STEWARD, STEWARD_SLACK_ID)
+    ctx = make_ctx(env, conn, gateway=gw)
+    proposal_id = _propose_repair(conn)
+
+    sent = _run(poll_once(ctx))
+
+    assert sent == 0
+    assert gw.posted == []
+    assert [i["kind"] for i in review.items_for_doorbell(conn)] == [review.KIND_REPAIR_PROPOSAL], (
+        "the item is still IN the shared inbox read — the doorbell skips it, it is not hidden")
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM steward_notifications WHERE item_id = %s",
+                    (str(proposal_id),))
+        assert cur.fetchone()[0] == 0, "a skipped kind leaves no notification state behind either"
+
+
+def test_a_repair_proposal_beside_a_parked_capture_rings_only_for_the_capture(env, conn):
+    """The specificity twin: the skip must drop exactly the kind it has no renderer for, and the
+    pass must keep ringing for the ones it does. A loop that `continue`d one item too eagerly — or
+    `return`ed instead of `continue`ing — would make every capture behind a proposal silent, and
+    the bell would look alive while being inert for the item that matters."""
+    _write_stewards(env, f'{{"*": ["{STEWARD}"]}}')
+    gw = FakeSlackGateway()
+    gw.seed_email(STEWARD, STEWARD_SLACK_ID)
+    ctx = make_ctx(env, conn, gateway=gw)
+    _propose_repair(conn)
+    item_id = _park_capture(conn, MemoryEvidenceStore())
+
+    sent = _run(poll_once(ctx))
+
+    assert sent == 1
+    assert len(gw.posted) == 1
+    assert f"#{item_id}" in _block_text(gw.posted[0])
+
+
+def test_every_item_kind_the_doorbell_rings_for_has_a_renderer(env, conn):
+    """The rule stated directly, over the real constants rather than over whatever this file happens
+    to seed: `_EVENT_NAMES` IS the set of kinds that ring, and every one of them must be a kind
+    `review_kinds` declares. A kind added to `ITEM_KINDS` and not to `_EVENT_NAMES` stays silent by
+    construction — which is the intended default — and a NOUN added to `_EVENT_NAMES` for a kind
+    that does not exist is a card nothing can ever post."""
+    assert set(doorbell_module._EVENT_NAMES) <= set(review.ITEM_KINDS)
+    assert set(doorbell_module._EVENT_NAMES) == {review.KIND_PARKED_CAPTURE,
+                                                 review.KIND_ENTITY_PROPOSAL}

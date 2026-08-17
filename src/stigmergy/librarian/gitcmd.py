@@ -95,20 +95,27 @@ class BaseRef:
         return f"{self.ref}@{self.sha[:12]}"
 
 
-def base_ref(repo: str, branch: str) -> BaseRef:
+def base_ref(repo: str, branch: str, *, timeout_s: float | None = None) -> BaseRef:
     """The remote's tip when there is a remote, the local branch otherwise. Fetching first is
     correctness, not freshness: two captures filed in a row must see each other. A fetch failure is
-    not fatal — the push path handles the race."""
-    if run("remote", cwd=repo, check=False).stdout.strip():
-        fetched = run("fetch", "--quiet", "origin", branch, cwd=repo, check=False)
+    not fatal — the push path handles the race.
+
+    `timeout_s` bounds every leg, and is `None` for the worker (a lease, and all night). It is not
+    optional for a caller inside an HTTP request: `server.review.load_stewards` runs this fetch
+    inside an AUTHORIZATION check, where an unreachable remote must fail rather than stall.
+    """
+    if run("remote", cwd=repo, check=False, timeout=timeout_s).stdout.strip():
+        fetched = run("fetch", "--quiet", "origin", branch, cwd=repo, check=False,
+                      timeout=timeout_s)
         if fetched.returncode != 0:
             log.warning("git fetch failed; basing the worktree on the local %s branch", branch)
         else:
             remote = run("rev-parse", "--verify", "--quiet", f"origin/{branch}",
-                         cwd=repo, check=False)
+                         cwd=repo, check=False, timeout=timeout_s)
             if remote.returncode == 0 and remote.stdout.strip():
                 return BaseRef(remote.stdout.strip(), f"origin/{branch}", True)
-    return BaseRef(run("rev-parse", "--verify", branch, cwd=repo).stdout.strip(), branch, False)
+    return BaseRef(run("rev-parse", "--verify", branch, cwd=repo,
+                       timeout=timeout_s).stdout.strip(), branch, False)
 
 
 def base_commit(repo: str, branch: str) -> str:
@@ -409,21 +416,27 @@ PUSH_BACKOFF_CAP_S = 2.0
 
 
 def push(worktree: str, *, branch: str, remote_url: str = "", config_env: dict | None = None,
-         author_name: str = "", author_email: str = "", attempts: int = PUSH_ATTEMPTS) -> str:
+         author_name: str = "", author_email: str = "", attempts: int = PUSH_ATTEMPTS,
+         timeout_s: float | None = None) -> str:
     """Push the worktree's HEAD to `branch`, rebasing on a race. **Returns the sha that actually
     landed**: a rebase REWRITES the commit, and the pre-push sha becomes `result_ref` while naming
     an object no reachable history holds. A genuine conflict FAILS the item rather than being
     resolved — a librarian with merge judgment can silently drop a human's edit. `remote_url`
     carries no credential: the token travels in `config_env`, argv being world-readable, and the
-    retry `fetch` carries it too or fails differently from the push it retries."""
+    retry `fetch` carries it too or fails differently from the push it retries.
+
+    `timeout_s` bounds EVERY leg of the loop, not only the first push: a retry that reached an
+    unbounded fetch would be a budget with a hole in it. `None` is the worker's shape (a lease, and
+    all night); `repair.remote` passes its own, because it pushes inside an HTTP request.
+    """
     target = remote_url or "origin"
     env = dict(config_env or {})
     for attempt in range(1, attempts + 1):
         proc = run("push", target, f"HEAD:refs/heads/{branch}", cwd=worktree, check=False,
-                   env=env)
+                   env=env, timeout=timeout_s)
         if proc.returncode == 0:
             # Re-read HEAD: a rebase on an earlier iteration already moved it.
-            return run("rev-parse", "HEAD", cwd=worktree).stdout.strip()
+            return run("rev-parse", "HEAD", cwd=worktree, timeout=timeout_s).stdout.strip()
         stderr = _scrub(proc.stderr).strip()
         if attempt == attempts:
             # Distinct wording from the conflict case: an operator must not hunt for an overlap.
@@ -433,7 +446,8 @@ def push(worktree: str, *, branch: str, remote_url: str = "", config_env: dict |
         log.warning("push rejected (attempt %d/%d), rebasing and retrying", attempt, attempts)
         # A rejected push is not always a lost race: an unreachable remote fails the fetch too and
         # the submitter would be told "conflict" about a fault that is not one.
-        fetched = run("fetch", target, branch, cwd=worktree, check=False, env=env)
+        fetched = run("fetch", target, branch, cwd=worktree, check=False, env=env,
+                      timeout=timeout_s)
         if fetched.returncode != 0:
             raise GitError(
                 f"could not reach the remote to rebase onto {branch} after a rejected push — this "
@@ -441,10 +455,10 @@ def push(worktree: str, *, branch: str, remote_url: str = "", config_env: dict |
                 f"{_scrub(fetched.stderr or stderr)[:STDERR_LIMIT]}")
         # The SAME per-invocation identity `commit()` uses: a rebase needs a committer, or git
         # takes the operator's own — or refuses, which would misreport as a conflict.
-        rebase = run("rebase", "FETCH_HEAD", cwd=worktree, check=False, env=_identity_env(
-            author_name, author_email))
+        rebase = run("rebase", "FETCH_HEAD", cwd=worktree, check=False, timeout=timeout_s,
+                     env=_identity_env(author_name, author_email))
         if rebase.returncode != 0:
-            run("rebase", "--abort", cwd=worktree, check=False)
+            run("rebase", "--abort", cwd=worktree, check=False, timeout=timeout_s)
             raise GitError(
                 "the page conflicts with a change made on the branch since this item started; "
                 "the librarian does not resolve conflicts")

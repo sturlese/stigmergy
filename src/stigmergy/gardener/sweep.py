@@ -231,7 +231,10 @@ def to_finding(spec: dict, *, model_name: str) -> dict:
     return checks.build_finding(
         check=spec["check"],
         severity=MODEL_CHECK_SEVERITY.get(spec["check"], schema.SEVERITY_WARN),
-        subject=", ".join(spec["subject"]), detail=detail,
+        # The display string AND the list, from the same validated `spec["subject"]` — a sweep
+        # finding routinely names two pages, and the comma-join is a report line, never a format
+        # anything downstream should have to parse back.
+        subject=", ".join(spec["subject"]), subjects=list(spec["subject"]), detail=detail,
         suggested_action=MODEL_SUGGESTED_ACTIONS[spec["check"]],
         source=schema.SOURCE_MODEL, model_id=model_name,
     )

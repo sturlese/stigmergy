@@ -109,7 +109,10 @@ def test_the_fast_lane_and_item_kind_vocabularies_are_small_and_stated_once():
     (eleven sites said "six fast-lane types" while there were three). Pinning them here means the
     next change to either has one obvious place that turns red."""
     assert len(FAST_LANE_TYPES) == 3
-    assert len(ITEM_KINDS) == 2
+    # Three since ADR 039 added `repair-proposal`. The number moving is the POINT of this pin: it
+    # is what sends somebody to re-read the prose that states it — `docs/reference/server.md`, the
+    # two MCP tool docstrings (the client contract), and this suite's own module docstring.
+    assert len(ITEM_KINDS) == 3
 
 
 # ── the architecture diagrams ─────────────────────────────────────────────────────────────────

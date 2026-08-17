@@ -1,16 +1,19 @@
 # The admin console (`/admin`)
 
-The web operations surface over what already runs — the steward drain, the three crons, the
-gardener's findings, the digest, the index, entity situations (a governed Approve mints, ADR 030),
+The web operations surface over what already runs — the steward drain, the four crons, the
+gardener's findings, the repair proposals derived from them (a governed Approve applies one,
+ADR 039), the digest, the index, entity situations (a governed Approve mints, ADR 030),
 activity, and the worker's status — served by the SAME `app` process group that serves MCP, behind
-its own token. Design record: [ADR 029](../decisions/029-admin-console.md) and
-[ADR 030](../decisions/030-server-side-entity-minting.md); code map:
+its own token. Design record: [ADR 029](../decisions/029-admin-console.md),
+[ADR 030](../decisions/030-server-side-entity-minting.md) and
+[ADR 039](../decisions/039-governed-repair-loop.md); code map:
 [`src/stigmergy/admin/index.md`](../../src/stigmergy/admin/index.md), which carries the full route
 table.
 
 What it deliberately is NOT: a brain client. No search, no page rendering, no `ask` — the
-architecture tests enforce that boundary on the package. It reads page *paths* in two places
-(the substrate check and the gardener's findings) and page *bodies* nowhere.
+architecture tests enforce that boundary on the package. It reads page *paths* in three places
+(the substrate check, the gardener's findings and a repair proposal's target paths) and page
+*bodies* nowhere — a repair proposal included: its ops name a page and a link, never a line of it.
 
 **The one thing that boundary does not cover, said plainly:** the Activity tab renders the `ask` QUESTIONS in `audit_log`. No answer, no page, no snippet — but a question is user content, and it sits behind the console's single shared credential with a free-text actor. Read "never a read surface over the corpus" as being about pages, because that is what it is about.
 
@@ -85,15 +88,30 @@ gateway's own sentence (status code, never the token, never an echoed body) show
   row that is not parked, with the reason shown beside them. The forms repeat `--help`'s own split, field
   by field: **resolve's note and reject's reason reach the submitter VERBATIM** (so: no secret, no
   personal data), while requeue's note is for the row's own history and is never shown to them.
-- **Crons** — the three workflows, each with its schedule, its enabled state, its recent runs
+- **Crons** — the four workflows, each with its schedule, its enabled state, its recent runs
   (linking out to the Actions logs), and three buttons: Run-now, Enable, Disable.
   `retention-purge` is the only one that takes a dispatch input (`dry_run`), and it is the only
   input any dispatch will accept — an undeclared key is refused by name before the GitHub gateway
   is touched, as is an unlisted workflow file. The truth column names its source: a `job_runs`
-  row for retention and the gardener, `index_meta.built_at` for the rebuild, which writes none.
+  row for retention, the gardener and the repair proposer, `index_meta.built_at` for the rebuild,
+  which writes none.
 - **Gardener** — the latest completed run's findings, filterable by severity and by check; a
   `partial` run says the deterministic findings are complete and trustworthy and names the sweep
   failure; Run-now dispatches the workflow (real model spend, and the button says so).
+- **Repairs** — what the `repair-propose` cron made of those findings ([repair.md](./repair.md),
+  ADR 039): the pending proposals, the recently decided ones, and the proposer's own `job_runs`
+  history. The decided list is not decoration — a **rejected** row is the dismissal memory the
+  proposer skips against, so "why has the nightly run stopped proposing this" is only answerable
+  there, and a **failed** row is an apply a gate refused, kept visible with its reason rather than
+  quietly returning to the queue. A proposal's detail shows the ops table — one line per declared
+  edit, page and link — with Approve and Decline; Decline demands a non-blank reason, because the
+  reason is the whole of what stops the same repair being re-derived tomorrow. Approve runs
+  `server.review.apply_repair_and_record`, the SAME ordering MCP's review lane runs, for the reason
+  the Entities tab shares its mint sequence: it applies exactly the approved ops through the
+  librarian's own validator and its eight gates, as ONE App-authored commit with an `Approved-by:`
+  trailer. `review_decide`'s per-target-path steward check is deliberately not reached here, exactly
+  as the Entities tab does not reach its own steward check — that guard is for a resolved identity,
+  and the console's authorization IS the token.
 - **Digest** — the configured-pieces checklist, Preview (the byte-identical dry-run body), Post
   now (names the duplicate-window risk before it posts). Still command-only: no schedule exists.
 - **Index** — built_at + pages per zone + webhook upsert health; Substrate check in-process;
@@ -148,10 +166,10 @@ not. That row is attribution, not authorization: the actor name is recorded and 
 exactly like `--by` on the steward CLIs. If the bookkeeping write itself fails it is logged
 loudly and the work still lands; bookkeeping must never fail the work it records.
 
-**The two Entities verdicts are the mutations that write a SECOND row.** Approve does, and so does
-Reject — the Entities tab routes its Reject through the ordinary queue rejection rather than
-growing a button of its own, and that path checks whether the row is an entity situation and
-records the decision when it is. Without that, "who decided this identity" answered from one table
+**Four mutations write a SECOND row: the two Entities verdicts and the two Repairs verdicts.**
+On Entities, Approve does and so does Reject — the Entities tab routes its Reject through the
+ordinary queue rejection rather than growing a button of its own, and that path checks whether the
+row is an entity situation and records the decision when it is. Without that, "who decided this identity" answered from one table
 for approve and a different one for reject, on the one door that has both. Alongside their
 `admin_actions` row both record into `review_decisions` — the same append-only governance ledger
 MCP's `review_decide` and Slack's mint modal write into — so "who approved this identity" answers
@@ -163,6 +181,16 @@ wrote a row is on the row itself: `extra->>'source'` is one of `mcp`/`slack`/`ad
 on every write. The `review_decisions` write and
 the git push it follows happen inside the SAME `_mutate`-wrapped attempt as the `admin_actions`
 row, not before it: a refusal anywhere in the mint leaves neither ledger touched.
+
+Repairs writes into that same ledger through the same shared functions the review lane runs —
+`server.review.apply_repair_and_record` and `reject_repair_and_record`, an approve's row carrying
+the commit sha and the edited paths in `extra` — so "who approved this edit to the corpus" answers
+from the table "who approved this identity" already answers from, whichever of the two doors made
+the decision. One asymmetry is deliberate there: a gate refusing the apply leaves the proposal
+`failed` carrying the sentence that refused it and writes no `review_decisions` row at all — the
+`admin_actions` row for the attempt is there already, with the refusing class name on it — because
+a governance ledger claiming a decision whose commit never landed is worse than a missing one, and
+a silent revert to pending would hide that a gate spoke.
 
 Three POSTs write no such row, because none of them mutates anything:
 

@@ -76,18 +76,25 @@ Tell the operator what to do; read the outcome from the database and the logs.
 
 Overview (parked / queue depth / in-flight / cron truth / index freshness) · Queue (the drain
 lives in each row's **detail card**, not in the list; Reclaim and Retention purge are the
-list-level buttons) · Crons (Run-now, Enable, Disable for the three workflows — needs the
-fine-grained PAT) · Gardener · Digest (Preview is byte-identical to the post) · Index (the
+list-level buttons) · Crons (Run-now, Enable, Disable for the four workflows — needs the
+fine-grained PAT) · Gardener · Repairs (pending proposals, recently decided ones, and the
+proposer's own run history) · Digest (Preview is byte-identical to the post) · Index (the
 substrate check runs in-process) · Entities (read-only: it renders the mint command) ·
 Activity · Worker.
 
-Two things worth proving here specifically:
+Three things worth proving here specifically:
 
 - **Retention purge** runs its dry run for you and shows the result inside the confirmation —
   there is no separate checkbox, and you cannot purge without having seen what would go.
 - **Run-now on `index-rebuild`** must move the Index tab's `built_at`. That column is the only
   truth for that workflow: it writes no `job_runs` row, and a cron skipped for an unset
   `STIGMERGY_KNOWLEDGE_REPO` variable is *green* in Actions.
+- **Approve on Repairs commits to the knowledge repo**, so read the detail card's ops table before
+  clicking it: the evidence is the commit named in the response, carrying an `Approved-by:` trailer
+  and nothing in its diff but the ops you just read. Decline a different one — its reason is the
+  dismissal memory, so the evidence is a `rejected` row the next `repair-propose` run leaves alone.
+  With nothing pending (`stigmergy-repair list` against the staging DSN settles it), report an
+  empty tab as an empty tab: it proves the route serves, never that a repair applies.
 
 ## Block 5 — identity and ACL
 

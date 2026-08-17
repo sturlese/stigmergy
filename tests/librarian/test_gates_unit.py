@@ -39,6 +39,7 @@ from stigmergy.librarian import gates, gitcmd
 from stigmergy.librarian import page as page_policy
 from stigmergy.librarian import processing as processing_module
 from stigmergy.librarian import report as report_module
+from stigmergy.librarian.errors import LibrarianConfigError
 from tests import adversarial_payloads as payloads
 
 _COMMIT_ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.test",
@@ -1682,8 +1683,79 @@ def test_the_contract_linter_never_inherits_the_app_key_or_the_queue_dsn(tmp_pat
     assert "PATH" in seen
 
 
+# ── the subprocess budget: a gate must not be able to pin an HTTP worker ────────────────────────
+# `repair.remote.apply_via_clone` runs these gates INSIDE the MCP server process, on the thread a
+# steward's Approve arrived on. The worker has all night; a request does not, and the difference is
+# a fact about the CALLER, so it is told to the context rather than inferred here.
+def _executable(path, script: str) -> str:
+    path.write_text(script, encoding="utf-8")
+    os.chmod(path, 0o755)
+    return str(path)
+
+
+def test_a_linter_that_never_returns_is_a_config_veto_rather_than_a_stalled_request(tmp_path):
+    """Red before the fix: `GateContext` carried no subprocess budget and `gate_contract` passed
+    none, so a contract linter that hung held its caller forever — and that caller may be an HTTP
+    worker applying an approved repair.
+
+    A REAL slow linter and a real `subprocess.run`: a mocked one would prove the argument was
+    passed and nothing about what happens when the budget elapses."""
+    linter = tmp_path / "linter.py"
+    linter.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", "wiki/notes/New.md", new_mode="100644")],
+               linter_path=str(linter), subprocess_timeout_s=0.5)
+
+    with pytest.raises(LibrarianConfigError, match="budget"):
+        gates.gate_contract(ctx)
+
+
+def test_a_linter_that_answers_inside_its_budget_is_judged_exactly_as_before(tmp_path):
+    """The benign twin. A budget that bounced an ordinary linter run would veto every capture on a
+    busy machine, and the veto would read as a contract failure the author cannot fix."""
+    ctx = _stub_linter(tmp_path, check=gates.DEAD_LINKS_CHECK,
+                       message="dead link [[Nowhere]] in wiki/notes/New.md",
+                       subprocess_timeout_s=30)
+
+    findings = gates.gate_contract(ctx)
+
+    assert [f.code for f in findings] == [gates.DEAD_LINKS_CHECK]
+
+
+@pytest.mark.usefixtures("require_gitleaks")
+def test_a_secret_scanner_that_never_returns_is_a_config_veto_too(tmp_path):
+    """The same budget, threaded down the other subprocess a gate runs. gitleaks is handed a
+    directory of copied pages, and a scanner that stalls on one stalls the whole request.
+
+    A real executable that sleeps stands in for the scanner: `gitleaks_bin` is a path the operator
+    supplies, so this is the honest shape of a scanner that does not come back."""
+    scanner = _executable(tmp_path / "slow-gitleaks", "#!/bin/sh\nsleep 30\n")
+    page = tmp_path / "wiki" / "notes" / "New.md"
+    page.parent.mkdir(parents=True)
+    page.write_text("# New\n", encoding="utf-8")
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", "wiki/notes/New.md", new_mode="100644")],
+               gitleaks_bin=scanner, subprocess_timeout_s=0.5)
+
+    with pytest.raises(LibrarianConfigError, match="budget"):
+        gates.gate_secrets(ctx)
+
+
+@pytest.mark.usefixtures("require_gitleaks")
+def test_a_real_scanner_under_a_generous_budget_still_finds_what_it_always_found(tmp_path):
+    """The benign twin for the scanner half: a budget must not be a way to turn the secrets gate
+    off, and a gate that stopped finding secrets under a timeout would look identical to a clean
+    page."""
+    page = tmp_path / "wiki" / "notes" / "leak.md"
+    page.parent.mkdir(parents=True)
+    page.write_text(f"key: {payloads.GITHUB_PAT}\n", encoding="utf-8")
+
+    findings = gates.scan_worktree_files(str(tmp_path), ["wiki/notes/leak.md"],
+                                         gitleaks_bin="gitleaks", timeout_s=60)
+
+    assert [f.code for f in findings] == ["secret"]
+
+
 # ── gate_contract: only FRONTMATTER_CHECK earns a brief on top of its message ───────────────────
-def _stub_linter(tmp_path, *, check: str, message: str):
+def _stub_linter(tmp_path, *, check: str, message: str, **over):
     """A stand-in for `.claude/tools/stigmergy_lint.py` that reports exactly one finding on
     `wiki/notes/New.md`, in the linter's own JSON report shape — the same real-subprocess pattern
     `test_the_contract_linter_never_inherits_the_app_key_or_the_queue_dsn` uses above, because
@@ -1701,7 +1773,7 @@ def _stub_linter(tmp_path, *, check: str, message: str):
                              entries=[gitcmd.DiffEntry("A", "wiki/notes/New.md",
                                                        new_mode="100644")],
                              added=[], material="", outcome=None, registry=None,
-                             linter_path=str(linter))
+                             linter_path=str(linter), **over)
 
 
 def test_a_frontmatter_check_finding_carries_the_facts_line_in_its_brief(tmp_path):

@@ -56,11 +56,22 @@ CREATE TABLE IF NOT EXISTS gardener_findings (
 _GARDENER_FINDINGS_MODEL_ID_COLUMN = (
     "ALTER TABLE gardener_findings ADD COLUMN IF NOT EXISTS model_id TEXT NOT NULL DEFAULT ''"
 )
+# `subject` is the DISPLAY string — a report line, comma-joined when a finding names several
+# pages. `subjects` is the same fact as DATA, so a consumer that has to act on the pages (the
+# repair proposer) reads a list instead of re-splitting prose that was never a parseable format.
+# Added the same additive way as `model_id`: the `'[]'` default fills every pre-existing row, so
+# no backfill is needed and a finding filed before this column existed reads as "names no page",
+# which is exactly what its `subject` could be recovered as anyway.
+_GARDENER_FINDINGS_SUBJECTS_COLUMN = (
+    "ALTER TABLE gardener_findings ADD COLUMN IF NOT EXISTS subjects JSONB NOT NULL "
+    "DEFAULT '[]'::jsonb"
+)
 _GARDENER_FINDINGS_RUN_INDEX = (
     "CREATE INDEX IF NOT EXISTS gardener_findings_run_idx ON gardener_findings (run_id)"
 )
 
-_ALL_DDL = (_GARDENER_FINDINGS_DDL, _GARDENER_FINDINGS_MODEL_ID_COLUMN, _GARDENER_FINDINGS_RUN_INDEX)
+_ALL_DDL = (_GARDENER_FINDINGS_DDL, _GARDENER_FINDINGS_MODEL_ID_COLUMN,
+            _GARDENER_FINDINGS_SUBJECTS_COLUMN, _GARDENER_FINDINGS_RUN_INDEX)
 
 
 def ensure_gardener_schema(conn) -> None:

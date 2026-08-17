@@ -191,10 +191,13 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
 
     @mcp.tool()
     def review_queue(limit: int = 50) -> str:
-        """The steward's unified inbox: entity proposals and parked captures — one
-        list, ACL-scoped to you, disjoint item kinds (an entity-situation row appears once, as
+        """The steward's unified inbox: entity proposals, parked captures and repair proposals —
+        one list, ACL-scoped to you, disjoint item kinds (an entity-situation row appears once, as
         `entity-proposal`, never also as `parked-capture`). Each item names what parked, since
-        when, and — if one already exists — the latest decision recorded on it."""
+        when, and — if one already exists — the latest decision recorded on it. A
+        `repair-proposal` has no submitter and names the pages it would edit, so it is listed only
+        for an unrestricted identity; it carries its rationale, its `target_paths` and a count of
+        its ops, never the ops themselves."""
         try:
             return json.dumps(service.review_queue(limit=limit), **_DUMP)
         except (CaptureError, RateLimitError) as ex:
@@ -208,15 +211,23 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
                       aliases: str | list | None = None, role: str = "",
                       requeue: bool = False) -> str:
         """Record your decision on one `review_queue` item, attributed to you.
-        `item_kind` is one of entity-proposal/parked-capture.
+        `item_kind` is one of entity-proposal/parked-capture/repair-proposal.
         `verdict` is `approve`/`reject` for `entity-proposal` — there is nothing to request
-        changes to: either the name resolves to an identity worth minting or it does not;
+        changes to: either the name resolves to an identity worth minting or it does not — and
+        `approve`/`reject` for `repair-proposal`, for the same reason from the other side: a
+        proposal IS its edits, so a different set of edits is a different proposal;
         `parked-capture` takes
         `requeue`/`resolve`/`reject` instead (the same three verbs `stigmergy-queue` already uses —
         there is no honest `approve` equivalent of a `resolve` that requires a note).
 
+        Approving a `repair-proposal` applies exactly the edits it lists as ONE App-authored commit,
+        through the librarian's own validator and its eight gates, and needs nothing but the id —
+        the proposal already is the change. It requires you to be a steward for EVERY page it would
+        edit, and `reject` requires a reason, which is what stops the nightly proposer asking the
+        same question again.
+
         `reject` and every `parked-capture` verdict never touch git. Approving an `entity-proposal`
-        is the one exception: it makes exactly ONE commit through the governed door — the same
+        is the other exception: it makes exactly ONE commit through the governed door — the same
         discipline `stigmergy-entities approve` runs (resolve-before-mint, drift refusal, a secrets
         scan, never a force-push) — committed as the librarian App with an `Approved-by: you`
         trailer. That verdict needs `name` (the entity's page title) and `entity_type` (one of

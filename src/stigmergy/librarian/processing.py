@@ -782,7 +782,7 @@ def _commit_and_push(conn, item, deps, ctx, worktree, message, *, what: str) -> 
 
     remote_url, config_env = "", {}
     if githubapp.configured():
-        slug = _repo_slug(deps.repo)
+        slug = githubapp.repo_slug(deps.repo)
         remote_url = githubapp.push_url(slug)
         # Minted as late as possible and handed over in the ENVIRONMENT, never in argv.
         config_env = githubapp.push_config(githubapp.installation_token(), slug)
@@ -823,12 +823,6 @@ def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
                      findings=notes,
                      source_pages=list(source_pages)),
         findings=notes)
-
-
-def _repo_slug(repo: str) -> str:
-    url = gitcmd.origin_url(repo)
-    slug = url.rsplit(":", 1)[-1] if url.startswith("git@") else url.split("github.com/")[-1]
-    return slug.removesuffix(".git")
 
 
 def _route_refusal(item, findings, outcome, *, anchoring_park, agent_attempts: int = 0,

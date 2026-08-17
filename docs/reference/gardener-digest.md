@@ -36,6 +36,15 @@ inbox (`review_queue`/`review_decide`), an entity-registry edit, `stigmergy-view
 ordinary correction filed through the 🧠 gesture — is still how anything a finding names actually
 gets fixed.
 
+**A finding now has one more road to zero, and it starts in a different package.**
+`stigmergy-repair propose` reads the latest completed gardener run and, for the three findings a
+link or a callout can answer (`model-unlinked-mention`, `model-contradiction`, `orphan-page`), has
+a model draft a concrete strictly-additive edit that a steward approves ONE at a time — over MCP or
+in the console's Repairs tab — before any code applies it. None of that reaches back here: this
+package still detects and fixes nothing, and it neither imports nor calls the one that proposes.
+The narrative is [repair.md](./repair.md), decided in
+[ADR 039](../decisions/039-governed-repair-loop.md).
+
 ## The eight deterministic checks
 
 `checks.ALL_CHECK_SLUGS` is the list, and the report prints `len()` of it rather than a
@@ -162,7 +171,10 @@ itself (severity tag, slug, subject, the specific numbers that make it self-expl
 one genuinely exists (`stale-view` only, with the backticks baked into the stored value so the
 report and `--json` carry the identical string), a plain sentence otherwise. Nothing here is a
 repair tool; the preamble says so once, up front, rather than leaving a reader to discover it
-finding by finding. `--json` emits one object per finding with the same fields plus
+finding by finding. `stigmergy-repair propose` reading these same findings afterwards does not
+soften that: an `action:` line still names what to go look at, and what the proposer produces is a
+question for a steward, never a fix this report performed. `--json` emits one object per finding
+with the same fields plus
 `id`/`run_id`/`created_at`/`model_id`, `suggested_action` always populated (never `null` for a
 sentence-only check — an absent field would read as "nothing to do," which is false).
 
@@ -246,7 +258,7 @@ returned string. A zero-activity window still renders every section, with its ow
 line — "silence is not an outcome" applies here exactly as it does to the gardener's own severity
 sections.
 
-## How the two commands relate to each other, and to the cron
+## How the two commands relate to each other, and to the crons
 
 `stigmergy-gardener` and `stigmergy-digest` are independent, fully-runnable operator commands.
 **The digest is command-only: no cron at all.** A schedule buys nothing it does not already have —
@@ -264,6 +276,13 @@ and posting the SLA notice (today, never — see above) in the same run. The who
 behind it skips cleanly instead of failing a scheduled run every night. A `concurrency` group
 queues a second run rather than cancelling one in flight: cancelling mid-write would discard real,
 already-computed work.
+
+A fourth workflow sits an hour behind this one, `repair-propose.yml` at ~06:07 UTC, and the offset
+is the whole of the coupling: `stigmergy-repair propose` reads the latest COMPLETED gardener run,
+so it wants this morning's findings rather than yesterday's. It belongs to `stigmergy.repair`, runs
+under the same `STIGMERGY_CRONS_ENABLED` gate and the same queue-don't-cancel `concurrency` rule,
+and needs neither a Slack token nor a write credential — a pass that finds no completed run, or
+nothing proposable in one, proposes nothing and exits 0.
 
 ## Findings-only, provably
 

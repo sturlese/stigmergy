@@ -346,10 +346,15 @@ def no_real_github_app(monkeypatch):
 
 def review_connect_or_skip():
     from stigmergy.capture import schema as capture_schema
+    from stigmergy.repair import schema as repair_schema
     from stigmergy.server import review
     conn = testdb.connect_or_skip("review")
     capture_schema.ensure_capture_schema(conn)
     review.ensure_review_schema(conn)
+    # The third kind's own table. Ensured HERE rather than per test module for the reason the other
+    # two are: the review lane reads all three in one query path, and a fixture that sets up only
+    # the tables its own file happens to touch turns a missing kind into `UndefinedTable`.
+    repair_schema.ensure_repair_schema(conn)
     return conn
 
 
@@ -359,6 +364,7 @@ def conn():
     with c.cursor() as cur:
         cur.execute("DELETE FROM capture_queue")
         cur.execute("DELETE FROM review_decisions")
+        cur.execute("DELETE FROM repair_proposals")
     yield c
     c.close()
 

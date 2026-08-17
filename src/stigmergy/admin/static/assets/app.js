@@ -5,7 +5,8 @@ import { api, clearToken, onUnauthorized, storedToken, storeToken } from "./api.
 import { banner, clear, el, icon, toast } from "./ui.js";
 import {
   activityView, cronsView, digestView, entitiesView, entityDetailView, gardenerView,
-  indexView, overviewView, queueDetailView, queueView, setMeta, workerView,
+  indexView, overviewView, queueDetailView, queueView, repairDetailView, repairsView, setMeta,
+  workerView,
 } from "./views.js";
 
 const ROUTES = [
@@ -13,6 +14,8 @@ const ROUTES = [
   { hash: "queue", label: "Queue", icon: "queue", render: queueView },
   { hash: "crons", label: "Crons", icon: "crons", render: cronsView },
   { hash: "gardener", label: "Gardener", icon: "gardener", render: gardenerView },
+  // Beside the gardener, deliberately: the findings are read on one tab and answered on the next.
+  { hash: "repairs", label: "Repairs", icon: "repairs", render: repairsView },
   { hash: "digest", label: "Digest", icon: "digest", render: digestView },
   { hash: "index", label: "Index", icon: "index", render: indexView },
   { hash: "entities", label: "Entities", icon: "entities", render: entitiesView },
@@ -23,6 +26,7 @@ const ROUTES = [
 const DETAIL_ROUTES = [
   { pattern: /^queue\/(\d+)$/, parent: "queue", render: queueDetailView },
   { pattern: /^entities\/(\d+)$/, parent: "entities", render: entityDetailView },
+  { pattern: /^repairs\/(\d+)$/, parent: "repairs", render: repairDetailView },
 ];
 
 const app = document.getElementById("app");

@@ -26,7 +26,7 @@ DEPLOY_DIR="$HERE/deploy"
 # ONE list, `name:empty-default`, and that is the point of it: the set this script CLEARS on the
 # way in and the set it RESTORES on the way out have to be the same set. They were not. The script
 # used to clear by deleting the whole directory, while the trap only ever knew these four files —
-# so when `deploy/workflows/` arrived beside them (three cron templates and a README, all
+# so when `deploy/workflows/` arrived beside them (four cron templates and a README, all
 # tracked), one `make deploy-staging` deleted them from the working tree and nothing here could
 # put them back. Blast radius larger than the repair, silently, for as long as it took someone to
 # run a deploy and read `git status`. Derived from one list, the two cannot drift apart again.

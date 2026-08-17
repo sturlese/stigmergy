@@ -8,6 +8,14 @@ else (lifespan included) flows to the inner app untouched.
 
 Gate order on the admin side: foreign `Host` -> 421, `/admin/api/*` without the admin bearer
 token -> generic 401, security headers on every response, static assets included.
+
+**The two Approve handlers run their service call in a worker thread** (`run_in_threadpool`), and
+they are the only ones that do. Both reach code that clones the knowledge repo, runs the eight
+gates — `git` and `gitleaks` subprocesses — and pushes: seconds of blocking work, on the event loop
+of a process that is also serving the MCP tools. The rejects stay inline because each is one
+statement. `AdminService`'s "no cursor across an `await`" invariant is untouched: the whole
+synchronous call happens inside the one thread, and the connection is the same autocommit one
+`slack.review` already reaches through `asyncio.to_thread`.
 """
 import json
 import logging
@@ -15,6 +23,7 @@ import os
 import pathlib
 
 from starlette.applications import Starlette
+from starlette.concurrency import run_in_threadpool
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
@@ -30,6 +39,7 @@ from stigmergy.admin.service import (
 )
 from stigmergy.admin.settings import AdminSettings
 from stigmergy.gardener.schema import ensure_gardener_schema
+from stigmergy.repair.schema import ensure_repair_schema
 from stigmergy.server import review
 
 log = logging.getLogger(__name__)
@@ -63,6 +73,7 @@ def compose(inner, *, conn, server_settings, admin_settings: AdminSettings | Non
     # ran in `build_http_app`.
     ensure_admin_schema(conn)
     ensure_gardener_schema(conn)
+    ensure_repair_schema(conn)
     review.ensure_review_schema(conn)
 
     if gateway is None and settings.github_configured():
@@ -316,10 +327,39 @@ def _build_admin_app(service: AdminService) -> Starlette:
         requeue = data.get("requeue", True)
         if not isinstance(requeue, bool):
             raise AdminBadRequest("'requeue' must be a boolean")
-        return service.entity_approve(
+        return await run_in_threadpool(
+            service.entity_approve,
             request.path_params["id"], actor=_str(data, "actor"), name=_str(data, "name"),
             entity_type=_str(data, "entity_type"), entity_id=_str(data, "entity_id"),
             aliases=_str(data, "aliases"), role=_str(data, "role"), requeue=requeue)
+
+    @_json_endpoint
+    async def repairs_list(_request):
+        return service.repairs_list()
+
+    @_json_endpoint
+    async def repairs_show(request):
+        return service.repair_show(request.path_params["id"])
+
+    @_json_endpoint
+    async def repairs_approve(request):
+        data = await _body(request)
+        return await run_in_threadpool(service.repair_approve, request.path_params["id"],
+                                       actor=_str(data, "actor"))
+
+    @_json_endpoint
+    async def repairs_reject(request):
+        data = await _body(request)
+        reason = _str(data, "reason")
+        if not reason.strip():
+            # The same shape `queue_reject` holds, and a stronger reason for it: a rejected row is
+            # the dismissal memory the proposer skips against, so a reason-less decline is a
+            # permanent "somebody said no" with nothing about why.
+            raise AdminBadRequest("'reason' is required — a rejected proposal is what stops the "
+                                  "proposer suggesting this repair again, and the reason is all a "
+                                  "later steward will have")
+        return service.repair_reject(request.path_params["id"], actor=_str(data, "actor"),
+                                     reason=reason)
 
     @_json_endpoint
     async def activity(_request):
@@ -376,6 +416,10 @@ def _build_admin_app(service: AdminService) -> Starlette:
         Route(API_PREFIX + "entities", entities_list, methods=["GET"]),
         Route(API_PREFIX + "entities/{id:int}", entities_show, methods=["GET"]),
         Route(API_PREFIX + "entities/{id:int}/approve", entities_approve, methods=["POST"]),
+        Route(API_PREFIX + "repairs", repairs_list, methods=["GET"]),
+        Route(API_PREFIX + "repairs/{id:int}", repairs_show, methods=["GET"]),
+        Route(API_PREFIX + "repairs/{id:int}/approve", repairs_approve, methods=["POST"]),
+        Route(API_PREFIX + "repairs/{id:int}/reject", repairs_reject, methods=["POST"]),
         Route(API_PREFIX + "activity", activity, methods=["GET"]),
         Route(API_PREFIX + "worker", worker, methods=["GET"]),
         Route(API_PREFIX + "crons", crons, methods=["GET"]),

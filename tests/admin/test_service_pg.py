@@ -23,8 +23,18 @@ from stigmergy.gardener.schema import ensure_gardener_schema
 from stigmergy.gardener.store import insert_findings
 from stigmergy.librarian import config as librarian_config
 from stigmergy.librarian import gitcmd
+from stigmergy.repair import remote as repair_remote
+from stigmergy.repair import schema as repair_schema
+from stigmergy.repair import store as repair_store
+from stigmergy.repair.errors import RepairError
+from stigmergy.server import review as server_review
 from stigmergy.server.settings import Settings
-from tests.admin.conftest import park, submit_one, unresolved_entity_report
+from tests.admin.conftest import (
+    park,
+    propose_repair,
+    submit_one,
+    unresolved_entity_report,
+)
 
 
 @pytest.fixture()
@@ -1010,9 +1020,9 @@ def test_the_console_schedule_table_matches_the_workflow_files():
 
     import yaml
 
-    # The three cron files are TEMPLATES an operator copies into their knowledge repo, so they
+    # The cron files are TEMPLATES an operator copies into their knowledge repo, so they
     # live outside `.github/workflows/` (a file there is registered by GitHub whether enabled or
-    # not, and three "Disabled" rows on a public Actions tab read as a broken project). The
+    # not, and a column of "Disabled" rows on a public Actions tab reads as a broken project). The
     # console still dispatches them by the same file NAME, in whichever repo they were copied to.
     workflows_dir = pathlib.Path(__file__).resolve().parents[2] / "deploy" / "workflows"
     for row in CRON_WORKFLOWS:
@@ -1054,3 +1064,169 @@ def test_a_malformed_agent_budget_leaves_the_console_serving_its_own_boot_call(
         librarian_config.DEFAULT_VISIBILITY_TIMEOUT_S)
     assert service.worker_status()["visibility_timeout_s"] == (
         librarian_config.DEFAULT_VISIBILITY_TIMEOUT_S)
+
+
+# ── repairs: read, approve, decline (ADR 039) ─────────────────────────────────────────────────
+# The console is the SECOND door onto the same governed apply the review lane drives. What these
+# pin is the half that is this package's own — the `admin_actions` bookkeeping, the error mapping,
+# the sanitizing — while the ordering itself belongs to `server.review.apply_repair_and_record`
+# and is proven there against real state.
+FAKE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+
+def _apply_records(monkeypatch, paths=("wiki/notes/Renewals.md",)):
+    """`apply_via_clone` replaced by a recorder, patched as a MODULE ATTRIBUTE — the seam
+    `repair.remote.apply_approved` keeps by calling it under that name. Everything around it
+    (`mark_decided`, `mark_applied`, the ledger row) is the real thing."""
+    calls = []
+
+    def fake(repo_url, branch, credential, *, proposal, approved_by, on_output=None):
+        calls.append({"repo_url": repo_url, "approved_by": approved_by, "proposal": proposal})
+        return {"commit": FAKE_COMMIT, "paths": list(paths)}
+
+    monkeypatch.setattr(repair_remote, "apply_via_clone", fake)
+    return calls
+
+
+@pytest.fixture()
+def repair_service(conn, admin_settings):
+    """`AdminService` with a knowledge-repo URL configured. The URL is never dialled in these
+    tests — `apply_via_clone` is the recorder above — but it has to be non-empty, because the
+    shared sequence refuses an unconfigured deployment BEFORE the proposal moves out of pending."""
+    return AdminService(conn, server_settings=Settings(librarian_repo_url="/tmp/not-dialled.git"),
+                        admin_settings=admin_settings)
+
+
+def test_repairs_list_carries_the_pending_and_the_decided_halves(conn, service, monkeypatch):
+    """Both halves, and the second is not decoration: a rejected row is the dismissal memory the
+    proposer skips against, so "why does the nightly run not propose this any more" is only
+    answerable from the decided list."""
+    pending_id = propose_repair(conn, path="wiki/notes/Renewals.md")
+    declined_id = propose_repair(conn, path="wiki/decisions/Refunds.md")
+    assert repair_store.mark_decided(conn, declined_id, status=repair_schema.STATUS_REJECTED,
+                                     decided_by="steward@example.com", notes="already linked")
+
+    listed = service.repairs_list()
+
+    assert [row["id"] for row in listed["pending"]] == [pending_id]
+    assert listed["pending"][0]["target_paths"] == ["wiki/notes/Renewals.md"]
+    assert listed["pending"][0]["ops"][0]["op"] == "backlink"
+    decided = listed["recent"][0]
+    assert (decided["id"], decided["status"], decided["notes"]) == (
+        declined_id, repair_schema.STATUS_REJECTED, "already linked")
+    assert isinstance(decided["decided_at"], str), "datetimes cross the wire as ISO strings"
+
+
+def test_repair_show_sanitizes_every_untrusted_string_and_404s_on_nothing(conn, service):
+    """A rationale and a note were written by a model that had just read pages somebody else wrote,
+    and a path is a filename somebody chose. Control characters die at the server; HTML inertness
+    is the client's half.
+
+    `\\x07`/`\\x1b`, not `\\x00`: Postgres refuses a NUL in a text column outright, so the byte this
+    console has to strip is the one that CAN be stored — an escape sequence a terminal would act on
+    and a browser would render as nothing."""
+    proposal_id = propose_repair(conn, kind="overlap", note="covers the same\x07 ground",
+                                 rationale="the two pages\x1b[2J overlap")
+
+    row = service.repair_show(proposal_id)
+
+    assert row["rationale"] == "the two pages[2J overlap"
+    assert row["ops"][0]["note"] == "covers the same ground"
+    with pytest.raises(AdminNotFound):
+        service.repair_show(999_999)
+
+
+def test_repair_approve_applies_and_records_both_ledgers(conn, repair_service, monkeypatch):
+    """The console's own half: an `admin_actions` row naming this door, and — through the shared
+    sequence — the `review_decisions` row that answers "who approved this change to the corpus"
+    identically whichever door was used."""
+    calls = _apply_records(monkeypatch)
+    proposal_id = propose_repair(conn)
+
+    result = repair_service.repair_approve(proposal_id, actor="steward@example.com")
+
+    assert result == {"applied": True, "commit": FAKE_COMMIT,
+                      "paths": ["wiki/notes/Renewals.md"]}
+    assert [c["approved_by"] for c in calls] == ["steward@example.com"]
+    row = repair_store.proposal(conn, proposal_id)
+    assert (row["status"], row["applied_commit"]) == (repair_schema.STATUS_APPLIED, FAKE_COMMIT)
+    decision = server_review.latest_decisions(conn)[
+        (server_review.KIND_REPAIR_PROPOSAL, str(proposal_id))]
+    assert (decision["verdict"], decision["source"]) == ("approve", server_review.SOURCE_ADMIN)
+    recorded = _actions(conn)[0]
+    assert (recorded["actor"], recorded["action"], recorded["outcome"]) == (
+        "steward@example.com", "repairs.approve", "ok")
+
+
+def test_repair_approve_maps_a_refusal_to_AdminRefused_after_recording_the_real_class(
+        conn, repair_service, monkeypatch):
+    """The mapping order `entity_approve` established: `_mutate` sees the LIBRARY's exception and
+    records its class name, and only then does the caller get `AdminRefused` with the library's own
+    sentence. Renaming it inside `_do` would rename what the row already captured."""
+    def refuse(*_a, **_k):
+        raise RepairError("the gates refused this repair, so nothing was committed or pushed")
+
+    monkeypatch.setattr(repair_remote, "apply_via_clone", refuse)
+    proposal_id = propose_repair(conn)
+
+    with pytest.raises(AdminRefused, match="the gates refused this repair"):
+        repair_service.repair_approve(proposal_id, actor="steward@example.com")
+
+    assert _actions(conn)[0]["error_class"] == "RepairError"
+    row = repair_store.proposal(conn, proposal_id)
+    assert row["status"] == repair_schema.STATUS_FAILED, "a failed apply stays visible as failed"
+    assert "the gates refused" in row["error"]
+
+
+def test_repair_approve_without_a_configured_repo_refuses_before_the_proposal_moves(
+        conn, service, monkeypatch):
+    """The plain `service` fixture has no `librarian_repo_url`. The refusal is a `ReviewError`, so
+    `_mutate`'s own `CaptureError` branch maps it — and the proposal is untouched, because the
+    check runs before `mark_decided`."""
+    def never(*_a, **_k):
+        raise AssertionError("apply_via_clone ran on a deployment with no knowledge-repo URL")
+
+    monkeypatch.setattr(repair_remote, "apply_via_clone", never)
+    proposal_id = propose_repair(conn)
+
+    with pytest.raises(AdminRefused, match="STIGMERGY_LIBRARIAN_REPO_URL"):
+        service.repair_approve(proposal_id, actor="steward@example.com")
+
+    assert repair_store.proposal(conn, proposal_id)["status"] == repair_schema.STATUS_PENDING
+
+
+def test_repair_reject_records_the_dismissal_on_the_row_and_in_the_ledger(conn, service):
+    proposal_id = propose_repair(conn)
+
+    assert service.repair_reject(proposal_id, actor="steward@example.com",
+                                 reason="the two pages describe different quarters")
+
+    row = repair_store.proposal(conn, proposal_id)
+    assert (row["status"], row["decided_by"]) == (repair_schema.STATUS_REJECTED,
+                                                  "steward@example.com")
+    assert row["notes"] == "the two pages describe different quarters"
+    assert row["content_key"] in repair_store.known_content_keys(conn)
+    decision = server_review.latest_decisions(conn)[
+        (server_review.KIND_REPAIR_PROPOSAL, str(proposal_id))]
+    assert (decision["verdict"], decision["source"]) == ("reject", server_review.SOURCE_ADMIN)
+    assert _actions(conn)[0]["action"] == "repairs.reject"
+
+
+def test_deciding_a_proposal_twice_is_refused_and_the_first_decision_stands(conn, service):
+    """`mark_decided`'s conditional UPDATE, seen from this door: the second decline loses and is
+    told so, rather than overwriting the reason the first steward gave."""
+    proposal_id = propose_repair(conn)
+    service.repair_reject(proposal_id, actor="first@example.com", reason="already linked")
+
+    with pytest.raises(AdminRefused, match="no longer pending"):
+        service.repair_reject(proposal_id, actor="second@example.com", reason="disagree")
+
+    assert repair_store.proposal(conn, proposal_id)["decided_by"] == "first@example.com"
+
+
+def test_repair_approve_and_reject_404_on_a_proposal_that_does_not_exist(conn, repair_service):
+    for call in (lambda: repair_service.repair_approve(999_999, actor="x"),
+                 lambda: repair_service.repair_reject(999_999, actor="x", reason="no")):
+        with pytest.raises(AdminNotFound):
+            call()
+    assert _actions(conn) == [], "a 404 is not an attempted mutation — no admin_actions row"

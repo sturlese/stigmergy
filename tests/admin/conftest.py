@@ -24,6 +24,8 @@ from stigmergy.capture.evidence import MemoryEvidenceStore
 from stigmergy.gardener.schema import ensure_gardener_schema
 from stigmergy.index import store as index_store
 from stigmergy.index.backends.embedder import build_embedder
+from stigmergy.repair import schema as repair_schema
+from stigmergy.repair import store as repair_store
 from stigmergy.server import review
 from stigmergy.server.audit import ensure_audit_table
 from stigmergy.server.identity import hash_token
@@ -41,6 +43,7 @@ def conn():
     ensure_audit_table(connection)
     review.ensure_review_schema(connection)
     ensure_gardener_schema(connection)
+    repair_schema.ensure_repair_schema(connection)
     ensure_admin_schema(connection)
     # A real (empty) pages_index + index_meta so the zone counts and the substrate check run
     # against the actual store DDL rather than a hand-rolled table. The FAKE embedder's own
@@ -58,7 +61,7 @@ def clean_tables(conn):
     with conn.cursor() as cur:
         cur.execute(
             "TRUNCATE capture_queue, job_runs, ingest_errors, audit_log, admin_actions,"
-            " gardener_findings, review_decisions RESTART IDENTITY")
+            " gardener_findings, review_decisions, repair_proposals RESTART IDENTITY")
     yield
 
 
@@ -93,6 +96,8 @@ class FakeGateway:
              "state": "active"},
             {"id": 3, "name": "gardener", "path": ".github/workflows/gardener.yml",
              "state": "disabled_manually"},
+            {"id": 4, "name": "repair-propose",
+             "path": ".github/workflows/repair-propose.yml", "state": "active"},
         ]
 
     def runs(self, workflow_file, *, limit=10):
@@ -215,6 +220,18 @@ def build_bare_knowledge_repo(root: str) -> str:
     _git("remote", "add", "origin", bare, cwd=seed)
     _git("push", "--quiet", "-u", "origin", "main", cwd=seed)
     return bare
+
+
+def propose_repair(conn, *, path="wiki/notes/Renewals.md", link="Existing Note", kind="backlink",
+                   note="", rationale="neither page links the other") -> int:
+    """One PENDING `repair_proposals` row, through the package's own writers — `target_paths` and
+    `content_key` are DERIVED exactly as `repair.proposer` derives them, so no fixture here can
+    seed a row whose two stored facts disagree (the disagreement `remote._cross_check` exists to
+    catch is worth reaching by tampering, never by a careless fixture)."""
+    ops = [{"op": kind, "path": path, "link": link, "note": note}]
+    return repair_store.insert_proposal(
+        conn, run_id=0, finding_ids=[1], target_paths=repair_schema.target_paths(ops), ops=ops,
+        rationale=rationale, content_key=repair_schema.content_key(ops), model_id="fake")
 
 
 @pytest.fixture()

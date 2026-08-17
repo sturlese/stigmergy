@@ -69,6 +69,11 @@ class GateContext:
     registry: object                   # kernel.registry.Registry
     linter_path: str = ""
     gitleaks_bin: str = "gitleaks"
+    # How long ONE subprocess a gate runs may take. TOLD, never inferred: the worker holds a lease
+    # and has all night (`None`, today's behaviour), while `repair.remote` runs these same gates on
+    # the thread an HTTP request arrived on, where an unbounded `gitleaks` or contract linter pins
+    # a server worker until somebody restarts the process.
+    subprocess_timeout_s: float | None = None
     stamped: dict = field(default_factory=dict)   # the server-owned values `_stamp` wrote
     findings: list = field(default_factory=list)
 
@@ -412,14 +417,22 @@ def ensure_scanner(gitleaks_bin: str) -> None:
             f"the secret scanner {gitleaks_bin!r} exited {proc.returncode} on `version`")
 
 
-def _gitleaks_dir(scratch: str, gitleaks_bin: str) -> list[dict]:
+def _gitleaks_dir(scratch: str, gitleaks_bin: str, *, timeout_s: float | None = None) -> list[dict]:
     """Run gitleaks over one directory and return its raw hits. `--redact`: a finding carries the
     rule id and line, never the matched value. `--exit-code 0` because hits are read from the
     JSON report, so a non-zero exit stays distinguishable from the binary crashing."""
-    proc = subprocess.run(
-        [gitleaks_bin, "dir", scratch, "--no-banner", "--redact", "--exit-code", "0",
-         "--report-format", "json", "--report-path", "-"],
-        capture_output=True, text=True)
+    try:
+        proc = subprocess.run(
+            [gitleaks_bin, "dir", scratch, "--no-banner", "--redact", "--exit-code", "0",
+             "--report-format", "json", "--report-path", "-"],
+            capture_output=True, text=True, timeout=timeout_s)
+    except subprocess.TimeoutExpired as ex:
+        # A CONFIG error, like every other way this scanner can fail to run: `repair.remote`'s
+        # `except LibrarianError` seam turns it into a recorded failure on the proposal, and the
+        # worker's own routing already knows this class.
+        raise LibrarianConfigError(
+            f"the secret scanner did not finish within its {timeout_s}s budget; refusing to file "
+            f"without a working secrets gate") from ex
     if proc.returncode != 0:
         raise LibrarianConfigError(
             f"the secret scanner failed to run (rc={proc.returncode}); refusing to file without "
@@ -484,7 +497,8 @@ def _secret_findings(scratch: str, hits, label_for) -> list[Finding]:
     return out
 
 
-def scan_secrets(text: str, *, gitleaks_bin: str, label: str) -> list[Finding]:
+def scan_secrets(text: str, *, gitleaks_bin: str, label: str,
+                 timeout_s: float | None = None) -> list[Finding]:
     """Run gitleaks over one blob of text. `label` names the surface for the refusal message."""
     with tempfile.TemporaryDirectory(prefix="stigmergy-gitleaks-") as scratch:
         # A file, not stdin: `gitleaks stdin` reports no line numbers, and the message exists
@@ -492,11 +506,12 @@ def scan_secrets(text: str, *, gitleaks_bin: str, label: str) -> list[Finding]:
         with open(os.path.join(scratch, "capture.md"), "w", encoding="utf-8") as f:
             f.write(text or "")
         _write_rejoined(scratch, "capture.md", text or "")
-        hits = _gitleaks_dir(scratch, gitleaks_bin)
+        hits = _gitleaks_dir(scratch, gitleaks_bin, timeout_s=timeout_s)
         return _secret_findings(scratch, hits, lambda _rel: label)
 
 
-def scan_worktree_files(worktree: str, rel_paths, *, gitleaks_bin: str) -> list[Finding]:
+def scan_worktree_files(worktree: str, rel_paths, *, gitleaks_bin: str,
+                        timeout_s: float | None = None) -> list[Finding]:
     """gitleaks over COPIES OF THE FILES THEMSELVES, not a rendered diff: these are the bytes
     that would be committed. Paths are reproduced in the scratch directory so a hit maps back to
     the real page."""
@@ -516,7 +531,7 @@ def scan_worktree_files(worktree: str, rel_paths, *, gitleaks_bin: str) -> list[
                     _write_rejoined(scratch, rel, f.read())
             except (OSError, UnicodeDecodeError):
                 continue
-        hits = _gitleaks_dir(scratch, gitleaks_bin)
+        hits = _gitleaks_dir(scratch, gitleaks_bin, timeout_s=timeout_s)
         return _secret_findings(scratch, hits, lambda rel: rel or "the drafted page")
 
 
@@ -526,13 +541,15 @@ def gate_secrets(ctx: GateContext) -> list[Finding]:
     VETO whenever the diff claims an in-lane edit, since anything that empties the diff would
     otherwise turn this gate off silently; `repairable=False`, because the gate could not run."""
     new_pages = ctx.in_lane_new_pages()
-    out = list(scan_worktree_files(ctx.worktree, new_pages, gitleaks_bin=ctx.gitleaks_bin))
+    out = list(scan_worktree_files(ctx.worktree, new_pages, gitleaks_bin=ctx.gitleaks_bin,
+                                   timeout_s=ctx.subprocess_timeout_s))
 
     # New pages excluded: the on-disk pass above covered every byte with a better locator.
     edited = set(ctx.in_lane_modified_pages())
     added = "\n".join(text for path, _, text in ctx.added if path in edited)
     if added.strip():
-        out += scan_secrets(added, gitleaks_bin=ctx.gitleaks_bin, label="the drafted page")
+        out += scan_secrets(added, gitleaks_bin=ctx.gitleaks_bin, label="the drafted page",
+                            timeout_s=ctx.subprocess_timeout_s)
     elif edited:
         paths = ", ".join(sorted(edited))
         out.append(Finding("secrets", "unscanned-diff",
@@ -659,13 +676,21 @@ def gate_contract(ctx: GateContext) -> list[Finding]:
         raise LibrarianConfigError(
             f"the contract linter is missing at {ctx.linter_path!r} — it is the knowledge "
             f"repo's own gate and the librarian will not file without it")
-    proc = subprocess.run(
-        ["python3", ctx.linter_path, "--repo", ctx.worktree, "--json"],
-        capture_output=True, text=True,
-        # An EXPLICIT environment: a script out of the repo the librarian CURATES must not
-        # inherit the App private key or the queue DSN. This prevents secrets being HANDED to
-        # it; it cannot prevent a same-uid process TAKING them.
-        env=gitcmd.base_env())
+    try:
+        proc = subprocess.run(
+            ["python3", ctx.linter_path, "--repo", ctx.worktree, "--json"],
+            capture_output=True, text=True,
+            # An EXPLICIT environment: a script out of the repo the librarian CURATES must not
+            # inherit the App private key or the queue DSN. This prevents secrets being HANDED to
+            # it; it cannot prevent a same-uid process TAKING them.
+            env=gitcmd.base_env(),
+            timeout=ctx.subprocess_timeout_s)
+    except subprocess.TimeoutExpired as ex:
+        # The linter comes out of the repo being curated, so "it never returns" is a state a page
+        # in that repo can cause. A CONFIG error, like every other way it can fail to run.
+        raise LibrarianConfigError(
+            f"the contract linter did not finish within its {ctx.subprocess_timeout_s}s budget") \
+            from ex
     if proc.returncode == 2 or not proc.stdout.strip():
         raise LibrarianConfigError(
             f"the contract linter could not scan the worktree (rc={proc.returncode})")

@@ -2,20 +2,22 @@
 text, decides nothing. `run.py` re-fetches after commit so the report renders what is durably
 true, never the in-memory list.
 """
+from psycopg.types.json import Jsonb
+
 from stigmergy.gardener.schema import JOB_NAME, SOURCE_DETERMINISTIC
 
 _INSERT_FINDING = """
 INSERT INTO gardener_findings
-    (run_id, check_slug, severity, source, subject, detail, suggested_action, model_id)
+    (run_id, check_slug, severity, source, subject, detail, suggested_action, model_id, subjects)
 VALUES (%(run_id)s, %(check)s, %(severity)s, %(source)s, %(subject)s, %(detail)s,
-        %(suggested_action)s, %(model_id)s)
+        %(suggested_action)s, %(model_id)s, %(subjects)s)
 """
 
 
 def insert_findings(conn, run_id: int, findings: list[dict]) -> None:
-    """Persist one run's findings — exactly seven keys per dict; the `_notice_*` keys are
-    deliberately not among them, so they never survive a round trip. `model_id` defaults to
-    `''`."""
+    """Persist one run's findings — exactly eight keys per dict; the `_notice_*` keys are
+    deliberately not among them, so they never survive a round trip. `model_id` defaults to `''`
+    and `subjects` to `[]`, the same value the column's own DEFAULT gives a pre-existing row."""
     with conn.cursor() as cur:
         for f in findings:
             cur.execute(_INSERT_FINDING, {
@@ -24,12 +26,13 @@ def insert_findings(conn, run_id: int, findings: list[dict]) -> None:
                 "subject": f.get("subject", ""), "detail": f.get("detail", ""),
                 "suggested_action": f.get("suggested_action", ""),
                 "model_id": f.get("model_id", ""),
+                "subjects": Jsonb([str(s) for s in (f.get("subjects") or [])]),
             })
 
 
 _FINDINGS_FOR_RUN = """
 SELECT id, run_id, check_slug, severity, source, subject, detail, suggested_action, created_at,
-       model_id
+       model_id, subjects
 FROM gardener_findings WHERE run_id = %s ORDER BY id
 """
 
@@ -37,14 +40,15 @@ FROM gardener_findings WHERE run_id = %s ORDER BY id
 def findings_for_run(conn, run_id: int) -> list[dict]:
     """Every finding this run persisted, in insertion order — `report.py` sorts at render time.
     `check_slug` -> `"check"` is renamed here in Python, not by a quoted SQL alias (`CHECK` is a
-    reserved keyword). `model_id` is always present, `''` for a deterministic finding."""
+    reserved keyword). `model_id` is always present, `''` for a deterministic finding; `subjects`
+    is always a LIST, `[]` for a finding stored before the column existed."""
     with conn.cursor() as cur:
         cur.execute(_FINDINGS_FOR_RUN, (run_id,))
         rows = cur.fetchall()
     return [
         {"id": r[0], "run_id": r[1], "check": r[2], "severity": r[3], "source": r[4],
          "subject": r[5], "detail": r[6], "suggested_action": r[7], "created_at": r[8],
-         "model_id": r[9]}
+         "model_id": r[9], "subjects": list(r[10] or [])}
         for r in rows
     ]
 

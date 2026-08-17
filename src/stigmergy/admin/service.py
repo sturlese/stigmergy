@@ -31,6 +31,9 @@ from stigmergy.index import check as index_check
 from stigmergy.index import store as index_store
 from stigmergy.index.errors import StigmergyIndexError
 from stigmergy.librarian import config as librarian_config
+from stigmergy.repair import store as repair_store
+from stigmergy.repair.errors import RepairError
+from stigmergy.repair.schema import JOB_NAME as REPAIR_JOB
 from stigmergy.review_kinds import KIND_ENTITY_PROPOSAL
 from stigmergy.server import pilot_report
 from stigmergy.server import review as server_review
@@ -51,6 +54,8 @@ CRON_WORKFLOWS = (
      "truth": f"job_runs:{PURGE_JOB}", "dispatch_inputs": ("dry_run",)},
     {"file": "gardener.yml", "title": "Gardener", "schedule_utc": "7 5 * * *",
      "truth": f"job_runs:{GARDENER_JOB}", "dispatch_inputs": ()},
+    {"file": "repair-propose.yml", "title": "Repair proposer", "schedule_utc": "7 6 * * *",
+     "truth": f"job_runs:{REPAIR_JOB}", "dispatch_inputs": ()},
 )
 DISPATCHABLE = tuple(w["file"] for w in CRON_WORKFLOWS)
 
@@ -356,6 +361,70 @@ class AdminService:
             # captured.
             raise AdminRefused(str(ex)) from ex
 
+    # ── repair proposals (read, and the second governed Approve — ADR 039) ────────────────────
+    def repairs_list(self) -> dict:
+        """Everything waiting on a steward, plus what was recently decided.
+
+        Both halves, and the second is not decoration: a REJECTED row is the dismissal memory the
+        proposer skips against, so "why does the nightly run not propose this any more" is only
+        answerable from the decided list. A `failed` row lives there too — an apply that a gate
+        refused stays visible with its reason instead of quietly returning to the queue."""
+        return {"pending": [self._proposal(row) for row in
+                            repair_store.pending_proposals(self._conn)],
+                "recent": [self._proposal(row) for row in
+                           repair_store.recent_decided(self._conn, limit=20)],
+                "history": self._job_runs((REPAIR_JOB,), limit=10)}
+
+    def repair_show(self, proposal_id: int) -> dict:
+        row = repair_store.proposal(self._conn, proposal_id)
+        if row is None:
+            raise AdminNotFound(f"proposal {proposal_id} does not exist")
+        return self._proposal(row)
+
+    def repair_approve(self, proposal_id: int, *, actor: str) -> dict:
+        """Apply the proposal through `server.review.apply_repair_and_record` (ADR 039) — the same
+        ordering the review lane runs, for the same reason `entity_approve` shares the mint
+        sequence: two copies of an irreversible ordering are two places for it to be reordered.
+
+        `review_decide`'s per-path steward check is deliberately not reached, exactly as
+        `entity_approve` does not reach its steward check: that guard is for a RESOLVED identity,
+        and `actor` here is free text behind the operator token (ADR 029/030 D2). The console's
+        authorization IS the token.
+
+        Nothing is caught inside `_do`, so `_mutate` records the library's own class name in
+        `admin_actions` before `RepairError` becomes `AdminRefused` for the caller — the shape
+        `entity_approve` established.
+        """
+        proposal = repair_store.proposal(self._conn, proposal_id)
+        if proposal is None:
+            raise AdminNotFound(f"proposal {proposal_id} does not exist")
+
+        def _do(by: str) -> dict:
+            return server_review.apply_repair_and_record(
+                self._conn, repo_url=self._server.librarian_repo_url, proposal=proposal, actor=by,
+                source=server_review.SOURCE_ADMIN)
+
+        try:
+            return self._mutate("repairs.approve", actor, {"id": proposal_id}, _do)
+        except RepairError as ex:
+            # Caught HERE, outside `_mutate`, for `entity_approve`'s reason: the row already
+            # captured the ORIGINAL class name. Every sentence `repair.remote` raises is written to
+            # be published to a steward, so it crosses as the refusal's own text.
+            raise AdminRefused(str(ex)) from ex
+
+    def repair_reject(self, proposal_id: int, *, actor: str, reason: str) -> dict:
+        """Decline it, through the same shared writer the review lane rejects with — the reason
+        lands on the PROPOSAL and in the ledger, which is what stops the proposer re-deriving the
+        same repair tomorrow."""
+        proposal = repair_store.proposal(self._conn, proposal_id)
+        if proposal is None:
+            raise AdminNotFound(f"proposal {proposal_id} does not exist")
+        return self._mutate(
+            "repairs.reject", actor, {"id": proposal_id},
+            lambda by: server_review.reject_repair_and_record(
+                self._conn, proposal=proposal, actor=by, source=server_review.SOURCE_ADMIN,
+                reason=reason))
+
     # ── activity ──────────────────────────────────────────────────────────────────────────────
     def activity(self) -> dict:
         return {
@@ -564,10 +633,37 @@ class AdminService:
                 "finished_at": _iso(run.get("finished_at")), "stats": run.get("stats") or {}}
 
     def _finding(self, finding: dict) -> dict:
+        """`**finding` carries every column forward, so a NEW one arrives here unsanitized by
+        default — `subjects` did exactly that when the repair loop needed the subject pages as
+        data. A page path is a filename somebody chose, so it is cleaned element by element, on
+        the same reasoning as `subject`, which is the comma-joined form of this same list."""
         return {**finding, "subject": _clean(finding["subject"]),
+                "subjects": [_clean(s) for s in (finding.get("subjects") or ())],
                 "detail": _clean(finding["detail"]),
                 "suggested_action": _clean(finding["suggested_action"]),
                 "created_at": _iso(finding.get("created_at"))}
+
+    def _proposal(self, row: dict) -> dict:
+        """A `repair_proposals` row, cleaned for the web. **Everything here is untrusted**, and by a
+        longer road than most: `rationale` and every `note` were written by a model that had just
+        read pages somebody else wrote, and `path`/`link` are filenames.
+
+        `**row` carries every column forward and the free-text ones are then named and cleaned over
+        the top. The columns NOT named here ride through unsanitized on purpose — `kind`, `status`
+        and `content_key` are constrained or derived, and `model_id` is operator configuration —
+        so a new free-text column is a new line in the override list, not a silent pass-through.
+
+        `error` is the sentence `repair.remote` raised, which is written to be published; it is
+        cleaned anyway, on the same reasoning every other operator-facing string here is."""
+        return {**row,
+                "id": row["id"], "created_at": _iso(row.get("created_at")),
+                "decided_at": _iso(row.get("decided_at")),
+                "rationale": _clean(row.get("rationale")), "notes": _clean(row.get("notes")),
+                "error": _clean(row.get("error")), "decided_by": _clean(row.get("decided_by")),
+                "target_paths": [_clean(p) for p in (row.get("target_paths") or ())],
+                "ops": [{"op": _clean(o.get("op")), "path": _clean(o.get("path")),
+                         "link": _clean(o.get("link")), "note": _clean(o.get("note"))}
+                        for o in (row.get("ops") or ())]}
 
     def _with_reply(self, row: dict) -> dict:
         """A sanitized queue row plus the one field the list and the trace both owe a parked

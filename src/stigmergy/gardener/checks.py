@@ -52,14 +52,25 @@ REANCHOR_BY_HAND = (
 
 
 def build_finding(*, check: str, severity: str, subject: str, detail: str,
-            suggested_action: str, source: str = SOURCE_DETERMINISTIC, **extra) -> dict:
+            suggested_action: str, source: str = SOURCE_DETERMINISTIC,
+            subjects: list[str] | None = None, **extra) -> dict:
     """The one place a finding dict is assembled — shared by every check here and by
     `gardener.sweep.to_finding` (`model_id` and the `_notice_*` keys ride through `**extra`).
-    `store.py` persists the six named keys plus `model_id` and nothing else."""
+    `store.py` persists the seven named keys plus `model_id` and nothing else.
+
+    `subject` is the DISPLAY string and `subjects` the same fact as data. Omitted, it derives from
+    `subject` — one page, named once — and an EMPTY subject derives to `[]` rather than `[""]`:
+    `check_company_wide_fraction` reports a corpus-wide fraction that names no page at all, and a
+    consumer iterating `subjects` must not be handed an empty string as if it were a path. A check
+    whose subject is not a page path (`check_stale_views` names an entity id) passes it through
+    unchanged — this function does not classify, and every reader that acts on a path filters for
+    one.
+    """
     finding = {
         "check": check, "severity": severity, "source": source,
         "subject": subject, "detail": detail[:MAX_DETAIL_CHARS],
         "suggested_action": suggested_action,
+        "subjects": list(subjects) if subjects is not None else ([subject] if subject else []),
     }
     finding.update(extra)
     return finding

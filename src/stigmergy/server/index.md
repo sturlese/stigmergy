@@ -21,7 +21,7 @@ path, authenticated by HMAC instead.
 |---|---|
 | `service.py` | `BrainService` and `_call`/`call_async`, the ONE rate-limit + audit seam every tool rides — a tool off this seam is invisible to the limiter and the audit trail. `build_service` (stdio) and `open_scoped_resources` (the shared conn+embedder build every transport wires through). Also: the audit shapers, `check_arg_length`/`MAX_ARG_CHARS`, `fetch_page_raw` (the one fetch+ACL+sanitize base), `scoped_entities` (the one entity-existence rule), `unrestricted` (the ONE spelling of `audiences is None`, which widens a QUEUE read to every identity's rows and is never an ACL decision — page visibility is `acl.visible()`'s alone), the `neutralize_fence`/`fence` and `SLACK_DOOR` re-exports, `UnavailableEmbedder` |
 | `mcp_server.py` | The FastMCP tool closures BOTH transports share — `search_brain` · `read_page` · `list_entities` · `describe_entity` · `brain_submit` · `brain_submissions` · `review_queue` · `review_decide` · `brain_reply` (mounted under `capture_schema.REPLY_TOOL`, never the function's own name) · `ask` — plus the `stigmergy-server` entry point and `_dsn_location`. Tool docstrings are the client-visible contract: leave them byte-identical unless the contract changes |
-| `review.py` | The review lane: `review_queue`/`review_decide`/`review_decide_safe`, the shared base `_collect_open_items`, the authorization predicates (`is_steward` — public, also the read-side gate — and `_guard_*`), the post-authorization staleness enrichment (`_already_decided_suffix`), the `review_decisions` ledger — OWNED by `capture.decisions` since issue #51 and re-exported here under the names callers already used (`ensure_review_schema`, `record_decision`, `latest_decisions`, and the `SOURCE_*`/`DECISION_SOURCES` door vocabulary), so the `stigmergy-entities` CLI can write the same row without importing this package and `stigmergy.slack` can read it without reaching into `stigmergy.capture` — the governed mint sequence (`mint_and_record_approval` → `entities.remote.mint_via_clone`, reached as a module attribute — the ONE function both SERVER-SIDE minting doors run, this one through `_mint_entity_proposal`'s translation; `stigmergy-entities approve` is a third door that mints outside that sequence, though it records the same ledger row), and the doorbell's read side (`items_for_doorbell`, `load_stewards`, `resolve_stewards_for_scope`, `record_undeliverable`) |
+| `review.py` | The review lane over its THREE item kinds (`entity-proposal`, `parked-capture`, `repair-proposal`): `review_queue`/`review_decide`/`review_decide_safe`, the shared base `_collect_open_items` (which lists a repair proposal in the MANAGEMENT read only — it has no submitter, and it names page paths), the authorization predicates (`is_steward` — public, also the read-side gate — and `_guard_*`), the post-authorization staleness enrichment (`_already_decided_suffix`), the `review_decisions` ledger — OWNED by `capture.decisions` since issue #51 and re-exported here under the names callers already used (`ensure_review_schema`, `record_decision`, `latest_decisions`, and the `SOURCE_*`/`DECISION_SOURCES` door vocabulary), so the `stigmergy-entities` CLI can write the same row without importing this package and `stigmergy.slack` can read it without reaching into `stigmergy.capture` — the governed mint sequence (`mint_and_record_approval` → `entities.remote.mint_via_clone`, reached as a module attribute — the ONE function both SERVER-SIDE minting doors run, this one through `_mint_entity_proposal`'s translation; `stigmergy-entities approve` is a third door that mints outside that sequence, though it records the same ledger row), the governed REPAIR sequence (`apply_repair_and_record`/`reject_repair_and_record` → `repair.remote.apply_approved`, also a module attribute — the ONE ordering both approving doors run, [ADR 039](../../../docs/decisions/039-governed-repair-loop.md)), and the doorbell's read side (`items_for_doorbell`, `load_stewards`, `resolve_stewards_for_scope`, `record_undeliverable`) |
 | `transport_http.py` | The streamable-HTTP transport: `_BearerAuthMiddleware` (raw ASGI), `_ScopedServiceProxy` + the `_current_service` contextvar, the request-body cap, the DNS-rebinding allowlist (`$STIGMERGY_PUBLIC_HOST`), `build_http_app`/`serve_http`, `token_store_from_env`, the webhook mount, and the admin console's ASGI branch |
 | `webhook.py` | `POST /webhook/github`: HMAC over the RAW body, then a two-phase incremental `pages_index` upsert (`process_push`), split-chain supersession propagation included. Reuses `corpus.page_row` and `store.upsert_pages`/`delete_pages` — never write a second `pages_index` path |
 | `identity.py` | `resolve_audiences` (the file-backed resolver both transports use) and the per-request half: `hash_token` · `load_token_store` · `resolve_email_for_token`. Fail-closed on every step |
@@ -40,7 +40,7 @@ path, authenticated by HMAC instead.
 |---|---|
 | `answer` | `service.BrainService` (`search`, `read_page`, `describe_entity`, `fetch_page_raw`, `scoped_entities`), `service.fence`/`neutralize_fence` |
 | `slack` | `service.open_scoped_resources`/`BrainService`/`SLACK_DOOR`, `identity.resolve_audiences`, `audit`, `ratelimit`, `settings.Settings`, `errors`, `review` (the doorbell reads, `review_decide_safe`) |
-| `admin` | `review` (`record_decision`, `mint_and_record_approval`, `ensure_review_schema` and the review reads), `pilot_report`, `identity.hash_token`, `webhook.JOB_NAME`, `errors` |
+| `admin` | `review` (`record_decision`, `mint_and_record_approval`, `apply_repair_and_record`/`reject_repair_and_record`, `ensure_review_schema` and the review reads), `pilot_report`, `identity.hash_token`, `webhook.JOB_NAME`, `errors` |
 | `gardener` | `errors`, `acl.visible`/`all_visible` |
 | `digest` | `errors`, `acl.visible` |
 
@@ -85,8 +85,14 @@ lives in `capture.decisions`, below both packages, and this package only re-expo
   be refused (FastMCP drops undeclared fields silently); `brain_submit` is pinned to
   `MCP_SUBMIT_KINDS`, never `capture_schema.KINDS`; the trusted provenance hints are
   door-gated (`SLACK_DOOR`).
-- `review_decide` is Postgres-only for `reject` and every `parked-capture` verdict; the ONE git
-  path is an entity-proposal `approve`, through `_mint_entity_proposal` and nothing else.
+- `review_decide` is Postgres-only for `reject` and every `parked-capture` verdict; the TWO git
+  paths are an entity-proposal `approve` (through `_mint_entity_proposal`) and a repair-proposal
+  `approve` (through `apply_repair_and_record`), and nothing else.
+- `repair-proposal`'s steward guard asks a PER-TARGET-PATH question — `all(is_steward(service, p)
+  for p in target_paths)` — and it is the only kind that can. The other two are anchored to no page,
+  so the empty scope is the only one they could resolve; a repair names the pages it would edit, and
+  `ops/stewards.json` exists to delegate zones. The universal question would let the general steward
+  write inside a delegated folder whose own steward never saw the change.
 - `mint_and_record_approval` is the ONE mint sequence for both SERVER-SIDE doors — the review lane
   (MCP, Slack) through `_mint_entity_proposal`, the admin console through
   `admin.service.entity_approve`: mint, then the ledger row, then — only if asked — the requeue,
@@ -99,6 +105,14 @@ lives in `capture.decisions`, below both packages, and this package only re-expo
   vocabulary, there into `admin_actions`' recorded class name), and it stops short of
   `situations.require_situation`, which each door runs at its own point in its own validation
   order.
+- `apply_repair_and_record` is the same bargain for the repair loop's own irreversible verdict, and
+  its caller set is closed for the same reason (it takes NO authorization argument): the review lane
+  through `_decide_repair`, the console through `admin.service.repair_approve`. Its order is
+  `mark_decided` (a CONDITIONAL update — that `WHERE status = 'pending'` is the whole concurrency
+  story, and why repairs need no lease), then the apply, then the ledger row after the push. A
+  failed apply stays `failed` with its reason and is never restored to pending: a silent revert
+  would hide that a gate refused. `repair` exceptions leave it UNTRANSLATED, exactly as `entities`
+  ones do, because the two doors map them differently.
 - An `entities` exception type never leaves this package through `review_decide` or
   `review_decide_safe`: `review.py` translates it into `ReviewError` (or
   `CapabilityUnavailableError`) at the raise site — the pre-mint guard

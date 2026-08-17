@@ -5,6 +5,7 @@ proves nothing about the property being claimed — so these are still "real git
 exercising `gitcmd.py`'s functions directly rather than through the whole filing flow.
 """
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -620,6 +621,87 @@ def test_run_a_generous_timeout_does_not_interrupt_a_fast_command(tmp_path):
     _init_repo(repo)
     result = gitcmd.run("rev-parse", "HEAD", cwd=repo, timeout=30)
     assert len(result.stdout.strip()) == 40
+
+
+# ── the budget REACHES every leg: push and base_ref, the two loops behind an HTTP request ───────
+# What `run(timeout=...)` DOES when a budget elapses is proven above, against a real slow git. What
+# is left to prove is PLUMBING — that a caller's budget reaches every subprocess these two make —
+# and that is a fact about argument passing, so a recorder is the honest instrument for it: a real
+# push proves the push, never which of its four invocations carries the bound.
+class _RecordingRun:
+    """`gitcmd.run`'s signature, recording every call. `reject_first_push` drives the retry arm, so
+    the fetch and the rebase legs are reached without a real race."""
+
+    def __init__(self, *, reject_first_push: bool = False):
+        self.calls: list[tuple] = []
+        self._reject_first_push = reject_first_push
+        self._pushes = 0
+
+    def __call__(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        returncode = 0
+        if args and args[0] == "push":
+            self._pushes += 1
+            returncode = 1 if (self._reject_first_push and self._pushes == 1) else 0
+        return SimpleNamespace(returncode=returncode, stdout="a" * 40, stderr="rejected")
+
+    def timeouts(self) -> set:
+        return {kwargs.get("timeout") for _args, kwargs in self.calls}
+
+    def verbs(self) -> list[str]:
+        return [args[0] for args, _kwargs in self.calls if args]
+
+
+def test_push_threads_its_callers_budget_into_every_leg_including_the_retry(monkeypatch):
+    """Red before the fix: `push` accepted no budget at all, so the ONE loop the repair apply runs
+    inside an HTTP request — push, fetch, rebase, and a second push — was unbounded end to end. A
+    stalled remote pinned an MCP worker for as long as it liked."""
+    recorder = _RecordingRun(reject_first_push=True)
+    monkeypatch.setattr(gitcmd, "run", recorder)
+    monkeypatch.setattr(gitcmd.time, "sleep", lambda _s: None)
+
+    gitcmd.push("/nowhere", branch="main", author_name="l", author_email="l@example.com",
+                timeout_s=17)
+
+    assert "fetch" in recorder.verbs() and "rebase" in recorder.verbs(), (
+        "the retry arm was not reached — this test would then bound only the happy path")
+    assert recorder.timeouts() == {17}
+
+
+def test_push_without_a_budget_stays_unbounded_for_the_worker(monkeypatch):
+    """The benign twin, and the invariant behind it: the librarian worker holds a lease and has all
+    night, and cutting its push off mid-flight is worse than waiting. The new parameter is
+    additive — a caller that passes none keeps today's behaviour exactly."""
+    recorder = _RecordingRun(reject_first_push=True)
+    monkeypatch.setattr(gitcmd, "run", recorder)
+    monkeypatch.setattr(gitcmd.time, "sleep", lambda _s: None)
+
+    gitcmd.push("/nowhere", branch="main", author_name="l", author_email="l@example.com")
+
+    assert recorder.timeouts() == {None}
+
+
+def test_base_ref_threads_its_callers_budget_into_the_fetch_it_runs(monkeypatch):
+    """Red before the fix: `base_ref` FETCHES, and `server.review.load_stewards` calls it inside an
+    authorization check on an MCP request — so resolving "is this caller a steward" could stall on
+    an unreachable remote instead of failing."""
+    recorder = _RecordingRun()
+    monkeypatch.setattr(gitcmd, "run", recorder)
+
+    gitcmd.base_ref("/nowhere", "main", timeout_s=30)
+
+    assert "fetch" in recorder.verbs()
+    assert recorder.timeouts() == {30}
+
+
+def test_base_ref_without_a_budget_stays_unbounded_for_the_worker(monkeypatch):
+    """The same benign twin, for the same reason: `processing` and `worker` call this per item."""
+    recorder = _RecordingRun()
+    monkeypatch.setattr(gitcmd, "run", recorder)
+
+    gitcmd.base_ref("/nowhere", "main")
+
+    assert recorder.timeouts() == {None}
 
 
 def test_push_does_not_report_an_unreachable_remote_as_a_conflict(tmp_path):

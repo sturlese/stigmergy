@@ -87,6 +87,17 @@ EDIT_TRANSIENT = "transient"
 _UNDELIVERABLE_PREFIX = store.UNDELIVERABLE_PREFIX
 
 # `review.KIND_*` -> the noun `job_runs` and the undeliverable copy name as "the {event}".
+#
+# **It is also the CLOSED LIST of kinds this module rings for**, which is why `poll_once` skips an
+# item whose kind is absent from it rather than treating a missing noun as a formatting detail.
+# `review.items_for_doorbell` is the MANAGEMENT read over EVERY review kind, and this module is a
+# renderer: `_state_signature` and `_render_for_item` both dispatch as "parked capture, or else the
+# entity-proposal branch", so a kind nobody wrote a card for does not fail to render — it renders as
+# something else, with live Approve/Reject buttons that would call `review_decide` with the wrong
+# item kind on an id belonging to another table. `repair-proposal` is the first kind to arrive
+# without a card (ADR 039): it is reviewed in the console and over MCP, and a repair's ops and
+# rationale are not a thing a DM can honestly summarize into two buttons. Silence is the correct
+# default for a new kind, and adding a noun here is the deliberate act of giving one a card.
 _EVENT_NAMES = {
     review.KIND_PARKED_CAPTURE: "capture-parked notification",
     review.KIND_ENTITY_PROPOSAL: "entity-proposal notification",
@@ -416,6 +427,11 @@ async def poll_once(ctx) -> int:
 
     sent = 0
     for item in review.items_for_doorbell(ctx.conn):
+        # A kind with no renderer is skipped, not guessed at — `_EVENT_NAMES`' own comment carries
+        # the argument. `continue`, never `return`: the inbox is one list of mixed kinds, and a pass
+        # that stopped at the first unrenderable item would silence every capture behind it.
+        if item["kind"] not in _EVENT_NAMES:
+            continue
         sent += await _notify_item(ctx, item, stewards_map)
     # AFTER the notify loop, in the same pass and on the same schedule — a decided item is one
     # this loop has just stopped seeing, so closing its card is the natural end of the pass rather
