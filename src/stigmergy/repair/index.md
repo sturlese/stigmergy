@@ -134,8 +134,10 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   `settings.max_proposals_per_run` (20) is how many approvals one NIGHT may ask for — a batch over
   it is refused whole with a named reason the retry carries, and the run stops batching once it is
   full, recording what it left for the next pass; `MAX_RATIONALE_CHARS` 400, `MAX_NOTE_CHARS` 300,
-  `MAX_PAGE_BODY_CHARS` 12000, `MAX_SKILL_BYTES` 256 KiB; `PROPOSER_LIMITS` 6 requests / 24 tool
-  calls. The body road adds `MIN_ANCHORED_PAGES` (2 — below it no model is asked at all) and
+  `MAX_PAGE_BODY_CHARS` 12000, `MAX_SKILL_BYTES` 256 KiB; `PROPOSER_LIMITS` 26 requests / 24 tool
+  calls (the tool budget is the work ceiling; the request budget is only the runaway bound above
+  it, pinned by test to stay dominated — a lapsed budget skips that one batch or draft, recorded,
+  never the run). The body road adds `MIN_ANCHORED_PAGES` (2 — below it no model is asked at all) and
   `MAX_ANCHORED_PAGES` (10 per prompt), and `entity_body`'s own `MAX_BODY_BYTES` (6000),
   `MAX_BODY_LINES` (110) and `MAX_ROLE_CHARS` (200). Those three are CONSTANTS rather than env
   settings on purpose: the real ceiling is the knowledge repo's contract linter, so an operator
