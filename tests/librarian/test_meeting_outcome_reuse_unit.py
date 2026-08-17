@@ -1,5 +1,8 @@
-"""`processing._reusable_outcome`: the re-file reuse's own gate, unit-tested directly — pure, no
-DB, no git, no agent double.
+"""The meeting flow's PURE `processing` helpers, unit-tested directly — no DB, no git, no agent
+double. `_reusable_outcome` (the re-file reuse's own gate) is the one this file was written for and
+most of it is still about that; `_edits_with_resolved_links` joined it because it is the same kind
+of thing: a small pure function of the outcome whose branches a real processing pass can only reach
+awkwardly.
 
 `tests/librarian/test_meeting_processing_pg.py` proves the mechanism works end to end over a real
 processing pass: park, mint, requeue, re-file, with a `_LossyMeetingAgent` that makes
@@ -18,6 +21,7 @@ raise or silently reuse something it should not.
 """
 import pytest
 
+from stigmergy.librarian import agent as agent_module
 from stigmergy.librarian import processing
 
 MATERIAL = "the archived transcript, byte for byte, exactly as it was when it was parked"
@@ -54,6 +58,104 @@ def test_a_matching_stored_outcome_is_reused():
     assert why_not == ""
     assert outcome is not None and outcome.decision == "file"
     assert [d["title"] for d in outcome.decisions] == ["keep the fast lane running as it is"]
+
+
+# ── `edits` across the store: the round trip, and the rows written before the field existed ─────
+# `_outcome_to_raw`'s own docstring — "keep it matched to `agent.parse_meeting_outcome`'s" — is a
+# rule nothing enforced, and the field ADR-038 added is the first one that could have gone missing
+# under it. A dropped `edits` would not raise anywhere: the re-file would simply file a set with
+# fewer cross-links than the set that parked, silently, and only a reader comparing two commits
+# would ever notice.
+def test_a_stored_outcome_carries_its_declared_edits_through_the_round_trip():
+    """Serialize with the production writer, read back through the production gate. Asserted on the
+    PARSED outcome because that is what `_one_meeting_pass` hands `edits.apply_declared`."""
+    parked = agent_module.parse_meeting_outcome({
+        **VALID_RAW,
+        "edits": [{"path": "wiki/decisions/An earlier decision.md", "kind": "overlap",
+                   "link": "keep the fast lane running as it is",
+                   "note": "the same ground, from the other side"}],
+    })
+    raw = processing._outcome_to_raw(parked)
+
+    reused, why_not = processing._reusable_outcome(_item(_stored(raw)), MATERIAL)
+
+    assert why_not == "" and reused is not None
+    assert reused.edits == parked.edits, (
+        f"the stored distillation lost its declared edits: {reused.edits!r} — a re-file would then "
+        f"file a less-connected set than the one that parked, with nothing raising")
+
+
+def test_a_row_written_before_edits_existed_reuses_cleanly_with_none_declared():
+    """The coexistence case, and the only one there can be: `edits` is an ADDITIVE key, so every
+    row already in `capture_queue.outcome` simply has no `edits` at all. It must reuse exactly as
+    it did before — no findings, no refusal, an empty tuple — which is also what makes this change
+    need no migration and no backfill."""
+    assert "edits" not in VALID_RAW, "this test's premise is that the stored shape predates the key"
+
+    reused, why_not = processing._reusable_outcome(_item(_stored()), MATERIAL)
+
+    assert why_not == "" and reused is not None
+    assert reused.edits == ()
+
+
+# ── `_edits_with_resolved_links`: the agent names a TITLE, the worker filed a SLUG ──────────────
+# Reproduced before it was fixed, against the real flow: a declaration naming the decision it had
+# just described came back as `declared an edit to wiki/decisions/an-earlier-acme-decision.md
+# linking [[Q3 sync — decision 1]], which resolves to no page in the graph` — the whole set refused,
+# BOTH agent attempts spent, the capture `failed`. A wikilink resolves by basename and
+# `_decision_stems` slugifies (accents stripped, punctuation folded, truncated at 60), so the
+# title the agent is told to use is never the name the page has.
+_TITLE = "Q3 sync — decision 1"
+_OTHER_TITLE = "Renew Acme for twelve months"
+
+
+def _outcome_with_edits(*edits) -> "object":
+    return agent_module.parse_meeting_outcome({
+        "decision": "file", "meeting_title": "Q3 Sync",
+        "decisions": [{"title": _TITLE, "body": "b", "anchoring": {}},
+                      {"title": _OTHER_TITLE, "body": "b", "anchoring": {}}],
+        "edits": list(edits),
+    })
+
+
+def _written(*stems) -> dict:
+    """What `_write_meeting_pages` returns, narrowed to the key this function reads."""
+    return {"decision_stems": list(stems)}
+
+
+def test_a_link_naming_this_captures_own_decision_resolves_to_the_stem_the_worker_filed():
+    outcome = _outcome_with_edits(
+        {"path": "wiki/decisions/Older.md", "kind": "backlink", "link": _TITLE, "note": ""})
+
+    resolved = processing._edits_with_resolved_links(
+        outcome, _written("q3-sync-decision-1", "renew-acme-for-twelve-months"))
+
+    assert [e["link"] for e in resolved] == ["q3-sync-decision-1"]
+    # Everything else about the declaration survives untouched — this translates a name, and a
+    # rewritten `path` or `kind` would be this function quietly editing the agent's account.
+    assert resolved[0]["path"] == "wiki/decisions/Older.md" and resolved[0]["kind"] == "backlink"
+
+
+def test_a_link_that_already_names_a_page_is_left_exactly_as_the_agent_wrote_it():
+    """The benign twin, and the specificity half: lookup is by THIS capture's declared titles only.
+    An agent that wrote a real page name — or the stem itself — must reach `edits.validate`
+    unchanged, so this translation can never shadow an existing page or invent a link nobody
+    declared."""
+    outcome = _outcome_with_edits(
+        {"path": "wiki/decisions/Older.md", "kind": "backlink", "link": "Acme Corp", "note": ""},
+        {"path": "wiki/decisions/Older.md", "kind": "backlink", "link": "q3-sync-decision-1",
+         "note": ""})
+
+    resolved = processing._edits_with_resolved_links(
+        outcome, _written("q3-sync-decision-1", "renew-acme-for-twelve-months"))
+
+    assert [e["link"] for e in resolved] == ["Acme Corp", "q3-sync-decision-1"]
+
+
+def test_an_account_declaring_no_edits_is_handed_through_untouched():
+    """The overwhelmingly common shape. It must not depend on `written` carrying anything, since a
+    future caller could reach this before the stems are computed."""
+    assert processing._edits_with_resolved_links(_outcome_with_edits(), {}) == []
 
 
 def test_no_stored_outcome_at_all_is_not_a_refusal_just_nothing_to_reuse():

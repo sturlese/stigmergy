@@ -325,7 +325,7 @@ def test_a_class_answering_both_calls_is_a_filing_agent_however_it_was_written()
             return AgentRun()
 
         def run_meeting(self, *, worktree, material, meeting_meta, registry,
-                        source_page_path, corrective="", reply=""):
+                        source_page_path, corrective="", reply="", gathered=""):
             return AgentRun()
 
     assert isinstance(HandWritten(), FilingAgent)
@@ -393,8 +393,8 @@ def test_the_signature_check_catches_a_positional_worktree_that_isinstance_waves
             return AgentRun()
 
         def run_meeting(self, worktree: str, *, material: str, meeting_meta: dict, registry,
-                        source_page_path: str, corrective: str = "",
-                        reply: str = "") -> AgentRun:
+                        source_page_path: str, corrective: str = "", reply: str = "",
+                        gathered: str = "") -> AgentRun:
             return AgentRun()
 
     assert isinstance(PositionalWorktree(), FilingAgent), (
@@ -428,8 +428,8 @@ def test_the_signature_check_catches_a_renamed_argument_too():
             return AgentRun()
 
         def run_meeting(self, *, worktree: str, material: str, meta: dict, registry,
-                        source_page_path: str, corrective: str = "",
-                        reply: str = "") -> AgentRun:
+                        source_page_path: str, corrective: str = "", reply: str = "",
+                        gathered: str = "") -> AgentRun:
             return AgentRun()
 
     assert isinstance(Renamed(), FilingAgent)
@@ -447,6 +447,11 @@ def test_the_signature_check_catches_a_backend_that_never_learned_about_the_gath
     all. `processing._one_pass` passes `gathered=` on EVERY ordinary call — empty for an exploring
     backend — so this one raises `TypeError` on the first item it claims, against a real queue row.
     The equality above is what catches it here instead.
+
+    **BOTH calls now, since ADR-038.** `_one_meeting_pass` passes `gathered=` on every meeting call
+    too — unconditionally, because no backend on that flow holds a tool — so a backend predating
+    that change is broken on the meeting road exactly as it is on the ordinary one, and asserting
+    only the ordinary half would leave the newer of the two drifts uncovered.
     """
     class PreGatherer:
         structured_ordinary = False
@@ -462,10 +467,15 @@ def test_the_signature_check_catches_a_backend_that_never_learned_about_the_gath
             return AgentRun()
 
     assert isinstance(PreGatherer(), FilingAgent)
-    assert (inspect.signature(PreGatherer.run) != inspect.signature(FilingAgent.run))
+    for method in PORT_METHODS:
+        assert (inspect.signature(getattr(PreGatherer, method))
+                != inspect.signature(getattr(FilingAgent, method))), method
     with pytest.raises(TypeError):
         PreGatherer().run(worktree="/x", material="m", hints={}, submitted_by="a@b.test",
                           gathered="context")
+    with pytest.raises(TypeError):
+        PreGatherer().run_meeting(worktree="/x", material="m", meeting_meta={}, registry={},
+                                  source_page_path="sources/meetings/x.md", gathered="context")
 
 
 # ── the envelope and the fault contract, which moved with the port ─────────────────────────────

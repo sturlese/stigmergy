@@ -27,7 +27,9 @@ reports `0.0` after paying for a full run.
   An edit to one is DECLARED in the outcome and PERFORMED by `edits.py`.
 - **`run`, `structured_ordinary = True`** — the agent writes NO page; code is the sole author and
   the account carries the page's text in `Outcome.page`. Its only legal write is its outcome file.
-- **`run_meeting`** — the agent writes NO page at all; code authors every page in the set.
+- **`run_meeting`** — the agent writes NO page at all; code authors every page in the set. An edit
+  to a page that already exists is DECLARED in the outcome and PERFORMED by `edits.py`, exactly as
+  on the first `run` shape above.
 
 `isinstance(x, FilingAgent)` checks only that the two methods are PRESENT; the signatures below
 are the contract, and the conformance test pins them.
@@ -96,10 +98,14 @@ class FilingAgent(Protocol):
         ...
 
     def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
-                    source_page_path: str, corrective: str = "", reply: str = "") -> AgentRun:
+                    source_page_path: str, corrective: str = "", reply: str = "",
+                    gathered: str = "") -> AgentRun:
         """The meeting flow: distil ONE transcript into a page SET's worth of content.
 
         Everything the agent needs is handed over, so a backend needs no filesystem exploration
-        to answer.
+        to answer — `gathered` included: it is `run`'s own argument, the gatherer's context ALREADY
+        RENDERED to prompt text by the worker, so both flows share one context builder and one
+        fence discipline. Unconditional here rather than gated on `wants_gathered`: no backend on
+        this flow holds a tool, so there is no second shape for the context to take.
         """
         ...

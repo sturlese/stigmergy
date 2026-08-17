@@ -40,6 +40,13 @@ produce a green test with one side missing. A shrunken honest table is the corre
 removed code-side rules are covered behaviourally elsewhere (each removal record names where), and
 the rows that remain are exactly the pairs where the brief still tells the agent something AND
 the code still enforces it in live behaviour, not in prose about itself.
+
+**It grew again with ADR-038**, by three rows, on the same terms it shrank by: the meeting flow
+gained a gathered context and a declared-edit mechanism, so the brief gained rules that a live
+piece of code really enforces — the worker's own gather call, this flow's lane, and the line that
+puts a bad declaration's findings in front of the vetoes. Growth is not the opposite of the
+shrinking above; both are the same rule applied, which is that a row exists when and only when
+both of its sides do.
 """
 import os
 import pathlib
@@ -139,8 +146,9 @@ def test_the_contract_table_is_not_vacuous():
     replaced a skip as much as to the skip."""
     text = _FROZEN_BRIEF.read_text(encoding="utf-8")
     assert len(text) > 5_000 and "meeting" in text.lower()
-    # Seven pairs today. The floor is what makes shrinking the table a deliberate act.
-    assert len(RULE_TABLE) >= 7, "the brief<->gate contract table has gone thin"
+    # Ten pairs today — seven, plus the three ADR-038 added. The floor is what makes shrinking the
+    # table a deliberate act.
+    assert len(RULE_TABLE) >= 10, "the brief<->gate contract table has gone thin"
 
 
 # ── the code side: read once, so every table entry's "marker in code" check is grep-cheap ───────
@@ -308,6 +316,32 @@ RULE_TABLE = [
     # "entirely" because the `sources:`/`related:` repair sits on the NEXT line of the real file
     # (the module docstring's own warning about line breaks).
     ("keep it out of body prose entirely", "date-bearing-body-link"),
+    # ── the three rules ADR-038 added, and the reason each marker is the one it is ──────────────
+    # The brief's whole framing of the gathered context rests on one claim: the worker looked, and
+    # you cannot look again. The code side is `_one_meeting_pass`' OWN gather call, and the marker
+    # is its closing `))` — the ordinary flow's identical-looking call ends `),` because it passes
+    # `**_SEEDED_GATHERED_SENTENCES` on the next line, the EXPLORING wording that tells a reader to
+    # search further. So this marker is not merely "the meeting flow gathers something": the two
+    # characters that make it unique are exactly the ones that mean "rendered with
+    # `render_gathered`'s no-tools defaults", which is what the brief phrase promises a tool-less
+    # agent. Verified against the concatenated source before use: it occurs exactly once.
+    ("tool for looking past it: judge overlap from what is in it, and never assert something "
+     "about this",
+     "excerpt_lines=settings.gather_excerpt_lines))"),
+    # The editable folder. `edits.validate` admits all three fast-lane folders, so what actually
+    # narrows a MEETING's edits to decision pages is this flow's own lane, declared at its
+    # `GateContext` and enforced by `gate_zone`'s `outside-lane` check — the keyword is the
+    # declaration itself and occurs nowhere else.
+    ("**`path` must be a decision page — `wiki/decisions/`, and nothing else.**",
+     "write_prefixes=MEETING_WRITE_PREFIXES"),
+    # All-or-nothing, and it costs the retry. `edits.apply_declared` returns `([], findings)` when
+    # ANY declaration is bad, and this is the line that puts those findings in front of
+    # `gates.vetoes` — without it a bad declaration would simply be skipped in silence. Pinned as
+    # the two-line join because `+ edit_findings` alone also occurs in the ordinary flow;
+    # `_cross_check_meeting_outcome` is what makes this the meeting road's own.
+    ("guessed path or a name that resolves to nothing refuses the WHOLE set — every page of it — "
+     "and",
+     "+ edit_findings\n                + _cross_check_meeting_outcome(ctx, outcome))"),
 ]
 
 

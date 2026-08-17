@@ -87,8 +87,12 @@ class GateContext:
     # Paths where the provenance fields are LEGITIMATE, server-stamped ones.
     provenance_pages: frozenset = field(default_factory=frozenset)
     # `False` for a caller granting no edit mechanism at all: a status-`M` entry from such a flow
-    # is never legitimate, additive or not. The finding code `meeting-edit-refused` and its
-    # message name today's single such caller — a second one must revisit both.
+    # is never legitimate, additive or not, because nothing in it could have produced one
+    # legitimately. **No caller passes `False` today** — the meeting flow, which did, gained the
+    # fast lane's declared-edit mechanism (ADR-038) and now grants it too. The field and its check
+    # stay because the property is a CALLER's to declare, not a fact about which flows exist; the
+    # branch is exercised by `test_gates_unit.py`'s explicit contexts, which is where its red proof
+    # lives now that no production flow reaches it.
     edits_allowed: bool = True
 
     @property
@@ -183,11 +187,18 @@ def gate_zone(ctx: GateContext) -> list[Finding]:
         # ADDITION to being a modification and gets first say. `repairable=False` for EVIDENCE
         # PRESERVATION — `processing.preserve_refused_diff` runs only on the terminal path, so a
         # repairable finding lets the retry's reset erase the trace of an unexplained write.
+        # The CODE keeps the name of the flow that motivated it: it is what a preserved refused
+        # diff's `# refused by:` header already says on deployed stacks, and renaming it would
+        # orphan those artifacts for nothing. The MESSAGE states the rule instead of that flow.
         if status == "M" and not ctx.edits_allowed:
+            # The anti-blame clause comes FIRST, before the explanation: `report.failed_system`
+            # clamps `reason` at 200 characters and the path can be 95 of them, so a clause after
+            # the explanation is truncated out of the report an operator actually reads. Bound
+            # measured and pinned in `test_gates_unit.py`.
             out.append(Finding("zone", "meeting-edit-refused",
-                               f"modified {path}: no edit mechanism exists here — a worker "
-                               f"defect or worktree interference, not the material; the refused "
-                               f"diff is preserved for inspection",
+                               f"modified {path}: a worker defect or worktree interference, not "
+                               f"the material — this flow grants no edit mechanism at all; the "
+                               f"refused diff is preserved for inspection",
                                locator=path, repairable=False))
             continue
         if status == "A":

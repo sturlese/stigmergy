@@ -561,7 +561,7 @@ cannot write — it may create new pages only, never modify one:
 | `zone/body-rewrite` | judges a MODIFIED page, which only `edits.apply_declared` produces. "You rewrote existing content in X" names work the agent did not do; the reachable cause is a target page whose `related:` block cannot be proved to have grown |
 | `zone/unreadable-edit` | same gate, same subject: the version an edit started from could not be decoded, so nothing about the draft is in question |
 | `zone/unparseable` | same gate again: the frontmatter an EDIT would commit is not valid YAML |
-| `zone/meeting-edit-refused` | fires only when `ctx.edits_allowed` is `False` — a caller-level fact about the meeting flow, not a per-diff judgment — where the agent holds no tool that could have produced the modification at all |
+| `zone/meeting-edit-refused` | fires only when `ctx.edits_allowed` is `False` — a caller-level fact about the flow, not a per-diff judgment. **No flow declares it today**: the meeting flow did until [ADR 038](../decisions/038-meeting-distiller-corpus-context.md) gave it the same declared-edit mechanism the fast lane has. The code keeps that flow's name because deployed refused diffs already carry it |
 | `secrets/unscanned-diff` | the scanner could not run over an edit to a page the agent cannot write, for a reason (git's rendering of a diff) it has no access to |
 | `pii/unscanned-diff` | the same, for the PII patterns |
 

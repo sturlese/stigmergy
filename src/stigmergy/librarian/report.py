@@ -164,10 +164,16 @@ def _reuse_lines(reuse: dict) -> list:
 
 
 def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, commit: str,
-                  agent_rationale: str = "", registry=None, reuse: dict | None = None) -> dict:
+                  pages_edited: list = (), agent_rationale: str = "", registry=None,
+                  reuse: dict | None = None) -> dict:
     """`filed`'s sibling for a page SET: N >= 1 source pages, a meeting page, and N decision pages,
     each with its OWN anchor outcome. `decisions` is `[{"path": ..., "anchoring": ...}]`, and
-    `result_ref` names the MEETING PAGE alone or `dedup.Match.page_path`'s `rsplit("@")` breaks."""
+    `result_ref` names the MEETING PAGE alone or `dedup.Match.page_path`'s `rsplit("@")` breaks.
+
+    `pages_edited` is `filed`'s own field with `filed`'s own meaning — what code actually wrote from
+    the agent's declared edits, on pages this capture did NOT create. It was a hardcoded `(none)`
+    line for as long as this flow had no edit mechanism; a page a commit changes and no report names
+    is a page nobody knows was touched."""
     n = len(decisions)
     source_pages = list(source_pages)
     n_source = len(source_pages)
@@ -189,14 +195,16 @@ def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, com
     else:
         lines.append("  decision pages    (none — nothing from this meeting was drafted as a "
                      "decision worth its own page)")
+    edited_paths = [_clean(path, 200) for path in _as_list(pages_edited)]
     lines.append(f"  links_created     {NONE_LABEL}")
     lines.append(f"  overlaps_flagged  {NONE_LABEL}")
-    lines.append(f"  pages_edited      {NONE_LABEL}")
+    lines.append(f"  pages_edited      {_listed(edited_paths)}")
     lines.append(f"  agent_rationale   {_clean(agent_rationale, RATIONALE_WIDTH) or NONE_LABEL}")
     lines += _reuse_lines(reuse or {})
     return base_report(
         status=schema.FILED, summary="\n".join(lines), page_path=meeting_page, commit=commit,
         agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
+        pages_edited=edited_paths,
         # The structured sibling of the rendered lines above, for a caller that branches on facts.
         filed_meeting={"source_pages": [_clean(p, 200) for p in source_pages],
                       "meeting_page": meeting_page, "decisions": decision_rows},

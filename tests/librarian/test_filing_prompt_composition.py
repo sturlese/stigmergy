@@ -117,6 +117,41 @@ def test_the_gathered_block_sits_above_the_material_it_is_context_for():
     assert prompt.index("GATHERED CONTEXT BLOCK") < prompt.index("The captured material follows")
 
 
+def test_the_meeting_prompt_puts_the_gathered_block_between_the_registry_and_the_transcript():
+    """The same rule on the meeting side (ADR-038), and BOTH of its bounds.
+
+    Above the transcript for the reason the ordinary prompt has it there: a reader meets its
+    context before the thing the context is for. Below the REGISTRY because the two answer
+    different questions and the order says which is which — the registry is the server's own
+    answer about identity (what may be anchored to), the gathered block is what this brain
+    already wrote (what may be linked to and what this overlaps). A block above the registry
+    would put page titles people wrote ahead of the governed list they must be checked against.
+    """
+    prompt = agent_module.build_meeting_prompt(
+        material="A transcript.", meeting_meta={"title": "Q3 sync"}, registry={},
+        source_page_path="sources/meetings/q3-sync-transcript.md",
+        gathered_block="\nGATHERED CONTEXT BLOCK")
+
+    assert (prompt.index("The entity registry")
+            < prompt.index("GATHERED CONTEXT BLOCK")
+            < prompt.index("The transcript follows"))
+
+
+def test_the_meeting_prompt_is_unchanged_when_the_worker_gathered_nothing():
+    """The benign twin for the branch: an empty `gathered_block` adds no section and no stray blank
+    heading. A prompt that announced a context it did not carry would tell a tool-less agent it had
+    been handed something it can neither see nor go and fetch."""
+    without = agent_module.build_meeting_prompt(
+        material="A transcript.", meeting_meta={"title": "Q3 sync"}, registry={},
+        source_page_path="sources/meetings/q3-sync-transcript.md")
+    with_empty = agent_module.build_meeting_prompt(
+        material="A transcript.", meeting_meta={"title": "Q3 sync"}, registry={},
+        source_page_path="sources/meetings/q3-sync-transcript.md", gathered_block="")
+
+    assert without == with_empty
+    assert "What this brain already holds" not in without
+
+
 def test_the_reply_still_sits_below_the_material_on_the_ordinary_path():
     """The one ordering rule in this prompt that is a security property rather than a readability
     one: the submitter's reply is the newest attacker-reachable text in the system, and placing it

@@ -13,6 +13,7 @@ import pathlib
 import pytest
 
 from stigmergy.capture import dispositions, queue, schema
+from stigmergy.librarian import agent as agent_module
 from stigmergy.librarian import gates, processing, worker
 from stigmergy.librarian import page as page_policy
 from stigmergy.librarian import report as report_module
@@ -77,17 +78,23 @@ def _refused_by(result) -> str:
     return header.split(":", 1)[1].strip() if header else ""
 
 
-class _CountingMeetingAgent:
-    """Wraps an agent and counts `run_meeting` calls — the direct measurement of how many agent
-    passes a refusal spent, independent of the counter the report happens to carry. Everything else
+class _RecordingMeetingAgent:
+    """Wraps an agent, counts `run_meeting` calls and keeps every call's keyword arguments.
+
+    The count is the direct measurement of how many agent passes a run spent, independent of the
+    counter the report happens to carry; the recorded kwargs are how a test asserts what the WORKER
+    handed the agent — the prompt is composed inside the backend, so the port call is the only place
+    the worker's own contribution is visible without reaching into a model. Everything else
     delegates, so this is a transparent wrapper rather than a stand-in for the double."""
 
     def __init__(self, inner):
         self.inner = inner
         self.meeting_calls = 0
+        self.calls = []
 
     def run_meeting(self, **kwargs):
         self.meeting_calls += 1
+        self.calls.append(kwargs)
         return self.inner.run_meeting(**kwargs)
 
     def __getattr__(self, name):
@@ -414,95 +421,87 @@ def test_sabotage_proof_a_second_meeting_page_is_refused_by_the_arity_veto(
 # `test_meeting_material_the_finding_names_a_category_from_the_fixed_set` for that coverage.
 
 
-# ── "the meeting flow files only NEW pages" — the lock that keeps it from REACHING the edit path
-# (the refusal that catches a status-M entry which reaches the gates by any other route is the pair
-# below this one) ────────────────────────────────────────────────────────────────────────────────
-def test_the_meeting_flow_never_reaches_the_edit_path_a_raising_apply_declared_does_not_disturb_a_filing(
-        rig, clean_queue, monkeypatch):
-    """The meeting flow files only NEW pages. `edits.apply_declared` is simply never invoked from
-    `_one_meeting_pass` — the contract holds because a line of code is absent, and the only thing
-    that named it was a comment. `test_meeting_brief_contract.py`'s table used to "pin" it by
-    grepping that comment, which proved nothing; this is the behavioural lock that replaces it, and
-    the cheapest correct guard here is a test rather than new production code.
+# REMOVED: `test_the_meeting_flow_never_reaches_the_edit_path_a_raising_apply_declared_does_not_`
+# `disturb_a_filing`. It stubbed `edits.apply_declared` into raising and asserted a meeting still
+# filed — a behavioural lock on the property "this flow files only NEW pages", whose own docstring
+# named the condition for its removal: *"If this call is intended, that refusal is the contract that
+# has to change first — and this test then needs to be replaced by the test of whatever mechanism
+# replaces it."* Both halves of that condition are met by ADR-038: the meeting flow now HAS the fast
+# lane's declared-edit mechanism, `_one_meeting_pass` calls `edits.apply_declared` on every pass,
+# and `GateContext.edits_allowed` keeps its `True` default here. The test is removed rather than
+# inverted because its subject no longer exists.
+# REPLACED BY: `test_a_declared_backlink_from_a_meeting_lands_on_the_existing_page_and_is_reported`
+# and `test_a_declared_meeting_edit_code_refuses_produces_no_commit` below — the mechanism's own
+# benign and adversarial halves.
 
-    **Scope, now that `edits_allowed`/`zone/meeting-edit-refused` exist:** this test covers the
-    CALL — the flow never routes through the edit path. A status-`M` entry that reaches the gates
-    by some other route is a different property, enforced in production and pinned by
-    `test_a_genuinely_additive_edit_to_an_existing_in_lane_page_is_refused_terminally` and its
-    sabotage twin below. The two are complementary and both worth keeping: this one fails if the
-    flow starts CALLING the edit path (even were the refusal to be weakened), that pair fails if the
-    refusal stops REFUSING (even were this call to stay absent).
 
-    **The exact production change that makes this test fail:** any call to `edits.apply_declared`
-    (or `edits.apply`) reached from a meeting filing. The stub below raises `AssertionError` when
-    called, so the first meeting capture that routes through the edit path stops filing — the
-    exception either propagates out of `process_meeting_item` or is converted into a refusal, and
-    both break `result.status == schema.FILED`. The stub is installed on the `edits` MODULE, which
-    is exactly the object `processing` holds (`from ... import edits`), so it cannot be bypassed by
-    calling through a different alias.
+# ── the worker hands this flow the corpus it files into (ADR-038) ───────────────────────────────
+def test_the_worker_hands_the_meeting_agent_the_gathered_context_it_files_into(rig, clean_queue):
+    """The asymmetry #37 names, closed: the meeting flow's agent now receives the SAME deterministic
+    gathered context the ordinary flow's does, built by the WORKER from this item's own worktree.
 
-    **And the property itself, independently of which function performs it:** every path in the
-    meeting's OWN commit is an ADD. This half survives even a future edit path that is guarded
-    behind an outcome field and therefore never calls the stub — it asserts the outcome (only new
-    pages) rather than the mechanism. The material names Acme deliberately: the fixture repo
-    already holds `wiki/entities/Acme Corp.md`, so an "additive edit" has a real, existing,
-    plausible target here — this is not a commit with nothing it could have modified.
+    Asserted at the PORT CALL, not in the prompt: `build_meeting_prompt` is invoked inside the
+    backend, so the recorded `gathered` keyword is the only place the worker's own contribution is
+    visible without a model in the loop — and it is the exact string the backend puts in the prompt,
+    since it arrives already rendered (one context builder, one fence discipline, `_one_pass`' own
+    reason for building it in the worker).
 
-    The status check reads `result.result_ref`'s sha, never the branch tip: the post-meeting hook
-    pushes a SECOND commit (the view regeneration) that legitimately MODIFIES `views/acme.md`
-    — a different writer, out of scope for the meeting filing's own no-edits contract.
+    Every clause is a property of `agent.render_gathered`'s NO-TOOLS defaults, which are what this
+    flow must get: the fence around the page-derived half, the preface's statement that there is no
+    tool to look further with, and the `link_names` vocabulary sentence. A run handed the ORDINARY
+    backend's seeded sentences instead would tell a tool-less agent to go searching, which is the
+    one thing it cannot do — so the seeded preface is asserted ABSENT rather than merely the
+    no-tools one present.
     """
-    env, deps = rig
+    _env, base_deps = rig
+    recording = _RecordingMeetingAgent(base_deps.agent)
+    deps = dataclasses.replace(base_deps, agent=recording)
 
-    def _refuse(*args, **kwargs):
-        raise AssertionError(
-            "the meeting flow called edits.apply_declared — this flow files only NEW pages and "
-            "grants no edit mechanism at all (`GateContext.edits_allowed=False`), so any edit it "
-            "performs is refused by `zone/meeting-edit-refused` rather than filed. If this call "
-            "is intended, that refusal is the contract that has to change first — and this test "
-            "then needs to be replaced by the test of whatever mechanism replaces it")
-
-    monkeypatch.setattr(processing.edits, "apply_declared", _refuse)
-    monkeypatch.setattr(processing.edits, "apply", _refuse)
-
-    item, result = _file_meeting(
+    _, result = _file_meeting(
         clean_queue, deps,
-        "DOUBLE:decisions=2\nAlice and Bob agreed the Acme renewal terms and the pilot scope.")
+        "DOUBLE:decisions=1\nAlice and Bob agreed the Acme renewal terms.")
 
-    assert result.status == schema.FILED, (
-        f"an ordinary meeting filing did not survive an edits module that refuses to be called: "
-        f"{result.detail if hasattr(result, 'detail') else result}")
+    assert result.status == schema.FILED, result.report.get("summary")
+    assert recording.meeting_calls == 1
+    gathered = recording.calls[0]["gathered"]
+    assert gathered, "the worker handed the meeting agent no gathered context at all"
+    assert agent_module.GATHERED_PREFACE_NO_TOOLS in gathered, (
+        f"the context was not framed for a tool-less reader:\n{gathered}")
+    assert processing._SEEDED_GATHERED_SENTENCES["preface"] not in gathered, (
+        "the meeting agent was handed the EXPLORING backend's preface, which tells a reader with "
+        "no tools at all to look further whenever the context is not enough")
+    assert f"<<<{agent_module._FENCE_TOKEN}" in gathered, (
+        f"the page-derived half is not inside the fence — titles and excerpts are content people "
+        f"wrote, and unfenced they read as instructions:\n{gathered}")
+    assert "link_names" in gathered, (
+        f"the wikilink vocabulary is missing, so the agent cannot know which [[name]] resolves:"
+        f"\n{gathered}")
+    # The corpus really was read: the fixture repo's own entity page is a page the gatherer can
+    # rank or name, so an empty-but-well-formed block would fail here.
+    assert "Acme Corp" in gathered, (
+        f"nothing from the checkout reached the block — the gatherer ran over an empty corpus, and "
+        f"the assertions above would pass on a context that holds nothing:\n{gathered}")
 
-    _, meeting_sha = result.result_ref.rsplit("@", 1)
-    rows = support.changed_paths_with_status(env.repo, meeting_sha)
-    assert rows, "the meeting commit touched nothing — this assertion would prove nothing"
-    assert [r for r in rows if r[0] != "A"] == [], (
-        f"the meeting's own commit did not only ADD pages: {rows} — a status other than A means "
-        f"this flow edited a page that already existed, which no gate in it checks")
-    assert _row(clean_queue, item["id"])["status"] == schema.FILED
 
-
-# ── `edits_allowed=False` / `zone/meeting-edit-refused` — the CONTROL, and the sabotage twin that
-# proves it is the control rather than an unexercised branch: before trusting a check, ask whether
-# it can go red, and prove it ────────────────────────────────────────────────────────────────────
+# ── the declared-edit mechanism this flow gained (ADR-038) ──────────────────────────────────────
+# The meeting agent still holds no tool that can reach any page: it DECLARES the edit in its account
+# and the worker performs it (`edits.apply_declared`), which is the fast lane's own arrangement,
+# reached through the same functions and judged by the same `gate_body_rewrite`.
 #
-# What the pair is about. The lock above (`test_the_meeting_flow_never_reaches_the_edit_path_...`)
-# proves the meeting flow does not CALL the edit path. It cannot prove what happens if a status-`M`
-# entry reaches the gates anyway — and until `edits_allowed` existed the answer was: it files.
-# `gate_body_rewrite` permits a genuinely additive edit BY DESIGN (rule 2, `_appended_callout_only`
-# — a real, gated mechanism for the ordinary fast lane, where `edits.apply_declared` exists), so an
-# appended callout on an existing in-lane page passed every gate, passed the contract linter, and
-# landed inside the meeting's own commit as an `M`, reported on no surface a human reads. The
-# refusal is what closes that, and these two tests are the two halves of its proof: the same
-# fixture, once with the control off (it files, as an `M`) and once with it on (refused, terminal,
-# no retry spent).
+# **The one folder a meeting can really edit is `wiki/decisions/`.** `edits.validate` admits the
+# three EDITABLE folders (`page.FOLDER_BY_TYPE`: notes, decisions, concepts) while this flow's own
+# lane is `MEETING_WRITE_PREFIXES` (sources/meetings, wiki/meetings, wiki/decisions), so a declared
+# edit to `wiki/notes/` passes validation and is then refused by `gate_zone` as out-of-lane. The
+# lane is deliberately not widened to match — it is the meeting BUILDER's range, pinned as such by
+# `test_gates_unit.py::test_the_meeting_lane_is_exactly_the_range_of_paths_the_meeting_builder_can_`
+# `write` — and the brief is what tells the agent which pages it may name.
 _EARLIER_DECISION_PATH = "wiki/decisions/an-earlier-acme-decision.md"
 
 # A decision page an EARLIER meeting filed: real, lint-clean, committed at the base commit, and in
 # the meeting flow's own lane (`processing.MEETING_DECISION_PREFIX`) — which is what makes it the
-# right target. An out-of-lane page (`wiki/notes/Existing Note.md`, the fast lane's own
-# additive-edit fixture) would be refused by `gate_zone`'s `outside-lane` check whether or not the
-# new control exists, so a twin built on one could never show the control doing any work.
+# right target for every test below. An out-of-lane page (`wiki/notes/Existing Note.md`, the fast
+# lane's own additive-edit fixture) would be refused by `gate_zone`'s `outside-lane` check whatever
+# the account declared, so a test built on one could never show the edit mechanism doing any work.
 #
 # Deliberately NOT the fixture repo's own `wiki/decisions/a-decision-from-a-previous-
 # meeting.md`: that page's body states, as its own invariant, that no meeting capture in this suite
@@ -531,16 +530,15 @@ test files, committed to the base commit before that capture is ever claimed.
 
 That the renewal conversation with Acme would be revisited later in the year, which is
 exactly the kind of standing decision a genuinely additive callout ("this newer meeting
-overlaps with this older decision") would be appended to on the ordinary fast lane, where
-an edit mechanism really exists.
+overlaps with this older decision") is appended to when a capture declares one.
 
 ## Why this page exists
 
-The meeting flow's contract is that it files only NEW pages. Proving that contract needs a
-page which already exists, sits INSIDE the meeting flow's own three write prefixes, and is
-a plausible target for an additive edit — so that a run which modifies it is refused for
-the reason under test (this flow has no edit mechanism) and not for an unrelated one (the
-page was outside the lane, the page was not there at all, the edit was not additive).
+A meeting distiller that can declare edits needs a page which already exists, sits INSIDE
+the meeting flow's own write prefixes, and is a plausible target for an additive edit — so
+that a run which modifies it does so for the reason under test and any refusal is about
+that reason too, never an unrelated one (the page was outside the lane, the page was not
+there at all, the edit was not additive).
 
 ## Facts
 
@@ -575,26 +573,34 @@ def _seed_earlier_decision(env) -> str:
     return _EARLIER_DECISION_PATH
 
 
-# The material for BOTH halves, byte for byte — the twin and the mirror must differ in exactly one
-# thing (whether the control is in place), so the fixture is shared rather than retyped.
+# The material every test in this section shares, byte for byte: the halves must differ in exactly
+# one thing (what the account declares, or what leaks into the worktree), so the fixture is shared
+# rather than retyped.
 _REVISIT_MATERIAL = ("DOUBLE:decisions=2\n"
                      "Alice and Bob revisited the Acme renewal and agreed the pilot scope.")
+
+# The stem `processing._decision_stems` computes for the double's FIRST decision on that material —
+# the basename of a page this capture creates, which is what the double declares its edits to link
+# and therefore what must appear in the edited page's `related:`. Derived from the same slug
+# function production uses, never typed out, so a change to either side is caught here rather than
+# by an assertion that quietly stopped matching anything.
+_FIRST_DECISION_STEM = processing._decision_stems(["Q3 sync — decision 1"])[0]
 
 
 def _append_callout(worktree: str, path: str) -> None:
     """Append one genuinely additive overlap callout to `path` inside `worktree`.
 
-    Through `page.with_callout` — the REAL helper `edits.apply` calls on the ordinary fast lane —
-    rather than a hand-rolled `> [!NOTE]` string, so this mutation has exactly the shape the fast
-    lane legitimately produces and `gate_body_rewrite`'s rule 2 (`_appended_callout_only`) is being
-    exercised on its own terms. Only the callout half of the fast lane's edit: `edits.apply` also
-    calls `with_related_link` first, and leaving that out keeps the demonstration resting on rule 2
-    alone (an append below the body) instead of also on rule 4's `related:`-growth proof.
+    Through `page.with_callout` — the REAL helper `edits.apply` calls — rather than a hand-rolled
+    `> [!NOTE]` string, so this mutation has exactly the shape a declared edit legitimately
+    produces and `gate_body_rewrite`'s rule 2 (`_appended_callout_only`) is exercised on its own
+    terms. Only the callout half of an edit: `edits.apply` also calls `with_related_link` first,
+    and leaving that out keeps the demonstration resting on rule 2 alone (an append below the body)
+    instead of also on rule 4's `related:`-growth proof.
 
     The note is deliberately unremarkable prose — no digits, no wikilink to anything unresolved,
     nothing a gate other than the one under test could have an opinion about. A mutation that draws
-    an unrelated veto turns the loosened half below into "refused, but for the wrong reason", and a
-    sabotage twin that refuses for the wrong reason lies about what it proved.
+    an unrelated veto turns a refusal into "refused, but for the wrong reason", and a test that
+    refuses for the wrong reason lies about what it proved.
     """
     full = os.path.join(worktree, path)
     with open(full, encoding="utf-8") as f:
@@ -603,220 +609,284 @@ def _append_callout(worktree: str, path: str) -> None:
         before, kind="overlap", name="Acme Corp",
         note="the same Acme renewal this meeting revisited, from the other side")
     assert after != before, (
-        f"page.with_callout changed nothing in {path} — the mutation this twin depends on did not "
-        f"happen, so neither half of the pair is exercising an additive edit at all")
+        f"page.with_callout changed nothing in {path} — the mutation this test depends on did not "
+        f"happen, so it is not exercising an additive edit at all")
     with open(full, "w", encoding="utf-8") as f:
         f.write(after)
 
 
-def _leak_an_additive_edit_into_the_meeting_flow(monkeypatch, path: str) -> None:
-    """Make the meeting flow's write phase append that callout to an existing in-lane page.
+def _rewrite_the_body(worktree: str, path: str) -> None:
+    """Replace a paragraph of `path`'s body in place — a NON-additive change, the kind
+    `gate_body_rewrite` exists to refuse.
 
-    This is THE exploit, reproduced permanently: a status-`M` entry in the meeting's diff, produced
-    by code inside the flow's own worktree, which is the only shape it can take (the meeting agent
-    holds no tool that can write to any page at all, and its one legal write — the outcome file —
-    is the single exception `agent.confined_write` makes). Wrapping `_write_meeting_pages` puts the edit exactly where a
-    future edit mechanism, or a leak of `edits.apply_declared` into this flow, would put it: after
-    the set is built, before `_one_meeting_pass` builds the `GateContext` and runs the gates over
-    the whole diff. The real builder runs first and its return value is passed through untouched, so
-    every page of the set is still genuinely code's own; nothing about the legitimate filing changes.
+    The counterpart to `_append_callout`: same page, same flow, same leak site, and the ONE
+    difference is that the base version is no longer a prefix of the result. Nothing else about the
+    page changes — no digits appear, no link is added or removed, the frontmatter is untouched — so
+    a veto here is attributable to the rewrite and to nothing that came with it.
+    """
+    full = os.path.join(worktree, path)
+    with open(full, encoding="utf-8") as f:
+        before = f.read()
+    after = before.replace(
+        "That the renewal conversation with Acme would be revisited later in the year",
+        "That the renewal conversation with Acme was settled and needs no further discussion")
+    assert after != before, (
+        f"the rewrite changed nothing in {path} — the sentence this test edits is no longer in the "
+        f"fixture page, so it is not exercising a body rewrite at all")
+    with open(full, "w", encoding="utf-8") as f:
+        f.write(after)
+
+
+def _leak_an_undeclared_edit_into_the_meeting_flow(monkeypatch, path: str, mutate) -> None:
+    """Make the meeting flow's write phase mutate an existing in-lane page that NO declaration named.
+
+    A status-`M` entry in the meeting's diff produced by code inside the flow's own worktree, which
+    is the only shape one can take that `edits.apply_declared` did not produce: the meeting agent
+    holds no tool that can write to any page at all, and its one legal write — the outcome file — is
+    the single exception `agent.confined_write` makes. Wrapping `_write_meeting_pages` puts the
+    mutation exactly where a worker defect or worktree interference would put it: after the set is
+    built, before `_one_meeting_pass` applies the declared edits, builds the `GateContext` and runs
+    the gates over the whole diff. The real builder runs first and its return value is passed
+    through untouched, so every page of the set is still genuinely code's own.
     """
     real_write_meeting_pages = processing._write_meeting_pages
 
-    def _also_edit_an_existing_page(worktree, *args, **kwargs):
+    def _also_mutate_an_existing_page(worktree, *args, **kwargs):
         written = real_write_meeting_pages(worktree, *args, **kwargs)
         if not isinstance(written, list):    # a `list` is the collision veto: nothing was written
-            _append_callout(worktree, path)
+            mutate(worktree, path)
         return written
 
-    monkeypatch.setattr(processing, "_write_meeting_pages", _also_edit_an_existing_page)
+    monkeypatch.setattr(processing, "_write_meeting_pages", _also_mutate_an_existing_page)
 
 
-def _grant_the_meeting_flow_an_edit_mechanism(monkeypatch) -> list:
-    """The loosening: `edits_allowed` left at its `True` DEFAULT for the meeting flow's context.
+def test_a_declared_backlink_from_a_meeting_lands_on_the_existing_page_and_is_reported(
+        rig, clean_queue):
+    """**The mechanism ADR-038 gave this flow, end to end.** The account declares a `backlink` on a
+    decision page an earlier meeting filed; the WORKER performs it (`edits.apply_declared`), it
+    lands inside the meeting's OWN commit as a status-`M` entry, every gate passes, and the report a
+    human reads names the page that was touched.
 
-    **Why this loosening and not monkeypatching `gate_zone`'s branch away.** The control has two
-    parts — a caller-level declaration (`processing._one_meeting_pass` passing
-    `edits_allowed=False`, one keyword on one `GateContext(...)`) and the gate branch that reads it.
-    The BOUND being pinned is the declaration: what makes the meeting flow different from the fast
-    lane is not that a branch exists in shared code, it is that THIS caller says it grants no edit
-    mechanism. Reverting that one keyword — and nothing else — is the honest reproduction of the
-    world before the refusal existed, and it leaves every gate in place and live:
-    `gate_body_rewrite` still judges the modified page and the contract linter still runs over it.
-    So when the loosened half FILES, that verdict is attributable to what it claims — a genuinely
-    additive edit is permissible to every check that exists, and only the caller's declaration
-    stops it here.
+    Four things asserted, each for its own reason:
 
-    Monkeypatching the branch away could not say that. There is no seam finer than `gate_zone`
-    itself (the check is four lines inside a per-entry loop), so removing it means replacing the
-    whole gate — which would also remove the deletion, unsupported-change, outside-lane, file-mode
-    and created-type checks. A filing under that patch would prove only that a gate function was
-    absent, not that the edit was permissible, and it would pin the plumbing (a branch exists) in
-    place of the bound (which caller grants the mechanism).
-
-    Returns the list of contexts built, so the caller can assert the loosening actually took effect
-    rather than trusting that it did.
-    """
-    real_gate_context = gates.GateContext
-    built = []
-
-    def _permissive_gate_context(*args, **kwargs):
-        kwargs["edits_allowed"] = True
-        ctx = real_gate_context(*args, **kwargs)
-        built.append(ctx)
-        return ctx
-
-    # On the `gates` MODULE, which is the exact object `processing` holds (`from ... import
-    # gates`), so `_one_meeting_pass`' own `gates.GateContext(...)` call site is the one patched.
-    monkeypatch.setattr(gates, "GateContext", _permissive_gate_context)
-    return built
-
-
-def test_sabotage_proof_without_the_edit_refusal_an_additive_meeting_edit_files_as_an_m(
-        rig, clean_queue, monkeypatch):
-    """**The red proof for `zone/meeting-edit-refused`** — a control nobody has watched fail is a
-    control nobody knows about. With `edits_allowed` left at its `True` default for the meeting
-    flow's context — the one keyword on `_one_meeting_pass`' `GateContext(...)`, reverted and
-    nothing else — the appended callout on an existing in-lane decision page passes every gate that
-    exists, passes the contract linter, and lands inside the MEETING'S OWN commit as a status-`M`
-    entry.
-
-    This is the world before the refusal existed, reproduced rather than remembered: it is what
-    makes the mirror test below a proof about the control instead of an observation about a fixture.
-    Every assertion here is also a guard on the fixture itself — if the mutation ever stops being
-    applied, or stops being additive, or the target page stops being in the lane, this test fails
-    instead of quietly passing while exercising nothing.
-
-    Read on `result.result_ref`'s sha, never the branch tip: the post-meeting hook pushes a SECOND
-    commit (the view regeneration) that legitimately modifies `views/acme.md`.
+    * **the edit really happened, in git**, read back out of the meeting commit's own tree rather
+      than off the working copy — a page edited in a worktree that never reached a commit is not an
+      edit at all;
+    * **it was additive**: a `backlink` touches the frontmatter's `related:` list and NOTHING else,
+      so additivity is asserted the way `gate_body_rewrite` establishes it — the body is byte-for-byte
+      the base's, and the `related:` list GREW rather than being rewritten (the link the page already
+      carried is still there). That is what makes the gate's permission the reason this filed, and
+      not a gate that happened to be looking elsewhere;
+    * **the set still filed atomically** — the new pages and the edit are ONE commit, which is what
+      "the diff the gates approved is the diff that lands" means here;
+    * **the report names it.** `pages_edited` was a hardcoded `(none)` line in `report.filed_meeting`
+      for as long as this flow had no edit mechanism. A page a commit changes and no surface names is
+      a page nobody knows was touched — that is the harm the old `edits_allowed=False` control
+      existed to prevent, and reporting it is what makes granting the mechanism honest.
     """
     env, deps = rig
     existing = _seed_earlier_decision(env)
     before = support.read_filed_page(env.bare, "main", existing)
 
-    contexts = _grant_the_meeting_flow_an_edit_mechanism(monkeypatch)
-    _leak_an_additive_edit_into_the_meeting_flow(monkeypatch, existing)
+    item, result = _file_meeting(
+        clean_queue, deps, f"DOUBLE:meeting-backlink={existing}\n{_REVISIT_MATERIAL}")
+
+    assert result.status == schema.FILED, (
+        f"a declared backlink onto an existing decision page did not file: "
+        f"findings={result.findings!r}, report={result.report!r}")
+
+    _, meeting_sha = result.result_ref.rsplit("@", 1)
+    rows = support.changed_paths_with_status(env.repo, meeting_sha)
+    assert ("M", existing) in rows, (
+        f"the declared edit is not in the meeting's own commit: {rows}")
+
+    after = support.read_filed_page(env.repo, meeting_sha, existing)
+    assert f"[[{_FIRST_DECISION_STEM}]]" in after, (
+        f"the edited page's `related:` does not name the decision page this meeting filed "
+        f"({_FIRST_DECISION_STEM!r}) — `edits.apply` wrote no link, so what landed is not the "
+        f"declared backlink:\n{after}")
+    assert page_policy.body_lines(after) == page_policy.body_lines(before), (
+        "the declared backlink changed the page's BODY: a `related:` link is a frontmatter edit and "
+        "nothing else, so a body that moved means `edits.apply` rewrote a page instead of linking "
+        "to one")
+    assert "[[Acme Corp]]" in after, (
+        "the link this page already carried is gone: the `related:` list was rewritten rather than "
+        "grown, which is not an additive edit however the new link got in")
+
+    assert result.report.get("pages_edited") == [existing], (
+        f"the report does not name the page this capture edited: "
+        f"pages_edited={result.report.get('pages_edited')!r}")
+    assert existing in result.report["summary"], (
+        f"the operator-facing summary does not name the edited page — the `pages_edited` line is "
+        f"still rendering `(none)`:\n{result.report['summary']}")
+    assert _row(clean_queue, item["id"])["status"] == schema.FILED
+
+
+def test_a_declared_overlap_from_a_meeting_appends_the_callout_the_other_pages_reader_sees(
+        rig, clean_queue):
+    """The second kind, which carries prose: an `overlap` adds the `related:` link AND a
+    `> [!NOTE] Overlaps with [[…]]` callout carrying the agent's own sentence. The note is what a
+    reader of the OTHER page sees, so it is asserted on the committed bytes rather than on the
+    declaration."""
+    env, deps = rig
+    existing = _seed_earlier_decision(env)
+
+    _, result = _file_meeting(
+        clean_queue, deps, f"DOUBLE:meeting-overlap={existing}\n{_REVISIT_MATERIAL}")
+
+    assert result.status == schema.FILED, (
+        f"a declared overlap did not file: findings={result.findings!r}, report={result.report!r}")
+    _, meeting_sha = result.result_ref.rsplit("@", 1)
+    after = support.read_filed_page(env.repo, meeting_sha, existing)
+    assert f"> [!NOTE] Overlaps with [[{_FIRST_DECISION_STEM}]]" in after, (
+        f"the overlap callout is not on the edited page:\n{after}")
+    assert "from the other side" in after, (
+        f"the callout carries no note, so the reader of the other page is told nothing:\n{after}")
+
+
+@pytest.mark.parametrize("bad_target,label", [
+    ("ops/acl.json", "outside the editable folders"),
+    ("wiki/decisions/Does Not Exist.md", "a page that is not there"),
+])
+def test_a_declared_meeting_edit_code_refuses_produces_no_commit(
+        rig, clean_queue, bad_target, label):
+    """The adversarial twin, mirroring the fast lane's own
+    (`test_processing_pg.py::test_a_declared_edit_code_refuses_produces_no_commit`). A declaration is
+    untrusted input on this flow exactly as on that one: the target has to exist and be editable, and
+    a bad one refuses the WHOLE page set rather than being silently skipped — `edits.apply_declared`
+    is all-or-nothing, so a half-applied meeting is not a state this flow can reach."""
+    env, deps = rig
+    before_sha, before_shas = support.branch_sha(env.bare), support.all_commit_shas(env.bare)
+    before_paths = support.all_ever_committed_paths(env.bare)
+
+    _, result = _file_meeting(
+        clean_queue, deps, f"DOUBLE:meeting-bad-edit={bad_target}\n{_REVISIT_MATERIAL}")
+
+    assert result.status in (schema.REJECTED, schema.FAILED), label
+    assert result.result_ref == ""
+    _assert_nothing_committed(env, before_sha, before_shas, before_paths)
+
+
+def test_a_declared_meeting_edit_never_reaches_a_page_this_capture_created(rig, clean_queue):
+    """`own-page`: an edit declared against a page the same capture just wrote is a confusion, not an
+    edit — the link belongs in the new page itself, which code writes freely. The target is the
+    meeting page's own computed path, so this exercises `edits.validate`'s `path_key` comparison
+    against `ctx.in_lane_new_pages()` on the SET, which is the meeting flow's version of the fast
+    lane's single new page."""
+    env, deps = rig
+    before_sha, before_shas = support.branch_sha(env.bare), support.all_commit_shas(env.bare)
+    before_paths = support.all_ever_committed_paths(env.bare)
+    own = f"{processing.MEETING_DECISION_PREFIX}{_FIRST_DECISION_STEM}.md"
+
+    _, result = _file_meeting(
+        clean_queue, deps, f"DOUBLE:meeting-bad-edit={own}\n{_REVISIT_MATERIAL}")
+
+    assert result.status in (schema.REJECTED, schema.FAILED), (
+        f"an edit declared against a page this very capture created was accepted: "
+        f"report={result.report!r}")
+    _assert_nothing_committed(env, before_sha, before_shas, before_paths)
+
+
+# ── what the gates still refuse now that this flow grants an edit mechanism ─────────────────────
+#
+# REMOVED, as a pair: `test_sabotage_proof_without_the_edit_refusal_an_additive_meeting_edit_files_`
+# `as_an_m` and `test_a_genuinely_additive_edit_to_an_existing_in_lane_page_is_refused_terminally`.
+# They were the two halves of one proof about `GateContext.edits_allowed=False`: with the control
+# off a genuinely additive callout filed as an `M`, with it on the same callout was refused
+# terminally on `zone/meeting-edit-refused`. ADR-038 removes their subject — this flow declares
+# `edits_allowed` no longer, because it HAS an edit mechanism, so the refusal they proved is not a
+# thing this flow does any more and the "world before it existed" they reproduced is the world we
+# are now in. Re-pointing them at the loosened flow would leave two tests asserting that an edit
+# files, which is what the pair immediately above already proves about a DECLARED one.
+# The `edits_allowed=False` branch itself is unchanged, still live and still exercised — by
+# `test_gates_unit.py`'s explicit contexts (`test_a_modification_is_refused_when_the_caller_grants_
+# no_edit_mechanism` and the precedence table above it), which is where a check with no production
+# caller belongs.
+#
+# WHAT THIS FLOW GAVE UP, stated plainly rather than left to be discovered: an UNDECLARED additive
+# edit — a worker defect, worktree interference — now files, exactly as it does on the fast lane,
+# because `gate_body_rewrite` permits an additive change BY DESIGN and nothing downstream asks
+# whether a declaration produced it. The pair below is the honest record of that: the first test
+# asserts the surviving control (a non-additive rewrite is still refused, terminally), the second
+# pins the posture change itself so that tightening it later is a deliberate act with a red test
+# behind it rather than a surprise.
+def test_a_stray_non_additive_rewrite_inside_the_meeting_flow_is_still_refused(
+        rig, clean_queue, monkeypatch, tmp_path):
+    """The control that SURVIVES granting this flow an edit mechanism. A rewrite of an existing
+    in-lane page's body — leaked into the flow's write phase, declared by nobody — is refused by
+    `gate_body_rewrite`, nothing is committed, and the refusal is terminal.
+
+    Read out of the preserved refused diff's own `# refused by:` line
+    (`processing.refused_diff_digest`), which is the only surface that names a finding's
+    `gate/code` after a refusal — the submitter-facing report deliberately carries a sentence. The
+    name is asserted as the ONLY one on that line: anything extra would mean a second gate is also
+    refusing this, and then this test would not be isolating the one it names.
+    """
+    env, base_deps = rig
+    existing = _seed_earlier_decision(env)
+    deps = _with_diagnostics(base_deps, tmp_path / "refused")
+    before_sha, before_shas = support.branch_sha(env.bare), support.all_commit_shas(env.bare)
+    before_paths = support.all_ever_committed_paths(env.bare)
+
+    _leak_an_undeclared_edit_into_the_meeting_flow(monkeypatch, existing, _rewrite_the_body)
 
     item, result = _file_meeting(clean_queue, deps, _REVISIT_MATERIAL)
 
-    assert result.status == schema.FILED, (
-        f"sabotage check failed: with the meeting flow's `edits_allowed=False` declaration reverted "
-        f"to the default, a genuinely additive callout on an existing in-lane page should have "
-        f"filed — got {result.status!r}, findings={result.findings!r}, "
-        f"report={result.report!r}. Either the loosening did not take effect, or something ELSE is "
-        f"now refusing this edit, which would mean the mirror test's green is not proof that "
-        f"`zone/meeting-edit-refused` is what refuses it")
-    assert contexts and all(ctx.edits_allowed for ctx in contexts), (
-        f"the loosening never reached a GateContext ({len(contexts)} built) — this test would be "
-        f"asserting that the flow files with the control IN PLACE, which is the opposite of its "
-        f"purpose")
+    assert result.status == schema.FAILED, (
+        f"a body rewrite of an existing page was not refused: report={result.report!r}")
+    assert result.diagnostics_path, "the refused diff was not preserved"
+    assert _refused_by(result) == "zone/body-rewrite", (
+        f"the refusal did not come from the body-rewrite gate alone: the preserved diff names "
+        f"{_refused_by(result)!r}")
+    _assert_nothing_committed(env, before_sha, before_shas, before_paths)
+    assert _row(clean_queue, item["id"])["status"] == schema.FAILED
 
+
+def test_a_stray_additive_edit_now_files_which_is_the_fast_lanes_own_posture(
+        rig, clean_queue, monkeypatch):
+    """**The posture this flow adopted, pinned so that changing it back is deliberate.** The same
+    leak site and the same page as the test above, with a genuinely ADDITIVE mutation: an appended
+    callout no declaration named. It files.
+
+    This is not a defect this test blesses — it is the fast lane's own long-standing posture,
+    inherited the moment this flow stopped declaring `edits_allowed=False`: `gate_body_rewrite`
+    permits an additive change by design (rule 2, `_appended_callout_only`) and no gate asks whether
+    a declaration produced it. It is recorded as a test rather than a comment because a comment
+    cannot fail: if a future change makes the meeting flow (or the fast lane) refuse an undeclared
+    modification, this test goes red at the exact line that states the old rule, and whoever tightens
+    it is told what they changed rather than discovering it in production.
+
+    The one asymmetry that IS asserted here, because it is what makes the mechanism honest: the
+    filed report names only what `edits.apply_declared` actually wrote. An undeclared edit rides
+    along in the commit and appears in `pages_edited` nowhere — which is precisely why the declared
+    path is the only one a submitter is ever told about.
+    """
+    env, deps = rig
+    existing = _seed_earlier_decision(env)
+    before = support.read_filed_page(env.bare, "main", existing)
+
+    _leak_an_undeclared_edit_into_the_meeting_flow(monkeypatch, existing, _append_callout)
+
+    _, result = _file_meeting(clean_queue, deps, _REVISIT_MATERIAL)
+
+    assert result.status == schema.FILED, (
+        f"an undeclared but genuinely additive edit was refused: findings={result.findings!r}, "
+        f"report={result.report!r}. If this flow has deliberately regained a refusal for "
+        f"undeclared modifications, this test is the record of the posture that changed — replace "
+        f"it with the test of the new control rather than relaxing the assertion")
     _, meeting_sha = result.result_ref.rsplit("@", 1)
     rows = support.changed_paths_with_status(env.repo, meeting_sha)
     assert ("M", existing) in rows, (
         f"the additive edit did not land as a modification in the meeting's own commit: {rows} — "
         f"without that, this test proves nothing about a status-M entry reaching the gates")
-
     after = support.read_filed_page(env.repo, meeting_sha, existing)
-    assert "> [!NOTE] Overlaps with [[Acme Corp]]" in after, (
-        "the committed page does not carry the appended callout, so what filed was not the edit "
-        "this twin claims to have made")
     assert after.startswith(before.rstrip("\n")), (
-        "the edit was NOT additive (the base version is no longer a byte-for-byte prefix of the "
-        "committed one) — `gate_body_rewrite` would then be refusing it as a rewrite, and this "
-        "twin would be demonstrating that gate rather than the absence of the edit refusal")
-
-    # And the harm, which is why the refusal is worth its own control: the landed edit appears on
-    # no surface anybody reads. `report.filed_meeting` carries the source pages, the meeting page
-    # and the decisions — it has no field for a page this capture merely modified, so an edit that
-    # files here is invisible to the submitter, to the operator and to the audit row.
-    assert existing not in json.dumps(result.report), (
-        "the filed report now names the edited page — if this flow has deliberately gained a "
-        "REPORTED edit mechanism, this whole pair needs rewriting against that contract, not this "
-        "assertion relaxing")
-
-
-def test_a_genuinely_additive_edit_to_an_existing_in_lane_page_is_refused_terminally(
-        rig, clean_queue, monkeypatch, tmp_path):
-    """The mirror: the same seeded page, the same leaked additive edit and the same material as the
-    sabotage twin above, with the control in place — the only difference between the two runs is
-    whether the meeting flow's context declares `edits_allowed=False` (the `Deps` here also route
-    refused diffs into `tmp_path` and wrap the double in a transparent call counter, neither of
-    which the flow can see). The edit is refused on `zone/meeting-edit-refused`, nothing is
-    committed, and the refusal is TERMINAL — one agent pass, no corrective retry spent.
-
-    Three things asserted, each for its own reason:
-
-    * **the code, end to end.** `zone/meeting-edit-refused` is read out of the preserved refused
-      diff's own `# refused by:` line (`processing.refused_diff_digest`), which is the only surface
-      that names a finding's `gate/code` after a refusal — the submitter-facing report deliberately
-      carries a sentence rather than a code. It is asserted as the ONLY name on that line, which is
-      the strong form: it proves the entry was refused on its STATUS, categorically, and that
-      `gate_body_rewrite` — which still runs over the same status-`M` entry — found nothing wrong
-      with it. An additive edit really is permissible to every other check; this one refusal is what
-      stops it.
-    * **no corrective retry spent** (`repairable=False`). Counted twice, on purpose:
-      `report["agent_attempts"] == 1` is what an operator reads, and `agent.meeting_calls == 1` is
-      the direct measurement of how many times the agent actually ran. A finding that became
-      repairable by accident would burn the flow's one retry on an agent that cannot act — it holds
-      no tool that could have produced the modification and the retry hands it back the same
-      transcript — and only the second assertion catches that if the first ever stops being wired.
-    * **atomicity**, in the strong form the rest of this file uses: not merely that the branch tip
-      did not move, but that the bare remote's history never held any of these pages on any ref.
-    * **what the operator actually reads.** The finding's message reaches a human verbatim as
-      `report.failed_system`'s `reason`, so the report's own summary is asserted to name the
-      cause-space (a worker defect or worktree interference, explicitly NOT the submitted material,
-      which is the failure `_refuse_meeting`'s `f.repairable` filter closes one layer up) and to say
-      the refused diff was kept. Both
-      clauses survive here because THIS fixture's path is short (47 characters); `reason` is clamped
-      at 200 and the message is ~147 characters plus the path, so the evidence clause is truncated
-      for the longer paths this flow can really compute. That bound is measured and pinned in
-      `test_gates_unit.py::test_the_refusals_anti_blame_clause_survives_the_reports_200_character_`
-      `reason_clamp`, which asserts only the clause that survives every reachable path.
-    """
-    env, base_deps = rig
-    existing = _seed_earlier_decision(env)
-    counting = _CountingMeetingAgent(base_deps.agent)
-    deps = dataclasses.replace(_with_diagnostics(base_deps, tmp_path / "refused"), agent=counting)
-    before_sha, before_shas = support.branch_sha(env.bare), support.all_commit_shas(env.bare)
-    before_paths = support.all_ever_committed_paths(env.bare)
-
-    _leak_an_additive_edit_into_the_meeting_flow(monkeypatch, existing)
-
-    item, result = _file_meeting(clean_queue, deps, _REVISIT_MATERIAL)
-
-    assert result.status == schema.FAILED, (
-        f"an additive edit to an existing in-lane page must be refused by this flow, which has no "
-        f"edit mechanism at all — got {result.status!r}, report={result.report!r}")
-    assert result.diagnostics_path, "the refused diff was not preserved"
-    assert _refused_by(result) == "zone/meeting-edit-refused", (
-        f"the refusal did not come from the edit check alone: the preserved diff names "
-        f"{_refused_by(result)!r}. Anything extra means another gate is ALSO refusing this edit "
-        f"(so the sabotage twin above is not isolating this control), and a different name alone "
-        f"means the status-M entry is being refused for some other reason entirely")
-    assert result.report["agent_attempts"] == 1, (
-        f"the refusal spent a corrective retry: agent_attempts="
-        f"{result.report['agent_attempts']}. `meeting-edit-refused` is `repairable=False` because "
-        f"the meeting agent cannot have produced this modification and cannot un-produce it on a "
-        f"retry — a repairable finding here would burn the flow's one retry on an agent that "
-        f"cannot act")
-    assert counting.meeting_calls == 1, (
-        f"the agent ran {counting.meeting_calls} times — the retry really was spent, whatever the "
-        f"report's counter says")
-
-    # The operator's briefing, on the surface a human really reads (the queue row's report, not the
-    # finding object): the cause-space, the explicit "not the material", and the preserved evidence.
-    summary = _row(clean_queue, item["id"])["report"]["summary"]
-    for phrase in ("worker defect", "worktree interference", "not the material", "preserved"):
-        assert phrase in summary, (
-            f"the operator-facing report no longer says {phrase!r}. This is the sentence a human "
-            f"gets for a refusal nobody can repair, and dropping the cause-space would let it read "
-            f"as the submitter's fault again. If the message grew instead, the 200-character "
-            f"`reason` clamp is eating it — see the bound pinned in "
-            f"test_gates_unit.py.\nsummary: {summary!r}")
-
-    _assert_nothing_committed(env, before_sha, before_shas, before_paths)
-    assert _row(clean_queue, item["id"])["status"] == schema.FAILED
+        "the leaked edit was NOT additive, so `gate_body_rewrite` would be refusing it as a rewrite "
+        "and this test would be demonstrating that gate instead of the posture it names")
+    assert result.report.get("pages_edited") == [], (
+        f"the report names a page no declaration asked for: "
+        f"pages_edited={result.report.get('pages_edited')!r} — `pages_edited` is what "
+        f"`edits.apply_declared` wrote, and an undeclared edit is by construction not in it")
 
 
 # ── the company-wide anchoring path for a decision page: the fast lane's own rule, asserted here

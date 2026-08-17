@@ -119,6 +119,20 @@ def _needed(field: str, instead: str) -> str:
     return f"`{field}` is required and came back empty. {instead}"
 
 
+# ── the one shape BOTH accounts declare ───────────────────────────────────────────────────────
+# An edit means the same thing on either flow — `agent._parse_edits` bounds it once,
+# `edits.apply_declared` performs it once and `gate_body_rewrite` judges it once — so the two
+# accounts name ONE model rather than each carrying its own idea of what an edit is. The name is
+# the ordinary account's, from the flow that had the field first.
+class OrdinaryEdit(BaseModel):
+    """One DECLARED edit to a page that already exists — performed by the worker, never by this
+    agent (`edits.py`)."""
+    path: str = ""
+    kind: str = ""
+    link: str = ""
+    note: str = ""
+
+
 class MeetingAnchoring(BaseModel):
     """One decision's own anchor. `kind` is `entity` (with `entities`) or `company` (with a written
     `reason`); the registry, not this schema, decides whether a name resolves."""
@@ -171,6 +185,7 @@ class MeetingAccount(BaseModel):
     meeting_notes: str = ""
     action_items: list[MeetingActionItem] = Field(default_factory=list)
     decisions: list[MeetingDecision] = Field(default_factory=list)
+    edits: list[OrdinaryEdit] = Field(default_factory=list)
     summary: str = ""
     findings: list[MeetingFinding] = Field(default_factory=list)
     triage: MeetingTriage = Field(default_factory=MeetingTriage)
@@ -234,15 +249,6 @@ class OrdinaryPage(BaseModel):
 
 class OrdinaryOverlap(BaseModel):
     path: str = ""
-    note: str = ""
-
-
-class OrdinaryEdit(BaseModel):
-    """One DECLARED edit to a page that already exists — performed by the worker, never by this
-    agent (`edits.py`)."""
-    path: str = ""
-    kind: str = ""
-    link: str = ""
     note: str = ""
 
 
@@ -857,17 +863,19 @@ class PydanticFilingAgent:
         run.tool_calls = int(getattr(usage, "tool_calls", 0) or 0)
 
     def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
-                    source_page_path: str, corrective: str = "", reply: str = "") -> AgentRun:
+                    source_page_path: str, corrective: str = "", reply: str = "",
+                    gathered: str = "") -> AgentRun:
         """One structured call: the brief as instructions, the item as the prompt, a typed account
-        back. Deliberately tool-less — everything it could fetch is already in the prompt, and code
-        writes every page in the set."""
+        back. Deliberately tool-less — everything it could fetch is already in the prompt, `gathered`
+        included, and code writes every page in the set."""
         import asyncio
         return asyncio.run(self._run_meeting(
             worktree=worktree, material=material, meeting_meta=meeting_meta, registry=registry,
-            source_page_path=source_page_path, corrective=corrective, reply=reply))
+            source_page_path=source_page_path, corrective=corrective, reply=reply,
+            gathered=gathered))
 
     async def _run_meeting(self, *, worktree, material, meeting_meta, registry, source_page_path,
-                           corrective, reply="") -> AgentRun:
+                           corrective, reply="", gathered="") -> AgentRun:
         import asyncio
 
         # Imported HERE, never at module scope — see the module docstring.
@@ -893,7 +901,7 @@ class PydanticFilingAgent:
         prompt = agent_module.build_meeting_prompt(
             material=material, meeting_meta=meeting_meta, registry=registry,
             source_page_path=source_page_path, corrective=corrective, reply=reply,
-            outcome_channel=OUTCOME_CHANNEL)
+            gathered_block=gathered, outcome_channel=OUTCOME_CHANNEL)
 
         # Their OWN narrow try: the blanket handler below would report a configuration fault as
         # "the meeting agent run failed". `read_meeting_brief`'s error stays outside both.

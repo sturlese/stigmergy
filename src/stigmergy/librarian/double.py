@@ -229,11 +229,19 @@ class DoubleAgent:
     #                                     brief's body-stays-digit-free convention
     #   DOUBLE:meeting-collide            the first decision's title slugifies onto an EXISTING
     #                                     fixture page, exercising the collision precheck
+    #   DOUBLE:meeting-backlink=<path>    file, and DECLARE a reciprocal `related:` link on an
+    #                                     existing page — this flow's own edit mechanism
+    #   DOUBLE:meeting-overlap=<path>     the same, plus an overlap callout carrying a note
+    #   DOUBLE:meeting-bad-edit[=<path>]  declare an edit code must refuse (outside the editable
+    #                                     folders by default, or the named page)
     #
     # A planted secret needs no directive: the transcript reaches the SOURCE page verbatim, so the
     # pre-agent scan catches it before any agent runs.
     def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
-                    source_page_path: str, corrective: str = "", reply: str = "") -> AgentRun:
+                    source_page_path: str, corrective: str = "", reply: str = "",
+                    gathered: str = "") -> AgentRun:
+        # `gathered` is accepted and unused: the signature answers the PORT, and what the worker
+        # gathered is a real model's input, not a scripted double's.
         directives = _directives(material)
         findings = _findings(material)
         run = AgentRun(turns=1, tool_calls=1)   # one Write call: its own outcome file
@@ -311,6 +319,30 @@ class DoubleAgent:
                 {"kind": "entity", "entities": [entity], "reason": ""})
             decisions.append({"title": d_title, "body": body, "anchoring": anchoring})
 
+        # ── the declared-edit case: DECLARED, never performed ─────────────────────────────
+        # Only the outcome file is written here, like every other meeting directive — the WORKER
+        # performs the edit (`edits.apply_declared`), so a double that edited a page itself would
+        # leave that call untested.
+        #
+        # The link is the first decision's own TITLE, spelled exactly as the brief tells a real
+        # agent to spell it — NOT the stem `_decision_stems` will slugify it into. A double that
+        # named the stem would be predicting a filename the agent is never shown, and the
+        # title→stem resolution in `processing._edits_with_resolved_links` (the thing that makes
+        # a correct declaration land) would go unexercised by every offline test.
+        declared_edits = []
+        edit_link = decisions[0]["title"] if decisions else meeting_stem
+        if directives.get("meeting-backlink"):
+            declared_edits.append({"path": directives["meeting-backlink"], "kind": "backlink",
+                                  "link": edit_link, "note": ""})
+        if directives.get("meeting-overlap"):
+            declared_edits.append({
+                "path": directives["meeting-overlap"], "kind": "overlap", "link": edit_link,
+                "note": "the same ground this meeting revisited, from the other side"})
+        # An edit code must refuse, so `edits.validate` is exercised on this flow too.
+        if "meeting-bad-edit" in directives:
+            declared_edits.append({"path": directives["meeting-bad-edit"] or "ops/acl.json",
+                                  "kind": "backlink", "link": edit_link, "note": ""})
+
         attendees = [a.strip() for a in (meeting_meta.get("attendees") or "").split(",")
                     if a.strip()]
         outcome = {
@@ -322,6 +354,7 @@ class DoubleAgent:
             "action_items": ([{"owner": attendees[0], "action": "follow up", "done": False}]
                             if attendees else []),
             "decisions": decisions,
+            "edits": declared_edits,
             "findings": [{"category": c} for c in findings],
             "summary": f"distilled {len(decisions)} decision(s) from the meeting",
         }
