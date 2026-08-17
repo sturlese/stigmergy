@@ -16,7 +16,7 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 | `page.py` | `MAX_BODY_LINES` / `SPLIT_CHUNK_LINES` — the page-as-chunk contract — and `_yaml(v)`, the frontmatter scalar emitter: plain only when the value provably round-trips through `yaml.safe_load`, quoted-and-escaped otherwise |
 | `frontmatter.py` | `split_frontmatter(text) -> (dict, body)` — tolerant: malformed or absent frontmatter degrades to `({}, text)`, never an exception |
 | `acl.py` | `load_acl_config` / `load_acl_config_text`, `resolve_acl` (first matching rule wins), `view_acl` (members INTERSECTION — a rollup must never widen access), `visible_to_view` (the non-member read gate) |
-| `registry.py` | `Registry`, `load_registry` / `save_registry` — `ops/entity-registry.json`'s one reader/writer, plus the `canonical_id` / `title` / `type_of` lookups. Missing file = empty registry; malformed = loud error |
+| `registry.py` | `Registry`, `load_registry` / `registry_from_text` / `save_registry` — `ops/entity-registry.json`'s one reader/writer, plus the `canonical_id` / `title` / `type_of` lookups. Missing file = empty registry; malformed = loud error. The reader is split path-from-text because the registry also reaches a reader as BYTES now (the index's snapshot, which `index.check` lints through this same parse) |
 | `normalize.py` | `normalize(name)` (matching key: accents, case, punctuation and legal suffixes folded), `slugify(s)` (≤60 chars) |
 | `fsutil.py` | `write_text_atomic(path, text)` — tmp file + same-directory `os.replace`, so a concurrent reader never sees a partial |
 | `converters.py` | the document HANDS: `method_for_ext`, `extract` (pdf/sheet/docx/office/text → `{method, text}`), `sheet_rows`, `vision_extract` (Gemini OCR, lazy SDK import). Faithful text, no judgment |
@@ -32,7 +32,8 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 - `acl.resolve_acl` / `view_acl` / `visible_to_view` — a caller with a differently-shaped ACL
   source writes an adapter over these (`librarian.acl_rules` is one), never a second resolution
   algorithm.
-- `registry.load_registry` / `save_registry` — never a hand-rolled JSON parse of the registry.
+- `registry.load_registry` / `registry_from_text` / `save_registry` — never a hand-rolled JSON
+  parse of the registry, from a path or from bytes.
 - `normalize.normalize` / `slugify` — they answer different questions: `slugify` is the id a page
   regenerates as, `normalize` the matching key legal-suffix stripping folds onto (see
   `entities.generator.canonical_id_for`).

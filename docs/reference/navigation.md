@@ -115,8 +115,9 @@ caller), each enriched from `ops/entity-registry.json`:
 
 An anchored id absent from the registry serves as `{"id": ...}` alone — honest, and the
 gardener's business, not an error. `count` states how many; nothing is dropped past it (the
-registry is small). A missing registry file serves every id that way (the loader's documented
-fail-open); a MALFORMED one raises loudly (an operator-visible fault, never silently degraded
+registry is small). No registry at all — neither an index snapshot nor a readable
+`--entity-registry` file — serves every id that way (the loader's documented fail-open); a
+MALFORMED one raises loudly as `RegistryError` (an operator-visible fault, never silently degraded
 navigation).
 
 ## `describe_entity` — layered and dated, never a flat list
@@ -167,8 +168,10 @@ D5 for the full reasoning and the ruling that replaced it.
 `ask`, any future agent. When the caller passed
 **no explicit `entity` filter** (key presence, not truthiness — `filters={"entity": ""}` still
 counts as explicit), the query is resolved against registry aliases
-(`entity_aliases.load_aliases` + `resolve_entity`, read fresh per call — the registry is a small
-local file, not worth caching). `resolve_entity` takes the LONGEST registered id/name/alias that
+(`entity_aliases.aliases_from_text` + `resolve_entity`, over the registry this service instance
+resolved — the index's snapshot where the database has one, the `--entity-registry` file where it
+does not; see "Which registry the server serves" in [server.md](./server.md). Re-read at every
+`_call` seam: the registry is small, and freshness is the point). `resolve_entity` takes the LONGEST registered id/name/alias that
 appears as a whole-word phrase in the question, so "Acme Corp" wins over a shorter alias "Acme" that
 also matches, and a two-letter alias like "gx" cannot match inside an unrelated word. On a match the resolved id is TOLD to the ranker
 (`entity_hint`) and one blended search runs — it is not scoped to that entity. Scoping was the
@@ -220,9 +223,14 @@ writes there. Two things derive from it, independently and in one direction each
 - **the index** — a rebuild folds the entity page's OWN `role`/`aliases` frontmatter into `tsv`.
 
 So editing `aliases` on the page changes BOTH, at their own cadences: `tsv` at the next index
-rebuild, the registry only when a steward regenerates and commits it. The index never reads the
-registry file, and the registry generator never reads the index. Three artifacts, one direction
-each time data moves between them, never a cycle.
+rebuild, the registry only when a steward regenerates and commits it. No ranking or retrieval
+query reads the registry, and the registry generator never reads the index. Three artifacts, one
+direction each time data moves between them, never a cycle.
+
+The index does CACHE the registry — `entity_registry_snapshot`, written by the push webhook and by
+the nightly rebuild — but purely as a courier for the server, which holds no checkout in
+production; the bytes are stored verbatim and interpreted only by `server/entity_aliases.py`. See
+[hybrid-index.md](./hybrid-index.md#the-registry-rides-along).
 
 ## Where the code lives
 
@@ -234,7 +242,8 @@ each time data moves between them, never a cycle.
 | Webhook's one-query outbound resolution + its incremental supersession window | `server/webhook.py` (`_resolve_outbound_links`, `_propagate_split_chain_supersession`) |
 | `read_page`'s graph shaping, the shared cap+note base | `server/service.py` (`fetch_page_raw`, `_read_page`, `_capped`/`_cap_note`/`_nav_section`) |
 | `list_entities` / `describe_entity` | `server/service.py` (same class, same `_call` seam every other tool rides) |
-| Registry reading (full records + exact-match resolution) | `server/entity_aliases.py` (`load_registry`, `resolve_exact`) |
+| Registry reading (full records + exact-match resolution) | `server/entity_aliases.py` (`registry_from_text`, `resolve_exact`) |
+| WHICH registry copy is read (index snapshot, else the `--entity-registry` file) | `server/service.py` (`BrainService._registry_source`), refreshed by `server/webhook.py` and `index/build.py` |
 | MCP tool closures | `server/mcp_server.py` |
 | Entity-first resolution | `server/service.py::BrainService._search` |
 | The entity boost + lexical alias expansion the resolution feeds | `server/service.py` (`_run_search`, `_expansion_terms`), `index/rank.py`, `index/search.py` |

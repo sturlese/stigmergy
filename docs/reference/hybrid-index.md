@@ -15,8 +15,8 @@ ranking. Never a source of truth — wipe it and rebuild it from git whenever co
 | `corpus.py` | repo checkout → `PageRow`s: zone walk over `ZONES = ("wiki", "sources", "views")` — an **include list and nothing else**, which is why `ops/` (the registry, identities, templates) never reaches retrieval. (There is deliberately no `EXCLUDED_ZONES` constant beside it: an include-list needs no exclude-list.) Also: tolerant frontmatter parsing, `entity_list`'s fail-CLOSED normalization of both `entity:` dialects, the wikilink graph → `inlinks` AND resolved outbound `links` (`resolve_links`/`by_stem_index` — the one algorithm the webhook shares), the build-time `superseded_by` propagation onto split-chain siblings, `content_hash` of the embedded text; `page_row` is the public single-file parser both `load_pages` and the incremental webhook call |
 | `backends/embedder.py` | OpenAI `text-embedding-3-large` + `build_embedder` — the one fake/real dispatch (deferred fake import) |
 | `backends/fake_embedder.py` | deterministic hashed bag-of-words double (tests/CI; keyless) |
-| `store.py` | all SQL DDL and writes: `pages_index` (dropped/recreated per rebuild; carries `links` + its GIN index and `generated_at`), `embedding_cache` (survives; keyed by model + content_hash), `index_meta`; `upsert_pages`/`delete_pages`/`current_content_hashes` are the webhook's incremental primitives, beside `insert_pages`, never a second row shape; `existing_paths` is the webhook's one-query snapshot for outbound-link resolution; `pages_with_page_id_prefix`/`set_superseded_by` are the webhook's split-chain propagation primitives. `create_search_indexes` runs **after** the bulk load, never before |
-| `build.py` | `rebuild(conn, repo_dir, embedder, fts_config="english")` — the full rebuild, cache-aware: init schema → insert rows → build the search indexes |
+| `store.py` | all SQL DDL and writes: `pages_index` (dropped/recreated per rebuild; carries `links` + its GIN index and `generated_at`), `embedding_cache` (survives; keyed by model + content_hash), `index_meta`, `entity_registry_snapshot` (survives; the singleton cache of the knowledge repo's `ops/entity-registry.json`, read/written/cleared through `read_entity_registry`/`write_entity_registry`/`clear_entity_registry` — see "The registry rides along" below); `upsert_pages`/`delete_pages`/`current_content_hashes` are the webhook's incremental primitives, beside `insert_pages`, never a second row shape; `existing_paths` is the webhook's one-query snapshot for outbound-link resolution; `pages_with_page_id_prefix`/`set_superseded_by` are the webhook's split-chain propagation primitives. `create_search_indexes` runs **after** the bulk load, never before |
+| `build.py` | `rebuild(conn, repo_dir, embedder, fts_config="english")` — the full rebuild, cache-aware: init schema → insert rows → build the search indexes → reconcile the entity-registry snapshot from the checkout |
 | `rank.py` | pure ranking: RRF fusion (`RRF_K` 60, `CANDIDATE_POOL` 40 per arm, `TOP_K` 5) + the six contract factors (ADR 012), snippets; `today` injected for staleness so a ranking is reproducible instead of wall-clock dependent. RRF is higher-is-better, so the factor constants DIVIDE the score — penalties > 1, boosts < 1. **Two things live here that a reader might expect elsewhere**: the entity boost fires on an `entity_hint` the service resolved and passed DOWN (never re-inferred from query tokens), and `rank()` collapses a split document's parts to ONE top-k slot before the `[:k]` cut |
 | `search.py` | the shared base query: both SQL arms under the same frontmatter filters, fusion, `search()` / `search_arms()`; `FILTER_COLUMNS` is the allowlist. It threads `entity_hint` (to the ranker) and `fts_expansion` (registry aliases OR-ed into the LEXICAL arm only — the vec arm embeds the raw query untouched) |
 | `check.py` | the retrieval-substrate lint behind `stigmergy-index --check` — deterministic SQL over `pages_index` asking the questions an operator would not think to ask until something already looked wrong. See "Linting the index" below |
@@ -209,8 +209,42 @@ successor is not in the index — may be legitimately historical), and an anchor
 entity (it resolves for navigation under ADR 022 D5, but gets no aliases, no entity-first search
 and no TOLD boost).
 
-The registry is read as a **file** (its id set only), never through `stigmergy.server`: the index
-sits below the server in the import graph, and packages talk through files.
+`--check` reads its id set through `kernel.registry`, never through `stigmergy.server`: the index
+sits below the server in the import graph. WHICH copy it reads is `check.served_registry` — the
+index's snapshot where the database has one, the `--entity-registry` file where it does not, the
+server's own order. A lint reading the other copy reports on a world nobody is living in: on a
+deployed console the file is the one baked at deploy time, so every entity minted since the rollout
+would be warned about as unregistered while the server serves full records for it.
+
+## The registry rides along
+
+The index also carries `entity_registry_snapshot` — one row, the knowledge repo's
+`ops/entity-registry.json` cached as TEXT. Nothing in retrieval reads it: it is here because the
+SERVER reads the registry on the hot path exactly as it reads pages, and the deployed `app` and
+`slack` process groups hold no checkout at all — they were served a copy baked into the image at
+deploy time, so an entity minted after a rollout answered `describe_entity` with no name, no type
+and no aliases, and its aliases resolved nowhere, until the next deploy (issue #74).
+
+It has the same two writers pages have, and no others:
+
+- **`stigmergy.server.webhook`**, incrementally — a push whose changed paths include
+  `ops/entity-registry.json` fetches that file at the pushed sha and writes it in the SAME
+  transaction as the pages, so a mint's page and its metadata land together. The lookup is over the
+  RAW pushed paths: `ops/` is in no `ZONES` entry, so every page filter is blind to it.
+- **`rebuild()`**, nightly — written from the checkout, and CLEARED when the checkout has no
+  registry, because a rebuild's job is to make the index match the repo. That clear destroys state
+  the webhook may have refreshed seconds earlier, so it is never silent: the returned stats say
+  `entity_registry: cleared` and a warning names the checkout it found nothing installable in.
+
+Both writers refuse a registry above `store.MAX_ENTITY_REGISTRY_BYTES` rather than installing it —
+this text is JSON-parsed on every tool call for every identity, so its size is a per-request cost,
+not the one-off cost of the push that wrote it. A refused push logs the size and the cap, leaves
+the previous snapshot standing, lands its PAGES normally and records the refusal in its `job_runs`
+stats; a refused rebuild clears, exactly as a registry-less checkout does.
+
+The bytes are stored verbatim and parsed only by `server/entity_aliases.py`; a snapshot-less
+database (an older index, or a local run) falls back to the server's own `--entity-registry` file,
+which is the behaviour that predates the table.
 
 ## Golden set + e2e
 

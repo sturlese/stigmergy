@@ -1016,3 +1016,214 @@ def test_an_ordinary_markdown_push_is_still_in_zone():
                "views/acme.md": "removed", "ops/acl.json": "modified", "README.md": "modified"}
     assert webhook.in_zone_changes(changes) == {
         "wiki/notes/a.md": "added", "sources/meetings/b.md": "modified", "views/acme.md": "removed"}
+
+
+# ── the entity-registry snapshot the same delivery refreshes (issue #74) ───────────────────────
+# `ops/` is not one of `corpus.ZONES`, so `ops/entity-registry.json` is invisible to every filter
+# written for pages — precisely how the deploy-window staleness stayed hidden. The registry is
+# therefore keyed off the RAW changed paths, fetched at the pushed sha, and written inside phase
+# 2's transaction, next to the entity page a governed mint pushes beside it.
+REGISTRY_RELPATH = "ops/entity-registry.json"
+SEEDED_REGISTRY = '{"entities": {"seeded": {"name": "Seeded Corp", "type": "organization"}}}'
+PUSHED_REGISTRY = '{"entities": {"pushed": {"name": "Pushed Corp", "type": "organization"}}}'
+
+
+@pytest.fixture()
+def snapshot(webhook_conn):
+    """The singleton registry row, cleared on the way IN and on the way OUT. `entity_registry_
+    snapshot` is one row in a database every suite shares and the server PREFERS it over its
+    `--entity-registry` file, so a leftover here changes what an unrelated suite's
+    `describe_entity` resolves — order-dependently, which is the kind of failure that reproduces
+    on nobody's laptop."""
+    store.clear_entity_registry(webhook_conn)
+    yield webhook_conn
+    store.clear_entity_registry(webhook_conn)
+
+
+@pytest.fixture()
+def pushed_pages(webhook_conn):
+    """Every page path a test in this section pushes, deleted on TEARDOWN whatever the outcome.
+
+    Not a cleanup line at the end of the test body, which is what the older tests here do: that
+    line never runs when an assertion above it fails, and the row it leaves in a database every
+    suite shares makes the NEXT run of the same test fail for a reason that has nothing to do with
+    the code under test. (Observed while mutation-checking these very tests — a deliberately broken
+    build left a page behind, and the repaired build then failed.)"""
+    paths: list[str] = []
+    yield paths
+    store.delete_pages(webhook_conn, paths)
+
+
+def _registry_content(conn) -> str | None:
+    return store.read_entity_registry(conn)
+
+
+def _token_spy(monkeypatch) -> list:
+    """Counts every `installation_token()` a delivery mints, replacing the module-wide fake (which
+    is a `lambda`, and therefore counts nothing)."""
+    calls = []
+
+    def spy(*a, **kw):
+        calls.append(1)
+        return "fake-token"
+    monkeypatch.setattr("stigmergy.librarian.githubapp.installation_token", spy)
+    return calls
+
+
+def test_registry_was_pushed_reads_the_raw_paths_and_only_added_or_modified():
+    """The predicate itself. `added`/`modified` refresh; a `removed` does NOT, because no governed
+    door deletes this file — a removal is either a rename away (the nightly rebuild reconciles from
+    the checkout) or an accident, and blanking every entity's name the moment one lands is the
+    worse of the two answers. The last assertion is the one that pins WHERE it is asked: the
+    page filter drops this path entirely, so a predicate built on `in_zone_changes` could never
+    fire at all."""
+    assert webhook.registry_was_pushed({REGISTRY_RELPATH: "added"}) is True
+    assert webhook.registry_was_pushed({REGISTRY_RELPATH: "modified"}) is True
+    assert webhook.registry_was_pushed({REGISTRY_RELPATH: "removed"}) is False
+    assert webhook.registry_was_pushed({"wiki/notes/a.md": "modified"}) is False
+    assert webhook.registry_was_pushed({}) is False
+    assert webhook.in_zone_changes({REGISTRY_RELPATH: "modified"}) == {}
+
+
+def test_a_push_that_removes_the_registry_leaves_the_snapshot_untouched(snapshot):
+    """A `removed` must be inert, not destructive. The snapshot is asserted BYTE-identical rather
+    than merely present: "we kept a registry" and "we kept THIS registry" are different promises,
+    and only the second one keeps every entity's name resolving. `registry_refreshed` stays out of
+    the stats, so `job_runs` never claims a refresh that did not happen."""
+    from stigmergy.index.backends.embedder import build_embedder
+    store.write_entity_registry(snapshot, SEEDED_REGISTRY, "seed-sha")
+    payload = _push_payload(commits=[{"added": [], "modified": [],
+                                      "removed": [REGISTRY_RELPATH]}])
+
+    stats = webhook.process_push(snapshot, build_embedder("fake"), payload, _settings(),
+                                 opener=_fake_opener({}))
+
+    assert "registry_refreshed" not in stats
+    assert _registry_content(snapshot) == SEEDED_REGISTRY
+
+
+def test_a_registry_only_push_refreshes_and_mints_exactly_one_token(snapshot, monkeypatch):
+    """A push can carry the registry and NO page at all — a regenerate, or a re-mint of an
+    already-indexed entity page. It must still refresh (the whole point of the fix), and it must
+    still be able to fetch: the token used to be minted inside the page-upsert branch, where a
+    registry-only push would have found none.
+
+    Exactly ONE token per delivery, and the count is the assertion. A GitHub App installation
+    token is a network round trip and a rate-limited credential; minting a second one per delivery
+    is invisible in every functional assertion and is paid on every push forever."""
+    from stigmergy.index.backends.embedder import build_embedder
+    calls = _token_spy(monkeypatch)
+    payload = _push_payload(commits=[{"added": [], "modified": [REGISTRY_RELPATH],
+                                      "removed": []}])
+
+    stats = webhook.process_push(snapshot, build_embedder("fake"), payload, _settings(),
+                                 opener=_fake_opener({REGISTRY_RELPATH: PUSHED_REGISTRY}))
+
+    assert stats["registry_refreshed"] is True
+    assert stats["upserted"] == 0 and stats["deleted"] == 0
+    assert _registry_content(snapshot) == PUSHED_REGISTRY
+    assert len(calls) == 1, f"a registry-only delivery minted {len(calls)} installation tokens"
+
+
+def test_a_mint_push_carrying_a_page_and_the_registry_mints_exactly_one_token(snapshot, monkeypatch,
+                                                                              pushed_pages):
+    """The shape a governed mint actually pushes: the entity page and the regenerated registry in
+    one commit. Both land, off ONE token — the mixed twin of the registry-only count above, and
+    the arm that would catch a second mint added beside the registry fetch."""
+    from stigmergy.index.backends.embedder import build_embedder
+    calls = _token_spy(monkeypatch)
+    path = "wiki/webhook-test/registry-mint.md"
+    pushed_pages.append(path)
+    text = ("---\ntitle: Registry Mint\nentity: pushed\nverification: verified\n---\n"
+            "The entity page a mint pushes beside the registry.")
+    payload = _push_payload(commits=[{"added": [path], "modified": [REGISTRY_RELPATH],
+                                      "removed": []}])
+
+    stats = webhook.process_push(snapshot, build_embedder("fake"), payload, _settings(),
+                                 opener=_fake_opener({path: text,
+                                                      REGISTRY_RELPATH: PUSHED_REGISTRY}))
+
+    assert stats["upserted"] == 1 and stats["registry_refreshed"] is True
+    assert _registry_content(snapshot) == PUSHED_REGISTRY
+    assert len(calls) == 1, f"a mint delivery minted {len(calls)} installation tokens"
+
+
+def test_a_push_with_nothing_to_fetch_mints_no_token_at_all(snapshot, monkeypatch):
+    """The benign twin of the two counts above, pointed the other way: a delivery that fetches
+    nothing — a deletion-only push — must mint NOTHING. Moving the mint out of the page branch to
+    cover the registry-only case is exactly the change that could have made every delivery pay for
+    a credential it never uses."""
+    from stigmergy.index.backends.embedder import build_embedder
+    calls = _token_spy(monkeypatch)
+    payload = _push_payload(commits=[{"added": [], "modified": [],
+                                      "removed": ["wiki/webhook-test/never-existed.md"]}])
+
+    webhook.process_push(snapshot, build_embedder("fake"), payload, _settings(),
+                         opener=_fake_opener({}))
+
+    assert calls == []
+
+
+def test_an_over_cap_push_that_also_touches_the_registry_defers_the_registry_too(snapshot,
+                                                                                 pushed_pages):
+    """The cap's promise is that a push lands WHOLE or not at all, and the registry rides it: half
+    of a bulk change is worse than a stale one, and a registry refreshed against pages that were
+    deferred is exactly a half-applied push. The nightly rebuild reconciles both together."""
+    from stigmergy.index.backends.embedder import build_embedder
+    store.write_entity_registry(snapshot, SEEDED_REGISTRY, "seed-sha")
+    paths = [f"wiki/webhook-test/registry-cap-{i}.md" for i in range(5)]
+    pushed_pages.extend(paths)      # deferred means none of them land — unless the cap regresses
+    contents = {p: f"---\ntitle: Cap {i}\nverification: verified\n---\nBody {i}."
+                for i, p in enumerate(paths)}
+    contents[REGISTRY_RELPATH] = PUSHED_REGISTRY
+    payload = _push_payload(commits=[{"added": paths, "modified": [REGISTRY_RELPATH],
+                                      "removed": []}])
+
+    stats = webhook.process_push(snapshot, build_embedder("fake"), payload,
+                                 _settings(file_cap=2), opener=_fake_opener(contents))
+
+    assert stats["deferred"] is True
+    assert "registry_refreshed" not in stats
+    assert _registry_content(snapshot) == SEEDED_REGISTRY
+    for path in paths:
+        with snapshot.cursor() as cur:
+            cur.execute("SELECT count(*) FROM pages_index WHERE path = %s", (path,))
+            assert cur.fetchone()[0] == 0
+
+
+def test_a_failing_registry_write_rolls_the_page_back_with_it(snapshot, monkeypatch, pushed_pages):
+    """Phase 2 is ONE transaction and the registry is inside it: the entity page and the metadata
+    that names it land together or neither does, so no reader ever sees a page whose entity has no
+    name — the exact half-state issue #74 reported, which a snapshot written OUTSIDE the
+    transaction would have reintroduced from the other side.
+
+    Proven by forcing the registry write to fail, because that is the direction the existing
+    rollback test (`..._rolls_back_a_deletion_when_the_upsert_side_fails_mid_run`) cannot reach:
+    the registry write is the LAST statement in the block, so only a failure there proves the page
+    upsert before it is genuinely inside the same transaction."""
+    from stigmergy.index.backends.embedder import build_embedder
+    store.write_entity_registry(snapshot, SEEDED_REGISTRY, "seed-sha")
+    path = "wiki/webhook-test/registry-rollback.md"
+    pushed_pages.append(path)
+    text = ("---\ntitle: Registry Rollback\nentity: pushed\nverification: verified\n---\n"
+            "The page that must not survive its registry's failure.")
+    payload = _push_payload(commits=[{"added": [path], "modified": [REGISTRY_RELPATH],
+                                      "removed": []}])
+    with snapshot.cursor() as cur:      # the row must be absent BEFORE, or "0 after" proves nothing
+        cur.execute("SELECT count(*) FROM pages_index WHERE path = %s", (path,))
+        assert cur.fetchone()[0] == 0
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated registry-snapshot failure mid-transaction")
+    monkeypatch.setattr(store, "write_entity_registry", boom)
+
+    with pytest.raises(RuntimeError, match="simulated registry-snapshot failure"):
+        webhook.process_push(snapshot, build_embedder("fake"), payload, _settings(),
+                             opener=_fake_opener({path: text,
+                                                  REGISTRY_RELPATH: PUSHED_REGISTRY}))
+
+    monkeypatch.undo()
+    with snapshot.cursor() as cur:
+        cur.execute("SELECT count(*) FROM pages_index WHERE path = %s", (path,))
+        assert cur.fetchone()[0] == 0             # the page rolled back WITH the registry write
+    assert _registry_content(snapshot) == SEEDED_REGISTRY

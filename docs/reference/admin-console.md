@@ -124,8 +124,10 @@ gateway's own sentence (status code, never the token, never an echoed body) show
   and the console's authorization IS the token.
 - **Digest** — the configured-pieces checklist, Preview (the byte-identical dry-run body), Post
   now (names the duplicate-window risk before it posts). Still command-only: no schedule exists.
-- **Index** — built_at + pages per zone + webhook upsert health; Substrate check in-process;
-  Rebuild-now dispatches the workflow.
+- **Index** — built_at + pages per zone + webhook upsert health, plus which entity registry this
+  stack is serving (the snapshot's age and the sha or `rebuild` that wrote it, or "no snapshot"
+  when every server here is answering from its own `--entity-registry` file); Substrate check
+  in-process, over that same served copy; Rebuild-now dispatches the workflow.
 - **Entities** — pending identity situations with the material and the agent's reading, and a
   real Approve form: name (prefilled from `mint_name_prefill`, the value
   `entities.situations.mint_name_prefill` decides on the parked row and BOTH entity routes send

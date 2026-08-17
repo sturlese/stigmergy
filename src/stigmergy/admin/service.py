@@ -289,12 +289,29 @@ class AdminService:
     # ── index ─────────────────────────────────────────────────────────────────────────────────
     def index_state(self) -> dict:
         return {"meta": index_store.read_meta(self._conn), "zones": self._zone_counts(),
+                "entity_registry": self._entity_registry_state(),
                 "webhook": self._job_runs((WEBHOOK_JOB,), limit=10)}
 
+    def _entity_registry_state(self) -> dict | None:
+        """Which registry copy this stack is serving, and how fresh it is — `None` when the index
+        carries no snapshot, which is the console's way of saying "every server here is answering
+        from its own `--entity-registry` file". The registry the deployed groups read is a database
+        row no operator holds a checkout of, so "is it fresh, and from which sha?" has no other
+        surface (issue #74)."""
+        state = index_store.read_entity_registry_meta(self._conn)
+        if state is None:
+            return None
+        return {"source": _clean(state["source"]), "refreshed_at": state["refreshed_at"]}
+
     def index_substrate_check(self) -> dict:
-        registry = self._server.entity_registry_path or None
+        # The copy the SERVER serves — the snapshot where this index has one, the
+        # `--entity-registry` file where it does not. Linting the file on a deployed console lints
+        # the copy baked at DEPLOY time, so every entity minted since the rollout reports as
+        # `anchored-but-unregistered` while the server has full records for it (issue #74).
+        registry = index_check.served_registry(self._conn,
+                                               self._server.entity_registry_path or None)
         try:
-            findings = index_check.run_checks(self._conn, registry_path=registry)
+            findings = index_check.run_checks(self._conn, registry=registry)
         except (StigmergyIndexError, ValueError) as ex:
             # `ValueError` too: the registry this check reads is loaded by
             # `kernel.registry.load_registry`, which raises a bare one (a nameless entity, a

@@ -8,42 +8,87 @@ document), missing embedding / empty tsv (a page invisible to one arm is a silen
 hole). WARN: dangling `superseded_by` (may be legitimately historical), anchored-but-unregistered
 entity (resolves for navigation but gets no aliases, no entity-first search, no TOLD boost).
 
-The registry is read as a FILE (id set only) through `kernel.registry.load_registry`, never
-through `stigmergy.server` — the index sits below the server, and packages talk through files.
-The shared loader rather than a local parse, so the lint accepts exactly what the server loads.
+The registry is read through `kernel.registry`, the one reader, never through `stigmergy.server` —
+the index sits below the server, and packages talk through files. The shared loader rather than a
+local parse, so the lint accepts exactly what the server loads. WHICH COPY it reads is
+`served_registry`'s answer: the index's snapshot wherever the database has one, the
+`--entity-registry` file where it does not — the server's own order, because a lint reading a
+different copy than the server serves reports on a world nobody is living in.
 The lint sees the WHOLE index by design: it is an operator tool with no caller identity to scope
 to, a named ACL exception in `tests/test_architecture.py`.
 """
 import os
 import posixpath
 
+from stigmergy.index import store
 from stigmergy.index.rank import chain_base
-from stigmergy.kernel.registry import load_registry
+from stigmergy.kernel import registry as kernel_registry
 
 FINDING_SEVERITIES = ("error", "warn")
+
+# What names the served copy in a parse error. There is no path to give when the bytes came out of
+# Postgres, and the operator still has to know WHICH copy to fix.
+SNAPSHOT_ORIGIN = "entity_registry_snapshot (the index's cached ops/entity-registry.json)"
 
 
 def _finding(severity: str, check: str, detail: str) -> dict:
     return {"severity": severity, "check": check, "detail": detail}
 
 
-def registry_ids(path: str | None) -> set[str] | None:
-    """The registry's id set, or None when there is no registry to check against (missing path or
-    file — the coverage check is then skipped, so None and an empty set mean different things).
-    A malformed registry raises: a broken registry is an operator-visible fault.
+def served_registry(conn, registry_path: str | None) -> tuple[str | None, str]:
+    """The registry the SERVER answers from, as `(TEXT, origin)`: the index's snapshot wherever
+    this database has one, the `--entity-registry` file where it does not.
 
-    Read through `kernel.registry.load_registry`, the one reader, and not by hand: a second parse
-    validates whatever it happens to check, which here was strictly less than the loader — a
-    nameless entity passed this lint and then made every real consumer refuse the file. A lint
-    that blesses a substrate the server will not load is worse than no lint.
-    """
+    `server.service.BrainService._registry_source`'s order, mirrored here rather than imported
+    (`stigmergy.index` sits below `stigmergy.server`). It exists because the console lints a LIVE
+    index: on a deployed server the registry file is the copy baked at deploy time, so every entity
+    minted since the rollout would be reported `anchored-but-unregistered` — "no aliases, no
+    entity-first search, no TOLD boost" — while the server has full records for all of them out of
+    the snapshot (issue #74). Two surfaces, one answer, or the console teaches an operator to
+    distrust it."""
+    snapshot = store.read_entity_registry(conn)
+    if snapshot is not None:
+        return snapshot, SNAPSHOT_ORIGIN
+    return _read_registry_file(registry_path), registry_path or ""
+
+
+def _read_registry_file(path: str | None) -> str | None:
+    """A registry FILE's text, or None when there is no file to read — the "no registry to check
+    against" answer, distinct from an empty one."""
     if not path or not os.path.exists(path):
         return None
-    return set(load_registry(path).entities)
+    with open(path, encoding="utf-8") as f:
+        return f.read()
 
 
-def run_checks(conn, registry_path: str | None = None) -> list[dict]:
-    """Every finding over the live `pages_index`, ordered errors-first then by check name."""
+def registry_ids(path: str | None) -> set[str] | None:
+    """`registry_ids_from_text` over a FILE — the file-only road, for a caller with no index
+    connection to prefer a snapshot from."""
+    return registry_ids_from_text(_read_registry_file(path), path or "")
+
+
+def registry_ids_from_text(text: str | None, origin: str) -> set[str] | None:
+    """The registry's id set, or None when there is no registry to check against (the coverage
+    check is then skipped, so None and an empty set mean different things). A malformed registry
+    raises: a broken registry is an operator-visible fault.
+
+    Read through `kernel.registry`, the one reader, and not by hand: a second parse validates
+    whatever it happens to check, which here was strictly less than the loader — a nameless entity
+    passed this lint and then made every real consumer refuse the file. A lint that blesses a
+    substrate the server will not load is worse than no lint.
+    """
+    if text is None:
+        return None
+    return set(kernel_registry.registry_from_text(text, origin).entities)
+
+
+def run_checks(conn, registry_path: str | None = None, *,
+               registry: tuple[str | None, str] | None = None) -> list[dict]:
+    """Every finding over the live `pages_index`, ordered errors-first then by check name.
+
+    `registry` is a resolved `(TEXT, origin)` pair — what `served_registry` returns, and what the
+    console and `stigmergy-index --check` pass so that both lint the copy the server serves.
+    `registry_path` is the file-only road, and it is what a caller naming ONE file to lint uses."""
     with conn.cursor() as cur:
         cur.execute("SELECT path, page_id, superseded_by, entity,"
                     "       embedding IS NULL AS no_embedding,"
@@ -97,7 +142,8 @@ def run_checks(conn, registry_path: str | None = None) -> list[dict]:
                 "warn", "dangling-superseded-by",
                 f"{r['path']} says superseded_by {target!r}, which no indexed page carries"))
 
-    known = registry_ids(registry_path)
+    known = (registry_ids_from_text(*registry) if registry is not None
+             else registry_ids(registry_path))
     if known is not None:
         anchored = sorted({e for r in rows for e in (r["entity"] or ()) if e})
         for entity_id in anchored:

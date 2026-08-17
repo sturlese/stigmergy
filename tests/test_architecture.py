@@ -2760,6 +2760,36 @@ def test_the_repair_preview_renders_every_callout_kind_the_applier_performs():
     assert _repair_cli._CALLOUT_PHRASES == _page.CALLOUT_STYLES
 
 
+def test_the_index_and_the_server_spell_the_entity_registry_path_the_same_way():
+    """`index.build.ENTITY_REGISTRY_RELPATH` is hand-mirrored from
+    `server.entity_aliases.ENTITY_REGISTRY_RELPATH`: `stigmergy.index` sits BELOW `stigmergy.server`
+    and may not import it (the second assertion holds that reason true), so the duplication is
+    declared rather than discovered — and this repo pins a declared duplication instead of trusting
+    it.
+
+    What drift costs: these two constants are the two WRITERS of one singleton row. The webhook
+    matches the server's spelling against a push's changed paths; the nightly rebuild reads the
+    index's spelling out of a checkout. Change one and the failure is silent in both directions —
+    a rebuild that finds no registry CLEARS the snapshot the webhook keeps refreshing, so the
+    deployed server flips between the fresh registry and its deploy-baked file depending on which
+    road ran last. That is issue #74 returning as an intermittent, and no test that exercises only
+    one road would see it.
+    """
+    from stigmergy.index import build as _build
+    from stigmergy.server import entity_aliases as _entity_aliases
+
+    assert _build.ENTITY_REGISTRY_RELPATH == _entity_aliases.ENTITY_REGISTRY_RELPATH
+
+    index_dir = STIGMERGY_ROOT / "index"
+    offenders = [f"{path.name}:{line} -> {mod}"
+                 for path in sorted(index_dir.rglob("*.py"))
+                 for mod, line in _all_module_imports(path)
+                 if mod.startswith("stigmergy.server")]
+    assert not offenders, (
+        "stigmergy.index imported stigmergy.server — the index sits below the server, and the "
+        "mirrored constant above exists only because of that:\n  " + "\n  ".join(offenders))
+
+
 # ── the admin console boundary (ADR 029) ───────────────────────────────────────────────────────
 # `stigmergy.admin` is a SKIN over seams other packages own and test. What it may import is a
 # closed, named set; what may import IT is exactly one module (the composition point); its one

@@ -10,7 +10,9 @@ import os
 import pytest
 
 from stigmergy.index import build
+from stigmergy.index import store as index_store
 from stigmergy.index.backends.embedder import build_embedder
+from stigmergy.server.errors import RegistryError
 from stigmergy.server.service import BrainService
 from stigmergy.server.settings import Settings
 from tests.server.conftest import connect_or_skip, write_page
@@ -83,10 +85,17 @@ class _EntityDocsFixture:
 
 @pytest.fixture(scope="module")
 def entity_docs_indexed(tmp_path_factory):
+    """This repo CARRIES an `ops/entity-registry.json`, so the rebuild caches it as the index's
+    registry snapshot — a singleton row in a database every suite shares, and the one the server
+    prefers over its `--entity-registry` file (issue #74). Cleared on the way out: whether this
+    module leaves one behind (and which one — two tests below clear it mid-module) would otherwise
+    depend on collection order, and it would change what an unrelated suite's `describe_entity`
+    resolves."""
     fx = _EntityDocsFixture(str(tmp_path_factory.mktemp("entity-docs")))
     conn = connect_or_skip()
     build.rebuild(conn, fx.repo, build_embedder("fake"))
     yield conn, fx
+    index_store.clear_entity_registry(conn)
     conn.close()
 
 
@@ -143,7 +152,12 @@ def test_list_entities_is_scoped_like_scoped_entities(entity_docs_indexed):
 
 
 def test_list_entities_registry_missing_serves_ids_only(entity_docs_indexed):
+    """Registry missing means missing on BOTH roads (issue #74): the index's snapshot is the
+    service's first source and the `--entity-registry` file is the fallback, so the fixture's
+    rebuild — which cached this repo's registry — has to be cleared for a bogus path to be the
+    whole answer."""
     conn, fx = entity_docs_indexed
+    index_store.clear_entity_registry(conn)
     svc = _service(conn, fx, fx.STEWARD, entity_registry_path="/nonexistent/entity-registry.json")
     out = svc.list_entities()
     assert out["entities"]
@@ -151,11 +165,16 @@ def test_list_entities_registry_missing_serves_ids_only(entity_docs_indexed):
 
 
 def test_list_entities_registry_malformed_raises_loudly(entity_docs_indexed, tmp_path):
+    """Loudly, and as `RegistryError` — not the loader's bare `ValueError` it used to let out.
+    `list_entities` was the one registry reader that reached the loader directly, so a message
+    naming the registry's filesystem PATH left the service; every reader now goes through
+    `_registry_records`, which converts it (`errors.RegistryError`'s own reason for existing)."""
     conn, fx = entity_docs_indexed
+    index_store.clear_entity_registry(conn)      # the file road is the one under test
     bad = tmp_path / "bad-registry.json"
     bad.write_text(json.dumps({"not-entities": {}}))
     svc = _service(conn, fx, fx.STEWARD, entity_registry_path=str(bad))
-    with pytest.raises(ValueError, match="entities"):
+    with pytest.raises(RegistryError):
         svc.list_entities()
 
 
@@ -362,10 +381,13 @@ class _DuplicateSelfAnchorFixture:
 
 @pytest.fixture(scope="module")
 def duplicate_self_anchor_indexed(tmp_path_factory):
+    """Same snapshot hygiene as `entity_docs_indexed` above: this repo carries a registry too, so
+    the rebuild caches one into the shared singleton row."""
     fx = _DuplicateSelfAnchorFixture(str(tmp_path_factory.mktemp("dup-self-anchor")))
     conn = connect_or_skip()
     build.rebuild(conn, fx.repo, build_embedder("fake"))
     yield conn, fx
+    index_store.clear_entity_registry(conn)
     conn.close()
 
 

@@ -144,7 +144,7 @@ Dockerfile then `COPY`s to `/app/`:
 | Baked from | To | Missing in the knowledge repo |
 |---|---|---|
 | `ops/identities.json` | `/app/identities.json` | **the script exits 2** — this is the one required file |
-| `ops/entity-registry.json` | `/app/entity-registry.json` | `{"entities": {}}` — `ask` searches without entity-first resolution |
+| `ops/entity-registry.json` | `/app/entity-registry.json` | `{"entities": {}}` — `ask` searches without entity-first resolution. The baked copy is the FALLBACK: a server whose index carries a registry snapshot (the webhook refreshes it on every push that touches the file) answers from that instead |
 | `ops/slack-channels.json` | `/app/slack-channels.json` | `{}` — every audience falls back to the safe empty default |
 | `ops/stewards.json` | `/app/stewards.json` | `{}` — no scope resolves to a steward, so the doorbell records an undeliverable and every review decision fails closed (see Troubleshooting) |
 
@@ -193,14 +193,18 @@ do to change this" differently enough that guessing costs a redeploy or a silent
 
 | Kind | Example | What changing it takes |
 |---|---|---|
-| Baked into the image at deploy time | `ops/identities.json`, `ops/entity-registry.json`, `ops/slack-channels.json`, `ops/stewards.json` — the copies `fly.toml` points the `app`/`slack` groups at (`--identities`/`--entity-registry`/`--stewards`, `$STIGMERGY_ADMIN_CHANNELS_PATH`) | a commit and a push in the knowledge repo, then `make deploy-staging` to re-bake `deploy/` and redeploy |
+| Baked into the image at deploy time | `ops/identities.json`, `ops/slack-channels.json`, `ops/stewards.json` — the copies `fly.toml` points the `app`/`slack` groups at (`--identities`/`--stewards`, `$STIGMERGY_ADMIN_CHANNELS_PATH`) | a commit and a push in the knowledge repo, then `make deploy-staging` to re-bake `deploy/` and redeploy |
+| Cached in the index, refreshed by the push webhook | `ops/entity-registry.json` — `entity_registry_snapshot`, which every process group reads through its database connection; `/app/entity-registry.json` is still baked and still `--entity-registry`, but only answers where the index has no snapshot | a commit and a push — no deploy; the webhook writes the new registry within seconds of the push, and the nightly index rebuild reconciles it |
 | A Fly secret, read once at process startup | `STIGMERGY_TOKEN_STORE`, `OPENAI_API_KEY`, `STIGMERGY_INDEX_DSN`, the `STIGMERGY_EVIDENCE_*` group, the librarian App triple, `ANTHROPIC_API_KEY`, `STIGMERGY_ADMIN_TOKEN_HASH`/`STIGMERGY_ADMIN_GITHUB_TOKEN`, the three `SLACK_*` tokens, `STIGMERGY_GITHUB_WEBHOOK_SECRET` | `fly secrets set …` — triggers the redeploy that applies it; effective once the new machines are healthy, not before |
 | A non-secret env var in `fly.toml`'s `[env]`, app-wide | `STIGMERGY_LIBRARIAN_TIMEOUT_S` — the worker's per-item agent budget, and what its lease (`config.resolved_visibility_timeout_s`) is derived from | edit `fly.toml`, then `make deploy-staging`/`fly deploy` — every process group's machines restart on the new value together. The admin console re-derives the DEPENDENT lease fresh on every request rather than caching a class default, so its meter and Reclaim horizon can never disagree with the worker's own once the new machines are up — see "A dead worker mid-item" below |
 | Committed to the knowledge repo, read at a base commit, wherever a checkout exists | `ops/acl.json`, `ops/entity-registry.json` and the contract linter (the WORKER's own reads — distinct from the `app`/`slack` groups' baked copies above), `ops/stewards.json` (same distinction, for the worker and any locally-run server passed `--repo`) | a commit and a push — no deploy; picked up at the very next item the worker claims, or the very next decision a checked-out server resolves |
 
-The two rows that name `ops/stewards.json` are one file read two ways: on the deployed
-`app`/`slack` groups a steward's authority is a deploy-time snapshot, while the worker (and any
-process holding a checkout) sees a push immediately. See Revocation.
+The rows that name `ops/stewards.json` are one file read two ways: on the deployed `app`/`slack`
+groups a steward's authority is a deploy-time snapshot, while the worker (and any process holding a
+checkout) sees a push immediately. See Revocation. `ops/entity-registry.json` used to work that way
+too and no longer does — a mint that pushed a new entity left `describe_entity` serving it with no
+name and no aliases until the next deploy, so the registry moved into the index where the webhook
+can refresh it for every group at once.
 
 ### The three process groups
 
@@ -499,14 +503,15 @@ probe, any time:
 
 The registry loader (`src/stigmergy/server/entity_aliases.py`) is deliberately asymmetric:
 
-- **Missing file → fail-open**: no aliases, no entity-first resolution, `ask` still answers
+- **No registry at all → fail-open**: no aliases, no entity-first resolution, `ask` still answers
   from semantic search. Not an incident.
 - **Malformed JSON (or a top level that is not `{"entities": {...}}`) → raises.** Every
   registry consumer — `ask`'s entity-first resolution, `list_entities`'s enrichment,
   `describe_entity`'s entity layer — hard-fails loudly rather than degrading silently.
 
-**Symptom**: every `ask` (and `list_entities`/`describe_entity`) starts erroring at once, right
-after a commit touched `ops/entity-registry.json` — or right after a deploy baked one.
+**Symptom**: every `ask` (and `list_entities`/`describe_entity`) starts erroring at once, within
+seconds of a push that touched `ops/entity-registry.json` — the push webhook caches that file into
+the index, and the server reads the cache in preference to the copy baked at deploy time.
 
 **Check** (the registry is plain JSON; one line settles it):
 
@@ -515,12 +520,16 @@ python3 -c 'import json,os; json.load(open(os.environ["STIGMERGY_REPO"]+"/ops/en
 ```
 
 **Fix**: `git revert` the registry commit in the knowledge repo (or fix the JSON by hand and
-commit), push, and — because the server reads the registry baked at deploy time —
-`make deploy-staging` if staging is the broken one. `stigmergy-entities` is the only thing that
-writes this file; a hand edit is the usual way it got malformed.
+commit) and **push** — the webhook caches the corrected file within seconds, no deploy needed. If
+the webhook is not delivering, `make index-rebuild` from a checkout writes the same snapshot, and
+clearing it (a rebuild from a repo with no registry) drops the server back to its baked
+`--entity-registry` copy. `stigmergy-entities` is the only thing that writes this file; a hand edit
+is the usual way it got malformed.
 
 **Prevention**: `stigmergy-index --check --repo $STIGMERGY_REPO` warns on anchored-but-unregistered
-entities — run it after registry changes; it raises on malformed registry JSON too. Its findings
+entities — run it after registry changes; it raises on malformed registry JSON too. It lints the
+copy the SERVER serves, so against a database carrying a snapshot the `--repo` file is not what it
+reads (`--rebuild` is what makes a checkout's registry the served one). Its findings
 name paths and page_ids of EVERY page, ACL-restricted ones included, so treat the output as scoped
 material and don't paste it into shared trackers.
 

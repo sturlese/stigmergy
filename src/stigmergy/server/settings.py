@@ -19,11 +19,12 @@ LIBRARIAN_REPO_URL_ENV = "STIGMERGY_LIBRARIAN_REPO_URL"
 class Settings:
     identity: str | None = None        # the resolved identity name (--identity / STIGMERGY_IDENTITY)
     identities_path: str = ""          # the versioned identities file
-    # `ops/entity-registry.json`, read-only. An EXPLICIT `--entity-registry` path wins over the
-    # `--repo` convention (the deployed server passes no `--repo` at all, so derivation alone
-    # would leave this permanently empty in production). The PATH is resolved once at startup; the
-    # file itself is read per call, so a deployment that must not track working-tree edits points
-    # this at a baked artifact.
+    # `ops/entity-registry.json`, read-only, and the FALLBACK source rather than the source: the
+    # service answers from the index's registry snapshot wherever the database has one, and reads
+    # this file only where it has none (a local `--repo` run, an index built before that table
+    # existed). An EXPLICIT `--entity-registry` path still wins over the `--repo` convention — the
+    # deployed server passes no `--repo` at all, so derivation alone would leave this empty in
+    # production, which is exactly where the fallback has to work.
     entity_registry_path: str = ""
     # A local checkout of the knowledge repo, fetchable from `origin` — only `review_decide`'s
     # steward resolution needs it; everything else works with it empty.
