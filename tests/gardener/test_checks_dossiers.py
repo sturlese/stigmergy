@@ -191,7 +191,7 @@ def test_entity_placeholder_body_fires_for_a_page_that_is_still_the_template(rep
                             "<One clear paragraph: what this entity is and why it's in the "
                             "brain.>\n")
 
-    findings = checks.check_entity_placeholder_bodies(repo)
+    findings = checks.check_entity_placeholder_bodies(checks.entity_zone_pages(repo))
 
     assert len(findings) == 1
     f = findings[0]
@@ -211,7 +211,7 @@ def test_a_written_entity_page_is_the_benign_twin(repo):
                        body="# Meridian Partners\n\n## What / Who\n\nA freight broker the "
                             "renewal pipeline runs through.\n")
 
-    assert checks.check_entity_placeholder_bodies(repo) == []
+    assert checks.check_entity_placeholder_bodies(checks.entity_zone_pages(repo)) == []
 
 
 def test_a_placeholder_on_a_note_page_is_not_this_checks_business(repo):
@@ -221,7 +221,7 @@ def test_a_placeholder_on_a_note_page_is_not_this_checks_business(repo):
                        frontmatter={"type": "note", "title": "Draft", "status": "developing"},
                        body="# Draft\n\n<the paragraph nobody wrote>\n")
 
-    assert checks.check_entity_placeholder_bodies(repo) == []
+    assert checks.check_entity_placeholder_bodies(checks.entity_zone_pages(repo)) == []
 
 
 def test_a_placeholder_inside_the_frontmatter_is_not_a_body_placeholder(repo):
@@ -231,4 +231,20 @@ def test_a_placeholder_inside_the_frontmatter_is_not_a_body_placeholder(repo):
                        frontmatter={**PLACEHOLDER_ENTITY, "created": "<YYYY-MM-DD>"},
                        body="# Meridian Partners\n\n## What / Who\n\nA freight broker.\n")
 
-    assert checks.check_entity_placeholder_bodies(repo) == []
+    assert checks.check_entity_placeholder_bodies(checks.entity_zone_pages(repo)) == []
+
+
+def test_a_symlinked_entity_page_is_never_read_by_this_check_either(repo, tmp_path):
+    """The walk is shared with the model's empty-body pass, so its symlink refusal has to be
+    proved from BOTH consumers — a leaf `islink` guard that a later refactor moved into the sweep
+    would leave this check following the link, and this check's detail is persisted, printed and
+    rendered in the admin console."""
+    secret = tmp_path / "outside-the-checkout.txt"
+    secret.write_text("<TOTALLY-SECRET-VALUE>\n", encoding="utf-8")
+    os.makedirs(os.path.join(repo, "wiki", "entities"), exist_ok=True)
+    os.symlink(secret, os.path.join(repo, "wiki", "entities", "leak.md"))
+
+    findings = checks.check_entity_placeholder_bodies(checks.entity_zone_pages(repo))
+
+    assert findings == []
+    assert "TOTALLY-SECRET-VALUE" not in repr(findings)

@@ -5,15 +5,26 @@ Calls `ops.record_job_run` directly, not the `job_run` context manager: that man
 row on exit, and every finding needs `run_id` at insert time. The try/except below replicates its
 shape so a failed run still gets an honest `status='error'` row.
 
-Two passes can never make this function raise, for one reason — work already done must not be
-lost to a later, optional step. The sweep: a sweep outage must not cost the operator the
-deterministic checks that already ran, so `_run_sweep_pass` catches everything and reports through
-its returned stats. The notice: it runs AFTER the findings are committed, so every failure it can
+Three passes can never make this function raise, for one reason — work already done must not be
+lost to a later, optional step. The two MODEL passes: an outage of either must not cost the
+operator the deterministic checks that already ran, nor the other pass's findings, so
+`_run_sweep_pass` and `_run_empty_body_pass` each catch everything and report through their
+returned stats. The notice: it runs AFTER the findings are committed, so every failure it can
 have — including the database errors its own ACL scoping query raises — is absorbed into
 `RunResult.notice_error`. Every OTHER failure aborts the run entirely.
 
-A failed sweep commits `'partial'`, never `'ok'`: `sweep.previous_run_watermark` reads only
-`'ok'` rows, and an `'ok'` here would advance the sweep watermark past pages nothing judged.
+A failure of EITHER model pass commits `'partial'`, never `'ok'` — a run's status is the one place
+an operator learns a whole model pass did not happen. That status is therefore an aggregate over
+two independent passes, and NOTHING may read it as a verdict on one of them:
+`sweep.previous_run_watermark` asks `stats.sweep.error` whether the editorial sweep itself
+completed, precisely so a failed empty-body pass cannot freeze the sweep's `since` and its sample
+rotation. There is no price to a `'partial'` beyond the status: each pass's watermark, or absence
+of one, follows that pass's own recorded outcome.
+
+The entity zone is walked ONCE per run, here, and the same list goes to the deterministic
+placeholder check and to the empty-body pass. Two walks straddling the editorial sweep's model
+call would let a page edited in between be reported by both checks or by neither, and the second
+pass's exclusion of what the first reported is only exact over one page set.
 """
 import logging
 import os
@@ -24,7 +35,7 @@ from stigmergy.capture import ops
 from stigmergy.gardener import checks, notice, store, sweep
 from stigmergy.gardener.errors import GardenerError
 from stigmergy.gardener.schema import JOB_NAME
-from stigmergy.gardener.settings import GardenerSettings
+from stigmergy.gardener.settings import EMPTY_BODY_CEILING_ENV, GardenerSettings
 from stigmergy.kernel.registry import Registry, load_registry
 from stigmergy.server.errors import IdentityError
 from stigmergy.slack import channels
@@ -51,6 +62,14 @@ class RunResult:
     sweep_error: str = ""
     sweep_changed_count: int = 0
     sweep_sampled_count: int = 0
+    # The SECOND model pass, reported separately from the first: the two fail independently, and
+    # one number covering both would tell an operator that a pass failed without saying which.
+    empty_body_error: str = ""
+    empty_body_judged_count: int = 0
+    # What the run ceiling deferred. On `RunResult` rather than only in `job_runs.stats` because
+    # `report.py` is the surface an operator actually reads, and a bound that bit only in a stats
+    # blob reads as "nothing wrong about the pages it never opened".
+    empty_body_deferred_count: int = 0
     stats: dict = field(default_factory=dict)
 
 
@@ -63,10 +82,12 @@ def _require_repo(repo: str) -> str:
 
 
 def _run_all_checks(conn, repo: str, registry: Registry, settings: GardenerSettings,
-                    filing_population_stats: dict, age_population_stats: dict) -> list[dict]:
+                    filing_population_stats: dict, age_population_stats: dict,
+                    entity_zone_pages: list[dict]) -> list[dict]:
     """`filing_population_stats` and `age_population_stats` are shared sink dicts the checks
     write their exclusion counters into — every excluded row is counted, never silently
-    dropped."""
+    dropped. `entity_zone_pages` is the run's ONE walk of the entity zone (module docstring),
+    passed in rather than taken because the empty-body pass judges the identical list."""
     findings: list[dict] = []
     findings += checks.check_orphans(conn)
     aging_seed_stats: dict = {}
@@ -80,7 +101,7 @@ def _run_all_checks(conn, repo: str, registry: Registry, settings: GardenerSetti
         population_stats=filing_population_stats)
     findings += checks.check_dead_vocabulary(repo, registry)
     findings += checks.check_date_bearing_body_links(repo)
-    findings += checks.check_entity_placeholder_bodies(repo)
+    findings += checks.check_entity_placeholder_bodies(entity_zone_pages)
     findings += checks.check_company_wide_fraction(
         conn, window=settings.company_window, share_threshold=settings.company_share,
         population_stats=filing_population_stats)
@@ -132,6 +153,72 @@ async def _run_sweep_pass(conn, settings: GardenerSettings) -> tuple[list[dict],
     return findings, run_stats
 
 
+async def _run_empty_body_pass(zone_pages: list[dict], settings: GardenerSettings, *,
+                               walk_exclusions: dict) -> tuple[list[dict], dict]:
+    """The second model pass — every entity page from the run's one entity-zone walk that the
+    deterministic twin has not already reported, batched — and, like `_run_sweep_pass`, it NEVER
+    raises.
+
+    `walk_exclusions` is what that walk REFUSED (unconfined, unreadable, oversized). It is
+    recorded here, in the one stats block that describes the entity zone, even though both
+    consumers of the walk lost those pages: a page missing from both checks and from the
+    population count would let the pass report full coverage of a population it silently
+    excluded.
+
+    Three decisions this shape records:
+
+    · **The judge is built only when there is something to judge.** A corpus with no entity pages
+      must not pay a model-stack construction, and — the real reason — a missing API key would
+      otherwise turn a run with nothing to do into a failed pass.
+    · **A batch failure stops the pass, and the batches already done are KEPT.** Stopping, because
+      a failing batch is a fact about the judge or about its answers, not about page 57, so the
+      remaining batches would most likely just repeat the bill. Keeping, because validated
+      findings are validated however the next batch went — the same reasoning that lets a failed
+      sweep leave the deterministic findings standing.
+    · **What was not judged is COUNTED, never dropped** — `unjudged` for a pass that stopped
+      early, `deferred` for the run ceiling, and the ceiling also speaks as a skip reason and a
+      log warning, because a bound that bit in silence reads as "nothing wrong here".
+    """
+    pages, select_stats = sweep.select_empty_body_pages(
+        zone_pages, ceiling=settings.empty_body_ceiling)
+    run_stats = {**select_stats, "walk_exclusions": dict(walk_exclusions),
+                 "batch": settings.empty_body_batch, "batches": 0,
+                 "inserted": 0, "skipped": 0, "skip_reasons": [], "unjudged": 0, "error": ""}
+    if select_stats["deferred"]:
+        reason = sweep.EMPTY_BODY_CEILING_REASON.format(
+            ceiling=settings.empty_body_ceiling, deferred=select_stats["deferred"],
+            env=EMPTY_BODY_CEILING_ENV)
+        run_stats["skip_reasons"].append(reason)
+        log.warning("gardener: %s", reason)
+    if not pages:
+        return [], run_stats
+
+    findings: list[dict] = []
+    batches = sweep.in_batches(pages, settings.empty_body_batch)
+    judged = 0
+    # Validation rejections ONLY, kept apart from `skip_reasons` (which also carries the ceiling
+    # sentence): `stats[*]["skipped"]` has to mean the same thing in both passes or a dashboard
+    # comparing them compares two different questions. The ceiling has `deferred` for its count.
+    rejected = 0
+    try:
+        judge = sweep.build_empty_body_judge(settings.model)
+        for batch in batches:
+            accepted, skip_reasons = await sweep.run_empty_body_sweep(judge, batch)
+            run_stats["batches"] += 1
+            judged += len(batch)
+            run_stats["skip_reasons"] += skip_reasons
+            rejected += len(skip_reasons)
+            findings += [sweep.to_finding(spec, model_name=settings.model) for spec in accepted]
+    except Exception as ex:  # noqa: BLE001 — ANY failure of this pass must leave the same run's
+        # deterministic findings, and the editorial sweep's, intact (module docstring).
+        run_stats["error"] = ex.__class__.__name__
+        run_stats["unjudged"] = len(pages) - judged
+    run_stats["judged"] = judged
+    run_stats["inserted"] = len(findings)
+    run_stats["skipped"] = rejected
+    return findings, run_stats
+
+
 def _run_completed_at(conn, run_id: int) -> str:
     with conn.cursor() as cur:
         cur.execute("SELECT finished_at FROM job_runs WHERE id = %s", (run_id,))
@@ -163,16 +250,24 @@ async def run_gardener(conn, *, repo: str, settings: GardenerSettings, channels_
 
         filing_population_stats: dict = {}
         age_population_stats: dict = {}
+        # THE walk of the entity zone for this run — both consumers judge this exact list.
+        walk_exclusions: dict = {}
+        entity_zone_pages = checks.entity_zone_pages(repo, walk_stats=walk_exclusions)
         findings = _run_all_checks(conn, repo, registry, settings, filing_population_stats,
-                                   age_population_stats)
+                                   age_population_stats, entity_zone_pages)
         run_stats["filing_population_exclusions"] = filing_population_stats
         run_stats["age_population_exclusions"] = age_population_stats
 
-        # Sweep findings join the deterministic ones BEFORE the aggregate counts, so the counts
-        # always describe exactly what got persisted.
+        # Both model passes' findings join the deterministic ones BEFORE the aggregate counts, so
+        # the counts always describe exactly what got persisted.
         sweep_findings, sweep_stats = await _run_sweep_pass(conn, settings)
         run_stats["sweep"] = sweep_stats
         findings += sweep_findings
+
+        empty_body_findings, empty_body_stats = await _run_empty_body_pass(
+            entity_zone_pages, settings, walk_exclusions=walk_exclusions)
+        run_stats["empty_body"] = empty_body_stats
+        findings += empty_body_findings
 
         by_check: dict[str, int] = {}
         by_severity: dict[str, int] = {}
@@ -188,9 +283,12 @@ async def run_gardener(conn, *, repo: str, settings: GardenerSettings, channels_
         raise
 
     with conn.transaction():
-        # 'partial', never 'ok', when the sweep failed — what `previous_run_watermark` needs to
-        # stay correct across a sweep outage (module docstring).
-        run_status = "partial" if sweep_stats["error"] else "ok"
+        # 'partial', never 'ok', when EITHER model pass failed: a run whose second model pass
+        # never happened must not read as a clean bill of health for the pages it never looked at.
+        # This status is an AGGREGATE and no watermark may be derived from it — that is
+        # `previous_run_watermark`'s job, off `stats.sweep.error` (module docstring), so a failed
+        # empty-body pass costs the editorial sweep's `since` and rotation nothing.
+        run_status = "partial" if (sweep_stats["error"] or empty_body_stats["error"]) else "ok"
         run_id = ops.record_job_run(conn, JOB_NAME, status=run_status, stats=run_stats)
         store.insert_findings(conn, run_id, findings)
 
@@ -201,7 +299,10 @@ async def run_gardener(conn, *, repo: str, settings: GardenerSettings, channels_
                        entities_checked=entities_checked, completed_at=completed_at,
                        stats=run_stats, sweep_error=sweep_stats["error"],
                        sweep_changed_count=sweep_stats["changed"],
-                       sweep_sampled_count=sweep_stats["sampled"])
+                       sweep_sampled_count=sweep_stats["sampled"],
+                       empty_body_error=empty_body_stats["error"],
+                       empty_body_judged_count=empty_body_stats["judged"],
+                       empty_body_deferred_count=empty_body_stats["deferred"])
 
     try:
         # The PRE-INSERT, in-memory `findings`, never `persisted`: the round trip through the

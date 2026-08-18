@@ -174,10 +174,13 @@ def test_happy_path_prints_the_severity_grouped_report_and_exits_zero(conn, caps
 
 def test_clean_run_prints_the_honest_no_findings_line_and_exits_zero(conn, capsys, repo):
     support.write_registry(repo, {})
+    # A written body — an entity page that says nothing about itself is itself a finding now
+    # (`model-empty-entity-body`), so a clean run needs a page with something on it.
     support.write_page(repo, "wiki", "entities/acme-corp.md",
                        frontmatter={"type": "entity", "title": "Acme Corp",
                                    "entity": ["acme-corp"], "status": "developing",
-                                   "updated": _days_ago(1)})
+                                   "updated": _days_ago(1)},
+                       body=support.written_entity_body("Acme Corp"))
     support.rebuild_index(conn, repo)
 
     rc = cli.main(["--repo", repo])
@@ -185,6 +188,25 @@ def test_clean_run_prints_the_honest_no_findings_line_and_exits_zero(conn, capsy
     out = capsys.readouterr().out
     assert rc == 0
     assert "no findings — every check came back clean this run" in out
+
+
+def test_the_report_says_how_many_entity_pages_the_second_model_pass_judged(conn, capsys, repo):
+    """End of the wire an operator reads: the corpus line names the body sweep and its count, so a
+    pass that judged nothing (a corpus with no entity pages, a ceiling of zero pages left) is
+    visible as such instead of hiding inside the sampled numbers."""
+    support.write_registry(repo, {})
+    support.write_page(repo, "wiki", "entities/acme-corp.md",
+                       frontmatter={"type": "entity", "title": "Acme Corp",
+                                   "entity": ["acme-corp"], "status": "developing",
+                                   "updated": _days_ago(1)},
+                       body=support.written_entity_body("Acme Corp"))
+    support.rebuild_index(conn, repo)
+
+    rc = cli.main(["--repo", repo])
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "and a body sweep over 1 entity page(s)" in out
 
 
 def test_json_flag_emits_machine_readable_findings(conn, capsys, repo):
@@ -300,6 +322,36 @@ def test_sweep_outage_still_prints_deterministic_findings_then_exits_error(
     assert "stigmergy-gardener: the model sweep failed (AgentRunError)" in captured.err
     assert "already saved" in captured.err
     assert "job_runs" in captured.err
+
+
+def test_an_empty_body_pass_failure_is_reported_on_stderr_and_exits_error(conn, capsys, repo,
+                                                                            monkeypatch):
+    """The SECOND model pass has its own failure message and its own exit path, and nothing
+    exercised either. The contract is the one the editorial sweep already keeps: the findings that
+    DID complete are printed and already saved, the failure is named on stderr with the pass that
+    had it, and the process exits non-zero so a scheduler notices."""
+    class _FlakyJudge:
+        async def run(self, prompt, *, deps=None, usage_limits=None):
+            raise AgentRunError("simulated model outage")
+
+    monkeypatch.setattr(sweep, "build_empty_body_judge", lambda model_name=None: _FlakyJudge())
+    support.write_registry(repo, {})
+    support.write_page(repo, "wiki", "entities/acme-corp.md",
+                       frontmatter={"type": "entity", "title": "Acme Corp",
+                                   "entity": ["acme-corp"], "status": "developing",
+                                   "updated": _days_ago(1)},
+                       body=support.empty_entity_body("Acme Corp"))
+    support.rebuild_index(conn, repo)
+
+    rc = cli.main(["--repo", repo])
+
+    captured = capsys.readouterr()
+    assert rc == cli.EXIT_ERROR
+    assert "stigmergy-gardener: the entity-body sweep failed (AgentRunError)" in captured.err
+    assert "already saved" in captured.err
+    assert "job_runs" in captured.err
+    assert captured.out.startswith("# Gardener report — run #"), (
+        "the deterministic report is printed whatever the second model pass did")
 
 
 def test_sweep_success_with_no_changed_pages_prints_a_normal_report_and_exits_zero(

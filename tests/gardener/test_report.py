@@ -50,6 +50,31 @@ def test_sweep_summary_extends_the_corpus_line_when_a_caller_supplies_one():
     assert ("9 deterministic checks, plus a model sweep over 3 changed page(s)") in text
 
 
+# ── the sweep clause the CLI builds from a run's own counts ───────────────────────────────────
+def test_sweep_summary_text_names_the_two_populations_the_editorial_sweep_judged():
+    """The function the CLI actually calls, which nothing here covered: the rendered clause above
+    was only ever asserted from a hand-written string, so the sentence an operator really reads was
+    unpinned in both of its shapes."""
+    assert report.sweep_summary_text(3, 10) == (
+        "a model sweep over 3 changed page(s) and 10 sampled unchanged page(s)")
+
+
+def test_sweep_summary_text_appends_the_entity_body_pass_as_its_own_clause():
+    """The second model pass is REPORTED separately because it covers its whole population instead
+    of sampling one — folding its pages into either of the other two numbers would misdescribe
+    both, and the digest is where an operator learns the pass ran at all."""
+    text = report.sweep_summary_text(3, 10, 7)
+    assert text.endswith(", and a body sweep over 7 entity page(s)")
+    assert "3 changed page(s) and 10 sampled unchanged page(s)" in text
+
+
+def test_sweep_summary_text_says_nothing_about_a_pass_with_nothing_to_judge():
+    """The benign twin: zero entity pages means the pass had nothing to do, and a clause about
+    nothing is noise in a report a human is meant to keep reading. It is also the default, so
+    every caller that predates the second pass keeps the sentence it had."""
+    assert report.sweep_summary_text(3, 10, 0) == report.sweep_summary_text(3, 10)
+
+
 # ── severity counts and the judgment-call preamble ──────────────────────────────────────────────
 def test_severity_counts_and_judgment_preamble_present_when_findings_exist():
     findings = [_finding(severity=schema.SEVERITY_SLA), _finding(severity=schema.SEVERITY_WARN),

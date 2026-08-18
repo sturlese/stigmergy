@@ -9,9 +9,10 @@ without having passed through all four.
 THREE proposal kinds, and a finding rides exactly one road. `edits` is the librarian's own
 declared-edit vocabulary and nothing else — `backlink`, `overlap`, `contradiction` — three strictly
 additive shapes the eight gates already know how to judge. `entity-body` is the one kind that
-REPLACES text: one drafted body for one entity page still carrying its template, judged by
-`gate_body_rewrite`'s permitted-rewrite branch instead of its additive proof (ADR 039's first
-amendment). `delete` is the one kind that REMOVES anything, and the one the covenant's first clause
+REPLACES text: one drafted body for one entity page whose body does not say what the corpus knows
+about the entity — still the template it was minted with, or written and empty of anything specific
+— judged by `gate_body_rewrite`'s permitted-rewrite branch instead of its additive proof (ADR 039's
+first amendment). `delete` is the one kind that REMOVES anything, and the one the covenant's first clause
 reads differently for: **no model may propose it in any spelling.** A person types it at
 `stigmergy-repair delete`, or code derives it for exact-duplicate `sources/` pages, where the
 decision is a lookup rather than a judgment (ADR 039's second amendment).
@@ -25,7 +26,7 @@ repo, read at run time from the checkout; a missing skill is a named refusal, ne
 | Module | What it is |
 |---|---|
 | `cli.py` | `stigmergy-repair propose \| list \| show <id> \| delete <path>... --why` — the only module that opens a connection or imports `stigmergy.index.store`. **No `apply`**: a terminal knows who is typing, not what they may approve. `delete` is the one verb that CREATES a proposal here, at `propose`'s authority level, because a deletion is the one repair no model may propose. Owns `preview`, the git-free rendering of what a proposal would change |
-| `proposer.py` | The agent seam, BOTH roads: `ProposerContext` and its two READ tools; `ProposalBatch`/`ProposalSpec`/`EditOp` + `validate_batch` for the additive road; `EntityBodyDraft` + `anchored_pages`/`draft_entity_body`/`validate_draft` for the body road; one retry each, `read_skill`, `propose_from_findings`, and the two offline doubles. The only module here that loads a model stack |
+| `proposer.py` | The agent seam, BOTH roads (`EDIT_PROPOSABLE_CHECKS` and `BODY_PROPOSABLE_CHECKS` decide which one a finding rides): `ProposerContext` and its two READ tools; `ProposalBatch`/`ProposalSpec`/`EditOp` + `validate_batch` for the additive road; `EntityBodyDraft` + `anchored_pages`/`draft_entity_body`/`validate_draft` for the body road; one retry each, `read_skill`, `propose_from_findings`, and the two offline doubles. The only module here that loads a model stack |
 | `entity_body.py` | The `entity-body` writer and its validator — `validate`, `apply_declared`, `rewritten`, and the bounds a draft lives inside. Pure of the model stack, because the APPLY runs it inside the MCP server process |
 | `deletion.py` | The `delete` kind, whole: `plan` (the sweep, a pure function of a worktree's bytes), `scrubbed` (one page's planned bytes), `validate`/`apply_declared` (recompute, byte-compare, perform), the readers every other surface goes through (`deleted_paths`, `scrubbed_paths`, `expected_bytes`, `lane_for`), and `duplicate_source_groups` — the one automatic road, which asks no model. Its link scanner is hand-mirrored from the frozen contract linter and must stay that way |
 | `remote.py` | `apply_via_clone` (clone → the kind's applier → the per-kind cross-check → `run_gates` → gated commit → push) and `apply_approved`, the door that also records the outcome. Owns `commit_message`, `LEDGER_RESULT_KEYS`, the delete kind's whole-tree dead-link check, and `_lane_and_permission` — the four caller-scoped facts the gates are told |
@@ -122,9 +123,12 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   authoritative check forgives. The UNIQUE index is narrower on purpose — pending only — so
   re-proposing after a rejection stays a human decision rather than a constraint violation.
 - `EDIT_PROPOSABLE_CHECKS` = `model-unlinked-mention`, `model-contradiction`, `orphan-page`;
-  `BODY_PROPOSABLE_CHECKS` = `entity-placeholder-body`; `PROPOSABLE_CHECKS` is their union. The
-  other checks are absent by NAME, not by oversight: none of them is answered by a link, a callout
-  or a body. `delete` answers no check at all — it has no finding behind it, which is why its rows
+  `BODY_PROPOSABLE_CHECKS` = `entity-placeholder-body`, `model-empty-entity-body`;
+  `PROPOSABLE_CHECKS` is their union. The two body checks are the deterministic and the judged
+  halves of ONE question — the page's body does not say what the corpus knows about the entity —
+  so they share a road rather than each getting one, and the gardener guarantees they never name
+  the same page in one run. The other checks are absent by NAME, not by oversight: none of them is
+  answered by a link, a callout or a body. `delete` answers no check at all — it has no finding behind it, which is why its rows
   carry an empty `finding_ids` and say what their question WAS in `finding_subjects` instead.
 - **An empty `model_id` on a `delete` row is a statement, not a gap**: no model proposed it, and
   that kind is the only one for which that can be true.
@@ -143,7 +147,8 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   the body road holds `BODY_DRAFT_LIMITS` instead — one entity per call, no batch to derive from,
   and the number it always had, because #75 was the edits road's problem and the body road was the
   half that worked. A lapsed budget skips that one batch or draft, recorded, never the run.
-  The body road adds `MIN_ANCHORED_PAGES` (2 — below it no model is asked at all) and
+  The body road adds `MIN_ANCHORED_PAGES` (2 — below it no model is asked at all, whichever of the
+  two checks named the page, and the run records that it was not) and
   `MAX_ANCHORED_PAGES` (10 per prompt), and `entity_body`'s own `MAX_BODY_BYTES` (6000),
   `MAX_BODY_LINES` (110) and `MAX_ROLE_CHARS` (200). Those three are CONSTANTS rather than env
   settings on purpose: the real ceiling is the knowledge repo's contract linter, so an operator

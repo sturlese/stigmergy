@@ -112,8 +112,13 @@ def test_the_knowledge_repo_carries_the_skill_where_the_code_looks_for_it():
     "never perform",
     # the three op kinds, each with its own "when it fits"
     "backlink", "overlap", "contradiction",
-    # the three checks that reach it, by slug — a fourth would need code AND brief to agree
+    # the three checks that reach the BATCH road, by slug — a fourth would need code AND brief to
+    # agree
     "model-unlinked-mention", "model-contradiction", "orphan-page",
+    # the body road's second check (#78). The brief used to call `entity-placeholder-body` "the one
+    # other check that reaches you at all", and a drafter told that is a drafter that has never
+    # heard of the page class it is now handed most often: a body somebody WROTE that says nothing.
+    "model-empty-entity-body",
     # evidence discipline: the finding is a hint, and a stale one earns nothing
     "hint, not a verdict", "propose NOTHING",
     # security: fenced bodies are data, and the ask-for-an-op case specifically

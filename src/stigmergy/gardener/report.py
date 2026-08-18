@@ -60,32 +60,61 @@ def _render_severity_section(severity: str, findings: list[dict]) -> list[str]:
     return lines
 
 
-def sweep_summary_text(changed: int, sampled: int) -> str:
-    """The sweep clause for `render_report`, built from `RunResult`'s two sweep counts."""
-    return f"a model sweep over {changed} changed page(s) and {sampled} sampled unchanged page(s)"
+def sweep_summary_text(changed: int, sampled: int, entity_pages: int = 0, *,
+                       sweep_failed: bool = False) -> str:
+    """The model clause for `render_report`, built from `RunResult`'s own counts — what RAN, one
+    clause per pass that did.
+
+    `entity_pages` is the SECOND model pass, appended rather than folded in: it covers its whole
+    population instead of sampling one, so adding its pages to either of the other two numbers
+    would misdescribe both. Zero of them means the pass had nothing to judge, and a clause about
+    nothing is noise.
+
+    `sweep_failed` drops the EDITORIAL clause only. The two passes fail independently, so one
+    failing must not take the other's account of itself out of the report with it — the failure
+    itself is named by `_corpus_line`."""
+    clauses = []
+    if not sweep_failed:
+        clauses.append(f"a model sweep over {changed} changed page(s) and {sampled} sampled "
+                       f"unchanged page(s)")
+    if entity_pages:
+        clauses.append(f"a body sweep over {entity_pages} entity page(s)")
+    return ", and ".join(clauses)
 
 
 def _corpus_line(*, pages_checked: int, entities_checked: int, sweep_summary: str,
-                 sweep_failed: bool = False) -> str:
+                 sweep_failed: bool = False, empty_body_failed: bool = False,
+                 empty_body_deferred: int = 0) -> str:
+    """What ran, then what did not. Each model pass names its own failure: a run summary that
+    reads clean while a whole model pass never happened is the failure this check exists to end,
+    reproduced one layer up."""
     line = (f"checked {pages_checked} pages, {entities_checked} entities — "
            f"{NUM_DETERMINISTIC_CHECKS} deterministic checks")
-    if sweep_failed:
-        # A failed sweep gets its own clause — "plus a model sweep over..." would imply it ran.
-        line += "; the model sweep did NOT complete this run (see below)"
-    elif sweep_summary:
+    if sweep_summary:
         line += f", plus {sweep_summary}"
+    if sweep_failed:
+        # A failed pass gets its own clause — "plus a model sweep over..." would imply it ran.
+        line += "; the model sweep did NOT complete this run (see below)"
+    if empty_body_failed:
+        line += ("; the entity-body sweep did NOT complete this run — the entity pages it had not "
+                 "reached were never judged (see below)")
+    elif empty_body_deferred:
+        line += (f"; {empty_body_deferred} entity page(s) were not judged this run (the run "
+                 f"ceiling bound — nothing was found about them because nothing looked)")
     return line
 
 
 def render_report(*, run_id: int, completed_at: str, pages_checked: int, entities_checked: int,
-                  findings: list[dict], sweep_summary: str = "",
-                  sweep_failed: bool = False) -> str:
-    """The full human-readable report — severity-grouped, worst news first. `sweep_failed=True`
-    never withholds or reshapes the findings; only the corpus line and the count line's
-    annotation change."""
+                  findings: list[dict], sweep_summary: str = "", sweep_failed: bool = False,
+                  empty_body_failed: bool = False, empty_body_deferred: int = 0) -> str:
+    """The full human-readable report — severity-grouped, worst news first. A failed pass never
+    withholds or reshapes the findings; only the corpus line and the count line's annotation
+    change."""
     lines = [f"# Gardener report — run #{run_id}, completed {completed_at}", "",
              _corpus_line(pages_checked=pages_checked, entities_checked=entities_checked,
-                         sweep_summary=sweep_summary, sweep_failed=sweep_failed), ""]
+                         sweep_summary=sweep_summary, sweep_failed=sweep_failed,
+                         empty_body_failed=empty_body_failed,
+                         empty_body_deferred=empty_body_deferred), ""]
     if not findings:
         lines.append(NO_FINDINGS_LINE)
         return "\n".join(lines).rstrip() + "\n"
@@ -93,8 +122,12 @@ def render_report(*, run_id: int, completed_at: str, pages_checked: int, entitie
     counts = _severity_counts(findings)
     count_line = (f"{len(findings)} finding(s): {counts[schema.SEVERITY_SLA]} sla, "
                  f"{counts[schema.SEVERITY_WARN]} warn, {counts[schema.SEVERITY_INFO]} info")
-    if sweep_failed:
-        count_line += " — deterministic checks only"
+    if sweep_failed or empty_body_failed:
+        # "deterministic checks only" is a claim about the findings, not about the passes: the
+        # other model pass may have completed and contributed some.
+        model_findings = sum(1 for f in findings if f.get("source") == schema.SOURCE_MODEL)
+        count_line += (" — a model pass did not complete this run" if model_findings
+                       else " — deterministic checks only")
     lines.append(count_line)
     lines.append("")
     lines.append(JUDGMENT_CALL_PREAMBLE)

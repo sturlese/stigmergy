@@ -43,6 +43,26 @@ DEFAULT_GARDENER_MODEL = "gpt-5.6-luna"
 SWEEP_SAMPLE_ENV = "STIGMERGY_GARDENER_SWEEP_SAMPLE"
 DEFAULT_SWEEP_SAMPLE = 10
 
+# ── the empty-body pass's own two bounds ─────────────────────────────────────────────────────
+# Deliberately NOT a sample size: that pass covers its whole population (entity pages are a
+# bounded set), so these two bound the model SPEND over it rather than choosing which pages are
+# looked at. The batch is how many entity bodies ride one call; the ceiling is how many pages one
+# run may judge at all, and when it binds the run records what it deferred instead of truncating
+# in silence.
+EMPTY_BODY_BATCH_ENV = "STIGMERGY_GARDENER_EMPTY_BODY_BATCH"
+DEFAULT_EMPTY_BODY_BATCH = 8
+# The batch is the ONLY thing standing between the whole entity-page population and a single model
+# call, so it is the one count here with a ceiling of its own: a floor alone would let `=100000`
+# put every body in one prompt, which is the failure batching exists to prevent. The run ceiling
+# needs no such bound — raising it adds calls, never enlarges one. This figure is a blast-radius
+# bound, deliberately well above any batch worth setting, not a recommendation: it exists to make
+# the catastrophic value impossible, and an operator who wants 8 or 20 is choosing on other
+# grounds entirely.
+MAX_EMPTY_BODY_BATCH = 64
+
+EMPTY_BODY_CEILING_ENV = "STIGMERGY_GARDENER_EMPTY_BODY_CEILING"
+DEFAULT_EMPTY_BODY_CEILING = 150
+
 # Hand-mirrored from `stigmergy.slack.settings.BOT_TOKEN_ENV`, not imported — importing it would
 # pull the whole `server.settings` surface in; if that value ever moves, move this with it.
 SLACK_BOT_TOKEN_ENV = "SLACK_BOT_TOKEN"
@@ -54,8 +74,18 @@ SLACK_BOT_TOKEN_ENV = "SLACK_BOT_TOKEN"
 _POSITIVE_COUNT_WHY = ("a zero or negative day/window count makes every page/filing instantly past "
                        "threshold.")
 
+# The empty-body pass's own sentence: its two counts are not thresholds a page is measured against
+# but bounds on how much of the population gets judged, and zero would silently disable a whole
+# model pass while every run still reported success.
+_EMPTY_BODY_COUNT_WHY = ("a zero or negative batch size or run ceiling means no entity page is "
+                         "ever judged for an empty body, and the run would say nothing was wrong.")
 
-def int_setting(env_name: str, default: int, *, why: str = _POSITIVE_COUNT_WHY) -> int:
+
+def int_setting(env_name: str, default: int, *, why: str = _POSITIVE_COUNT_WHY,
+                maximum: int | None = None) -> int:
+    """A positive whole number from the environment, or `default`. `maximum`, when a setting has
+    one, is refused at startup rather than absorbed: a count with a floor and no ceiling is only
+    half-validated, and the settings that need one say why at their call site."""
     raw = os.environ.get(env_name)
     if raw is None or raw == "":
         return default
@@ -69,6 +99,10 @@ def int_setting(env_name: str, default: int, *, why: str = _POSITIVE_COUNT_WHY) 
         raise StartupError(
             f"${env_name}={value} must be a positive integer — {why} Unset it to use the "
             f"default ({default}) or set it to a positive integer.")
+    if maximum is not None and value > maximum:
+        raise StartupError(
+            f"${env_name}={value} is above the maximum of {maximum} — unset it to use the default "
+            f"({default}) or set it to a whole number between 1 and {maximum}.")
     return value
 
 
@@ -101,6 +135,8 @@ class GardenerSettings:
     digest_channel_id: str = ""
     model: str = DEFAULT_GARDENER_MODEL
     sweep_sample: int = DEFAULT_SWEEP_SAMPLE
+    empty_body_batch: int = DEFAULT_EMPTY_BODY_BATCH
+    empty_body_ceiling: int = DEFAULT_EMPTY_BODY_CEILING
 
     @classmethod
     def from_args(cls, args=None) -> "GardenerSettings":
@@ -117,4 +153,9 @@ class GardenerSettings:
             digest_channel_id=os.environ.get(DIGEST_CHANNEL_ID_ENV, ""),
             model=os.environ.get(MODEL_ENV) or DEFAULT_GARDENER_MODEL,
             sweep_sample=int_setting(SWEEP_SAMPLE_ENV, DEFAULT_SWEEP_SAMPLE),
+            empty_body_batch=int_setting(EMPTY_BODY_BATCH_ENV, DEFAULT_EMPTY_BODY_BATCH,
+                                         why=_EMPTY_BODY_COUNT_WHY,
+                                         maximum=MAX_EMPTY_BODY_BATCH),
+            empty_body_ceiling=int_setting(EMPTY_BODY_CEILING_ENV, DEFAULT_EMPTY_BODY_CEILING,
+                                           why=_EMPTY_BODY_COUNT_WHY),
         )

@@ -85,6 +85,45 @@ def write_page(root: str, zone: str, relpath: str, *, frontmatter: dict, body: s
     return f"{zone}/{relpath}".replace(os.sep, "/")
 
 
+# ── the two entity bodies the empty-body pass exists to tell apart ─────────────────────────────
+# NEITHER carries an angle-marked placeholder line, so `entity-placeholder-body` is blind to both
+# and no other deterministic check reads a body at all. That is the gap `model-empty-entity-body`
+# was added for, and these two fixtures are what "it works" and "it is not noise" mean.
+EMPTY_ENTITY_BODY_TEXT = "Cofers is a company we work with."
+
+
+def empty_entity_body(title: str = "Cofers") -> str:
+    """A body somebody typed in thirty seconds: one sentence that would read identically with any
+    other company's name in it. The reported case."""
+    return f"# {title}\n\n{EMPTY_ENTITY_BODY_TEXT}\n"
+
+
+def written_entity_body(title: str = "Cofers") -> str:
+    """The BENIGN TWIN, and the one that matters: five specific facts, each wikilinked to the page
+    that states it, plus a connections section. A check that flags this has bounced a steward's
+    real work, which is how a corpus-health check turns into noise nobody reads."""
+    return f"""# {title}
+
+## What / Who
+
+{title} is the payments processor behind the checkout flow, onboarded in March 2026 after the
+[[Payments Vendor Review]] compared three candidates.
+
+## Facts
+
+- The contract floor is $15k/month, agreed in [[{title} Contract Terms]].
+- Settlement runs T+2 for EU cards and T+3 elsewhere ([[{title} Settlement Windows]]).
+- Their integration lead is Petra Halden, named in [[{title} Kickoff Notes]].
+- The 2026 renewal date is 2027-03-01 ([[{title} Contract Terms]]).
+- Two incidents in Q2 2026 were both DNS, not payments ([[{title} Incident Log]]).
+
+## Connections
+
+Replaced the previous processor described in [[Payments Vendor Review]], and feeds the reconciliation
+job documented in [[Finance Reconciliation]].
+"""
+
+
 def write_registry(root: str, entities: dict) -> None:
     """`entities`: `{id: {"name": ..., "type": ..., "aliases": [...]}}` — `ops/entity-registry.json`,
     `kernel.registry.load_registry`'s own contract."""

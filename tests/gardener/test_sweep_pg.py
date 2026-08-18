@@ -261,3 +261,44 @@ def test_previous_run_watermark_a_failed_sweep_leaves_the_next_runs_since_unchan
     assert offset == 7   # the OLDER 'ok' run's offset — the partial run never became a baseline
     age = datetime.datetime.now(datetime.UTC) - since
     assert age > datetime.timedelta(days=4)   # since == the OLD run's started_at
+
+
+def test_previous_run_watermark_advances_past_a_run_whose_OTHER_model_pass_failed(conn):
+    """A run whose editorial sweep SUCCEEDED and whose empty-body pass failed commits
+    `status='partial'` — that status is an aggregate over two independent passes. Reading `'ok'`
+    only, this watermark stayed pinned at the last flawless run: `since` never advanced, so
+    `select_pages` put every page filed since into ONE unbatched prompt that grew every night
+    until it killed the editorial sweep too, and `next_sample_offset` re-judged the same rotating
+    sample forever — coverage halting silently, which is the exact failure the second pass was
+    added to end, reintroduced on the other one."""
+    fixed_selected_at = "2026-01-01T00:00:00+00:00"
+    support.seed_gardener_job_run(conn, status="ok",
+                                  stats={"sweep": {"next_sample_offset": 7}},
+                                  started_days_ago=5)
+    support.seed_gardener_job_run(
+        conn, status="partial",
+        stats={"sweep": {"next_sample_offset": 42, "selected_at": fixed_selected_at, "error": ""},
+               "empty_body": {"error": "SweepGarbage"}},
+        started_days_ago=1)
+
+    since, offset = sweep.previous_run_watermark(conn)
+
+    assert offset == 42, "the sweep that ran IS the next run's baseline, whatever the other pass did"
+    assert since == datetime.datetime.fromisoformat(fixed_selected_at)
+
+
+def test_previous_run_watermark_skips_a_run_whose_own_sweep_failed_whatever_the_status(conn):
+    """The twin, and the property that survives the change above: what disqualifies a baseline is
+    the SWEEP's own recorded outcome, never the run's aggregate status. A row that somehow carries
+    `status='ok'` beside a failed sweep is still not a baseline."""
+    support.seed_gardener_job_run(conn, status="ok",
+                                  stats={"sweep": {"next_sample_offset": 7}},
+                                  started_days_ago=5)
+    support.seed_gardener_job_run(
+        conn, status="ok",
+        stats={"sweep": {"next_sample_offset": 99, "error": "AgentRunError"}},
+        started_days_ago=1)
+
+    _since, offset = sweep.previous_run_watermark(conn)
+
+    assert offset == 7
