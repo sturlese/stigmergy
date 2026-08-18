@@ -26,8 +26,14 @@ DEFAULT_REPAIR_MODEL = librarian_config.DEFAULT_MODEL
 MAX_OPS_ENV = "STIGMERGY_REPAIR_MAX_OPS"
 DEFAULT_MAX_OPS_PER_PROPOSAL = 6
 
+# How many findings go to the model in ONE call. A batch is the unit of LOSS: a call that spends
+# its usage budget mid-work is skipped whole, so every finding in it waits for the next night. At 8
+# that cost eight findings a lapse, and on the first real corpus it cost the additive road every
+# proposal it had (issue #75). The proposer's budget scales with this number
+# (`proposer.batch_limits`), so raising it buys the model more room rather than starving it — what
+# it also buys is a bigger crater when one call lapses.
 BATCH_SIZE_ENV = "STIGMERGY_REPAIR_BATCH"
-DEFAULT_BATCH_SIZE = 8
+DEFAULT_BATCH_SIZE = 3
 
 # What ONE run may put in front of stewards. `MAX_OPS_PER_PROPOSAL` bounds one approval; this
 # bounds how many approvals a night can ask for, which is the other half of the same argument: a

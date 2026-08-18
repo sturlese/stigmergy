@@ -206,10 +206,33 @@ committed there.
 | `STIGMERGY_REPAIR_MODEL` | the librarian's own default model | which model proposes |
 | `STIGMERGY_REPAIR_MAX_OPS` | `6` | how much ONE approval is allowed to be |
 | `STIGMERGY_REPAIR_MAX_PROPOSALS` | `20` | how many approvals one RUN may ask for |
-| `STIGMERGY_REPAIR_BATCH` | `8` | findings per model call |
+| `STIGMERGY_REPAIR_BATCH` | `3` | findings per model call — and, through that, how large the call's usage budget is |
 | `STIGMERGY_REPAIR_MAX_PLAN_BYTES` | `100000` | how much ONE deletion may be, in the bytes its stored plan carries |
 | `STIGMERGY_REPO` | — | the checkout to propose against |
 | `STIGMERGY_INDEX_DSN` | — | where the proposals live |
+
+### The model budget is sized for the batch
+
+Each model call is given a tool-call ceiling derived from how many findings it carries — six per
+finding, plus one finding's worth for the call to get its bearings — with the request ceiling kept
+two above it so the runaway bound can never bind before the work bound. A call that spends the
+ceiling mid-work is skipped WHOLE, its reason recorded in `job_runs.stats`, and the run carries on;
+the next run retries those findings.
+
+That is why the batch is small and why the two numbers move together. A tool call is a page read,
+the two pages a finding names are already in the prompt, and the allowance exists to pay for the
+pages it does NOT name — a proposer that can only re-read what it was handed cannot notice that a
+third page is the better link target. A fixed budget against a growing batch is what emptied the
+additive road on the first real corpus (issue #75): eight findings sharing a constant ceiling meant
+three reads each, every batch lapsed, and a run that proposed nothing still recorded itself `ok`.
+Raising `STIGMERGY_REPAIR_BATCH` therefore raises the allowance with it — what it also raises is
+how many findings one lapse costs, because the batch is the unit of loss.
+
+The body road is the exception, and deliberately: it drafts ONE entity page per call, so its budget
+is a constant rather than something derived from a batch it does not have — and it is the constant
+that road already had. #75 was the additive road's problem; on the night that found it the body
+road was the only one that produced anything, and resizing the half that works for the sake of
+symmetry is a change with a risk and no benefit.
 
 ## The proposer's own procedure lives in the knowledge repo
 
