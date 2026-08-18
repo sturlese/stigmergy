@@ -3294,8 +3294,10 @@ def test_the_repair_apply_caller_pin_can_go_red_in_both_directions(tmp_path):
 
 
 # ── ADR 039's amendments: who may tell the gates to suspend one of their proofs ────────────────
-# THREE `GateContext` fields are exceptions the caller declares, and each one is the whole of how a
-# thing that is otherwise impossible becomes possible in this system:
+# FIVE `GateContext` fields are exceptions the caller declares, and each one is the whole of how a
+# thing that is otherwise impossible becomes possible in this system. The count is spelled out
+# because it is the thing that goes stale: this sentence said THREE while listing five, having been
+# written when there were three and appended to twice. It says what the list below says.
 #
 #   · `body_rewrite_allowed` — a page's existing prose may be replaced;
 #   · `deletions_allowed`    — a file may be removed at all, which `gate_zone`'s oldest veto exists

@@ -543,8 +543,16 @@ a claim the linter would refuse — at plan time, with a sentence naming the col
 than storing a proposal a steward can approve and a gate then vetoes.
 
 **What this leaves open, stated rather than hidden.** The absorbed entity's own NAME keeps resolving
-to its retired identity, so a future capture spelling it that way still anchors there. That is the
-residual this kind does not close, and closing it belongs to #77's FILING-time piece — the agent
+to its retired identity, so a future capture spelling it that way still anchors there — the absorbed
+id stays REGISTERED, because its page exists and the generator derives the registry from the pages.
+
+And this loop cannot clean that up afterwards, which is the half worth naming: the pair's
+`content_key` and its `finding_subjects` are both permanent, so the question is skipped before the
+model forever; and even if a second merge were proposed, `_cross_check` refuses it, because the
+`retire-absorbed` op would be unchanged, `target_paths` drops an op whose planned bytes equal what
+is on disk, and the absorbed page is then absent from the diff the cross-check judges. So the
+residual accumulates monotonically and nothing inside this loop owns it. Closing it belongs to
+#77's FILING-time piece — the agent
 resolving a near miss against the registry it is handed, where a page carrying `superseded_by:` is
 exactly the signal a skill can act on. The alternatives were both worse: dropping the absorbed
 entity from the derived registry breaks the linter's page↔registry rule (an entity page it does not

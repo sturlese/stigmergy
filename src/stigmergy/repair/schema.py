@@ -214,6 +214,31 @@ ALIAS_OP_FIELDS = (OP_KIND_KEY, "path", "expected_before_hash", "planned_after")
 ALIAS_IDENTITY_OP_NAMES = (ALIAS_OP_NAME, RETIRE_OP_NAME)
 
 
+def merge_direction(ops) -> dict:
+    """`{"survivor", "absorbed", "reanchored"}` for an `entity-alias` proposal — `{}` for any other
+    kind, since no other proposal has a direction.
+
+    **Why a reader exists at all, rather than a review surface reading `ops` itself.** For every
+    other kind the paths say what happens to them: a `backlink` names the page that gains a link, a
+    `delete` names the page that goes. A merge names two entity pages and the whole decision is
+    WHICH ONE SURVIVES — and in `target_paths`, a sorted list, that is invisible. A steward
+    approving from the review lane would otherwise read only the model-authored `rationale`, whose
+    text is derived from two page bodies somebody else wrote; the direction is the half code owns
+    and it has to be on the same screen.
+
+    Derived from `ops` and never from `target_paths`: the cross-check judges one of those against
+    the other, and a display built from the thing being judged would let one stored column vouch
+    for its own consistency with the other.
+    """
+    by_name = {str(o.get(OP_KIND_KEY, "")): str(o.get("path", "")) for o in (ops or ())}
+    survivor, absorbed = by_name.get(ALIAS_OP_NAME, ""), by_name.get(RETIRE_OP_NAME, "")
+    if not (survivor and absorbed):
+        return {}
+    return {"survivor": survivor, "absorbed": absorbed,
+            "reanchored": sum(1 for o in ops or ()
+                              if str(o.get(OP_KIND_KEY, "")) == REANCHOR_OP_NAME)}
+
+
 def declared_edits(ops) -> list[dict]:
     """Stored ops -> the `edits.validate`/`edits.apply_declared` declaration shape."""
     return [{"kind": str(o.get(OP_KIND_KEY, "")), "path": str(o.get("path", "")),

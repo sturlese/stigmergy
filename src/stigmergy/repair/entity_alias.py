@@ -246,11 +246,30 @@ def anchored_paths(worktree: str, absorbed_id: str, *, excluding=()) -> list[str
 
     The walk is `deletion.corpus_pages` — the same wikilink-namespace walk, reused rather than
     re-derived, so the two non-additive kinds cannot disagree about which files are pages.
+
+    **The MACHINE zones are excluded, and there are TWO reasons, each sufficient on its own.**
+
+    A `views/` page is DERIVED: it is named by entity id and regenerated from its member set. So
+    re-anchoring one produces `views/<absorbed-id>.md` declaring the SURVIVOR's id beside the
+    survivor's own view declaring the same — two rollups for one entity, carrying a `title:`, a
+    `content_hash:` and a `member_hash:` that describe nothing. Nothing here has to fix that,
+    because the periodic view sweep converges `views/` from the corpus (issue #76) and it can:
+    the absorbed entity's own page keeps its self-anchor, so it stays a member set of one.
+
+    Independently, a view carries `tier:` and `content_hash:`, which `gate_frontmatter` refuses on
+    any modified in-lane page the caller has not declared a provenance page — and a merge has no
+    claim to declare one. `delete` does declare them (`deletion.provenance_scrubs`) and that is
+    right for ITS operation: a scrub only REMOVES a dead link, while this rewrites a value. Left
+    in, the veto arrives AFTER a steward has approved, the row lands `failed`, and because
+    `known_content_keys` excludes failed rows the pair is proposed again the next night — forever.
+
+    A `sources/` page never reaches here at all: `page.stamp_source_fields` leaves `entity` absent
+    by contract, so no source page names an id.
     """
     skip = {str(p) for p in excluding}
     out = []
     for rel in deletion.corpus_pages(worktree):
-        if rel in skip:
+        if rel in skip or rel.startswith(deletion.PROVENANCE_ZONE_PREFIXES):
             continue
         text = _read(worktree, rel)
         if text is None:

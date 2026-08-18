@@ -724,9 +724,17 @@ def entity_id_for(path: str, registry) -> str:
       · `slugify(stem)` when the registry already holds that id, which is the contract
         (`generator.canonical_id_for`: an id is the slug of the title, and an entity page's file is
         named after its title). An EXACT id hit is preferred because it cannot be ambiguous;
-      · otherwise `registry.canonical_id(stem)`, the matcher, which folds case, accents,
-        punctuation and legal suffixes — so a page whose file name differs from its title in one of
+      · otherwise `registry.collision_id(stem)`, the matcher, which folds case, accents,
+        punctuation AND legal suffixes — so a page whose file name differs from its title in one of
         those ways still finds its entry.
+
+    The matcher is `collision_id` and not `canonical_id`, and the difference is the whole reason
+    this pass exists. Since #77 those are two keys: `canonical_id` answers "which entity does this
+    text NAME?", folding only how a keyboard renders a name, because a false positive there anchors
+    a capture to the wrong entity in silence. `collision_id` answers "would these two names ever be
+    confused?" — the coarse fold, whose failure is a question asked of a human. That second question
+    is precisely this pass's own, so borrowing the filing key here would make a duplicate-identity
+    sweep blind to `Cofers Ltd` beside `Cofers`, which is the pair it exists to find.
 
     Never a fuzzy third attempt: a page this cannot place is EXCLUDED from the population and
     counted, because a pass that guessed at an identity would compare two entries and report a
@@ -738,7 +746,7 @@ def entity_id_for(path: str, registry) -> str:
     slug = slugify(stem)
     if slug in registry.entities:
         return slug
-    return registry.canonical_id(stem) or ""
+    return registry.collision_id(stem) or ""
 
 
 def select_duplicate_entity_pages(zone_pages: list[dict], registry, *,

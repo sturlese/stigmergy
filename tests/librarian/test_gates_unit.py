@@ -28,6 +28,7 @@ claimed; `gitcmd.DiffEntry` is built by hand where only the diff's SHAPE
 `test_page.py` already take for the modules they cover directly.
 """
 import os
+import pathlib
 from types import SimpleNamespace
 
 import pytest
@@ -2319,3 +2320,85 @@ def test_naming_one_deletion_does_not_permit_another(tmp_path):
 def test_the_deletion_permission_is_empty_unless_a_caller_declares_it(tmp_path):
     ctx = _ctx(tmp_path, [])
     assert ctx.deletions_allowed == frozenset()
+
+
+# ── the `entity-alias` kind's told fact: `ctx.derived_files` (ADR 039's third amendment) ────────
+#
+# A merge regenerates `ops/entity-registry.json`, and that file is NOT a page. `gate_zone` refuses
+# any in-lane write whose name is not a `.md`, and that refusal is right: the fast lane writes
+# pages, and a file that is not one has no contract anybody checks. So the kind buys the exception
+# per PATH, and it buys exactly one thing — the page-SHAPE proof — while the other two still stand:
+# the path must be inside this run's lane, and its whole content must have been computed ahead of
+# time and proven byte for byte.
+#
+# The three tests below are the ones the sibling told facts each landed with, and they matter more
+# here than for those: `derived-file-unproven` is unreachable from production today (the kind's own
+# validator refuses any derived path but the registry), so without a red proof it would be a
+# defense nobody has ever seen fire.
+_DERIVED_REGISTRY = "ops/entity-registry.json"
+
+
+def _put(worktree, rel: str, text: str) -> None:
+    """One file into a worktree, parents made. `gate_zone` reads the DIFF and the file mode, so
+    these need no git history — only bytes on disk under the path the entry names."""
+    path = pathlib.Path(worktree, *rel.split("/"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_a_derived_file_the_caller_computed_passes_the_page_shape_proof(tmp_path):
+    """The benign twin, first: this permission has to let the real thing through, or the kind is
+    unusable and every other test here is measuring a gate that says no to everything."""
+    _put(tmp_path, _DERIVED_REGISTRY, '{"entities": {}}\n')
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("M", _DERIVED_REGISTRY, new_mode="100644")],
+               write_prefixes=("ops/",),
+               derived_files=frozenset({_DERIVED_REGISTRY}),
+               expected_bytes={_DERIVED_REGISTRY: '{"entities": {}}\n'})
+
+    assert [f.code for f in gates.gate_zone(ctx)] == []
+
+
+def test_a_non_page_nobody_declared_is_refused_exactly_as_before(tmp_path):
+    """The twin from the other side, and the property every told fact in this file has had to
+    prove: a caller that has never heard of the field is judged byte-identically to before it
+    existed."""
+    _put(tmp_path, _DERIVED_REGISTRY, '{"entities": {}}\n')
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("M", _DERIVED_REGISTRY, new_mode="100644")],
+               write_prefixes=("ops/",))
+
+    assert [f.code for f in gates.gate_zone(ctx)] == ["not-a-page"]
+
+
+def test_a_declared_derived_file_with_no_planned_bytes_is_refused_by_name(tmp_path):
+    """The permission suspends ONE proof and requires the other to stand. A "derived" file nobody
+    computed is a permission with nothing behind it — which is a way to write an arbitrary non-page
+    into the corpus, and the exact thing the byte-compare exists to make impossible."""
+    _put(tmp_path, _DERIVED_REGISTRY, '{"entities": {}}\n')
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("M", _DERIVED_REGISTRY, new_mode="100644")],
+               write_prefixes=("ops/",),
+               derived_files=frozenset({_DERIVED_REGISTRY}))
+
+    findings = gates.gate_zone(ctx)
+    assert [f.code for f in findings] == ["derived-file-unproven"]
+    assert findings[0].repairable is False, (
+        "a caller cannot be told to try again: the bytes it never planned are not a thing an "
+        "agent could go and write")
+
+
+def test_a_dotfile_named_as_a_derived_file_is_still_refused(tmp_path):
+    """**The ORDERING is the defense, and this is what pins it.**
+
+    A `.gitattributes` carrying `* -diff` blinds every content gate for the folder it lands in, so
+    the dotfile refusal is asked BEFORE the exception and a caller cannot buy its way past it with
+    a byte plan. Folding the two checks back into one — which is how they read on `origin/main`,
+    before this permission existed — reopens that silently, and nothing else in this suite would
+    notice.
+    """
+    dotfile = "ops/.gitattributes"
+    _put(tmp_path, dotfile, "* -diff\n")
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("M", dotfile, new_mode="100644")],
+               write_prefixes=("ops/",),
+               derived_files=frozenset({dotfile}),
+               expected_bytes={dotfile: "* -diff\n"})
+
+    assert [f.code for f in gates.gate_zone(ctx)] == ["not-a-page"]

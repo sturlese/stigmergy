@@ -1272,3 +1272,32 @@ def test_an_applied_merge_reports_which_identity_survived_and_how_many_pages_mov
     assert result["reanchored_pages"] == 2
     assert set(remote.LEDGER_RESULT_KEYS) >= set(result) - {"paths", "commit"} | {"commit",
                                                                                   "paths"}
+
+
+def test_a_merge_diff_containing_an_ADDED_file_is_refused_by_the_cross_check(conn, repo_env):
+    """**`gate_zone` delegates its creation bound to this, and the bound is the ABSENCE of a
+    `return`.**
+
+    The `entity-alias` kind is the one caller allowed to write a file that is not a page
+    (`ctx.derived_files`, ADR 039's third amendment), and `gate_zone` says so in its own comment:
+    the page-shape proof is suspended, and what still stops this kind from CREATING an arbitrary
+    file is that every entry in its diff must be a modification. That is enforced by
+    `_cross_check`'s `entity-alias` branch falling THROUGH to the shape check — the `delete` branch
+    two lines above returns, this one deliberately does not — so one added `return` would remove a
+    bound a gate is relying on and nothing else in the suite would notice.
+    """
+    pages = support.seed_duplicate_pair(repo_env)
+    ops = entity_alias.plan(repo_env.repo, pages["survivor"], pages["absorbed"])
+    paths = schema.target_paths(ops)
+    entries = [gitcmd.DiffEntry(status=("A" if path == paths[0] else "M"),
+                                path=path, old_mode="", new_mode="100644")
+               for path in paths]
+
+    with pytest.raises(RepairError) as excinfo:
+        remote._cross_check(entries, {"target_paths": paths},
+                            kind=schema.KIND_ENTITY_ALIAS, ops=ops)
+
+    assert paths[0] in str(excinfo.value)
+    assert "(A)" in str(excinfo.value), (
+        "the refusal names the status, because 'something other than edit existing pages' is not "
+        "actionable without saying which entry and what it was")

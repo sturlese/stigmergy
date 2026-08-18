@@ -382,7 +382,8 @@ def seed_duplicate_pair(env, *, absorbed_aliases=("Cofers Grupo",), anchored: in
 
 
 def seed_duplicate_entity_finding(conn, run_id: int, pages=(SURVIVOR_PAGE, ABSORBED_PAGE)) -> int:
-    """The MODEL finding the merge road answers: one pair of entity pages, both ids in `subjects`,
+    """The MODEL finding the merge road answers: one pair of entity pages, both RELPATHS in
+    `subjects` (never ids — `entity_alias.plan` consumes them as paths),
     `warn` — exactly as `sweep.MODEL_CHECK_SEVERITY` emits it."""
     return seed_finding(conn, run_id, check=gardener_sweep.CHECK_MODEL_DUPLICATE_ENTITY,
                         subjects=list(pages))

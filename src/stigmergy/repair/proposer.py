@@ -1333,8 +1333,9 @@ async def _propose_entity_bodies(deps: ProposerContext, fresh: list[dict], *, re
 
 # ── the merge road: one pair, one choice, the sweep computed by code ──────────────────────────
 NOT_A_PAIR_REASON = (
-    "entity-alias skipped for finding {finding_id}: it names {n} page(s) and a merge is a decision "
-    "about a PAIR — two identities, one of which absorbs the other")
+    "entity-alias skipped for finding {finding_id}: it names {n} page(s), {distinct} of them "
+    "distinct, and a merge is a decision about a PAIR — two DIFFERENT identities, one of which "
+    "absorbs the other")
 
 MERGE_DECLINED_REASON = (
     "entity-alias declined for {pair}: the proposer read both pages and judged that they are NOT "
@@ -1365,9 +1366,16 @@ async def _propose_entity_aliases(deps: ProposerContext, fresh: list[dict], *, r
                 ceiling=ceiling, dropped=0, unseen=len(fresh) - index))
             break
         candidates = [str(p) for p in (finding.get("subjects") or []) if p]
-        if len(candidates) != _MERGE_CANDIDATES:
+        # DISTINCTNESS as well as the count, and the two are one question. `subjects` naming one
+        # page twice satisfies the count and then leaves `_absorbed_of` with nothing to return —
+        # a `StopIteration` inside a coroutine, which surfaces as a `RuntimeError` that kills the
+        # whole propose run and the other two roads with it. The comment on `_MERGE_CANDIDATES`
+        # already says a finding row is read back out of a database and is asked again rather than
+        # trusted; this is that promise implemented.
+        if len({*candidates}) != _MERGE_CANDIDATES or len(candidates) != _MERGE_CANDIDATES:
             skip_reasons.append(NOT_A_PAIR_REASON.format(finding_id=finding.get("id"),
-                                                         n=len(candidates)))
+                                                         n=len(candidates),
+                                                         distinct=len({*candidates})))
             continue
         pair = " + ".join(candidates)
         if agent is None:

@@ -50,9 +50,11 @@ judgment — code itself.
 
 Only findings one of the three MODEL-proposed kinds could actually close reach the proposer — the
 fourth kind, `delete`, answers no finding at all and is proposed by a person or derived from
-duplicate content hashes. The other four checks are absent by NAME rather than by oversight: an aging seed needs somebody to write, a stale view needs a
-regeneration, an anchor that no longer fits is a judgment about a page's subject. None of them is an
-edit, a body or a merge this vocabulary can express.
+duplicate content hashes. The corpus has fifteen checks in all — nine deterministic and six model —
+so the other NINE are absent by NAME rather than by oversight: an aging seed needs somebody to write,
+a stale view needs a regeneration (the periodic sweep converges those, issue #76), an anchor that no
+longer fits is a judgment about a page's subject. None of them is an edit, a body or a merge this
+vocabulary can express.
 
 **"This loop cannot express it" is not "nothing acts on it."** `stale-view` is answered by the
 librarian worker's periodic view sweep — a state-based convergence pass that regenerates the page
@@ -210,9 +212,15 @@ carries four op shapes and every one of them holds the whole file it would write
   are the ones the absorbed entity carried in its `aliases:` list, and the merge REMOVES them from
   that page in the same commit (two pages claiming one alias is that linter's other error). A claim
   it would refuse is refused at PLAN time with a sentence, never left for `gate_contract` to veto.
-  What follows: the absorbed entity's own name keeps resolving to its retired page. A future capture
-  spelling it that way still anchors there, which is the residual this kind does not close — the
-  filing-time half of issue #77 is what closes it.
+  What follows is a residual with two halves, and the second is the one that matters. The absorbed
+  id STAYS registered — its page exists, so the generator still derives it — so a future capture
+  spelling that name anchors to the retired identity. And this loop can never sweep those pages up
+  afterwards: the pair's `content_key` and its `finding_subjects` are both permanent, so the
+  question is skipped before the model forever; and even if it were re-proposed, the cross-check
+  refuses, because a second merge's `retire-absorbed` op is unchanged, `target_paths` drops it, and
+  the absorbed page is then absent from the diff. The residual therefore accumulates monotonically
+  with no remedy inside this loop. The filing-time half of issue #77 is the only closure — a page
+  carrying `superseded_by:` is exactly the signal a resolution skill can act on.
 - **What a steward is authorizing.** `target_paths` carries the full touched set — both entity
   pages, every re-anchored page and the registry when it changes — so the review lane's per-path
   steward guard covers the whole blast radius. An op whose planned bytes equal the bytes it was

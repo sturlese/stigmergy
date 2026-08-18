@@ -334,6 +334,13 @@ def _lane_and_permission(kind: str, ops: list) -> _ToldFacts:
     the only kind that names a DERIVED FILE: `ops/entity-registry.json` is not a page, so
     `gate_zone` refuses it by default and rightly. It names no deletion and no body rewrite — a
     merge removes nothing and replaces no prose — so byte-equality is the whole of its proof.
+
+    It also names NO `provenance_pages`, and that absence is a decision rather than an omission.
+    `delete` declares them because its scrub only REMOVES a dead link from a machine-written page;
+    a merge REWRITES a value, and a caller with no claim to rewrite `content_hash:`/`tier:` should
+    not be handed the permission to. What follows is that the machine zones are excluded from the
+    re-anchor population upstream (`entity_alias.anchored_paths`) rather than waved through here —
+    a `views/` page is derived and the view sweep converges it, so nothing needs the permission.
     """
     if kind == schema.KIND_ENTITY_BODY:
         return _ToldFacts(

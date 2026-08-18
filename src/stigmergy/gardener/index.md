@@ -115,8 +115,10 @@ both or neither.
   disjoint BY CONSTRUCTION — one walk per run, and `select_empty_body_pages` excludes from it a
   page the deterministic check reports, before the model is asked — so one page is one finding and
   one draft, never two. A THIRD check has a repair of its own: `model-duplicate-entity`
-  (`repair.schema.KIND_ENTITY_ALIAS`), the only finding in this system that names a PAIR — two
-  entity pages, both ids in `subjects` — and the only one whose repair is a merge. This package
+  (`repair.schema.KIND_ENTITY_ALIAS`), the only finding REQUIRED to name exactly two subjects —
+  the two entity pages, by RELPATH in `subjects`, which is what `repair.entity_alias.plan` consumes
+  as paths — and the only one whose repair is a merge. (An editorial finding may name two as well;
+  `MAX_SWEEP_SUBJECT_PAGES` is 5. What is unique here is the requirement, not the pair.) This package
   still fixes nothing — it does not import the repair loop, and the repair loop reads findings from
   `store` and nothing else. No check currently emits `sla`, so the notice machinery has no
   producer — a check that adds one must also set `_notice_page_paths` (the ACL scoping key, a
