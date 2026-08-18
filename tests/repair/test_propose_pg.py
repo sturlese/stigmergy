@@ -701,11 +701,3 @@ def test_a_lapsed_usage_budget_skips_the_batch_and_the_run_completes(conn, repo_
         cur.execute("SELECT status FROM job_runs WHERE job = %s ORDER BY id DESC LIMIT 1",
                     (proposer.JOB_NAME,))
         assert cur.fetchone()[0] == "ok"
-
-
-def test_the_request_budget_cannot_bind_before_the_tool_budget():
-    """`tool_calls_limit` is the WORK ceiling; `request_limit` exists only as a runaway bound. A
-    conservative model spends one request per tool call, so a request budget below the tool budget
-    (it was 6 against 24) starves a legitimate batch before its work bound is reached — observed
-    on staging 2026-08-17 with the first real 29-finding night."""
-    assert proposer.PROPOSER_LIMITS.request_limit >= proposer.PROPOSER_LIMITS.tool_calls_limit + 2

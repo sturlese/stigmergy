@@ -54,14 +54,64 @@ log = logging.getLogger(__name__)
 
 JOB_NAME = schema.JOB_NAME
 
-# Two tools, a handful of reads each, one retry. Bounded structurally rather than by asking: a
+# ── the model budget, sized for the WORK a call carries ──────────────────────────────────────
+# Two tools, a bounded number of reads, one retry. Bounded structurally rather than by asking: a
 # proposer that searched its way through the whole corpus would be re-running the gardener.
-# `tool_calls_limit` is the WORK ceiling; `request_limit` is only the runaway bound above it, and
-# it must not be the one that binds — a conservative model spends one request per tool call, so a
-# request budget below the tool budget starves a legitimate batch before its work bound is
-# reached. It was 6 against 24, and the first real 29-finding night on staging died on it
-# (2026-08-17) — pinned by test to stay dominated.
-PROPOSER_LIMITS = UsageLimits(request_limit=26, tool_calls_limit=24)
+#
+# A tool call is one page read. A finding names two pages and both are already in the prompt, so
+# the budget is not for them: it is for the pages the finding did NOT name. Answering one well
+# means a `search_pages` for candidates nobody handed over, reading the two or three that look
+# plausible, and a second query when the first was the wrong words — six calls, and that is the
+# floor below which the proposer can only confirm what it was told. Exploration is the feature
+# and it is not negotiable for tokens (ADR 034: deterministic code may seed the context and must
+# not replace the model's ability to decide the context is not enough) — a proposer that reads
+# only the two pages a finding names cannot notice that a third page is the better link target.
+MIN_TOOL_CALLS_PER_FINDING = 6
+
+# The runaway bound above the work ceiling, and it must never be the one that binds: a
+# conservative model spends one request per tool call, plus one to write the answer, so a request
+# budget at or below the tool budget starves a legitimate batch before its work bound is reached.
+# It was 6 against 24 and the first real 29-finding night on staging died on it (2026-08-17).
+REQUEST_HEADROOM_OVER_TOOLS = 2
+
+
+def batch_limits(batch_size: int) -> UsageLimits:
+    """The budget for ONE model call carrying `batch_size` findings.
+
+    Derived rather than fixed, which is the whole of issue #75: a constant 24 tool calls against a
+    batch of 8 is three reads per finding, and the first real corpus skipped every edits batch with
+    `usage-budget-exhausted` — a permanent-retry loop that reads as a healthy `ok` row in
+    `job_runs`.
+
+    The `+ 1` is the call's own orientation: one finding's allowance spent on getting the model's
+    bearings in this corpus rather than on any particular finding, paid once per call however many
+    findings it carries. At the default batch that lands on exactly the pair this used to hardcode
+    (24 tool calls / 26 requests), so the bill per call is unchanged and it is the BATCH that was
+    resized to fit it.
+
+    The budget is per `agent.run`, not per batch: the corrective retry in `run_proposer` and
+    `draft_entity_body` is a second run with its own fresh allowance.
+
+    One thing the arithmetic hides, verified against the library rather than assumed: the
+    STRUCTURED ANSWER is itself a tool call, so a batch of `n` can afford one read fewer than the
+    ceiling says. The orientation term absorbs it — but anyone tempted to lower the floor because
+    "six reads is plenty" should know they would be buying five.
+    """
+    tool_calls = MIN_TOOL_CALLS_PER_FINDING * (max(int(batch_size), 1) + 1)
+    return UsageLimits(request_limit=tool_calls + REQUEST_HEADROOM_OVER_TOOLS,
+                       tool_calls_limit=tool_calls)
+
+
+# The body road's own budget, and it is a CONSTANT because that road is one entity page per call
+# and always was — deriving it from a batch size it does not have would be a lie about what it
+# does.
+#
+# The NUMBER is deliberately the one this road already had, not the single-finding batch's. Issue
+# #75 is about the edits road: on the night that found it, the body road was the only one that
+# produced anything at all, and cutting the budget of the half that works — for symmetry, with no
+# measurement of what it actually spends — is a risk taken for nothing. It moves when there is a
+# reason to move it, and the reason will be an observation rather than a formula.
+BODY_DRAFT_LIMITS = UsageLimits(request_limit=26, tool_calls_limit=24)
 
 # A lapsed usage budget is a fact about ONE batch or one draft, never a verdict on the run: the
 # work is skipped, the reason lands in `job_runs.stats`, and the next night retries it.
@@ -658,21 +708,27 @@ def validate_batch(output: ProposalBatch, *, corpus_paths: set[str], link_names:
 
 async def run_proposer(agent, deps: ProposerContext, prompt: str, *, corpus_paths: set[str],
                        link_names: set[str], finding_ids: set[int], max_ops: int,
-                       max_proposals: int) -> tuple[list[dict], list[str]]:
+                       max_proposals: int, usage_limits) -> tuple[list[dict], list[str]]:
     """`(accepted, skip_reasons)` for ONE batch: one call, one retry carrying the reasons, then
     SKIP — never insert unvalidated.
+
+    `usage_limits` is the caller's, because only the caller knows how many findings this prompt
+    carries and the budget is a function of that (`batch_limits`). The retry gets the SAME
+    allowance and not the remainder of the first call's: it is a second `agent.run` with its own
+    fresh budget, and a retry brief the model cannot afford to answer is a call spent proving
+    nothing.
 
     Unlike the gardener's sweep this never raises on a batch where nothing survives: a proposer
     that produced garbage has cost a model call and nothing else, and there is no watermark it
     could corrupt by being skipped. The reasons are counted into `job_runs.stats` instead.
     """
-    result = await agent.run(prompt, deps=deps, usage_limits=PROPOSER_LIMITS)
+    result = await agent.run(prompt, deps=deps, usage_limits=usage_limits)
     accepted, rejected = validate_batch(result.output, corpus_paths=corpus_paths,
                                         link_names=link_names, finding_ids=finding_ids,
                                         max_ops=max_ops, max_proposals=max_proposals)
     if rejected:
         retry = _retry_prompt(prompt, rejected, max_ops=max_ops, max_proposals=max_proposals)
-        result2 = await agent.run(retry, deps=deps, usage_limits=PROPOSER_LIMITS)
+        result2 = await agent.run(retry, deps=deps, usage_limits=usage_limits)
         accepted, rejected = validate_batch(result2.output, corpus_paths=corpus_paths,
                                             link_names=link_names, finding_ids=finding_ids,
                                             max_ops=max_ops, max_proposals=max_proposals)
@@ -773,12 +829,12 @@ async def draft_entity_body(agent, deps: ProposerContext, prompt: str, *, repo: 
     """`(op, reasons)` for ONE entity page: one call, one retry carrying the reasons, then SKIP —
     never store an unvalidated body. A draft that fails twice has cost two model calls and nothing
     else; there is no watermark it could corrupt."""
-    result = await agent.run(prompt, deps=deps, usage_limits=PROPOSER_LIMITS)
+    result = await agent.run(prompt, deps=deps, usage_limits=BODY_DRAFT_LIMITS)
     op = _draft_op(path, result.output)
     reasons = validate_draft(repo, op, link_names=link_names)
     if reasons:
         result2 = await agent.run(_draft_retry(prompt, reasons), deps=deps,
-                                  usage_limits=PROPOSER_LIMITS)
+                                  usage_limits=BODY_DRAFT_LIMITS)
         op = _draft_op(path, result2.output)
         reasons = validate_draft(repo, op, link_names=link_names)
     return (None if reasons else op), reasons
@@ -993,7 +1049,11 @@ async def _propose_edits(deps: ProposerContext, fresh: list[dict], *, repo: str,
             got, reasons = await run_proposer(
                 agent, deps, build_prompt(batch, batch_pages), corpus_paths=corpus_paths,
                 link_names=link_names, finding_ids={int(f["id"]) for f in batch},
-                max_ops=settings.max_ops_per_proposal, max_proposals=ceiling)
+                max_ops=settings.max_ops_per_proposal, max_proposals=ceiling,
+                # The findings this call actually carries, not `settings.batch_size`: the last
+                # batch of a run is usually short, and paying it a full batch's allowance is the
+                # honest reading of a budget that exists to cover the work in the prompt.
+                usage_limits=batch_limits(len(batch)))
         except UsageLimitExceeded:
             skip_reasons.append(USAGE_BUDGET_REASON.format(
                 what=f"batch of {len(batch)} finding(s) skipped"))
