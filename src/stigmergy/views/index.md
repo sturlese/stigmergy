@@ -100,6 +100,9 @@ Downstream: `librarian.processing` imports `views.regenerate` (the post-meeting 
 - `SWEEP_JOB_NAME` (`views-sweep`) — the periodic pass's own `job_runs.job`, distinct from `views`
   (an operator's run) and `views-on-meeting` (the post-filing hook), so a history says which of the
   three did the work.
+- `synthesis.view_model()` — the model a view is WRITTEN with, `$STIGMERGY_VIEWS_MODEL` or the
+  librarian's own. NAMED rather than inherited: every unattended caller runs in the worker, whose
+  boot strips `$OPENAI_API_KEY`, so an agent falling back to `CLEAN_MODEL` could only raise there.
 - `synthesis.VIEW_LIMITS` (6 requests / 6 tool calls), `MAX_PAGE_READS` (4), `PAGE_EXCERPT`
   (5000); member bodies pass `stigmergy.text.fence`. Caps: `TIMELINE_CAP` 10, `BACKLINKS_CAP` 20,
   both announced with "showing N of M". Both renderers link by file STEM, never by title.

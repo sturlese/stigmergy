@@ -10,6 +10,7 @@ import asyncio
 
 from pydantic_ai.exceptions import UsageLimitExceeded
 
+from stigmergy.librarian import config as librarian_config
 from stigmergy.views import skeleton, synthesis
 
 
@@ -81,3 +82,54 @@ def test_the_offline_double_writes_from_the_pages_it_actually_read(tmp_path, mon
     assert result.shipped is True
     assert "## Status" in result.body_markdown and "D1" in result.body_markdown
     assert "8.42M" not in result.body_markdown   # the retired seeded hallucination never returns
+
+
+# ── the model a view is WRITTEN with (#90) ────────────────────────────────────────────────────
+def test_the_view_agent_names_its_model_instead_of_inheriting_the_read_paths(monkeypatch):
+    """**RED before #90, and it could only ever have gone red on a deployment.**
+
+    `build_view_agent` was the ONE agent builder in this package that named no model, so it fell to
+    `build_model(None)` and `$OPENAI_API_KEY`. Every unattended caller of it runs inside the
+    librarian worker — and `stigmergy-librarian-boot` STRIPS that key before exec on purpose, so
+    the write path does not depend on the read path's embedder. The first periodic sweep on the
+    real deployment therefore died on its first entity with all eleven deferred, and the
+    post-meeting hook had been failing silently for as long as it had existed, because it is
+    best-effort and catches.
+
+    The keyless suite could not see it: `build_processor` returns the offline double long before
+    any key is consulted. So this asserts the WIRING — that a model name is handed over at all —
+    rather than the agent it builds.
+    """
+    from stigmergy.kernel import llm as kernel_llm
+
+    seen = {}
+
+    def _record(output_type, instructions, **kw):
+        seen.update(kw)
+        return object()
+
+    monkeypatch.setattr(synthesis, "build_processor", _record)
+    synthesis.build_view_agent()
+
+    assert seen.get("model_name"), (
+        "the view agent inherited CLEAN_MODEL again — on the worker that is a RuntimeError for a "
+        "key its own boot removed, and the sweep's whole population is deferred behind it")
+    assert seen["model_name"] == librarian_config.DEFAULT_MODEL
+    assert kernel_llm.build_processor is not _record   # the monkeypatch was local, not global
+
+
+def test_a_deployment_can_name_its_own_view_model(monkeypatch):
+    """The operator's door. One model per ARTIFACT is the rule — the worker and a terminal must not
+    write two views of one corpus with two different models — so the override moves both callers
+    together rather than either alone."""
+    monkeypatch.setenv(synthesis.VIEW_MODEL_ENV, "openai:gpt-5.6-terra")
+    assert synthesis.view_model() == "openai:gpt-5.6-terra"
+
+
+def test_the_view_model_is_read_at_call_time_not_at_import(monkeypatch):
+    """The worker resolves this AFTER its boot has finished editing the environment. A module-level
+    read would capture whatever was set before that, which is the state this bug lived in."""
+    monkeypatch.delenv(synthesis.VIEW_MODEL_ENV, raising=False)
+    assert synthesis.view_model() == librarian_config.DEFAULT_MODEL
+    monkeypatch.setenv(synthesis.VIEW_MODEL_ENV, "anthropic:claude-opus-5")
+    assert synthesis.view_model() == "anthropic:claude-opus-5"

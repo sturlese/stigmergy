@@ -1652,6 +1652,12 @@ _VIEWS_LIBRARY_ALLOWED_PREFIXES = (
     "stigmergy.text",                  # `fence`: dependency-free, the bottom of the stack —
     #                                   deliberately importable from anywhere, including a
     #                                   governed writer like this one.
+    "stigmergy.librarian.config",      # `DEFAULT_MODEL`, for the model a view is WRITTEN with.
+    #   `repair.settings` reaches for the same constant with the same argument: a deployment that
+    #   has settled on a model for the agent that writes pages has settled on it for the agent
+    #   that summarizes them. It is load-bearing rather than tidy — every unattended caller of
+    #   `views.synthesis` runs inside the librarian worker, whose boot STRIPS `$OPENAI_API_KEY`
+    #   on purpose, so a view agent inheriting `CLEAN_MODEL` could only ever raise there (#90).
 )
 # cli.py's additional, documented reach: the one DB-connection seam (mirroring capture.cli /
 # entities.cli) and the repo-path default `librarian.config` already exports.
