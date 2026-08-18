@@ -134,10 +134,16 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   `settings.max_proposals_per_run` (20) is how many approvals one NIGHT may ask for — a batch over
   it is refused whole with a named reason the retry carries, and the run stops batching once it is
   full, recording what it left for the next pass; `MAX_RATIONALE_CHARS` 400, `MAX_NOTE_CHARS` 300,
-  `MAX_PAGE_BODY_CHARS` 12000, `MAX_SKILL_BYTES` 256 KiB; `PROPOSER_LIMITS` 26 requests / 24 tool
-  calls (the tool budget is the work ceiling; the request budget is only the runaway bound above
-  it, pinned by test to stay dominated — a lapsed budget skips that one batch or draft, recorded,
-  never the run). The body road adds `MIN_ANCHORED_PAGES` (2 — below it no model is asked at all) and
+  `MAX_PAGE_BODY_CHARS` 12000, `MAX_SKILL_BYTES` 256 KiB. The model budget is DERIVED from the
+  batch, not fixed: `batch_limits(n)` pays `MIN_TOOL_CALLS_PER_FINDING` (6) per finding plus one
+  finding's worth of orientation for the call itself, and `REQUEST_HEADROOM_OVER_TOOLS` (2) above
+  that — the tool budget is the work ceiling, the request budget only the runaway bound above it,
+  pinned by test to stay dominated at EVERY batch size. A fixed budget against a growing batch is
+  what starved the first real corpus, so `settings.batch_size` and the allowance move together;
+  the body road holds `BODY_DRAFT_LIMITS` instead — one entity per call, no batch to derive from,
+  and the number it always had, because #75 was the edits road's problem and the body road was the
+  half that worked. A lapsed budget skips that one batch or draft, recorded, never the run.
+  The body road adds `MIN_ANCHORED_PAGES` (2 — below it no model is asked at all) and
   `MAX_ANCHORED_PAGES` (10 per prompt), and `entity_body`'s own `MAX_BODY_BYTES` (6000),
   `MAX_BODY_LINES` (110) and `MAX_ROLE_CHARS` (200). Those three are CONSTANTS rather than env
   settings on purpose: the real ceiling is the knowledge repo's contract linter, so an operator
