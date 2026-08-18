@@ -145,6 +145,20 @@ def test_the_knowledge_repo_carries_the_skill_where_the_code_looks_for_it():
     # — and, worse, would leave "why can I not remove this stale page" an open question in the
     # procedure a model reasons from ────────────────────────────────────────────────────────────
     "never propose a deletion",
+    # ── the fourth kind (ADR 039's third amendment): the merge road. Two rules code enforces and
+    # the brief has to agree with, or the model spends a retry — or a steward's decision —
+    # discovering them ──────────────────────────────────────────────────────────────────────────
+    #
+    # Declining is an ANSWER, not a failure: `choose_survivor` reads an empty survivor as "these
+    # are not one company" and records it. A brief that did not say so would leave the model
+    # choosing between two identities it has no evidence to merge.
+    "return an empty survivor",
+    # And the one thing the merge CANNOT do, which the model must not promise in its rationale:
+    # the knowledge repo's own contract linter refuses an alias naming an existing page, and the
+    # absorbed page stays by governance. `entity_alias._unclaimable` refuses such a claim at plan
+    # time — so a rationale telling a steward the absorbed NAME will now resolve to the survivor
+    # would be describing an outcome code has already refused.
+    "**It does not gain the absorbed entity's own",
 ])
 def test_the_skill_still_covers_every_clause_the_frame_assumes(phrase):
     """A contract TABLE rather than one "the file is long enough" check, because each row is a
