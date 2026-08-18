@@ -19,6 +19,7 @@ import pytest
 
 from stigmergy.capture import schema as capture_schema
 from stigmergy.slack import app as slack_app
+from stigmergy.views import regenerate as views_regenerate
 from tests import testdb
 
 # A key of this file's own, one above the run lock's. Every test below that needs to exercise the
@@ -164,20 +165,22 @@ def test_no_server_at_all_is_silent_rather_than_a_failure():
     testdb.require_sole_test_run(unreachable)          # no raise, no skip, no output
 
 
-def test_the_run_lock_key_collides_with_neither_key_the_shipped_code_takes():
+def test_the_run_lock_key_collides_with_no_key_the_shipped_code_takes():
     """Advisory locks share ONE flat namespace per database — the rule `slack/app.py` states where
     it picks its own key, and the reason it picked a distinct one.
 
-    Two of these keys are taken by code a developer may well be running against `stigmergy_test`
-    while the suite starts: the startup-DDL lock, which every entry point takes, and the
-    Slack singleton. Reusing either would make the suite and that process wait on each other, and
-    a hang names nothing — it does not read as a key collision, it reads as a flaky test.
+    Every one of these keys is taken by code a developer may well be running against
+    `stigmergy_test` while the suite starts: the startup-DDL lock, which every entry point takes,
+    the Slack singleton, and the view sweep, which a librarian worker takes on its own timer.
+    Reusing any of them would make the suite and that process wait on each other, and a hang names
+    nothing — it does not read as a key collision, it reads as a flaky test.
 
     Compared by VALUE, deliberately. A test that grepped for the literal would go green the moment
     someone renamed a constant, and the collision it exists to prevent is between numbers.
     """
     taken = {"capture.schema startup DDL": capture_schema._STARTUP_DDL_LOCK_KEY,
-             "slack.app singleton": slack_app._SINGLETON_LOCK_KEY}
+             "slack.app singleton": slack_app._SINGLETON_LOCK_KEY,
+             "views.regenerate sweep": views_regenerate.VIEW_SWEEP_LOCK_KEY}
     clashes = [name for name, key in taken.items() if key == testdb.RUN_LOCK_KEY]
     assert not clashes, (
         f"the suite's run lock ({testdb.RUN_LOCK_KEY}) is the same key as {clashes} — the suite "
@@ -195,7 +198,8 @@ def test_every_advisory_lock_in_the_shipped_code_is_one_this_file_knows_about():
     src = pathlib.Path(__file__).resolve().parents[1] / "src"
     holders = sorted(str(p.relative_to(src)) for p in src.rglob("*.py")
                      if "pg_advisory_lock" in (t := p.read_text()) or "pg_try_advisory_lock" in t)
-    assert holders == ["stigmergy/capture/schema.py", "stigmergy/slack/app.py"], (
+    assert holders == ["stigmergy/capture/ops.py", "stigmergy/capture/schema.py",
+                       "stigmergy/slack/app.py"], (
         f"the set of modules taking a Postgres advisory lock changed to {holders}. Add the new "
         f"key to the comparison in the test above — it shares one namespace with the suite's run "
         f"lock, and a collision surfaces as a hang rather than as an error.")

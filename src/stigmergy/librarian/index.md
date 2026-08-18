@@ -16,15 +16,15 @@ Layering (`tests/test_architecture.py` enforces it): `librarian` imports `captur
 `stigmergy.kernel`, and never `server` or `answer` — a worker beside the API; the two talk only
 through the durable queue row. `stigmergy.index.corpus` is a declared LIBRARY reach (a pure
 repo parser — nothing here touches `pages_index`); `stigmergy.index.store` is reached by
-`cli.py` alone; `processing.py` may import exactly one `stigmergy.views` symbol
-(`views.regenerate`).
+`cli.py` alone; `processing.py` and `worker.py` may import exactly one `stigmergy.views` symbol
+(`views.regenerate`) — the post-meeting hook and the periodic sweep, nothing wider.
 
 ## Modules
 
 | Module | What it is |
 |---|---|
 | `processing.py` | `process_item` — one capture end to end (`Result`, `Deps`, the refused-diff digest); `process_meeting_item` — the sibling for `kind="meeting"` rows, filing a page SET; `process_drive_item` — the thin drive sibling (kernel-hands conversion, then `process_item` with the source attachment on). The flows share one spine, and a new one joins it rather than copying it: `_resolve_filing_base` (this item's base commit, plus the `Deps` re-read at it), `_commit_and_push` (gated commit → lease re-check → push) and `_route_refusal` (which terminal state a surviving veto earns, with the anchoring park the one branch each flow passes in). Read it first when tracing a capture's path; everything else is reached from it |
-| `worker.py` | the loop: `startup_checks` (every fail-closed startup refusal), `sweep`, `Worker` (signal handling), `process_next` — the only caller of the whole processing path |
+| `worker.py` | the loop: `startup_checks` (every fail-closed startup refusal), `sweep` (stranded claims), `Worker` (signal handling, and the idle branch's maintenance schedule), `process_next` — the only caller of the whole processing path — plus `run_view_sweep`/`view_sweep_clause`, the periodic view convergence pass and its one operator line |
 | `gates.py` | the one veto surface: `Finding`, `GateContext`, `run_gates`, `ALL_GATES` (eight gates: zone, binary, body-rewrite, secrets, pii, frontmatter, contract, anchoring). A new check is a `(ctx) -> list[Finding]` added to `ALL_GATES`, never a special case in `processing.py` |
 | `agent.py` | the agent seam's shared half: `build_agent`, `BACKENDS`, `parse_outcome` / `parse_meeting_outcome` (the trust boundary both backends' accounts cross), `confined_write` (the write allow-list), the prompt builders and the fence |
 | `pydantic_backend.py` | `PydanticFilingAgent` — the real backend, serving both flows: an iterating ordinary run (five confined tools, an outcome file, it writes its own page) and one structured meeting call. `FilingToolbox` holds the tool bodies so every confinement rule is testable with no model; `_register_tools` writes the model-facing docstrings, which ARE the tool schema |
@@ -127,6 +127,16 @@ repo parser — nothing here touches `pages_index`); `stigmergy.index.store` is 
 - **`result_ref`/`sha` name a meeting's OWN commit, not the branch tip** — the post-filing view
   regeneration can push a second commit on top; code that reads "the current tip" to learn what
   a capture filed is wrong (see [`views/index.md`](../views/index.md)).
+- **The periodic view sweep is maintenance on the IDLE branch, on its own clock** — "the queue is
+  empty" is where it belongs, but a corpus parse per poll is not free, so
+  `Worker.maybe_sweep_views` skips (never blocks) until `view_sweep_interval_s` has elapsed and
+  `_sleep` keeps slicing so a signal is still observed promptly. It materializes its OWN
+  `ephemeral_worktree` off a fresh `base_ref`, because that fresh-checkout fact is exactly what
+  `guarded=False` is justified by, and it reads the registry at that base rather than at startup.
+  `view_sweep_ceiling` bounds one pass's model calls; a fault is logged and swallowed, because
+  filing must never depend on a rollup. Both knobs and the clock are injectable
+  (`Worker(view_sweep=…, now=…)`) — the interval is a timing contract, not something to sleep out
+  in a test.
 
 ## Tests
 

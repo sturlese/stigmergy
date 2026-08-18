@@ -70,7 +70,7 @@ The zones differ by **who writes them**:
 |---|---|---|
 | `wiki/` | people; the librarian, through the eight gates; the meeting flow (`wiki/meetings/`); `stigmergy-entities` (`wiki/entities/`) | what someone concluded |
 | `sources/` | the librarian worker only, from the captured material, byte for byte | what someone said or sent — written once, never edited |
-| `views/` | `stigmergy.views` only — two triggers, one writer: `stigmergy-views regenerate` by hand, and the librarian right after a meeting files (best-effort) | derived rollups, regenerated from their members |
+| `views/` | `stigmergy.views` only — ONE writer, three entry points: the librarian worker's periodic convergence sweep (the guarantee), the librarian right after a meeting files (best-effort), and `stigmergy-views regenerate` by hand | derived rollups, regenerated from their members |
 
 A capture **door** (the 🧠 gesture, `stigmergy-meeting drop`, `stigmergy-drive drop`, `brain_submit`)
 never writes a page. It puts a row on the queue and uploads the original bytes to the evidence

@@ -65,7 +65,7 @@ surface, the same reach `stigmergy.views` declares. Nothing here touches `pages_
 | Module | Does |
 |---|---|
 | `cli.py` | `stigmergy-librarian` — `once`, `run`, `status` |
-| `worker.py` | the loop, the fail-closed `startup_checks`, the sweep, signal handling, the per-`kind` routing |
+| `worker.py` | the loop, the fail-closed `startup_checks`, the claim sweep, signal handling, the per-`kind` routing, and the idle branch's periodic view sweep |
 | `bootstrap.py` | `stigmergy-librarian-boot` — the DEPLOYED worker's entry point (clone, verify, exec) |
 | `gitcredential.py` | `stigmergy-librarian-credential` — the git credential helper the container fetches with |
 | `config.py` | every tunable, resolved once (`Settings.from_args`); the derived lease |
@@ -151,11 +151,21 @@ refused-diff line: that path is only on the prose road, on stderr.
 filing into /path/to/stigmergy-brain against origin/main@a1b2c3d4e5f6
   polling every 3s; lease 900s (15 min); Ctrl-C stops after the item in flight
 #42 -> filed
+view sweep: 12 of 12 entity(ies) checked — 1 regenerated, 0 removed, 11 already current
 ^C
 finishing the item in flight, then stopping — no further items will be claimed. Press Ctrl-C again
 for the same thing without waiting to poll.
 stopped after 1 item(s)
 ```
+
+**The `view sweep` line is the loop's one maintenance report**, printed on the idle branch when
+its interval has elapsed AND the pass actually moved something — the same rule the claim-sweep line
+follows, for the same reason: a line printed every interval is a line nobody reads. The pass is
+where a view stops being stale whatever wrote the corpus; [`views.md`](./views.md) is the account,
+and the two knobs are in the table above. It cannot be cancelled mid-pass any more than an item
+can, and it does not need to be: one commit per entity means an interrupted sweep leaves a coherent
+repo, and the next pass picks up whatever it did not reach. A fault is logged and swallowed —
+filing must never depend on a rollup — leaving a `job_runs` error row under `views-sweep`.
 
 **Ctrl-C is less than a cooperative cancel**: nothing can abort a running `process_item` — there is
 no cancellation point inside an agent turn, a gitleaks run or a push — so the item in flight always
@@ -229,6 +239,8 @@ time, and model ids are configuration, never constants.
 | `STIGMERGY_LIBRARIAN_GATHER_EXCERPT_LINES` | 20 | how many lines of each candidate either of them shows |
 | `STIGMERGY_LIBRARIAN_TIMEOUT_S` | 300 | per-item wall clock (enforced by us), around the WHOLE run rather than one request — a different bound from the iteration budget above, and not a substitute for it |
 | `STIGMERGY_LIBRARIAN_DEDUP_WINDOW_S` | 600 | the retry-collapse window |
+| `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S` | 900 | how often the idle loop converges `views/` to the corpus (see [`views.md`](./views.md)). It runs on the IDLE branch only — a busy queue is drained first — and the first pass is at the first idle tick, so a restart converges without waiting an interval out. `0` turns the pass off, leaving the post-meeting hook and `stigmergy-views regenerate` as the only roads; a NEGATIVE value is refused by name, because it would rebuild a worktree and re-parse the corpus on every poll |
+| `STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING` | 10 | how many entities ONE pass may regenerate or remove — each is a model call, and nothing else bounds them. Entities that cost nothing (`unchanged`) do not consume it. What a pass defers is recorded in `job_runs.stats.skip_reasons` and picked up by the next one, since the population is recomputed from state every time. Below `1` is refused by name: every pass would defer everything |
 | (`--poll-interval`) | 3.0 | `run` only; must be > 0 |
 | (`--visibility-timeout`) | 900 | derived: `2 × timeout_s + 120s` gates `+ 180s` headroom |
 | (`--max-attempts`) | 3 | deliveries before an item is failed; must be ≥ 1 |

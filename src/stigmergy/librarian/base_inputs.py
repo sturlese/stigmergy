@@ -101,6 +101,20 @@ def load_registry(repo: str, base: gitcmd.BaseRef):
                 f"pages against entities that do not exist") from ex
 
 
+def registry_present_at(repo: str, base: gitcmd.BaseRef) -> bool:
+    """Is the entity registry IN the commit at all? A PREDICATE, so each caller writes its own
+    refusal around the path it already holds — `config.is_repo_checkout`'s shape, for its reason.
+
+    It exists because `load_registry` cannot answer it: absent and unreadable both resolve to an
+    EMPTY registry there, which is the right default for filing (an unregistered graph parks names
+    rather than anchoring them) and the wrong one for any caller that reads "no entity is
+    registered" as an instruction to act. `read_at`'s absence test is `gitcmd.blob_size < 0`, which
+    is any non-zero `git cat-file` exit — so "the file is not in this commit" and "the object could
+    not be read" are one answer, and this is the check that keeps that answer from being silent.
+    """
+    return gitcmd.blob_size(repo, base.sha, config.REGISTRY_RELPATH) >= 0
+
+
 def load_stewards(repo: str, base: gitcmd.BaseRef) -> dict:
     """`ops/stewards.json` at `base`: the doorbell's scope -> steward-emails map, read at the base
     commit like `load_acl`/`load_registry` above. See `_parse_stewards` for the shape rules."""

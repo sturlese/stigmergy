@@ -4,6 +4,7 @@ subcommand, one required target:
     stigmergy-views regenerate --entity <id>
     stigmergy-views regenerate --stale
     stigmergy-views regenerate --all
+    stigmergy-views regenerate --sweep
 
 Exit 130 on Ctrl-C, `--json` first, one sentence (no traceback) per domain refusal,
 id-and-display-name pairing on every entity named in output.
@@ -54,6 +55,10 @@ def _who(entity_id: str, name: str) -> str:
 
 WITHHELD_SUMMARY = "synthesis withheld (ran out of budget before a draft was ready)"
 
+# `--sweep`'s population, in the report line's grammar. Named because the reason it is a UNION is
+# the whole point of the target (see `views.staleness.list_sweep_entities`).
+SWEEP_POPULATION = "with an anchored page or an existing view"
+
 
 def _timeline_phrase(o: regenerate.RegenOutcome) -> str:
     """The capped-timeline note, or `""` when nothing was capped — one sentence for both the batch
@@ -103,7 +108,21 @@ def _cmd_regenerate(conn, args) -> int:
                                             branch=args.branch, force=args.force))
         return _report_single(result.outcomes[0], args)
 
+    if args.sweep:
+        # The union population, through `regenerate.sweep` — the SAME entry point the librarian
+        # worker's idle pass uses, so an operator running this by hand and the unattended pass can
+        # never converge different sets. `job=` is the ONE thing that differs, and deliberately:
+        # three roads, three `job_runs.job` names. This is an operator's run whatever target it
+        # was given, so it records itself as one; `views-sweep` means the unattended pass.
+        result = asyncio.run(regenerate.sweep(repo, conn, registry=registry, branch=args.branch,
+                                              force=args.force, job=regenerate.JOB_NAME))
+        return _report_batch(result, population=SWEEP_POPULATION,
+                             current_phrase="already match the corpus",
+                             checked_total=result.population, args=args)
+
     population = "with an existing view" if args.stale else "with at least one anchored page"
+    current_phrase = ("match their current member set" if args.stale
+                     else "have an up-to-date view")
     # `--force` widens `--stale`'s population to every entity with an existing view (its help
     # text's promise); `--all`'s population needs no widening.
     entity_ids = (sorted(regenerate.existing_view_ids(repo)) if (args.stale and args.force)
@@ -114,7 +133,8 @@ def _cmd_regenerate(conn, args) -> int:
 
     result = asyncio.run(regenerate.run(repo, conn, entity_ids, registry=registry,
                                         branch=args.branch, force=args.force))
-    return _report_batch(result, population=population, checked_total=checked_total, args=args)
+    return _report_batch(result, population=population, current_phrase=current_phrase,
+                         checked_total=checked_total, args=args)
 
 
 def _report_single(o: regenerate.RegenOutcome, args) -> int:
@@ -128,6 +148,8 @@ def _report_single(o: regenerate.RegenOutcome, args) -> int:
              f"entity. Check the id (`stigmergy-entities list` shows what's parked; the registry "
              f"itself is `{librarian_config.REGISTRY_RELPATH}` in the knowledge repo), or mint it first with "
              f"`stigmergy-entities create`/`approve` if it should exist.", file=sys.stderr)
+    elif o.action == "refused-unusable-id":
+        print(f"stigmergy-views: refusing to regenerate — {o.message}.", file=sys.stderr)
     elif o.action == "refused-no-members":
         print(f"stigmergy-views: refusing to regenerate {_who(o.entity_id, o.entity_name)} — "
              f'no page anywhere in the repo declares entity: ["{o.entity_id}"] yet. A view is '
@@ -162,7 +184,12 @@ def _report_single(o: regenerate.RegenOutcome, args) -> int:
     return EXIT_REFUSED if o.action.startswith("refused") else 0
 
 
-def _report_batch(result: regenerate.RunResult, *, population: str, checked_total: int, args) -> int:
+def _report_batch(result: regenerate.RunResult, *, population: str, current_phrase: str,
+                  checked_total: int, args) -> int:
+    """`population` names WHICH entities were looked at and `current_phrase` closes the
+    nothing-to-do sentence for that same population — passed in as a pair rather than branched on
+    a flag here, so a new target states its own two halves instead of adding a third arm to a
+    conditional that already had two."""
     if args.json:
         print(json.dumps({"stats": result.stats,
                           "outcomes": [{"entity_id": o.entity_id, "action": o.action,
@@ -171,10 +198,16 @@ def _report_batch(result: regenerate.RunResult, *, population: str, checked_tota
         return 0
     changed = [o for o in result.outcomes if o.action != "unchanged"]
     unchanged = [o for o in result.outcomes if o.action == "unchanged"]
+    if not checked_total and result.skip_reasons:
+        # A run that examined NOTHING and gave a reason reports the reason alone. "all 0 already
+        # match the corpus" is vacuously true and reads as success, which is the opposite of what
+        # a sweep that never started needs to say.
+        _print_skip_reasons(result, lead="")
+        return 0
     if not changed:
         print(f"checked {checked_total} entities {population} — all {checked_total} already "
-             f"{'match their current member set' if args.stale else 'have an up-to-date view'}"
-             f"; nothing regenerated, nothing committed.")
+             f"{current_phrase}; nothing regenerated, nothing committed.")
+        _print_skip_reasons(result)
         return 0
     print(f"checked {checked_total} entities {population} — {len(changed)} stale, "
          f"{len(unchanged)} up to date\n")
@@ -183,7 +216,18 @@ def _report_batch(result: regenerate.RunResult, *, population: str, checked_tota
     if unchanged:
         names = ", ".join(_who(o.entity_id, o.entity_name) for o in unchanged)
         print(f"\n{len(unchanged)} up to date, unchanged: {names}")
+    _print_skip_reasons(result)
     return 0
+
+
+def _print_skip_reasons(result: regenerate.RunResult, *, lead: str = "\n") -> None:
+    """What the run did NOT do, if anything: the per-run ceiling (which no operator target sets),
+    an id no view can be named from, a branch that moved mid-batch, another sweep already holding
+    the lock. Printed off the list rather than branched on here — a run that grows a new way to
+    stop must not have to remember to add its own reporting. `lead` is blank when these are the
+    ONLY lines, so a refusal does not open with an empty one."""
+    for reason in result.skip_reasons:
+        print(f"{lead}{reason}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -213,6 +257,13 @@ def build_parser() -> argparse.ArgumentParser:
                              "or not it has a view yet (the backfill flag — use it to seed views "
                              "for the first time, or any time you don't trust the staleness "
                              "bookkeeping)")
+    target.add_argument("--sweep", action="store_true",
+                        help="converge views/ to the corpus: the UNION of --stale and --all, "
+                             "which is the only population that both CREATES a missing view and "
+                             "REMOVES an orphaned one (--all misses a view whose members have all "
+                             "gone, --stale misses an entity that never had a view). The same "
+                             "pass the librarian worker runs periodically — run it by hand when "
+                             "you do not want to wait for the interval")
     p_regen.add_argument("--force", action="store_true",
                          help="bypass the staleness check and re-attempt synthesis even against "
                               "an UNCHANGED member set — the one operator-triggerable retry for "

@@ -51,6 +51,23 @@ DEFAULT_GATHER_EXCERPT_LINES = 20
 
 DEFAULT_POLL_INTERVAL_S = 3.0
 
+# ── the periodic view sweep ───────────────────────────────────────────────────────────────────
+# The worker's one maintenance pass: it converges `views/` to the corpus from STATE, so a view is
+# never stale whatever door wrote the page. It runs on the idle branch (the queue is empty) but on
+# its OWN clock — an empty queue polls every few seconds, and the pass costs a corpus parse.
+VIEW_SWEEP_INTERVAL_ENV = "STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S"
+DEFAULT_VIEW_SWEEP_INTERVAL_S = 900.0
+# `0` is a real setting, not a broken one: it turns the pass off, leaving the post-meeting hook and
+# `stigmergy-views regenerate` as the only roads — what this deployment had before the pass existed.
+VIEW_SWEEP_OFF = 0.0
+
+# How many entities ONE pass may regenerate or remove. #69's lesson, applied to a second unattended
+# loop: N changed entities are N model calls, and until this existed nothing bounded them. The
+# surplus is not lost — the pass recomputes its population from state, so whatever it defers is
+# still divergent when the next one starts.
+VIEW_SWEEP_CEILING_ENV = "STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING"
+DEFAULT_VIEW_SWEEP_CEILING = 10
+
 # The retry-collapse window (`dedup`'s level 1): identical content from the same submitter
 # inside this many seconds is a RETRY of one capture, not a second one.
 DEFAULT_DEDUP_WINDOW_S = 600
@@ -239,6 +256,10 @@ class Settings:
     max_attempts: int = queue.DEFAULT_MAX_ATTEMPTS
     dedup_window_s: int = DEFAULT_DEDUP_WINDOW_S
 
+    # the periodic view sweep (see the constants above)
+    view_sweep_interval_s: float = DEFAULT_VIEW_SWEEP_INTERVAL_S
+    view_sweep_ceiling: int = DEFAULT_VIEW_SWEEP_CEILING
+
     # the gates
     gitleaks_bin: str = "gitleaks"      # resolved on PATH; existence checked ONCE at startup
     worktree_root: str = ""             # "" -> a per-run temp dir under the system temp
@@ -287,6 +308,10 @@ class Settings:
             max_attempts=int(flag("max_attempts", cls.max_attempts)),
             dedup_window_s=int(os.environ.get("STIGMERGY_LIBRARIAN_DEDUP_WINDOW_S",
                                               cls.dedup_window_s)),
+            view_sweep_interval_s=float(os.environ.get(VIEW_SWEEP_INTERVAL_ENV,
+                                                       cls.view_sweep_interval_s)),
+            view_sweep_ceiling=int(os.environ.get(VIEW_SWEEP_CEILING_ENV,
+                                                  cls.view_sweep_ceiling)),
             gitleaks_bin=os.environ.get("STIGMERGY_GITLEAKS_BIN", cls.gitleaks_bin),
             worktree_root=os.environ.get("STIGMERGY_LIBRARIAN_WORKTREE_ROOT", cls.worktree_root),
             refused_diff_root=os.environ.get(REFUSED_DIFF_ROOT_ENV, cls.refused_diff_root),
@@ -313,6 +338,36 @@ class Settings:
                 f"max_attempts is {self.max_attempts}, so every delivery would already be "
                 f"exhausted and the queue would fail each item on its first claim; pass "
                 f"--max-attempts 1 or more (default {queue.DEFAULT_MAX_ATTEMPTS})")
+        # A NEGATIVE interval is the out-of-domain one, not zero: zero is the documented off
+        # switch, while a negative value would make every idle tick "due" and turn a corpus parse
+        # plus a fresh worktree into the poll loop.
+        if float(self.view_sweep_interval_s) < VIEW_SWEEP_OFF:
+            raise LibrarianConfigError(
+                f"view_sweep_interval_s is {self.view_sweep_interval_s}, which would run the "
+                f"periodic view sweep on every idle poll — a corpus parse and a fresh worktree "
+                f"every few seconds. Set ${VIEW_SWEEP_INTERVAL_ENV} to a positive number of "
+                f"seconds (default {DEFAULT_VIEW_SWEEP_INTERVAL_S}), or to "
+                f"{VIEW_SWEEP_OFF:g} to turn the sweep off")
+        # The damage the branch above describes is reachable from INSIDE its domain: the pass is
+        # due at most once per idle poll, so any interval below the poll interval means every idle
+        # tick, which is the "corpus parse and a fresh worktree every few seconds" already named
+        # there. `0.9` for `900` is the typo that gets there, and it is not a fault the value's
+        # sign can catch.
+        if VIEW_SWEEP_OFF < float(self.view_sweep_interval_s) < float(self.poll_interval_s):
+            raise LibrarianConfigError(
+                f"view_sweep_interval_s is {self.view_sweep_interval_s}, which is below the "
+                f"{self.poll_interval_s}s poll interval — the sweep is due at most once per idle "
+                f"poll, so anything under that runs it on EVERY one: a corpus parse and a fresh "
+                f"worktree every few seconds. Set ${VIEW_SWEEP_INTERVAL_ENV} to at least "
+                f"{self.poll_interval_s:g} (default {DEFAULT_VIEW_SWEEP_INTERVAL_S}), or to "
+                f"{VIEW_SWEEP_OFF:g} to turn the sweep off")
+        if int(self.view_sweep_ceiling) < 1:
+            raise LibrarianConfigError(
+                f"view_sweep_ceiling is {self.view_sweep_ceiling}, so every pass would defer "
+                f"every entity and no view would ever be regenerated — a silently useless loop. "
+                f"Set ${VIEW_SWEEP_CEILING_ENV} to 1 or more (default "
+                f"{DEFAULT_VIEW_SWEEP_CEILING}), or turn the sweep off with "
+                f"${VIEW_SWEEP_INTERVAL_ENV}={VIEW_SWEEP_OFF:g}")
 
     # ── the three repo-sourced inputs: where they live IN A CHECKOUT ──────────────────────────
     # Locations, not reads — the fast lane opens none of them, reading all three at `base.sha`.

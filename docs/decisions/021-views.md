@@ -114,3 +114,102 @@ answer that question is wrong. This bit a test, which is how it was found.
 - **The mechanism is proven against synthetic, single-operator traffic**, and a view is a rollup of
   material one person wrote. How the intersection rule behaves over a corpus many people label
   differently is untested.
+
+## Amendment — a view is never stale, whatever wrote the corpus (2026-08-18, closes #76)
+
+The decisions above stand as written. This section records where the answer to "*who* regenerates
+views" — D3 called it a scheduling question and deliberately deferred it — actually landed, and why
+"Known limits" never mentioned staleness even though staleness was the limit.
+
+**The problem it answers.** Views regenerated in exactly two places: `librarian.processing` after a
+MEETING files, and `stigmergy-views regenerate` run by a human. Every other door left a view stale
+indefinitely — an ordinary `brain_submit`, a Slack capture, a Drive drop, an applied repair, an
+entity mint, a hand edit in the knowledge repo. `gardener.checks.check_stale_views` flagged it and
+nothing acted: the one check with a detector and no actor, because its fix is a REGENERATION and
+not one of the three additive edit shapes the repair loop can express. Read at the right level this
+is [ADR 039](./039-governed-repair-loop.md)'s complaint once more, for the one finding
+class that loop deliberately does not cover. Staging, 2026-08-17: `stale-view` flagged for one
+entity and nothing acted on it, and an entity minted the same day with one anchored page had **no
+view at all** — nothing would ever have created one.
+
+### C1 — the fix is state-based convergence, never another trigger
+
+"Regenerate after each write" makes every new door remember to call it, and the two doors that must
+NOT call it — an applied repair and an entity mint, both running inside the HTTP server process
+whose availability [ADR 039](./039-governed-repair-loop.md)'s own audit fixed — would
+still leave views stale. `regenerate_entity` was already written for the other shape: an unchanged
+member hash with no `--force` is `action="unchanged"`, with **no model call and no commit**; a
+changed one is one entity and one commit; no members left, or a de-registered entity, is a REMOVAL.
+So a pass that asks the corpus what diverges converges `views/` regardless of what wrote it, and
+costs a corpus parse plus a hash per entity when nothing changed. That convergence IS the coverage
+guarantee, and it is structural rather than a promise somebody has to keep at each call site.
+
+### C2 — the population is a UNION, and neither existing target was a superset
+
+This is the crux, and it was found by scoping rather than by reasoning from the names. `--all`
+(every entity with ≥ 1 anchored page) includes an entity that never had a view and MISSES an
+orphaned view whose members have all disappeared. `--stale` (an existing view whose member hash no
+longer matches) catches those removals and MISSES every entity that never had a view. So `--stale`
+alone — the obvious choice, and the population `check_stale_views` reuses verbatim — would silently
+never CREATE a missing view, which was the very case the issue was filed on. The union got a named
+helper in the read-only `views.staleness` (which stays git-free, so the gardener keeps importing it
+without the write stack) and its own CLI target, `--sweep`, rather than a third meaning on `--stale`.
+
+### C3 — it runs in the librarian worker, and the four crons stay four
+
+A fifth GitHub Actions cron would have been the first one needing the librarian App's private key —
+`repair-propose.yml` was built with no write credential at all, on purpose — and a new credential
+surface deserves its own argument. The worker already holds that credential, already calls
+`views_regenerate.run(..., guarded=False)` after a meeting, and already runs continuously with
+`job_runs` bookkeeping. The seam is `Worker.run`'s idle branch: "the queue is empty" is precisely
+where maintenance belongs, and `sweep()` (the stranded-claim recovery) was already precedent for
+maintenance in that class. The existing post-meeting call becomes a latency optimisation on top of
+a guarantee rather than the only road.
+
+### C4 — the idle pass materializes its OWN worktree, and that is what keeps `guarded=False` honest
+
+The post-meeting call BORROWS the capture's worktree, which is where `guarded=False`'s stated
+justification comes from: *"the librarian worker, whose ephemeral worktree is always a fresh
+checkout"*. An idle pass has none to borrow, so it builds one off a freshly-fetched `origin/<branch>`.
+That justification is load-bearing — it is the whole reason the steward guards may be skipped — and
+a new caller inheriting the words without the fact is how a documented invariant quietly stops
+being one.
+
+### C5 — a per-run ceiling, and it is #69's lesson applied to a second unattended loop
+
+N changed entities are N model calls, and nothing bounded them. The pass stops at a settings-backed
+ceiling with an env override — how the repair loop does it — records what it left in
+`job_runs.stats.skip_reasons`, and reuses the WORDING of `repair.proposer.RUN_CEILING_REASON` so an
+operator does not learn two spellings of one fact. The ceiling counts entities REGENERATED, never
+entities examined: an `unchanged` entity costs a hash, and charging the ceiling for it would leave
+the tail of the population permanently unconverged however little was actually changing. Nothing is
+lost — the population is recomputed from state every pass, so what one defers the next one sees.
+
+### C6 — a fault is recorded and swallowed
+
+A regeneration fault leaves a `job_runs` error row and does not stop the worker draining the queue.
+The same best-effort posture the post-meeting hook already has, for the same reason: filing must
+never depend on a rollup.
+
+### What this deliberately does NOT do
+
+- **The filing agent does not append to the entity page.** `wiki/entities/` is a governed lane
+  outside the agent's write prefixes; an entity page carries ONE `acl` while the accumulated content
+  comes from pages with different labels — which the view solves by INTERSECTION and an appended
+  page cannot; and the decision would then live both as its own page and as a line elsewhere, with
+  `as_of`, supersession and ACL applying to one and not the other.
+- **`entity-body` does not become a recurring refresh.** Its dismissal key is `kind+path` on purpose
+  ("a re-drafted body is the same question", ADR 039 A3), so recurrence would invert a recorded
+  decision and every refresh would cost a steward a review. The split is deliberate: the entity page
+  is IDENTITY (long half-life, steward-approved), the view is the ACCUMULATED STORY (short
+  half-life, regenerated).
+- **No trigger on the repair-apply or mint paths.** Both run in the HTTP server process, which is
+  the availability finding #69 already fixed.
+
+### Consequences for "Known limits" above
+
+The staleness limit is closed for the MEMBER SET and only for it. What remains, and is now stated
+rather than absent: a view's Backlinks section can drift without its `member_hash` changing — a page
+elsewhere gaining a wikilink to the entity's own page is not a member-set change — and a withheld
+synthesis over an unchanged member set still has no automatic retry, because the pass converges on
+the same hash. `--force` is the recovery for both, and it is an operator's act by design.
