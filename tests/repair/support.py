@@ -306,6 +306,89 @@ def seed_deletion_corpus(env) -> dict[str, str]:
             "only_related": "wiki/notes/Only A Related Entry.md"}
 
 
+# ── the `entity-alias` kind's fixtures: two identities that are one entity ────────────────────
+# The fixture repo's `ops/entity-registry.json` registers `Acme Corp` under the id `acme`, which is
+# NOT `slugify("Acme Corp")` — so that repo is permanently in registry drift as far as the frozen
+# contract linter's `check_registry` is concerned. Every other kind gets away with it because
+# `gate_contract` filters the linter's findings to the pages a diff TOUCHED and none of them touch
+# the registry. A merge REGENERATES it, so the finding surfaces and vetoes the apply.
+#
+# `regenerate_registry` is therefore part of the fixture rather than part of the test: it makes the
+# checkout's registry what `stigmergy-entities regenerate` would produce, which is the state every
+# real knowledge repo is in (the knowledge repo's own CI goes red on drift).
+SURVIVOR_STEM, SURVIVOR_ID = "Cofers", "cofers"
+ABSORBED_STEM, ABSORBED_ID = "Cofers Holdings", "cofers-holdings"
+SURVIVOR_PAGE = f"wiki/entities/{SURVIVOR_STEM}.md"
+ABSORBED_PAGE = f"wiki/entities/{ABSORBED_STEM}.md"
+
+# What an entity page says when somebody has written it — enough that the linter's size rule is
+# satisfied and a reader can tell the two identities apart.
+def entity_body(stem_name: str) -> str:
+    return (f"# {stem_name}\n\n## What / Who\n\n{stem_name} is an organization this fixture corpus "
+            f"records dealings with.\n\n## Facts\n\n"
+            + "\n".join(f"- fact {n} about {stem_name}, recorded for the fixture."
+                        for n in range(1, 26)) + "\n")
+
+
+def write_entity_page(env, stem_name: str, entity_id: str, *, aliases=(),
+                      push: bool = True) -> str:
+    """One `wiki/entities/` page in the checkout — NOT registered here: `regenerate_registry`
+    derives the registry from the pages, exactly as the mint door does."""
+    front = ["type: entity", f'title: "{stem_name}"', "status: developing",
+             "entity_type: organization", 'role: ""',
+             f"aliases: {json.dumps(list(aliases), ensure_ascii=False)}",
+             "created: 2026-01-01", "updated: 2026-01-01", "tags: [entity, organization]",
+             f'entity: ["{entity_id}"]', "related: []", "sources: []"]
+    relpath = f"wiki/entities/{stem_name}.md"
+    path = os.path.join(env.repo, *relpath.split("/"))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("---\n" + "\n".join(front) + "\n---\n\n" + entity_body(stem_name))
+    if push:
+        librarian_support.commit_and_push(env.repo, f"test: add {stem_name}")
+    return relpath
+
+
+def regenerate_registry(env, *, push: bool = True) -> None:
+    """`ops/entity-registry.json`, derived from the entity pages by the ONE writer that derives it.
+    Never hand-written here: a fixture registry a test typed would let a merge pass against a file
+    the real generator would never produce."""
+    from stigmergy.entities import generator
+
+    generator.regenerate(env.repo)
+    if push:
+        librarian_support.commit_and_push(env.repo, "test: regenerate the entity registry")
+
+
+def seed_duplicate_pair(env, *, absorbed_aliases=("Cofers Grupo",), anchored: int = 1,
+                        push: bool = True) -> dict[str, str]:
+    """The shape every merge test needs: two registered identities, `anchored` note pages anchored
+    to the one that will be absorbed, one anchored to the survivor, and a derived registry.
+
+    Returns `{label: relpath}` so a test names each page by what it is FOR.
+    """
+    write_entity_page(env, SURVIVOR_STEM, SURVIVOR_ID, push=False)
+    write_entity_page(env, ABSORBED_STEM, ABSORBED_ID, aliases=absorbed_aliases, push=False)
+    absorbed_notes = [write_anchored_note(env, f"Holdings Note {n + 1}", entity_id=ABSORBED_ID,
+                                          push=False)
+                      for n in range(anchored)]
+    survivor_note = write_anchored_note(env, "Cofers Note", entity_id=SURVIVOR_ID, push=False)
+    regenerate_registry(env, push=False)
+    if push:
+        librarian_support.commit_and_push(env.repo, "test: seed the duplicate identity pair")
+    return {"survivor": SURVIVOR_PAGE, "absorbed": ABSORBED_PAGE,
+            "survivor_note": survivor_note, **{f"absorbed_note_{n + 1}": p
+                                               for n, p in enumerate(absorbed_notes)}}
+
+
+def seed_duplicate_entity_finding(conn, run_id: int, pages=(SURVIVOR_PAGE, ABSORBED_PAGE)) -> int:
+    """The MODEL finding the merge road answers: one pair of entity pages, both RELPATHS in
+    `subjects` (never ids — `entity_alias.plan` consumes them as paths),
+    `warn` — exactly as `sweep.MODEL_CHECK_SEVERITY` emits it."""
+    return seed_finding(conn, run_id, check=gardener_sweep.CHECK_MODEL_DUPLICATE_ENTITY,
+                        subjects=list(pages))
+
+
 def stem(path: str) -> str:
     return path.rsplit("/", 1)[-1].removesuffix(".md")
 

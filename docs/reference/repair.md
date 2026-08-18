@@ -1,9 +1,9 @@
 # The governed repair loop — `stigmergy.repair`
 
 A finding's path to zero. `stigmergy-repair propose` turns the gardener's findings into concrete
-changes a steward can approve one at a time — additive edits to pages that already exist, and a
-drafted BODY for an entity page whose own body says nothing about it — while `stigmergy-repair
-delete` is where a
+changes a steward can approve one at a time — additive edits to pages that already exist, a
+drafted BODY for an entity page whose own body says nothing about it, and a MERGE of two registry
+entries that turn out to be the same entity — while `stigmergy-repair delete` is where a
 person proposes removing a page and everything that points at it. The review lane and the admin
 console are where one is approved; and only then does code perform exactly the approved ops,
 through the librarian's own validator, its eight gates and its governed commit.
@@ -23,14 +23,16 @@ judgment — code itself.
 
 ```
   gardener findings                stigmergy-repair propose            a steward, one at a time
-  (the latest COMPLETED run)         ├─ split by check into TWO model       ├─ review_queue / review_decide
+  (the latest COMPLETED run)         ├─ split by check into THREE model     ├─ review_queue / review_decide
    model-unlinked-mention            │    roads, plus one that asks none    │    (MCP, item_kind
    model-contradiction               │   edits:  batch → 1 call/batch       │     "repair-proposal")
    orphan-page                       │   entity-body: 1 page → 1 call,      └─ the console's Repairs tab
    entity-placeholder-body           │     and only with >= 2 anchored              │
-   model-empty-entity-body           │                                              │
-        │                            │   delete: duplicate sources/ pages,          │  approve
-        └────────── read ───────────>│     derived by CODE, no model                v
+   model-empty-entity-body           │   entity-alias: 1 PAIR → 1 call,             │
+   model-duplicate-entity            │     the model picks the survivor,            │  approve
+        │                            │     code computes the sweep                  v
+        │                            │   delete: duplicate sources/ pages,          │
+        └────────── read ───────────>│     derived by CODE, no model                │
                                      ├─ drop keys already reviewed        server.review.apply_repair_and_record
   a person, at a terminal            ├─ the model, 2 READ tools             ├─ mark_decided (WHERE pending)
    stigmergy-repair delete ─────────>├─ validate the answer, one retry      ├─ clone → the kind's applier
@@ -44,13 +46,15 @@ judgment — code itself.
                                                                             └─ mark_applied + review_decisions
 ```
 
-## The five checks a repair can answer
+## The six checks a repair can answer
 
-Only findings one of the two MODEL-proposed kinds could actually close reach the proposer — the
-third kind, `delete`, answers no finding at all and is proposed by a person or derived from
-duplicate content hashes. The other four checks are absent by NAME rather than by oversight: an aging seed needs somebody to write, a stale view needs a
-regeneration, an anchor that no longer fits is a judgment about a page's subject. None of them is an
-edit or a body this vocabulary can express.
+Only findings one of the three MODEL-proposed kinds could actually close reach the proposer — the
+fourth kind, `delete`, answers no finding at all and is proposed by a person or derived from
+duplicate content hashes. The corpus has fifteen checks in all — nine deterministic and six model —
+so the other NINE are absent by NAME rather than by oversight: an aging seed needs somebody to write,
+a stale view needs a regeneration (the periodic sweep converges those, issue #76), an anchor that no
+longer fits is a judgment about a page's subject. None of them is an edit, a body or a merge this
+vocabulary can express.
 
 **"This loop cannot express it" is not "nothing acts on it."** `stale-view` is answered by the
 librarian worker's periodic view sweep — a state-based convergence pass that regenerates the page
@@ -64,6 +68,7 @@ else. See [`views.md`](./views.md).
 | `orphan-page` | nothing in the corpus links to this page | a `backlink` on the page that ought to link to it — which the proposer has to FIND |
 | `entity-placeholder-body` | an entity page still carries the placeholders it was minted with | an `entity-body` draft of that page's body, written from the pages anchored to the entity |
 | `model-empty-entity-body` | an entity page's body is written and says nothing about that entity | the same `entity-body` draft — one road, because it is the same question judged rather than matched |
+| `model-duplicate-entity` | two registry entries are the same real-world entity, registered twice | an `entity-alias` merge: the model picks which name survives, code moves the spellings, re-anchors every page and regenerates the registry |
 
 A contradiction repair FLAGS the disagreement and never resolves it. Deciding which of two pages is
 right is not something this loop does, and it could not express the edit if it were.
@@ -171,6 +176,69 @@ a file, so it carries two op shapes:
   is blind to a deletion's global blast radius — and any surviving link to a removed page refuses
   the commit.
 
+
+`entity-alias` is the fourth kind, and the only one that changes what a NAME resolves to
+([ADR 039's third amendment](../decisions/039-governed-repair-loop.md)). Its unit is a merge, so it
+carries four op shapes and every one of them holds the whole file it would write:
+
+```json
+{"op": "alias-survivor",      "path": "wiki/entities/<Survivor>.md",
+ "expected_before_hash": "<sha256 of the bytes the plan was computed from>",
+ "planned_after": "<the whole page, as it would be written>"}
+{"op": "retire-absorbed",     "path": "wiki/entities/<Absorbed>.md",  "...": "…"}
+{"op": "reanchor-page",       "path": "wiki/notes/<Some Page>.md",     "...": "…"}
+{"op": "regenerate-registry", "path": "ops/entity-registry.json",      "...": "…"}
+```
+
+- **What the model decides, and it is one thing.** Which of the two entity pages SURVIVES, and a
+  sentence saying what makes them one entity and why that name is canonical. Which name is
+  canonical is a judgment — the legal name is often the less-used one, a former name usually loses
+  to a current one — and it is not a backlink count. The rationale it writes is what a steward reads
+  beside Approve, unlike the `entity-body` road where code composes the rationale because the draft
+  itself is the thing being judged.
+- **What code decides, and it is everything else.** Which pages carry the absorbed entity in their
+  `entity:` list, what each one says afterwards, the survivor's new `aliases:` line, the
+  `superseded_by:` on the absorbed page, and the regenerated registry. **A model never computes a
+  file list** — that is the deletion sweep's lesson, and an error here moves a page's whole history
+  onto the wrong company.
+- **The absorbed page is never deleted.** An identity is retired through governance, not `rm`
+  (ADR 016). The page stays, marked `superseded_by:` the survivor, demoted by the index's ranking
+  exactly as any superseded page is, and still answering to its own name — knowing that these two
+  names were once two entities is the record of the decision.
+- **The survivor gains the absorbed entity's ALIASES and never its own name, and that is a
+  constraint rather than a choice.** The knowledge repo's contract linter refuses an alias that
+  names an existing page (`alias 'X' collides with page wiki/entities/X.md`), because the wikilink
+  namespace is keyed on page names and the absorbed page is still there. So the spellings that move
+  are the ones the absorbed entity carried in its `aliases:` list, and the merge REMOVES them from
+  that page in the same commit (two pages claiming one alias is that linter's other error). A claim
+  it would refuse is refused at PLAN time with a sentence, never left for `gate_contract` to veto.
+  What follows is a residual with two halves, and the second is the one that matters. The absorbed
+  id STAYS registered — its page exists, so the generator still derives it — so a future capture
+  spelling that name anchors to the retired identity. And this loop can never sweep those pages up
+  afterwards: the pair's `content_key` and its `finding_subjects` are both permanent, so the
+  question is skipped before the model forever; and even if it were re-proposed, the cross-check
+  refuses, because a second merge's `retire-absorbed` op is unchanged, `target_paths` drops it, and
+  the absorbed page is then absent from the diff. The residual therefore accumulates monotonically
+  with no remedy inside this loop. The filing-time half of issue #77 is the only closure — a page
+  carrying `superseded_by:` is exactly the signal a resolution skill can act on.
+- **What a steward is authorizing.** `target_paths` carries the full touched set — both entity
+  pages, every re-anchored page and the registry when it changes — so the review lane's per-path
+  steward guard covers the whole blast radius. An op whose planned bytes equal the bytes it was
+  computed from names no page the diff will touch and is excluded, which is the ordinary case for
+  the registry (an absorbed entity with no aliases changes nothing about it).
+  `STIGMERGY_REPAIR_MAX_PLAN_BYTES` bounds how much one approval may be, shared with the delete
+  kind because both store whole pages for the same reason.
+- **How the apply proves it.** The plan is RECOMPUTED from the fresh clone and refused unless it is
+  identical to the stored one, op for op and byte for byte — a page that gained the absorbed
+  entity's anchor since the proposal was made is a different merge. The pages are written, then
+  `stigmergy-entities regenerate` — the mint door's own writer, and the only writer of
+  `ops/entity-registry.json` in this codebase — rebuilds the registry, and the result is refused
+  unless it is byte-identical to what the plan predicted. Then the gates are told
+  `expected_bytes={path: the planned file}` and `derived_files={ops/entity-registry.json}`, the
+  fourth caller-declared exception: `gate_zone` otherwise refuses any in-lane write that is not a
+  `.md` page, and it still requires a derived file's bytes to have been computed. No deletion and no
+  body rewrite is granted at all — a merge removes nothing and replaces no prose.
+
 ## `stigmergy-repair`
 
 ```
@@ -183,8 +251,9 @@ stigmergy-repair [--dsn DSN] [--repo PATH] [--json] delete <path>... --why "<rea
 - **`propose`** — the pass a cron runs. Reads the latest COMPLETED gardener run, keeps the
   proposable findings, drops the ones whose repair has already been reviewed, and sends what is
   left down whichever road its check belongs to — the additive findings in batches, each entity
-  page on its own — then validates and inserts one pending row per surviving proposal. Both roads
-  share ONE run ceiling: it is how many decisions a night may ask a person for. Stops at `STIGMERGY_REPAIR_MAX_PROPOSALS` — an answer carrying more than that
+  page on its own, each duplicate PAIR on its own — then validates and inserts one pending row per
+  surviving proposal. Every road shares ONE run ceiling: it is how many decisions a night may ask a
+  person for. Stops at `STIGMERGY_REPAIR_MAX_PROPOSALS` — an answer carrying more than that
   is refused whole so the model re-cuts it, and a run that fills the ceiling stops batching and
   records what it left for the next pass. Records a `job_runs` row under the job `repair-propose`
   with `findings_seen` / `proposed` / `skipped_known` / `skipped_invalid`. Exits 0 when it proposes
@@ -193,7 +262,8 @@ stigmergy-repair [--dsn DSN] [--repo PATH] [--json] delete <path>... --why "<rea
 - **`show <id>`** — what one proposal would change, rendered from the ops without touching git. For
   an `entity-body` proposal that is the drafted body in full: the draft is the whole of what a
   steward judges, so a preview that summarised it would hide the only thing worth reading. For a
-  `delete` proposal it is the pages that stop existing and the pages that get rewritten — never the
+  `delete` or an `entity-alias` proposal it is what each page BECOMES — which pages stop existing,
+  or which identity absorbs which and how many pages move with it — never the
   planned bytes, which are the apply's contract with its own recomputation and not something a
   person reads.
 - **`delete <path>... --why "<reason>"`** — the only verb that CREATES a proposal from a terminal,

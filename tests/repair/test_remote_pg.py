@@ -25,7 +25,15 @@ import pytest
 
 from stigmergy.librarian import gitcmd
 from stigmergy.librarian import page as page_policy
-from stigmergy.repair import deletion, entity_body, proposer, remote, schema, store
+from stigmergy.repair import (
+    deletion,
+    entity_alias,
+    entity_body,
+    proposer,
+    remote,
+    schema,
+    store,
+)
 from stigmergy.repair.errors import ProposalStateError, RepairError
 from stigmergy.repair.settings import RepairSettings
 from tests import adversarial_payloads
@@ -1029,3 +1037,267 @@ def test_a_sources_page_that_cites_a_removed_page_is_scrubbed_and_not_vetoed(con
     assert "Cited By A Source" in landed, "the sentence survives the page it cited"
     for line in ('content_hash: "sha256:', "tier: 1"):
         assert line in landed, f"{line} is the librarian's own stamp and not this sweep's to remove"
+
+
+# ── the `entity-alias` kind: two identities become one, through the same eight gates ───────────
+# Every test here goes through the REAL gates against a REAL bare remote. That is the whole point:
+# this kind is the first thing in the system to put a file that is NOT a page into a governed
+# commit, and `gate_zone` refuses one by default. Whether `derived_files` actually carries
+# `ops/entity-registry.json` past eight gates is not something a unit test can answer.
+def _merge_proposal(conn, repo, survivor, absorbed, **over):
+    return _proposal(conn, entity_alias.plan(repo, survivor, absorbed),
+                     kind=schema.KIND_ENTITY_ALIAS,
+                     rationale="both pages describe the same broker; the shorter name is the one "
+                               "the contracts use", **over)
+
+
+def test_an_approved_merge_lands_as_ONE_commit_containing_exactly_the_four_changes(conn,
+                                                                                    repo_env):
+    """The whole kind in one assertion set, against a real remote: the survivor gains the absorbed
+    entity's spellings, the absorbed page is marked superseded, the page anchored to it moves, and
+    the registry is regenerated — in one commit, and nothing else in it."""
+    pages = support.seed_duplicate_pair(repo_env)
+    proposal = _merge_proposal(conn, repo_env.repo, pages["survivor"], pages["absorbed"])
+    before_head = _remote_head(repo_env.bare)
+
+    result = remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                                    approved_by=APPROVER)
+
+    assert result["commit"] == _remote_head(repo_env.bare)
+    # `-z`, not whitespace splitting: entity page names carry spaces routinely, and a test that
+    # split on them would report a false diff for exactly the paths this kind is about.
+    changed = [p for p in gitcmd.run("diff", "--name-only", "-z", f"{before_head}..main",
+                                     cwd=repo_env.bare).stdout.split("\0") if p]
+    assert sorted(changed) == sorted(proposal["target_paths"])
+
+    survivor = _remote_page(repo_env.bare, pages["survivor"])
+    assert "Cofers Grupo" in survivor
+    assert "[[Cofers Holdings]]" in survivor
+    absorbed = _remote_page(repo_env.bare, pages["absorbed"])
+    assert 'superseded_by: "[[Cofers]]"' in absorbed
+    assert "aliases: []" in absorbed
+    assert 'entity: ["cofers"]' in _remote_page(repo_env.bare, pages["absorbed_note_1"])
+    assert "Cofers Grupo" in _remote_page(repo_env.bare, "ops/entity-registry.json")
+
+
+def test_the_absorbed_entitys_page_still_EXISTS_on_the_remote_after_the_merge(conn, repo_env):
+    """An identity is retired through governance, not `rm` (ADR 016, ADR 039's second amendment).
+    The page stays, demoted and superseded, and knowing that these two names were once two
+    entities is the whole record of the decision."""
+    pages = support.seed_duplicate_pair(repo_env)
+    proposal = _merge_proposal(conn, repo_env.repo, pages["survivor"], pages["absorbed"])
+
+    remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal, approved_by=APPROVER)
+
+    assert pages["absorbed"] in _remote_paths(repo_env.bare)
+
+
+def test_after_the_merge_a_search_naming_the_absorbed_entity_reaches_the_SURVIVORS_pages(
+        conn, repo_env):
+    """**The point of the alias, pinned end to end rather than assumed.** A question naming
+    `Cofers Grupo` resolves — through the registry the merge regenerated, read by the server's own
+    parser — to the surviving id, and the page that used to be the absorbed entity's is now one of
+    that entity's pages."""
+    from stigmergy.server import entity_aliases
+
+    pages = support.seed_duplicate_pair(repo_env)
+    proposal = _merge_proposal(conn, repo_env.repo, pages["survivor"], pages["absorbed"])
+    remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal, approved_by=APPROVER)
+
+    registry_text = _remote_page(repo_env.bare, "ops/entity-registry.json")
+    aliases = entity_aliases.aliases_from_text(registry_text, "the merged registry")
+
+    assert entity_aliases.resolve_exact(aliases, "Cofers Grupo") == support.SURVIVOR_ID
+    assert entity_aliases.resolve_entity(
+        aliases, "what did we agree with Cofers Grupo last quarter?") == support.SURVIVOR_ID
+    assert 'entity: ["cofers"]' in _remote_page(repo_env.bare, pages["absorbed_note_1"])
+
+
+def test_the_pages_the_merge_did_not_name_are_byte_identical_afterwards(conn, repo_env):
+    """**The benign twin for the whole kind.** A merge rewrites four files and re-anchors a page's
+    whole history, so "it changed what it named" is only half the property — this is the half that
+    says it changed nothing else."""
+    pages = support.seed_duplicate_pair(repo_env)
+    untouched = {path: _remote_page(repo_env.bare, path)
+                 for path in (support.NOTE_A, support.DECISION, pages["survivor_note"])}
+    proposal = _merge_proposal(conn, repo_env.repo, pages["survivor"], pages["absorbed"])
+
+    remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal, approved_by=APPROVER)
+
+    for path, before in untouched.items():
+        assert _remote_page(repo_env.bare, path) == before, f"{path} was rewritten by a merge"
+
+
+def test_a_merge_apply_tells_the_gates_exactly_the_files_it_was_approved_for(conn, repo_env):
+    """The told facts, observed rather than assumed. `derived_files` names the registry and ONLY
+    the registry — `gate_zone` refuses an in-lane write that is not a `.md` page, and a permission
+    wide enough for a second file is a permission for a file nobody approved. No deletion and no
+    body rewrite are granted at all: a merge removes nothing and replaces no prose."""
+    pages = support.seed_duplicate_pair(repo_env)
+    ops = entity_alias.plan(repo_env.repo, pages["survivor"], pages["absorbed"])
+    told = remote._lane_and_permission(schema.KIND_ENTITY_ALIAS, ops)
+
+    assert told.derived_files == frozenset({"ops/entity-registry.json"})
+    assert told.deletions_allowed == frozenset()
+    assert told.body_rewrite_allowed == frozenset()
+    assert told.provenance_pages == frozenset()
+    assert set(told.expected_bytes) == {op["path"] for op in ops}
+    assert told.lane == ("ops/", "wiki/entities/", "wiki/notes/")
+
+
+def test_a_tampered_merge_with_an_extra_reanchored_page_is_refused_and_nothing_is_pushed(
+        conn, repo_env):
+    """**The tampered proposal, end to end.** An extra page in the re-anchor set is a page nobody's
+    finding named and no steward read. The row lands `failed`, `main` does not move, and the page
+    the tamper aimed at is byte-identical."""
+    pages = support.seed_duplicate_pair(repo_env)
+    ops = entity_alias.plan(repo_env.repo, pages["survivor"], pages["absorbed"])
+    victim = pages["survivor_note"]
+    victim_before = _remote_page(repo_env.bare, victim)
+    with open(os.path.join(repo_env.repo, *victim.split("/")), encoding="utf-8") as f:
+        smuggled = f.read().replace('entity: ["cofers"]', 'entity: ["cofers", "smuggled"]')
+    tampered = [*ops[:3], {schema.OP_KIND_KEY: entity_alias.OP_REANCHOR, "path": victim,
+                           "expected_before_hash": "0" * 64, "planned_after": smuggled}, ops[-1]]
+    proposal = _proposal(conn, tampered, kind=schema.KIND_ENTITY_ALIAS,
+                         rationale="a merge somebody edited after it was approved")
+    head_before = _remote_head(repo_env.bare)
+
+    with pytest.raises(RepairError) as excinfo:
+        remote.apply_approved(conn, repo_env.bare, "main", None, proposal=proposal,
+                              approved_by=APPROVER)
+
+    assert _remote_head(repo_env.bare) == head_before, "nothing may be pushed"
+    assert _remote_page(repo_env.bare, victim) == victim_before
+    row = store.proposal(conn, proposal["id"])
+    assert row["status"] == schema.STATUS_FAILED
+    assert row["error"] == str(excinfo.value)
+    assert entity_alias.PLAN_DRIFT_CODE in row["error"]
+
+
+def test_a_merge_whose_absorbed_page_was_edited_out_of_the_ops_is_refused_by_the_cross_check(
+        conn, repo_env):
+    """The path comparison alone cannot see this: a merge that re-anchors the absorbed entity's
+    pages onto the survivor without marking it absorbed leaves TWO live identities and no record of
+    the decision. The shape half of the cross-check is what says so."""
+    pages = support.seed_duplicate_pair(repo_env)
+    ops = entity_alias.plan(repo_env.repo, pages["survivor"], pages["absorbed"])
+    # Every path the plan names EXCEPT the absorbed page, as modifications — the exact diff a
+    # tampered `ops` blob that dropped the retire op would produce, and one the path comparison
+    # cannot fault on its own once `target_paths` is edited to match.
+    entries = [gitcmd.DiffEntry(status="M", path=path, old_mode="", new_mode="")
+               for path in schema.target_paths(ops) if path != pages["absorbed"]]
+
+    with pytest.raises(RepairError) as excinfo:
+        remote._cross_check_entity_alias(entries, ops)
+
+    assert pages["absorbed"] in str(excinfo.value)
+    assert "retired by being superseded" in str(excinfo.value)
+
+
+def test_the_merge_cross_check_passes_a_diff_that_does_mark_the_absorbed_page(conn, repo_env):
+    """The benign twin: the shape check must not bounce the merge it exists to protect."""
+    pages = support.seed_duplicate_pair(repo_env)
+    ops = entity_alias.plan(repo_env.repo, pages["survivor"], pages["absorbed"])
+    entries = [gitcmd.DiffEntry(status="M", path=path, old_mode="", new_mode="")
+               for path in schema.target_paths(ops)]
+
+    remote._cross_check_entity_alias(entries, ops)      # no raise
+
+
+def test_a_corpus_that_moved_under_the_merge_refuses_rather_than_merging_the_old_plan(
+        conn, repo_env):
+    """A page that gained the absorbed entity's anchor after the proposal was made is a DIFFERENT
+    merge, and performing the old one would leave that page anchored to a retired identity."""
+    pages = support.seed_duplicate_pair(repo_env)
+    proposal = _merge_proposal(conn, repo_env.repo, pages["survivor"], pages["absorbed"])
+    support.write_anchored_note(repo_env, "Arrived Later", entity_id=support.ABSORBED_ID)
+    head_before = _remote_head(repo_env.bare)
+
+    with pytest.raises(RepairError) as excinfo:
+        remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                               approved_by=APPROVER)
+
+    assert entity_alias.PLAN_DRIFT_CODE in str(excinfo.value)
+    assert _remote_head(repo_env.bare) == head_before
+
+
+def test_a_credential_hidden_in_an_alias_the_merge_would_MOVE_is_vetoed(conn, repo_env):
+    """This kind's own secrets surface, and it is the only one it has: a merge writes no prose, but
+    it does COPY the absorbed entity's aliases onto the survivor's page, and an alias is free text
+    a steward typed. So the one line a merge adds anywhere is a line that came from another page,
+    and the gate has to see it as an addition to the page it lands on.
+
+    The credential is already on `main` — it is the absorbed entity's alias — and the merge is what
+    would put it somewhere new. Nothing is pushed, and the veto's sentence never reproduces it."""
+    pages = support.seed_duplicate_pair(
+        repo_env, absorbed_aliases=(f"Grupo {adversarial_payloads.GITHUB_PAT}",))
+    proposal = _merge_proposal(conn, repo_env.repo, pages["survivor"], pages["absorbed"])
+    head_before = _remote_head(repo_env.bare)
+
+    with pytest.raises(RepairError) as caught:
+        remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                               approved_by=APPROVER)
+
+    assert "secrets/" in str(caught.value)
+    assert adversarial_payloads.GITHUB_PAT not in str(caught.value), (
+        "a refusal reproduced is a payload delivered twice")
+    assert _remote_head(repo_env.bare) == head_before
+
+
+def test_the_commit_message_says_which_identity_absorbed_which(conn, repo_env):
+    """Reading `git log` after a merge is how somebody finds out which identity absorbed which, so
+    the subject line carries both names rather than a path and an op count."""
+    pages = support.seed_duplicate_pair(repo_env)
+    proposal = _merge_proposal(conn, repo_env.repo, pages["survivor"], pages["absorbed"])
+
+    remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal, approved_by=APPROVER)
+
+    message = gitcmd.run("log", "-1", "--pretty=%B", "main", cwd=repo_env.bare).stdout
+    assert "merge Cofers Holdings into Cofers" in message
+    assert f"Approved-by: {APPROVER}" in message
+
+
+def test_an_applied_merge_reports_which_identity_survived_and_how_many_pages_moved(conn,
+                                                                                    repo_env):
+    """`paths` cannot say it: the two entity pages are two entries in one sorted list, and which
+    absorbed which is the whole of what was approved."""
+    pages = support.seed_duplicate_pair(repo_env, anchored=2)
+    proposal = _merge_proposal(conn, repo_env.repo, pages["survivor"], pages["absorbed"])
+
+    result = remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                                    approved_by=APPROVER)
+
+    assert result["survivor"] == pages["survivor"]
+    assert result["absorbed"] == pages["absorbed"]
+    assert result["reanchored_pages"] == 2
+    assert set(remote.LEDGER_RESULT_KEYS) >= set(result) - {"paths", "commit"} | {"commit",
+                                                                                  "paths"}
+
+
+def test_a_merge_diff_containing_an_ADDED_file_is_refused_by_the_cross_check(conn, repo_env):
+    """**`gate_zone` delegates its creation bound to this, and the bound is the ABSENCE of a
+    `return`.**
+
+    The `entity-alias` kind is the one caller allowed to write a file that is not a page
+    (`ctx.derived_files`, ADR 039's third amendment), and `gate_zone` says so in its own comment:
+    the page-shape proof is suspended, and what still stops this kind from CREATING an arbitrary
+    file is that every entry in its diff must be a modification. That is enforced by
+    `_cross_check`'s `entity-alias` branch falling THROUGH to the shape check — the `delete` branch
+    two lines above returns, this one deliberately does not — so one added `return` would remove a
+    bound a gate is relying on and nothing else in the suite would notice.
+    """
+    pages = support.seed_duplicate_pair(repo_env)
+    ops = entity_alias.plan(repo_env.repo, pages["survivor"], pages["absorbed"])
+    paths = schema.target_paths(ops)
+    entries = [gitcmd.DiffEntry(status=("A" if path == paths[0] else "M"),
+                                path=path, old_mode="", new_mode="100644")
+               for path in paths]
+
+    with pytest.raises(RepairError) as excinfo:
+        remote._cross_check(entries, {"target_paths": paths},
+                            kind=schema.KIND_ENTITY_ALIAS, ops=ops)
+
+    assert paths[0] in str(excinfo.value)
+    assert "(A)" in str(excinfo.value), (
+        "the refusal names the status, because 'something other than edit existing pages' is not "
+        "actionable without saying which entry and what it was")

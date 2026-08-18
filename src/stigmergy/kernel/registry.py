@@ -109,8 +109,22 @@ def registry_from_text(text: str | None, origin: str) -> Registry:
     return reg
 
 
-def save_registry(path: str, reg: Registry) -> None:
+def registry_text(reg: Registry) -> str:
+    """The exact bytes `save_registry` writes, as a STRING.
+
+    Split out from the write for one caller and one reason: the repair loop's `entity-alias` kind
+    has to know what the regenerated registry WILL say before it writes anything, because a
+    proposal stores the bytes a steward approves and the apply byte-compares against them. Building
+    that string a second way would be a second writer of this file format, which is the one thing
+    `ops/entity-registry.json` may not have — so the prediction and the write share this function.
+
+    Sorting and the separators live HERE, which is what makes `generator.regenerate` idempotent.
+    """
     data = {"entities": {cid: {"name": e["name"], "type": e["type"],
                                "aliases": sorted(set(e["aliases"]))}
                          for cid, e in sorted(reg.entities.items())}}
-    write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
+def save_registry(path: str, reg: Registry) -> None:
+    write_text_atomic(path, registry_text(reg))

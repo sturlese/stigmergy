@@ -97,15 +97,18 @@ def _run(conn, args) -> int:
             findings=result.findings,
             sweep_summary=report.sweep_summary_text(
                 result.sweep_changed_count, result.sweep_sampled_count,
-                result.empty_body_judged_count, sweep_failed=bool(result.sweep_error)),
+                result.empty_body_judged_count, result.duplicate_entity_judged_count,
+                sweep_failed=bool(result.sweep_error)),
             sweep_failed=bool(result.sweep_error),
-            # BOTH passes reach the report, and the ceiling with them: the second pass used to
+            # EVERY pass reaches the report, and its ceiling with it: the second pass used to
             # exist only in `job_runs.stats` and the log, so a run whose entity-body pass died on
             # batch 3 of 5 printed a corpus line that read like a normal run.
             empty_body_failed=bool(result.empty_body_error),
-            empty_body_deferred=result.empty_body_deferred_count), end="")
+            empty_body_deferred=result.empty_body_deferred_count,
+            duplicate_entity_failed=bool(result.duplicate_entity_error),
+            duplicate_entity_deferred=result.duplicate_entity_deferred_count), end="")
 
-    # A model-pass outage and a notice failure are independent, and so are the two model passes;
+    # A model-pass outage and a notice failure are independent, and so are the three model passes;
     # every one of them leaves the already-committed report above intact.
     failed = False
     if result.sweep_error:
@@ -119,6 +122,13 @@ def _run(conn, args) -> int:
             f"{len(result.findings)} finding(s) above are complete and already saved; the entity "
             f"pages it had not judged yet were not judged this run, and it will run again next "
             f"time. See job_runs for this run's recorded outcome.")
+        failed = True
+    if result.duplicate_entity_error:
+        _err(f"the identity sweep failed ({result.duplicate_entity_error}) — the "
+            f"{len(result.findings)} finding(s) above are complete and already saved; NO registered "
+            f"entity was compared against another this run (that pass is one call over the whole "
+            f"registry), and it will run again next time. See job_runs for this run's recorded "
+            f"outcome.")
         failed = True
     if result.notice_error:
         _err(f"the SLA notice could not be posted: {result.notice_error}")

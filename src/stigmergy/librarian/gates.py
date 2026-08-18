@@ -121,6 +121,17 @@ class GateContext:
     # disappeared", this says "this is precisely the file that was approved, to the byte" — and it
     # is the only proof available when disappearing is the point.
     expected_bytes: dict = field(default_factory=dict)
+    # `derived_files` is the set of in-lane paths that are NOT pages: files this run DERIVED from
+    # the pages in the same commit. `gate_zone` otherwise refuses any in-lane write whose name is
+    # not a `.md` page, and that refusal is right — a `.gitattributes` carrying `* -diff` blinds
+    # every content gate for the folder it lands in — which is exactly why the exception is a set
+    # of PATHS the caller names rather than a flag, and why `gate_zone` also requires each of them
+    # to be in `expected_bytes`: the page-shape proof is only suspended for a file whose whole
+    # content the caller computed and this run proves byte for byte. The governed repair loop's
+    # `entity-alias` kind is the one caller (ADR 039's third amendment); it names
+    # `ops/entity-registry.json`, which `stigmergy-entities regenerate` rebuilds from the entity
+    # pages the same commit rewrites.
+    derived_files: frozenset = field(default_factory=frozenset)
 
     @property
     def changes(self) -> list[tuple[str, str]]:
@@ -207,7 +218,34 @@ def gate_zone(ctx: GateContext) -> list[Finding]:
         # A path under an allowed prefix is not automatically a page: a `.gitattributes` carrying
         # `* -diff` blinds the content gates for every capture filed into that folder afterwards.
         basename = path.rsplit("/", 1)[-1]
-        if basename.startswith(".") or not basename.endswith(".md"):
+        if basename.startswith("."):
+            out.append(Finding("zone", "not-a-page",
+                               f"wrote {path}, which is not a page: the fast lane writes "
+                               f"`.md` files and never a dotfile",
+                               locator=path))
+            continue
+        if path in ctx.derived_files:
+            # ONE exception to the page-shape proof, per-PATH and caller-declared exactly as
+            # `deletions_allowed` is (ADR 039's third amendment). A caller is trusted about WHICH
+            # derived file its approval covers and about nothing else, so BOTH of the other two
+            # facts are still asked: the path is inside this run's lane (checked above), and its
+            # whole content was computed ahead of time and is proven byte for byte by
+            # `gate_body_rewrite`. A "derived" file nobody computed is a permission with no proof
+            # behind it, which is a way to write an arbitrary non-page into the corpus.
+            #
+            # The per-type check below is skipped along with the page-shape one, and it has to be:
+            # a derived file has no page TYPE and its folder implies none. What still bounds a
+            # CREATION here is the caller — `repair.remote`'s cross-check requires every entry in
+            # an `entity-alias` diff to be a modification, and its plan refuses a corpus with no
+            # registry to regenerate.
+            if path not in ctx.expected_bytes:
+                out.append(Finding("zone", "derived-file-unproven",
+                                   f"{path} was declared a derived file, but this run computed no "
+                                   f"bytes for it: the page-shape proof is only suspended for a "
+                                   f"file whose whole content the approval covers",
+                                   locator=path, repairable=False))
+            continue
+        if not basename.endswith(".md"):
             out.append(Finding("zone", "not-a-page",
                                f"wrote {path}, which is not a page: the fast lane writes "
                                f"`.md` files and never a dotfile",

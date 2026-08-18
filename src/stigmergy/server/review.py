@@ -266,6 +266,14 @@ def _repair_proposal_items(conn, *, limit: int) -> list[dict]:
     scan, and the ops carry page paths and a free-text `note`. What a steward has to read before
     approving is the `rationale` and the pages it would touch; the whole thing is one `review_queue`
     entry away in the console, and one `stigmergy-repair show <id>` away in a terminal.
+
+    `merge` is the ONE exception to that rule, and only for `entity-alias`. Every other kind's
+    paths say what happens to them; a merge names two entity pages and the decision is WHICH ONE
+    SURVIVES, which a sorted `target_paths` cannot express. Without it a steward approves on the
+    strength of the `rationale` alone — model-authored text derived from two page bodies somebody
+    else wrote — while the half code computed stays off the screen. Nothing new is disclosed: both
+    paths are already in `target_paths`, so this adds no ACL question, and `_neutralize_leaves`
+    covers it like every other string here.
     """
     return [{
         "kind": KIND_REPAIR_PROPOSAL, "id": str(row["id"]),
@@ -278,6 +286,8 @@ def _repair_proposal_items(conn, *, limit: int) -> list[dict]:
         "ops_preview": {"count": len(row.get("ops") or ()),
                         "kinds": sorted({str(o.get(repair_schema.OP_KIND_KEY, ""))
                                          for o in (row.get("ops") or ())})},
+        **({"merge": direction} if (direction := repair_schema.merge_direction(row.get("ops")))
+           else {}),
         "model_id": row.get("model_id", ""),
     } for row in repair_store.pending_proposals(conn, limit=limit)]
 

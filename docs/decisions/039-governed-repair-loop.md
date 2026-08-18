@@ -4,9 +4,10 @@
 - **Date**: 2026-08-17
 - **Closes**: issues #39 (findings accumulate with no way to close one, and no memory of having
   declined) and #40 (the gardener detects and nothing acts); the first amendment at the foot of
-  this document closes #36 (an entity page is minted with a body nothing ever writes) and the
+  this document closes #36 (an entity page is minted with a body nothing ever writes), the
   second closes #38 (nothing in this system can remove a page, so the only way to is by hand,
-  outside every gate)
+  outside every gate), and the third carries the cleanup half of #77 (near misses mint duplicate
+  identities and nothing can merge two of them)
 - **Related**: [ADR 024](./024-gardener-digest.md) (the gardener, which produces the findings this
   loop answers and still fixes nothing), [ADR 015](./015-librarian.md) (the write path this reuses
   whole: declared-not-performed edits, the eight gates, the App as committer),
@@ -477,3 +478,149 @@ a gate bouncing work they cannot fix from there.
 - **No in-corpus deletion log.** What was removed lives in the commit message, the governance
   ledger row and `git log`, exactly where ADR 037's D2 put the same question: a page recording what
   used to be a page is a page, and it would be indexed, retrieved and cited.
+
+## Amendment — `entity-alias`: the fourth kind (2026-08-18, part of #77)
+
+The decisions above stand as written; this section records what the repair loop grew to close a
+finding no kind could answer, and the one place where a constraint from ANOTHER repository decided
+what this kind is allowed to be.
+
+**The problem it answers.** A near miss of a registered name that gets minted anyway splits the
+anchoring: pages land on two entity ids, each timeline is a fraction of the truth, entity-first
+retrieval degrades — and none of that degradation is visible, because nothing counts it. The
+gardener's identity pass (issue #77's second piece) now reports the pair, `model-duplicate-entity`,
+and this kind is the answer. Without it the report would name a problem whose only remedy was a
+human editing `wiki/entities/` and `ops/entity-registry.json` by hand, outside every gate — which
+is exactly the state `delete` was added to end for pages.
+
+### C1 — the model picks the survivor; code computes everything that follows
+
+Which of two names is canonical is a JUDGMENT and not a count. The legal name is often the
+less-used one, a former name usually loses to a current one, and an abbreviation usually loses to
+what it abbreviates — none of which a backlink tally can see. So the model reads both entity pages
+and the pages anchored to each and answers with exactly two things: **which page survives, and a
+sentence saying why.** That sentence is what a steward reads beside Approve, which is the one place
+this road differs from `entity-body`'s: there the DRAFT is the thing being judged, so a model's own
+argument for its prose would be persuasion sitting beside it; here the visible result is four
+rewritten files, and only the reasoning can tell a steward whether the two names are one company.
+
+Everything else is code's: which pages carry the absorbed id in their `entity:` list, what each one
+says afterwards, the survivor's new `aliases:` line, the `superseded_by:` pointer, the regenerated
+registry. **A model never computes a file list** — B2's lesson, and the failure here is worse than a
+wrong deletion: a page re-anchored to the wrong company has its whole history moved, silently, and
+nothing later undoes it. `EntityMergeChoice` has two fields and neither is a list of paths, so the
+road is closed structurally rather than by instruction.
+
+The safe answer is a PARK, and it is a first-class one: an empty survivor means "these are not one
+entity", nothing is proposed, and the finding stays in the report. Treating that as a validation
+failure would spend the single corrective retry pushing a model off the answer it was told to give.
+
+### C2 — the absorbed identity is SUPERSEDED, never deleted
+
+ADR 016 made an entity page undeletable and B1 kept it that way. A merge does not weaken that: the
+absorbed page stays, marked `superseded_by:` the survivor, demoted by `index.rank` exactly as any
+superseded page is, and still answering to its own name. Supersession is a vocabulary this system
+already has (D8) and a merge is precisely what it is for — the page records what was believed
+before the merge, which is the only durable account of the decision that is not a commit message.
+
+Its own self-anchor is deliberately NOT re-anchored. Re-anchoring it would drop the absorbed id out
+of `scoped_entities()` and turn a governed retirement into a silent disappearance: `describe_entity`
+would answer "unknown entity" for a name somebody has been using for a year, rather than showing the
+retired page that says what absorbed it.
+
+### C3 — the survivor claims the absorbed entity's ALIASES and never its own name
+
+This is the constraint that shaped the kind, it comes from the knowledge repo rather than from here,
+and it was MEASURED rather than reasoned about: a merge that added the absorbed entity's name to the
+survivor's `aliases:` is vetoed by `gate_contract`, because the frozen contract linter reports
+`alias 'Cofers Holdings' collides with page wiki/entities/Cofers Holdings.md`. The wikilink
+namespace is keyed on page STEMS, and the absorbed page is still there by C2. The sibling rule bites
+too: two pages declaring one alias is `alias 'X' already declared by <page>`, so the spellings that
+move must be REMOVED from the absorbed page in the same commit.
+
+So a merge moves the absorbed entity's alias list and nothing else, and `entity_alias.plan` refuses
+a claim the linter would refuse — at plan time, with a sentence naming the colliding page — rather
+than storing a proposal a steward can approve and a gate then vetoes.
+
+**What this leaves open, stated rather than hidden.** The absorbed entity's own NAME keeps resolving
+to its retired identity, so a future capture spelling it that way still anchors there — the absorbed
+id stays REGISTERED, because its page exists and the generator derives the registry from the pages.
+
+And this loop cannot clean that up afterwards, which is the half worth naming: the pair's
+`content_key` and its `finding_subjects` are both permanent, so the question is skipped before the
+model forever; and even if a second merge were proposed, `_cross_check` refuses it, because the
+`retire-absorbed` op would be unchanged, `target_paths` drops an op whose planned bytes equal what
+is on disk, and the absorbed page is then absent from the diff the cross-check judges. So the
+residual accumulates monotonically and nothing inside this loop owns it. Closing it belongs to
+#77's FILING-time piece — the agent
+resolving a near miss against the registry it is handed, where a page carrying `superseded_by:` is
+exactly the signal a skill can act on. The alternatives were both worse: dropping the absorbed
+entity from the derived registry breaks the linter's page↔registry rule (an entity page it does not
+register is an ERROR), and renaming or moving its page is a deletion wearing a different verb.
+
+### C4 — the fourth told fact, and the reason the other three could not carry it
+
+The issue predicted `wiki/entities/` would need a new caller-declared exception. It does not: the
+zone is grantable through `write_prefixes`, which `delete` already derives from its plan, and the
+two frontmatter keys are proven by `expected_bytes`' byte-equality, which B5 established is stronger
+than the additive proof rather than softer. **That half was tested, not assumed** — a real apply
+through `run_gates(ALL_GATES)` against a real clone.
+
+What the same test found is a different gate: `ops/entity-registry.json` is not a `.md` page, and
+`gate_zone` refuses any in-lane write that is not one — `wrote ops/entity-registry.json, which is
+not a page`. That refusal is right and stays: a `.gitattributes` carrying `* -diff` blinds every
+content gate for the folder it lands in, which is why the check exists at all.
+
+So the exception is `GateContext.derived_files`, a set of PATHS with the posture all three of its
+siblings have: empty by default, told by the caller and never inferred, granted only by
+`repair/remote.py`, and pinned in `tests/test_architecture.py` both directions with the pruning
+check that watches for a FIFTH. It suspends exactly one proof — that an in-lane write is a page —
+and it requires the other two to still hold: the path is inside this run's lane, and its whole
+content is in `expected_bytes`, so a "derived" file nobody computed is refused by name
+(`derived-file-unproven`). A permission with no proof behind it is a way to write an arbitrary
+non-page into the corpus.
+
+### C5 — the registry is PREDICTED here and WRITTEN by the generator
+
+`ops/entity-registry.json` has exactly one writer in this codebase and a merge does not become a
+second. The proposal stores what the file WILL say — derived through `entities.generator`'s own
+reader and `kernel.registry.registry_text`, the one serializer — because a steward approves bytes
+and the apply byte-compares against them. The apply then writes the pages, runs the real
+`generator.regenerate`, and refuses unless the file it produced is byte-identical to the prediction.
+A prediction that turned out wrong is a fact about the corpus, not something to paper over by
+writing the stored bytes instead.
+
+That is the reason `stigmergy.repair` gains its first import edge into `stigmergy.entities`, and it
+is narrow by design: the generator's reader and writer and the error type they raise, never
+`mint`, `birth`, `remote` or `cli`, which are the mint DOOR and have their own authorization
+question. The alternative — moving the derivation down into `kernel` — would refactor the governed
+birth door to give a repair kind a constant, and re-implementing it here would be the second writer
+this decision exists to prevent.
+
+### C6 — one decision per PAIR, once, whichever way the model called it
+
+`content_key` for this kind is the two entity pages as an UNORDERED pair, and nothing else. The
+re-anchored pages are excluded for the reason B4's scrubs are: which pages happen to be anchored to
+the absorbed entity is a fact about the rest of the corpus, and keying on it would re-ask a declined
+merge every time somebody filed a page. The DIRECTION is excluded for a reason only this kind has:
+which of two entities survives is a judgment that may legitimately come out the other way tomorrow,
+and a steward who declined the merge declined the pair — a key carrying the direction would ask them
+again the moment the answer flipped. `finding_subjects` carries the same pair, so the cheap
+pre-model skip recognises the question under a new finding id too (D3).
+
+### C7 — what is deliberately NOT here
+
+- **No new write path.** The merge lands through the same clone, the same eight gates, the same
+  cross-check and the same `gitcmd.commit(gated_entries=…)` as every other repair. The kind branches
+  at exactly three points — which applier performs the ops, which caller-scoped facts the gates are
+  told, and one extra shape assertion in the cross-check.
+- **No deletion, and no body rewrite.** A merge grants neither, and both stay empty on its
+  `GateContext`: it removes nothing and replaces no prose. Every byte it changes is a frontmatter
+  line, and byte-equality is the whole of its proof.
+- **No merge a person types.** Unlike `delete`, there is no CLI verb: this kind exists because a
+  MODEL can see something a lookup cannot, and a hand-typed merge would be a person asserting the
+  judgment the road was built to ask for. A person who wants one waits for the finding, or edits the
+  pages by hand as they always could.
+- **No three-way merge.** A finding names exactly two entity pages, enforced from both ends in
+  `gardener.sweep` and asked again by the proposer. Three identities collapsing into one is three
+  decisions a steward cannot separate, and it is two merges.

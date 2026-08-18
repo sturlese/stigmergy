@@ -2131,6 +2131,13 @@ _GARDENER_ALLOWED_PREFIXES = (
                                        # ensure_capture_schema — several checks read the queue
     "stigmergy.kernel.registry",         # the entity registry loader — the operator-tier reader
                                        # `views/cli.py` already uses, not `server.entity_aliases`
+    "stigmergy.kernel.normalize",        # normalize/slugify — the duplicate-identity pass places an
+                                       # entity PAGE onto its registry id (`sweep.entity_id_for`,
+                                       # which prefers the `slugify(title)` id contract and falls
+                                       # back to the matcher), and its offline double folds two
+                                       # registered names the registry's own way. Asking either
+                                       # question a second way would let this pass disagree with
+                                       # the registry about which page is which entity
     "stigmergy.views.staleness",         # list_stale_entities/list_all_anchored_entities — the
                                        # staleness checks reuse it rather than re-derive it (ONE
                                        # declared symbol, mirroring librarian's own single edge
@@ -2623,6 +2630,17 @@ _REPAIR_ALLOWED_PREFIXES = (
     "stigmergy.librarian.config",        # repo_path / is_repo_checkout / the three relpaths
     "stigmergy.librarian.errors",        # LibrarianError — the seam every fault is renamed at
     "stigmergy.server.errors",           # StartupError — the shared settings-validation vocabulary
+    # The ONE edge into the governed birth door's package, and it exists because the registry has
+    # exactly ONE writer. `entity-alias` regenerates `ops/entity-registry.json` from the entity
+    # pages its own commit rewrites; hand-building that file here would be a second writer of the
+    # thing every anchoring decision resolves against, which is the property ADR 016 and the
+    # knowledge repo's own linter both rest on. Narrow on purpose: the generator's READER and
+    # WRITER (`read_entity_pages`, `registry_of`, `regenerate`, `FIX_COMMAND`) and the error type
+    # they raise — never `entities.mint`, `entities.birth`, `entities.remote` or `entities.cli`,
+    # which are the mint DOOR and have their own authorization question. The same shape
+    # `server/review.py` already has for `entities.generator.canonical_id_for`.
+    "stigmergy.entities.generator",
+    "stigmergy.entities.errors",
 )
 # cli.py's extra, documented reach: the one DB-connection seam, exactly as `gardener/cli.py` and
 # `capture/cli.py` have it.
@@ -2739,11 +2757,13 @@ def test_the_repair_op_vocabulary_is_exactly_the_librarians_edit_kinds():
     new gate question, not a bigger tuple — the pin is here rather than in the package's own suite
     because it is a CROSS-package promise.
 
-    Neither of the repair loop's other two proposal kinds widens this tuple, and neither may:
-    `entity-body` (ADR 039's first amendment) REPLACES prose and `delete` (its second) removes
-    pages, and each has its own validator, its own writer and its own branch in the gates precisely
-    because it could not be judged by the proof these three are admitted under. The KINDS set is
-    pinned too, so a fourth is a decision somebody states here rather than a tuple that grew."""
+    None of the repair loop's other three proposal kinds widens this tuple, and none may:
+    `entity-body` (ADR 039's first amendment) REPLACES prose, `delete` (its second) removes pages,
+    and `entity-alias` (its third) rewrites two identities, re-anchors every page that named one of
+    them and regenerates a file that is not a page at all. Each has its own validator, its own
+    writer and its own branch in the gates precisely because it could not be judged by the proof
+    these three are admitted under. The KINDS set is pinned too, so a FIFTH is a decision somebody
+    states here rather than a tuple that grew."""
     from stigmergy.librarian import edits as _edits
     from stigmergy.librarian import page as _page
     from stigmergy.repair import schema as _repair_schema
@@ -2752,9 +2772,11 @@ def test_the_repair_op_vocabulary_is_exactly_the_librarians_edit_kinds():
     assert set(_edits.EDIT_KINDS) == {"backlink", "overlap", "contradiction"}
     assert _repair_schema.KIND_ENTITY_BODY not in _edits.EDIT_KINDS
     assert _repair_schema.KIND_DELETE not in _edits.EDIT_KINDS
+    assert _repair_schema.KIND_ENTITY_ALIAS not in _edits.EDIT_KINDS
     assert set(_repair_schema.KINDS) == {_repair_schema.KIND_EDITS,
                                          _repair_schema.KIND_ENTITY_BODY,
-                                         _repair_schema.KIND_DELETE}
+                                         _repair_schema.KIND_DELETE,
+                                         _repair_schema.KIND_ENTITY_ALIAS}
 
 
 def test_the_repair_preview_renders_every_callout_kind_the_applier_performs():
@@ -3272,14 +3294,19 @@ def test_the_repair_apply_caller_pin_can_go_red_in_both_directions(tmp_path):
 
 
 # ── ADR 039's amendments: who may tell the gates to suspend one of their proofs ────────────────
-# THREE `GateContext` fields are exceptions the caller declares, and each one is the whole of how a
-# thing that is otherwise impossible becomes possible in this system:
+# FIVE `GateContext` fields are exceptions the caller declares, and each one is the whole of how a
+# thing that is otherwise impossible becomes possible in this system. The count is spelled out
+# because it is the thing that goes stale: this sentence said THREE while listing five, having been
+# written when there were three and appended to twice. It says what the list below says.
 #
 #   · `body_rewrite_allowed` — a page's existing prose may be replaced;
 #   · `deletions_allowed`    — a file may be removed at all, which `gate_zone`'s oldest veto exists
 #                              to make impossible;
 #   · `expected_bytes`       — a modification is judged by byte-equality against a caller's plan
 #                              instead of by the additive proof;
+#   · `derived_files`        — an in-lane write may be something OTHER than a `.md` page, which
+#                              `gate_zone` otherwise refuses outright (a `.gitattributes` carrying
+#                              `* -diff` blinds every content gate for its folder);
 #   · `provenance_pages`     — a page may carry `content_hash`/`tier`/`extracted_at`, which
 #                              `gate_frontmatter` otherwise refuses outright.
 #
@@ -3297,6 +3324,7 @@ _TOLD_PERMISSIONS = {
     "body_rewrite_allowed": ("repair/remote.py",),
     "deletions_allowed": ("repair/remote.py",),
     "expected_bytes": ("repair/remote.py",),
+    "derived_files": ("repair/remote.py",),
     # The one with two granters, and both are the same claim: these fields were stamped by the
     # librarian when it FILED the page. `processing.py` says so for the source pages one capture
     # just wrote; `repair/remote.py` says so for the machine-zone pages a sweep rewrites, which is

@@ -39,10 +39,18 @@ JOB_NAME = "repair-propose"
 # `delete-page`/`scrub-page` (`repair.deletion.OP_NAMES`) and `ops_preview.kinds` tells a steward
 # which is which. A single word there would hide the half of the blast radius that is not the
 # pages they named (ADR 039, "delete: the third kind").
+#
+# `entity-alias` is the fourth, and it breaks the doubling for the same reason `delete` does: one
+# approval performs four different actions — the survivor's page gains the absorbed entity's
+# spellings, the absorbed page is marked superseded, every page anchored to it is re-anchored, and
+# the derived registry is rebuilt — so its ops carry their own names
+# (`repair.entity_alias.OP_NAMES`) and `ops_preview.kinds` tells a steward which is which
+# (ADR 039, "entity-alias: the fourth kind").
 KIND_EDITS = "edits"
 KIND_ENTITY_BODY = "entity-body"
 KIND_DELETE = "delete"
-KINDS = (KIND_EDITS, KIND_ENTITY_BODY, KIND_DELETE)
+KIND_ENTITY_ALIAS = "entity-alias"
+KINDS = (KIND_EDITS, KIND_ENTITY_BODY, KIND_DELETE, KIND_ENTITY_ALIAS)
 
 # ── status — the lifecycle. `failed` is terminal for the ROW, never for the finding: a steward
 # may propose again, and the `error` column says what went wrong. An approved proposal whose
@@ -190,6 +198,46 @@ SCRUB_OP_NAME = "scrub-page"
 DELETE_OP_FIELDS = (OP_KIND_KEY, "path")
 SCRUB_OP_FIELDS = (OP_KIND_KEY, "path", "expected_before_hash", "planned_after")
 
+# The `entity-alias` kind's four op names, and its ONE op shape. Every op in a merge carries the
+# whole file it would write, exactly as a scrub does and for the identical reason: what each one
+# writes depends on every OTHER page in the corpus, so the apply recomputes the plan and
+# byte-compares it. The names live here for `content_key`'s sake — the key below has to tell the
+# two IDENTITY ops from the rest — and this module is the bottom of the package: it imports
+# nothing of its own.
+ALIAS_OP_NAME = "alias-survivor"
+RETIRE_OP_NAME = "retire-absorbed"
+REANCHOR_OP_NAME = "reanchor-page"
+REGISTRY_OP_NAME = "regenerate-registry"
+ALIAS_OP_FIELDS = (OP_KIND_KEY, "path", "expected_before_hash", "planned_after")
+# The two ops that say WHICH pair this merge is about — the question a steward answers, as against
+# the pages the answer would also touch.
+ALIAS_IDENTITY_OP_NAMES = (ALIAS_OP_NAME, RETIRE_OP_NAME)
+
+
+def merge_direction(ops) -> dict:
+    """`{"survivor", "absorbed", "reanchored"}` for an `entity-alias` proposal — `{}` for any other
+    kind, since no other proposal has a direction.
+
+    **Why a reader exists at all, rather than a review surface reading `ops` itself.** For every
+    other kind the paths say what happens to them: a `backlink` names the page that gains a link, a
+    `delete` names the page that goes. A merge names two entity pages and the whole decision is
+    WHICH ONE SURVIVES — and in `target_paths`, a sorted list, that is invisible. A steward
+    approving from the review lane would otherwise read only the model-authored `rationale`, whose
+    text is derived from two page bodies somebody else wrote; the direction is the half code owns
+    and it has to be on the same screen.
+
+    Derived from `ops` and never from `target_paths`: the cross-check judges one of those against
+    the other, and a display built from the thing being judged would let one stored column vouch
+    for its own consistency with the other.
+    """
+    by_name = {str(o.get(OP_KIND_KEY, "")): str(o.get("path", "")) for o in (ops or ())}
+    survivor, absorbed = by_name.get(ALIAS_OP_NAME, ""), by_name.get(RETIRE_OP_NAME, "")
+    if not (survivor and absorbed):
+        return {}
+    return {"survivor": survivor, "absorbed": absorbed,
+            "reanchored": sum(1 for o in ops or ()
+                              if str(o.get(OP_KIND_KEY, "")) == REANCHOR_OP_NAME)}
+
 
 def declared_edits(ops) -> list[dict]:
     """Stored ops -> the `edits.validate`/`edits.apply_declared` declaration shape."""
@@ -200,8 +248,25 @@ def declared_edits(ops) -> list[dict]:
 
 def target_paths(ops) -> list[str]:
     """The pages a proposal would touch, deduplicated and sorted — the second stored fact
-    `remote.apply_via_clone` cross-checks the produced diff against."""
-    return sorted({str(o.get("path", "")) for o in (ops or ()) if str(o.get("path", ""))})
+    `remote.apply_via_clone` cross-checks the produced diff against.
+
+    An op that carries BOTH the bytes it was computed from and the bytes it would write, and whose
+    two agree, names a page this proposal would NOT touch, and it is excluded. That case is real
+    rather than theoretical: an `entity-alias` merge regenerates `ops/entity-registry.json` every
+    time and the file usually comes out identical (the absorbed entity declared no alias to move),
+    so a `target_paths` that named it would demand a diff entry git will never produce and the
+    cross-check would refuse every such merge. Both keys are required before an op is skipped, so
+    the kinds whose ops carry neither are unaffected.
+    """
+    return sorted({str(o.get("path", "")) for o in (ops or ())
+                   if str(o.get("path", "")) and not _unchanged(o)})
+
+
+def _unchanged(op) -> bool:
+    before = str(op.get("expected_before_hash", ""))
+    if not before or "planned_after" not in op:
+        return False
+    return hashlib.sha256(str(op.get("planned_after", "")).encode("utf-8")).hexdigest() == before
 
 
 def content_key(ops, *, kind: str = KIND_EDITS) -> str:
@@ -218,12 +283,24 @@ def content_key(ops, *, kind: str = KIND_EDITS) -> str:
     it. **A re-drafted body is the same question** — a steward who read a draft for a page and
     decided it needs writing by a person is not asked again tomorrow with the prose rearranged.
 
-    `delete` needs one step more than an exclusion, and it is the only kind that does: its key is
-    built from the DELETIONS alone. The scrubs are a fact about the rest of the corpus rather than
-    about the question — a page that gained a link to the doomed page overnight changes the plan
-    and changes nothing a steward was asked — so keying on them would re-ask a declined deletion
-    every time somebody linked to it.
+    `delete` needs one step more than an exclusion, and `entity-alias` needs the same step for the
+    same reason: their keys are built from the ops that ARE the question. A deletion's key is its
+    DELETIONS alone — the scrubs are a fact about the rest of the corpus rather than about the
+    question, so keying on them would re-ask a declined deletion every time somebody linked to the
+    doomed page. A merge's key is its two IDENTITY ops alone, and which pages are anchored to the
+    absorbed entity moves the same way.
+
+    `entity-alias` goes one step further still, and it is the only kind that does: its key drops
+    the OP NAME as well, so the two paths are keyed as an unordered PAIR. Which of two entities
+    survives is the model's judgment and it may legitimately come out the other way tomorrow — but
+    a steward who declined the merge declined the PAIR, and a key that carried the direction would
+    ask them again the moment the answer flipped (#69's `finding_subjects` for the pre-model half
+    of the same memory).
     """
+    if kind == KIND_ENTITY_ALIAS:
+        pair = sorted({str(o.get("path", "")) for o in (ops or ())
+                       if str(o.get(OP_KIND_KEY, "")) in ALIAS_IDENTITY_OP_NAMES})
+        return hashlib.sha256(f"{kind}|{'|'.join(pair)}".encode()).hexdigest()
     keyed = [o for o in (ops or ())
              if kind != KIND_DELETE or str(o.get(OP_KIND_KEY, "")) == DELETE_OP_NAME]
     body = "|".join(sorted(f"{o.get(OP_KIND_KEY, '')}:{o.get('path', '')}:{o.get('link', '')}"
