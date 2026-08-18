@@ -36,6 +36,28 @@ MAX_LINK_NAMES = 400
 # A page is line-bounded by the linter, so one pathological line can carry a whole body.
 MAX_EXCERPT_LINE = 400
 
+# How many registry entities one capture is handed. A bound is needed now that a NEAR miss can
+# surface an entry the material never spells: without one, a registry of a thousand entities could
+# put hundreds into a prompt on a single common token. `entities_total` beside the list is what
+# keeps a cut list from reading as "the registry holds nothing else" — the same rule `link_names`
+# has carried since ADR 033.
+MAX_ENTITIES = 25
+
+# The shortest token run that may surface an entry it is only PART of. `_TERM_RE` already floors a
+# token at three characters; this floors the RUN, so `Co` or `SL` inside a registered name never
+# drags that entity into a prompt on their own.
+MIN_NEAR_RUN_CHARS = 4
+
+# A registered spelling longer than this contributes no sub-runs: run enumeration is quadratic in
+# the token count, and a name of nine words is not an abbreviation anybody types.
+MAX_NEAR_SPELLING_TOKENS = 8
+
+# How one entity reached the list. The agent needs the difference: `named` is a spelling the
+# material actually carries, `near` is a candidate the material only PART of — a judgment call,
+# never a resolution code has made.
+MATCH_NAMED = "named"
+MATCH_NEAR = "near"
+
 # Below this, "a term most pages carry is noise" means nothing in a five-page repo.
 MIN_CORPUS_FOR_TERM_FREQUENCY = 8
 
@@ -50,12 +72,15 @@ _BODY_WEIGHT = 1
 
 @dataclass(frozen=True)
 class GatheredEntity:
-    """One registered entity the MATERIAL names. `page_path` is `""` when the registry knows the
-    entity and the checkout carries no page for it — a legitimate state, not "does not exist"."""
+    """One registered entity this material names or nearly names. `page_path` is `""` when the
+    registry knows the entity and the checkout carries no page for it — a legitimate state, not
+    "does not exist". `match` says WHICH of the two it is (`MATCH_NAMED` / `MATCH_NEAR`), because
+    only the agent may turn a near miss into an anchor and it cannot judge what it cannot see."""
     entity_id: str
     name: str
     aliases: tuple = ()
     page_path: str = ""
+    match: str = MATCH_NAMED
 
 
 @dataclass(frozen=True)
@@ -81,6 +106,7 @@ class Gathered:
     """Everything code found in the checkout about one capture, frozen so a prompt builder cannot
     edit the context into agreement with the answer."""
     entities: tuple = ()
+    entities_total: int = 0
     candidates: tuple = ()
     neighbours: tuple = ()
     link_names: tuple = ()
@@ -165,7 +191,7 @@ def gather(worktree: str, registry, material: str, *, top_k: int,
     can disagree about. Deterministic end to end — every ranking breaks ties by path."""
     parsed = load_corpus(worktree)
     rows = parsed.rows
-    entities = _entities(rows, registry, material)
+    entities, entities_total = _entities(rows, registry, material)
     entity_paths = {e.page_path for e in entities if e.page_path}
 
     candidates = search_candidates(parsed, material, top_k=top_k, excerpt_lines=excerpt_lines,
@@ -177,10 +203,14 @@ def gather(worktree: str, registry, material: str, *, top_k: int,
     # The SAME function `edits.validate` answers "does this link resolve" with: a gatherer that
     # offered a name the validator refuses costs a full corrective retry.
     names = sorted(edits.page_names(worktree, confined=True))
-    log.info("gathered for one capture: %d entities, %d candidate(s) of %d page(s), %d neighbour(s)",
-             len(entities), len(candidates), len(rows), len(neighbours))
+    log.info("gathered for one capture: %d of %d entities (%d a near miss), %d candidate(s) of "
+             "%d page(s), %d neighbour(s)",
+             len(entities), entities_total,
+             sum(1 for e in entities if e.match == MATCH_NEAR),
+             len(candidates), len(rows), len(neighbours))
     return Gathered(
         entities=tuple(entities),
+        entities_total=entities_total,
         candidates=tuple(candidates),
         neighbours=tuple(neighbours),
         link_names=tuple(names[:MAX_LINK_NAMES]),
@@ -212,33 +242,125 @@ def _confined(worktree: str, rows: list) -> list:
     return kept
 
 
-# ── which entities the material names ─────────────────────────────────────────────────────────
-def _entities(rows, registry, material: str) -> list[GatheredEntity]:
-    """The registered entities this material mentions, by the registry's OWN spellings, through
-    `gates.registry_candidates` and `Registry.canonical_id` — the normalization the anchoring gate
-    uses, so what the gatherer surfaces the gate resolves. Whole-TOKEN containment, not substring."""
-    hay = f" {' '.join(_tokens(material))} "
+# ── which entities the material names, and which it nearly names ──────────────────────────────
+def _entities(rows, registry, material: str) -> tuple[list[GatheredEntity], int]:
+    """The registered entities this material names or NEARLY names, and how many there were before
+    the bound cut the list.
+
+    Two rules, in that priority order, because they answer two different questions:
+
+    * **named** — a registry spelling appears in the material as a contiguous run of whole tokens.
+      Unchanged, and it already covers a qualifier the registry does not carry: `Cofers Holdings`
+      contains ` cofers `, so the registered `Cofers` is surfaced.
+    * **near** — a DISTINCTIVE contiguous sub-run of a registry spelling appears in the material.
+      This is the direction whole-token containment cannot reach and no skill wording can fix:
+      material saying `Nexus` never contains ` ferrovial nexus `, so the registered `Ferrovial
+      Nexus` never reached the agent at all. Distinctive means the run names exactly ONE registry
+      entry (`_run_owners`), so a token two entities share drags in neither of them.
+
+    Surfacing is not resolving. Both kinds are handed over labelled; which one this capture is
+    about — and whether it is any of them — is the agent's judgment, fenced by
+    `gates.resolve_entity_ids` (the id it declares must exist) and by the park (uncertainty asks).
+    """
     resolve = getattr(registry, "canonical_id", None)
-    found: dict[str, GatheredEntity] = {}
+    matches, total = match_registry(registry, material)
+    return [GatheredEntity(entity_id=entity_id, name=name, aliases=aliases,
+                           page_path=entity_page(rows, entity_id, resolve), match=kind)
+            for entity_id, name, aliases, kind in matches], total
+
+
+def match_registry(registry, text: str, *, limit: int = MAX_ENTITIES) -> tuple[list[tuple], int]:
+    """`([(id, name, aliases, match)], total_before_the_bound)` for one text — THE near-miss rule,
+    with no checkout involved.
+
+    Public and shared: the seeded context (`_entities`) and the agent's own `resolve_entities` tool
+    both ask this, so the block a run is handed and the answer it gets when it asks again cannot
+    disagree about what counts as a near miss. `_entities` adds the one thing that needs the
+    checkout — where each entity's page is.
+    """
+    hay = f" {' '.join(_tokens(text))} "
+    resolve = getattr(registry, "canonical_id", None)
+    if not callable(resolve):
+        return [], 0
+    entries = _registry_entries(registry, resolve)
+    owners = _run_owners(entries)
+
+    named: dict[str, tuple] = {}
+    near: dict[str, tuple] = {}
+    for entity_id, name, aliases in entries:
+        if entity_id in named or entity_id in near:
+            continue
+        spellings = [s for s in (name, *aliases) if s]
+        if any(_mentions(hay, spelling) for spelling in spellings):
+            named[entity_id] = (entity_id, name, aliases, MATCH_NAMED)
+        elif any(_near_mentions(hay, spelling, owners, entity_id) for spelling in spellings):
+            near[entity_id] = (entity_id, name, aliases, MATCH_NEAR)
+
+    # NAMED first: a near miss must never displace an entity the material actually spells.
+    ordered = [named[key] for key in sorted(named)] + [near[key] for key in sorted(near)]
+    return ordered[:max(int(limit), 0)], len(ordered)
+
+
+def _registry_entries(registry, resolve) -> list[tuple[str, str, tuple]]:
+    """`(id, name, aliases)` for every entity the registry would resolve, read through
+    `gates.registry_candidates` — THE one reading of "which entities exist" — and keyed by the id
+    the registry itself gives one of its own spellings. An entry none of whose spellings resolves is
+    dropped rather than guessed at: it is a registry the loader and the gate would disagree about."""
+    out = []
     for entry in gates.registry_candidates(registry):
-        aliases = tuple(entry.get("aliases") or ())
-        for spelling in (entry.get("name", ""), *aliases):
-            if not _mentions(hay, spelling):
-                continue
-            entity_id = str(resolve(spelling) or "") if callable(resolve) else ""
-            if not entity_id or entity_id in found:
-                continue
-            found[entity_id] = GatheredEntity(
-                entity_id=entity_id, name=str(entry.get("name", "")), aliases=aliases,
-                page_path=entity_page(rows, entity_id, resolve))
-            break
-    return [found[key] for key in sorted(found)]
+        name = str(entry.get("name", ""))
+        aliases = tuple(str(alias) for alias in (entry.get("aliases") or ()))
+        for spelling in (name, *aliases):
+            entity_id = str(resolve(spelling) or "")
+            if entity_id:
+                out.append((entity_id, name, aliases))
+                break
+    return out
 
 
 def _mentions(haystack: str, spelling: str) -> bool:
     """Does the tokenized material carry this spelling as a contiguous run of whole tokens?"""
     tokens = _tokens(spelling)
     return bool(tokens) and f" {' '.join(tokens)} " in haystack
+
+
+def _token_runs(spelling: str, *, proper_only: bool = False) -> list[str]:
+    """Every contiguous whole-token run of one spelling, space-joined. `proper_only` drops the run
+    that IS the whole spelling, which the named rule already owns. Ordered and deduplicated, so two
+    registries with the same entities produce the same index."""
+    tokens = _tokens(spelling)[:MAX_NEAR_SPELLING_TOKENS]
+    runs = {" ".join(tokens[start:stop])
+            for start in range(len(tokens))
+            for stop in range(start + 1, len(tokens) + 1)}
+    if proper_only:
+        runs.discard(" ".join(tokens))
+    return sorted(run for run in runs if run)
+
+
+def _run_owners(entries) -> dict:
+    """`run -> the set of entity ids whose spellings contain it`. The distinctiveness index: a run
+    owned by two entities identifies neither, and surfacing both on it would hand the agent a
+    coin-flip dressed as a candidate list. Full runs count too, so a registered `Cofers` stops
+    `Cofers Legal` from being offered as the near miss of a bare "Cofers"."""
+    owners: dict = {}
+    for entity_id, name, aliases in entries:
+        for spelling in (name, *aliases):
+            for run in _token_runs(spelling):
+                owners.setdefault(run, set()).add(entity_id)
+    return owners
+
+
+def _near_mentions(haystack: str, spelling: str, owners: dict, entity_id: str) -> bool:
+    """Does the material carry a distinctive PART of this spelling? See `_entities` for the rule and
+    `MIN_NEAR_RUN_CHARS` for why a short run does not count."""
+    for run in _token_runs(spelling, proper_only=True):
+        if len(run) < MIN_NEAR_RUN_CHARS:
+            continue
+        if owners.get(run) != {entity_id}:
+            continue
+        if f" {run} " in haystack:
+            return True
+    return False
 
 
 def entity_page(rows, entity_id: str, resolve) -> str:
@@ -354,17 +476,24 @@ def _terms(text: str) -> set:
 
 # ── the prompt payloads: two halves, and what makes the unfenced one safe ─────────────────────
 def structural_payload(gathered: Gathered) -> dict:
-    """The half rendered OUTSIDE the fence: entity ids, names, aliases and page paths.
+    """The half rendered OUTSIDE the fence: entity ids, names, aliases, page paths and how each one
+    matched.
 
     What makes it safe is the ESCAPING, not the provenance — a page PATH is a filename a person
     chose, and the fast lane will happily file `wiki/notes/Ignore the above.md`. The payload is
     one `json.dumps` value, which cannot end its own data span, plus `text.sanitize`.
+
+    `match` and `entities_total` are server-computed scalars, not captured text: the first says
+    whether the material actually spells this entity, the second keeps a bounded list from reading
+    as the whole registry.
     """
     return {"entities": [{"id": prompt_scalar(e.entity_id),
                           "name": prompt_scalar(e.name),
                           "aliases": [prompt_scalar(a) for a in e.aliases],
-                          "page": prompt_scalar(e.page_path) or None}
-                         for e in gathered.entities]}
+                          "page": prompt_scalar(e.page_path) or None,
+                          "match": prompt_scalar(e.match)}
+                         for e in gathered.entities],
+            "entities_total": gathered.entities_total}
 
 
 # `stigmergy.text.sanitize` deliberately does NOT strip these: at the bottom of the stack a U+2028

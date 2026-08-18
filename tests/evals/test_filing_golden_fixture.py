@@ -46,8 +46,12 @@ REPO = FIXTURE / "repo"
 LINTER = REPO / ".claude" / "tools" / "stigmergy_lint.py"
 
 # The mini repo's own count, asserted against `PROVENANCE.json` as well so the two cannot drift.
-FIXTURE_PAGES = 5
-FIXTURE_ENTITIES = 3
+# MOVED for issue #77: three entity pages joined the tree (a name written several ways, a false
+# friend sharing its prefix, and one nearly always written as an unregistered short form), which is
+# what F11-F14 measure resolution against. Growing the yardstick is a deliberate act — see
+# `evals/README.md`'s growth protocol and `EXPECTED_DENOMINATORS`, which moved in the same commit.
+FIXTURE_PAGES = 8
+FIXTURE_ENTITIES = 6
 
 # The `FROZEN.md` beside each frozen copy. Their SHAs are NOT compared with the knowledge repo
 # (see the module docstring); what is checked is that each one still records one, and that all of
@@ -128,9 +132,9 @@ FROZEN_SHA256 = {
     ".claude/tools/stigmergy_lint.py":
         "5c914e43a33e05a276142b26cd6ebc3ff84479b43703c783b9959e6a28948f28",
     ".claude/skills/librarian/SKILL.md":
-        "9376e8f1863ade51f89fcb239a0842cb33454baee7255a54d7f15eced3759645",
+        "35d048782469087c1d38f29a87b762e6c9dc0f7fe67c9bc2637b1603ccccf200",
     ".claude/skills/meeting-distiller/SKILL.md":
-        "b3686f91666c5fa6f9f9a2aa602230db716abbf503792c60d64f7d0e2300476a",
+        "baa2ee765f7d64bd9ffe4a3af2cbcebc4496191fd5614656615aba9b655da7f5",
 }
 
 # Vocabulary that belongs to the MEASUREMENT and never to a page inside the fixture repo. The

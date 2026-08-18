@@ -30,6 +30,7 @@ import pytest
 from evals import eval_history, run_filing
 from stigmergy.capture import schema
 from stigmergy.kernel.frontmatter import split_frontmatter
+from stigmergy.kernel.registry import load_registry
 from stigmergy.librarian import githubapp, worker
 from stigmergy.librarian.agent import build_agent
 from stigmergy.server.service import BrainService
@@ -51,7 +52,26 @@ schedules migrated without an incident worth recording.
 
 REPLY = "Halcyon Grid is our internal name for the Northwind Freight pilot — file it there."
 
-ANCHORED_TO_THE_REGISTRY = {"kind": "entity", "ids": ["northwind-freight"]}
+_FIXTURE_REGISTRY = load_registry(str(FIXTURE_REPO / "ops" / "entity-registry.json"))
+
+
+def _first_registry_entity() -> str:
+    """The id the offline double anchors an ordinary capture to.
+
+    DERIVED, never retyped: `DoubleAgent._registry_entity` files against the FIRST entity in the
+    fixture's own registry file, so a literal here silently stops describing the double the day the
+    fixture gains an entity ahead of it — which is exactly what issue #77's three new entities did.
+    """
+    return next(iter(_FIXTURE_REGISTRY.entities))
+
+
+# TWO anchors, because the double reaches them by two different roads and they are no longer the
+# same entity: an ordinary capture takes the registry's first entry, while a capture re-filed after
+# a reply takes whatever the REPLY names (`DoubleAgent._resolve_reply`). One constant for both was
+# a coincidence of the fixture, not a property of the double.
+ANCHORED_BY_DEFAULT = {"kind": "entity", "ids": [_first_registry_entity()]}
+ANCHORED_BY_THE_REPLY = {"kind": "entity",
+                         "ids": [_FIXTURE_REGISTRY.canonical_id("Northwind Freight")]}
 
 
 @pytest.fixture()
@@ -112,7 +132,7 @@ def test_a_parking_capture_is_scored_as_two_phases_across_the_real_ask_back_loop
              "expect": {"status": schema.NEEDS_INPUT, "park_question": ["Halcyon Grid"]},
              "reply": REPLY,
              "after_reply": {"status": schema.FILED, "type": "note", "folder": "wiki/notes",
-                             "anchor": ANCHORED_TO_THE_REGISTRY}}
+                             "anchor": ANCHORED_BY_THE_REPLY}}
 
     phases = _drive(rig, materials, _capture("park.md"), entry)
 
@@ -147,7 +167,7 @@ def test_a_capture_with_no_reply_in_its_expectation_yields_exactly_one_phase(rig
     materials = _material(tmp_path, "plain.md", PLAIN_MATERIAL)
     entry = {"id": "T01", "expect": {"status": schema.FILED, "type": "note",
                                      "folder": "wiki/notes",
-                                     "anchor": ANCHORED_TO_THE_REGISTRY}}
+                                     "anchor": ANCHORED_BY_DEFAULT}}
 
     phases = _drive(rig, materials, _capture("plain.md"), entry)
 
@@ -186,7 +206,7 @@ def test_a_backend_that_never_parks_still_produces_the_second_phase_as_a_miss(ri
              "expect": {"status": schema.NEEDS_INPUT, "park_question": ["Halcyon Grid"]},
              "reply": REPLY,
              "after_reply": {"status": schema.FILED, "type": "note", "folder": "wiki/notes",
-                             "anchor": ANCHORED_TO_THE_REGISTRY}}
+                             "anchor": ANCHORED_BY_THE_REPLY}}
 
     phases = _drive(rig, materials, _capture("plain.md"), entry)
 
@@ -230,7 +250,7 @@ def test_a_run_scrubs_the_credentials_that_would_make_it_touch_a_humans_state(tm
     (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     expectations = {"expectations": [
         {"id": "T01", "expect": {"status": schema.FILED, "type": "note", "folder": "wiki/notes",
-                                 "anchor": ANCHORED_TO_THE_REGISTRY, "attempts": 1}}]}
+                                 "anchor": ANCHORED_BY_DEFAULT, "attempts": 1}}]}
     report_path = tmp_path / "report.json"
     args = argparse.Namespace(repo=str(FIXTURE_REPO), manifest=str(tmp_path / "manifest.json"),
                               expectations=str(tmp_path / "expectations.json"), backend="double",

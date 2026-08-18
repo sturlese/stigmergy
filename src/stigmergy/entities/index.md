@@ -141,6 +141,15 @@ plus an `Approved-by:` trailer naming the human.
   `read_entity_pages`: same slug id, and distinct ids whose titles claim one `normalize()` key
   (legal-suffix folding). The knowledge repo's own linter mirrors the match-key rule — a declared
   duplication across two repos with no shared import.
+- **The legal-suffix fold lives on THIS side of the system only.** `birth._refuse_collisions` asks
+  `Registry.collision_id` and `_duplicate_match_keys` asks `normalize` directly: both answer "would
+  these two ever be confused?", where a false negative mints a duplicate identity and the refusal
+  falls closed onto a steward. The FILING side stopped folding it (issue #77) — which entity a
+  capture means is the agent's judgment now — so `canonical_id` and `collision_id` legitimately
+  disagree about the same string, and a caller here that reached for `canonical_id` would be
+  weakening the gate.
+- `generator._index` calls `kernel.registry.index_entity` rather than keying the maps itself; its
+  promise to index "exactly as `load_registry` does" is now kept by calling the same function.
 - `capture.schema.SITUATION_NAMES_KEY` — the ONLY name key a park writes, a list whatever the count.
   `situations.subjects_of` still falls back to the singular `SITUATION_NAME_KEY` as a one-element
   list, and that fallback is PERMANENT: rows parked before the plural collapse keep the old key and

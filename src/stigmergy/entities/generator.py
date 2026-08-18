@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from stigmergy.entities.errors import EntityError
 from stigmergy.kernel import frontmatter as graph_pages
 from stigmergy.kernel.normalize import normalize, slugify
-from stigmergy.kernel.registry import Registry, load_registry, save_registry
+from stigmergy.kernel.registry import Registry, index_entity, load_registry, save_registry
 
 log = logging.getLogger(__name__)
 
@@ -208,12 +208,10 @@ def derive_registry(repo: str) -> Registry:
 
 
 def _index(registry: Registry) -> None:
-    """Populate `by_alias` exactly as `load_registry` does — same key function, same precedence."""
+    """Populate both lookup maps exactly as `load_registry` does — by CALLING the same indexer,
+    rather than by re-typing the same key functions and promising they stay identical."""
     for canonical_id, entity in registry.entities.items():
-        for alias in (canonical_id, entity["name"], *entity.get("aliases", ())):
-            key = normalize(str(alias))
-            if key:
-                registry.by_alias[key] = canonical_id
+        index_entity(registry, canonical_id, entity)
 
 
 def committed_registry(repo: str) -> Registry:

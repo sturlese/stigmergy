@@ -35,3 +35,6 @@ dispatch scheduling and warehouse slotting.
 
 - [[Northwind Freight Onboarding]] — how the account came onto the routing system
 - [[Warehouse Slotting Policy]] — an earlier decision recorded against this entity
+- [[Cofers]] — maintains the depot buildings under a standing contract
+- [[Meridian Nexus]] — supplies the platform the depot settlement runs reconcile against
+- [[Cofers Legal]] — external counsel on commercial agreements, unrelated to [[Cofers]]

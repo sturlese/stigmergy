@@ -368,7 +368,8 @@ ORDINARY_AGENTIC_ENVIRONMENT = (
     "vocabulary. A `[[name]]` resolves only if it is in that list.\n"
     "   - `resolve_entities(names)` — the entity registry's own answer for a list of names: the "
     "canonical id, the aliases and the entity's page when one exists. A name it does not resolve "
-    "is not registered, whatever the material calls it.\n"
+    "verbatim comes back with `near` — the registered entities that name partly spells — which are "
+    "candidates for you to judge, not answers.\n"
     "   - `write_page(path, content)` — the ONLY way you write anything, and the only writes it "
     "permits are ONE new `.md` page in this repo's fast-lane knowledge folders and your own "
     "outcome file. A page that already exists is not writable, however its name is spelled.\n"
@@ -578,7 +579,13 @@ class FilingToolbox:
     def resolve_entities(self, names) -> dict:
         """The registry's own answer for each name. `resolved: false` is a REAL answer the brief's
         third anchoring outcome depends on — a name the registry does not know is a park, never an
-        invention — so an unresolved name is returned as itself rather than dropped."""
+        invention — so an unresolved name is returned as itself rather than dropped.
+
+        An unresolved name carries `near`: the registered entities that name partly spells, through
+        `gather.match_registry` — the SAME rule that built the seeded block, so asking again cannot
+        get a different set. They are candidates to JUDGE. Resolving one is still declaring its id
+        and still meeting `gate_anchoring`; being unsure is still the park.
+        """
         ps = gather.prompt_scalar
         registry = self.registry()
         asked = [str(n).strip() for n in (names or []) if str(n).strip()][:MAX_TOOL_NAMES]
@@ -587,7 +594,12 @@ class FilingToolbox:
         for name in asked:
             cid = registry.canonical_id(name)
             if not cid:
-                out.append({"asked": ps(name), "resolved": False})
+                near, _total = gather.match_registry(registry, name)
+                out.append({"asked": ps(name), "resolved": False,
+                            "near": [{"id": ps(entity_id), "name": ps(entity_name),
+                                      "aliases": [ps(a) for a in entity_aliases],
+                                      "match": ps(kind)}
+                                     for entity_id, entity_name, entity_aliases, kind in near]})
                 continue
             entity = registry.entities.get(cid) or {}
             out.append({
@@ -731,9 +743,15 @@ class PydanticFilingAgent:
             entity is registered but has no page yet — a real state, and a different one from "not
             registered").
 
-            Use it before declaring an anchor. A name it does not resolve is not registered, however
-            the material spells it: park the capture as `unresolved-entity` rather than inventing an
-            entity or falling back to company-wide scope to get it filed.
+            Use it before declaring an anchor. A name it does not resolve VERBATIM comes back with
+            `near`: the registered entities that name partly spells. Those are candidates for your
+            judgment, not answers — read the corpus and decide whether the material really is about
+            one of them, and anchor by declaring THAT entity's id.
+
+            If none of them is it, or you are not sure which, park the capture as
+            `unresolved-entity`. Never invent an entity id, and never fall back to company-wide
+            scope to get something filed: a wrong anchor corrupts a timeline silently, a park costs
+            one question.
             """
             return _tool_payload(toolbox.resolve_entities(names))
 

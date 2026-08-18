@@ -264,6 +264,32 @@ def test_filed_render_states_the_freshness_gap_without_naming_internal_tools():
     assert "search_brain" not in text and "ask(" not in text
 
 
+def test_a_judged_anchor_carries_its_reason_into_the_card_and_an_unjudged_one_does_not():
+    """Issue #77: which entity a capture is about is the agent's judgment now, and the card already
+    invites the submitter to say "that's wrong" — an invitation only a reader who can see the
+    reasoning can act on. Both directions, because a card that ALWAYS carried an explanation would
+    train its reader past the one that matters: most captures name their entity plainly and have
+    nothing to explain."""
+    judged = render.render_filed(page_path="wiki/notes/X.md", commit="abc123", anchor="Cofers",
+                                 anchor_reason="same company, a legal form on the certificate"
+                                 )[0]["text"]["text"]
+    assert "same company, a legal form on the certificate" in judged
+
+    plain = render.render_filed(page_path="wiki/notes/X.md", commit="abc123",
+                                anchor="Cofers")[0]["text"]["text"]
+    assert "(" not in plain.split("read this as being about")[1].split("—")[0]
+
+
+def test_an_anchor_reason_is_escaped_like_every_other_agent_written_string():
+    """It is the agent's prose about CAPTURED material, so it reaches this card carrying whatever
+    the submitter wrote. Unescaped, `<https://evil.example|click>` in it renders as a real live
+    link inside a message the bot appears to have authored."""
+    text = render.render_filed(page_path="wiki/notes/X.md", commit="abc123", anchor="Cofers",
+                               anchor_reason="see <https://evil.example|click>")[0]["text"]["text"]
+    assert "<https://evil.example|click>" not in text
+    assert "&lt;https://evil.example|click&gt;" in text
+
+
 def test_needs_input_render_addresses_the_submitter_and_never_shows_the_mcp_invocation():
     text = render.render_needs_input(situation_prose="needs_input — parked on one question",
                                      slack_user_id="U123")[0]["text"]["text"]

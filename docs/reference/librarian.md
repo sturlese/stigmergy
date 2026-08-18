@@ -289,7 +289,7 @@ tool itself rather than by a permission hook:
 | `search_pages(query)` | the gatherer's own ranking, over any query the model chooses — how it looks further than the seed |
 | `read_page(path)` | one page in full — and the per-type page templates (`ops/templates/<type>.md`), which are what a run writing its own file learns the container's shape from. Confined to those two roads: no symlinks, nothing outside the worktree, and nothing else in `ops/` |
 | `list_page_names()` | the wikilink vocabulary, bounded and reporting its own total |
-| `resolve_entities(names)` | the registry's answer per name — resolved or not, with aliases and the entity's page |
+| `resolve_entities(names)` | the registry's answer per name — resolved (with aliases and the entity's page) or not, and an unresolved name carries `near`: the registered entities that spelling partly names, through `gather.match_registry`. Candidates to judge, never answers |
 | `write_page(path, content)` | the ONE write: a new `.md` page in a fast-lane folder, or the outcome file. An existing page is refused however its name is spelled |
 
 A refused tool call returns a refusal and changes nothing. What the model wrote is judged by the
@@ -330,9 +330,15 @@ call per capture means a cache write with no read to offset its premium.
 `gather_excerpt_lines`. It runs before the model call for a backend that declares `wants_gathered`,
 and it produces four things:
 
-- **the entities the material names**, resolved through the registry's own alias map (never a second
-  matching rule — `gates.registry_candidates` is the one reading of "which entities exist"), each
-  with its registry id, its aliases and the path of its own page when this brain has one;
+- **the entities the material NAMES or nearly names** (`gather.match_registry`, the one near-miss
+  rule, over `gates.registry_candidates`, the one reading of "which entities exist"), each with its
+  registry id, its aliases, the path of its own page when this brain has one, and how it matched.
+  `match: "named"` is a whole-token run of a registry spelling inside the material; `match: "near"`
+  is a DISTINCTIVE contiguous sub-run of a registry spelling — the abbreviation direction
+  containment cannot reach, where material saying `Nexus` has to surface a registered
+  `Ferrovial Nexus`. Bounded by `MAX_ENTITIES`, with `entities_total` beside it so a cut list never
+  reads as "the registry holds nothing else". **Surfacing is not resolving**: a near miss is a
+  candidate the agent judges, and only a declared id the registry holds becomes an anchor;
 - **the top-K candidate pages** it lexically overlaps with, each with a bounded excerpt and its own
   outbound link names. The score is an integer: `3 × title + 2 × its links + 1 × body` term overlap,
   ties broken by path. The corpus decides what a stopword is — a term more than half the pages carry
@@ -501,6 +507,18 @@ draws (ADR 031).
 
 `anchoring.kind` is `entity` (with `entities`, each resolving through `ops/entity-registry.json`) or
 `company` (with a written `reason`). There is no third value: silence is not an anchoring outcome.
+
+**On an `entity` anchor, `reason` is where the agent says WHY that entity** — and it reaches the
+submitter as `anchor_reason`, in the filed report's sentence, in `render_prose`, and in the Slack
+card's "the librarian read this as being about X" line. It matters because which entity a capture
+means is a judgment now rather than a suffix table's answer (issue #77:
+`kernel.normalize.resolution_key` folds accents, case and punctuation and nothing that is a claim
+about the world), and an automatic decision nobody can see is what this repo does not allow. It is
+volunteered rather than required: most captures name their entity plainly, and a clause printed on
+every filing is a clause nobody reads. Code neither writes it nor checks it — the FENCE is that the
+declared id must exist in the registry read at the base commit (`gates.resolve_entity_ids`, the ONE
+resolver) and that uncertainty parks. Company-wide scope keeps carrying its own `reason` inside the
+anchor phrase, where it is required.
 
 The agent's `summary` reaches the submitter as `agent_rationale` — on a filed report and on both
 parked ones. Every other field is code's observation of WHAT happened (page, commit, anchor, links,

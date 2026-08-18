@@ -68,9 +68,14 @@ FACETS = QUALITY_FACETS + COST_FACETS
 # The per-facet denominators the shipped golden set produces, pinned rather than derived: a facet
 # that quietly loses one is a score that ROSE because a capture stopped being counted. Adding a
 # capture fails `_check_set` first, on purpose — update this in the same commit.
-EXPECTED_DENOMINATORS = {"status": 12, "reason": 1, "type": 9, "folder": 9, "anchor": 7,
+#
+# MOVED for issue #77, which added F11-F14: four entity-resolution captures (a qualifier the legal
+# suffix table never covered, the abbreviation direction, the false friend, and the legal-form
+# spelling code used to fold). Scores before and after are comparable per FACET and not per run —
+# see evals/README.md's growth protocol, and say so in the history row's own commit.
+EXPECTED_DENOMINATORS = {"status": 16, "reason": 1, "type": 13, "folder": 13, "anchor": 11,
                          "edits": 1, "park_question": 2, "decisions": 2, "reuse": 1,
-                         "attempts": 8, "bounces": 8}
+                         "attempts": 12, "bounces": 12}
 
 # Words carried by nearly every title in this domain; matching on them would let any two titles
 # match each other. Deliberately tiny — a long stop list is a second yardstick nobody reviews.

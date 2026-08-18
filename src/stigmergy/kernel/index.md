@@ -16,8 +16,8 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 | `page.py` | `MAX_BODY_LINES` / `SPLIT_CHUNK_LINES` — the page-as-chunk contract — and `_yaml(v)`, the frontmatter scalar emitter: plain only when the value provably round-trips through `yaml.safe_load`, quoted-and-escaped otherwise |
 | `frontmatter.py` | `split_frontmatter(text) -> (dict, body)` — tolerant: malformed or absent frontmatter degrades to `({}, text)`, never an exception |
 | `acl.py` | `load_acl_config` / `load_acl_config_text`, `resolve_acl` (first matching rule wins), `view_acl` (members INTERSECTION — a rollup must never widen access), `visible_to_view` (the non-member read gate) |
-| `registry.py` | `Registry`, `load_registry` / `registry_from_text` / `save_registry` — `ops/entity-registry.json`'s one reader/writer, plus the `canonical_id` / `title` / `type_of` lookups. Missing file = empty registry; malformed = loud error. The reader is split path-from-text because the registry also reaches a reader as BYTES now (the index's snapshot, which `index.check` lints through this same parse) |
-| `normalize.py` | `normalize(name)` (matching key: accents, case, punctuation and legal suffixes folded), `slugify(s)` (≤60 chars) |
+| `registry.py` | `Registry`, `load_registry` / `registry_from_text` / `save_registry` / `index_entity` — `ops/entity-registry.json`'s one reader/writer, plus `title` / `type_of` and the TWO lookups the registry is asked for: `canonical_id` (which entity does this text MEAN — filing) and `collision_id` (would this new name be confused with one we have — the mint gate). Missing file = empty registry; malformed = loud error. The reader is split path-from-text because the registry also reaches a reader as BYTES now (the index's snapshot, which `index.check` lints through this same parse) |
+| `normalize.py` | `resolution_key(name)` (accents, case and punctuation folded — and nothing that is a judgment), `normalize(name)` (that plus the legal-suffix table: the COLLISION key), `slugify(s)` (≤60 chars) |
 | `fsutil.py` | `write_text_atomic(path, text)` — tmp file + same-directory `os.replace`, so a concurrent reader never sees a partial |
 | `converters.py` | the document HANDS: `method_for_ext`, `extract` (pdf/sheet/docx/office/text → `{method, text}`), `sheet_rows`, `vision_extract` (Gemini OCR, lazy SDK import). Faithful text, no judgment |
 
@@ -33,10 +33,15 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
   source writes an adapter over these (`librarian.acl_rules` is one), never a second resolution
   algorithm.
 - `registry.load_registry` / `registry_from_text` / `save_registry` — never a hand-rolled JSON
-  parse of the registry, from a path or from bytes.
-- `normalize.normalize` / `slugify` — they answer different questions: `slugify` is the id a page
-  regenerates as, `normalize` the matching key legal-suffix stripping folds onto (see
-  `entities.generator.canonical_id_for`).
+  parse of the registry, from a path or from bytes. `registry.index_entity` for anything that
+  BUILDS a `Registry` in memory (`entities.generator._index` is the other caller): it is the one
+  place either lookup key is computed, and hand-filling `by_alias` keys one map and silently leaves
+  the other empty.
+- `normalize.resolution_key` / `normalize.normalize` / `slugify` — THREE keys, three questions.
+  `slugify` is the id a page regenerates as; `resolution_key` is what a capture resolves through
+  (accents, case, punctuation — nothing a developer could be wrong about); `normalize` is
+  `resolution_key` plus the legal-suffix table, and it exists for the mint gate alone (see
+  `entities.birth._refuse_collisions` and `entities.generator.canonical_id_for`).
 - `fsutil.write_text_atomic` for any file another process might read mid-write.
 
 ## Avoid
@@ -73,8 +78,15 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 - `converters.vision_extract` reads `VISION_MODEL`, requires `GEMINI_API_KEY`. PDFs ≤14 MB go
   inline as bytes (the Files API's ASCII header encoding breaks on non-ASCII filenames); larger
   ones upload through an ASCII-named temp copy. The model id is returned as provenance.
-- `normalize.py` has no dedicated suite — it is exercised transitively; `frontmatter.py`'s lives
-  in `tests/kernel/test_frontmatter.py`.
-  `normalize` carries the legal-suffix table entity identity depends on; a change there needs a
-  suite added with it. `server.entity_aliases` deliberately does NOT use it (its own looser
-  `_norm`, no suffix stripping — a retrieval nicety, not an identity decision).
+- `normalize.py`'s suite is `tests/kernel/test_normalize.py`, added with the split that gave it a
+  second key; `frontmatter.py`'s lives in `tests/kernel/test_frontmatter.py`. Every case there is
+  written against a spelling that DISCRIMINATES the two keys — one both answer alike proves nothing
+  about the line between them.
+- **The legal-suffix table is the mint gate's and nothing else's.** `Registry.collision_id` is its
+  only lookup, and `entities.birth._refuse_collisions` its only consumer; the knowledge repo's own
+  contract linter mirrors the same match key as a declared duplication across two repos with no
+  shared import, so a change to `_SUFFIXES` is a two-repo decision. `Registry.canonical_id` — the
+  filing side — deliberately does not consult it: which entity a capture MEANS is the agent's
+  judgment, fenced by `librarian.gates.resolve_entity_ids` (a declared id must exist) and by the
+  park. `server.entity_aliases` uses neither (its own looser `_norm` — a retrieval nicety, not an
+  identity decision).
