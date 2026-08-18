@@ -30,7 +30,7 @@ repo parser — nothing here touches `pages_index`); `stigmergy.index.store` is 
 | `pydantic_backend.py` | `PydanticFilingAgent` — the real backend, serving both flows: an iterating ordinary run (five confined tools, an outcome file, it writes its own page) and one structured meeting call. `FilingToolbox` holds the tool bodies so every confinement rule is testable with no model; `_register_tools` writes the model-facing docstrings, which ARE the tool schema |
 | `double.py` | `DoubleAgent` — the offline, directive-driven backend the whole keyless suite runs against; misbehaves on demand, behaves perfectly on ordinary material, and writes through `agent.confined_write` like the real one |
 | `filing_port.py` | `FilingAgent` — the port `processing.py` is written against: the two calls, the `AgentRun` envelope, `priced()`, the fault contract, the per-flow side-effect rules, and the two declared capabilities (`structured_ordinary`, `wants_gathered`). Imports `errors` and nothing else |
-| `gather.py` | the deterministic gatherer — a pure function of `(worktree, registry, material)` producing the seeded context BOTH flows get (the ordinary agent's seed, and the tool-less meeting agent's whole view of the corpus), and the bodies the ordinary search/read tools share (`load_corpus`, `search_candidates`, `confined_page`). Reads the checkout, never `pages_index` |
+| `gather.py` | the deterministic gatherer — a pure function of `(worktree, registry, material)` producing the seeded context BOTH flows get (the ordinary agent's seed, and the tool-less meeting agent's whole view of the corpus), and the bodies the ordinary search/read tools share (`load_corpus`, `search_candidates`, `confined_page`, `match_registry`). Reads the checkout, never `pages_index` |
 | `page.py` | the placement table (`PAGE_TYPES`: SEVEN types known, THREE creatable — `note`, `decision`, `concept`; every derived list and regex computes from it), path identity (`path_key`, `is_inside`), server-owned frontmatter (`SERVER_OWNED_KEYS`, `stamp_server_fields`, `stamp_source_fields`), page-name policy (`unnameable_reason`), the additive-edit primitives |
 | `edits.py` | declared edits to existing pages, on BOTH flows: the agent declares, `validate`/`apply` perform — all-or-nothing, judged by the gates like any other write. Its editable set is `page.FOLDER_BY_TYPE`'s three folders; a caller whose own lane is narrower (the meeting flow) sees the difference refused by `gate_zone` |
 | `report.py` | the ONLY place a sentence a human reads about a fast-lane outcome is composed; the CLI (`render_prose`) and `brain_submissions` render the same fact set. Its shape (`base_report`) and `SEARCHABILITY_NOTE` live in `capture.schema`, re-exported. A steward-authored sentence belongs in `capture.dispositions` instead |
@@ -57,6 +57,21 @@ repo parser — nothing here touches `pages_index`); `stigmergy.index.store` is 
   rendered diff** — page content can be spelled to look like diff metadata.
 - **`gates.registry_candidates` is the ONE reading of "which entities exist"** — the agent brief
   and the human question both list it, and a second implementation would let the two disagree.
+- **Which entity a capture MEANS is the agent's judgment; `gates.resolve_entity_ids` is the fence
+  and the ONE resolver.** `kernel.normalize` stopped folding a legal form on the filing side (issue
+  #77), so a spelling the registry does not carry resolves only because the agent declared that
+  entity's id — and code still refuses an id the registry does not hold, still parks on
+  uncertainty, and now REPORTS the resolution (`report.filed`'s `anchor_reason`, from
+  `anchoring.reason`). An automatic decision nobody can see is what this repo does not allow.
+  Widen the resolver; never bolt a second beside it. The mint gate keeps the coarse fold and is out
+  of this lane (`entities.birth._refuse_collisions` → `Registry.collision_id`).
+- **`gather.match_registry` is the ONE near-miss rule** — the seeded entity block and the
+  `resolve_entities` tool both ask it, so the run cannot get one answer in its prompt and a
+  different one when it asks again. It surfaces a registered entity the material NAMES (a whole-
+  token run of a registry spelling) or nearly names (a DISTINCTIVE contiguous sub-run of one, which
+  is the abbreviation direction containment cannot reach), labelled `named`/`near` and bounded by
+  `MAX_ENTITIES` with `entities_total` beside it. Surfacing is not resolving: a `near` entry is a
+  candidate the agent has to judge, and nothing downstream can turn it into an anchor.
 - **The three repo-sourced inputs are read at `base.sha` through `base_inputs`** —
   `Settings.acl_path` / `registry_path` / `linter_path` answer only "where does this live in a
   checkout", for steward tooling and messages.

@@ -35,6 +35,12 @@ from stigmergy.capture import schema
 
 MEETING_IDS = ("F08-meeting-two-decisions", "F09-meeting-parks")
 
+# How many captures the shipped set carries, DERIVED from the manifest rather than retyped: this
+# number is not a claim these tests make about the set, it is the set's own size, and a literal here
+# is one more place a grown golden set has to be chased to (issue #77 grew it by four).
+SHIPPED_CAPTURES = len(json.loads(
+    run_filing.FIXTURE.joinpath("captures", "manifest.json").read_text(encoding="utf-8"))["captures"])
+
 
 @pytest.fixture(scope="module")
 def golden():
@@ -324,7 +330,7 @@ def test_every_backend_parses_and_measures_the_whole_set_by_default(parse, backe
 
     The structured one is the row that changed. `--backend pydantic` with no subset was the exact
     invocation M1 exited on before the queue was touched; it now reaches the measurement carrying
-    all ten captures, which is what "the backend serves both flows" means at the rig's seam.
+    every capture in the set, which is what "the backend serves both flows" means at the rig's seam.
 
     The `sdk` arm went with that backend. Nothing about this test needed rewriting for it — the
     parametrize list is one entry shorter and every assertion is untouched, which is what a rig
@@ -333,7 +339,7 @@ def test_every_backend_parses_and_measures_the_whole_set_by_default(parse, backe
     captured = parse("--backend", backend)
 
     assert captured["backend"] == backend
-    assert len(captured["ids"]) == 10
+    assert len(captured["ids"]) == SHIPPED_CAPTURES
     assert captured["kinds"] == ["meeting", "raw"], (
         "a whole-set run must still record which kinds it measured, or its row is the ambiguous "
         "one every later row is compared against")
@@ -361,7 +367,7 @@ def test_spelling_out_every_kind_the_set_carries_is_the_WHOLE_set_and_still_owes
     """
     captured = parse("--backend", "double", "--kinds", "meeting,raw")
 
-    assert len(captured["ids"]) == 10, "spelling out every kind narrowed the set"
+    assert len(captured["ids"]) == SHIPPED_CAPTURES, "spelling out every kind narrowed the set"
     assert captured["kinds"] == ["meeting", "raw"]
 
 

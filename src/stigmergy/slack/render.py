@@ -209,9 +209,14 @@ def render_private_channel_refusal() -> list[dict]:
     return [_section(copy.PRIVATE_CHANNEL_REFUSAL)]
 
 
-def render_filed(*, page_path: str, commit: str, anchor: str, source_page: str = "") -> list[dict]:
+def render_filed(*, page_path: str, commit: str, anchor: str, source_page: str = "",
+                 anchor_reason: str = "") -> list[dict]:
+    """`anchor_reason` is the AGENT's sentence about a judged anchor, derived from captured
+    material, so it is escaped exactly like `anchor` — unescaped, a `<https://evil.example|text>`
+    inside it renders as a REAL live link in the card."""
     return [_section(copy.filed(page_path=page_path, commit=commit,
-                               anchor=escape_mrkdwn(anchor), source_page=source_page))]
+                               anchor=escape_mrkdwn(anchor), source_page=source_page,
+                               anchor_reason=escape_mrkdwn(anchor_reason)))]
 
 
 def render_needs_input(*, situation_prose: str, slack_user_id: str) -> list[dict]:

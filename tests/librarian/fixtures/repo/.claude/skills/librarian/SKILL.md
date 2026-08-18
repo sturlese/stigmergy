@@ -71,11 +71,19 @@ nothing in a hint binds it.
 Every message you receive carries, in full:
 
 - **the captured material** — fenced, the thing to file;
-- **the entities this material names**, already resolved through the entity registry: each one's
-  registry `id`, its canonical `name`, its aliases, and the path of its own page when this brain
-  has one (`page` is `null` when the entity is registered but has no page yet — a real state, and
-  a different one from "this entity does not exist"). **This list is the registry's answer, not a
-  guess**: an entity that is not in it is one the registry did not resolve from your material;
+- **the entities this material names or nearly names**, each with its registry `id`, its
+  canonical `name`, its aliases, and the path of its own page when this brain has one (`page` is
+  `null` when the entity is registered but has no page yet — a real state, and a different one from
+  "this entity does not exist"). Each carries a **`match`**, and the difference is your whole job
+  here:
+  - `match: "named"` — the material carries that entity's own registered spelling.
+  - `match: "near"` — the material carries only a distinctive PART of one. `Nexus` where the
+    registry holds `Meridian Nexus`.
+
+  **Neither is a resolution already made.** Code folds accents, case and punctuation and nothing
+  else — whether `Cofers SL` is the registered `Cofers`, or `Nexus` is `Meridian Nexus`, is a claim
+  about the world, and claims about the world are yours to make. A list cut for room says so, and a
+  cut list is never proof an entity is absent;
 - **`candidates`** — the existing pages this material most overlaps with, ranked, each with its
   path, title, type, an excerpt of its opening, and `links_to` (the pages it already links out
   to). These are what you judge overlap against;
@@ -117,10 +125,12 @@ client") parks the same way.
 Nothing is filed ownerless. **Every capture ends in exactly one of these three, and you decide
 which before you draft.** Pick the one that is **true of the material**, not the one that files:
 
-1. **ANCHOR to an entity** — declare it: `"anchoring": {"kind": "entity", "entities": ["<that
-   name>"]}`, a name or an id the entity registry resolves. The entity list you were handed IS
-   that registry's answer for this material: an entity in it resolves, and a name that is not in
-   it did not resolve and will not. Do not guess and do not invent one. A page ABOUT something is
+1. **ANCHOR to an entity** — declare it: `"anchoring": {"kind": "entity", "entities": ["<the
+   registry's own id or name>"], "reason": "<why this material is about that entity>"}`. The value
+   must be one the registry resolves, so **declare the entity's own registered spelling, not the
+   material's** — that is what turns your judgment into an anchor. Say WHY in `reason`: it is
+   printed back to the person who submitted the capture, beside the anchor, and a resolution nobody
+   can see is not one this brain allows. Do not guess and do not invent one. A page ABOUT something is
    not a registration of it — only a value the registry resolves counts. **No wikilink is
    required, and none is read.** The anchor is this declared `anchoring.entities` value and
    nothing else — the worker stamps the page's own `entity:` frontmatter from the SAME resolved
@@ -144,6 +154,41 @@ which before you draft.** Pick the one that is **true of the material**, not the
 Deciding this up front is cheaper than discovering it late: the anchoring gate resolves the
 DECLARED `anchoring.entities` list — ids, names and aliases — against the registry read at the
 base commit, and a page written for one outcome rarely converts into another without a rewrite.
+
+### Judging a near miss
+
+Most names that look unregistered are not new entities. They are a registered one wearing a
+different spelling, and deciding that is the judgment this brain asks you for. Getting it right
+means one anchor and no interruption; getting it wrong in either direction costs something
+different, and the difference is why the rule below is not symmetric.
+
+Read every candidate you were handed, `named` and `near` alike, and ask what is TRUE, not what
+files:
+
+- **a legal form** — `Cofers SL`, `Cofers, S.L.`, `cofers inc`, `COFERS LTD` are the registered
+  `Cofers` wearing its company registration. So are `GmbH`, `B.V.`, `S.r.l.`, `Limited`, `Corp`.
+- **casing, accents and punctuation** — `COFERS`, `Côfers`, `Cofers.` are the same name typed
+  differently, and code has already folded those for you.
+- **a former name or a rebrand** — `Cofers (formerly Nubelo)` names one company under two names.
+  The material usually says so; the corpus sometimes does.
+- **an abbreviation the material itself uses** — `Nexus` for the registered `Meridian Nexus`,
+  especially where the material introduces the long form once and then shortens it. This is what a
+  `near` candidate usually is.
+- **the evidence, always** — the anchored pages of each candidate are the tie-breaker. Three pages
+  about `Cofers` billing, and material about an invoice, is a fit. Nothing in common is not.
+
+**A shared prefix is not identity.** `Cofers Legal` beside a registered `Cofers` is very often a
+different company — a subsidiary, a namesake, a different line of business — and the registry may
+well hold both. When you are handed both, they are two entities and you are choosing between them,
+not merging them. `Cofers Holdings`, `Cofers Group`, `Cofers España`: each may be the same company
+or a genuinely separate one, and only the material and the corpus can say which.
+
+**When you cannot tell, PARK.** That is not a tie-break rule, it is the asymmetry: a wrong anchor
+files a page under a company it is not about, corrupts that entity's timeline silently, and nobody
+ever re-reads it to notice. A park costs one question to one steward, once — and once they answer,
+the registry carries the answer and no future capture asks it again. Confidence is not evidence,
+and a fluent justification for a merge you are unsure of is the failure mode this instruction
+exists to prevent.
 
 ## Writing the page
 

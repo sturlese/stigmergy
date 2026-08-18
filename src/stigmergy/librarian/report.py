@@ -97,20 +97,55 @@ def _anchor_phrase(anchoring: dict, registry=None) -> str:
 
 
 # ── filed ─────────────────────────────────────────────────────────────────────────────────────
+# What an ENTITY anchor's own `reason` is introduced by. Entity resolution is the agent's judgment
+# now (`kernel.normalize`: code folds accents and punctuation, never a legal form or a former
+# name), and an automatic decision nobody can see is exactly what this repo does not allow — so
+# whenever the agent says WHY a capture points where it points, the person who submitted it reads
+# that sentence beside the anchor. Company-wide scope keeps carrying its reason inside
+# `_anchor_phrase` instead: there the reason justifies belonging to NO entity, and it is required
+# by `gate_anchoring` rather than volunteered.
+RESOLUTION_PREFIX = "Resolved:"
+
+
+def _resolution_note(anchoring: dict, registry=None) -> str:
+    """The agent's stated reason for an ENTITY anchor, cleaned — `""` when there is none to state.
+
+    Only for `kind == "entity"`: a company-wide reason is already inside the anchor phrase, and
+    printing it twice would read as two different facts. Never a claim code can check — the whole
+    point is that the JUDGMENT is the agent's and the FENCE is code's (the id must resolve in the
+    registry, or `gate_anchoring` refuses the filing outright).
+    """
+    anchoring = anchoring if isinstance(anchoring, dict) else {}
+    if str(anchoring.get("kind", "")).lower() != "entity":
+        return ""
+    # Registry-resolvable or not, the sentence is the same: `_anchor_phrase` above already says
+    # which ids the page carries, and this says why.
+    del registry
+    return _clean(anchoring.get("reason", ""), RATIONALE_WIDTH)
+
+
 def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps: list,
           findings: list, pages_edited: list = (), agent_rationale: str = "", registry=None,
           source_pages: list = ()) -> dict:
     """The ordinary success: page, commit and anchor, plus the not-searchable-yet clause in the same
     sentence. `pages_edited` is what code actually wrote from the agent's declared edits, while
-    `overlaps_flagged` is the agent's JUDGMENT about which pages overlap — a different field."""
+    `overlaps_flagged` is the agent's JUDGMENT about which pages overlap — a different field.
+
+    An entity anchor's `reason` rides beside the anchor as `anchor_reason` and in the sentence,
+    never folded into `anchored_to`: that field names the identity a read path branches on, and a
+    rationale glued onto it would make one field two facts.
+    """
     anchor = _anchor_phrase(anchoring, registry)
-    summary = (f"{schema.FILED} — {_clean(page_path)}@{commit}, anchored to {anchor}. "
-               f"{SEARCHABILITY_NOTE}")
+    resolution = _resolution_note(anchoring, registry)
+    resolved_clause = f" {RESOLUTION_PREFIX} {resolution}" if resolution else ""
+    summary = (f"{schema.FILED} — {_clean(page_path)}@{commit}, anchored to {anchor}."
+               f"{resolved_clause} {SEARCHABILITY_NOTE}")
     overlap_paths = [_path_of(o) for o in _as_list(overlaps)]
     if overlap_paths:
         # Visibly different from the exact-duplicate refusal: this one FILED.
         others = _listed(overlap_paths)
-        summary = (f"{schema.FILED} — {_clean(page_path)}@{commit}, anchored to {anchor}. "
+        summary = (f"{schema.FILED} — {_clean(page_path)}@{commit}, anchored to {anchor}."
+                   f"{resolved_clause} "
                    f"This overlaps existing material at {others}; both pages now cross-link and "
                    f"carry an overlap note — nothing was deleted or rewritten on either side. "
                    f"{SEARCHABILITY_NOTE}")
@@ -121,6 +156,7 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
     return base_report(
         status=schema.FILED, summary=summary,
         page_path=page_path, commit=commit, anchored_to=anchor,
+        anchor_reason=resolution,
         links_created=[_clean(link, 120) for link in _as_list(links)],
         overlaps_flagged=[_clean(path, 200) for path in overlap_paths],
         pages_edited=[_clean(path, 200) for path in _as_list(pages_edited)],
@@ -189,9 +225,15 @@ def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, com
     if decisions:
         lines.append("  decision pages:")
         for index, d in enumerate(decisions, start=1):
-            anchor = _anchor_phrase(d.get("anchoring") or {}, registry)
-            lines.append(f"    {index}. {_clean(d.get('path', ''))} — anchored to {anchor}")
-            decision_rows.append({"path": _clean(d.get("path", ""), 200), "anchored_to": anchor})
+            anchoring = d.get("anchoring") or {}
+            anchor = _anchor_phrase(anchoring, registry)
+            # Per DECISION, because a meeting anchors each one independently: one resolution
+            # judgment per page, and the reader has to be able to tell which page it was about.
+            resolution = _resolution_note(anchoring, registry)
+            lines.append(f"    {index}. {_clean(d.get('path', ''))} — anchored to {anchor}"
+                         + (f". {RESOLUTION_PREFIX} {resolution}" if resolution else ""))
+            decision_rows.append({"path": _clean(d.get("path", ""), 200), "anchored_to": anchor,
+                                  "anchor_reason": resolution})
     else:
         lines.append("  decision pages    (none — nothing from this meeting was drafted as a "
                      "decision worth its own page)")
@@ -574,6 +616,7 @@ def render_prose(report: dict) -> str:
     is_meeting = "filed_meeting" in report
     if status == schema.FILED and not is_meeting:
         # `filed_meeting` renders its own field block INTO `summary`; appending these duplicates.
+        lines.append(f"  anchor_reason    {report.get('anchor_reason') or NONE_LABEL}")
         lines.append(f"  links_created    {_listed(report.get('links_created'))}")
         lines.append(f"  overlaps_flagged {_listed(report.get('overlaps_flagged'))}")
         lines.append(f"  pages_edited     {_listed(report.get('pages_edited'))}")

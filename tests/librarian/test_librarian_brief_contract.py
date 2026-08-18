@@ -42,7 +42,16 @@ import pathlib
 
 import pytest
 
-from stigmergy.librarian import agent, config, edits, gates, gather, processing, pydantic_backend
+from stigmergy.librarian import (
+    agent,
+    config,
+    edits,
+    gates,
+    gather,
+    processing,
+    pydantic_backend,
+    report,
+)
 
 # ── this contract runs in CI ────────────────────────────────────────────────────────────────────
 # The same two-halves arrangement `test_meeting_brief_contract.py` argues for at length: the RULE
@@ -196,6 +205,12 @@ def _code_text() -> str:
     context the brief promises, `edits` validates the declarations it documents, and `agent` owns
     the outcome boundary that decides which half of the account is well-formed.
 
+    `report` joined them for issue #77. The brief now makes a promise about what the SUBMITTER
+    SEES — an entity anchor states WHY it resolved, and that sentence is printed back beside the
+    anchor — and `report` is the only module where that is true or false. A contract that could not
+    see it would let the brief keep asking for a reason after the report stopped showing one, which
+    is precisely how an automatic decision becomes an invisible one.
+
     `pydantic_backend` joined them for issue #53. The brief documents an inbound spelling
     (`triage.name`, folded into `names`) that BOTH outcome boundaries have to honour — the file
     channel through `agent.parse_outcome` and the structured road through `OrdinaryTriage`. A
@@ -204,7 +219,7 @@ def _code_text() -> str:
     """
     import inspect
     return "".join(inspect.getsource(module)
-                   for module in (gates, processing, agent, edits, gather, pydantic_backend))
+                   for module in (gates, processing, agent, edits, gather, pydantic_backend, report))
 
 
 # (brief phrase, code marker) — see the module docstring for what each direction proves. Every
@@ -235,6 +250,16 @@ RULE_TABLE = [
     #    ...and the gate that judges it. A brief promising "an entity in the list resolves" is only
     #    true because this is what runs.
     ("**No wikilink is", "def gate_anchoring"),
+    #    Since #77 the candidate list carries WHY an entry is in it, and the two kinds mean
+    #    different things to the agent: `named` is a spelling the material carries, `near` is one it
+    #    only partly carries. A brief that did not explain the field would leave the agent guessing
+    #    at the one input it needs to judge a near miss at all.
+    ('- `match: "near"` — the material carries only a distinctive PART of one.', "MATCH_NEAR"),
+    #    ...and resolution stopped being something code does silently, so the agent's stated reason
+    #    is printed back beside the anchor. A brief that asked for no reason would make every
+    #    resolution invisible — the thing this repo does not allow of an automatic decision.
+    ("printed back to the person who submitted the capture, beside the anchor",
+     "RESOLUTION_PREFIX"),
     # 2. COMPANY-WIDE: legal only WITH a written reason, and "a shrug is not one" is enforced
     #    rather than requested — `gate_anchoring` refuses a company scope with no reason, which is
     #    the difference between an ownerless page and a declared company-wide one.
@@ -339,8 +364,8 @@ RULE_TABLE = [
     # not the reader can go further from it.
     ("**What every run is handed** is one capture and everything this brain already holds that is",
      "def gather("),
-    ("  registry `id`, its canonical `name`, its aliases, and the path of its own page when this "
-     "brain", "structural_payload"),
+    ("  canonical `name`, its aliases, and the path of its own page when this brain has one",
+     "structural_payload"),
     ("- **`candidates`** — the existing pages this material most overlaps with, ranked, each with "
      "its", "def _candidates("),
     ("- **`neighbourhood`** — the pages one link out from those candidates and from the entity "
