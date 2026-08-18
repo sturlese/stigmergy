@@ -24,11 +24,34 @@ def test_load_registry_builds_alias_map(tmp_path):
         "globex": {"name": "Globex", "type": "organization",
                    "aliases": ["Globex Corp", "GX Industries"]}})
     reg = load_registry(path)
-    assert reg.canonical_id("GLOBEX CORP") == "globex"        # normalized alias
+    assert reg.canonical_id("GLOBEX CORP") == "globex"        # case and spacing are not judgments
     assert reg.canonical_id("gx industries") == "globex"
-    assert reg.canonical_id("Globex, S.L.") == "globex"       # legal suffix stripped by normalize
     assert reg.canonical_id("Initech") is None
     assert reg.title("globex") == "Globex"
+
+
+def test_a_legal_form_no_longer_resolves_a_capture_and_still_blocks_a_mint(tmp_path):
+    """The one fold that MOVED, pinned from both sides.
+
+    OLD BEHAVIOUR: `canonical_id("Globex, S.L.")` returned `"globex"` — `normalize`'s legal-suffix
+    table decided, at filing time, that those were one company. That is a claim about the world a
+    suffix list cannot make: the day `Globex` and `Globex Co` are two real entities, code merges
+    them with no human anywhere in the loop and no signal anywhere. So filing asks the narrow key
+    and the JUDGMENT belongs to the agent, fenced by `gates.resolve_entity_ids` (the id it declares
+    must exist) and by the park (unsure asks a steward).
+
+    The mint gate is unchanged, and that is the half this test exists to keep honest: there a false
+    negative lets a duplicate identity through a governed door, and the refusal falls closed onto a
+    human. `collision_id` still folds the suffix.
+    """
+    path = _registry_file(tmp_path, {
+        "globex": {"name": "Globex", "type": "organization", "aliases": []}})
+    reg = load_registry(path)
+
+    assert reg.canonical_id("Globex, S.L.") is None
+    assert reg.collision_id("Globex, S.L.") == "globex"
+    # ...and the benign twin, so this is a boundary and not a lookup that stopped working:
+    assert reg.canonical_id("Globex") == reg.collision_id("Globex") == "globex"
 
 
 def test_load_registry_missing_is_empty_malformed_is_loud(tmp_path):

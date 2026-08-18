@@ -876,7 +876,15 @@ def resolve_entity_ids(anchoring: dict, registry) -> tuple[list[str], list[str]]
     """`(ids, unresolved)` for one anchoring outcome; `([], [])` for company-wide scope. A PAIR,
     because `ids` alone folds two states onto `[]`: company-wide (the RIGHT `[]`) and "declared
     an entity anchor but nothing resolved" (the WRONG `[]`, which must never reach a committed
-    page). Raises on a falsy `registry`, deliberately uncaught, for the same reason."""
+    page). Raises on a falsy `registry`, deliberately uncaught, for the same reason.
+
+    **THE resolver, and the whole fence around an agentic resolution.** Which entity a capture is
+    about is the agent's judgment (see `kernel.normalize`: `canonical_id` folds accents, case and
+    punctuation and no longer strips a legal form, because "is `Cofers Co` the same company as
+    `Cofers`?" is a claim about the world). What code keeps is authority: the id the agent declares
+    must EXIST in the registry read at the base commit, or it lands in `unresolved` and the capture
+    parks. A hallucinated anchor is not a resolution. Widen this; never bolt a second resolver
+    beside it, or two answers exist to one question."""
     anchoring = anchoring if isinstance(anchoring, dict) else {}
     if str(anchoring.get("kind", "")).lower() != "entity":
         return [], []
@@ -1085,7 +1093,13 @@ def anchoring_brief(ctx: GateContext, declared: list[str]) -> str:
             '  1. ANCHOR — declare a registry id from the list above, spelled exactly as it is '
             'listed there (an id, never a display name or alias): "anchoring": {"kind": "entity", '
             '"entities": ["<that id>"]}. This is a change to the OUTCOME only — nothing on the '
-            'page itself is checked or needs to change.')
+            'page itself is checked or needs to change. A name in the material that is not spelled '
+            'the way the registry spells it — a legal form, a former name, a regional variant, an '
+            'abbreviation used in the same material — MAY be one of these entities, and deciding '
+            'that is your judgment to make from the corpus, not a string rule\'s. Say what you '
+            'resolved and why in "anchoring": {"reason": "..."}; the submitter reads it. Judge it, '
+            'do not guess it: if you are unsure which entity it is, outcome 3 is the correct answer '
+            'and a wrong anchor is not.')
     else:
         lines.append(
             "  1. ANCHOR — unavailable on this pass: the registry is empty, so no id resolves.")

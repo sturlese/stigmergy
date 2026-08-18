@@ -81,7 +81,7 @@ python evals/run_qa.py --embedder openai --llm openai --model gpt-5.6-terra \
 
 ## Golden filing — the write path
 
-[`filing/`](filing/) — **10 golden captures, 12 scored phases**, driven by
+[`filing/`](filing/) — **14 golden captures, 16 scored phases**, driven by
 [`run_filing.py`](run_filing.py) through the REAL filing path:
 `worker.process_next` over real Postgres, a real bare remote, a real `git worktree`, the eight
 deterministic gates and the knowledge repo's own contract linter. Nothing is stubbed and nothing is
@@ -99,11 +99,11 @@ and refused on drift before a model call is spent.
 
 | Facet | What it asks | Denominator |
 |---|---|---|
-| `status` | the terminal state each capture reached (`filed`/`needs_input`/`rejected`) | 12 |
+| `status` | the terminal state each capture reached (`filed`/`needs_input`/`rejected`) | 16 |
 | `reason` | a refusal's own `reason_code` | 1 |
-| `type` | the `type:` of the page that ACTUALLY landed, read back out of git | 9 |
-| `folder` | where it landed | 9 |
-| `anchor` | the page's server-stamped `entity:` — resolved registry ids, or company-wide | 7 |
+| `type` | the `type:` of the page that ACTUALLY landed, read back out of git | 13 |
+| `folder` | where it landed | 13 |
+| `anchor` | the page's server-stamped `entity:` — resolved registry ids, or company-wide | 11 |
 | `edits` | which OTHER pages the commit changed, from the agent's declaration | 1 |
 | `park_question` | for a park: the unresolved name the question actually captured | 2 |
 | `decisions` | for a meeting: one decision page per decision, each with its OWN anchor | 2 |
@@ -229,6 +229,22 @@ unaffected.
 
 Appending never fails a run: an eval that died because its bookkeeping failed would be worse than
 one that quietly loses a row.
+
+### Re-freezes, and the rows they end
+
+A frozen brief re-frozen is a new measurement, not a regression — nothing is re-scored and nothing
+is back-filled, so read the first row under new bytes as a fresh baseline candidate. The re-freezes
+so far, newest first:
+
+- **`abf6790` (2026-08-18, issue #77)** — the librarian brief, because entity resolution stopped
+  being a suffix table in Python and became the agent's judgment fenced by code, and the fixture
+  gained the three entities that judgment needs (`Cofers`, `Cofers Legal`, `Meridian Nexus`) plus
+  four captures. The MEETING-DISTILLER brief was re-frozen in the same commit for a different
+  reason, and it is the one worth reading: it had fallen 106 lines behind the knowledge repo's own
+  (ADR 038 gave the distiller corpus context), so `stigmergy_sha` no longer described the whole
+  tree and the meeting half of this instrument had been measuring a brief production does not run.
+  One sha describes the tree again.
+- **`03aab87`** — the original freeze.
 
 **`git_sha` has two spellings.** A bare 40-char sha means cleanliness was CHECKED and the tree
 matched. `-dirty` means either the tree did not match, or the check itself failed and cleanliness is

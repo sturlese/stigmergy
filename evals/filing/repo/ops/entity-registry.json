@@ -1,5 +1,27 @@
 {
   "entities": {
+    "cofers": {
+      "name": "Cofers",
+      "type": "organization",
+      "aliases": []
+    },
+    "cofers-legal": {
+      "name": "Cofers Legal",
+      "type": "organization",
+      "aliases": []
+    },
+    "marlowe-publishing": {
+      "name": "Marlowe Publishing",
+      "type": "organization",
+      "aliases": [
+        "Marlowe"
+      ]
+    },
+    "meridian-nexus": {
+      "name": "Meridian Nexus",
+      "type": "organization",
+      "aliases": []
+    },
     "northwind-freight": {
       "name": "Northwind Freight",
       "type": "organization",
@@ -12,13 +34,6 @@
       "type": "organization",
       "aliases": [
         "Quillon"
-      ]
-    },
-    "marlowe-publishing": {
-      "name": "Marlowe Publishing",
-      "type": "organization",
-      "aliases": [
-        "Marlowe"
       ]
     }
   }

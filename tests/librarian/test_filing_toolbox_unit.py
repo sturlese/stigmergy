@@ -662,7 +662,14 @@ def test_the_name_list_is_bounded_and_reports_the_real_total(tmp_path):
 def test_resolve_entities_answers_the_registry_and_says_no_when_the_answer_is_no(toolbox):
     """`resolved: false` is a REAL answer and the brief's third anchoring outcome depends on it: a
     name the registry does not know is a park, never an invention. An unresolved name comes back as
-    itself rather than being dropped, because a shorter list would read as "I did not ask"."""
+    itself rather than being dropped, because a shorter list would read as "I did not ask".
+
+    It now comes back with `near` as well — the registered entities that name partly spells. Here
+    that list is EMPTY, and it has to be: "Halcyon Grid" shares no token with anything registered,
+    so the honest answer is still "nothing close". A near list is a set of candidates to judge, and
+    inventing one for a name nothing resembles would be minting an entity by suggestion — the one
+    thing governed birth exists to stop. The populated direction is its twin below.
+    """
     payload = toolbox.resolve_entities(["Acme", "Halcyon Grid", "  "])
 
     assert [row["asked"] for row in payload["entities"]] == ["Acme", "Halcyon Grid"]
@@ -671,7 +678,26 @@ def test_resolve_entities_answers_the_registry_and_says_no_when_the_answer_is_no
     assert resolved["name"] == "Acme Corp" and "Acme" in resolved["aliases"]
     assert resolved["page"] == "wiki/entities/Acme Corp.md", (
         "the entity's own page is what makes the answer actionable — `gather.entity_page` finds it")
-    assert unresolved == {"asked": "Halcyon Grid", "resolved": False}
+    assert unresolved == {"asked": "Halcyon Grid", "resolved": False, "near": []}
+
+
+def test_a_near_miss_the_registry_cannot_resolve_comes_back_as_a_candidate_to_judge(toolbox):
+    """The other direction, and the one issue #77 is about: a spelling the registry does not carry
+    is not "not registered, park" any more — it is a JUDGMENT the agent has to make, and it can only
+    make it about candidates it can see.
+
+    `Acme Corp Holdings` resolves to nothing (`canonical_id` folds accents and punctuation and
+    deliberately not a qualifier or a legal form — see `kernel.normalize`), so the tool answers
+    `resolved: false` AND hands over the registered `acme` as a near miss. Anchoring is still
+    declaring that id and still meeting `gate_anchoring`; being unsure is still the park. What
+    changed is that the candidate reaches the agent at all.
+    """
+    payload = toolbox.resolve_entities(["Acme Corp Holdings"])
+
+    row = payload["entities"][0]
+    assert row["resolved"] is False, (
+        "a near miss must never resolve by itself — that is the suffix list this issue retired")
+    assert [near["id"] for near in row["near"]] == ["acme"]
 
 
 def test_a_name_list_past_the_ceiling_is_bounded_rather_than_asked_in_full(toolbox):

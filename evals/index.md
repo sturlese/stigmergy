@@ -25,7 +25,7 @@ measures.
 | `make qa-golden` → honesty · groundedness · refutation · retry rate · seconds/question | `run_qa.py` (needs `make db-up` + `OPENAI_API_KEY`) |
 | QA golden set | `qa_golden.json`; ACL-probe identities in `qa_identities.json` |
 | `make filing-golden` → nine quality facets, each with its own denominator | `run_filing.py` (needs `make db-up`, `gitleaks` on PATH, and the filing model's provider key. `BACKEND=double` is the keyless plumbing self-check; `--kinds` measures one kind of capture only) |
-| filing golden (10 captures, 12 scored phases) | `filing/captures/manifest.json` (what is submitted) + `filing/expected/expectations.json` (the yardstick), kept apart on purpose |
+| filing golden (14 captures, 16 scored phases) | `filing/captures/manifest.json` (what is submitted) + `filing/expected/expectations.json` (the yardstick), kept apart on purpose |
 | `make gates` → one verdict, one exit code | `run_gates.py`; the armed thresholds live in `bars.py`. It arms the two READ instruments only |
 | the frozen reference corpus | `corpus/` — committed pages + `PROVENANCE.json` + its own `ops/entity-registry.json`. For `run_qa.py`, `--repo` is also what gives `Settings` an alias map; without it entity-first resolution is inert for the whole measurement. Guarded keylessly by `tests/evals/test_golden_corpus_fixture.py` |
 | the frozen mini knowledge repo | `filing/repo/` — its own `ops/` and `PROVENANCE.json`, plus byte-for-byte frozen copies of the knowledge repo's contract linter and both agent briefs (each with a `FROZEN.md`). Frozen, not drift-guarded — see the gotcha below |

@@ -243,10 +243,15 @@ def _refuse_collisions(*, canonical_id: str, name: str, aliases, registry: Regis
     Ordered name -> id -> aliases: the id is DERIVED from the name, so a name collision collides
     on both, and reporting it as `--id` would misname the problem. `--id` then only fires when a
     DIFFERENT name slugs onto a taken id — the case where the id really is the problem.
+
+    `collision_id`, never `canonical_id`: this gate asks the COARSE question ("would these two ever
+    be confused?"), where a false negative mints a duplicate identity and the refusal falls closed
+    onto a human. Filing asks the narrow one, and the two must not share a lookup — see
+    `kernel.normalize`.
     """
     for label, value in [("--name", name), ("--id", canonical_id),
                          *[("an alias", alias) for alias in aliases]]:
-        hit = registry.canonical_id(value)
+        hit = registry.collision_id(value)
         if not hit:
             continue
         entry = registry.entities.get(hit, {})

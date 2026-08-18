@@ -82,6 +82,34 @@
       "material": "F10-anchoring-choice.md",
       "submitted_by": "alonso@stigmergy.test",
       "hints": {}
+    },
+    {
+      "id": "F11-near-miss-qualifier",
+      "kind": "raw",
+      "material": "F11-near-miss-qualifier.md",
+      "submitted_by": "dana@stigmergy.test",
+      "hints": {}
+    },
+    {
+      "id": "F12-abbreviation-only",
+      "kind": "raw",
+      "material": "F12-abbreviation-only.md",
+      "submitted_by": "priya@stigmergy.test",
+      "hints": {}
+    },
+    {
+      "id": "F13-false-friend",
+      "kind": "raw",
+      "material": "F13-false-friend.md",
+      "submitted_by": "alonso@stigmergy.test",
+      "hints": {}
+    },
+    {
+      "id": "F14-legal-form-spelling",
+      "kind": "raw",
+      "material": "F14-legal-form-spelling.md",
+      "submitted_by": "dana@stigmergy.test",
+      "hints": {}
     }
   ]
 }

@@ -33,7 +33,6 @@ from types import SimpleNamespace
 import pytest
 
 from stigmergy.kernel import registry as registry_module
-from stigmergy.kernel.normalize import normalize
 from stigmergy.librarian import agent as agent_module
 from stigmergy.librarian import gates, gitcmd
 from stigmergy.librarian import page as page_policy
@@ -553,16 +552,17 @@ def test_the_refusals_anti_blame_clause_survives_the_reports_200_character_reaso
 # earning one — are otherwise dead code from the test suite's point of view. See
 # `test_processing_pg.py`'s `test_a_claimed_entity_anchor_that_does_not_resolve_is_refused_never_
 # filed` for the same property proven end to end, through a real worker run.
-def _registry(entities: dict) -> registry_module.Registry:
-    """A real `Registry`, resolved through the real `normalize()` — the same function
+def _registry(entities: dict, *, aliases: dict | None = None) -> registry_module.Registry:
+    """A real `Registry`, keyed by the real `registry.index_entity` — the same function
     `load_registry` uses — so this fixture cannot silently diverge from what the gate's own
-    resolution actually does (`canonical_id` looks the alias up by that key, not by a raw
-    `.lower()`)."""
+    resolution actually does. It keys TWO maps (the narrow one `canonical_id` reads, the coarse
+    collision one the mint gate reads), which is precisely why a hand-filled `by_alias` here would
+    make this file agree with itself about a fold production does differently."""
     reg = registry_module.Registry()
     for cid, name in entities.items():
-        reg.entities[cid] = {"name": name, "type": "organization", "aliases": []}
-        reg.by_alias[normalize(cid)] = cid
-        reg.by_alias[normalize(name)] = cid
+        reg.entities[cid] = {"name": name, "type": "organization",
+                             "aliases": list((aliases or {}).get(cid, ()))}
+        registry_module.index_entity(reg, cid, reg.entities[cid])
     return reg
 
 
@@ -591,9 +591,7 @@ def test_a_declared_id_name_or_alias_all_resolve(tmp_path):
     page = tmp_path / "wiki" / "notes" / "New.md"
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text("# New\n\nOrdinary content.\n", encoding="utf-8")
-    registry = registry_module.Registry(
-        entities={"acme": {"name": "Acme Corp", "type": "organization", "aliases": ["Acme"]}},
-        by_alias={"acme corp": "acme", "acme": "acme"})
+    registry = _registry({"acme": "Acme Corp"}, aliases={"acme": ["Acme"]})
 
     for declared in ("acme", "Acme Corp", "Acme"):
         ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", "wiki/notes/New.md", new_mode="100644")],
@@ -802,9 +800,7 @@ def test_a_company_wide_scope_with_a_reason_is_the_other_benign_twin(tmp_path):
 def test_resolve_entity_ids_returns_canonical_ids_never_the_raw_declared_value():
     """The PAGE is stamped with the resolved canonical id, whatever the agent typed — an id, a
     display name or an alias."""
-    registry = registry_module.Registry(
-        entities={"acme": {"name": "Acme Corp", "type": "organization", "aliases": ["Acme"]}},
-        by_alias={"acme corp": "acme", "acme": "acme"})
+    registry = _registry({"acme": "Acme Corp"}, aliases={"acme": ["Acme"]})
     assert gates.resolve_entity_ids(
         {"kind": "entity", "entities": ["Acme Corp"]}, registry) == (["acme"], [])
     assert gates.resolve_entity_ids(
@@ -814,9 +810,7 @@ def test_resolve_entity_ids_returns_canonical_ids_never_the_raw_declared_value()
 def test_resolve_entity_ids_dedupes_resolved_ids_preserving_order():
     """Two declared spellings resolving to the same id must not stamp
     `entity: ["acme", "acme"]`."""
-    registry = registry_module.Registry(
-        entities={"acme": {"name": "Acme Corp", "type": "organization", "aliases": ["Acme"]}},
-        by_alias={"acme corp": "acme", "acme": "acme"})
+    registry = _registry({"acme": "Acme Corp"}, aliases={"acme": ["Acme"]})
     ids, unresolved = gates.resolve_entity_ids(
         {"kind": "entity", "entities": ["Acme", "Acme Corp"]}, registry)
     assert ids == ["acme"]

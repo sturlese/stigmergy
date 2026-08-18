@@ -10,11 +10,20 @@ from stigmergy.librarian import report
 
 
 def _registry() -> registry_module.Registry:
+    """A `Registry` keyed by the production indexer, never by hand-filling a lookup map.
+
+    `kernel.registry` keys TWO maps now — the narrow resolution one `canonical_id` reads and the
+    coarse collision one the mint gate reads — and a fixture that filled one of them by hand would
+    let this file agree with itself about a fold production does differently.
+    """
     reg = registry_module.Registry()
-    reg.entities["acme"] = {"name": "Acme Corp", "type": "organization", "aliases": []}
-    reg.by_alias["acme corp"] = "acme"
-    reg.by_alias["acme"] = "acme"
+    _register(reg, "acme", "Acme Corp")
     return reg
+
+
+def _register(reg: registry_module.Registry, entity_id: str, name: str) -> None:
+    reg.entities[entity_id] = {"name": name, "type": "organization", "aliases": []}
+    registry_module.index_entity(reg, entity_id, reg.entities[entity_id])
 
 
 def test_filed_names_the_page_the_commit_and_says_the_brain_cannot_answer_about_it_yet():
@@ -70,8 +79,7 @@ def test_filed_with_a_registry_resolves_whatever_the_outcome_declared_id_name_or
 
 def test_filed_with_multiple_entities_and_a_registry_joins_id_name_pairs():
     reg = _registry()
-    reg.entities["globex"] = {"name": "Globex", "type": "organization", "aliases": []}
-    reg.by_alias["globex"] = "globex"
+    _register(reg, "globex", "Globex")
     out = report.filed(page_path="wiki/notes/X.md", commit="abc123",
                        anchoring={"kind": "entity", "entities": ["acme", "globex"]}, links=[],
                        overlaps=[], findings=[], registry=reg)
@@ -105,6 +113,99 @@ def test_filed_with_a_registry_falls_back_to_the_bare_id_when_it_cannot_resolve(
                        anchoring={"kind": "entity", "entities": ["unknown-id"]}, links=[],
                        overlaps=[], findings=[], registry=_registry())
     assert out["anchored_to"] == "`unknown-id`"
+
+
+# ── the resolution is REPORTED, never silent (issue #77) ───────────────────────────────────────
+# Which entity a capture is about is the agent's judgment now, not a suffix list's. An automatic
+# decision nobody can see is exactly what this repo does not allow, so whenever the agent says WHY
+# it pointed a capture somewhere, the person who submitted it reads that sentence beside the anchor.
+def test_an_entity_anchors_stated_reason_reaches_the_submitter_beside_the_anchor():
+    """The whole point of the change, at the one surface a human reads. The reason is the agent's
+    prose and code neither writes it nor checks it — what code guarantees is that it is not
+    DROPPED, and that the id it accompanies passed `gate_anchoring` to get here at all."""
+    reason = ('resolved "Cofers, S.L." to acme: same company, legal-form suffix; three anchored '
+              "pages match the billing context")
+    out = report.filed(page_path="wiki/notes/X.md", commit="abc123",
+                       anchoring={"kind": "entity", "entities": ["acme"], "reason": reason},
+                       links=[], overlaps=[], findings=[], registry=_registry())
+
+    assert out["anchor_reason"] == reason
+    assert reason in out["summary"]
+    assert report.RESOLUTION_PREFIX in out["summary"]
+    assert reason in report.render_prose(out)
+
+
+def test_the_reason_never_contaminates_the_anchor_identity_field():
+    """`anchored_to` names WHICH entity and a read path branches on it (`slack.poller` renders it
+    as the anchor line). A rationale glued onto it would make one field two facts, so the note gets
+    its own key and its own clause."""
+    out = report.filed(page_path="wiki/notes/X.md", commit="abc123",
+                       anchoring={"kind": "entity", "entities": ["acme"],
+                                  "reason": "same company, a legal form"},
+                       links=[], overlaps=[], findings=[], registry=_registry())
+
+    assert out["anchored_to"] == "Acme Corp (`acme`)"
+
+
+def test_an_entity_anchor_with_no_stated_reason_reads_exactly_as_it_always_did():
+    """The benign twin, and it is the common case: most captures name their entity plainly and
+    there is nothing to explain. A report that grew an empty `Resolved:` clause on every filing
+    would train a reader to skip the one line this change exists to make them read."""
+    out = report.filed(page_path="wiki/notes/X.md", commit="abc123",
+                       anchoring={"kind": "entity", "entities": ["acme"]},
+                       links=[], overlaps=[], findings=[], registry=_registry())
+
+    assert out["anchor_reason"] == ""
+    assert report.RESOLUTION_PREFIX not in out["summary"]
+    assert out["summary"].startswith(f"{schema.FILED} — wiki/notes/X.md@abc123, anchored to "
+                                     "Acme Corp (`acme`). ")
+
+
+def test_a_company_wide_reason_is_not_repeated_as_a_resolution_note():
+    """Company-wide scope already carries its reason INSIDE the anchor phrase, where it justifies
+    belonging to no entity and is REQUIRED by `gate_anchoring` rather than volunteered. Printing it
+    a second time under a resolution heading would read as two different facts about one page."""
+    out = report.filed(page_path="wiki/notes/X.md", commit="abc123",
+                       anchoring={"kind": "company", "reason": "applies company-wide"},
+                       links=[], overlaps=[], findings=[], registry=_registry())
+
+    assert out["anchor_reason"] == ""
+    assert out["summary"].count("applies company-wide") == 1
+
+
+def test_a_hostile_reason_is_clamped_and_control_stripped_like_every_other_echoed_value():
+    """The reason is agent prose derived from captured material, and it lands in a sentence a human
+    reads. Same treatment as every other echoed value in this module — never a second escaping
+    rule, and never a raw newline that could forge the report's own structure."""
+    hostile = "same\x1b[31mcompany\nsecond line " + "x" * 900
+    out = report.filed(page_path="wiki/notes/X.md", commit="abc123",
+                       anchoring={"kind": "entity", "entities": ["acme"], "reason": hostile},
+                       links=[], overlaps=[], findings=[], registry=_registry(),
+                       agent_rationale=hostile)
+
+    assert "\x1b" not in out["anchor_reason"] and "\n" not in out["anchor_reason"]
+    # Compared against the sibling field rather than against a length: `agent_rationale` is the
+    # module's existing prose-from-the-agent field, and asserting a number here would be a second
+    # copy of a truncation rule (`text.clamp` marks the cut, so it is not simply the width).
+    assert out["anchor_reason"] == out["agent_rationale"]
+
+
+def test_a_meeting_reports_the_resolution_of_each_decisions_own_anchor():
+    """A meeting anchors every decision INDEPENDENTLY, so a resolution note belongs per decision and
+    not per capture — a reader has to be able to tell which page a judgment was about."""
+    out = report.filed_meeting(
+        source_pages=["sources/meetings/t.md"], meeting_page="wiki/meetings/m.md",
+        decisions=[{"path": "wiki/decisions/d1.md",
+                    "anchoring": {"kind": "entity", "entities": ["acme"],
+                                  "reason": "the group form of the registered name"}},
+                   {"path": "wiki/decisions/d2.md",
+                    "anchoring": {"kind": "entity", "entities": ["acme"]}}],
+        commit="cafefeed", registry=_registry())
+
+    rows = out["filed_meeting"]["decisions"]
+    assert rows[0]["anchor_reason"] == "the group form of the registered name"
+    assert rows[1]["anchor_reason"] == ""
+    assert "the group form of the registered name" in out["summary"]
 
 
 def test_filed_with_company_scope_names_the_written_reason():

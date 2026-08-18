@@ -142,6 +142,12 @@ def test_an_unknown_entity_yields_no_entities_at_all_and_the_flow_parks_on_that(
     `_ask_or_park` do — but a capture about a name nobody registered has to reach the agent as an
     EMPTY entity list rather than as a plausible-looking near match. A gatherer that guessed here
     would be minting entities by suggestion, which is the one thing governed birth exists to stop.
+
+    **Narrowed, not weakened, by issue #77**, and the narrowing is what keeps this test honest: the
+    gatherer now DOES surface a near miss — a registered entity whose spelling the material carries
+    a distinctive part of. What it still never does is invent a resemblance out of nothing, and
+    "Halcyon Grid" shares no token with anything registered. The near-miss cases below are the other
+    half of the same rule; between them they say where the line is.
     """
     registry = _registry(tmp_path, {"acme": {"name": "Acme Corp", "aliases": ["Acme"]}})
     _write(tmp_path, "wiki/notes/Existing.md", _page("Existing", body="Acme Corp material."))
@@ -221,6 +227,138 @@ def test_entities_come_back_ordered_by_id_and_never_repeated(tmp_path):
                      "Zeta Works and Acme Corp met; Acme brought the numbers.")
 
     assert [e.entity_id for e in result.entities] == ["acme", "zeta"]
+
+
+# ── the NEAR miss: the direction whole-token containment cannot reach (issue #77) ──────────────
+# Entity resolution moved out of `kernel.normalize`'s suffix list and into the agent's judgment. An
+# agent can only judge candidates it can SEE, and containment of a registry spelling inside the
+# material is one-way: `Cofers Holdings` carries ` cofers `, so a registered `Cofers` was always
+# surfaced — but material saying `Nexus` never carries ` ferrovial nexus `, so a registered
+# `Ferrovial Nexus` never reached the agent at all, and no wording in any skill could fix that.
+def test_a_qualifier_the_registry_does_not_carry_still_surfaces_the_registered_entity(tmp_path):
+    """The case that already worked, pinned so the widening cannot cost it. `Cofers Holdings`
+    tokenizes to `cofers holdings`, which contains ` cofers `, so this is the NAMED road and not the
+    near one — and it is the road that carries `Cofers España`, `Cofers Group` and
+    `Cofers (formerly Nubelo)` too."""
+    registry = _registry(tmp_path, {"cofers": {"name": "Cofers", "aliases": []}})
+    _write(tmp_path, "wiki/notes/N.md", _page("N", body="filler"))
+
+    for spelling in ("Cofers Holdings", "Cofers Group", "Cofers España",
+                     "Cofers (formerly Nubelo)"):
+        found = _gather(tmp_path, registry, f"A note about {spelling} and the depots.").entities
+        assert [(e.entity_id, e.match) for e in found] == [("cofers", gather.MATCH_NAMED)], spelling
+
+
+def test_an_abbreviation_in_the_material_surfaces_the_longer_registered_name(tmp_path):
+    """The direction that was unreachable, and issue #77's own example. The material writes only
+    `Nexus`; the registry holds `Ferrovial Nexus` and no alias for the short form. Whole-token
+    containment of the REGISTRY spelling finds nothing, so the entity has to arrive by the sub-run
+    rule — labelled `near`, because "the material spells part of this name" is a candidate to judge
+    and not a resolution anything has made."""
+    registry = _registry(tmp_path, {"ferrovial-nexus": {"name": "Ferrovial Nexus", "aliases": []}})
+    _write(tmp_path, "wiki/notes/N.md", _page("N", body="filler"))
+
+    found = _gather(tmp_path, registry, "The Nexus reconciliation changed shape.").entities
+
+    assert [(e.entity_id, e.match) for e in found] == [("ferrovial-nexus", gather.MATCH_NEAR)]
+
+
+def test_a_near_miss_is_surfaced_and_never_resolved_by_the_registry_itself(tmp_path):
+    """The fence, stated at the gatherer: surfacing is not resolving. The same registry that hands
+    `Ferrovial Nexus` over as a near miss still answers `None` when asked to resolve `Nexus`, so
+    nothing downstream can turn a surfaced candidate into an anchor except the agent declaring the
+    id — which `gates.resolve_entity_ids` then checks against this same registry."""
+    registry = _registry(tmp_path, {"ferrovial-nexus": {"name": "Ferrovial Nexus", "aliases": []}})
+    _write(tmp_path, "wiki/notes/N.md", _page("N", body="filler"))
+
+    found = _gather(tmp_path, registry, "The Nexus reconciliation changed shape.").entities
+
+    assert found[0].entity_id == "ferrovial-nexus"
+    assert registry.canonical_id("Nexus") is None
+
+
+def test_a_run_two_registered_entities_share_surfaces_neither_of_them(tmp_path):
+    """The distinctiveness rule, and the reason the widening is not a noise generator. `Cofers` and
+    `Cofers Legal` are genuinely different organizations that share a word; material naming only
+    `Cofers` must reach the agent as `Cofers` — the entity it actually spells — and NOT drag its
+    false friend in beside it on the strength of a shared token.
+
+    A run owned by two entities identifies neither, so offering both would be a coin flip dressed
+    as a candidate list. The material that really is about the practice is the twin below.
+    """
+    registry = _registry(tmp_path, {"cofers": {"name": "Cofers", "aliases": []},
+                                    "cofers-legal": {"name": "Cofers Legal", "aliases": []}})
+    _write(tmp_path, "wiki/notes/N.md", _page("N", body="filler"))
+
+    found = _gather(tmp_path, registry, "Cofers rebooked the depot access window.").entities
+
+    assert [(e.entity_id, e.match) for e in found] == [("cofers", gather.MATCH_NAMED)]
+
+
+def test_material_naming_the_false_friend_in_full_surfaces_both_for_the_agent_to_separate(tmp_path):
+    """Its benign twin. `Cofers Legal` contains ` cofers `, so both entities are NAMED and both
+    reach the agent — which is correct: this is precisely the moment a human would have to tell the
+    two apart, so the agent is given the same two things a human would have.
+
+    Nothing here decides which one the capture is about. That is the judgment, and the false-friend
+    eval case (`evals/filing/`, F13) is where it is measured rather than described.
+    """
+    registry = _registry(tmp_path, {"cofers": {"name": "Cofers", "aliases": []},
+                                    "cofers-legal": {"name": "Cofers Legal", "aliases": []}})
+    _write(tmp_path, "wiki/notes/N.md", _page("N", body="filler"))
+
+    found = _gather(tmp_path, registry, "Cofers Legal came back on the renewal clause.").entities
+
+    assert [(e.entity_id, e.match) for e in found] == [("cofers", gather.MATCH_NAMED),
+                                                       ("cofers-legal", gather.MATCH_NAMED)]
+
+
+def test_a_short_run_of_a_registered_name_is_not_a_near_miss(tmp_path):
+    """`MIN_NEAR_RUN_CHARS`, and the failure it prevents: `Ltd` or `Co` inside a registered name is
+    not evidence of anything, and a rule that let a three-letter fragment surface an entity would
+    put half the registry into every prompt that mentioned a legal form."""
+    registry = _registry(tmp_path, {"aba-logistics": {"name": "Aba Logistics", "aliases": []}})
+    _write(tmp_path, "wiki/notes/N.md", _page("N", body="filler"))
+
+    assert _gather(tmp_path, registry, "The aba paperwork is late.").entities == ()
+    # ...and the benign twin, so the floor is a boundary rather than a rule that never fires:
+    found = _gather(tmp_path, registry, "The logistics paperwork is late.").entities
+    assert [(e.entity_id, e.match) for e in found] == [("aba-logistics", gather.MATCH_NEAR)]
+
+
+def test_a_named_entity_is_never_displaced_by_a_near_miss_when_the_list_is_cut(tmp_path):
+    """The bound, and the ordering that makes it safe. `MAX_ENTITIES` exists because a near miss can
+    now surface an entry the material never spells, so a large registry could otherwise put hundreds
+    into one prompt. What must never happen is a cut that drops the entity the material ACTUALLY
+    names in favour of a candidate it only partly spells — so named entries are ordered first and
+    the near ones are what the bound eats."""
+    entities = {f"near-{index:02d}": {"name": f"Distinct{index:02d} Holdings", "aliases": []}
+                for index in range(gather.MAX_ENTITIES + 5)}
+    entities["zeta"] = {"name": "Zeta Works", "aliases": []}
+    registry = _registry(tmp_path, entities)
+    _write(tmp_path, "wiki/notes/N.md", _page("N", body="filler"))
+    material = "Zeta Works met " + " and ".join(f"Distinct{index:02d}"
+                                                for index in range(gather.MAX_ENTITIES + 5))
+
+    result = _gather(tmp_path, registry, material)
+
+    assert len(result.entities) == gather.MAX_ENTITIES
+    assert result.entities_total == gather.MAX_ENTITIES + 6, (
+        "the total must count what MATCHED, not what survived the bound — a cut list that reported "
+        "its own length would read as 'the registry holds nothing else'")
+    assert result.entities[0].entity_id == "zeta", "the only NAMED entity was displaced by a cut"
+    assert all(e.match == gather.MATCH_NEAR for e in result.entities[1:])
+
+
+def test_an_uncut_entity_list_reports_its_own_length_as_the_total(tmp_path):
+    """`link_names_total`'s rule, applied to the entity block: "there is more" and "there is
+    nothing" have to stay different claims, and on an ordinary capture they are the same number."""
+    registry = _registry(tmp_path, {"acme": {"name": "Acme Corp", "aliases": []}})
+    _write(tmp_path, "wiki/notes/N.md", _page("N", body="filler"))
+
+    result = _gather(tmp_path, registry, "Acme Corp renewed.")
+
+    assert len(result.entities) == result.entities_total == 1
 
 
 # ── the candidate half: the pages this material overlaps with ──────────────────────────────────
@@ -563,10 +701,15 @@ def test_an_empty_checkout_gathers_an_empty_context_rather_than_raising(tmp_path
 
 # ── the two prompt payloads: the split is a trust boundary, not a formatting choice ────────────
 def test_the_structural_payload_carries_only_what_the_server_owns(tmp_path):
-    """Entity ids that went through governed birth, the registry's own names, and code's own
-    repo-relative paths. This half is rendered UNFENCED, exactly as `build_meeting_prompt` already
-    renders `gates.registry_candidates`, so what is in it is a security question rather than a
-    layout one."""
+    """Entity ids that went through governed birth, the registry's own names, code's own
+    repo-relative paths, and two server-computed scalars (`match`, `entities_total`). This half is
+    rendered UNFENCED, exactly as `build_meeting_prompt` already renders
+    `gates.registry_candidates`, so what is in it is a security question rather than a layout one.
+
+    `match` is in the STRUCTURAL half deliberately: it is the worker's own account of how this
+    entity reached the list, and a model must be able to tell "the material spells this" from "the
+    material spells part of this" without that distinction travelling as captured text.
+    """
     registry = _registry(tmp_path, {"acme": {"name": "Acme Corp", "aliases": ["Acme"]}})
     _write(tmp_path, "wiki/entities/Acme Corp.md",
            _page("Acme Corp", page_type="entity", entity="acme"))
@@ -574,7 +717,9 @@ def test_the_structural_payload_carries_only_what_the_server_owns(tmp_path):
     payload = gather.structural_payload(_gather(tmp_path, registry, "Acme Corp renewed."))
 
     assert payload == {"entities": [{"id": "acme", "name": "Acme Corp", "aliases": ["Acme"],
-                                     "page": "wiki/entities/Acme Corp.md"}]}
+                                     "page": "wiki/entities/Acme Corp.md",
+                                     "match": gather.MATCH_NAMED}],
+                       "entities_total": 1}
 
 
 def test_an_entity_with_no_page_renders_as_null_rather_than_as_an_empty_string(tmp_path):

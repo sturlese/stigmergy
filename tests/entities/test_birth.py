@@ -67,6 +67,30 @@ def test_a_name_that_already_resolves_is_refused_and_names_the_registered_entry(
     assert "type: organization" in message
 
 
+def test_the_mint_gate_still_folds_a_legal_form_that_filing_no_longer_folds():
+    """**The half of issue #77 that did NOT move, pinned so it cannot move by accident.**
+
+    `kernel.normalize` split one key into two: filing resolves through `canonical_id`, which folds
+    accents, case and punctuation and deliberately not a legal form, because deciding that
+    `Acme S.L.` is `Acme` is a claim about the world and belongs to the agent. This gate asks the
+    opposite question and keeps the coarse fold, because its failure direction is opposite too — a
+    false negative here mints a SECOND identity for one company and nothing ever reconciles them,
+    while a false positive costs a steward one refusal they can read and argue with.
+
+    So the same string has two different, both-correct answers, and this is where that is stated:
+    the registry does not RESOLVE `Acme S.L.` and still REFUSES to mint it.
+    """
+    registry = _registry()
+    assert registry.canonical_id("Acme S.L.") is None, (
+        "filing must not fold a legal form any more — that is the judgment this issue moved")
+
+    with pytest.raises(CollisionError) as exc:
+        _prepare(canonical_id=generator.canonical_id_for("Acme S.L."), name="Acme S.L.",
+                 entity_type="organization", registry=registry)
+
+    assert "acme" in str(exc.value)
+
+
 def test_an_alias_that_collides_with_a_different_entity_is_refused():
     with pytest.raises(CollisionError, match="an alias"):
         _prepare(canonical_id="globex", name="Globex", entity_type="organization",

@@ -112,15 +112,22 @@ PRIVATE_CHANNEL_REFUSAL = ("🧠 doesn't work here — a private channel's mater
 
 
 # ── the push channel ────────────────────────────────────────────────────────────────────────────
-def filed(*, page_path: str, commit: str, anchor: str, source_page: str = "") -> str:
+def filed(*, page_path: str, commit: str, anchor: str, source_page: str = "",
+          anchor_reason: str = "") -> str:
     # `source_page` names the thread's own verbatim archive filed beside the synthesis; empty for
     # captures without one, and the card is unchanged.
     source_line = (f"Your thread is also archived word-for-word at `{source_page}`.\n\n"
                    if source_page else "")
+    # Which entity a capture is about is a JUDGMENT (issue #77), so where one was explained the
+    # explanation belongs beside the invitation to correct it: "tell a steward if that's wrong" is
+    # only actionable for a reader who can see what the librarian thought. Empty for a capture that
+    # named its entity plainly, which is most of them — a card that always carried an explanation
+    # would train its reader past the one that matters.
+    reason_clause = f" ({anchor_reason})" if anchor_reason else ""
     return (f"*filed* — this became a page: `{page_path}` @ `{commit}`\n\n"
             f"{source_line}"
-            f"The librarian read this as being about *{anchor}* — if that's wrong, tell "
-            f"{STEWARD_NAME} so the page can be pointed at the right thing.\n\n"
+            f"The librarian read this as being about *{anchor}*{reason_clause} — if that's wrong, "
+            f"tell {STEWARD_NAME} so the page can be pointed at the right thing.\n\n"
             "Heads up: this won't show up yet if you `@brain` a question about it — that catches "
             "up automatically tonight, not right away.")
 

@@ -43,7 +43,8 @@ def _blocks_for(status: str, report: dict, result_ref: str, *,
         # `sources:` cites; further parts are reachable from it.
         source_page = (report.get("source_pages") or [""])[0]
         blocks = render.render_filed(page_path=page_path, commit=commit, anchor=anchor,
-                                     source_page=source_page)
+                                     source_page=source_page,
+                                     anchor_reason=report.get("anchor_reason", ""))
         return blocks, copy.filed_fallback(page_path=page_path)
     # triage / rejected / resolved / failed: reuse the report's own sentence, bold-prefixed.
     blocks = render.render_generic_report(status, report.get("summary", ""))

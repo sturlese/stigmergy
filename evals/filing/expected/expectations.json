@@ -148,6 +148,54 @@
         "attempts": 1,
         "bounces": 0
       }
+    },
+    {
+      "id": "F11-near-miss-qualifier",
+      "why": "The first of four captures added for issue #77, where entity resolution stopped being a suffix list in Python and became the agent's judgment fenced by code. This one is the case the suffix list NEVER had: the material consistently writes a group form of a registered name that `normalize` does not fold and never did, so no deterministic path resolves it in either direction. What DOES reach the agent is the registered entity itself, because whole-token containment already surfaces it — the material's token run carries the registered spelling inside it. So this measures judgment with the candidate already in hand: does the agent read a qualifier as the same company, and does it say so. Substantively unambiguous on purpose (depots, site access, a standing maintenance contract — the entity page's own subject matter), because an instrument whose fixture is genuinely ambiguous measures the ambiguity.",
+      "expect": {
+        "status": "filed",
+        "type": "note",
+        "folder": "wiki/notes",
+        "anchor": {"kind": "entity", "ids": ["cofers"]},
+        "attempts": 1,
+        "bounces": 0
+      }
+    },
+    {
+      "id": "F12-abbreviation-only",
+      "why": "The ABBREVIATION direction, and the only case in the set that no wording in any skill could have fixed. The material writes the short house form and never the registered one, so whole-token containment of the REGISTRY spelling inside the material finds nothing: before `gather._entities` learned to match a distinctive sub-run of a registered name, this candidate never reached the agent at all and the capture could only park. The corpus evidence is on the entity's own page, phrased as the ordinary fact it is — nearly nobody writes the full name — exactly as the research partner's page has always recorded its own short form. Two things are being measured together here, which is deliberate: that the near miss is SURFACED (platform) and that it is JUDGED rather than guessed (agent).",
+      "expect": {
+        "status": "filed",
+        "type": "note",
+        "folder": "wiki/notes",
+        "anchor": {"kind": "entity", "ids": ["meridian-nexus"]},
+        "attempts": 1,
+        "bounces": 0
+      }
+    },
+    {
+      "id": "F13-false-friend",
+      "why": "The benign twin, and it matters MORE now that resolution is a judgment: the failure mode of an agentic resolver is a confident wrong answer, so this belongs here and not only in a unit test. Two registered entities share a prefix and are genuinely different organizations — an independent legal practice and a maintenance contractor, no ownership, no shared work — and BOTH are handed to the agent, because the material's token run carries the shorter registered name inside the longer one. The capture is about the practice alone and must anchor to it alone. A run that anchors this to the contractor, or to both, has merged two identities, and every page filed against the wrong one is a timeline nobody will re-read. The distinctness is written on both entity pages as ordinary knowledge — a real brain would hold exactly that fact, because a real brain's people confuse the two names too.",
+      "expect": {
+        "status": "filed",
+        "type": "note",
+        "folder": "wiki/notes",
+        "anchor": {"kind": "entity", "ids": ["cofers-legal"]},
+        "attempts": 1,
+        "bounces": 0
+      }
+    },
+    {
+      "id": "F14-legal-form-spelling",
+      "why": "The regression guard for the judgment that MOVED. `Registry.canonical_id` used to fold a legal-form suffix, so this spelling resolved mechanically; it no longer does (`kernel.normalize` splits the resolution key from the mint gate's collision key), and the point of this capture is that the OUTCOME must not change even though the decider did. If moving judgment out of code lost behaviour, this is the cell that goes red, and it goes red for the whole class rather than for one spelling. Written as an ordinary operational note about a name mismatch on a certificate, not as a puzzle about names: the material's own subject happens to be the same confusion the resolver is being asked to see through, which is how the confusion actually shows up in a real brain.",
+      "expect": {
+        "status": "filed",
+        "type": "note",
+        "folder": "wiki/notes",
+        "anchor": {"kind": "entity", "ids": ["cofers"]},
+        "attempts": 1,
+        "bounces": 0
+      }
     }
   ]
 }

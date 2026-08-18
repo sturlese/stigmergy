@@ -7,7 +7,7 @@ reasoning, as the frozen contract linter two directories over (`../../tools/FROZ
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/skills/librarian/SKILL.md` |
-| **Copied at commit** | `03aab8799f9778087ab78cc23fbbf9a809d52d5b` |
+| **Copied at commit** | `abf6790bf7e6845d0f322645b36e41fa66f9f333` |
 | **Drift guard** | `tests/librarian/test_librarian_brief_contract.py` — the rule table, over the copy in `tests/librarian/fixtures/repo/`; this copy stays a yardstick with no guard (see `../../tools/FROZEN.md`) |
 
 ## Why the filing golden needs it

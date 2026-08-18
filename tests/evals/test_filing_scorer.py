@@ -49,9 +49,15 @@ EVALS_INDEX = ROOT / "evals" / "index.md"
 # replaced list equality, an empty list is true for every backend anyway, so the honest spelling of
 # "this capture owes no edit" is silence. `expected/expectations.json`'s F01 `why` note is the
 # source of truth; `test_no_expectation_names_an_empty_edits_list` keeps the trap from returning.
-DENOMINATORS = {"status": 12, "reason": 1, "type": 9, "folder": 9, "anchor": 7, "edits": 1,
-                "park_question": 2, "decisions": 2, "reuse": 1, "attempts": 8, "bounces": 8}
-CAPTURES, PHASES = 10, 12
+#
+# MOVED for issue #77, and counted by hand off the expectations file again rather than copied from
+# the runner: F11-F14 are four ordinary single-phase filings, each naming status/type/folder/anchor
+# plus the two cost axes, so exactly those six facets gain four apiece and the meeting, park, edits
+# and reason denominators do not move at all. Scores recorded before and after remain comparable
+# per FACET and are not comparable per run.
+DENOMINATORS = {"status": 16, "reason": 1, "type": 13, "folder": 13, "anchor": 11, "edits": 1,
+                "park_question": 2, "decisions": 2, "reuse": 1, "attempts": 12, "bounces": 12}
+CAPTURES, PHASES = 14, 16
 
 
 @pytest.fixture(scope="module")
