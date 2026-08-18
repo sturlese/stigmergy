@@ -2,7 +2,8 @@
 
 A finding's path to zero. `stigmergy-repair propose` turns the gardener's findings into concrete
 changes a steward can approve one at a time — additive edits to pages that already exist, and a
-drafted BODY for an entity page that has never had one — while `stigmergy-repair delete` is where a
+drafted BODY for an entity page whose own body says nothing about it — while `stigmergy-repair
+delete` is where a
 person proposes removing a page and everything that points at it. The review lane and the admin
 console are where one is approved; and only then does code perform exactly the approved ops,
 through the librarian's own validator, its eight gates and its governed commit.
@@ -27,6 +28,7 @@ judgment — code itself.
    model-contradiction               │   edits:  batch → 1 call/batch       │     "repair-proposal")
    orphan-page                       │   entity-body: 1 page → 1 call,      └─ the console's Repairs tab
    entity-placeholder-body           │     and only with >= 2 anchored              │
+   model-empty-entity-body           │                                              │
         │                            │   delete: duplicate sources/ pages,          │  approve
         └────────── read ───────────>│     derived by CODE, no model                v
                                      ├─ drop keys already reviewed        server.review.apply_repair_and_record
@@ -42,11 +44,11 @@ judgment — code itself.
                                                                             └─ mark_applied + review_decisions
 ```
 
-## The four checks a repair can answer
+## The five checks a repair can answer
 
 Only findings one of the two MODEL-proposed kinds could actually close reach the proposer — the
 third kind, `delete`, answers no finding at all and is proposed by a person or derived from
-duplicate content hashes. The other five checks are absent by NAME rather than by oversight: an aging seed needs somebody to write, a stale view needs a
+duplicate content hashes. The other four checks are absent by NAME rather than by oversight: an aging seed needs somebody to write, a stale view needs a
 regeneration, an anchor that no longer fits is a judgment about a page's subject. None of them is an
 edit or a body this vocabulary can express.
 
@@ -56,6 +58,7 @@ edit or a body this vocabulary can express.
 | `model-contradiction` | two pages assert things that disagree | a `contradiction` callout on BOTH sides |
 | `orphan-page` | nothing in the corpus links to this page | a `backlink` on the page that ought to link to it — which the proposer has to FIND |
 | `entity-placeholder-body` | an entity page still carries the placeholders it was minted with | an `entity-body` draft of that page's body, written from the pages anchored to the entity |
+| `model-empty-entity-body` | an entity page's body is written and says nothing about that entity | the same `entity-body` draft — one road, because it is the same question judged rather than matched |
 
 A contradiction repair FLAGS the disagreement and never resolves it. Deciding which of two pages is
 right is not something this loop does, and it could not express the edit if it were.

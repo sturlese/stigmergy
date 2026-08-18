@@ -95,18 +95,30 @@ def _run(conn, args) -> int:
             run_id=result.run_id, completed_at=result.completed_at,
             pages_checked=result.pages_checked, entities_checked=result.entities_checked,
             findings=result.findings,
-            sweep_summary=report.sweep_summary_text(result.sweep_changed_count,
-                                                    result.sweep_sampled_count),
-            sweep_failed=bool(result.sweep_error)), end="")
+            sweep_summary=report.sweep_summary_text(
+                result.sweep_changed_count, result.sweep_sampled_count,
+                result.empty_body_judged_count, sweep_failed=bool(result.sweep_error)),
+            sweep_failed=bool(result.sweep_error),
+            # BOTH passes reach the report, and the ceiling with them: the second pass used to
+            # exist only in `job_runs.stats` and the log, so a run whose entity-body pass died on
+            # batch 3 of 5 printed a corpus line that read like a normal run.
+            empty_body_failed=bool(result.empty_body_error),
+            empty_body_deferred=result.empty_body_deferred_count), end="")
 
-    # A sweep outage and a notice failure are independent; both leave the already-committed
-    # report above intact.
+    # A model-pass outage and a notice failure are independent, and so are the two model passes;
+    # every one of them leaves the already-committed report above intact.
     failed = False
     if result.sweep_error:
         _err(f"the model sweep failed ({result.sweep_error}) — the {len(result.findings)} "
             f"finding(s) above are complete and already saved; the sweep pass produced zero "
             f"findings this run and will run again next time. See job_runs for this run's "
             f"recorded outcome.")
+        failed = True
+    if result.empty_body_error:
+        _err(f"the entity-body sweep failed ({result.empty_body_error}) — the "
+            f"{len(result.findings)} finding(s) above are complete and already saved; the entity "
+            f"pages it had not judged yet were not judged this run, and it will run again next "
+            f"time. See job_runs for this run's recorded outcome.")
         failed = True
     if result.notice_error:
         _err(f"the SLA notice could not be posted: {result.notice_error}")

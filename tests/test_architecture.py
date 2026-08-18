@@ -1911,13 +1911,12 @@ FENCE_LITERAL_EXCEPTIONS = {
     # A CONSUMER, not a producer: it strips the delimiters to show a page body to a human in
     # Slack. It needs to know the literal in order to remove it.
     "slack/replies.py": "strips the fence for human display — a consumer of the literal",
-    # `FakeGardenerSweep.run`'s own regex parses `build_prompt`'s fence delimiters back out of the
-    # batch prompt it was just handed — the same "consumer, not producer" shape. `sweep.py` itself
-    # is born on `stigmergy.text.fence` directly (that module's own docstring: "no new fence
-    # dialect").
+    # Both offline doubles' regexes parse their own prompt's fence delimiters back out of the batch
+    # they were just handed — the same "consumer, not producer" shape. `sweep.py` itself is born on
+    # `stigmergy.text.fence` directly (that module's own docstring: "no new fence dialect").
     "gardener/sweep.py": (
-        "FakeGardenerSweep parses back its own prompt's fence delimiters — a consumer, not a "
-        "producer"),
+        "the offline doubles parse back their own prompts' fence delimiters — consumers, not "
+        "producers"),
 }
 
 
@@ -2319,6 +2318,12 @@ _GARDENER_THRESHOLD_LITERALS = {
     # excerpt/subject-count bounds are NOT here: they are fixed figures, never tunable
     # (settings.py's own module docstring).
     _gardener_settings.DEFAULT_SWEEP_SAMPLE,
+    # The empty-body pass's batch and run ceiling — two more env-tunable counts, same family. They
+    # bound how much of a population is judged rather than measuring a page against a threshold,
+    # and the reason they belong here is identical: a comparison against either figure anywhere
+    # but `settings.py` would be unreachable by the env override that exists for it.
+    _gardener_settings.DEFAULT_EMPTY_BODY_BATCH,
+    _gardener_settings.DEFAULT_EMPTY_BODY_CEILING,
 }
 
 # A future legitimate collision (a numeral that happens to equal one of the seven defaults, for a

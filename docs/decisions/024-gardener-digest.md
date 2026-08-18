@@ -280,3 +280,136 @@ package's own discipline is to fail loud on the former rather than blur the two.
   the case where an `sla` finding DOES fire and the channels file is ALSO broken.
 - The digest's "entities born" line is labelled to name what `review_decisions` actually records:
   an approval, not the later, separate mint commit.
+
+## Amendment — the empty-body pass: a second model pass, and coverage instead of sampling (2026-08-18, closes #78)
+
+The decisions above stand as written; this section records what the model half of the gardener
+grew, and why it could not be a fifth bullet in the sweep's existing prompt.
+
+**The problem it answers.** ADR 039's first amendment gave the corpus a check for an entity page
+that still carries its template (`entity-placeholder-body`) and a repair that drafts its body. That
+check is deliberately literal: the page has to still contain `<one clear paragraph…>` to be seen.
+The wider half of the same gap is the one that matters — **a body that is WRITTEN but says nothing
+is completely invisible.** `Cofers is a company we work with.` passes every deterministic check
+there is, and so does anything somebody typed in thirty seconds. It is exactly the page a drafted
+body would improve most, and it was the one page class the repair loop could never be offered.
+
+### A1 — a fifth model-check slug, and its OWN pass
+
+`model-empty-entity-body` observes a body that does not say anything about the entity in
+particular — no specific facts, nothing named, no links to the pages that would state them.
+
+It is a second pass rather than a fifth bullet in `SWEEP_SYS`, and the reason is the population.
+The editorial sweep judges a batch of changed-plus-sampled pages drawn from `pages_index`; a slug
+hung on that prompt would inherit the sample, and an entity page would be judged only when the
+rotation happened to reach it — which is precisely the silent miss this check exists to end. The
+new pass has its own prompt, its own population and its own model calls, and REUSES everything
+that is not one of those three: the output schema, the validator, the one-retry discipline, the
+finding assembler.
+
+That reuse forced one change with a property behind it: `_validate` now takes its allowed slug set
+as a PARAMETER instead of reading the module's full vocabulary. It is load-bearing in both
+directions — it is what lets the new pass accept only its own slug, and what stops the four-check
+sweep from emitting the fifth on a sampled page whose text argues for it.
+
+### A2 — coverage, not sampling, with a ceiling that is never silent
+
+Entity pages are a bounded population — a few dozen — so this pass sees all of them, batched
+`STIGMERGY_GARDENER_EMPTY_BODY_BATCH` (8) per call. A sampled judgment check would leave pages
+unjudged while the report read as "nothing wrong", which is the failure mode, not a lesser version
+of it.
+
+A ceiling exists anyway (`STIGMERGY_GARDENER_EMPTY_BODY_CEILING`, 150) because nothing else bounds
+the model spend if a corpus ever grows hundreds of entity pages. It is a spend bound and not a
+sampler: when it binds, the run RECORDS what it deferred — in `job_runs.stats`, as a run skip
+reason, and as a log warning naming the variable that raises it. A ceiling that truncated in
+silence would read as a clean bill of health for the pages it never opened.
+
+There is deliberately no rotation and no watermark. Adding one would make the pass a sampler with
+extra steps, and the honest answer to a ceiling that binds every night is an operator raising it,
+which is what the recorded sentence asks for.
+
+### A3 — the interaction with the deterministic twin is settled by EXCLUSION
+
+A page still carrying literal placeholder lines is already reported by `entity-placeholder-body`,
+and it is removed from this pass's population **before the model is asked**. One finding per page
+across both checks by construction, rather than by a downstream de-duplication that a later
+re-ordering or re-keying of findings could defeat — and therefore one repair proposal for one page
+on one night, never two.
+
+That exactness requires both halves to be talking about the same page set at the same instant, so
+the entity zone is walked ONCE per run — `run.run_gardener` calls `checks.entity_zone_pages` and
+hands the same list to both consumers, which are pure functions of it — and "still carries
+placeholders" is one predicate (`checks.placeholder_lines`). One function called twice was not
+enough: the two calls straddled the editorial sweep's model call, so a page that lost its
+placeholders in between was reported by both checks and one that gained them by neither. The zone
+is still spelled in two segments, because the gardener may hold no literal path fragment under the
+knowledge checkout.
+
+**That walk is also a confinement boundary, and it was the only reader of a checkout in this
+codebase that was not.** What it reads no longer stays on the machine: a body is fenced into a
+model prompt and shipped to the provider, and a sanitized excerpt is persisted into
+`gardener_findings.detail`, printed in the terminal report and rendered in the admin console. A
+committed `wiki/entities/Acme.md -> /proc/self/environ` would have made all three happen to the
+target. The walk now refuses a symlinked leaf AND resolves every path component
+(`librarian.page.is_inside`, the same pair `librarian.gather._confined` uses), refuses to open a
+file above a fixed byte cap, and COUNTS every page it declines to open into
+`stats.empty_body.walk_exclusions` — a check whose whole justification is "a silent miss reads as
+nothing wrong" cannot drop a page from its own population in silence.
+
+### A4 — `info`, not `warn`, and the severity table is now spelled out
+
+It is the judgment twin of an `info` deterministic check, and what it invites is a drafted body a
+steward reads before approving; `warn` would inflate the digest for a page nobody is at risk from.
+`MODEL_CHECK_SEVERITY`'s blanket comprehension over the slug tuple became an explicit entry per
+slug, so a severity is a decision somebody made rather than something a new slug inherits by being
+added to a tuple.
+
+### A5 — the slug joins the repair loop's body road
+
+Without that, the finding has no path to zero and this amendment would only move the problem to a
+report nobody can act on. `BODY_PROPOSABLE_CHECKS` gains it, `subjects=[path]` so the dismissal
+memory keys on the page and survives finding-id churn, and the road itself is unchanged: the two
+checks are the deterministic and the judged halves of ONE question, so they share an answer rather
+than each getting one. The `MIN_ANCHORED_PAGES` floor stays exactly where ADR 039's A2 put it — in
+the proposer, before the model call — so a reported page with too little evidence produces a
+finding, no draft, and a recorded reason.
+
+### A6 — how the two model passes' failures combine
+
+They fail independently and are reported independently (`RunResult.sweep_error` and
+`RunResult.empty_body_error`, `stats["sweep"]` and `stats["empty_body"]`), and a failure of either
+commits `partial`: a run's status is the one place an operator learns a whole model pass did not
+happen.
+
+**That makes `job_runs.status` an aggregate over two independent passes, and nothing may read it as
+a verdict on one of them.** `previous_run_watermark` used to select the last `status='ok'` run,
+which was correct while the sweep was the only model pass and became false the moment a second one
+could commit `partial` beside a healthy sweep. It now asks the sweep's OWN recorded outcome —
+`stats.sweep.error` empty, on an `ok` or `partial` row — which is the read `digest/sections.py`
+already performs on the same blob for the same reason. Two consumers of one question, one reading.
+There is no price to pay for a `partial`: each pass's watermark, or absence of one, follows that
+pass's own outcome, so a failed empty-body pass costs the sweep's `since` and sample rotation
+nothing. Had the run's status stayed the input, a nightly empty-body failure would have pinned
+`since` at the last flawless run and grown the sweep's single unbatched prompt every night until it
+killed the editorial sweep too, while the rotating sample re-judged the same pages forever.
+
+Within the pass, a failing BATCH stops the pass and the batches already judged are kept: a failure
+is a fact about the judge or its answers rather than about page 57, so continuing would most likely
+just repeat the bill — and validated findings are validated however the next batch went.
+
+### Consequences
+
+- `job_runs.stats` grows an `empty_body` block beside `sweep`. It carries `population`,
+  `excluded_placeholder`, `considered`, `judged`, `deferred`, `unjudged`, `walk_exclusions`,
+  `batches`, `inserted`, `skipped` and `error` — every page the pass did not judge is counted under
+  one of them. `skipped` means validation rejections in BOTH passes; the ceiling's own count is
+  `deferred`.
+- `partial` now has two independent producers within one job. The vocabulary in `capture/ops.py` is
+  unchanged; what changed is that a `partial` gardener run no longer implies the editorial sweep
+  specifically failed, and a reader — human or code — has to look at `stats` to know which pass did.
+- The terminal report names both passes: the empty-body pass's own failure and the run ceiling's
+  deferred count reach the corpus line, not only `job_runs.stats` and the log. A run summary that
+  reads clean while a whole model pass did not happen is the failure this ADR's check exists to
+  end, one layer up.
+- The knowledge repo's `repair-proposer` skill names the checks it answers, and now names one more.

@@ -19,6 +19,12 @@ INT_SETTINGS = [
     # threshold above already uses, so it rides the identical parametrized suite below rather than
     # needing its own copy of every case.
     (settings.SWEEP_SAMPLE_ENV, settings.DEFAULT_SWEEP_SAMPLE, "sweep_sample"),
+    # The empty-body pass's two bounds (#78). They ride the same parametrized suite for the same
+    # reason the sample size does — one validator, one set of cases — and being LISTED here is
+    # what makes `_clean_env` clear them too: a leftover `STIGMERGY_GARDENER_EMPTY_BODY_CEILING`
+    # in an operator's shell would otherwise decide what the default assertions below see.
+    (settings.EMPTY_BODY_BATCH_ENV, settings.DEFAULT_EMPTY_BODY_BATCH, "empty_body_batch"),
+    (settings.EMPTY_BODY_CEILING_ENV, settings.DEFAULT_EMPTY_BODY_CEILING, "empty_body_ceiling"),
 ]
 
 SHARE_SETTINGS = [
@@ -49,6 +55,8 @@ def test_all_defaults_with_nothing_set():
     assert s.digest_channel_id == ""
     assert s.model == settings.DEFAULT_GARDENER_MODEL == "gpt-5.6-luna"
     assert s.sweep_sample == settings.DEFAULT_SWEEP_SAMPLE == 10
+    assert s.empty_body_batch == settings.DEFAULT_EMPTY_BODY_BATCH == 8
+    assert s.empty_body_ceiling == settings.DEFAULT_EMPTY_BODY_CEILING == 150
 
 
 def test_from_args_accepts_no_argument_at_all():
@@ -110,6 +118,25 @@ def test_share_setting_accepts_the_upper_bound_exactly(monkeypatch):
     monkeypatch.setenv(settings.CONCENTRATION_SHARE_ENV, "1")
     s = settings.GardenerSettings.from_args()
     assert s.concentration_share == 1.0
+
+
+@pytest.mark.parametrize("env_name", [settings.EMPTY_BODY_BATCH_ENV,
+                                     settings.EMPTY_BODY_CEILING_ENV])
+def test_a_zero_empty_body_bound_is_refused_by_name_with_its_own_reason(monkeypatch, env_name):
+    """`0` is the value that would DISABLE a whole model pass while every run still reported
+    success — the exact "nothing wrong because nothing looked" failure `model-empty-entity-body`
+    exists to end. So the refusal happens at settings time, names the variable, and gives this
+    pass's own sentence rather than the day/window one every other count shares: an operator who
+    set it to zero deliberately has to be told what it would have cost."""
+    monkeypatch.setenv(env_name, "0")
+
+    with pytest.raises(StartupError) as caught:
+        settings.GardenerSettings.from_args()
+
+    message = str(caught.value)
+    assert f"${env_name}" in message
+    assert "no entity page is ever judged for an empty body" in message
+    assert "the run would say nothing was wrong" in message
 
 
 def test_digest_channel_id_reads_env(monkeypatch):

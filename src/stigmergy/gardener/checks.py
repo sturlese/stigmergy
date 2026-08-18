@@ -8,6 +8,7 @@ provenance-type pages: a provenance page's `entity: []` means "the extractor fou
 never a checked company-wide declaration. `check_aging_seeds` ages `updated` IN Postgres, so a
 test backdates the fixture row and lets `current_date` do the comparison.
 """
+import logging
 import pathlib
 import re
 
@@ -21,6 +22,8 @@ from stigmergy.kernel.registry import Registry
 from stigmergy.librarian import page as page_policy
 from stigmergy.text import parse_result_ref
 from stigmergy.views import staleness as view_staleness
+
+log = logging.getLogger(__name__)
 
 # ── check slugs ──────────────────────────────────────────────────────────────────────────────
 CHECK_ORPHAN_PAGE = "orphan-page"
@@ -474,30 +477,102 @@ def is_placeholder_line(line: str) -> bool:
     return stripped.startswith("<") and stripped.endswith(">")
 
 
-def check_entity_placeholder_bodies(repo: str) -> list[dict]:
-    """Population: every page in the entity zone of the repo checkout, read from disk — never
-    `pages_index`, which stores the body with its frontmatter already parsed away but is a
-    different tree from the one a repair would be applied to. One INFO finding per page whose body
-    still carries at least one placeholder line."""
-    findings = []
+def placeholder_lines(body: str) -> list[str]:
+    """Every placeholder line in a body — the ONE spelling of "this body still carries its
+    template". `check_entity_placeholder_bodies` reports on it and `sweep.select_empty_body_pages`
+    EXCLUDES on it, and the two must be the same predicate or a page would be reported by both
+    checks or by neither."""
+    return [line for line in body.splitlines() if is_placeholder_line(line)]
+
+
+# What one entity page may weigh before this walk refuses to open it at all. A FIXED figure, not
+# an env setting: it bounds the shape of one file's contribution, never how much of the population
+# is judged, which is the line `settings.py`'s own docstring draws. Generous by an entity page's
+# standards (a written one is a few kilobytes) and small next to a process's memory, because the
+# walk reads the whole zone into memory BEFORE the empty-body pass's ceiling applies — the ceiling
+# bounds the model spend and has never bounded this.
+MAX_ENTITY_PAGE_BYTES = 256_000
+
+
+def entity_zone_pages(repo: str, *, walk_stats: dict | None = None) -> list[dict]:
+    """Every page in the entity zone of the repo checkout, read from disk: `{"path", "body"}`
+    dicts, `path` relative to the checkout root, `body` the text under the frontmatter, ordered by
+    path. `walk_stats`, when given, gets this walk's own exclusion counters — the same shared-sink
+    convention the windowed checks' `population_stats` uses.
+
+    The ONE walk of that zone, and it happens ONCE per run: `run.run_gardener` calls it and hands
+    the SAME list to `check_entity_placeholder_bodies` and to the sweep's empty-body pass, because
+    the second EXCLUDES what the first reported. Two walks minutes apart (they used to straddle
+    the editorial sweep's model call) would let a page edited in between be reported by both
+    checks or by neither, and the exclusion is only exact over one page set.
+
+    **A symlinked leaf or a symlinked path component is refused, not followed.** What this walk
+    reads no longer stays on the machine: a body reaches a model prompt and a sanitized excerpt is
+    persisted into `gardener_findings.detail`, printed in the terminal report and rendered in the
+    admin console. `wiki/entities/Acme.md -> /proc/self/environ` would ship that file to the model
+    provider. Both halves are needed and `librarian.gather._confined` gives the reasoning for
+    each: `page.is_inside` resolves the whole path, since a symlinked DIRECTORY component is
+    invisible to a leaf `islink` test, and the leaf test catches a link pointing back inside the
+    zone — contained, and still not the bytes git tracks.
+
+    Never `pages_index`: it stores the body with its frontmatter already parsed away, and it is a
+    different tree from the one a repair would be applied to. A file that cannot be read is
+    skipped rather than raised on — a corpus health check that dies on one unreadable page reports
+    nothing about the rest — but every skip is COUNTED into `walk_stats`, never dropped in
+    silence: a check whose whole justification is "a silent miss reads as nothing wrong" cannot
+    drop a page from its own population without saying so.
+    """
     root = pathlib.Path(repo)
     zone_dir = root.joinpath(*_ENTITY_ZONE)
-    if not zone_dir.is_dir():
-        return findings
-    for path in sorted(zone_dir.rglob("*.md")):
-        if path.name.startswith("."):
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        _front, body = page_policy.split_frontmatter(text)
-        placeholders = [line for line in body.splitlines() if is_placeholder_line(line)]
+    dropped = {"unconfined": 0, "unreadable": 0, "oversized": 0}
+    pages = []
+    # A symlinked zone DIRECTORY is refused whole and counted as one: `page.is_inside` resolves its
+    # root, so a link there would read as confined and hide the entire real population behind it.
+    if zone_dir.is_symlink():
+        dropped["unconfined"] += 1
+    elif zone_dir.is_dir():
+        for path in sorted(zone_dir.rglob("*.md")):
+            if path.name.startswith("."):
+                continue
+            if path.is_symlink() or not page_policy.is_inside(
+                    str(zone_dir), str(path.relative_to(zone_dir))):
+                dropped["unconfined"] += 1
+                continue
+            try:
+                if path.stat().st_size > MAX_ENTITY_PAGE_BYTES:
+                    dropped["oversized"] += 1
+                    continue
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                dropped["unreadable"] += 1
+                continue
+            _front, body = page_policy.split_frontmatter(text)
+            pages.append({"path": str(path.relative_to(root)), "body": body})
+    if any(dropped.values()):
+        # Counts, never the paths: this line is an operator's terminal and a cron log, and the
+        # durable account is `job_runs.stats`.
+        log.warning("gardener: the entity-zone walk excluded %d unconfined, %d unreadable and %d "
+                    "oversized file(s) — a symlinked page in a knowledge repo has no legitimate "
+                    "producer in this system", dropped["unconfined"], dropped["unreadable"],
+                    dropped["oversized"])
+    if walk_stats is not None:
+        walk_stats.update(dropped)
+    return pages
+
+
+def check_entity_placeholder_bodies(pages: list[dict]) -> list[dict]:
+    """Population: `entity_zone_pages`'s own list, walked once per run and handed to this check
+    and to the model's empty-body pass alike — a page list, never a repo path, so this check is a
+    pure function of what the walk found. One INFO finding per page whose body still carries at
+    least one placeholder line."""
+    findings = []
+    for page in pages:
+        placeholders = placeholder_lines(page["body"])
         if not placeholders:
             continue
         findings.append(build_finding(
             check=CHECK_ENTITY_PLACEHOLDER_BODY, severity=SEVERITY_INFO,
-            subject=str(path.relative_to(root)),
+            subject=page["path"],
             # The COUNT, never the lines themselves: a finding's detail reaches a model's prompt
             # and a Slack digest, and this one has nothing to say that the page's own text says
             # better to whoever opens it.

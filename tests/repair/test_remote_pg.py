@@ -16,6 +16,7 @@ The two twins this file exists for are the ones that must be observed REFUSING:
 Each has a benign twin beside it, because a check that only ever fires measures its sensitivity
 and never its specificity — and both of these can bounce a steward's real decision.
 """
+import asyncio
 import datetime
 import json
 import os
@@ -24,8 +25,9 @@ import pytest
 
 from stigmergy.librarian import gitcmd
 from stigmergy.librarian import page as page_policy
-from stigmergy.repair import deletion, entity_body, remote, schema, store
+from stigmergy.repair import deletion, entity_body, proposer, remote, schema, store
 from stigmergy.repair.errors import ProposalStateError, RepairError
+from stigmergy.repair.settings import RepairSettings
 from tests import adversarial_payloads
 from tests.entities import conftest as entities_conftest
 from tests.librarian import support as librarian_support
@@ -587,6 +589,117 @@ def test_a_drafted_role_lands_on_the_remote_and_nothing_else_in_the_frontmatter_
     after = page_policy.frontmatter_lines(_remote_page(repo_env.bare, support.ENTITY_PAGE))
     assert 'role: "A freight broker in the north-west."' in after
     assert set(before) - set(after) == {'role: ""', "updated: 2026-01-01"}
+
+
+# A body somebody WROTE, not the template: the page class `model-empty-entity-body` (#78) added to
+# this road. Every entity-body apply above starts from `seed_entity`'s placeholder text, where the
+# lines being destroyed are angle markers nobody typed — so the permitted-rewrite branch has never
+# been asked to destroy a person's sentences. Real prose, real sections, its own wikilink.
+WRITTEN_BASE_BODY = f"""# {support.ENTITY_STEM}
+
+## What / Who
+
+{support.ENTITY_STEM} is a broker we have worked with since the spring, mostly on renewals.
+
+## Facts
+
+- The last renewal conversation is recorded in [[Existing Note]].
+- Volumes held through the quarter and nobody has revisited the terms since.
+
+## Connections
+
+Everything we know about them sits in the renewal thread.
+"""
+
+
+def test_a_written_prose_body_is_replaced_end_to_end_through_the_real_gates(conn, repo_env):
+    """**The apply this kind was built for and had never been asked to perform.** The body being
+    destroyed here is somebody's writing — paragraphs, sections, a working wikilink — not the
+    template's angle markers, so this is the first time `gate_body_rewrite`'s permitted-rewrite
+    branch has to let real content DISAPPEAR from a page and still hold everything else.
+
+    The three assertions are the whole contract of the branch: what the steward approved landed,
+    what they did not approve (identity frontmatter, the page's own H1) is byte-identical, and the
+    prose that was there is gone — the last one being precisely what the additive proof exists to
+    forbid, and therefore the proof that the permission is what carried this commit and not an
+    accident of the diff.
+    """
+    support.seed_entity(repo_env, body=WRITTEN_BASE_BODY)
+    before = _remote_page(repo_env.bare, support.ENTITY_PAGE)
+    assert "worked with since the spring" in before, "fixture sanity: real prose is on the remote"
+    proposal = _body_proposal(conn, _body_ops())
+
+    result = remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                                    approved_by=APPROVER)
+
+    assert result["paths"] == [support.ENTITY_PAGE]
+    landed = _remote_page(repo_env.bare, support.ENTITY_PAGE)
+    assert "A freight broker" in landed
+    assert "worked with since the spring" not in landed, (
+        "the steward's own prose is what this apply replaces — if it survived, the draft was "
+        "appended rather than applied")
+    assert "Volumes held through the quarter" not in landed
+    assert f"# {support.ENTITY_STEM}" in landed
+    before_front = page_policy.frontmatter_lines(before)
+    after_front = page_policy.frontmatter_lines(landed)
+    assert set(before_front) - set(after_front) == {"updated: 2026-01-01"}, (
+        "only `updated:` moves — permission to replace a body is not permission to change what "
+        "the page declares")
+
+
+def test_the_whole_road_from_an_empty_body_finding_to_a_commit_on_main(conn, repo_env):
+    """**Finding to `main`, with nothing hand-built in between.** Every other test in this section
+    starts from a proposal a test wrote; this one starts from the gardener finding
+    `model-empty-entity-body` files, lets the REAL proposer draft the body, approves the row a
+    steward would see, and applies it through the same eight gates and the same real remote.
+
+    It is the criterion #78 turns on: the fifth check's finding has a path to zero. The page it
+    rewrites is written prose, so the draft that lands is replacing somebody's sentences — the
+    only shape of this road where that is true.
+    """
+    support.seed_entity(repo_env, anchored=2, body=WRITTEN_BASE_BODY)
+    run_id = support.seed_gardener_run(conn)
+    finding_id = support.seed_empty_entity_body(conn, run_id)
+
+    result = asyncio.run(proposer.propose_from_findings(
+        conn, settings=RepairSettings(repo=repo_env.repo)))
+    assert result.proposed == 1, result.skip_reasons
+    (row,) = store.pending_proposals(conn)
+    assert row["kind"] == schema.KIND_ENTITY_BODY
+    assert row["finding_ids"] == [finding_id]
+    store.mark_decided(conn, row["id"], status=schema.STATUS_APPROVED, decided_by=APPROVER)
+
+    applied = remote.apply_approved(conn, repo_env.bare, "main", None,
+                                    proposal=store.proposal(conn, row["id"]),
+                                    approved_by=APPROVER)
+
+    assert applied["paths"] == [support.ENTITY_PAGE]
+    landed = _remote_page(repo_env.bare, support.ENTITY_PAGE)
+    assert "[[Meridian Note 1]]" in landed, "the body that landed is the one that was drafted"
+    assert "worked with since the spring" not in landed, "the prose it replaced is gone"
+    assert f"# {support.ENTITY_STEM}" in landed
+    assert store.proposal(conn, row["id"])["status"] == schema.STATUS_APPLIED
+
+
+def test_the_permitted_rewrite_of_written_prose_is_still_judged_by_the_real_gates(conn, repo_env):
+    """The benign twin's opposite number for this page class: the permission covers ONE path and
+    buys nothing else. A drafted body carrying a credential over WRITTEN prose is vetoed exactly as
+    it is over a placeholder — the permission says which page may be rewritten, never that its new
+    content goes unread."""
+    support.seed_entity(repo_env, body=WRITTEN_BASE_BODY)
+    body = (f"## Facts\n\n- the deploy token is {adversarial_payloads.GITHUB_PAT}\n"
+            f"- see [[Existing Note]]\n")
+    proposal = _body_proposal(conn, _body_ops(body=body))
+    before = _remote_head(repo_env.bare)
+
+    with pytest.raises(RepairError) as caught:
+        remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                               approved_by=APPROVER)
+
+    assert "secrets/" in str(caught.value)
+    assert _remote_head(repo_env.bare) == before
+    assert "worked with since the spring" in _remote_page(repo_env.bare, support.ENTITY_PAGE), (
+        "nothing was pushed — the steward's prose is still the page")
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════

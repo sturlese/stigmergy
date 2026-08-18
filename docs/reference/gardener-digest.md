@@ -20,6 +20,10 @@ stigmergy-gardener                                  stigmergy-digest
   │    changed-since-watermark pages +                    pages filed, review_decisions
   │    a rotating sample of unchanged ones,               entity-proposal approvals)
   │    PydanticAI, no checkout, no tools
+  ├─ model empty-body pass    (sweep.py)
+  │    EVERY entity page in the checkout,
+  │    batched, minus the ones already
+  │    reported as placeholders — no tools
   ├─ persist: gardener_findings + job_runs          every page NAMED is ACL-scoped to the posting
   ├─ print: severity-grouped report, or --json      channel (server.acl.visible, slack.channels.
   └─ sla-severity findings → ONE Slack notice       channel_audiences) — the digest broadcasts
@@ -75,8 +79,8 @@ holding a veto. It lives here now under the same slug — deliberately the same
 string, so an operator's grep finds both eras — and the line it draws is the house rule: **gates veto
 the irreversible, the gardener flags conventions.**
 
-**`entity-placeholder-body` is the one check with a repair kind of its own.** Entity birth is
-identity-only by design (ADR 016): `stigmergy-entities create` copies `ops/templates/entity.md`
+**`entity-placeholder-body` is one of the two checks with a repair kind of its own.** Entity birth
+is identity-only by design (ADR 016): `stigmergy-entities create` copies `ops/templates/entity.md`
 verbatim, so a minted page carries the template's angle-marked placeholders until somebody writes
 it. Nothing counted those pages before — the orphan check exempts entity pages by type, and no
 other check reads a body — so an identity with no content was invisible to every health pass. The
@@ -85,6 +89,11 @@ that page's body from the pages anchored to the entity, and a steward approves t
 is deliberately literal — a body line that is wholly wrapped in angle brackets — so a one-line HTML
 element (`<details>`) reads as a placeholder. That false positive is accepted: the finding is
 `info`, and the repair it invites is a draft a human reads before it lands.
+
+Its literal-ness is also its gap, and the gap is wide: a body somebody WROTE that says nothing —
+`Cofers is a company we work with.` — carries no angle markers and passes this check, and every
+other deterministic one. That half is the model pass's, `model-empty-entity-body`, described under
+"The model passes" below; the two are disjoint by construction and share one repair.
 
 **None of the nine checks is `sla` severity.** The `sla` severity band itself exists — the schema
 carries it (`SEVERITIES`), the report prints an `sla` section and the notice-composing code is
@@ -110,9 +119,9 @@ retire, merge or un-birth verb exists — so this finding recurs on every run un
 anchors to the entity or someone hand-edits the registry outside any governed lane. That is a real
 property of the check, not a gap in its copy.
 
-## The model editorial sweep — "only what the tool can't see"
+## The model passes — "only what the tool can't see"
 
-The nine checks stay exact and model-free; the sweep is the judgment half, built on a
+The nine checks stay exact and model-free; the model half is the judgment one, built on a
 PydanticAI structured-extraction pattern: one
 prompt, one structured call through `stigmergy.kernel.llm.build_processor`, one retry
 carrying the validation error as its brief, then log-and-skip — never insert unvalidated.
@@ -120,15 +129,52 @@ It holds no tools at all: `SWEEP_LIMITS.tool_calls_limit` is `0`, a structural p
 agent's usage limits rather than a request made in a prompt, so there is nothing for the model to
 call and no write path to reach.
 
-It judges four things a mechanical check cannot, each its own check slug
+**There are TWO passes, and they share that discipline and nothing else.** They differ in their
+prompt, their population and the check slugs each may emit — and that last difference is enforced
+rather than promised: `_validate` takes its allowed slug set as a parameter, so neither pass can
+emit the other's vocabulary however a page's text argues for it.
+
+**The editorial sweep** judges four things a mechanical check cannot, each its own check slug
 (`sweep.ALL_MODEL_CHECK_SLUGS`: `model-contradiction`,
 `model-anchor-fit`, `model-unlinked-mention`, `model-superseded-canon`), all `warn` — none carries
 a real time-bound clock, so none is `sla`. Its input is bounded
 on purpose: every page filed since the last run's watermark, plus a rotating sample of
 `STIGMERGY_GARDENER_SWEEP_SAMPLE` (default 10) unchanged pages, so the sweep steadily re-covers the
-whole corpus over many runs rather than reading it in full every time. Every page body reaches the
+whole corpus over many runs rather than reading it in full every time.
+
+**The empty-body pass** judges one thing, `model-empty-entity-body` (`info`): an entity page whose
+body is WRITTEN and says nothing about that entity in particular — no specific facts, nothing named,
+no links to the pages that would state them. It is the judgment twin of the deterministic
+`entity-placeholder-body`, which only ever sees a body still carrying the template's literal angle
+markers; a body somebody typed in thirty seconds passes every deterministic check there is.
+
+Its population is COVERAGE, not sampling, and that is a decision rather than an inherited default:
+entity pages are a bounded set (a few dozen), and a sampled judgment check would leave pages
+unjudged while the report read as "nothing wrong". It reads the entity zone of the repo CHECKOUT
+from the run's single walk of it — the same list `entity-placeholder-body` judged moments earlier,
+so the two talk about one page set at one instant — batches it
+`STIGMERGY_GARDENER_EMPTY_BODY_BATCH` (default 8) pages per call, and judges every page up to
+`STIGMERGY_GARDENER_EMPTY_BODY_CEILING` (default 150). The ceiling is a spend bound for a corpus
+that grew hundreds of entity pages, and when it binds the run RECORDS what it deferred in
+`job_runs.stats`, as a skip reason and as a log warning: a ceiling that truncated in silence would
+read as a clean bill of health for the pages it never opened.
+
+**A page still carrying literal placeholders is removed from that population before the model is
+asked**, so one page produces one finding across the two checks by construction — not by a
+downstream de-duplication a later re-ordering could defeat, and not two repair proposals for one
+page on one night.
+
+**That walk is a confinement boundary.** What it reads leaves the machine, so it refuses a
+symlinked page and every symlinked path component above one, refuses to open a file above a fixed
+byte cap, and counts each refusal into `job_runs.stats` rather than dropping it — a page missing
+from both checks AND from the population count would let the run report full coverage of a
+population it silently excluded. Each body also contributes a bounded number of characters to the
+prompt: the entity zone is written by hand, so nothing else bounds what one page can cost, and a
+body that says nothing about its entity says so in its opening lines or nowhere.
+
+Every page body reaches the
 model only inside `stigmergy.text.fence` — page content, including verbatim `sources/` material, is
-untrusted input to a prompt, and the system prompt tells the model a fenced page is DATA,
+untrusted input to a prompt, and both system prompts tell the model a fenced page is DATA,
 never instructions, however it reads.
 
 **`suggested_action` for a model finding is never model-generated text.** The model's own output
@@ -138,15 +184,25 @@ slug alone; an injected page cannot make this module choose, let alone compose, 
 string. The rationale and excerpt DO reach the report, sanitized and hard-clamped, in `detail` —
 bounded to a wrong sentence in a report, never to an instruction a reader might paste.
 
-The model is configuration (`STIGMERGY_GARDENER_MODEL`, defaulting to
+Both passes run on the same model. It is configuration (`STIGMERGY_GARDENER_MODEL`, defaulting to
 `settings.DEFAULT_GARDENER_MODEL`), independent of `stigmergy.kernel.llm`'s own `CLEAN_MODEL` —
 and it does not fall back to the shared model when unset:
 it carries its own concrete cheap-class default, so "model is configuration" reads literally rather
 than "model is whatever the shared one happens to be". Escalating past that default is an
-evidence-driven decision from reading real weeks of findings, not a guess made up front. A sweep
-outage (a hard model-call failure, or nothing surviving even the one retry) never
-takes the deterministic findings from the same run down with it — see "Reading a gardener report"
-below.
+evidence-driven decision from reading real weeks of findings, not a guess made up front.
+
+An outage of EITHER pass (a hard model-call failure, or nothing surviving even the one retry) never
+takes the deterministic findings from the same run down with it, and never takes the other pass
+down either — they fail independently and are reported independently. Either failure commits
+`partial` rather than `ok`, because a run's status is the one place an operator learns a whole
+model pass did not happen.
+
+That makes the status an **aggregate**, and no watermark is derived from it: the editorial sweep's
+`since` and sample rotation continue from the most recent run whose OWN `stats.sweep.error` is
+empty, `ok` or `partial` alike. Reading `status = 'ok'` alone would pin the sweep's window at the
+last flawless run every night the empty-body pass failed, growing its single unbatched prompt until
+it took the sweep down too — and re-judging the same rotating sample forever. See "Reading a
+gardener report" below.
 
 ## Reading a gardener report
 
@@ -154,8 +210,8 @@ below.
 $ stigmergy-gardener
 # Gardener report — run #128, completed 2026-07-31T05:07:03Z
 
-checked 412 pages, 38 entities — 8 deterministic checks, plus a model sweep over 6 changed page(s)
-and 10 sampled unchanged page(s)
+checked 412 pages, 38 entities — 9 deterministic checks, plus a model sweep over 6 changed page(s)
+and 10 sampled unchanged page(s), and a body sweep over 24 entity page(s)
 
 19 finding(s): 0 sla, 5 warn, 14 info
 
@@ -190,13 +246,20 @@ with the same fields plus
 `id`/`run_id`/`created_at`/`model_id`, `suggested_action` always populated (never `null` for a
 sentence-only check — an absent field would read as "nothing to do," which is false).
 
+**The corpus line names every pass that did not happen, one clause each.** A model pass that failed
+says so there rather than simply omitting its numbers ("the model sweep did NOT complete this
+run", "the entity-body sweep did NOT complete this run"), the two are named separately because
+they fail separately, and the run ceiling's deferred count appears there too. A report that read
+like a normal run while a whole model pass never happened — or while a bound quietly skipped half
+the entity zone — would be the same silent miss these checks exist to end, one layer up.
+
 `#`/`##` markdown headers are correct here: the reader is a terminal, never Slack. That is the
 opposite convention from the digest, below.
 
 ## The SLA notice
 
 **Stated plainly: this mechanism has no producer.** Every one of the nine
-deterministic checks is `info` or `warn`, and so is every one of the sweep's four model
+deterministic checks is `info` or `warn`, and so is every one of the five model
 slugs. Nothing in this codebase constructs a finding with `SEVERITY_SLA`. The machinery below is
 therefore live code with a dead input — and not by accident: the
 severity band, the notice-composing code and `stigmergy-gardener`'s own loud-failure-on-post-error

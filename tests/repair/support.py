@@ -121,6 +121,15 @@ def seed_contradiction(conn, run_id: int, pages=(NOTE_A, DECISION)) -> int:
                         subjects=list(pages))
 
 
+def seed_empty_entity_body(conn, run_id: int, page: str = "") -> int:
+    """The MODEL finding the same road answers: one entity page whose body is written and says
+    nothing. `severity=info`, as `sweep.MODEL_CHECK_SEVERITY` emits it, and `source=model` with a
+    model id, which `seed_finding` already sets — the two body-road findings differ in their check
+    and in nothing else the proposer reads."""
+    return seed_finding(conn, run_id, check=gardener_sweep.CHECK_MODEL_EMPTY_ENTITY_BODY,
+                        subjects=[page or ENTITY_PAGE], severity=gardener_schema.SEVERITY_INFO)
+
+
 def seed_placeholder_body(conn, run_id: int, page: str = "") -> int:
     """The gardener finding the `entity-body` road answers: one entity page, still its template.
 
