@@ -5,26 +5,28 @@ Calls `ops.record_job_run` directly, not the `job_run` context manager: that man
 row on exit, and every finding needs `run_id` at insert time. The try/except below replicates its
 shape so a failed run still gets an honest `status='error'` row.
 
-Three passes can never make this function raise, for one reason — work already done must not be
-lost to a later, optional step. The two MODEL passes: an outage of either must not cost the
-operator the deterministic checks that already ran, nor the other pass's findings, so
-`_run_sweep_pass` and `_run_empty_body_pass` each catch everything and report through their
-returned stats. The notice: it runs AFTER the findings are committed, so every failure it can
-have — including the database errors its own ACL scoping query raises — is absorbed into
-`RunResult.notice_error`. Every OTHER failure aborts the run entirely.
+Four passes can never make this function raise, for one reason — work already done must not be
+lost to a later, optional step. The three MODEL passes: an outage of any one must not cost the
+operator the deterministic checks that already ran, nor the other passes' findings, so
+`_run_sweep_pass`, `_run_empty_body_pass` and `_run_duplicate_entity_pass` each catch everything
+and report through their returned stats. The notice: it runs AFTER the findings are committed, so
+every failure it can have — including the database errors its own ACL scoping query raises — is
+absorbed into `RunResult.notice_error`. Every OTHER failure aborts the run entirely.
 
-A failure of EITHER model pass commits `'partial'`, never `'ok'` — a run's status is the one place
-an operator learns a whole model pass did not happen. That status is therefore an aggregate over
-two independent passes, and NOTHING may read it as a verdict on one of them:
+A failure of ANY model pass commits `'partial'`, never `'ok'` — a run's status is the one place an
+operator learns a whole model pass did not happen. That status is therefore an aggregate over
+three independent passes, and NOTHING may read it as a verdict on one of them:
 `sweep.previous_run_watermark` asks `stats.sweep.error` whether the editorial sweep itself
-completed, precisely so a failed empty-body pass cannot freeze the sweep's `since` and its sample
-rotation. There is no price to a `'partial'` beyond the status: each pass's watermark, or absence
-of one, follows that pass's own recorded outcome.
+completed, precisely so a failure of either OTHER pass cannot freeze the sweep's `since` and its
+sample rotation. There is no price to a `'partial'` beyond the status: each pass's watermark, or
+absence of one, follows that pass's own recorded outcome.
 
 The entity zone is walked ONCE per run, here, and the same list goes to the deterministic
-placeholder check and to the empty-body pass. Two walks straddling the editorial sweep's model
-call would let a page edited in between be reported by both checks or by neither, and the second
-pass's exclusion of what the first reported is only exact over one page set.
+placeholder check, to the empty-body pass and to the duplicate-identity pass. Two walks straddling
+the editorial sweep's model call would let a page edited in between be reported by both checks or
+by neither, and the second pass's exclusion of what the first reported is only exact over one page
+set. The registry is loaded once here for the same reason, and the duplicate-identity pass reads
+the identity of every page from THAT object rather than from a second read of the same file.
 """
 import logging
 import os
@@ -35,7 +37,11 @@ from stigmergy.capture import ops
 from stigmergy.gardener import checks, notice, store, sweep
 from stigmergy.gardener.errors import GardenerError
 from stigmergy.gardener.schema import JOB_NAME
-from stigmergy.gardener.settings import EMPTY_BODY_CEILING_ENV, GardenerSettings
+from stigmergy.gardener.settings import (
+    DUPLICATE_ENTITY_CEILING_ENV,
+    EMPTY_BODY_CEILING_ENV,
+    GardenerSettings,
+)
 from stigmergy.kernel.registry import Registry, load_registry
 from stigmergy.server.errors import IdentityError
 from stigmergy.slack import channels
@@ -70,6 +76,12 @@ class RunResult:
     # `report.py` is the surface an operator actually reads, and a bound that bit only in a stats
     # blob reads as "nothing wrong about the pages it never opened".
     empty_body_deferred_count: int = 0
+    # The THIRD model pass, reported separately from the other two for the reason the second is:
+    # three passes fail independently, and one number covering all of them would tell an operator
+    # that a pass failed without saying which.
+    duplicate_entity_error: str = ""
+    duplicate_entity_judged_count: int = 0
+    duplicate_entity_deferred_count: int = 0
     stats: dict = field(default_factory=dict)
 
 
@@ -219,6 +231,59 @@ async def _run_empty_body_pass(zone_pages: list[dict], settings: GardenerSetting
     return findings, run_stats
 
 
+async def _run_duplicate_entity_pass(zone_pages: list[dict], registry: Registry,
+                                     settings: GardenerSettings) -> tuple[list[dict], dict]:
+    """The third model pass — the registry entries behind the run's one entity-zone walk, judged
+    for two entries that are one entity — and, like the other two, it NEVER raises.
+
+    ONE call, never batched, and that is this pass's defining property rather than an oversight:
+    the question is about PAIRS, and a pair whose two halves fell in different batches would be
+    invisible to every batch. So there is no `batch` counter here and no per-batch loop; what
+    bounds the spend is the population ceiling and the per-entry character cap in the prompt.
+
+    The population FLOOR is enforced before the judge is built, `proposer.MIN_ANCHORED_PAGES`'
+    posture: a registry holding one registered entity cannot hold a pair, and a run that asked
+    anyway would reach the same answer and pay for it every night. The skip is RECORDED, because
+    "no model was asked" and "the model found nothing" are different facts and only one of them is
+    a clean bill of health.
+    """
+    pages, select_stats = sweep.select_duplicate_entity_pages(
+        zone_pages, registry, ceiling=settings.duplicate_entity_ceiling)
+    run_stats = {**select_stats, "inserted": 0, "skipped": 0, "skip_reasons": [], "error": ""}
+    if select_stats["deferred"]:
+        reason = sweep.DUPLICATE_ENTITY_CEILING_REASON.format(
+            ceiling=settings.duplicate_entity_ceiling, deferred=select_stats["deferred"],
+            env=DUPLICATE_ENTITY_CEILING_ENV)
+        run_stats["skip_reasons"].append(reason)
+        log.warning("gardener: %s", reason)
+    if len(pages) < sweep.MIN_DUPLICATE_ENTITY_POPULATION:
+        # Not an error and not a finding: a corpus with fewer than two registered entities is a
+        # corpus with no pair to judge. `judged` is corrected to zero so the stats never claim a
+        # comparison that no call made.
+        if pages:
+            run_stats["skip_reasons"].append(sweep.TOO_SMALL_POPULATION_REASON.format(
+                population=len(pages), floor=sweep.MIN_DUPLICATE_ENTITY_POPULATION))
+        run_stats["judged"] = 0
+        return [], run_stats
+
+    findings: list[dict] = []
+    try:
+        judge = sweep.build_duplicate_entity_judge(settings.model)
+        accepted, skip_reasons = await sweep.run_duplicate_entity_sweep(judge, pages)
+        run_stats["skip_reasons"] += skip_reasons
+        run_stats["skipped"] = len(skip_reasons)
+        findings = [sweep.to_finding(spec, model_name=settings.model) for spec in accepted]
+    except Exception as ex:  # noqa: BLE001 — ANY failure of this pass must leave the same run's
+        # deterministic findings, and both other model passes', intact (module docstring).
+        run_stats["error"] = ex.__class__.__name__
+        # The whole population went unjudged: this pass is ONE call, so there is no half of it that
+        # survived a failure the way a batched pass's earlier batches do.
+        run_stats["judged"] = 0
+        return [], run_stats
+    run_stats["inserted"] = len(findings)
+    return findings, run_stats
+
+
 def _run_completed_at(conn, run_id: int) -> str:
     with conn.cursor() as cur:
         cur.execute("SELECT finished_at FROM job_runs WHERE id = %s", (run_id,))
@@ -269,6 +334,11 @@ async def run_gardener(conn, *, repo: str, settings: GardenerSettings, channels_
         run_stats["empty_body"] = empty_body_stats
         findings += empty_body_findings
 
+        duplicate_findings, duplicate_stats = await _run_duplicate_entity_pass(
+            entity_zone_pages, registry, settings)
+        run_stats["duplicate_entity"] = duplicate_stats
+        findings += duplicate_findings
+
         by_check: dict[str, int] = {}
         by_severity: dict[str, int] = {}
         for f in findings:
@@ -283,12 +353,14 @@ async def run_gardener(conn, *, repo: str, settings: GardenerSettings, channels_
         raise
 
     with conn.transaction():
-        # 'partial', never 'ok', when EITHER model pass failed: a run whose second model pass
+        # 'partial', never 'ok', when ANY model pass failed: a run whose second or third model pass
         # never happened must not read as a clean bill of health for the pages it never looked at.
         # This status is an AGGREGATE and no watermark may be derived from it — that is
         # `previous_run_watermark`'s job, off `stats.sweep.error` (module docstring), so a failed
-        # empty-body pass costs the editorial sweep's `since` and rotation nothing.
-        run_status = "partial" if (sweep_stats["error"] or empty_body_stats["error"]) else "ok"
+        # empty-body or duplicate-identity pass costs the editorial sweep's `since` and rotation
+        # nothing.
+        run_status = "partial" if (sweep_stats["error"] or empty_body_stats["error"]
+                                   or duplicate_stats["error"]) else "ok"
         run_id = ops.record_job_run(conn, JOB_NAME, status=run_status, stats=run_stats)
         store.insert_findings(conn, run_id, findings)
 
@@ -302,7 +374,10 @@ async def run_gardener(conn, *, repo: str, settings: GardenerSettings, channels_
                        sweep_sampled_count=sweep_stats["sampled"],
                        empty_body_error=empty_body_stats["error"],
                        empty_body_judged_count=empty_body_stats["judged"],
-                       empty_body_deferred_count=empty_body_stats["deferred"])
+                       empty_body_deferred_count=empty_body_stats["deferred"],
+                       duplicate_entity_error=duplicate_stats["error"],
+                       duplicate_entity_judged_count=duplicate_stats["judged"],
+                       duplicate_entity_deferred_count=duplicate_stats["deferred"])
 
     try:
         # The PRE-INSERT, in-memory `findings`, never `persisted`: the round trip through the

@@ -877,3 +877,168 @@ def test_run_gardener_survives_a_malformed_updated_date_the_whole_run_does_not_a
         cur.execute("SELECT status FROM job_runs WHERE id = %s", (result.run_id,))
         assert cur.fetchone()[0] == "ok"   # NOT 'error' — the run survives the bad data
     assert result.stats["age_population_exclusions"]["aging_seed"]["malformed_updated"] == 1
+
+
+# ── the THIRD model pass: two registry entries that are one entity ──────────────────────────────
+# Every test here uses `Cofers` beside `Cofers SL`, the one pair the offline double can see (it
+# folds two registered names to a single `normalize()` key). What that proves is the ORCHESTRATION
+# — which population reached the pass, what landed in `stats`, and what a failure costs the rest of
+# the run — never the rubric; `test_sweep_duplicate_entity.py` says the same thing about itself.
+_DUPLICATE_REGISTRY = {"cofers": {"name": "Cofers", "type": "organization", "aliases": []},
+                       "cofers-sl": {"name": "Cofers SL", "type": "organization", "aliases": []}}
+
+
+def _duplicate_pair(repo) -> None:
+    support.write_registry(repo, _DUPLICATE_REGISTRY)
+    _entity_page(repo, "Cofers", body=support.written_entity_body("Cofers"))
+    _entity_page(repo, "Cofers SL", body=support.written_entity_body("Cofers SL"))
+
+
+def test_run_gardener_persists_a_duplicate_identity_finding_carrying_BOTH_ids(conn, repo):
+    """One finding, `warn`, both entity pages in `subjects` — the LIST, which is what the repair
+    loop reads to know which pair a merge would be about."""
+    _duplicate_pair(repo)
+    support.rebuild_index(conn, repo)
+
+    result = _run(conn, repo)
+
+    dupes = [f for f in result.findings if f["check"] == sweep.CHECK_MODEL_DUPLICATE_ENTITY]
+    assert len(dupes) == 1
+    assert dupes[0]["subjects"] == ["wiki/entities/Cofers SL.md", "wiki/entities/Cofers.md"]
+    assert dupes[0]["severity"] == schema.SEVERITY_WARN
+    assert dupes[0]["source"] == schema.SOURCE_MODEL
+    assert result.duplicate_entity_error == ""
+    assert result.duplicate_entity_judged_count == 2
+
+
+def test_run_gardener_the_benign_twin_two_unrelated_entities_produce_no_finding(conn, repo):
+    """`Cofers` beside `Cofers Legal` — a parent and its law firm — ride the same run, are both
+    JUDGED, and come back unmerged. A pass that flagged this would be rewriting what somebody's
+    pages are about, which is the failure that turns a health check into noise nobody reads."""
+    support.write_registry(repo, {
+        "cofers": {"name": "Cofers", "type": "organization", "aliases": []},
+        "cofers-legal": {"name": "Cofers Legal", "type": "organization", "aliases": []}})
+    _entity_page(repo, "Cofers", body=support.written_entity_body("Cofers"))
+    _entity_page(repo, "Cofers Legal", body=support.written_entity_body("Cofers Legal"))
+    support.rebuild_index(conn, repo)
+
+    result = _run(conn, repo)
+
+    assert result.duplicate_entity_judged_count == 2, "both must have been JUDGED, not skipped"
+    assert [f for f in result.findings
+            if f["check"] == sweep.CHECK_MODEL_DUPLICATE_ENTITY] == []
+
+
+def test_run_gardener_duplicate_identity_stats_land_in_job_runs(conn, repo):
+    _duplicate_pair(repo)
+    _entity_page(repo, "Never Minted", body=support.written_entity_body("Never Minted"))
+    support.rebuild_index(conn, repo)
+
+    result = _run(conn, repo)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT stats FROM job_runs WHERE id = %s", (result.run_id,))
+        stats = cur.fetchone()[0]
+    duplicate = stats["duplicate_entity"]
+    assert duplicate["population"] == 3
+    assert duplicate["excluded_unregistered"] == 1
+    assert duplicate["judged"] == 2
+    assert duplicate["inserted"] == 1
+    assert duplicate["deferred"] == 0
+    assert duplicate["error"] == ""
+    # No `batch`/`batches` key at all: this pass is ONE call by construction, and a counter
+    # implying otherwise would invite somebody to batch a question about pairs.
+    assert "batches" not in duplicate
+
+
+def test_run_gardener_asks_no_model_about_a_registry_that_cannot_hold_a_pair(conn, repo,
+                                                                             monkeypatch):
+    """The floor, enforced BEFORE the judge is built: one registered entity cannot be half of a
+    pair, so a run that asked would reach the same answer and pay for it every night. The skip is
+    RECORDED — "no model was asked" and "the model found nothing" are different facts."""
+    support.write_registry(repo, {"cofers": {"name": "Cofers", "type": "organization",
+                                             "aliases": []}})
+    _entity_page(repo, "Cofers", body=support.written_entity_body("Cofers"))
+    support.rebuild_index(conn, repo)
+
+    def refuse(*a, **kw):
+        raise AssertionError("no judge may be built for a population that cannot hold a pair")
+
+    monkeypatch.setattr(sweep, "build_duplicate_entity_judge", refuse)
+
+    result = _run(conn, repo)
+
+    assert result.duplicate_entity_error == ""
+    assert result.duplicate_entity_judged_count == 0
+    assert any("population-below-floor" in reason
+               for reason in result.stats["duplicate_entity"]["skip_reasons"])
+
+
+def test_run_gardener_the_duplicate_identity_ceiling_records_what_it_deferred(conn, repo,
+                                                                              monkeypatch):
+    _duplicate_pair(repo)
+    _entity_page(repo, "Globex", body=support.written_entity_body("Globex"))
+    support.write_registry(repo, {**_DUPLICATE_REGISTRY,
+                                  "globex": {"name": "Globex", "type": "organization",
+                                             "aliases": []}})
+    support.rebuild_index(conn, repo)
+    monkeypatch.setenv("STIGMERGY_GARDENER_DUPLICATE_ENTITY_CEILING", "2")
+
+    result = _run(conn, repo, settings=GardenerSettings.from_args())
+
+    duplicate = result.stats["duplicate_entity"]
+    assert duplicate["considered"] == 3
+    assert duplicate["judged"] == 2
+    assert duplicate["deferred"] == 1
+    assert result.duplicate_entity_deferred_count == 1
+    assert any("1 registered entity page(s)" in reason for reason in duplicate["skip_reasons"])
+
+
+def test_run_gardener_a_duplicate_identity_failure_alone_still_commits_partial(conn, repo,
+                                                                               monkeypatch):
+    """The third pass fails independently of the other two: the deterministic findings and both
+    other passes' findings stand, the run is `'partial'`, and the WHOLE population is recorded as
+    unjudged — this pass is one call, so there is no half of it that survived."""
+    _duplicate_pair(repo)
+    support.rebuild_index(conn, repo)
+
+    class _Boom:
+        async def run(self, prompt, *, deps=None, usage_limits=None):
+            raise AgentRunError("the identity pass is down")
+
+    monkeypatch.setattr(sweep, "build_duplicate_entity_judge", lambda *a, **kw: _Boom())
+
+    result = _run(conn, repo)
+
+    assert result.duplicate_entity_error == "AgentRunError"
+    assert result.duplicate_entity_judged_count == 0
+    assert result.sweep_error == ""
+    assert result.empty_body_error == ""
+    assert [f for f in result.findings
+            if f["check"] == sweep.CHECK_MODEL_DUPLICATE_ENTITY] == []
+    with conn.cursor() as cur:
+        cur.execute("SELECT status, stats FROM job_runs WHERE id = %s", (result.run_id,))
+        status, stats = cur.fetchone()
+    assert status == "partial"
+    assert stats["duplicate_entity"]["error"] == "AgentRunError"
+    assert stats["duplicate_entity"]["judged"] == 0
+
+
+def test_run_gardener_a_duplicate_identity_failure_does_not_freeze_the_editorial_watermark(
+        conn, repo, monkeypatch):
+    """`previous_run_watermark` asks `stats.sweep.error`, never the run's aggregate status — so a
+    `'partial'` run whose EDITORIAL sweep completed still advances that sweep's `since`."""
+    _duplicate_pair(repo)
+    support.rebuild_index(conn, repo)
+
+    class _Boom:
+        async def run(self, prompt, *, deps=None, usage_limits=None):
+            raise AgentRunError("the identity pass is down")
+
+    monkeypatch.setattr(sweep, "build_duplicate_entity_judge", lambda *a, **kw: _Boom())
+    result = _run(conn, repo)
+
+    assert result.stats["sweep"]["error"] == ""
+    since, _offset = sweep.previous_run_watermark(conn)
+    assert since is not None, ("a failed identity pass must not cost the editorial sweep its "
+                              "watermark")

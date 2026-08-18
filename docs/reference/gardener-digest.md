@@ -24,6 +24,10 @@ stigmergy-gardener                                  stigmergy-digest
   │    EVERY entity page in the checkout,
   │    batched, minus the ones already
   │    reported as placeholders — no tools
+  ├─ model identity pass      (sweep.py)
+  │    EVERY registered entity behind that
+  │    same zone, in ONE call — a pair split
+  │    across batches is invisible; no tools
   ├─ persist: gardener_findings + job_runs          every page NAMED is ACL-scoped to the posting
   ├─ print: severity-grouped report, or --json      channel (server.acl.visible, slack.channels.
   └─ sla-severity findings → ONE Slack notice       channel_audiences) — the digest broadcasts
@@ -138,10 +142,12 @@ It holds no tools at all: `SWEEP_LIMITS.tool_calls_limit` is `0`, a structural p
 agent's usage limits rather than a request made in a prompt, so there is nothing for the model to
 call and no write path to reach.
 
-**There are TWO passes, and they share that discipline and nothing else.** They differ in their
+**There are THREE passes, and they share that discipline and nothing else.** They differ in their
 prompt, their population and the check slugs each may emit — and that last difference is enforced
-rather than promised: `_validate` takes its allowed slug set as a parameter, so neither pass can
-emit the other's vocabulary however a page's text argues for it.
+rather than promised: `_validate` takes its allowed slug set as a parameter, so no pass can emit
+another's vocabulary however a page's text argues for it. It takes the SHAPE the same way: only the
+identity pass sets a floor on how many pages a finding names, because only that check is a claim
+about a pair.
 
 **The editorial sweep** judges four things a mechanical check cannot, each its own check slug
 (`sweep.ALL_MODEL_CHECK_SLUGS`: `model-contradiction`,
@@ -173,6 +179,32 @@ asked**, so one page produces one finding across the two checks by construction 
 downstream de-duplication a later re-ordering could defeat, and not two repair proposals for one
 page on one night.
 
+**The identity pass** judges one thing, `model-duplicate-entity` (`warn`): two of the brain's
+registered entities are the SAME real-world entity, registered twice. A legal-form or qualifier
+variant of one name, a former name beside a current one, a regional or transliterated spelling, an
+abbreviation and what it abbreviates. `warn` rather than the empty-body pass's `info`, and the
+difference is what the finding costs to ignore: an empty body is a page that says nothing, while
+two identities for one company SPLIT the anchoring — each timeline is a fraction of the truth and
+entity-first retrieval degrades with nothing anywhere reporting that it has.
+
+Its population is the same zone walk, read as REGISTRY ENTRIES: each page is placed onto the id the
+registry knows it by (the `slugify(title)` id contract first, the alias matcher as the fallback),
+and a page the registry does not register is excluded and counted — an unregistered page is not an
+entry, and this check compares entries. It carries `STIGMERGY_GARDENER_DUPLICATE_ENTITY_CEILING`
+(default 120) and no batch size at all, and the absence is the decision: **the question is about a
+PAIR, and a pair whose two halves fell in different batches is invisible to every batch.** So the
+whole population rides ONE call, each entry contributing a bounded number of characters, and below
+two registered entities no model is asked at all — a registry that cannot hold a pair is recorded as
+such rather than reported as clean.
+
+**Sharing a word is not the finding, and that is the half that keeps this from becoming noise.**
+`Cofers` and `Cofers Legal` may well be a parent and its law firm; merging them would silently
+rewrite what somebody's pages are about. What makes a pair a finding is agreement in what the two
+pages SAY — the same activity, the same people, the same products — not resemblance between two
+strings, and the prompt says so and says to flag nothing when the pages do not say enough to tell.
+A missed duplicate costs a search some recall; a wrong one moves a page's whole history onto the
+wrong company.
+
 **That walk is a confinement boundary.** What it reads leaves the machine, so it refuses a
 symlinked page and every symlinked path component above one, refuses to open a file above a fixed
 byte cap, and counts each refusal into `job_runs.stats` rather than dropping it — a page missing
@@ -193,24 +225,25 @@ slug alone; an injected page cannot make this module choose, let alone compose, 
 string. The rationale and excerpt DO reach the report, sanitized and hard-clamped, in `detail` —
 bounded to a wrong sentence in a report, never to an instruction a reader might paste.
 
-Both passes run on the same model. It is configuration (`STIGMERGY_GARDENER_MODEL`, defaulting to
+All three passes run on the same model. It is configuration (`STIGMERGY_GARDENER_MODEL`, defaulting to
 `settings.DEFAULT_GARDENER_MODEL`), independent of `stigmergy.kernel.llm`'s own `CLEAN_MODEL` —
 and it does not fall back to the shared model when unset:
 it carries its own concrete cheap-class default, so "model is configuration" reads literally rather
 than "model is whatever the shared one happens to be". Escalating past that default is an
 evidence-driven decision from reading real weeks of findings, not a guess made up front.
 
-An outage of EITHER pass (a hard model-call failure, or nothing surviving even the one retry) never
-takes the deterministic findings from the same run down with it, and never takes the other pass
-down either — they fail independently and are reported independently. Either failure commits
-`partial` rather than `ok`, because a run's status is the one place an operator learns a whole
-model pass did not happen.
+An outage of ANY pass (a hard model-call failure, or nothing surviving even the one retry) never
+takes the deterministic findings from the same run down with it, and never takes another pass down
+either — they fail independently and are reported independently. Any failure commits `partial`
+rather than `ok`, because a run's status is the one place an operator learns a whole model pass did
+not happen. The identity pass loses its WHOLE population when it fails, not a remainder: it is one
+call, so there is no half of it that survived.
 
 That makes the status an **aggregate**, and no watermark is derived from it: the editorial sweep's
 `since` and sample rotation continue from the most recent run whose OWN `stats.sweep.error` is
 empty, `ok` or `partial` alike. Reading `status = 'ok'` alone would pin the sweep's window at the
-last flawless run every night the empty-body pass failed, growing its single unbatched prompt until
-it took the sweep down too — and re-judging the same rotating sample forever. See "Reading a
+last flawless run every night one of the OTHER passes failed, growing its single unbatched prompt
+until it took the sweep down too — and re-judging the same rotating sample forever. See "Reading a
 gardener report" below.
 
 ## Reading a gardener report
@@ -220,7 +253,8 @@ $ stigmergy-gardener
 # Gardener report — run #128, completed 2026-07-31T05:07:03Z
 
 checked 412 pages, 38 entities — 9 deterministic checks, plus a model sweep over 6 changed page(s)
-and 10 sampled unchanged page(s), and a body sweep over 24 entity page(s)
+and 10 sampled unchanged page(s), and a body sweep over 24 entity page(s), and an identity sweep
+over 38 registered entity(ies)
 
 19 finding(s): 0 sla, 5 warn, 14 info
 
@@ -268,7 +302,7 @@ opposite convention from the digest, below.
 ## The SLA notice
 
 **Stated plainly: this mechanism has no producer.** Every one of the nine
-deterministic checks is `info` or `warn`, and so is every one of the five model
+deterministic checks is `info` or `warn`, and so is every one of the six model
 slugs. Nothing in this codebase constructs a finding with `SEVERITY_SLA`. The machinery below is
 therefore live code with a dead input — and not by accident: the
 severity band, the notice-composing code and `stigmergy-gardener`'s own loud-failure-on-post-error

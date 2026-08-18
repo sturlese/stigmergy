@@ -33,7 +33,15 @@ from stigmergy.index.errors import StigmergyIndexError
 from stigmergy.librarian import config as librarian_config
 from stigmergy.repair import store as repair_store
 from stigmergy.repair.errors import RepairError
-from stigmergy.repair.schema import DELETE_OP_NAME, KIND_ENTITY_BODY, SCRUB_OP_NAME
+from stigmergy.repair.schema import (
+    ALIAS_OP_NAME,
+    DELETE_OP_NAME,
+    KIND_ENTITY_BODY,
+    REANCHOR_OP_NAME,
+    REGISTRY_OP_NAME,
+    RETIRE_OP_NAME,
+    SCRUB_OP_NAME,
+)
 from stigmergy.repair.schema import JOB_NAME as REPAIR_JOB
 from stigmergy.review_kinds import KIND_ENTITY_PROPOSAL
 from stigmergy.server import pilot_report
@@ -47,6 +55,12 @@ log = logging.getLogger(__name__)
 # whose ops are two different shapes, and matching them one at a time is how one of the two gets a
 # link column nobody asked for.
 DELETE_OP_NAMES = (DELETE_OP_NAME, SCRUB_OP_NAME)
+
+# The `entity-alias` kind's four op names, for the same reason and with one more: every one of them
+# carries `planned_after`, a WHOLE FILE, and three of the four are pages the console would then
+# render in a cell. What a steward judges on a merge is which identity absorbs which and how many
+# pages move with it, and the op name plus the path is all of that.
+MERGE_OP_NAMES = (ALIAS_OP_NAME, RETIRE_OP_NAME, REANCHOR_OP_NAME, REGISTRY_OP_NAME)
 
 PURGE_JOB, PURGE_DRY_RUN_JOB = "capture-purge", "capture-purge-dry-run"
 
@@ -697,17 +711,17 @@ class AdminService:
         control characters and KEEPS newlines: a body flattened to one line is a body nobody can
         read as the page it would become.
 
-        A `delete` op is the one shape that reaches the console with LESS than it was stored with:
-        `planned_after` is a whole page per scrubbed page, and it is the apply's contract with its
-        own recomputation rather than something a steward reads. What the console owes here is
-        which pages stop existing and which get rewritten, and the op NAME plus the path is all of
-        it."""
+        `delete` and `entity-alias` are the shapes that reach the console with LESS than they were
+        stored with: `planned_after` is a whole page per op, and it is the apply's contract with
+        its own recomputation rather than something a steward reads. What the console owes here is
+        which pages stop existing or which identity absorbs which, and the op NAME plus the path is
+        all of it."""
         kind = _clean(op.get("op"))
         common = {"op": kind, "path": _clean(op.get("path"))}
         if kind == KIND_ENTITY_BODY:
             return {**common, "body_markdown": _clean(op.get("body_markdown")),
                     "role": _clean(op.get("role"))}
-        if kind in DELETE_OP_NAMES:
+        if kind in DELETE_OP_NAMES or kind in MERGE_OP_NAMES:
             return common
         return {**common, "link": _clean(op.get("link")), "note": _clean(op.get("note"))}
 

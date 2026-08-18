@@ -211,7 +211,7 @@ def preview(row: dict) -> list[str]:
     network. A steward reading this is deciding whether to authorize it, so it is rendered from
     exactly the stored fact the apply will act on, never from a re-derivation that could differ.
 
-    Three shapes, because there are three kinds. The additive ops are additive by construction, so
+    Four shapes, because there are four kinds. The additive ops are additive by construction, so
     every line is a `+`: `backlink` adds one `related:` entry, and a callout kind adds that entry
     AND the callout block `page.with_callout` appends. An `entity-body` op REPLACES the body below
     the page's own `# Title`, so its preview says so with a `-` line and then shows the draft in
@@ -219,7 +219,9 @@ def preview(row: dict) -> list[str]:
     would be hiding the only thing worth reading. A `delete` op's two shapes both say what STOPS
     being true, and the scrub deliberately does NOT show its planned bytes: they are the apply's
     contract with itself, not the thing a steward is judging, and a whole page per scrubbed page
-    would bury the one line that matters — which pages cease to exist.
+    would bury the one line that matters — which pages cease to exist. An `entity-alias` op's four
+    shapes say what each page BECOMES, and they hide their planned bytes for the deletion's reason:
+    what a steward is judging is which identity absorbs which, and four whole files would bury it.
     """
     lines: list[str] = []
     for op in row.get("ops") or ():
@@ -235,6 +237,9 @@ def preview(row: dict) -> list[str]:
         if kind in _DELETE_PHRASES:
             lines.append(f"-   {_DELETE_PHRASES[kind]}")
             continue
+        if kind in _MERGE_PHRASES:
+            lines.append(f"~   {_MERGE_PHRASES[kind]}")
+            continue
         lines.append(f"+   related: [[{link}]]")
         if kind in _CALLOUT_PHRASES:
             callout, phrase = _CALLOUT_PHRASES[kind]
@@ -248,6 +253,21 @@ def preview(row: dict) -> list[str]:
 _DELETE_PHRASES = {
     deletion.OP_DELETE: "(the whole page is removed)",
     deletion.OP_SCRUB: "(every link to the removed page(s) taken out; nothing else changes here)",
+}
+
+# What each of the `entity-alias` kind's four ops does to one file, in the words a steward needs.
+# `~` rather than `+`/`-`: nothing is added and nothing is removed — each of these files is
+# REWRITTEN, and a preview claiming otherwise would be describing a shape the gates never see.
+# Spelled from `repair.schema`'s op names, which `entity_alias` re-exports, so this table cannot
+# name an op the applier does not perform.
+_MERGE_PHRASES = {
+    schema.ALIAS_OP_NAME: ("(this identity SURVIVES: it takes the other's alternative names and "
+                           "links to it)"),
+    schema.RETIRE_OP_NAME: ("(this identity is ABSORBED: marked superseded by the survivor, its "
+                            "alternative names moved. The page itself stays)"),
+    schema.REANCHOR_OP_NAME: "(re-anchored from the absorbed entity to the survivor)",
+    schema.REGISTRY_OP_NAME: ("(regenerated from the entity pages by `stigmergy-entities "
+                              "regenerate`)"),
 }
 
 

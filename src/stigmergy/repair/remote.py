@@ -44,7 +44,7 @@ from stigmergy.kernel import registry as registry_module
 from stigmergy.librarian import config as librarian_config
 from stigmergy.librarian import edits, gates, gitcmd, githubapp
 from stigmergy.librarian.errors import LibrarianError
-from stigmergy.repair import deletion, entity_body, schema, store
+from stigmergy.repair import deletion, entity_alias, entity_body, schema, store
 from stigmergy.repair.errors import ProposalStateError, RepairError
 
 log = logging.getLogger(__name__)
@@ -180,15 +180,16 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
         # worker's. A `LibrarianConfigError` out of an elapsed budget meets the `except
         # LibrarianError` seam above and the row lands `failed` with a sentence, not a hung thread.
         subprocess_timeout_s=REPAIR_SUBPROCESS_TIMEOUT_S,
-        # The four TOLD facts, and the only place in this system that grants any of them: which
+        # The five TOLD facts, and the only place in this system that grants any of them: which
         # zones THIS apply owns, which single page's prose its approval covers, which paths it may
-        # remove, and — for the pages a sweep rewrites — the exact bytes it planned. Every one is
+        # remove, which non-page file it derived from the pages in this same commit, and — for
+        # every page whose bytes were computed ahead of time — exactly what they are. Every one is
         # derived from the ops that were just performed, never from `target_paths` — the two are
         # cross-checked against each other a few lines above, so deriving a permission from the
         # same fact the cross-check judges would make one stored column able to widen the other.
         write_prefixes=told.lane, body_rewrite_allowed=told.body_rewrite_allowed,
         deletions_allowed=told.deletions_allowed, expected_bytes=told.expected_bytes,
-        provenance_pages=told.provenance_pages)
+        provenance_pages=told.provenance_pages, derived_files=told.derived_files)
     veto = gates.vetoes(gates.run_gates(ctx))
     if veto:
         raise RepairError(
@@ -224,16 +225,23 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
 # What an applied repair records BEYOND the commit and the paths, per kind. `paths` alone cannot
 # tell a steward reading the governance ledger months later whether an approval removed one page or
 # eleven — and for a deletion that is the whole of what was approved.
-LEDGER_RESULT_KEYS = ("commit", "paths", "deleted", "scrubbed_pages")
+LEDGER_RESULT_KEYS = ("commit", "paths", "deleted", "scrubbed_pages", "absorbed", "survivor",
+                      "reanchored_pages")
 
 
 def _outcome_detail(kind: str, ops: list) -> dict:
     """The kind-specific half of an apply's result. Empty for the kinds whose `paths` says
-    everything: a ledger row carrying two always-empty columns teaches nobody anything."""
-    if kind != schema.KIND_DELETE:
-        return {}
-    return {"deleted": deletion.deleted_paths(ops),
-            "scrubbed_pages": len(deletion.scrubbed_paths(ops))}
+    everything: a ledger row carrying always-empty columns teaches nobody anything."""
+    if kind == schema.KIND_DELETE:
+        return {"deleted": deletion.deleted_paths(ops),
+                "scrubbed_pages": len(deletion.scrubbed_paths(ops))}
+    if kind == schema.KIND_ENTITY_ALIAS:
+        # WHICH identity absorbed which is the whole of what was approved, and `paths` cannot say
+        # it — the two entity pages are two entries in one sorted list.
+        return {"survivor": entity_alias.survivor_path(ops),
+                "absorbed": entity_alias.absorbed_path(ops),
+                "reanchored_pages": len(entity_alias.reanchored_paths(ops))}
+    return {}
 
 
 def _refuse_surviving_dead_links(clone: str, linter_path: str, ops: list) -> None:
@@ -285,6 +293,8 @@ def _perform(clone: str, kind: str, ops: list) -> tuple[list[str], list]:
         return entity_body.apply_declared(clone, ops)
     if kind == schema.KIND_DELETE:
         return deletion.apply_declared(clone, ops)
+    if kind == schema.KIND_ENTITY_ALIAS:
+        return entity_alias.apply_declared(clone, ops)
     return edits.apply_declared(clone, schema.declared_edits(ops), new_pages=())
 
 
@@ -299,6 +309,7 @@ class _ToldFacts:
     deletions_allowed: frozenset = frozenset()
     expected_bytes: dict = field(default_factory=dict)
     provenance_pages: frozenset = frozenset()
+    derived_files: frozenset = frozenset()
 
 
 def _lane_and_permission(kind: str, ops: list) -> _ToldFacts:
@@ -318,6 +329,11 @@ def _lane_and_permission(kind: str, ops: list) -> _ToldFacts:
     division of labour. It is also the first flow here that MODIFIES a machine-zone page, so it
     names the provenance pages among them — the same fact the librarian's source-attachment flow
     declares, for the same reason: those stamps are the librarian's own and a scrub only removes.
+
+    `entity-alias` derives its lane the same way and hands over the same computed bytes, and it is
+    the only kind that names a DERIVED FILE: `ops/entity-registry.json` is not a page, so
+    `gate_zone` refuses it by default and rightly. It names no deletion and no body rewrite — a
+    merge removes nothing and replaces no prose — so byte-equality is the whole of its proof.
     """
     if kind == schema.KIND_ENTITY_BODY:
         return _ToldFacts(
@@ -329,6 +345,10 @@ def _lane_and_permission(kind: str, ops: list) -> _ToldFacts:
                           deletions_allowed=frozenset(deletion.deleted_paths(ops)),
                           expected_bytes=deletion.expected_bytes(ops),
                           provenance_pages=deletion.provenance_scrubs(ops))
+    if kind == schema.KIND_ENTITY_ALIAS:
+        return _ToldFacts(lane=entity_alias.lane_for(ops),
+                          expected_bytes=entity_alias.expected_bytes(ops),
+                          derived_files=entity_alias.derived_files(ops))
     return _ToldFacts(lane=gates.ALLOWED_WRITE_PREFIXES)
 
 
@@ -365,6 +385,8 @@ def _cross_check(entries, proposal: dict, *, kind: str, ops: list) -> None:
     if kind == schema.KIND_DELETE:
         _cross_check_delete(entries, ops)
         return
+    if kind == schema.KIND_ENTITY_ALIAS:
+        _cross_check_entity_alias(entries, ops)
     off_shape = sorted(f"{e.path} ({e.status})" for e in entries if e.status != "M")
     if off_shape:
         raise RepairError(
@@ -391,6 +413,26 @@ def _cross_check_delete(entries, ops: list) -> None:
             f"{', '.join(removed) or 'nothing'}. Propose again and approve the new proposal")
 
 
+def _cross_check_entity_alias(entries, ops: list) -> None:
+    """A merge's own shape: the ABSORBED page is in the diff and it is a modification.
+
+    The path comparison above cannot say this and it is the half that matters. A merge whose ops
+    were edited to leave the absorbed page alone — re-anchoring its pages onto the survivor while
+    the absorbed identity stays live and unmarked — names the same `target_paths` set only if the
+    absorbed page is named in it, so the one thing to assert is that the diff actually carries it.
+    A deletion's cross-check makes the identical argument about a sweep that quietly stopped
+    deleting.
+    """
+    absorbed = entity_alias.absorbed_path(ops)
+    modified = {e.path for e in entries if e.status == "M"}
+    if absorbed and absorbed not in modified:
+        raise RepairError(
+            f"this merge did not mark {absorbed} as absorbed, so nothing was committed or pushed: "
+            f"an identity is retired by being superseded, and a merge that re-anchors its pages "
+            f"without doing so leaves the corpus with two live identities and no record of the "
+            f"decision. Propose again and approve the new proposal")
+
+
 def commit_message(proposal: dict, *, approved_by: str) -> str:
     """The commit an approved repair lands as. `Approved-by:` is half of how `git log` answers who
     authorized a change to the corpus, so the actor is collapsed to one line: the console passes a
@@ -414,6 +456,13 @@ def _commit_subject(proposal: dict, ops) -> str:
         first = stems[0] if stems else "the knowledge repo"
         return (f"chore(repair): delete {len(removed)} page(s) — {first}"
                 + ("…" if len(stems) > 1 else ""))
+    if kind == schema.KIND_ENTITY_ALIAS:
+        # Both names, in the verb: reading `git log` after a merge is how somebody finds out which
+        # identity absorbed which, and "4 edit(s) on wiki/entities/…" would name one of the two and
+        # say nothing about the decision.
+        survivor = entity_alias.page_stem(entity_alias.survivor_path(ops)) or "an entity"
+        absorbed = entity_alias.page_stem(entity_alias.absorbed_path(ops)) or "another"
+        return f"chore(repair): merge {absorbed} into {survivor}"
     targets = [str(p) for p in (proposal.get("target_paths") or ())]
     return (f"chore(repair): {kind} — {len(ops)} edit(s) on "
             f"{targets[0] if targets else 'the knowledge repo'}")

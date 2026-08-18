@@ -6,7 +6,7 @@ Sibling that produces the findings and fixes nothing: [`gardener`](../gardener/i
 time, and code applies exactly what was approved.** Nothing here can write to the knowledge repo
 without having passed through all four.
 
-THREE proposal kinds, and a finding rides exactly one road. `edits` is the librarian's own
+FOUR proposal kinds, and a finding rides exactly one road. `edits` is the librarian's own
 declared-edit vocabulary and nothing else — `backlink`, `overlap`, `contradiction` — three strictly
 additive shapes the eight gates already know how to judge. `entity-body` is the one kind that
 REPLACES text: one drafted body for one entity page whose body does not say what the corpus knows
@@ -15,7 +15,12 @@ about the entity — still the template it was minted with, or written and empty
 first amendment). `delete` is the one kind that REMOVES anything, and the one the covenant's first clause
 reads differently for: **no model may propose it in any spelling.** A person types it at
 `stigmergy-repair delete`, or code derives it for exact-duplicate `sources/` pages, where the
-decision is a lookup rather than a judgment (ADR 039's second amendment).
+decision is a lookup rather than a judgment (ADR 039's second amendment). `entity-alias` is the one
+kind that answers a finding about a PAIR: two registry entries that are the same entity, where the
+model picks which name SURVIVES and says why, and code computes everything that follows — the
+spellings that move, the pages that re-anchor, the supersession, the regenerated registry (ADR
+039's third amendment). It is also the only kind that puts a file which is not a page into a
+governed commit, and the only one that reaches `stigmergy.entities`.
 
 The proposer's judgment (which finding is worth repairing, which shape fits, what an entity page
 should say, when a finding has gone stale and deserves nothing) lives in a skill in the KNOWLEDGE
@@ -26,8 +31,9 @@ repo, read at run time from the checkout; a missing skill is a named refusal, ne
 | Module | What it is |
 |---|---|
 | `cli.py` | `stigmergy-repair propose \| list \| show <id> \| delete <path>... --why` — the only module that opens a connection or imports `stigmergy.index.store`. **No `apply`**: a terminal knows who is typing, not what they may approve. `delete` is the one verb that CREATES a proposal here, at `propose`'s authority level, because a deletion is the one repair no model may propose. Owns `preview`, the git-free rendering of what a proposal would change |
-| `proposer.py` | The agent seam, BOTH roads (`EDIT_PROPOSABLE_CHECKS` and `BODY_PROPOSABLE_CHECKS` decide which one a finding rides): `ProposerContext` and its two READ tools; `ProposalBatch`/`ProposalSpec`/`EditOp` + `validate_batch` for the additive road; `EntityBodyDraft` + `anchored_pages`/`draft_entity_body`/`validate_draft` for the body road; one retry each, `read_skill`, `propose_from_findings`, and the two offline doubles. The only module here that loads a model stack |
+| `proposer.py` | The agent seam, ALL THREE model roads (`EDIT_PROPOSABLE_CHECKS`, `BODY_PROPOSABLE_CHECKS` and `ALIAS_PROPOSABLE_CHECKS` decide which one a finding rides; the deterministic duplicate-sources road asks no model at all): `ProposerContext` and its two READ tools; `ProposalBatch`/`ProposalSpec`/`EditOp` + `validate_batch` for the additive road; `EntityBodyDraft` + `anchored_pages`/`draft_entity_body`/`validate_draft` for the body road; `EntityMergeChoice` + `build_entity_alias_prompt`/`choose_survivor`/`validate_merge_choice` for the merge road; one retry each, `read_skill`, `propose_from_findings`, and the three offline doubles. The only module here that loads a model stack |
 | `entity_body.py` | The `entity-body` writer and its validator — `validate`, `apply_declared`, `rewritten`, and the bounds a draft lives inside. Pure of the model stack, because the APPLY runs it inside the MCP server process |
+| `entity_alias.py` | The `entity-alias` kind, whole: `plan` (the merge, a pure function of a worktree's bytes), the three page writers (`aliased`, `retired`, `reanchored`), `validate`/`apply_declared` (recompute, byte-compare, write the pages, regenerate, byte-compare the registry), the readers every other surface goes through (`survivor_path`, `absorbed_path`, `reanchored_paths`, `expected_bytes`, `derived_files`, `lane_for`), and `claimable_aliases` — the one place the contract linter's alias rule is enforced at PLAN time. The ONE module here that imports `stigmergy.entities`, and only its generator: the registry has exactly one writer |
 | `deletion.py` | The `delete` kind, whole: `plan` (the sweep, a pure function of a worktree's bytes), `scrubbed` (one page's planned bytes), `validate`/`apply_declared` (recompute, byte-compare, perform), the readers every other surface goes through (`deleted_paths`, `scrubbed_paths`, `expected_bytes`, `lane_for`), and `duplicate_source_groups` — the one automatic road, which asks no model. Its link scanner is hand-mirrored from the frozen contract linter and must stay that way |
 | `remote.py` | `apply_via_clone` (clone → the kind's applier → the per-kind cross-check → `run_gates` → gated commit → push) and `apply_approved`, the door that also records the outcome. Owns `commit_message`, `LEDGER_RESULT_KEYS`, the delete kind's whole-tree dead-link check, and `_lane_and_permission` — the four caller-scoped facts the gates are told |
 | `store.py` | `repair_proposals` persistence: `insert_proposal`, `pending_proposals`, `recent_decided`, `proposal`, `mark_decided`, `mark_applied`, `mark_failed`, `known_content_keys`. Pure — decides nothing, authorizes nothing |
@@ -51,10 +57,16 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   asking about two different trees. `deletion.apply_declared` goes one step further and RECOMPUTES
   its plan, because a sweep's content depends on every other page in the corpus.
 - `librarian.page` — the frontmatter LINE machinery (`top_level_key_line`, `top_level_key_span`,
-  `frontmatter_lines`, `strip_key_lines`, `yaml_scalar`, `yaml_list`, `parse_list_value`) that
-  `entity_body` rewrites `updated:`/`role:` through, `deletion` removes list entries and pointer
-  lines with, and `gate_body_rewrite` compares the before and after with. ONE owner for "what lines
+  `frontmatter_lines`, `strip_key_lines`, `yaml_scalar`, `yaml_list`, `parse_list_value`,
+  `with_related_link`) that `entity_body` rewrites `updated:`/`role:` through, `deletion` removes
+  list entries and pointer lines with, `entity_alias` rewrites `aliases:`/`superseded_by:`/`entity:`
+  through, and `gate_body_rewrite` compares the before and after with. ONE owner for "what lines
   does a top-level key occupy", or two writers and a gate could disagree about the same block.
+- `entities.generator.read_entity_pages` / `registry_of` / `regenerate` — the ONE derivation of
+  `ops/entity-registry.json` from `wiki/entities/*.md`, and the only edge from this package into
+  `stigmergy.entities`. `entity_alias.plan` PREDICTS the regenerated bytes through that reader plus
+  `kernel.registry.registry_text`; the apply runs the real `regenerate` and refuses unless the file
+  it produced is byte-identical. One writer of the registry, still — never a hand-built JSON here.
 - `librarian.gates.run_gates(ALL_GATES)` — a repair goes through the librarian's own eight gates,
   not a subset. `GateContext(material="", outcome=None)` is honest: nothing was captured and no
   agent wrote here, and every gate that reads either is scoped to CREATED pages, of which a repair
@@ -80,11 +92,16 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   question. A new KIND is a bigger decision, not a smaller one: it needs its own validator, its own
   writer, its own branch in the gates and its own ADR record, which is what `entity-body` and
   `delete` each have.
+- Never let a MODEL compute a file list. `entity-alias` hands it exactly one decision — which of
+  two entity pages survives — and `entity_alias.plan` derives every byte that follows from the
+  corpus. A road where the model named the pages to re-anchor would be #72's deletion lesson
+  re-learned on a kind whose error is a page's whole history moved onto the wrong company.
 - Never let a MODEL reach the `delete` kind. `validate_batch` refuses an op naming a deletion in any
   spelling, by name, and the deterministic duplicate road is CODE — not a model call whose answer
   happens to be checked. Judging that a page is stale is a person's decision.
-- Never widen `GateContext.body_rewrite_allowed`, `deletions_allowed`, `expected_bytes` or
-  `provenance_pages` past what the proposal names, and never set one from anywhere but `remote.py`
+- Never widen `GateContext.body_rewrite_allowed`, `deletions_allowed`, `expected_bytes`,
+  `derived_files` or `provenance_pages` past what the proposal names, and never set one from
+  anywhere but `remote.py`
   (pinned in `tests/test_architecture.py`, both directions, plus a classification check over every
   keyword any module passes to a `GateContext`). A permission wide enough for a second page is a
   permission for a page nobody approved.
@@ -106,7 +123,7 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
 
 - `repair_proposals`: `id`, `created_at`, `run_id`, `finding_ids`, `finding_subjects`, `kind`,
   `target_paths`, `ops`, `rationale`, `content_key`, `status`, `decided_by`, `decided_at`, `notes`,
-  `applied_commit`, `error`, `model_id`. `kind ∈ ('edits', 'entity-body', 'delete')`; `status ∈ (pending,
+  `applied_commit`, `error`, `model_id`. `kind ∈ ('edits', 'entity-body', 'delete', 'entity-alias')`; `status ∈ (pending,
   approved, rejected, applied, failed)`. The kind CHECK is swapped by a guarded `DO` block, not
   carried by `CREATE TABLE IF NOT EXISTS` alone — a table that already exists never gains a value,
   and a kind the code writes and the column refuses is an IntegrityError in production at night. `finding_subjects` is a list of LISTS — one sorted page set per
@@ -124,7 +141,8 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   re-proposing after a rejection stays a human decision rather than a constraint violation.
 - `EDIT_PROPOSABLE_CHECKS` = `model-unlinked-mention`, `model-contradiction`, `orphan-page`;
   `BODY_PROPOSABLE_CHECKS` = `entity-placeholder-body`, `model-empty-entity-body`;
-  `PROPOSABLE_CHECKS` is their union. The two body checks are the deterministic and the judged
+  `ALIAS_PROPOSABLE_CHECKS` = `model-duplicate-entity`; `PROPOSABLE_CHECKS` is their union and the
+  three sets are disjoint. The two body checks are the deterministic and the judged
   halves of ONE question — the page's body does not say what the corpus knows about the entity —
   so they share a road rather than each getting one, and the gardener guarantees they never name
   the same page in one run. The other checks are absent by NAME, not by oversight: none of them is
@@ -154,9 +172,22 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   settings on purpose: the real ceiling is the knowledge repo's contract linter, so an operator
   raising them could only produce proposals the gates then refuse. The delete road adds
   `settings.max_delete_plan_bytes` (100000) — a SIZE rather than an op count, because that kind's
-  ops carry whole pages so the apply can recompute and byte-compare them.
+  ops carry whole pages so the apply can recompute and byte-compare them; the merge road SHARES
+  that setting, since both store whole pages for the identical reason and one ceiling governs how
+  much stored content one approval may carry. The merge road holds `MERGE_CHOICE_LIMITS` (the body
+  road's figure, and a constant for the same reason: one pair per call, no batch to derive from).
+- **A merge moves the absorbed entity's ALIASES and never its own name, and that is a constraint
+  rather than a choice.** The knowledge repo's contract linter refuses an alias that names an
+  existing page (`alias 'X' collides with page wiki/entities/X.md`) because the wikilink namespace
+  is keyed on page stems, and the absorbed page stays by governance. `entity_alias.claimable_aliases`
+  refuses such a claim at PLAN time, with a sentence, rather than letting `gate_contract` veto it at
+  apply time. What follows is stated in ADR 039's third amendment and is not a defect to be fixed
+  here: the absorbed name keeps resolving to the identity the merge retired, whose page now says
+  what absorbed it.
 - The proposer's skill: `.claude/skills/repair-proposer/SKILL.md` in the knowledge repo, read at
-  run time, refused if the leaf is a symlink, and size-capped before the bytes.
+  run time, refused if the leaf is a symlink, and size-capped before the bytes. THREE frames read
+  it — `build_system_prompt`, `build_entity_body_system_prompt`, `build_entity_alias_system_prompt`
+  — one procedure, three questions.
 
 - The review lane's own kind is `repair-proposal` (`stigmergy.review_kinds`), decided with
   `approve`/`reject` only, authorized by a steward for EVERY page in `target_paths`, and listed in

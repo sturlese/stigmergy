@@ -63,6 +63,16 @@ MAX_EMPTY_BODY_BATCH = 64
 EMPTY_BODY_CEILING_ENV = "STIGMERGY_GARDENER_EMPTY_BODY_CEILING"
 DEFAULT_EMPTY_BODY_CEILING = 150
 
+# ── the duplicate-identity pass's ONE bound ──────────────────────────────────────────────────
+# One bound rather than the pair above, and the absence of a batch size is the decision: that pass
+# asks whether TWO registry entries are one entity, and a pair whose halves fell in different
+# batches is invisible to every batch. So its population rides ONE prompt and the only thing to
+# bound is how large that population may be — `sweep.MAX_DUPLICATE_ENTITY_PROMPT_CHARS` bounds what
+# each entry contributes to it. Lower than the empty-body ceiling for the same arithmetic reason:
+# every entry is co-present in one call rather than spread over batches of eight.
+DUPLICATE_ENTITY_CEILING_ENV = "STIGMERGY_GARDENER_DUPLICATE_ENTITY_CEILING"
+DEFAULT_DUPLICATE_ENTITY_CEILING = 120
+
 # Hand-mirrored from `stigmergy.slack.settings.BOT_TOKEN_ENV`, not imported — importing it would
 # pull the whole `server.settings` surface in; if that value ever moves, move this with it.
 SLACK_BOT_TOKEN_ENV = "SLACK_BOT_TOKEN"
@@ -79,6 +89,13 @@ _POSITIVE_COUNT_WHY = ("a zero or negative day/window count makes every page/fil
 # model pass while every run still reported success.
 _EMPTY_BODY_COUNT_WHY = ("a zero or negative batch size or run ceiling means no entity page is "
                          "ever judged for an empty body, and the run would say nothing was wrong.")
+
+# The duplicate-identity pass's own sentence. Its ceiling is not a threshold either, and zero
+# there is worse than a disabled pass: a run would report no duplicate identities for a registry
+# nothing compared.
+_DUPLICATE_ENTITY_COUNT_WHY = (
+    "a zero or negative run ceiling means no registered entity is ever compared against another, "
+    "and the run would say the registry holds no duplicate identity.")
 
 
 def int_setting(env_name: str, default: int, *, why: str = _POSITIVE_COUNT_WHY,
@@ -137,6 +154,7 @@ class GardenerSettings:
     sweep_sample: int = DEFAULT_SWEEP_SAMPLE
     empty_body_batch: int = DEFAULT_EMPTY_BODY_BATCH
     empty_body_ceiling: int = DEFAULT_EMPTY_BODY_CEILING
+    duplicate_entity_ceiling: int = DEFAULT_DUPLICATE_ENTITY_CEILING
 
     @classmethod
     def from_args(cls, args=None) -> "GardenerSettings":
@@ -158,4 +176,7 @@ class GardenerSettings:
                                          maximum=MAX_EMPTY_BODY_BATCH),
             empty_body_ceiling=int_setting(EMPTY_BODY_CEILING_ENV, DEFAULT_EMPTY_BODY_CEILING,
                                            why=_EMPTY_BODY_COUNT_WHY),
+            duplicate_entity_ceiling=int_setting(DUPLICATE_ENTITY_CEILING_ENV,
+                                                 DEFAULT_DUPLICATE_ENTITY_CEILING,
+                                                 why=_DUPLICATE_ENTITY_COUNT_WHY),
         )
