@@ -675,14 +675,39 @@ apply is not a dismissal.
 
 ### A view that did not catch up
 
+**Usually you do not have to do anything.** The librarian worker converges `views/` to the corpus
+on its own interval, whenever its queue is idle — an ordinary capture, a Slack or Drive drop, an
+applied repair, an entity mint and a hand edit are all covered, and so is an entity that has never
+had a view at all. `stigmergy-views` is for when you do not want to wait:
+
 ```sh
 .venv/bin/stigmergy-views regenerate --entity acme-corp           # exactly this entity
 .venv/bin/stigmergy-views regenerate --stale                      # every entity whose view no longer matches its members
+.venv/bin/stigmergy-views regenerate --sweep                      # what the worker's periodic pass does, right now
 .venv/bin/stigmergy-views regenerate --entity acme-corp --force   # bypass staleness; re-attempt a withheld synthesis
 ```
 
+`--sweep` is the UNION of `--stale` and `--all`, and neither of those alone converges the zone:
+`--stale` cannot create a view for an entity that never had one, and `--all` cannot remove one
+whose members have all disappeared. Prefer `--sweep` when you want the repo correct;
+[`views.md`](./views.md) has the table.
+
 A withheld synthesis is not a bug: the skeleton (timeline, backlinks) still ships, and
-`--force` is the operator-triggered retry. Re-running against an unchanged member set is a no-op.
+`--force` is the operator-triggered retry — the periodic pass will not retry one on its own,
+because the member hash did not change. Re-running against an unchanged member set is a no-op.
+
+**The two knobs on the periodic pass** (both on the librarian worker, both documented in full in
+[`librarian.md`](./librarian.md)'s environment table):
+
+| Var | Default | What it does |
+|---|---|---|
+| `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S` | `900` | how often the idle worker converges `views/`. `0` turns the pass off entirely; a negative value is refused at startup |
+| `STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING` | `10` | how many entities ONE pass may regenerate or remove — each is a model call. The surplus is picked up by the next pass |
+
+The pass records itself in `job_runs` under the job name `views-sweep` (distinct from `views`, an
+operator's own run, and `views-on-meeting`, the post-filing hook), and prints a `view sweep:` line
+on the worker's stdout when it moved something. What a ceiling deferred is in that row's
+`stats.skip_reasons`, spelled `run-ceiling-reached(N)` — the same wording the repair proposer uses.
 
 ### Postgres backup / restore
 

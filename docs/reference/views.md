@@ -14,12 +14,15 @@ Code map: [`../../src/stigmergy/views/index.md`](../../src/stigmergy/views/index
 (`tests/gardener/test_checks_dossiers.py` keeps an older word in its filename only).
 
 ```
-a meeting files ────────┐                       stigmergy-views regenerate --entity/--stale/--all
-                         │                                          │
-                         ▼                                          ▼
-         views.regenerate.run(touched_ids, guarded=False)   views.regenerate.run(ids, guarded=True)
-                         │                                          │
-                         └──────────────────┬───────────────────────┘
+the worker is idle,      a meeting files          stigmergy-views regenerate
+ its interval elapsed          │                   --entity/--stale/--all/--sweep
+          │                    │                                  │
+          ▼                    ▼                                  ▼
+ regenerate.sweep(      regenerate.run(          regenerate.run(ids, guarded=True)
+   guarded=False,        touched_ids,             or regenerate.sweep(guarded=True)
+   max_changes=N)        guarded=False)                            │
+          │                    │                                  │
+          └────────────────────┴──────────────────┬───────────────┘
                                              ▼
                   regenerate.regenerate_entity, once per entity id, in order:
 
@@ -167,46 +170,102 @@ never *narrow* `view_acl` itself. The two computations stay separate on purpose:
 other row be shown here," and folding the second into the first would let a backlink silently
 restrict a view its own members never restricted.
 
-## Two triggers
+## Three entry points, one guarantee
 
-**Trigger 1 — after a meeting files.** `librarian.processing._file_meeting` regenerates the
+A view is DERIVED, so it goes stale the moment anything writes a page. The fix is deliberately not
+a call at every door — two of the doors (an applied repair, an entity mint) run inside the HTTP
+server process, and any new door would have to remember. It is a **state-based convergence pass**:
+ask the corpus what diverges from `views/` right now, and fix that. The other two entry points are
+latency optimisations on top of that guarantee, not the guarantee itself.
+
+**The guarantee — the librarian worker's periodic sweep.** `worker.Worker`'s loop already has an
+idle branch (the queue is empty), which is precisely where maintenance belongs. On its own
+interval it calls `worker.run_view_sweep`, which materializes a fresh `gitcmd.ephemeral_worktree`
+off a freshly-fetched `origin/<branch>` and runs `regenerate.sweep(guarded=False, max_changes=…)`
+inside it. Three details are load-bearing:
+
+- **It runs in the worker, not in a fifth cron.** A view regeneration COMMITS AND PUSHES, so a
+  GitHub Actions cron would be the first one needing the librarian App's private key —
+  `repair-propose.yml` was built with no write credential at all, on purpose. The worker already
+  holds that credential and already runs continuously with `job_runs` bookkeeping, so this adds no
+  credential surface. **The four crons stay four.**
+- **It builds its OWN worktree.** The post-meeting hook BORROWS the capture's, and that is where
+  `guarded=False`'s justification comes from ("the librarian worker, whose ephemeral worktree is
+  always a fresh checkout"). An idle pass has none to borrow, so it makes one — the justification
+  stays literally true for the new caller instead of quietly becoming a claim nobody checks.
+- **It has a per-run ceiling.** N changed entities are N model calls.
+  `$STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING` bounds one pass; what it defers is recorded in
+  `job_runs.stats.skip_reasons` in `repair.proposer.RUN_CEILING_REASON`'s own wording, and picked
+  up by the next pass, because the population is recomputed from state every time. A fault leaves
+  a `job_runs` error row and is swallowed — filing must never depend on a rollup.
+
+Both knobs, with their defaults, are in [`operator-runbook.md`](./operator-runbook.md).
+
+**Latency, 1 — after a meeting files.** `librarian.processing._file_meeting` regenerates the
 views of every entity the meeting's decision pages touched, in the same worker run, right
 after the meeting's own page set is pushed. See [`librarian.md`](./librarian.md) and
 [`../../src/stigmergy/librarian/index.md`](../../src/stigmergy/librarian/index.md) for the contract
 change this introduces to what "the branch tip after a filing" means. Ordinary (non-meeting)
-captures do **not** trigger regeneration — a deliberate scope limit, not an oversight.
+captures still do **not** call it — they no longer need to, because the sweep covers them.
 
-**Nothing on a schedule closes that window, and it is worth being exact about why.** The
-gardener runs daily and its `stale-view` check (`views.staleness.list_stale_entities`, the same
-function `--stale` uses) NAMES every entity whose view no longer matches its members — and then
-stops there. The gardener is findings-only by construction: it holds no git plumbing and no path
-under `wiki/`, and its `suggested_action` for that finding is the literal string
-`stigmergy-views regenerate --entity <id>`, printed for a human to run, never invoked. So the loop is
-detect-nightly, repair-by-hand; see [`gardener-digest.md`](./gardener-digest.md).
+The gardener's `stale-view` check is still DETECTION only, and that is now a division of labour
+rather than a gap: it holds no git plumbing and no path under `wiki/`, so it names divergent
+entities and the sweep is what acts on them. Its `suggested_action` remains a command a human can
+run when they do not want to wait for the interval. See
+[`gardener-digest.md`](./gardener-digest.md).
 
-**Trigger 2 — `stigmergy-views regenerate`**, the operator's own front door:
+**Latency, 2 — `stigmergy-views regenerate`**, the operator's own front door:
 
 ```sh
 stigmergy-views regenerate --entity <id>     # exactly this entity, even if not stale
 stigmergy-views regenerate --stale           # every entity whose EXISTING view no longer matches its members
 stigmergy-views regenerate --all             # every entity with at least one anchored page (the backfill flag)
+stigmergy-views regenerate --sweep           # the UNION of the two: what the worker's periodic pass does
 stigmergy-views regenerate --entity <id> --force   # bypass staleness; re-attempt synthesis
 ```
 
 One required, mutually exclusive target — a bare `regenerate` never silently picks `--all` for
-you. `--stale` and `--all` check **different populations**, named explicitly in every report line
-so a steward comparing two runs can tell whether they even looked at the same entities. `--force`
+you. The targets check **different populations**, named explicitly in every report line so a
+steward comparing two runs can tell whether they even looked at the same entities. `--force`
 widens `--stale`'s population to every entity with an existing view (not just the stale ones);
 `--all`'s own population already covers everything, so `--force` there changes only whether a
 fresh view's synthesis is re-attempted, not which entities are visited.
+
+### The populations, and why the sweep is a UNION
+
+`--stale` and `--all` are not comparable, and **neither is a superset of the other**. This is the
+crux of the whole design, so it is written down rather than left to be rediscovered:
+
+| Target | Population | What it CANNOT see |
+|---|---|---|
+| `--stale` | entities with an EXISTING view whose `member_hash` no longer matches (`staleness.list_stale_entities`) | every entity that has never had a view — it iterates the views on DISK, so a newly-minted entity with one anchored page is invisible to it. Also a de-registered entity whose pages still anchor it: its member hash still matches |
+| `--all` | every entity with ≥ 1 anchored page (`staleness.list_all_anchored_entities`) | an orphaned view whose members have ALL disappeared — that entity has no anchored pages left to be found by |
+| `--sweep` | the union of both (`staleness.list_sweep_entities`) | — |
+
+So a periodic pass built on `--stale` alone — the obvious choice, and the population
+`gardener.checks.check_stale_views` reuses verbatim — would silently never CREATE a missing view,
+and one built on `--all` alone would never REMOVE an orphaned one. `--sweep` is a fourth target
+rather than a widening of `--stale` on purpose: `--stale` names a population another module reuses
+by name, and `--stale --force` already carries a documented widening of its own; a third meaning on
+the same flag is how two readers end up disagreeing about what "stale" means.
+
+**One corpus parse serves the whole population.** `list_sweep_entities` parses once and hands the
+rows down through `list_stale_entities`, `list_all_anchored_entities`, `regenerate.run` and
+`regenerate_entity` into `skeleton.members_of` — O(population x corpus) becomes O(corpus). That is
+safe across the batch's own commits for exactly one reason: `views/` is deliberately excluded from
+`skeleton.MEMBER_ZONES`, so nothing a view write or removal commits can change a member set. The
+shared parse stops at the member set: `skeleton.backlinks_of` scans every indexed zone INCLUDING
+`views/`, where a view written earlier in the same pass is a legitimate backlink source, so it
+keeps its own fresh parse — paid per REGENERATED entity, never per entity checked.
 
 ## One writer, one commit per entity
 
 Every view commit is authored by the App bot (`librarian.githubapp.identity()`). On the steward's
 own clone (`guarded=True`, the CLI's default) `writer.py` first proves that checkout is on the
-right branch and clean; the worker's trigger passes `guarded=False`, because its worktree is a
-fresh, always-detached checkout where both guards would misfire on conditions that are not
-problems. A batch run (`--stale`/`--all`, or the
+right branch and clean; both of the worker's paths pass `guarded=False`, because each runs in an
+ephemeral, always-detached worktree where both guards would misfire on conditions that are not
+problems — the post-meeting hook in the capture's, the periodic sweep in one it builds for itself.
+A batch run (`--stale`/`--all`/`--sweep`, the periodic pass, or the
 worker's touched-entity set) is **N independent commits**, one per entity, not one commit for the
 whole run — deliberately different from the meeting flow's atomicity rule (one meeting capture is
 one indivisible page set): here each entity's view is independent of every other entity's, so
@@ -238,28 +297,37 @@ standing.
 - **`views/` is already an indexed zone** (`stigmergy.index.corpus.ZONES`), so a regenerated
   view is searchable at the next rebuild/webhook upsert with no index schema change and no
   ranking change.
-- **A withheld synthesis with no member-set change has no automatic retry** — only `--force`
-  closes that gap, and only when an operator runs it by hand; nothing retries on a schedule.
-- **No cron regenerates a view — not here, and not in the gardener either.** This package owns both
-  halves of view regeneration (the skeleton and the synthesis). The gardener owns DETECTION only:
-  its daily run reports a `stale-view` finding per divergent entity and names the command, and
-  running that command is an operator's act. A findings-only package that quietly regenerated pages
-  would be the thing its own architecture tests exist to forbid.
+- **A withheld synthesis with no member-set change has no automatic retry** — the periodic sweep
+  converges on the MEMBER HASH, so an entity whose members did not change is `unchanged` to it too.
+  Only `--force` closes that gap, and only when an operator runs it by hand.
+- **The sweep converges the member set, not the backlinks.** `member_hash` covers a view's members;
+  a page elsewhere gaining a wikilink to an entity's own page changes that view's Backlinks section
+  without changing its hash, and no pass will notice. `--force` is the recovery, as it is above.
+- **No cron regenerates a view — not here, and not in the gardener either.** The convergence pass
+  lives in the librarian worker (which already holds the write credential), and this package owns
+  both halves of view regeneration (the skeleton and the synthesis). The gardener owns DETECTION
+  only: its daily run reports a `stale-view` finding per divergent entity and names the command a
+  human can run without waiting for the interval. A findings-only package that quietly regenerated
+  pages would be the thing its own architecture tests exist to forbid.
 
 ## Where the code lives
 
 - `stigmergy.views` — the package itself: `skeleton.py` (the deterministic half — Timeline,
   Backlinks, `member_hash`), `synthesis.py` (the bounded agent),
   `render.py` (page assembly), `writer.py` (the one commit path), `regenerate.py` (orchestration —
-  staleness, `--force`, removal, the shared `run()`), `staleness.py` (the READ-ONLY extraction of
-  `list_stale_entities`/`list_all_anchored_entities`, so the gardener can ask "which views are
-  stale" without importing `regenerate.py` and dragging the whole git write stack in with it),
+  staleness, `--force`, removal, the shared `run()` with its ceiling, and the `sweep()` wrapper),
+  `staleness.py` (the READ-ONLY extraction of `list_stale_entities`/`list_all_anchored_entities`/
+  `list_sweep_entities`, so the gardener can ask "which views are stale" without importing
+  `regenerate.py` and dragging the whole git write stack in with it),
   `cli.py` (`stigmergy-views`), `errors.py`. See
   [`../../src/stigmergy/views/index.md`](../../src/stigmergy/views/index.md) for the full code
   map.
-- `librarian.processing._file_meeting`'s `views_regenerate` block — trigger 1. See
-  [`../../src/stigmergy/librarian/index.md`](../../src/stigmergy/librarian/index.md).
-- The operator's own quick-reference (commands, the two triggers, the audience rule, all in
+- `librarian.worker.run_view_sweep` and `Worker.maybe_sweep_views` — the periodic pass and its
+  schedule; `librarian.config`'s `VIEW_SWEEP_INTERVAL_ENV`/`VIEW_SWEEP_CEILING_ENV` are its two
+  knobs. See [`../../src/stigmergy/librarian/index.md`](../../src/stigmergy/librarian/index.md).
+- `librarian.processing._file_meeting`'s `views_regenerate` block — the post-meeting hook, same
+  code map.
+- The operator's own quick-reference (commands, the entry points, the audience rule, all in
   brief) lives in [`operator-runbook.md`](./operator-runbook.md#a-view-that-did-not-catch-up);
   this document is the fuller narrative account.
 
@@ -270,10 +338,13 @@ the budget-withheld outcome (`test_synthesis.py`), the frontmatter shape and the
 proven both ways plus its sabotage twin (`test_render.py`), App-bot authorship over a real bare git
 remote (`test_writer.py`), staleness/`--force`/removal/refusals over that same real git — with the
 `job_runs` write going through the conftest's offline `FakeConn`, so the suite needs no Postgres at
-all (`test_regenerate.py`) — and the CLI's argument handling (`test_cli.py`). `tests/server/
+all (`test_regenerate.py`) — the convergence pass's union population, its single corpus parse, its
+ceiling and the no-commit/no-model-call twin (`test_sweep.py`), and the CLI's argument handling
+(`test_cli.py`). The worker's half — the interval, the fault posture, and the pass's own worktree —
+is `tests/librarian/test_view_sweep_unit.py`. `tests/server/
 test_service_acl.py`'s two `test_view_*` cases prove the existence-leak guarantee needed no
 view-specific server code. `scripts/walk_views.py` is a narrated, offline, keyless walk of the
-whole mechanism (drop a transcript, watch trigger 1 fire, read the commit back, run trigger 2 by
-hand and watch the honest no-op) — it does not replace the live judgment step ("what do we know about
+whole mechanism (drop a transcript, watch the post-meeting hook fire, read the commit back, run the
+CLI by hand and watch the honest no-op) — it does not replace the live judgment step ("what do we know about
 X?" against the real corpus, judged by the operator), which needs a real embedder and model call
 and is out of scope for an offline script.

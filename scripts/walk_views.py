@@ -2,11 +2,13 @@
 
 Not a test: a narrated walk the way an operator meets it — drop a meeting transcript, watch the
 librarian file it and regenerate the touched entity's view in the same run (the post-filing
-trigger); read the committed view back from git; then run `stigmergy-views regenerate --entity <id>`
-by hand and watch the honest no-op. Real Postgres, real git, real gates, the offline double.
+hook); read the committed view back from git; run `stigmergy-views regenerate --entity <id>` by
+hand and watch the honest no-op; then let the worker's periodic convergence sweep create a view for
+an entity NOTHING has a hook for. Real Postgres, real git, real gates, the offline double.
 
-It proves the MECHANISM only — skeleton, synthesis, commit, trigger, no-op. Whether a live `ask`
-prefers the view is the operator's judgment against a real corpus and stays a hand step.
+It proves the MECHANISM only — skeleton, synthesis, commit, hook, no-op, convergence. Whether a
+live `ask` prefers the view is the operator's judgment against a real corpus and stays a hand
+step.
 
 Run: `.venv/bin/python scripts/walk_views.py` from the repo root, after `make db-up`.
 """
@@ -68,12 +70,12 @@ def main() -> int:
         assert result.status == schema.FILED, f"expected filed, got {result.status}"
         print(result.report["summary"])
 
-        step("job_runs carries a row for the view trigger")
+        step("job_runs carries a row for the post-filing hook")
         with conn.cursor() as cur:
             cur.execute("SELECT job, status, stats FROM job_runs WHERE job LIKE 'views%' "
                        "ORDER BY id DESC LIMIT 1")
             row = cur.fetchone()
-        assert row is not None, "no views job_runs row — trigger 1 did not fire"
+        assert row is not None, "no views job_runs row — the post-filing hook did not fire"
         show("job_runs row", row)
 
         step("the committed view, read back from the bare remote (env.repo's own working "
@@ -86,7 +88,7 @@ def main() -> int:
         assert page, f"{relpath} was never committed to {env.bare}"
         print(page)
 
-        step("trigger 2 — the operator CLI (stigmergy-views regenerate --entity), by hand, "
+        step("the operator CLI (stigmergy-views regenerate --entity), by hand, "
             "from a steward's clone freshly synced with what the worker just pushed: an honest "
             "no-op, since the worker already regenerated it")
         gitcmd.run("fetch", "origin", settings.branch, cwd=env.repo)
@@ -95,6 +97,45 @@ def main() -> int:
             env.repo, entity_id, registry=registry, branch=settings.branch))
         show("action", outcome.action)
         assert outcome.action == "unchanged", f"expected unchanged, got {outcome.action}"
+
+        step("a page lands with NO hook of any kind — the shape every door except a meeting has "
+            "(an ordinary capture, a Slack or Drive drop, an applied repair, a hand edit). "
+            "Nothing regenerates anything, and the entity has no view at all")
+        second_id = "globex"
+        with open(os.path.join(env.repo, "ops", "entity-registry.json"), "w") as f:
+            f.write(f'{{"entities": {{"{entity_id}": {{"name": "Acme Corp", "type": "organization", '
+                   f'"aliases": []}}, "{second_id}": {{"name": "Globex", "type": "organization", '
+                   f'"aliases": []}}}}}}\n')
+        with open(os.path.join(env.repo, "wiki", "entities", "Globex.md"), "w") as f:
+            f.write(f'---\ntype: entity\ntitle: "Globex"\nentity: [{second_id}]\n'
+                   f'status: developing\ncreated: "2026-07-01"\nupdated: "2026-07-01"\n'
+                   f'tags: [entity]\n---\n\n# Globex\n\nAn entity nothing has filed a meeting for.\n')
+        support.commit_and_push(env.repo, "feat: an entity page filed by a door with no view hook")
+        on_remote = gitcmd.run("ls-tree", "--name-only", f"{settings.branch}:views", cwd=env.bare,
+                               check=False).stdout.split()
+        show("views/ on the remote", ", ".join(on_remote) or "(the tree does not exist yet)")
+        assert f"{second_id}.md" not in on_remote, "nothing should have written globex's view yet"
+
+        step("the worker's periodic convergence sweep — the guarantee. It builds its OWN "
+            "ephemeral worktree (an idle pass has no capture's to borrow), asks the corpus which "
+            "views diverge, and fixes those. NOTE the population: --stale could never have named "
+            "globex, because it has no view to be stale")
+        result = worker.run_view_sweep(conn, deps)
+        show("stats", result.stats)
+        assert result.stats["written"] == 1, f"expected one view written, got {result.stats}"
+        page = gitcmd.run("show", f"{settings.branch}:{regenerate.view_relpath(second_id)}",
+                          cwd=env.bare).stdout
+        assert page, f"the sweep did not commit views/{second_id}.md"
+        print(page)
+
+        step("and again, with nothing changed — the cost property: no commit and no model call")
+        before = gitcmd.run("rev-parse", settings.branch, cwd=env.bare).stdout.strip()
+        again = worker.run_view_sweep(conn, deps)
+        show("stats", again.stats)
+        assert again.stats["written"] == 0 and again.stats["removed"] == 0
+        assert gitcmd.run("rev-parse", settings.branch, cwd=env.bare).stdout.strip() == before, (
+            "a converged corpus must cost zero commits")
+        show("remote tip", "unmoved")
 
         print(f"\n{'=' * 78}\nView walk complete — {STEP} step(s). Mechanism proven offline; the "
              f"live 'ask what do we know about {entity_id}?' judgment against the real "

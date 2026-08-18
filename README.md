@@ -116,7 +116,10 @@ knowledge.
 
 Two flows sit on top: the **meeting distiller** (a dropped transcript becomes a source page, a
 meeting page and one decision page per decision, each anchored) and **views** (per-entity rollups
-whose ACL is the intersection of their members').
+whose ACL is the intersection of their members'). A view is derived, so it can go stale whatever
+wrote the page — the worker fixes that by CONVERGENCE rather than by a hook per door: whenever its
+queue is idle and its interval has elapsed, it asks the corpus which views diverge and regenerates
+those, bounded by a per-pass ceiling that says what it deferred.
 
 ### The read path
 

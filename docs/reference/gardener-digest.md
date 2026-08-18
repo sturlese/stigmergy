@@ -67,6 +67,15 @@ amount.
 | Date-bearing body link (`date-bearing-body-link`) | every `wiki/`, `sources/`, `views/` page's BODY prose, read from the repo checkout, for a `[[YYYY-MM-DD-…]]` wikilink target | any match — one finding per page, naming the first offending stem | warn |
 | Entity placeholder body (`entity-placeholder-body`) | every `wiki/entities/` page's BODY, read from the repo checkout, for a line that is wholly angle-marked (`<…>`) — the entity template's unwritten spans | any such line survives — the identity exists and says nothing about itself | info |
 
+**`stale-view` is the one check with an actor outside this package, and that is a division of
+labour rather than a gap.** The librarian worker's periodic view sweep converges `views/` to the
+corpus on its own interval, over a population that is a SUPERSET of this check's (see
+[`views.md`](./views.md)): this check names entities whose EXISTING view has drifted, the sweep
+also creates views that were never written and removes orphaned ones. So a `stale-view` finding is
+a report of something already scheduled to be fixed, and its `action:` command is what an operator
+runs when they do not want to wait for the interval. The gardener itself still writes nothing but
+findings — it holds no git plumbing, by construction and by architecture test.
+
 **The date-bearing check is a veto that was demoted, and the demotion is the point.** Only a meeting page's own
 filename carries a calendar date (`wiki/meetings/YYYY-MM-DD-<slug>.md`), so a date-bearing wikilink
 in body prose is a pointer that belongs in `sources:`/`related:` frontmatter. The meeting flow used

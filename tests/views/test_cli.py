@@ -7,7 +7,14 @@ import pytest
 
 from stigmergy.kernel.registry import Registry
 from stigmergy.views import cli, regenerate
-from tests.views.conftest import FakeConn, build_repo, git, registry_of, remote_log
+from tests.views.conftest import (
+    FakeConn,
+    build_repo,
+    git,
+    registry_of,
+    remote_files,
+    remote_log,
+)
 
 
 def test_regenerate_requires_exactly_one_target():
@@ -23,6 +30,18 @@ def test_regenerate_accepts_each_target_alone():
     assert parser.parse_args(["regenerate", "--entity", "acme-corp"]).entity == "acme-corp"
     assert parser.parse_args(["regenerate", "--stale"]).stale is True
     assert parser.parse_args(["regenerate", "--all"]).all is True
+    assert parser.parse_args(["regenerate", "--sweep"]).sweep is True
+
+
+def test_sweep_is_a_fourth_target_not_a_widening_of_stale():
+    """`--stale` names a population `gardener.checks.check_stale_views` reuses verbatim, and
+    `--stale --force` already carries a documented widening of its own. A third meaning on the same
+    flag is how two readers end up disagreeing about what "stale" is, so the union got its own
+    target — mutually exclusive with the other three like any of them."""
+    parser = cli.build_parser()
+    assert parser.parse_args(["regenerate", "--sweep"]).stale is False
+    with pytest.raises(SystemExit):
+        parser.parse_args(["regenerate", "--sweep", "--stale"])
 
 
 def test_repo_refuses_a_non_git_directory(tmp_path):
@@ -58,7 +77,7 @@ def test_main_exits_2_when_the_database_is_unreachable(monkeypatch):
 
 # ── --force must actually widen --stale's population ────────────────────────────────────────────
 class _Args:
-    def __init__(self, repo, *, stale=False, all_=False, entity=None, force=False,
+    def __init__(self, repo, *, stale=False, all_=False, sweep=False, entity=None, force=False,
                  as_json=False):
         self.repo = repo
         self.dsn = None
@@ -67,6 +86,7 @@ class _Args:
         self.entity = entity
         self.stale = stale
         self.all = all_
+        self.sweep = sweep
         self.force = force
 
 
@@ -185,3 +205,52 @@ def test_each_removal_road_prints_only_its_own_true_sentence(tmp_path, capsys):
     assert _PAGES_UNTOUCHED not in out
     assert _NOTHING_ANCHORS not in out
     assert f"committed {no_members.commit[:12]}" in out
+
+
+# ── --sweep: the union target, and the same entry point the worker's idle pass uses ─────────────
+def test_sweep_creates_a_missing_view_that_stale_would_never_have_named(tmp_path, monkeypatch,
+                                                                       capsys):
+    """The operator-facing half of the population argument: `--stale` reports "0 entities with an
+    existing view" and does nothing, while `--sweep` over the same repo writes the view."""
+    remote, clone = build_repo(str(tmp_path / "git"))
+    registry = registry_of()
+    monkeypatch.setattr(cli, "_registry", lambda repo: registry)
+
+    assert cli._cmd_regenerate(FakeConn(), _Args(clone, stale=True)) == 0
+    capsys.readouterr()
+    assert "views/acme-corp.md" not in remote_files(remote)
+
+    assert cli._cmd_regenerate(FakeConn(), _Args(clone, sweep=True)) == 0
+    out = capsys.readouterr().out
+    assert cli.SWEEP_POPULATION in out
+    assert "views/acme-corp.md" in remote_files(remote)
+
+
+def test_sweep_on_a_converged_repo_says_so_and_commits_nothing(tmp_path, monkeypatch, capsys):
+    remote, clone = build_repo(str(tmp_path / "git"))
+    registry = registry_of()
+    monkeypatch.setattr(cli, "_registry", lambda repo: registry)
+    cli._cmd_regenerate(FakeConn(), _Args(clone, sweep=True))
+    capsys.readouterr()
+    log_before = remote_log(remote)
+
+    assert cli._cmd_regenerate(FakeConn(), _Args(clone, sweep=True)) == 0
+
+    out = capsys.readouterr().out
+    assert "already match the corpus" in out
+    assert "nothing regenerated, nothing committed" in out
+    assert remote_log(remote) == log_before
+
+
+def test_sweep_json_carries_the_ceiling_bookkeeping_keys(tmp_path, monkeypatch, capsys):
+    """`--json`'s `stats` IS `job_runs.stats`, so the keys an operator reads on a terminal and the
+    ones a run leaves behind cannot drift apart."""
+    remote, clone = build_repo(str(tmp_path / "git"))
+    monkeypatch.setattr(cli, "_registry", lambda repo: registry_of())
+
+    assert cli._cmd_regenerate(FakeConn(), _Args(clone, sweep=True, as_json=True)) == 0
+
+    stats = json.loads(capsys.readouterr().out)["stats"]
+    assert stats["population"] == 1
+    assert stats["deferred"] == 0
+    assert stats["skip_reasons"] == []

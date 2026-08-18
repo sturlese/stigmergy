@@ -188,7 +188,12 @@ def check_stale_views(repo: str) -> list[dict]:
     """Population: every entity `views.staleness.list_stale_entities` names — reused verbatim,
     never re-derived. Staleness is a member-hash mismatch, not an age. Import `views.staleness`,
     never `views.regenerate`: the latter would load the git write stack into every gardener
-    process."""
+    process.
+
+    This finding HAS an actor, and it is not here: the librarian worker's periodic convergence
+    sweep regenerates over a SUPERSET of this population (it also creates views that never existed
+    and removes orphaned ones). So this stays detection — the gardener holds no git plumbing by
+    construction — and the command below is what an operator runs to skip the wait."""
     return [
         build_finding(
             check=CHECK_STALE_VIEW, severity=SEVERITY_WARN, subject=entity_id,

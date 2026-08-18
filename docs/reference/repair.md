@@ -50,6 +50,11 @@ duplicate content hashes. The other five checks are absent by NAME rather than b
 regeneration, an anchor that no longer fits is a judgment about a page's subject. None of them is an
 edit or a body this vocabulary can express.
 
+**"This loop cannot express it" is not "nothing acts on it."** `stale-view` is answered by the
+librarian worker's periodic view sweep — a state-based convergence pass that regenerates the page
+whole, which is exactly the shape this vocabulary refuses and exactly why it belongs somewhere
+else. See [`views.md`](./views.md).
+
 | check | what it says | the repair |
 |---|---|---|
 | `model-unlinked-mention` | two pages cover the same ground with no link between them | a `backlink` on one of them, or on each |

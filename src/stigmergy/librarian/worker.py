@@ -11,7 +11,16 @@ Shutdown is not a cooperative cancel: nothing can abort a `process_item` already
 `stopping`/`releasing` affect only whether the NEXT item is claimed and the item in flight runs
 to completion (and may well be filed, with a real commit). Only a kill returns the row to the
 queue, after the visibility timeout, with its worktree reaped at the next startup.
+
+The periodic view sweep below is cooperative BETWEEN ENTITIES and uncancellable within one. That
+line is where the two properties meet: one entity is one commit, so any prefix of a pass is a
+valid repo state and stopping between them costs one interval, while inside an entity there is a
+synthesis call and a push that tearing in half would gain nothing. So a signal is observed after
+at most one entity instead of after a whole ceiling's worth of model calls — which matters because
+the deployed kill window is finite and `ops.job_run` writes its row on the way OUT, so a pass that
+gets to SIGKILL leaves no row at all.
 """
+import asyncio
 import logging
 import os
 import signal
@@ -22,6 +31,7 @@ from stigmergy.capture.errors import QueueStateError
 from stigmergy.librarian import agent as agent_module
 from stigmergy.librarian import base_inputs, config, gates, gitcmd, processing
 from stigmergy.librarian.errors import GitError, LibrarianConfigError, StaleBaseError
+from stigmergy.views import regenerate as views_regenerate
 
 log = logging.getLogger(__name__)
 
@@ -246,6 +256,109 @@ def swept_clause(result: dict, settings) -> str:
             f"{human_duration(settings.visibility_timeout_s)})")
 
 
+# ── the periodic view sweep ───────────────────────────────────────────────────────────────────
+# A view is DERIVED, so it can go stale whenever anything writes a page — an ordinary capture, a
+# Slack or Drive drop, an applied repair, an entity mint, a hand edit in the knowledge repo. The
+# fix is deliberately NOT a call at each of those doors: two of them run inside the HTTP server
+# process, and any new door would have to remember. It is a state-based convergence pass that asks
+# the corpus what is divergent NOW, which covers every writer that will ever exist.
+#
+# It lives HERE, in the worker, rather than in a fifth cron: this process already holds the GitHub
+# App credential the commit needs, and `repair-propose.yml` was deliberately built with no write
+# credential at all — a cron that pushed would be a new credential surface.
+
+
+# The two refusals below both fail CLOSED before a single view is touched, and both exist because
+# this pass is the one writer in the system with no operator in front of it: every other caller of
+# `views.regenerate` is either a human at a terminal or a capture somebody submitted, and can
+# afford to learn about a bad input from an error message.
+_ABSENT_REGISTRY_REFUSAL = (
+    "refusing to converge views/: the entity registry is not readable at {where}. It resolves to "
+    "an EMPTY registry, and an empty registry makes every existing view an orphan — this pass's "
+    "answer to an orphan is to DELETE it, so a fetch that raced a force-push, a corrupt object or "
+    "a missing file would remove every view in the repo, {ceiling} per pass, for as long as the "
+    "worker runs. The ceiling bounds the pass, not the incident. A registry that is present and "
+    "declares no entities is a different thing — a committed, reviewable statement — and is "
+    "honoured.")
+_STALE_BASE_REFUSAL = (
+    "refusing to converge views/: the base resolved to the local {base} instead of "
+    "origin/{branch}, so the fetch failed and this deployed worker's checkout is whatever it was "
+    "cloned at. A pass off a stale base re-derives every view from an OLD member set and then "
+    "`gitcmd.push` rebases that state onto the current tip — replaying an older, potentially "
+    "WIDER acl over the current one. `processing._resolve_filing_base` refuses a filing for the "
+    "same fault; this is the same rule, and it binds harder here, because a capture writes new "
+    "content while this writes DERIVED state over content somebody else already fixed.")
+
+
+def run_view_sweep(conn, deps: processing.Deps, *, should_stop=None) -> views_regenerate.RunResult:
+    """One convergence pass over `views/`, on this worker's own fresh worktree.
+
+    **The worktree is materialized here, and that is what keeps `guarded=False` honest.** The
+    post-meeting hook BORROWS the capture's worktree, so it inherits the "always a fresh, detached
+    checkout" justification `views.regenerate.regenerate_entity` states for skipping the
+    dirty-tree/wrong-branch guards. An idle pass has no capture to borrow from, so it builds the
+    same thing itself off a freshly-fetched `origin/<branch>` — the justification stays literally
+    true for this caller instead of quietly becoming a claim nobody checks.
+
+    The registry is read at THIS pass's base, not at startup: a de-registration pushed since the
+    worker booted is exactly the input that turns an orphaned view into a removal, and a pre-flight
+    copy would miss it until the next restart. That is also why the base and the registry are both
+    CHECKED here rather than trusted — see the two refusals above, and note that each is returned
+    as a `skip_reason` on a `RunResult` rather than raised: a raise reaches
+    `Worker.maybe_sweep_views`, which logs and swallows, leaving the one unattended loop in the
+    system to refuse silently every interval.
+
+    `should_stop` is threaded down to `views.regenerate.run`, which consults it BETWEEN entities.
+    """
+    settings = deps.settings
+    base = gitcmd.base_ref(deps.repo, settings.branch)
+    if settings.require_remote_base and not base.remote:
+        return _refused_sweep(conn, _STALE_BASE_REFUSAL.format(base=base.describe(),
+                                                               branch=settings.branch),
+                              error=StaleBaseError)
+    if not base_inputs.registry_present_at(deps.repo, base):
+        return _refused_sweep(conn, _ABSENT_REGISTRY_REFUSAL.format(
+            where=base_inputs.where(base, config.REGISTRY_RELPATH),
+            ceiling=settings.view_sweep_ceiling), error=LibrarianConfigError)
+    with gitcmd.ephemeral_worktree(deps.repo, base.sha, settings.worktree_root) as worktree:
+        registry = base_inputs.load_registry(deps.repo, base)
+        return asyncio.run(views_regenerate.sweep(
+            worktree, conn, registry=registry, branch=settings.branch, guarded=False,
+            max_changes=settings.view_sweep_ceiling, should_stop=should_stop))
+
+
+def _refused_sweep(conn, reason: str, *, error: type[BaseException]) -> views_regenerate.RunResult:
+    """A pass that did not run, in the shape a pass that did returns — so `view_sweep_clause`
+    prints it and nothing downstream needs a second kind of answer.
+
+    It also writes its own `job_runs` error row, named for the exception the FILING path raises for
+    the same fault, because a maintenance pass nobody is watching that refuses only into a log has
+    no operator-facing surface at all: `job_runs` is where the pass is read from.
+    """
+    log.error("%s", reason)
+    result = views_regenerate.RunResult(skip_reasons=[reason])
+    ops.record_job_run(conn, views_regenerate.SWEEP_JOB_NAME, status="error",
+                       stats=result.stats, error=error.__name__)
+    return result
+
+
+def view_sweep_clause(result: views_regenerate.RunResult) -> str:
+    """One line about a view sweep, or `""` when it converged with nothing to do — `swept_clause`'s
+    shape, for the same reason: a maintenance pass that printed "nothing changed" every interval
+    would bury the passes that did change something."""
+    stats = result.stats
+    if not (stats["written"] or stats["removed"] or stats["refused"] or result.skip_reasons):
+        return ""
+    line = (f"view sweep: {stats['checked']} of {stats['population']} entity(ies) checked — "
+            f"{stats['written']} regenerated, {stats['removed']} removed, "
+            f"{stats['unchanged']} already current")
+    if stats["refused"]:
+        line += f", {stats['refused']} refused"
+    if result.skip_reasons:
+        line += " — " + "; ".join(result.skip_reasons)
+    return line
+
+
 def build_deps(settings, resolved: dict, evidence) -> processing.Deps:
     return processing.Deps(
         settings=settings, evidence=evidence, agent=agent_module.build_agent(settings),
@@ -374,12 +487,25 @@ def emit_from_signal_handler(message: str) -> None:
 class Worker:
     """The long-running loop. `once` uses `process_next` directly and never constructs this."""
 
-    def __init__(self, conn, deps: processing.Deps, *, on_output=print):
+    def __init__(self, conn, deps: processing.Deps, *, on_output=print,
+                 view_sweep=run_view_sweep, now=time.monotonic):
         self.conn = conn
         self.deps = deps
         self.on_output = on_output
         self.stopping = False       # do not claim another item after this one
         self.releasing = False      # do not claim another item, and do not sleep waiting either
+        # The maintenance pass and the clock that schedules it, both injected: the interval is a
+        # timing contract, and a test that had to wait one out could only prove it by sleeping.
+        self._view_sweep = view_sweep
+        self._now = now
+        # `None` means "due at the first idle tick" — a worker that has just started converges
+        # `views/` before it waits an interval, the same posture `sweep()` above already takes.
+        self._view_sweep_due_at: float | None = None
+
+    def _stop_requested(self) -> bool:
+        """Either shutdown flag, as a CALLABLE — read at the moment it is asked, never captured.
+        Handed to the view sweep, which consults it between entities."""
+        return self.stopping or self.releasing
 
     def install_signal_handlers(self) -> None:
         signal.signal(signal.SIGINT, self._on_sigint)
@@ -437,9 +563,47 @@ class Worker:
                 if self.stopping:
                     break
                 if outcome is None:
+                    # The queue is empty — where maintenance belongs. On its OWN interval, not
+                    # every idle tick: an empty queue polls every few seconds and a corpus parse
+                    # per tick is not free.
+                    self.maybe_sweep_views()
                     self._sleep(self.deps.settings.poll_interval_s)
             stats["processed"] = processed
         return processed
+
+    def maybe_sweep_views(self) -> bool:
+        """Run the convergence pass if its interval has elapsed. Returns whether it ran.
+
+        SKIPPED, never blocked: the idle branch returns immediately when the pass is not due, so
+        `_sleep` keeps polling in slices and a signal is still observed promptly.
+
+        A fault is recorded and swallowed — `views.regenerate.run` has already written its own
+        `job_runs` error row by the time one reaches here — because filing must never depend on a
+        rollup. That is the post-meeting hook's posture, for the same reason.
+
+        The pass is handed `self._stop_requested` rather than a copy of the flags: it is consulted
+        between entities, and by then the flags may have flipped. Not starting one is still the
+        first guard — a shutdown must not pick up a fresh multi-entity pass on its way out.
+        """
+        interval = float(self.deps.settings.view_sweep_interval_s)
+        if interval <= config.VIEW_SWEEP_OFF or self.stopping or self.releasing:
+            return False
+        now = self._now()
+        if self._view_sweep_due_at is not None and now < self._view_sweep_due_at:
+            return False
+        # Scheduled BEFORE the pass runs, off the moment it STARTED: a fault would otherwise
+        # re-attempt on every idle tick, and a pass slower than its own interval would owe another
+        # the instant it finished.
+        self._view_sweep_due_at = now + interval
+        try:
+            result = self._view_sweep(self.conn, self.deps, should_stop=self._stop_requested)
+        except Exception:  # noqa: BLE001 — best-effort maintenance; see the docstring
+            log.error("the periodic view sweep failed; the queue keeps draining", exc_info=True)
+            return True
+        clause = view_sweep_clause(result)
+        if clause:
+            self.on_output(clause)
+        return True
 
     def _sleep(self, seconds: float) -> None:
         """Poll in slices so a signal is observed promptly rather than after a whole interval."""

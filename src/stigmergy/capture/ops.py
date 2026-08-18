@@ -67,6 +67,38 @@ def record_ingest_error(conn, *, source_doc_id: str, stage: str, error: str, att
 
 
 @contextlib.contextmanager
+def try_advisory_lock(conn, key: int):
+    """Hold a session-scoped advisory lock for the block if it is free, yielding whether it was
+    taken. NON-BLOCKING (`pg_try_advisory_lock`): a caller that cannot have it must be able to say
+    so and move on, never queue behind a run that may take minutes.
+
+    RELEASED on the way out rather than left to the connection, because the callers are
+    long-running processes: a worker that held its maintenance lock for the life of its connection
+    would lock every other worker out permanently, which is a different rule from the one it asked
+    for. Failure to release is logged and swallowed — the lock dies with the connection anyway, and
+    a cleanup error must not mask whatever the block raised.
+
+    Each caller owns its own `key`, declared beside its own use: two locks sharing one key
+    interfere silently. `capture.schema.startup_ddl_lock` is the BLOCKING sibling (a startup DDL
+    run must wait, not skip); `slack.app.acquire_singleton_lock` is a third spelling this module
+    cannot serve without a `slack -> capture` import that the layering does not have.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT pg_try_advisory_lock(%s::bigint)", (key,))
+        acquired = bool(cur.fetchone()[0])
+    try:
+        yield acquired
+    finally:
+        if acquired:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(%s::bigint)", (key,))
+            except Exception:  # noqa: BLE001 — see the docstring: never mask the block's own error
+                log.warning("could not release advisory lock %s; it is released when this "
+                            "connection closes", key, exc_info=True)
+
+
+@contextlib.contextmanager
 def job_run(conn, job: str):
     """Record a `job_runs` row around a block of work, ok or error.
 

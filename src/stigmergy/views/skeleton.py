@@ -51,11 +51,14 @@ def members_of(repo: str, entity_id: str, *, rows=None) -> list[Member]:
             for r in sorted(rows, key=lambda r: r.path)]
 
 
-def all_anchored_entity_ids(repo: str) -> set[str]:
+def all_anchored_entity_ids(repo: str, *, rows=None) -> set[str]:
     """Every entity id anchored by at least one page in `MEMBER_ZONES` — the `--all`
-    population."""
+    population.
+
+    `rows` is `members_of`'s, for the same reason: a sweep that has already parsed the repo hands
+    the parse in rather than paying for a second one."""
     out: set[str] = set()
-    for r in _member_rows(repo):
+    for r in _member_rows(repo, rows):
         out.update(r.entity)
     return out
 
