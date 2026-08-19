@@ -9,6 +9,36 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
+## [0.5.0] - 2026-08-20
+
+v0.4.0's follow-up tracker, emptied: the five issues the open-models port filed against itself
+(#110–#113, #115), each landed behind the instrument that owns it. The reference deployment's
+embeddings move to `qwen3-embedding-8b` at 2560 MRL dimensions through the same OpenRouter key —
+gated by the retrieval golden holding recall@5 at 0.969, identical to the `text-embedding-3-large`
+baseline it replaces.
+
+### Added
+- `EMBED_DIMENSIONS` — MRL truncation for over-ceiling embedding models: request-level
+  `dimensions`, sent only when set, refused by name when malformed; what fits a 4096-native model
+  under the schema's 4000-dimension HNSW ceiling (#116, closes #115)
+- `index_meta` records the embedding HOST beside model and dim, and `search_arms` refuses a
+  host mismatch by name BEFORE the first embedding — the same model name on two hosts is not
+  provably the same vector space, and a mismatched query returns noise without failing. Legacy
+  indexes without a recorded host skip the check until their next rebuild (#117, closes #112)
+
+### Fixed
+- the vision OCR pass reaches `cost_usd`: both forms return token usage as data, the pass is
+  priced through the librarian's one table (an unpriced vision model degrades to a loud `$0.00`
+  line, never a refused capture), every exit bills it exactly once, and the report names the
+  share on `conversion_cost_usd` (#118, closes #110)
+- the visibility-lease derivation carries the drive conversion budget, imported from the
+  kernel's own vision clocks so the term cannot drift: 1290s at the class default, 1890s on the
+  deployed worker, with every prose statement of the numbers moved in the same commit and the
+  reclaim refusal's example lease pinned to the derivation by a parity test (#119, closes #113)
+- the docs-claims environment guards see the model-seam env family (`EMBED_*`, `CLEAN_*`,
+  `ANSWER_*`, `VISION_MODEL`) through one name-enumerated pattern — never a wildcard, because the
+  literal scan cannot tell an env var from a module constant (#120, closes #111)
+
 ## [0.4.0] - 2026-08-19
 
 The open-models port. Every model seam now runs on any pydantic-ai provider — OpenRouter
