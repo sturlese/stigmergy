@@ -77,37 +77,59 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
 )
 """
 
-# The knowledge repo's `ops/entity-registry.json`, cached where every process group can see it.
+# The knowledge repo's `ops/` control files, cached where every process group can see them.
 #
-# Not an index of pages, and deliberately in this table anyway: the registry is repo-derived data
-# the SERVER reads on the hot path, exactly like `pages_index`, and the deployed `app` and `slack`
-# groups hold no checkout at all — they were served a copy baked into the image at deploy time,
-# which meant an entity minted after the rollout had no name, no type and no aliases until the
-# next one (issue #74). One writer road it already had (`--rebuild`, from a checkout) plus the one
-# the pages already ride (the push webhook) keeps it fresh for both groups at once.
+# Not an index of pages, and deliberately in this database anyway: these are repo-derived files the
+# SERVER reads on the hot path, exactly like `pages_index`, and the deployed `app` and `slack`
+# groups hold no checkout at all — they were served copies baked into the image at deploy time,
+# which meant an entity minted after the rollout had no name, no type and no aliases until the next
+# one (issue #74), and — the sharper half — an identity REVOKED after the rollout kept resolving
+# until the next one (issue #79). One writer road they already had (`--rebuild`, from a checkout)
+# plus the one the pages already ride (the push webhook) keeps them fresh for both groups at once.
 #
-# The TEXT verbatim, never a parsed shape: `server.entity_aliases` owns what the bytes mean, and a
-# second interpretation of them here is exactly the drift a cache must not introduce.
-_ENTITY_REGISTRY_DDL = """
-CREATE TABLE IF NOT EXISTS entity_registry_snapshot (
-  singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
+# **Storing the identity roster here is not a new exposure.** Whoever holds this DSN already reads
+# every page's `acl` labels out of `pages_index` — the labels these files map people ONTO — and the
+# deploy already bakes the same three files into the image. What changes is freshness, not who can
+# read them. What it must never change is the fail-closed posture above: a missing snapshot falls
+# back to the file, a malformed one refuses exactly as a malformed file does, and an EMPTY one
+# resolves nobody rather than everybody (`server.identity.audiences_from_text`).
+#
+# The TEXT verbatim, never a parsed shape: each file's own reader owns what its bytes mean, and a
+# second interpretation of them here is exactly the drift a cache must not introduce. One table
+# keyed by the repo-relative path rather than one table per file, so a third file cannot be given
+# its own subtly different road.
+#
+# POSIX paths, because a webhook's changed-path list is POSIX — `server.webhook` matches these
+# strings against it verbatim. The reader-side `default_path` helpers re-split them for the local
+# filesystem.
+ENTITY_REGISTRY_RELPATH = "ops/entity-registry.json"
+IDENTITIES_RELPATH = "ops/identities.json"
+SLACK_CHANNELS_RELPATH = "ops/slack-channels.json"
+# Every file this cache carries, in the order a rebuild reconciles them. `ops/stewards.json` is
+# deliberately NOT here: `server.review.load_stewards` already reads `origin/main`'s tip wherever a
+# checkout exists, and giving it a second road would mean two answers to one authorization question.
+OPS_FILE_RELPATHS = (ENTITY_REGISTRY_RELPATH, IDENTITIES_RELPATH, SLACK_CHANNELS_RELPATH)
+
+_OPS_FILE_DDL = """
+CREATE TABLE IF NOT EXISTS ops_file_snapshot (
+  relpath text PRIMARY KEY,               -- one of OPS_FILE_RELPATHS, the repo-relative POSIX path
   content text NOT NULL,
   source text NOT NULL DEFAULT '',        -- the pushed sha, or 'rebuild' — operator diagnosis only
   refreshed_at timestamptz NOT NULL DEFAULT now()
 )
 """
 
-# The bound on what may be installed into that row, applied by BOTH writers (the push webhook and
-# `build.rebuild`) so the rebuild road cannot install what the push road refuses.
+# The bound on what may be installed into one of those rows, applied by BOTH writers (the push
+# webhook and `build.rebuild`) so the rebuild road cannot install what the push road refuses.
 #
 # It is a size, not a count, and it is a bound on the SERVING cost rather than on the ingest: this
-# text is read out of Postgres and JSON-parsed on every tool call, for every identity, on one small
+# text is read out of Postgres and parsed on every tool call, for every identity, on one small
 # single-process machine — so its size is a per-request cost, never the one-off cost of the push
 # that wrote it. (`webhook.MAX_BODY_BYTES` bounds the delivery; `webhook_settings.file_cap` bounds
-# a COUNT of in-zone files, which a registry-only push does not even reach.) Sized to a registry
-# orders of magnitude larger than any this system has served — a record is a couple of hundred
-# bytes — not to what a text column could hold.
-MAX_ENTITY_REGISTRY_BYTES = 512 * 1024
+# a COUNT of in-zone files, which an ops-file-only push does not even reach.) Sized to files orders
+# of magnitude larger than any this system has served — a registry record or an identity entry is a
+# couple of hundred bytes — not to what a text column could hold.
+MAX_OPS_FILE_BYTES = 512 * 1024
 
 _META_DDL = """
 CREATE TABLE IF NOT EXISTS index_meta (
@@ -216,84 +238,104 @@ def read_meta(conn: psycopg.Connection) -> dict | None:
             "built_at": row[3].isoformat() if row[3] is not None else None}
 
 
-def read_entity_registry(conn: psycopg.Connection) -> str | None:
-    """The cached `ops/entity-registry.json` TEXT, or `None` when this database has none.
+def read_ops_file(conn: psycopg.Connection, relpath: str) -> str | None:
+    """One cached ops file's TEXT, or `None` when this database has no snapshot of it.
 
     `None` is a real answer with a caller-visible meaning — "no snapshot here, use your file" —
     and it is why the table absence is probed rather than caught: a database whose index predates
     this table must behave exactly like one whose snapshot has not been written yet, and both must
     behave exactly like the server did before any of this existed."""
     with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('entity_registry_snapshot')")
+        cur.execute("SELECT to_regclass('ops_file_snapshot')")
         if cur.fetchone()[0] is None:
             return None
-        cur.execute("SELECT content FROM entity_registry_snapshot")
+        cur.execute("SELECT content FROM ops_file_snapshot WHERE relpath = %s", (relpath,))
         row = cur.fetchone()
     return row[0] if row else None
 
 
-def read_entity_registry_meta(conn: psycopg.Connection) -> dict | None:
-    """`{"source", "refreshed_at"}` for the cached registry, or `None` when there is no snapshot.
+def read_ops_file_meta(conn: psycopg.Connection, relpath: str) -> dict | None:
+    """`{"source", "refreshed_at"}` for one cached ops file, or `None` when there is no snapshot.
 
-    The columns beside the content, read for the operator asking "is my registry fresh, and from
-    which sha?" — the question issue #74 was found through, and one no other surface can answer:
-    the registry the deployed server serves is a database row nobody holds a checkout of.
+    The columns beside the content, read for the operator asking "is what I am serving fresh, and
+    from which sha?" — the question issue #74 was found through, and one no other surface can
+    answer: what the deployed server serves is a database row nobody holds a checkout of.
     `refreshed_at` ships as an ISO-8601 string, `read_meta`'s own convention, because the console
     serializes it into JSON."""
     with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('entity_registry_snapshot')")
+        cur.execute("SELECT to_regclass('ops_file_snapshot')")
         if cur.fetchone()[0] is None:
             return None
-        cur.execute("SELECT source, refreshed_at FROM entity_registry_snapshot")
+        cur.execute("SELECT source, refreshed_at FROM ops_file_snapshot WHERE relpath = %s",
+                    (relpath,))
         row = cur.fetchone()
     if not row:
         return None
     return {"source": row[0], "refreshed_at": row[1].isoformat() if row[1] is not None else None}
 
 
-def ensure_entity_registry_table(conn: psycopg.Connection) -> None:
-    """Create the snapshot table if it is not there yet — called once per process at the same
-    startup seam `ensure_audit_table` and `ensure_review_schema` are called from.
+def ensure_ops_file_table(conn: psycopg.Connection) -> None:
+    """Create the ops-file cache if it is not there yet — called once per process at the same
+    startup seam `ensure_audit_table` and `ensure_review_schema` are called from, and by
+    `init_schema` on the rebuild road.
 
     Why startup and not only on the write path: `CREATE TABLE IF NOT EXISTS` is NOT race-free in
     Postgres (two concurrent creations raise a unique violation on `pg_type`), and inside the
     webhook's phase-2 transaction that violation would roll the PAGES back with it — for a push
     GitHub does not redeliver. Created single-threaded at startup, the write path's own
-    `IF NOT EXISTS` becomes a no-op that has nothing left to race with."""
-    with conn.cursor() as cur:
-        cur.execute(_ENTITY_REGISTRY_DDL)
+    `IF NOT EXISTS` becomes a no-op that has nothing left to race with.
+
+    It also carries issue #74's single-purpose `entity_registry_snapshot` forward into this table
+    ONCE and drops it. Without the carry-forward, upgrading would empty the registry cache and
+    reopen the deploy-static window that table was added to close, until the next registry push or
+    nightly rebuild; without the drop, a table nothing writes would keep answering the question of
+    what is cached. Rolling back is still safe: the old code probes for its own table, finds none,
+    and falls back to its `--entity-registry` file exactly as it does on a fresh database."""
+    with conn.transaction(), conn.cursor() as cur:
+        cur.execute(_OPS_FILE_DDL)
+        cur.execute("SELECT to_regclass('entity_registry_snapshot')")
+        if cur.fetchone()[0] is None:
+            return
+        cur.execute("INSERT INTO ops_file_snapshot (relpath, content, source, refreshed_at)"
+                    " SELECT %s, content, source, refreshed_at FROM entity_registry_snapshot"
+                    " ON CONFLICT (relpath) DO NOTHING", (ENTITY_REGISTRY_RELPATH,))
+        cur.execute("DROP TABLE entity_registry_snapshot")
 
 
-def write_entity_registry(conn: psycopg.Connection, content: str, source: str) -> None:
-    """Replace the cached registry with `content` verbatim.
+def write_ops_file(conn: psycopg.Connection, relpath: str, content: str, source: str) -> None:
+    """Replace one cached ops file with `content` verbatim.
 
-    The `IF NOT EXISTS` create stays here even though `ensure_entity_registry_table` runs at
-    startup: without it an incremental refresh would depend on a rebuild (or a restart) having run
-    since the upgrade, which is the property it was added for. With the table already created
+    The `IF NOT EXISTS` create stays here even though `ensure_ops_file_table` runs at startup:
+    without it an incremental refresh would depend on a rebuild (or a restart) having run since
+    the upgrade, which is the property it was added for. With the table already created
     single-threaded, it is a no-op — see that function for the race this ordering avoids."""
     with conn.transaction(), conn.cursor() as cur:
-        cur.execute(_ENTITY_REGISTRY_DDL)
-        cur.execute("INSERT INTO entity_registry_snapshot (content, source, refreshed_at)"
-                    " VALUES (%s, %s, now())"
-                    " ON CONFLICT (singleton) DO UPDATE SET content = EXCLUDED.content,"
+        cur.execute(_OPS_FILE_DDL)
+        cur.execute("INSERT INTO ops_file_snapshot (relpath, content, source, refreshed_at)"
+                    " VALUES (%s, %s, %s, now())"
+                    " ON CONFLICT (relpath) DO UPDATE SET content = EXCLUDED.content,"
                     " source = EXCLUDED.source, refreshed_at = EXCLUDED.refreshed_at",
-                    (content, source))
+                    (relpath, content, source))
 
 
-def clear_entity_registry(conn: psycopg.Connection) -> None:
-    """Drop back to "no snapshot" — the state a fresh database is in, and the state every reader
-    falls back to its own `--entity-registry` file from.
+def clear_ops_file(conn: psycopg.Connection, relpath: str) -> bool:
+    """Drop one file back to "no snapshot" — the state a fresh database is in, and the state every
+    reader falls back to its own baked file from. Returns whether a snapshot was actually removed,
+    which is what lets a caller warn about DESTROYING a cached copy without warning about a file
+    the repo has simply never had.
 
-    Its production caller is `build.rebuild`'s nightly reconciler: a checkout that carries no
-    registry must be able to say so, or a snapshot would outlive every rebuild forever. The
+    Its production caller is `build.rebuild`'s nightly reconciler: a checkout that carries no copy
+    of a file must be able to say so, or a snapshot would outlive every rebuild forever. The
     transaction block and the `to_regclass` probe are its writing sibling's, for the same two
     reasons — one atomic step, and a caught `UndefinedTable` on a SHARED connection would poison an
     open transaction around it."""
     with conn.transaction(), conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('entity_registry_snapshot')")
+        cur.execute("SELECT to_regclass('ops_file_snapshot')")
         if cur.fetchone()[0] is None:
-            return
-        cur.execute("DELETE FROM entity_registry_snapshot")
+            return False
+        cur.execute("DELETE FROM ops_file_snapshot WHERE relpath = %s RETURNING relpath",
+                    (relpath,))
+        return cur.fetchone() is not None
 
 
 def cached_embeddings(conn: psycopg.Connection, model: str, hashes: list[str]) -> dict[str, list[float]]:
