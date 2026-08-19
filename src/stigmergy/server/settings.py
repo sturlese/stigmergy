@@ -44,7 +44,9 @@ class Settings:
     # the answer model policy: the same server process that serves the read tools also serves
     # `ask`, so its synthesizer settings ride here. `fake` runs the whole path keyless.
     llm: str = "openai"                # 'openai' | 'fake' (ANSWER_LLM); unknown value fails fast
-    model: str = "gpt-5.6-terra"       # ANSWER_MODEL (OPENAI_API_KEY required for 'openai')
+    # ANSWER_MODEL, two forms: a bare name is the OpenAI Responses API (OPENAI_API_KEY); a
+    # provider-prefixed pydantic-ai id ("openrouter:…") authenticates with that provider's own key.
+    model: str = "gpt-5.6-terra"
     reasoning_effort: str = "medium"   # ANSWER_REASONING_EFFORT
 
     @classmethod
