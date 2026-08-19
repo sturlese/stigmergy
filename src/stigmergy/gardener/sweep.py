@@ -33,7 +33,14 @@ from stigmergy.gardener.errors import SweepGarbage
 from stigmergy.kernel.llm import build_processor
 from stigmergy.kernel.normalize import normalize, slugify
 from stigmergy.kernel.result import fake_result
-from stigmergy.text import clamp, fence, parse_result_ref, sanitize
+from stigmergy.text import (
+    clamp,
+    fence,
+    is_one_line,
+    parse_result_ref,
+    prompt_scalar,
+    sanitize,
+)
 
 log = logging.getLogger(__name__)
 
@@ -312,12 +319,20 @@ def build_prompt(pages: list[dict]) -> str:
     """One section per page (`{"path", "entity", "body", "changed"}` dicts), each body fenced —
     nothing of a page's text reaches the model outside the fence. The `changed=true|false` header
     is a structural fact the model is never asked to use; it exists so `FakeGardenerSweep` and
-    tests can tell the two halves apart from the prompt alone."""
+    tests can tell the two halves apart from the prompt alone.
+
+    The header is the UNFENCED half, so every scalar in it goes through `prompt_scalar` and a page
+    whose path is not one line is dropped entirely: a filename carrying a newline forges a second
+    `### path=` header the model reads as trusted structure, and a U+2028 splits the block.
+    `select_pages` already excluded and COUNTED such a page — this is the same rule enforced where
+    the bytes are actually written, so no caller of this function can lose it."""
     sections = []
     for page in pages:
-        entities = ",".join(page.get("entity") or []) or "(none)"
+        if not is_one_line(page["path"]):
+            continue
+        entities = ",".join(prompt_scalar(e) for e in (page.get("entity") or [])) or "(none)"
         changed = "true" if page.get("changed") else "false"
-        header = f"### path={page['path']} entity={entities} changed={changed}"
+        header = f"### path={prompt_scalar(page['path'])} entity={entities} changed={changed}"
         body = page.get("body") or "(no content)"
         sections.append(f"{header}\n{fence(body)}")
     return "\n\n".join(sections)
@@ -339,11 +354,16 @@ def build_empty_body_prompt(pages: list[dict]) -> str:
     offline doubles from ever answering each other's prompt.
 
     Each body is clamped to `MAX_EMPTY_BODY_PROMPT_CHARS` — the one bound on this pass's INPUT.
+
+    The `### path=` header is unfenced, so it is hygiened exactly as `build_prompt`'s is and for the
+    identical reason; `select_empty_body_pages` counted the pages this drops.
     """
     sections = []
     for page in pages:
+        if not is_one_line(page["path"]):
+            continue
         body = clamp(page.get("body") or "", MAX_EMPTY_BODY_PROMPT_CHARS) or "(no content)"
-        sections.append(f"### path={page['path']}\n{fence(body)}")
+        sections.append(f"### path={prompt_scalar(page['path'])}\n{fence(body)}")
     return "\n\n".join(sections)
 
 
@@ -367,10 +387,16 @@ def build_duplicate_entity_prompt(pages: list[dict]) -> str:
     The header carries only code-derived structure — the page path from the zone walk and the
     registry id, a slug — and `id=` sits after `path=` so a path containing spaces (which entity
     page names routinely do) still parses back unambiguously. Everything a person wrote is fenced.
+
+    Code-derived is not the same as harmless: the path half is a FILENAME somebody chose, so the
+    header is hygiened exactly as `build_prompt`'s is and a page whose path is not one line is
+    dropped, its exclusion already counted by `select_duplicate_entity_pages`.
     """
     sections = []
     for page in pages:
-        header = f"### entity path={page['path']} id={page['id']}"
+        if not is_one_line(page["path"]):
+            continue
+        header = f"### entity path={prompt_scalar(page['path'])} id={prompt_scalar(page['id'])}"
         identity = _DUPLICATE_IDENTITY_BLOCK.format(
             name=page.get("name") or "(unnamed)",
             type=page.get("type") or "(unset)",
@@ -764,19 +790,25 @@ def select_duplicate_entity_pages(zone_pages: list[dict], registry, *,
     deliberate: this pass asks whether two REGISTRY ENTRIES are one entity, and an unregistered page
     is not an entry. Two pages that place onto one id are a registry the generator refuses to
     rebuild at all; the first by path is kept so this pass still says something, and the rest are
-    counted.
+    counted. So is a page whose PATH cannot be put on one line: `build_duplicate_entity_prompt`
+    names it in an unfenced header, where a newline forges a second entry the model reads as a real
+    registry entry.
 
     COVERAGE, not sampling — `select_empty_body_pages`' reasoning, and it binds harder here: this
     check is a question about PAIRS, so a sampled population would silently answer "no duplicates"
     for every pair whose two halves were not both drawn. The ceiling is a spend bound, and when it
     binds what it deferred is recorded rather than dropped.
     """
-    stats = {"population": 0, "excluded_unregistered": 0, "excluded_duplicate_id": 0,
-             "considered": 0, "judged": 0, "deferred": 0, "ceiling": ceiling}
+    stats = {"population": 0, "excluded_unnameable_path": 0, "excluded_unregistered": 0,
+             "excluded_duplicate_id": 0, "considered": 0, "judged": 0, "deferred": 0,
+             "ceiling": ceiling}
     considered: list[dict] = []
     seen_ids: set[str] = set()
     for page in zone_pages:
         stats["population"] += 1
+        if not is_one_line(page["path"]):
+            stats["excluded_unnameable_path"] += 1
+            continue
         entity_id = entity_id_for(page["path"], registry)
         if not entity_id:
             stats["excluded_unregistered"] += 1
@@ -814,7 +846,7 @@ def select_empty_body_pages(zone_pages: list[dict], *, ceiling: int) -> tuple[li
     deterministic twin has NOT already reported, up to `ceiling`, ordered by path.
 
     Takes the walked LIST rather than a repo path: `run.run_gardener` walks the entity zone once
-    and hands the same list to both consumers, so "the population this pass judges" and "the
+    and hands the same list to every consumer, so "the population this pass judges" and "the
     population the deterministic check reported" are the same page set at the same instant, not
     two walks minutes apart.
 
@@ -828,11 +860,17 @@ def select_empty_body_pages(zone_pages: list[dict], *, ceiling: int) -> tuple[li
     from this population entirely. One finding per page across the two checks by construction,
     rather than by a downstream de-duplication a later re-ordering or re-keying could defeat.
     """
-    stats = {"population": 0, "excluded_placeholder": 0, "considered": 0, "judged": 0,
-             "deferred": 0, "ceiling": ceiling}
+    stats = {"population": 0, "excluded_unnameable_path": 0, "excluded_placeholder": 0,
+             "considered": 0, "judged": 0, "deferred": 0, "ceiling": ceiling}
     considered = []
     for page in zone_pages:
         stats["population"] += 1
+        if not is_one_line(page["path"]):
+            # `build_empty_body_prompt` names the path in an unfenced header, where a filename
+            # carrying a newline forges a second entry. Excluded, and COUNTED — the rule this whole
+            # selection is written to: nothing leaves the population in silence.
+            stats["excluded_unnameable_path"] += 1
+            continue
         if checks.placeholder_lines(page["body"]):
             stats["excluded_placeholder"] += 1
             continue
@@ -908,19 +946,30 @@ def select_pages(conn, *, since, sample_size: int, sample_offset: int
     Deliberately does NOT apply `_recent_filed_pages`'s provenance exclusion: that exists so
     `entity: []` is never miscounted in a numeric fraction, and the sweep reads CONTENT —
     a provenance page that changed is exactly as changed as any other. Every exclusion is counted
-    into `stats`; `stats["next_sample_offset"]` is what the next run continues the rotation
-    from."""
+    into `stats` — including a path that cannot be named on one line, which `build_prompt` would
+    have to drop from its unfenced header anyway; `stats["next_sample_offset"]` is what the next
+    run continues the rotation from."""
+    stats = {"unparsed_result_ref": 0, "changed_page_not_indexed": 0,
+             "excluded_unnameable_path": 0}
     with conn.cursor() as cur:
         cur.execute("SELECT path, entity, body FROM pages_index ORDER BY path")
         all_rows = cur.fetchall()
-    by_path = {r[0]: {"path": r[0], "entity": list(r[1] or []), "body": r[2] or ""}
-              for r in all_rows}
+    by_path: dict[str, dict] = {}
+    unnameable: set[str] = set()
+    for row in all_rows:
+        if not is_one_line(row[0]):
+            # `build_prompt` names the path in an unfenced `### path=` header, where a filename
+            # carrying a newline forges a second header the model reads as a real page. Dropped
+            # from BOTH halves — changed and sampled — and counted, never silently.
+            unnameable.add(row[0])
+            stats["excluded_unnameable_path"] += 1
+            continue
+        by_path[row[0]] = {"path": row[0], "entity": list(row[1] or []), "body": row[2] or ""}
 
     with conn.cursor() as cur:
         cur.execute(_CHANGED_FILED_REFS_SQL, {"since": since})
         result_refs = [row[0] for row in cur.fetchall()]
 
-    stats = {"unparsed_result_ref": 0, "changed_page_not_indexed": 0}
     changed_paths: list[str] = []
     seen: set[str] = set()
     for ref in result_refs:
@@ -929,6 +978,8 @@ def select_pages(conn, *, since, sample_size: int, sample_offset: int
             stats["unparsed_result_ref"] += 1
             continue
         path = parsed[0]
+        if path in unnameable:
+            continue          # already counted above; it is excluded, not an indexing gap
         if path not in by_path:
             stats["changed_page_not_indexed"] += 1
             continue

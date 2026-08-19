@@ -35,8 +35,12 @@ def resolution_key(name: str) -> str:
     Two spellings share this key only when they are the same string modulo how a keyboard and a
     locale render it. Anything beyond that (a legal form, a qualifier, a former name, an
     abbreviation) is a claim about the world, not about text, and this function refuses to make it.
+
+    `None` folds to `""`, which every caller reads as "names nothing": this is the fold the MCP
+    server's alias resolution reaches for too, and there a missing name is an ordinary shape of the
+    data rather than a programming error.
     """
-    s = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode().lower()
+    s = unicodedata.normalize("NFKD", name or "").encode("ascii", "ignore").decode().lower()
     s = re.sub(r"[.,()\"'/]", " ", s)
     return re.sub(r"\s+", " ", s).strip()
 

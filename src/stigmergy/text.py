@@ -80,3 +80,28 @@ def one_line(text: str, width: int) -> str:
     point against text the reader never sees rendered.
     """
     return clamp(" ".join(sanitize(str(text or "")).split()), width)
+
+
+# `sanitize` deliberately does NOT strip these: at the bottom of the stack a U+2028 in a search hit
+# is inert, so the extra step lives in the one function that renders a scalar into a PROMPT.
+_LINE_SEPARATORS = str.maketrans({"\u2028": " ", "\u2029": " "})
+
+
+def prompt_scalar(value: str) -> str:
+    """One untrusted scalar rendered into a prompt OUTSIDE the fence: `text.sanitize` plus
+    U+2028/U+2029, which survive it and which `json.dumps` emits RAW, splitting the structural
+    block. A REPLACEMENT, never a whitespace collapse, or a filename carrying two spaces is
+    rewritten into one that names no file. PUBLIC: every unfenced scalar comes through here."""
+    return sanitize(str(value or "")).translate(_LINE_SEPARATORS)
+
+
+def is_one_line(path: str) -> bool:
+    """A path that cannot be named on ONE line is not named at all.
+
+    `text.sanitize` strips control characters and deliberately keeps `\\n` — it defends terminals,
+    not line structure — so a page whose FILENAME carries one would emit a second line inside the
+    unfenced index, and a second line there is a forged `### finding` header the model reads as a
+    real finding. Filenames may contain newlines on every filesystem this runs on.
+    """
+    text = str(path or "")
+    return "\n" not in text and "\r" not in text

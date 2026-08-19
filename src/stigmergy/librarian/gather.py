@@ -496,17 +496,11 @@ def structural_payload(gathered: Gathered) -> dict:
             "entities_total": gathered.entities_total}
 
 
-# `stigmergy.text.sanitize` deliberately does NOT strip these: at the bottom of the stack a U+2028
-# in a search hit is inert, so the extra step lives here instead.
-_LINE_SEPARATORS = str.maketrans({" ": " ", " ": " "})
-
-
-def prompt_scalar(value: str) -> str:
-    """One untrusted scalar rendered into a prompt OUTSIDE the fence: `text.sanitize` plus
-    U+2028/U+2029, which survive it and which `json.dumps` emits RAW, splitting the structural
-    block. A REPLACEMENT, never a whitespace collapse, or a filename carrying two spaces is
-    rewritten into one that names no file. PUBLIC: every unfenced scalar comes through here."""
-    return textutil.sanitize(str(value or "")).translate(_LINE_SEPARATORS)
+# `stigmergy.text`'s, re-exported under the name this package's call sites and
+# `tests/test_architecture.py`'s allowlists already know it by. It MOVED down to the bottom of the
+# stack because the gardener's prompt builders need the identical hygiene and may not import the
+# librarian — and a fourth prompt builder anywhere would otherwise have a reason to re-derive it.
+prompt_scalar = textutil.prompt_scalar
 
 
 def candidates_payload(candidates) -> list:

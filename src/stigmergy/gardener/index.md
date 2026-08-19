@@ -18,7 +18,7 @@ pins every import edge and the threshold-literal ban.
 |---|---|
 | `cli.py` | `stigmergy-gardener [--repo] [--dsn] [--channels] [--json]` — one command. The only module here that imports `stigmergy.index.store`, `stigmergy.librarian.config` or `stigmergy.slack.bolt_gateway` |
 | `run.py` | `run_gardener` — the one function the CLI calls: run everything, persist findings + a `job_runs` row in ONE transaction, re-fetch, post the SLA notice. Owns `RunResult` |
-| `checks.py` | The nine deterministic checks, `ALL_CHECK_SLUGS`, `build_finding` (the one finding-dict assembler, shared with both model passes), `count_indexed_pages`, `_recent_filed_pages`, and `entity_zone_pages`/`placeholder_lines` — the confinement-checked walk of the entity zone (run ONCE per run by `run.py`) and the one spelling of "still its template". `check_entity_placeholder_bodies` and `sweep.select_empty_body_pages` are pure functions of that walk's list |
+| `checks.py` | The nine deterministic checks, `ALL_CHECK_SLUGS`, `build_finding` (the one finding-dict assembler, shared with all three model passes), `count_indexed_pages`, `_recent_filed_pages`, and `entity_zone_pages`/`placeholder_lines` — the confinement-checked walk of the entity zone (run ONCE per run by `run.py`) and the one spelling of "still its template". `check_entity_placeholder_bodies` and `sweep.select_empty_body_pages` are pure functions of that walk's list |
 | `sweep.py` | ALL THREE model passes: the shared schema, `_validate` (its `allowed_slugs` and `min_subject_pages` are what keep the three vocabularies and shapes apart), `_run_batch`, `to_finding`. The editorial four — `SWEEP_SYS`, `build_prompt`, `run_sweep`, `build_judge`, `FakeGardenerSweep`, page selection (`previous_run_watermark`, `select_pages`). The empty-body fifth — `EMPTY_BODY_SYS`, `build_empty_body_prompt`, `run_empty_body_sweep`, `build_empty_body_judge`, `FakeEmptyBodySweep`, `select_empty_body_pages`/`in_batches`. The duplicate-identity sixth — `DUPLICATE_ENTITY_SYS`, `build_duplicate_entity_prompt`, `run_duplicate_entity_sweep`, `build_duplicate_entity_judge`, `FakeDuplicateEntitySweep`, `entity_id_for`/`select_duplicate_entity_pages`. That pass is NEVER batched: it asks about a PAIR, and a pair whose halves fell in different batches is invisible to every batch |
 | `store.py` | `gardener_findings` persistence: `insert_findings`, `findings_for_run`, `latest_completed_run` |
 | `report.py` | The terminal report: `render_report`, `render_json`, `sweep_summary_text`. Pure text from plain data. Every model pass names its own failure there, and each ceiling names what it deferred |
@@ -39,9 +39,11 @@ both or neither.
 - `checks.build_finding` — the one finding assembler; `**extra` carries keys the table lacks
   (the `_notice_*` family). `subjects` is derived from `subject` unless a caller passes the list
   it already has (`sweep.to_finding` does).
-- `store.latest_completed_run` — `status IN ('ok','partial')`; `sweep.previous_run_watermark` —
-  `'ok'` only. The two readers disagree on purpose: a partial run's findings are trustworthy, its
-  sweep baseline is not.
+- `store.latest_completed_run` and `sweep.previous_run_watermark` — both
+  `status IN ('ok','partial')`, and the watermark then filters on `stats.sweep.error` being empty.
+  The status is an AGGREGATE over three passes, so `'partial'` says nothing about the SWEEP itself;
+  what a sweep baseline needs is the sweep's own outcome — the same read `digest.sections` makes of
+  the same blob.
 - `views.staleness.list_stale_entities` / `list_all_anchored_entities` — reused verbatim by two
   checks. Import `views.staleness`, never `views.regenerate` (which loads the git write stack).
 - `librarian.page.is_provenance_type` — a provenance page's `entity: []` means "no evidence
@@ -77,8 +79,8 @@ both or neither.
   looked at.
 - Never derive a watermark from `job_runs.status`. That status is an AGGREGATE over three
   independent passes; `previous_run_watermark` asks the sweep's own `stats.sweep.error` instead,
-  the same read `digest.sections` performs on the same blob. Reading `'ok'` only would freeze the
-  sweep's `since` and its sample rotation every time one of the OTHERS failed.
+  the same read `digest.sections` performs on the same blob. Reading the status alone would freeze
+  the sweep's `since` and its sample rotation every time one of the OTHERS failed.
 - Never walk the entity zone inside a check or a pass, and never load the registry a second time.
   `run.run_gardener` does each once and hands the results to every consumer; two walks straddling
   the sweep's model call would report a page twice or not at all, and the exclusion between the two

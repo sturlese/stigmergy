@@ -45,7 +45,6 @@ three, because this is the same shape of change:
     the prediction. One writer of the registry, still.
 """
 import dataclasses
-import hashlib
 import os
 
 from stigmergy.entities import generator
@@ -60,7 +59,7 @@ OP_ALIAS = schema.ALIAS_OP_NAME
 OP_RETIRE = schema.RETIRE_OP_NAME
 OP_REANCHOR = schema.REANCHOR_OP_NAME
 OP_REGISTRY = schema.REGISTRY_OP_NAME
-OP_NAMES = (OP_ALIAS, OP_RETIRE, OP_REANCHOR, OP_REGISTRY)
+OP_NAMES = schema.ALIAS_OP_NAMES
 
 # The zone an identity lives in and the file derived from it. Both spelled here rather than
 # imported from `entities.generator`, the posture `entity_body` states one module over: this
@@ -81,16 +80,10 @@ def _finding(code: str, message: str, locator: str = "") -> gates.Finding:
 
 
 # ── reading one page's identity claim ─────────────────────────────────────────────────────────
-def _read(worktree: str, rel: str) -> str | None:
-    try:
-        with open(os.path.join(worktree, *rel.split("/")), encoding="utf-8") as f:
-            return f.read()
-    except (OSError, UnicodeDecodeError):
-        return None
-
-
-def _sha256(text: str) -> str:
-    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
+# The bytes-level readers are `deletion`'s and are reached through it rather than copied —
+# `read_text` for "what does this file say", `sha256` for the propose-to-apply drift proof — so the
+# two non-additive kinds cannot disagree about which files exist or about whether the corpus moved
+# under a proposal.
 
 
 def page_stem(path: str) -> str:
@@ -110,19 +103,16 @@ def entity_page_refusal(worktree: str, path: str) -> tuple[str, str]:
         return "outside-entity-zone", (
             f"{path} is not an entity page — a merge is a decision about two identities, and "
             f"identities live in {ENTITY_ZONE_PREFIX}")
-    basename = path.rsplit("/", 1)[-1]
-    if basename.startswith(".") or not basename.endswith(".md"):
-        return "not-a-page", f"{path} is not a page: this kind touches `.md` files and never a dotfile"
-    # Containment RESOLVED rather than inferred from the string: every check above is a shape
-    # check, and a symlinked DIRECTORY component satisfies all of them.
-    if not page_policy.is_inside(worktree, path):
-        return "outside-worktree", f"{path} resolves outside the repo checkout"
-    if os.path.islink(os.path.join(worktree, path)):
-        return "symlinked-target", (
-            f"{path} is a symlink and not a page — a merge would rewrite the thing it points at")
-    if _read(worktree, path) is None:
-        return "missing-target", f"{path} does not exist in the repo, or is not readable as text"
-    return "", ""
+    return deletion.page_refusal(worktree, path, symlink_why=_SYMLINK_WHY,
+                                 missing_why=_MISSING_WHY, require_readable=True)
+
+
+# This kind's own half of `deletion.page_refusal`'s sentences — what a MERGE would have done to the
+# page, which is what a steward has to read. `require_readable` above is this kind's one real
+# difference from the delete kind's confinement check: every op here rewrites frontmatter the plan
+# has to parse first, so a file that cannot be read as text is as missing as an absent one.
+_SYMLINK_WHY = "{path} is a symlink and not a page — a merge would rewrite the thing it points at"
+_MISSING_WHY = "{path} does not exist in the repo, or is not readable as text"
 
 
 # ── the two entity-page rewrites ──────────────────────────────────────────────────────────────
@@ -271,7 +261,7 @@ def anchored_paths(worktree: str, absorbed_id: str, *, excluding=()) -> list[str
     for rel in deletion.corpus_pages(worktree):
         if rel in skip or rel.startswith(deletion.PROVENANCE_ZONE_PREFIXES):
             continue
-        text = _read(worktree, rel)
+        text = deletion.read_text(worktree, rel)
         if text is None:
             continue
         front_lines = page_policy.frontmatter_lines(text)
@@ -352,7 +342,8 @@ def plan(worktree: str, survivor_path: str, absorbed_path: str) -> list[dict]:
     survivor = _claim_for(claims, survivor_path)
     absorbed = _claim_for(claims, absorbed_path)
 
-    survivor_text, absorbed_text = _read(worktree, survivor_path), _read(worktree, absorbed_path)
+    survivor_text = deletion.read_text(worktree, survivor_path)
+    absorbed_text = deletion.read_text(worktree, absorbed_path)
     aliases = claimable_aliases(
         worktree, survivor_path=survivor_path, survivor_name=survivor.name,
         survivor_aliases=survivor.aliases, absorbed_aliases=absorbed.aliases)
@@ -363,14 +354,14 @@ def plan(worktree: str, survivor_path: str, absorbed_path: str) -> list[dict]:
                retired(absorbed_text, page_stem(survivor_path)))]
     for rel in anchored_paths(worktree, absorbed.canonical_id,
                               excluding=(survivor_path, absorbed_path)):
-        text = _read(worktree, rel)
+        text = deletion.read_text(worktree, rel)
         after = reanchored(text, absorbed_id=absorbed.canonical_id,
                            survivor_id=survivor.canonical_id)
         if after == text:
             continue
         ops.append(_op(OP_REANCHOR, rel, text, after))
 
-    registry_before = _read(worktree, REGISTRY_RELPATH)
+    registry_before = deletion.read_text(worktree, REGISTRY_RELPATH)
     if registry_before is None:
         raise RepairError(
             f"{REGISTRY_RELPATH} could not be read, and a merge regenerates it — every anchoring "
@@ -394,7 +385,7 @@ def plan(worktree: str, survivor_path: str, absorbed_path: str) -> list[dict]:
 
 def _op(name: str, path: str, before: str, after: str) -> dict:
     return {schema.OP_KIND_KEY: name, "path": path,
-            "expected_before_hash": _sha256(before), "planned_after": after}
+            "expected_before_hash": deletion.sha256(before), "planned_after": after}
 
 
 def _registered(worktree: str):
@@ -494,13 +485,15 @@ def lane_for(ops) -> tuple[str, ...]:
     cannot be what proves the plan is confined — `validate` is — and what the narrowed lane still
     buys is everything OUTSIDE this plan.
     """
-    return tuple(sorted({deletion.zone_prefix(str(o.get("path", "")))
-                         for o in (ops or ()) if o.get("path")}))
+    return deletion.lane_for(ops)
 
 
 def plan_bytes(ops) -> int:
-    """How much of a steward's attention this plan is, measured in the bytes it stores."""
-    return sum(len(str(o.get("planned_after", "")).encode("utf-8")) for o in (ops or ()))
+    """How much of a steward's attention this plan is — `deletion.plan_bytes`, reused rather than
+    re-derived, so the two non-additive kinds cannot disagree about the measurement behind the
+    ceiling they deliberately SHARE (`oversize_reason` below states the sharing; two
+    implementations behind one number is what drifts)."""
+    return deletion.plan_bytes(ops)
 
 
 OVERSIZE_REASON = (
@@ -626,7 +619,7 @@ def apply_declared(worktree: str, ops) -> tuple[list[str], list[gates.Finding]]:
         return [], [_finding("registry-refused",
                              f"the entity registry could not be regenerated after the merge: {ex}",
                              REGISTRY_RELPATH)]
-    produced = _read(worktree, REGISTRY_RELPATH)
+    produced = deletion.read_text(worktree, REGISTRY_RELPATH)
     if produced != planned[REGISTRY_RELPATH]:
         return [], [_finding(REGISTRY_DRIFT_CODE,
                              f"the registry {generator.FIX_COMMAND} produced is not the registry "

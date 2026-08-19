@@ -110,7 +110,7 @@ def _cmd_delete(conn, args) -> int:
             "steward reads beside Approve, and what `git log` will carry afterwards")
 
     ops = deletion.plan(settings.repo, list(args.paths))
-    oversize = deletion.oversize_reason(ops, settings.max_delete_plan_bytes)
+    oversize = deletion.oversize_reason(ops, settings.max_plan_bytes)
     if oversize:
         raise RepairError(oversize)
     key = schema.content_key(ops, kind=schema.KIND_DELETE)
@@ -250,16 +250,22 @@ def preview(row: dict) -> list[str]:
 
 # What each of the `delete` kind's two ops does to one page, in the words a steward needs. Both are
 # `-` lines: one page stops existing, and the other stops saying something it used to say.
+#
+# Both tables are keyed off `repair.schema`'s op names — the same module the two kinds build their
+# own `OP_NAMES` from — and `tests/test_architecture.py` pins each table's key set EQUAL to its
+# kind's group. Equal in both directions on purpose: naming an op nothing performs is the harmless
+# direction, and the one that hurts is COVERAGE, because an op neither table knows falls through to
+# the ADDITIVE rendering below and shows a steward `+ related: [[]]` — a change that is not the one
+# they would authorize.
 _DELETE_PHRASES = {
-    deletion.OP_DELETE: "(the whole page is removed)",
-    deletion.OP_SCRUB: "(every link to the removed page(s) taken out; nothing else changes here)",
+    schema.DELETE_OP_NAME: "(the whole page is removed)",
+    schema.SCRUB_OP_NAME: (
+        "(every link to the removed page(s) taken out; nothing else changes here)"),
 }
 
 # What each of the `entity-alias` kind's four ops does to one file, in the words a steward needs.
 # `~` rather than `+`/`-`: nothing is added and nothing is removed — each of these files is
 # REWRITTEN, and a preview claiming otherwise would be describing a shape the gates never see.
-# Spelled from `repair.schema`'s op names, which `entity_alias` re-exports, so this table cannot
-# name an op the applier does not perform.
 _MERGE_PHRASES = {
     schema.ALIAS_OP_NAME: ("(this identity SURVIVES: it takes the other's alternative names and "
                            "links to it)"),

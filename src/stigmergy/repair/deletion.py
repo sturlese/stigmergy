@@ -49,7 +49,7 @@ from stigmergy.repair.errors import RepairError
 # to tell "three pages removed" from "eleven pages rewritten" without opening the row.
 OP_DELETE = schema.DELETE_OP_NAME
 OP_SCRUB = schema.SCRUB_OP_NAME
-OP_NAMES = (OP_DELETE, OP_SCRUB)
+OP_NAMES = schema.DELETE_OP_NAMES
 
 # What may be deleted: the fast lane's own folders plus the two machine zones. `wiki/entities/` is
 # absent BY CONSTRUCTION rather than by exclusion — an entity page's type carries no folder in
@@ -270,7 +270,8 @@ def target_refusal(worktree: str, path: str) -> tuple[str, str]:
             f"{path} is not a corpus page this kind may delete — deletion is confined to "
             f"{', '.join(DELETABLE_PREFIXES)}, and nothing under `ops/` or `.claude/` is a page at "
             f"all")
-    return _page_refusal(worktree, path)
+    return page_refusal(worktree, path, symlink_why=DELETE_SYMLINK_WHY,
+                        missing_why=DELETE_MISSING_WHY)
 
 
 def scrub_refusal(worktree: str, path: str) -> tuple[str, str]:
@@ -281,24 +282,55 @@ def scrub_refusal(worktree: str, path: str) -> tuple[str, str]:
         return "outside-corpus", (
             f"{path} is outside the corpus zones ({', '.join(CONTENT_ZONE_PREFIXES)}), so no sweep "
             f"can have planned a rewrite of it")
-    return _page_refusal(worktree, path)
+    return page_refusal(worktree, path, symlink_why=DELETE_SYMLINK_WHY,
+                        missing_why=DELETE_MISSING_WHY)
 
 
-def _page_refusal(worktree: str, path: str) -> tuple[str, str]:
+# The two sentences that read the same whichever kind is asking — a dotfile is a dotfile, and a
+# path resolving outside the checkout is outside it — so `page_refusal` defaults to them. The other
+# two name what THIS kind would have done to the page, so they are the caller's.
+NOT_A_PAGE_WHY = "{path} is not a page: this kind touches `.md` files and never a dotfile"
+OUTSIDE_WORKTREE_WHY = "{path} resolves outside the repo checkout"
+
+# This kind's own two, for the caller-supplied half above.
+DELETE_SYMLINK_WHY = ("{path} is a symlink and not a page — removing it would remove the pointer "
+                      "and leave the page it names in place")
+DELETE_MISSING_WHY = "{path} does not exist in the repo"
+
+
+def page_refusal(worktree: str, path: str, *, symlink_why: str, missing_why: str,
+                 not_a_page_why: str = NOT_A_PAGE_WHY,
+                 outside_worktree_why: str = OUTSIDE_WORKTREE_WHY,
+                 require_readable: bool = False) -> tuple[str, str]:
+    """`(code, sentence)` for a path that is not a real, non-symlinked `.md` page inside
+    `worktree`, `("", "")` when it is — THE confinement predicate, for every kind in this package.
+
+    ONE implementation because it is a SECURITY predicate: hardening it — an NFD-spelling check, a
+    `..` segment rule, a stricter ancestor test — has to reach every kind at once, and a second
+    copy is how the kinds that did not get the hardening keep the hole in silence.
+
+    Each `*_why` is a `{path}` TEMPLATE rather than a finished sentence, because a refusal is read
+    by a steward and has to say what the kind asking would have done to the page. The two that
+    carry no such verb have defaults.
+
+    `require_readable` picks the last check and the difference is deliberate: a kind that goes on to
+    PARSE the file wants `read_text(...) is None` (a merge rewrites frontmatter it has to read
+    first, so unreadable is missing), and one that only needs the page to exist wants
+    `os.path.isfile`.
+    """
     basename = path.rsplit("/", 1)[-1]
     if basename.startswith(".") or not basename.endswith(".md"):
-        return "not-a-page", f"{path} is not a page: this kind touches `.md` files and never a dotfile"
+        return "not-a-page", not_a_page_why.format(path=path)
     # Containment RESOLVED rather than inferred from the string: every check above is a shape check,
     # and a symlinked DIRECTORY component satisfies all of them.
     if not page_policy.is_inside(worktree, path):
-        return "outside-worktree", f"{path} resolves outside the repo checkout"
+        return "outside-worktree", outside_worktree_why.format(path=path)
     full = os.path.join(worktree, path)
     if os.path.islink(full):
-        return "symlinked-target", (
-            f"{path} is a symlink and not a page — removing it would remove the pointer and leave "
-            f"the page it names in place")
-    if not os.path.isfile(full):
-        return "missing-target", f"{path} does not exist in the repo"
+        return "symlinked-target", symlink_why.format(path=path)
+    missing = read_text(worktree, path) is None if require_readable else not os.path.isfile(full)
+    if missing:
+        return "missing-target", missing_why.format(path=path)
     return "", ""
 
 
@@ -329,7 +361,7 @@ def plan(worktree: str, paths) -> list[dict]:
             # A page on its way out is never rewritten first: the plan would then carry planned
             # bytes for a file that must not exist when the apply finishes.
             continue
-        text = _read(worktree, rel)
+        text = read_text(worktree, rel)
         if text is None:
             continue                    # unreadable as text: it declares no wikilink either
         after, unremovable = scrubbed(text, stems)
@@ -342,7 +374,7 @@ def plan(worktree: str, paths) -> list[dict]:
         if after == text:
             continue
         ops.append({schema.OP_KIND_KEY: OP_SCRUB, "path": rel,
-                    "expected_before_hash": _sha256(text), "planned_after": after})
+                    "expected_before_hash": sha256(text), "planned_after": after})
     return ops
 
 
@@ -362,7 +394,10 @@ def corpus_pages(worktree: str) -> list[str]:
     return sorted(out)
 
 
-def _read(worktree: str, rel: str) -> str | None:
+def read_text(worktree: str, rel: str) -> str | None:
+    """One repo-relative file as text, `None` when it cannot be read as text at all. PUBLIC:
+    `entity_alias` reads the same checkout through this one, so the two non-additive kinds cannot
+    come to disagree about which files exist."""
     try:
         with open(os.path.join(worktree, *rel.split("/")), encoding="utf-8") as f:
             return f.read()
@@ -370,7 +405,10 @@ def _read(worktree: str, rel: str) -> str | None:
         return None
 
 
-def _sha256(text: str) -> str:
+def sha256(text: str) -> str:
+    """The propose-to-apply drift proof for both non-additive kinds: the bytes an op was computed
+    FROM, so "the corpus moved" is a fact rather than a guess. PUBLIC for the same reason
+    `read_text` is."""
     return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
 
 
@@ -533,7 +571,7 @@ def duplicate_source_groups(worktree: str) -> list[tuple[str, list[str]]]:
     for rel in corpus_pages(worktree):
         if not rel.startswith(SOURCES_ZONE_PREFIX):
             continue
-        text = _read(worktree, rel)
+        text = read_text(worktree, rel)
         digest = _content_hash(text) if text is not None else ""
         if digest:
             hashes.setdefault(digest, []).append(rel)
@@ -576,7 +614,7 @@ def _content_hash(text: str) -> str:
 def _age_key(worktree: str, rel: str) -> str:
     """One comparable spelling of "when was this captured", `""` when the page says nothing —
     which sorts FIRST, so a page carrying no date is treated as the older filing and survives."""
-    text = _read(worktree, rel)
+    text = read_text(worktree, rel)
     front, _rest = page_policy.split_frontmatter(text or "")
     try:
         parsed = yaml.safe_load(front) if front.strip() else {}
@@ -594,7 +632,7 @@ def _inbound_counts(worktree: str) -> dict[str, int]:
         by_stem.setdefault(page_stem(rel), []).append(rel)
     counts: dict[str, int] = {}
     for rel in corpus_pages(worktree):
-        text = _read(worktree, rel)
+        text = read_text(worktree, rel)
         if text is None:
             continue
         for stem in {stem for _match, stem in _live_links(text)}:

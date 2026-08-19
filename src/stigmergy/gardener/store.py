@@ -65,9 +65,10 @@ def latest_completed_run(conn) -> dict | None:
     read.
 
     `status IN ('ok', 'partial')`, not `'ok'` alone: a `'partial'` run's FINDINGS are exactly as
-    trustworthy — they committed before the sweep ever ran. Deliberately wider than
-    `sweep.previous_run_watermark`'s `'ok'`-only predicate; the two readers of this column
-    disagree on purpose."""
+    trustworthy — they committed before the sweep ever ran. The SAME status pair
+    `sweep.previous_run_watermark` accepts, which then narrows further on `stats.sweep.error`: the
+    status is an aggregate over three passes, so it is the wrong question for a baseline and the
+    right one for "did this run commit findings"."""
     with conn.cursor() as cur:
         cur.execute(_LATEST_COMPLETED_RUN, (JOB_NAME,))
         row = cur.fetchone()

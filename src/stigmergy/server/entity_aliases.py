@@ -10,11 +10,20 @@ one parser, and the path-taking `load_aliases`/`load_registry` are `read_file` p
 `_norm` is deliberately NOT `kernel.normalize.normalize`: that one is the registry's stricter
 folding for resolve-before-mint collision detection, where a false negative lets a duplicate
 through a gate. A false negative HERE only costs a fallback to ordinary semantic search.
+
+It IS `kernel.normalize.resolution_key`, the narrow fold #77 split out of that stricter one — the
+key that folds only how a keyboard and a locale render a name. `resolve_exact` asks the question
+`Registry.canonical_id` asks, "which entity does this text name?", and two implementations of one
+fold is how the MCP server and the librarian come to disagree about which entity a name means: the
+worker anchors a page to an id this service would never resolve back, and nothing anywhere reports
+a mismatch. Imported rather than re-derived; `stigmergy.kernel` is the bottom of the stack and
+depends on nothing, so the edge costs this package nothing it did not already have.
 """
 import json
 import os
 import re
-import unicodedata
+
+from stigmergy.kernel.normalize import resolution_key
 
 # POSIX, because a webhook's changed-path list is POSIX — `server.webhook` matches this string
 # against it verbatim. `default_path` re-splits it for the local filesystem.
@@ -28,12 +37,10 @@ def default_path(repo_dir: str | None) -> str:
     return os.path.join(repo_dir, *ENTITY_REGISTRY_RELPATH.split("/")) if repo_dir else ""
 
 
-def _norm(text: str) -> str:
-    """Lowercase, accent-folded, punctuation-collapsed — matching inside a question, not a claim
-    about entity identity (see module docstring)."""
-    s = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
-    s = re.sub(r"[.,()\"'/]", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
+# Lowercase, accent-folded, punctuation-collapsed — matching inside a question, not a claim about
+# entity identity (see module docstring). One name inside this module for the ONE fold, so every
+# reader here and `Registry.canonical_id` cannot answer differently.
+_norm = resolution_key
 
 
 def read_file(path: str | None) -> str | None:
