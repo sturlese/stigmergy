@@ -194,3 +194,42 @@ def _anchor_a_page(env) -> None:
     with open(entity_md, "w") as f:
         f.write(text.replace("type: entity\n", "type: entity\nentity: [acme]\n", 1))
     support.commit_and_push(env.repo, "feat: a page anchored to acme")
+
+
+# ── the sweep lock: two sweepers is a supported shape, and one of them yields ──────────────────
+def test_a_sweep_finding_the_lock_taken_skips_with_no_row_and_no_writes(clean_queue, tmp_path):
+    """The mutual-exclusion skip, made to FIRE — it needs a REAL second connection, because the
+    lock is a Postgres advisory lock and `FakeConn.fetchone` answers `(1,)` to everything, which
+    is why no offline suite can ever reach this branch. The skip writes NO `job_runs` row on
+    purpose: the pass that holds the lock is converging exactly the same state, so there is
+    nothing owed and nothing to report beyond the skip reason itself."""
+    from tests import testdb
+    remote, clone, registry = _two_entity_repo(tmp_path)
+    holder = testdb.connect_or_skip("index")
+    try:
+        with holder.cursor() as cur:
+            cur.execute("SELECT pg_try_advisory_lock(%s)", (regenerate.VIEW_SWEEP_LOCK_KEY,))
+            assert cur.fetchone()[0] is True
+
+        result = asyncio.run(regenerate.sweep(clone, clean_queue, registry=registry))
+
+        assert result.skip_reasons == [regenerate.SWEEP_IN_FLIGHT_REASON]
+        assert result.stats["written"] == 0
+        assert _rows(clean_queue, regenerate.SWEEP_JOB_NAME) == []
+        assert "views/" not in git("ls-tree", "-r", "--name-only", "main", cwd=remote).stdout
+    finally:
+        holder.close()   # the advisory lock dies with the session
+
+
+def test_the_lock_released_the_next_sweep_proceeds(clean_queue, tmp_path):
+    """The benign twin, on the same rig: the losing side's skip must be the RACE's cost, never a
+    latch — a lock left behind by a dead sweeper dies with its connection, and the next pass
+    converges normally."""
+    remote, clone, registry = _two_entity_repo(tmp_path)
+
+    result = asyncio.run(regenerate.sweep(clone, clean_queue, registry=registry))
+
+    assert result.skip_reasons == []
+    assert result.stats["written"] == 2
+    ((job, status, _stats, error),) = _rows(clean_queue, regenerate.SWEEP_JOB_NAME)
+    assert (job, status, error) == (regenerate.SWEEP_JOB_NAME, "ok", "")

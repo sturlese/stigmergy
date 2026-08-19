@@ -307,6 +307,86 @@ def test_both_knobs_are_env_resolved_through_from_args(monkeypatch):
     assert settings.view_sweep_ceiling == 3
 
 
+# ── the two refusals in front of the one unattended writer ────────────────────────────────────
+def test_a_registry_absent_at_the_base_refuses_the_pass_and_deletes_nothing(rig):
+    """The defense, made to FIRE. Every existing sweep test runs with the registry present, which
+    proves the pass works and says nothing about the guard in front of it — and this guard is what
+    stands between a fetch that raced a force-push (or a corrupt object, or a botched merge that
+    dropped `ops/`) and a pass whose answer to every orphaned view is to DELETE it, ceiling per
+    interval, for as long as the worker runs."""
+    env, deps = rig
+    _anchor_a_page(env, "acme")
+    worker.run_view_sweep(FakeConn(), deps)
+    assert "views/acme.md" in _remote_files(env)
+
+    gitcmd.run("pull", "--quiet", "--rebase", "origin", "main", cwd=env.repo)
+    gitcmd.run("rm", "--quiet", os.path.join("ops", "entity-registry.json"), cwd=env.repo)
+    support.commit_and_push(env.repo, "chore: drop the registry from the repo")
+    conn = FakeConn()
+
+    result = worker.run_view_sweep(conn, deps)
+
+    (reason,) = result.skip_reasons
+    assert reason.startswith("refusing to converge views/")
+    assert "views/acme.md" in _remote_files(env), "the refusal exists so this file survives"
+    # The refusal is not only a log line: `job_runs` is the one operator surface an unattended
+    # pass has, and the row names the exception the FILING path raises for the same fault.
+    assert any("job_runs" in sql and LibrarianConfigError.__name__ in tuple(params)
+               for sql, params in conn.executed)
+
+
+def test_a_registry_that_is_present_and_empty_is_honoured_not_refused(rig):
+    """The benign twin, and the line the refusal's own wording draws: a registry that is PRESENT
+    and declares no entities is a committed, reviewable statement — de-registration is exactly the
+    input that turns a view into a removal, and the guard must not eat it. (The end-to-end version
+    of this twin already exists: `test_run_view_sweep_reads_the_registry_at_its_own_base_not_at_
+    startup` drives the removal itself.)"""
+    env, deps = rig
+    gitcmd.run("pull", "--quiet", "--rebase", "origin", "main", cwd=env.repo)
+    with open(os.path.join(env.repo, "ops", "entity-registry.json"), "w") as f:
+        f.write('{"entities": {}}\n')
+    support.commit_and_push(env.repo, "chore: de-register everything, on purpose")
+
+    result = worker.run_view_sweep(FakeConn(), deps)
+
+    assert result.skip_reasons == []
+
+
+def test_a_local_only_base_refuses_the_pass_when_the_remote_base_is_required(rig):
+    """The other refusal: a deployed worker whose fetch failed is sitting on whatever it was
+    cloned at, and a pass off that base re-derives every view from an OLD member set — replaying
+    an older, potentially wider acl over the current one. Same rule as the filing path's
+    `_resolve_filing_base`, asserted on this caller because this one has no operator in front of
+    it."""
+    import dataclasses
+    env, deps = rig
+    gitcmd.run("remote", "remove", "origin", cwd=env.repo)
+    deps = dataclasses.replace(deps, settings=dataclasses.replace(deps.settings,
+                                                                  require_remote_base=True))
+    conn = FakeConn()
+
+    result = worker.run_view_sweep(conn, deps)
+
+    (reason,) = result.skip_reasons
+    assert reason.startswith("refusing to converge views/")
+    assert "origin/main" in reason
+    assert any("job_runs" in sql and "StaleBaseError" in tuple(params)
+               for sql, params in conn.executed)
+
+
+def test_a_reachable_remote_base_satisfies_the_requirement(rig):
+    """The benign twin: `require_remote_base=True` is the DEPLOYED shape, so the guard must pass
+    every healthy interval, not only fail the broken one."""
+    import dataclasses
+    env, deps = rig
+    deps = dataclasses.replace(deps, settings=dataclasses.replace(deps.settings,
+                                                                  require_remote_base=True))
+
+    result = worker.run_view_sweep(FakeConn(), deps)
+
+    assert result.skip_reasons == []
+
+
 # ── helpers ────────────────────────────────────────────────────────────────────────────────────
 def _anchor_a_page(env, entity_id: str) -> None:
     """A page anchored to a registered entity, committed and pushed the way ANY door leaves one —
