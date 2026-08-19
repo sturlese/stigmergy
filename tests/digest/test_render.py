@@ -20,11 +20,11 @@ def _health_stale(*, last_run_date, days_before_window) -> dict:
 
 
 def _health_ok(*, run_date, sla=0, warn=0, info=0, checks_by_severity=None,
-              sweep_incomplete=False) -> dict:
+              model_passes_incomplete=()) -> dict:
     return {"state": "ok", "run_date": run_date, "total": sla + warn + info,
             "counts_by_severity": {"sla": sla, "warn": warn, "info": info},
             "checks_by_severity": checks_by_severity or {},
-            "sweep_incomplete": sweep_incomplete}
+            "model_passes_incomplete": list(model_passes_incomplete)}
 
 
 def _deltas(*, pages_count=0, titles=None, entities=0) -> dict:
@@ -141,21 +141,24 @@ def test_health_omits_a_severity_bullet_line_when_that_severity_is_zero_but_othe
 # nothing" when it may instead mean "the sweep did not complete" ────────────────────────────────
 def test_health_notes_an_incomplete_sweep_alongside_populated_findings():
     health = _health_ok(run_date=datetime.date(2026, 7, 31), warn=3,
-                        checks_by_severity={"warn": {"stale-view": 3}}, sweep_incomplete=True)
+                        checks_by_severity={"warn": {"stale-view": 3}},
+                        model_passes_incomplete=["sweep"])
     body = build_body(since=SINCE, until=UNTIL, health=health,
                       deltas=_deltas())
     assert "Latest gardener run: 2026-07-31 — 3 findings" in body
-    assert "(model sweep did not complete that run)" in body
+    assert "did not complete that run: sweep" in body
 
 
 def test_health_notes_an_incomplete_sweep_even_with_zero_findings():
     """The note must not depend on `total > 0` — a run can have zero deterministic findings AND a
     failed sweep at the same time, and a reader deserves the same honesty either way."""
-    health = _health_ok(run_date=datetime.date(2026, 7, 31), sweep_incomplete=True)
+    health = _health_ok(run_date=datetime.date(2026, 7, 31),
+                        model_passes_incomplete=["empty_body", "sweep"])
     body = build_body(since=SINCE, until=UNTIL, health=health,
                       deltas=_deltas())
     assert "0 findings: every check came back clean" in body
-    assert "(model sweep did not complete that run)" in body
+    assert "did not complete that run: empty_body, sweep" in body, (
+        "the line must NAME the passes, exactly as the terminal report does")
 
 
 def test_health_the_benign_twin_a_completed_sweep_prints_no_note():
@@ -163,7 +166,7 @@ def test_health_the_benign_twin_a_completed_sweep_prints_no_note():
                         checks_by_severity={"warn": {"stale-view": 1}})
     body = build_body(since=SINCE, until=UNTIL, health=health,
                       deltas=_deltas())
-    assert "model sweep did not complete" not in body
+    assert "did not complete" not in body
 
 
 # ── corpus deltas ───────────────────────────────────────────────────────────────────────────────

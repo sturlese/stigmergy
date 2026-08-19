@@ -50,10 +50,12 @@ the worker is idle,      a meeting files          stigmergy-views regenerate
                              ▼
                    "written", one commit for this entity
 
-  One `job_runs` row covers the WHOLE batch regardless of how many of the five outcomes above it
+  One `job_runs` row covers the WHOLE batch regardless of how many of the outcomes above it
   produced across however many entity ids were in it (`RegenOutcome.action` is exactly `written` ·
-  `removed` · `unchanged` · `refused-unknown-entity` · `refused-no-members`; the run's `stats` folds
-  the two refusals into one `refused` count and reports `withheld` as a SUBSET of `written`, since a
+  `removed` · `unchanged` · `refused-unknown-entity` · `refused-no-members` ·
+  `refused-unusable-id`, the last for an id no view file can be named from — refused before any
+  repo work, counted, and named per id in `skip_reasons`; the run's `stats` folds
+  every refusal into one `refused` count and reports `withheld` as a SUBSET of `written`, since a
   withheld synthesis still writes and commits the page). Stats are updated after every entity, not
   once at the end, so a fault at entity k of n leaves a `job_runs` row that admits the k-1 commits
   already pushed.

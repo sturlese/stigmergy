@@ -34,6 +34,12 @@ DEFAULT_MAX_OPS_PER_PROPOSAL = 6
 # it also buys is a bigger crater when one call lapses.
 BATCH_SIZE_ENV = "STIGMERGY_REPAIR_BATCH"
 DEFAULT_BATCH_SIZE = 3
+# The hard ceiling on that knob, because it MULTIPLIES a per-call model budget by six
+# (`proposer.batch_limits`): of every count setting in the two packages, this is the one whose
+# blast radius is a bill rather than a prompt, and it was the one with no maximum. Sized far above
+# any sane batch — a lapse at 32 costs 32 findings their night — and far below what a typo'd
+# extra digit would buy.
+MAX_BATCH_SIZE = 32
 
 # What ONE run may put in front of stewards. `MAX_OPS_PER_PROPOSAL` bounds one approval; this
 # bounds how many approvals a night can ask for, which is the other half of the same argument: a
@@ -58,11 +64,12 @@ _POSITIVE_COUNT_WHY = ("a zero or negative bound would either refuse every propo
                        "empty batch to the model.")
 
 
-def _int_setting(env_name: str, default: int) -> int:
+def _int_setting(env_name: str, default: int, *, maximum: int | None = None) -> int:
     """`gardener.settings.int_setting`'s rules, spelled here rather than imported: importing it
     would put a `stigmergy.gardener.settings` edge on this package for one validator, and this
-    package already reaches the gardener for findings only. Two callers, one shape, and if the
-    validation ever grows a third rule both should gain it."""
+    package already reaches the gardener for findings only. Two callers, one shape — the parity
+    test in `tests/repair/test_settings_parity.py` is what keeps a rule from landing on one copy
+    only, which is exactly how this one's `maximum` arrived late."""
     raw = os.environ.get(env_name)
     if raw is None or raw == "":
         return default
@@ -76,6 +83,10 @@ def _int_setting(env_name: str, default: int) -> int:
         raise StartupError(
             f"${env_name}={value} must be a positive integer — {_POSITIVE_COUNT_WHY} Unset it to "
             f"use the default ({default}) or set it to a positive integer.")
+    if maximum is not None and value > maximum:
+        raise StartupError(
+            f"${env_name}={value} is above the maximum of {maximum} — unset it to use the default "
+            f"({default}) or set it to a whole number between 1 and {maximum}.")
     return value
 
 
@@ -102,7 +113,8 @@ class RepairSettings:
             repo=librarian_config.repo_path(getattr(args, "repo", None) or ""),
             model=os.environ.get(MODEL_ENV) or DEFAULT_REPAIR_MODEL,
             max_ops_per_proposal=_int_setting(MAX_OPS_ENV, DEFAULT_MAX_OPS_PER_PROPOSAL),
-            batch_size=_int_setting(BATCH_SIZE_ENV, DEFAULT_BATCH_SIZE),
+            batch_size=_int_setting(BATCH_SIZE_ENV, DEFAULT_BATCH_SIZE,
+                                    maximum=MAX_BATCH_SIZE),
             max_proposals_per_run=_int_setting(MAX_PROPOSALS_ENV, DEFAULT_MAX_PROPOSALS_PER_RUN),
             max_plan_bytes=_int_setting(MAX_PLAN_BYTES_ENV, DEFAULT_MAX_PLAN_BYTES),
         )

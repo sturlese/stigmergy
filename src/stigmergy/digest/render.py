@@ -36,14 +36,17 @@ def _render_health(health: dict) -> list[str]:
 
     run_date = health["run_date"].isoformat()
     total = health["total"]
-    # A reader must not mistake "no sweep findings" for "the sweep found nothing" when it means
-    # "the sweep did not complete" — appended in BOTH branches below, regardless of `total`.
-    sweep_incomplete = health.get("sweep_incomplete", False)
+    # A reader must not mistake "no model findings" for "the model passes found nothing" when it
+    # means "a pass did not complete" — appended in BOTH branches below, regardless of `total`,
+    # and NAMING the pass, exactly as the terminal report does.
+    incomplete = health.get("model_passes_incomplete") or []
+    incomplete_line = ("(model pass(es) did not complete that run: "
+                       + ", ".join(incomplete) + ")") if incomplete else ""
     if total == 0:
         lines.append(f"Latest gardener run: {run_date} — {total} {_plural(total, 'finding')}: "
                      f"every check came back clean")
-        if sweep_incomplete:
-            lines.append("(model sweep did not complete that run)")
+        if incomplete_line:
+            lines.append(incomplete_line)
         return lines
 
     counts = health["counts_by_severity"]
@@ -51,8 +54,8 @@ def _render_health(health: dict) -> list[str]:
                 f"{counts[gardener_schema.SEVERITY_SLA]} sla, "
                 f"{counts[gardener_schema.SEVERITY_WARN]} warn, "
                 f"{counts[gardener_schema.SEVERITY_INFO]} info")
-    if sweep_incomplete:
-        lines.append("(model sweep did not complete that run)")
+    if incomplete_line:
+        lines.append(incomplete_line)
     for severity in (gardener_schema.SEVERITY_SLA, gardener_schema.SEVERITY_WARN):
         by_check = health["checks_by_severity"].get(severity) or {}
         if not by_check:

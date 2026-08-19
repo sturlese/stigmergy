@@ -606,3 +606,17 @@ def test_the_offline_double_misses_a_wikilink_inside_a_code_fence_an_ACCEPTED_fa
 
     assert len(pages) == 1, "the page IS judged — the miss is the double's answer, not the walk"
     assert _double_findings(pages) == [], "documented double limitation, not a check property"
+
+
+def test_a_blank_body_is_excluded_from_the_model_population_because_the_twin_reports_it():
+    """The pair's one-finding-per-page rule, extended to the shape that used to fall between the
+    halves: a body blank below its title is the deterministic twin's now, so this pass must
+    exclude it — asked of the model, the rubric's "WRITTEN but says nothing" invites a shrug and
+    the page vanishes from both reports."""
+    pages = [{"path": "wiki/entities/Blank.md", "body": "# Blank\n"},
+             {"path": "wiki/entities/Written.md", "body": "# Written\n\nProse somebody typed.\n"}]
+
+    considered, stats = sweep.select_empty_body_pages(pages, ceiling=10)
+
+    assert [p["path"] for p in considered] == ["wiki/entities/Written.md"]
+    assert stats["excluded_placeholder"] == 1

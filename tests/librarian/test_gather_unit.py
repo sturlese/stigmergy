@@ -73,8 +73,9 @@ def _registry(root, entities: dict) -> registry_module.Registry:
     """A REAL `Registry`, loaded from a real registry file by the production loader.
 
     Never a hand-built object: `gather._entities` resolves through `Registry.canonical_id`, which
-    is keyed off `by_alias` — a normalization the loader owns. A fake registry with a hand-filled
-    `by_alias` would let this file agree with itself about a normalization production does
+    since #77 is keyed off `by_resolution` — the narrow keyboard-and-locale fold the loader owns
+    (`by_alias` is the coarser mint-collision map, a different question). A fake registry with a
+    hand-filled map would let this file agree with itself about a normalization production does
     differently.
     """
     path = os.path.join(str(root), "ops", "entity-registry.json")

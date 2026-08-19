@@ -3462,10 +3462,10 @@ def _gate_context_keywords() -> set[str]:
 
 
 def test_every_gate_context_keyword_is_either_evidence_or_a_pinned_permission():
-    """The pruning half, and the direction that actually goes wrong: a FOURTH caller-declared
+    """The pruning half, and the direction that actually goes wrong: a NEW caller-declared
     exception passed to the gates with no entry above would be a way to suspend a proof that
-    nothing in this file watches — and it would arrive looking exactly like the other seventeen
-    keywords at the same call site. Derived from the CALL SITES, so the question is asked of the
+    nothing in this file watches — and it would arrive looking exactly like every other keyword
+    at the same call site. Derived from the CALL SITES, so the question is asked of the
     code rather than of somebody's memory."""
     used = _gate_context_keywords()
     assert "entries" in used, "no GateContext construction found — this check has gone blind"

@@ -73,7 +73,7 @@ else. See [`views.md`](./views.md).
 A contradiction repair FLAGS the disagreement and never resolves it. Deciding which of two pages is
 right is not something this loop does, and it could not express the edit if it were.
 
-## Three kinds, and every vocabulary is closed
+## The kinds, and every vocabulary is closed
 
 A proposal's `kind` says which question it is. `edits` is three additive shapes, all performed by
 `edits.apply_declared` — the same function a filing capture's declared edits go through:

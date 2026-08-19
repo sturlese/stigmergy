@@ -547,6 +547,19 @@ def placeholder_lines(body: str) -> list[str]:
     return [line for line in body.splitlines() if is_placeholder_line(line)]
 
 
+def is_blank_body(body: str) -> bool:
+    """Nothing below the title: an empty body, or an H1 and blank lines and no more. The ONE
+    spelling, for `placeholder_lines`' reason — the deterministic check reports on it and the
+    model pass excludes on it, and a page must never fall between the two. It used to: a blank
+    body carries no placeholder LINE, and the model's rubric asks about a body that is "WRITTEN
+    but says nothing" — which a blank one is not. Blank is decidable without a model, so it is
+    answered here, free and exact, with the same finding and the same repair."""
+    lines = [line.strip() for line in (body or "").splitlines() if line.strip()]
+    if lines and lines[0].startswith("# "):
+        lines = lines[1:]
+    return not lines
+
+
 # What one entity page may weigh before this walk refuses to open it at all. A FIXED figure, not
 # an env setting: it bounds the shape of one file's contribution, never how much of the population
 # is judged, which is the line `settings.py`'s own docstring draws. Generous by an entity page's
@@ -627,22 +640,27 @@ def check_entity_placeholder_bodies(pages: list[dict]) -> list[dict]:
     and to the model's empty-body pass alike — a page list, never a repo path, so this check is a
     pure function of what the walk found. One INFO finding per page whose body still carries at
     least one placeholder line."""
+    action = ("no command — the repair proposer drafts a body from the pages anchored to this "
+              "entity; approve it in the review lane, or edit the page by hand")
     findings = []
     for page in pages:
         placeholders = placeholder_lines(page["body"])
-        if not placeholders:
-            continue
-        findings.append(build_finding(
-            check=CHECK_ENTITY_PLACEHOLDER_BODY, severity=SEVERITY_INFO,
-            subject=page["path"],
-            # The COUNT, never the lines themselves: a finding's detail reaches a model's prompt
-            # and a Slack digest, and this one has nothing to say that the page's own text says
-            # better to whoever opens it.
-            detail=(f"its body still carries {len(placeholders)} unwritten placeholder line"
-                    f"{'' if len(placeholders) == 1 else 's'} from the entity template — this "
-                    f"identity exists and says nothing about itself"),
-            suggested_action=(
-                "no command — the repair proposer drafts a body from the pages anchored to this "
-                "entity; approve it in the review lane, or edit the page by hand"),
-        ))
+        if placeholders:
+            findings.append(build_finding(
+                check=CHECK_ENTITY_PLACEHOLDER_BODY, severity=SEVERITY_INFO,
+                subject=page["path"],
+                # The COUNT, never the lines themselves: a finding's detail reaches a model's
+                # prompt and a Slack digest, and this one has nothing to say that the page's own
+                # text says better to whoever opens it.
+                detail=(f"its body still carries {len(placeholders)} unwritten placeholder line"
+                        f"{'' if len(placeholders) == 1 else 's'} from the entity template — this "
+                        f"identity exists and says nothing about itself"),
+                suggested_action=action))
+        elif is_blank_body(page["body"]):
+            findings.append(build_finding(
+                check=CHECK_ENTITY_PLACEHOLDER_BODY, severity=SEVERITY_INFO,
+                subject=page["path"],
+                detail=("its body says nothing at all below the title — this identity exists "
+                        "and says nothing about itself"),
+                suggested_action=action))
     return findings

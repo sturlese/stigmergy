@@ -879,7 +879,10 @@ def select_empty_body_pages(zone_pages: list[dict], *, ceiling: int) -> tuple[li
             # selection is written to: nothing leaves the population in silence.
             stats["excluded_unnameable_path"] += 1
             continue
-        if checks.placeholder_lines(page["body"]):
+        if checks.placeholder_lines(page["body"]) or checks.is_blank_body(page["body"]):
+            # One structural exclusion for both deterministic shapes — the template's markers and
+            # a body blank below its title — because both are already reported by the twin and a
+            # blank body is not the "WRITTEN and says nothing" this pass's rubric judges.
             stats["excluded_placeholder"] += 1
             continue
         considered.append(page)

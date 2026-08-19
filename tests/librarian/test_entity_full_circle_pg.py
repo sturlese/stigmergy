@@ -56,7 +56,8 @@ def _fix_preexisting_fixture_drift(env) -> None:
     derived-view generator computes from the PAGE TITLE is `acme-corp` (`slugify` keeps "corp";
     only `normalize`, the ALIAS matcher, strips it) — the alias `Acme` is what resolves to `acme`,
     not the entity's own name. That is invisible to every OTHER librarian test (`Registry.
-    canonical_id` resolves through `by_alias` regardless of which id owns the entry) and entirely
+    canonical_id` resolves through `by_resolution` — since #77 the narrow fold, and still keyed on
+    every alias regardless of which id owns the entry) and entirely
     real to `entities.cli._refuse_drift`, which — correctly — refuses to mint ANY new entity into
     a repo whose pages and registry already disagree, naming exactly this.
 

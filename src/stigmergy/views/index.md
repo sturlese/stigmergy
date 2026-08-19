@@ -99,7 +99,9 @@ Downstream: `librarian.processing` imports `views.regenerate` (the post-meeting 
   arguments, since a view written without one reads as stale on every pass thereafter), optional
   `acl` — `acl: []` is legal and rendered, never omitted.
 - `RegenOutcome.action`: `written` / `removed` / `unchanged` / `refused-unknown-entity` /
-  `refused-no-members`. `removed` fires for two causes: no anchored members left, or a
+  `refused-no-members` / `refused-unusable-id` (an id no view file can be named from — counted,
+  and named per id in `skip_reasons`, so one typo'd anchor costs its own id and never the pass).
+  `removed` fires for two causes: no anchored members left, or a
   de-registered entity whose view still exists. WHICH one travels on `RegenOutcome.message`
   (`REMOVED_NO_MEMBERS` / `REMOVED_DEREGISTERED`, the same pair the commit subject's tail is built
   from) — no caller re-derives it, and the CLI prints that message ALONE rather than naming a cause
