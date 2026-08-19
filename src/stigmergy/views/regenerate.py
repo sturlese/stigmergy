@@ -16,12 +16,15 @@ from stigmergy.kernel.registry import Registry
 from stigmergy.views import render, skeleton, synthesis, writer
 from stigmergy.views.staleness import (
     ENTITY_ID_RULE,
+    current_signals,
     existing_member_hash,
+    existing_signals,
     existing_view_ids,
     is_usable_view_id,
     list_all_anchored_entities,
     list_stale_entities,
     list_sweep_entities,
+    view_is_current,
     view_path,
     view_relpath,
 )
@@ -42,8 +45,9 @@ VIEW_SWEEP_LOCK_KEY = int.from_bytes(b"SYNVIEW", "big")
 # `gardener.checks` without this module's write path) and are re-exported here on purpose —
 # `__all__` says so — so every call site reaches them as `regenerate.X`.
 __all__ = ["view_relpath", "view_path", "existing_view_ids", "existing_member_hash",
-          "is_usable_view_id", "list_all_anchored_entities", "list_stale_entities",
-          "list_sweep_entities", "regenerate_entity", "run", "sweep", "RegenOutcome", "RunResult"]
+          "existing_signals", "current_signals", "view_is_current", "is_usable_view_id",
+          "list_all_anchored_entities", "list_stale_entities", "list_sweep_entities",
+          "regenerate_entity", "run", "sweep", "RegenOutcome", "RunResult"]
 
 
 @dataclass(frozen=True)
@@ -115,11 +119,13 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
     skips them, since neither condition is reachable there.
 
     `rows` is ONE `corpus.load_pages` parse a batch caller already holds, threaded down to
-    `skeleton.members_of`. **What it shares is the repeated READ AND PARSE of the corpus, not the
-    per-entity work**: `skeleton._member_rows` still filters the whole parsed row set for every
-    entity and `existing_member_hash` still opens one file per entity, so a converged pass stays
-    O(population x corpus) in CPU with one open each — it is the O(population) re-reads and
-    re-parses of every page on disk that go away, which is the term that actually dominates.
+    `skeleton.members_of` and to the backlink half of the staleness signal. **What it shares is
+    the repeated READ AND PARSE of the corpus, not the per-entity work**: `skeleton._member_rows`
+    and `skeleton.backlinks_of` each still filter the whole parsed row set for every entity, and
+    `existing_signals` still opens the view file once per entity (once, for both signals), so a
+    converged pass stays O(population x corpus) in CPU with one open each — it is the
+    O(population) re-reads and re-parses of every page on disk that go away, which is the term
+    that actually dominates.
 
     It is safe across a batch under TWO conditions, and only the first is this module's to keep:
 
@@ -127,7 +133,10 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
        `("wiki", "sources")` and `views/` is deliberately not in it. If `views/` ever became a
        member zone the parse would go stale mid-batch and every caller would have to stop passing
        it, which is the same change that would break the staleness hash's convergence: the two
-       constraints are one.
+       constraints are one. The BACKLINK signal is the one thing here the loop's own commits do
+       move (`backlinks_of` scans `views/` too), and it is knowingly one pass late rather than
+       wrong: the next pass sees the view this one wrote. What gets WRITTEN never uses the
+       snapshot — see the `backlinks_of` call below.
     2. No FOREIGN commit enters the tree mid-batch. `gitcmd.push` answers a lost race by rebasing
        this worktree onto `FETCH_HEAD`, checking somebody else's pages into the tree the batch is
        still reading — after which `members`/`member_hash`/`view_audience` come from the pre-rebase
@@ -176,9 +185,13 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
             repo, entity_id, entity_name=entity_name, branch=branch, guarded=guarded,
             cause=REMOVED_NO_MEMBERS)
 
-    member_hash = skeleton.member_hash(members)
-    existing_hash = existing_member_hash(repo, entity_id)
-    if not force and existing_hash == member_hash:
+    # BOTH staleness signals, compared as a pair (`staleness.view_is_current`): the member set
+    # AND the backlinks the page would cite now. The backlink half is computed off the shared
+    # parse here and off a FRESH one at the write below — two moments, two needs, stated in
+    # `skeleton.backlinks_of`.
+    current = current_signals(repo, entity_id, members, rows=rows)
+    existing = existing_signals(repo, entity_id)
+    if not force and view_is_current(existing=existing, current=current):
         return RegenOutcome(entity_id=entity_id, entity_name=entity_name, action="unchanged",
                             member_count=len(members), path=view_relpath(entity_id))
 
@@ -201,6 +214,8 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
     # the same sweep is a real backlink source, and a shared parse would silently drop it. The
     # member-set parse is shared because `MEMBER_ZONES` excludes `views/`; that argument stops
     # exactly at this line, and this parse pays for itself only on entities being rewritten anyway.
+    # The staleness signal above CAN use the snapshot, because being one pass late about a
+    # backlink is not the same fault as publishing a page that never had it.
     backlink_rows = skeleton.backlinks_of(repo, entity_page, view_acl=view_audience,
                                           exclude_path=view_relpath(entity_id))
     backlinks_md = skeleton.render_backlinks(backlink_rows, entity_title=title)
@@ -208,13 +223,16 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
     agent = synthesis.build_view_agent()
     result = await synthesis.write_synthesis(agent, entity_id, repo, members)
 
-    page = render.render(entity_id, title, members, member_hash=member_hash,
+    # The persisted `backlink_hash` is the hash of the rows this page just RENDERED — the fresh
+    # parse's, never the snapshot's, so what the page claims about itself is what it shows.
+    page = render.render(entity_id, title, members, member_hash=current.member_hash,
+                         backlink_hash=skeleton.backlink_hash(backlink_rows),
                          timeline_md=timeline_md, backlinks_md=backlinks_md,
                          synthesis_body=result.body_markdown, shipped=result.shipped)
 
-    # Decided from `existing_hash`, read BEFORE anything was written — a fresh call here would
-    # read back this call's own write and report "regenerate" for a first write.
-    verb = "regenerate" if existing_hash is not None else "write"
+    # Decided from the signals read BEFORE anything was written — a fresh read here would see
+    # this call's own write and report "regenerate" for a first write.
+    verb = "regenerate" if existing.member_hash is not None else "write"
     # Deliberately NOT named `view_path`: shadowing the imported function would turn every
     # earlier call in this function into an UnboundLocalError on the next reorder.
     view_file_path = view_path(repo, entity_id)

@@ -4,7 +4,8 @@ Narrative doc: [`docs/reference/views.md`](../../../docs/reference/views.md).
 
 `views/<entity-id>.md` answers "what do we know about X": a deterministic skeleton (timeline by
 `as_of`, backlinks — pure code) followed by a single-pass synthesis written by a bounded agent.
-One file per entity, regenerated when its member set changes. This package is the ONLY writer of
+One file per entity, regenerated when either of the two feeds it renders moves — its member set,
+or the backlinks it is allowed to cite. This package is the ONLY writer of
 `views/` anywhere in the codebase — `views/` appears in neither librarian write-prefix allowlist.
 
 **Staleness is fixed by CONVERGENCE, not by a trigger per door.** The librarian worker runs
@@ -18,8 +19,11 @@ and `stigmergy-views regenerate` (the operator's).
 A view's `acl` is the **INTERSECTION** of its members' audiences (`kernel.acl.view_acl`), never
 their union — a rollup must not widen access to what it summarizes. Backlinks are a governed but
 NON-member feed and pass a second gate (`kernel.acl.visible_to_view`), never folded into the
-intersection. The synthesis is unverified by design: no figure check, no `verification:` field —
-the one withheld road is the agent's budget (`UsageLimitExceeded`).
+intersection. That gate is applied at generation time AND inside the staleness signal
+(`skeleton.backlink_hash` hashes the post-gate rows), because a gate that ran only at generation
+time left a narrowed source cited forever on an already-committed page — #85. The synthesis is
+unverified by design: no figure check, no `verification:` field — the one withheld road is the
+agent's budget (`UsageLimitExceeded`).
 
 ## Modules
 
@@ -27,8 +31,8 @@ the one withheld road is the agent's budget (`UsageLimitExceeded`).
 |---|---|
 | `cli.py` | `stigmergy-views regenerate` with a required target (`--entity` / `--stale` / `--all` / `--sweep`) plus `--force` |
 | `regenerate.py` | Orchestration: `regenerate_entity` (one entity, one commit), `run` (the shared batch base — one `job_runs` row per batch, the per-run ceiling) and `sweep` (the semantic wrapper: `run` over the union population off one corpus parse). Owns `RegenOutcome`, `RunResult`, `RUN_CEILING_REASON` |
-| `staleness.py` | The READ-ONLY half: `view_relpath`/`view_path`, `existing_member_hash`, `existing_view_ids`, `list_stale_entities`, `list_all_anchored_entities`, `list_sweep_entities` (the union). Imports neither `writer` nor `synthesis` |
-| `skeleton.py` | The deterministic half: `members_of`, `member_hash`, timeline and backlinks rendering, `entity_own_page` |
+| `staleness.py` | The READ-ONLY half: `view_relpath`/`view_path`, `ViewSignals` with `existing_signals`/`current_signals`/`view_is_current` (the staleness definition itself), `existing_member_hash` (the existence probe), `existing_view_ids`, `list_stale_entities`, `list_all_anchored_entities`, `list_sweep_entities` (the union). Imports neither `writer` nor `synthesis` |
+| `skeleton.py` | The deterministic half: `members_of`, `member_hash`, `backlinks_of`/`backlink_hash`, timeline and backlinks rendering, `entity_own_page` |
 | `synthesis.py` | The bounded agent: `build_view_agent`, `write_synthesis`, `FakeViewWriter`, `ViewContext` and its `read_page` tool |
 | `render.py` | Assembles skeleton + synthesis into one page; owns the frontmatter shape, `WITHHELD_BLOCK`, `SYNTHESIS_CAPTION` |
 | `writer.py` | The one commit path: `commit_and_push` (App-bot authored), the steward-clone guards `ensure_on_branch`/`ensure_clean`. The origin's `owner/name` comes from `librarian.githubapp.repo_slug`, the ONE parser, never a copy here |
@@ -43,9 +47,13 @@ Downstream: `librarian.processing` imports `views.regenerate` (the post-meeting 
 - `skeleton.members_of` — the ONE reading of "which pages anchor here", through `index.corpus`'s
   parser (the same one the index build uses). The index itself is a disposable cache and never a
   generator's input.
-- `skeleton.member_hash` — the staleness signal; it hashes frontmatter fields beyond
-  `content_hash` on purpose (that hash covers title+body only, and a frontmatter-only edit must
-  not leave a view silently stale).
+- `staleness.view_is_current` over a `ViewSignals` PAIR — the ONE definition of stale, read by
+  `regenerate_entity` and by `list_stale_entities` (and so by the gardener). Never compare a
+  single hash at a call site: `member_hash` hashes frontmatter fields beyond `content_hash` on
+  purpose (that hash covers title+body only, and a frontmatter-only edit must not leave a view
+  silently stale), and `backlink_hash` covers the feed `member_hash` says nothing about. A missing
+  `backlink_hash:` is STALE, never a match — that is what regenerates the views a deployment
+  already has.
 - `regenerate.run` — route ANY new batch caller through it: incremental stats, its own error
   row for `KeyboardInterrupt` (which `ops.job_run` cannot see), and `max_changes`, the per-run
   ceiling every unattended caller needs. `None` means unbounded, which is what an operator who
@@ -55,9 +63,12 @@ Downstream: `librarian.processing` imports `views.regenerate` (the post-meeting 
 - `staleness.list_sweep_entities` — that population, read-only and git-free, so a future
   findings-only reader can ask the same question the gardener already asks `list_stale_entities`.
 - `rows=` on `members_of` / `list_*` / `regenerate_entity` / `run` — ONE `corpus.load_pages` for a
-  whole batch. Safe across the batch's own commits ONLY because `views/` is not a `MEMBER_ZONE`;
-  it is deliberately NOT threaded into `skeleton.backlinks_of`, which scans every zone including
-  `views/` and would then miss a view written earlier in the same pass.
+  whole batch. Safe across the batch's own commits ONLY because `views/` is not a `MEMBER_ZONE`.
+  `skeleton.backlinks_of` takes `rows=` too and the two callers must NOT be confused: the
+  staleness signal passes the shared parse (once per entity CHECKED — a fresh parse there would
+  cost the pass its single-parse argument, and being one interval late about a backlink is a
+  bounded, converging error), the WRITE passes `None` (once per entity REGENERATED — it must see
+  a view written earlier in the same pass, which the shared snapshot cannot contain).
 - `regenerate.regenerate_entity`'s `force` — the one place `--force` is interpreted.
   `--stale --force` widens the population to every entity with an existing view; `--all` needs no
   widening.
@@ -83,8 +94,10 @@ Downstream: `librarian.processing` imports `views.regenerate` (the post-meeting 
 ## Contracts
 
 - Frontmatter (`render.render`): `type: view`, `title`, `entity: [<id>]` (a LIST), `tags`,
-  `tier: 3`, `content_hash`, `generated_at`, `members`, `member_hash` (the persisted staleness
-  signal, on the page itself), optional `acl` — `acl: []` is legal and rendered, never omitted.
+  `tier: 3`, `content_hash`, `generated_at`, `members`, `member_hash` and `backlink_hash` (the two
+  persisted staleness signals, on the page itself, one per feed it renders — both REQUIRED
+  arguments, since a view written without one reads as stale on every pass thereafter), optional
+  `acl` — `acl: []` is legal and rendered, never omitted.
 - `RegenOutcome.action`: `written` / `removed` / `unchanged` / `refused-unknown-entity` /
   `refused-no-members`. `removed` fires for two causes: no anchored members left, or a
   de-registered entity whose view still exists. WHICH one travels on `RegenOutcome.message`

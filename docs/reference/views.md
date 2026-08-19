@@ -36,8 +36,8 @@ the worker is idle,      a meeting files          stigmergy-views regenerate
                        NO  + no view ever existed           → refused-no-members
                        YES → step 3
 
-                  3. member_hash unchanged since the view's own `member_hash:` frontmatter,
-                     and not --force?
+                  3. member_hash AND backlink_hash both unchanged since the view's own
+                     `member_hash:`/`backlink_hash:` frontmatter, and not --force?
                        YES → "unchanged", nothing written
                        NO  → skeleton (timeline, backlinks — pure code)
                                ║
@@ -95,13 +95,28 @@ independent, cheap to recompute, and rendered first on the page (before Synthesi
 reader encounters two solid, code-generated sections before reaching anything that might read
 "withheld" — the reverse order would make a withheld synthesis look like the whole page failed.
 
-**Staleness** is a hash over the member set (`skeleton.member_hash`: path, content hash,
-`superseded_by`, and `acl` per member) stored on the view's own `member_hash:` frontmatter
-field. An unchanged member set is an honest no-op — nothing written, nothing committed. `acl` and
-`superseded_by` are hashed in addition to the (id, content hash, path) triple
-because a frontmatter-only edit to a member (an ACL narrowing, a new `superseded_by`) changes
-what the view should say without changing `content_hash` — the strengthened hash closes that
-false negative.
+**Staleness** is TWO hashes, one per feed the page renders, compared as a pair
+(`staleness.view_is_current`) against the two the view recorded on itself:
+
+- `skeleton.member_hash` — path, content hash, `type`, `as_of`, `superseded_by` and `acl` per
+  member, stored as `member_hash:`. `acl` and `superseded_by` are hashed in addition to the
+  (id, content hash, path) triple because a frontmatter-only edit to a member (an ACL narrowing,
+  a new `superseded_by`) changes what the view should say without changing `content_hash` — the
+  strengthened hash closes that false negative.
+- `skeleton.backlink_hash` — (path, title) per backlink the section actually RENDERS, stored as
+  `backlink_hash:`. The rows are the post-gate set, so a source a steward narrows out of the
+  view's audience, or deletes outright, drops out of the list and moves the hash. Nothing
+  body-shaped is in this key on purpose: a view is itself an indexed backlink source and its body
+  carries its own regeneration date, so a content-sensitive key would make two views that cite
+  each other regenerate each other every pass, forever.
+
+Both unchanged is an honest no-op — nothing written, nothing committed. A view carrying **no**
+`backlink_hash:` (every view generated before that field existed) reads as STALE rather than as a
+match, so the first pass after this shipped regenerates each one exactly once, which is what
+computes the missing signal. The second signal exists because `member_hash` covers the member set
+and nothing else, and a view's Backlinks section is fed by pages that are not members: until #85
+a source narrowed to `acl: [board-only]` after generation stayed cited — title and path — on an
+otherwise open view, and every convergence pass reported `unchanged` forever.
 
 ## The synthesis — a bounded agent, judged by no verifier
 
@@ -135,11 +150,12 @@ heading always renders — shipped or withheld — never omitted; an absent head
 populated skeleton sections would read as a broken build, which is a worse and false story next to
 the true one.
 
-The staleness hash is the only thing that normally re-attempts a withheld synthesis, and it only
-changes when the member set changes — so a synthesis withheld for reasons unrelated to the member
-set (the agent's run happened to need more budget than usual) has no automatic retry. `--force` on
-`stigmergy-views regenerate` is the operator-triggerable lever that closes this gap: it bypasses
-the staleness check and re-attempts synthesis against the *same* member set.
+The staleness signals are the only thing that normally re-attempts a withheld synthesis, and they
+only change when the member set or the rendered backlinks do — so a synthesis withheld for reasons
+unrelated to either (the agent's run happened to need more budget than usual) has no automatic
+retry. `--force` on `stigmergy-views regenerate` is the operator-triggerable lever that closes
+this gap: it bypasses the staleness check and re-attempts synthesis against the *same* member
+set.
 
 ## The audience rule — the intersection, not the union
 
@@ -238,7 +254,7 @@ crux of the whole design, so it is written down rather than left to be rediscove
 
 | Target | Population | What it CANNOT see |
 |---|---|---|
-| `--stale` | entities with an EXISTING view whose `member_hash` no longer matches (`staleness.list_stale_entities`) | every entity that has never had a view — it iterates the views on DISK, so a newly-minted entity with one anchored page is invisible to it. Also a de-registered entity whose pages still anchor it: its member hash still matches |
+| `--stale` | entities with an EXISTING view whose `member_hash` OR `backlink_hash` no longer matches (`staleness.list_stale_entities`) | every entity that has never had a view — it iterates the views on DISK, so a newly-minted entity with one anchored page is invisible to it. Also a de-registered entity whose pages still anchor it: its member hash still matches |
 | `--all` | every entity with ≥ 1 anchored page (`staleness.list_all_anchored_entities`) | an orphaned view whose members have ALL disappeared — that entity has no anchored pages left to be found by |
 | `--sweep` | the union of both (`staleness.list_sweep_entities`) | — |
 
@@ -253,10 +269,19 @@ the same flag is how two readers end up disagreeing about what "stale" means.
 rows down through `list_stale_entities`, `list_all_anchored_entities`, `regenerate.run` and
 `regenerate_entity` into `skeleton.members_of` — O(population x corpus) becomes O(corpus). That is
 safe across the batch's own commits for exactly one reason: `views/` is deliberately excluded from
-`skeleton.MEMBER_ZONES`, so nothing a view write or removal commits can change a member set. The
-shared parse stops at the member set: `skeleton.backlinks_of` scans every indexed zone INCLUDING
-`views/`, where a view written earlier in the same pass is a legitimate backlink source, so it
-keeps its own fresh parse — paid per REGENERATED entity, never per entity checked.
+`skeleton.MEMBER_ZONES`, so nothing a view write or removal commits can change a member set.
+
+`skeleton.backlinks_of` scans every indexed zone INCLUDING `views/`, where a view written earlier
+in the same pass is a legitimate backlink source — so it is called at two moments with two
+different parses, and the split is the whole design:
+
+| Moment | Parse | Why |
+|---|---|---|
+| the STALENESS SIGNAL (`staleness.current_signals`), once per entity CHECKED | the population's shared one | a fresh parse per entity checked would undo the single-parse argument that makes a fifteen-minute pass affordable |
+| what gets WRITTEN, once per entity REGENERATED | its own fresh one | a page must never cite a set that was already out of date when it was rendered |
+
+The bounded consequence, stated rather than discovered: a backlink created by a view written
+earlier in the SAME pass is noticed on the NEXT pass, one interval later.
 
 ## One writer, one commit per entity
 
@@ -297,12 +322,16 @@ standing.
 - **`views/` is already an indexed zone** (`stigmergy.index.corpus.ZONES`), so a regenerated
   view is searchable at the next rebuild/webhook upsert with no index schema change and no
   ranking change.
-- **A withheld synthesis with no member-set change has no automatic retry** — the periodic sweep
-  converges on the MEMBER HASH, so an entity whose members did not change is `unchanged` to it too.
-  Only `--force` closes that gap, and only when an operator runs it by hand.
-- **The sweep converges the member set, not the backlinks.** `member_hash` covers a view's members;
-  a page elsewhere gaining a wikilink to an entity's own page changes that view's Backlinks section
-  without changing its hash, and no pass will notice. `--force` is the recovery, as it is above.
+- **A withheld synthesis with no signal change has no automatic retry** — the periodic sweep
+  converges on the two hashes, so an entity whose members and backlinks did not change is
+  `unchanged` to it too. Only `--force` closes that gap, and only when an operator runs it by hand.
+- **A backlink a view gains from a view written earlier in the SAME pass is one interval late.**
+  The staleness signal is computed off the population's shared parse, which by construction cannot
+  contain a page that pass has not written yet; the next pass sees it. This is the residue of #85,
+  which closed the "never" (a narrowed, deleted or newly-added backlink now moves
+  `backlink_hash:` and regenerates the view) and left this one bounded lag rather than paying a
+  fresh corpus parse per entity CHECKED to close it. It converges on its own; `--force` is still
+  there for an operator who will not wait an interval.
 - **No cron regenerates a view — not here, and not in the gardener either.** The convergence pass
   lives in the librarian worker (which already holds the write credential), and this package owns
   both halves of view regeneration (the skeleton and the synthesis). The gardener owns DETECTION
@@ -313,7 +342,8 @@ standing.
 ## Where the code lives
 
 - `stigmergy.views` — the package itself: `skeleton.py` (the deterministic half — Timeline,
-  Backlinks, `member_hash`), `synthesis.py` (the bounded agent),
+  Backlinks, and both staleness hashes: `member_hash`, `backlink_hash`), `synthesis.py` (the
+  bounded agent),
   `render.py` (page assembly), `writer.py` (the one commit path), `regenerate.py` (orchestration —
   staleness, `--force`, removal, the shared `run()` with its ceiling, and the `sweep()` wrapper),
   `staleness.py` (the READ-ONLY extraction of `list_stale_entities`/`list_all_anchored_entities`/
