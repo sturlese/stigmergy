@@ -290,6 +290,9 @@ def _vision_extract_pydantic(model: str, path: str, agent_builder=None) -> dict:
                                    for png in pages]
     result = agent.run_sync(parts)
     text = str(result.output or "")
+    usage = getattr(result, "usage", None)
+    usage_dict = {"input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+                  "output_tokens": int(getattr(usage, "output_tokens", 0) or 0)} if usage else None
     truncated = False
     if len(pages) == MAX_VISION_PAGES:
         total = _pdf_page_count(path)
@@ -299,7 +302,10 @@ def _vision_extract_pydantic(model: str, path: str, agent_builder=None) -> dict:
                      f"{MAX_VISION_PAGES}-page OCR ceiling, so what you have is its opening "
                      f"and not the whole of it]")
     return {"method": "vision", "text": text, "model": model,
-            "pages": len(pages), "truncated": truncated}
+            "pages": len(pages), "truncated": truncated,
+            # Token counts as DATA, so the caller can price the pass (issue #110); None when the
+            # framework reported none — absent is honest, zero would read as free.
+            "usage": usage_dict}
 
 
 def vision_extract(path: str, agent_builder=None) -> dict:
@@ -332,7 +338,12 @@ def vision_extract(path: str, agent_builder=None) -> dict:
         finally:
             os.unlink(tmpname)
     r = client.models.generate_content(model=model, contents=[part, VISION_OCR_PROMPT])
-    return {"method": "vision", "text": r.text or "", "model": model}   # model -> faithful provenance
+    meta = getattr(r, "usage_metadata", None)
+    usage = ({"input_tokens": int(getattr(meta, "prompt_token_count", 0) or 0),
+              "output_tokens": int(getattr(meta, "candidates_token_count", 0) or 0)}
+             if meta is not None else None)
+    # model -> faithful provenance; usage -> the caller prices the pass (issue #110)
+    return {"method": "vision", "text": r.text or "", "model": model, "usage": usage}
 
 
 def extract(path: str, method: str) -> dict:

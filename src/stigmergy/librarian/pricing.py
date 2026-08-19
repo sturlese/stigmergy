@@ -58,6 +58,10 @@ PRICES = {
     # over-state. Both rows read from openrouter.ai/api/v1/models on the AS_OF date.
     "openrouter:z-ai/glm-5.2": (0.966, 0.966, 0.966, 3.036),
     "openrouter:deepseek/deepseek-v4-flash": (0.083, 0.083, 0.083, 0.165),
+    # The drive road's vision OCR (`processing._vision_spend`), not a filing model — priced here
+    # because this is the librarian's one tokens-to-dollars table. Same OpenRouter caveats as
+    # the rows above; listed 2026-08-19.
+    "openrouter:qwen/qwen3-vl-8b-instruct": (0.117, 0.117, 0.117, 0.455),
 }
 
 _TOKENS_PER_UNIT = 1_000_000

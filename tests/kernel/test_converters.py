@@ -292,10 +292,28 @@ def test_vision_prefixed_model_sends_rasterized_pages_to_the_pydantic_path(monke
 
     assert res == {"method": "vision", "text": "transcribed text",
                    "model": "openrouter:qwen/qwen3-vl-8b-instruct",
-                   "pages": 2, "truncated": False}
+                   "pages": 2, "truncated": False, "usage": None}
     assert agent.parts[0] == converters.VISION_OCR_PROMPT
     assert [p.data for p in agent.parts[1:]] == [b"png-1", b"png-2"]
     assert {p.media_type for p in agent.parts[1:]} == {"image/png"}
+
+
+def test_vision_prefixed_reports_its_token_usage_as_data(monkeypatch):
+    """The pass costs money and the caller prices it (issue #110): the framework's RunUsage is
+    normalized to plain in/out counts. Absent usage stays None — zero would read as free."""
+    monkeypatch.setenv("VISION_MODEL", "openrouter:qwen/qwen3-vl-8b-instruct")
+    monkeypatch.setattr(converters, "_pdf_page_pngs",
+                        lambda path, cap=converters.MAX_VISION_PAGES: [b"png-1"])
+
+    class _WithUsage(FakeVisionAgent):
+        def run_sync(self, parts):
+            self.parts = parts
+            return types.SimpleNamespace(output=self.output,
+                                         usage=types.SimpleNamespace(input_tokens=1200,
+                                                                     output_tokens=340))
+
+    res = converters.vision_extract("/scan.pdf", agent_builder=lambda model: _WithUsage())
+    assert res["usage"] == {"input_tokens": 1200, "output_tokens": 340}
 
 
 def test_vision_prefixed_says_where_it_cut_a_document_over_the_page_ceiling(monkeypatch):
