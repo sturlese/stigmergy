@@ -81,6 +81,9 @@ Narrative doc: [`docs/reference/hybrid-index.md`](../../../docs/reference/hybrid
   `OPENAI_API_KEY` falls back for the DEFAULT host only — it is never sent to another host.
   `EMBED_DIMENSIONS` (MRL truncation, request-level `dimensions`) is what fits a 4096-native
   model under the schema's 4000-dim HNSW ceiling; build and query must agree with the index.
+  The rebuild records the embedding HOST in `index_meta` beside model/dim, and `search_arms`
+  refuses a mismatch by name before the first embedding (a legacy index without one skips the
+  check until its next rebuild).
   `backends/fake_embedder.py` — the deterministic keyless double for tests/CI.
 
 ## Reuse / avoid

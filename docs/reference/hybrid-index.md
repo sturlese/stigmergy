@@ -152,7 +152,10 @@ key refuses loudly instead of borrowing a credential the host did not issue. `EM
 the BUILD-time default model only: the model is recorded in `index_meta` and queries always
 embed with the recorded one, so changing it takes effect at the next `--rebuild`, never
 mid-index — and pointing `EMBED_BASE_URL` at a host that serves a DIFFERENT model under the same
-name deserves a `--rebuild` for the same vector-space reason. `EMBED_DIMENSIONS` is MRL
+name is REFUSED at query time by name: the rebuild records the embedding HOST in `index_meta`
+beside model and dim (a base URL, never a credential), and a mismatch raises telling the operator
+to point `EMBED_BASE_URL` back or rebuild — an index built before the column existed carries no
+host and skips the check until its next rebuild records one. `EMBED_DIMENSIONS` is MRL
 truncation, sent as the dialect's `dimensions` field only when set: it is how a 4096-native
 model (Qwen3-Embedding-8B) fits under the schema's 4000-dimension HNSW ceiling, it must agree
 between build and query for a standing index, and a mismatch fails loudly as a pgvector
