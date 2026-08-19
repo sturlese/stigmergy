@@ -197,8 +197,10 @@ time (see [navigation.md](./navigation.md)), because only part 1 ever carries th
 Pages under `views/<entity-id>.md` are held to the page standard by `stigmergy.views`, the only view
 generator in this codebase — documented in full at [views.md](./views.md). They carry
 `type: view`, `tags: [view]`, `tier: 3`, `content_hash` (sha256 of the rendered **body** — a
-derived page has no single raw source), `generated_at`, `member_hash`, and `acl` as the
-**intersection** of the member pages' audiences: a rollup never widens access. They carry no
+derived page has no single raw source), `generated_at`, the two staleness signals `member_hash`
+and `backlink_hash` (the member set, and the backlinks the page actually renders — a view missing
+the second is regenerated on the next convergence pass), and `acl` as the **intersection** of the
+member pages' audiences: a rollup never widens access. They carry no
 `verification` field — nothing computes a verdict, so nothing stamps one.
 
 ## Field notes worth knowing

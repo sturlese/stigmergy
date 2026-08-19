@@ -36,11 +36,15 @@ def commit_all(clone: str, message: str) -> None:
 
 
 def add_decision(clone: str, name: str, *, entity_id: str = "acme-corp", as_of: str = "2026-08-01",
-                 acl: list | None = None) -> str:
+                 acl: list | None = None, mentions_entity_page: str = "Acme Corp") -> str:
+    """`mentions_entity_page` is which entity page the new decision WIKILINKS, which since #85 is
+    a second thing this fixture decides: a page linking `[[Acme Corp]]` is a backlink of
+    `acme-corp`'s view whatever it is anchored to, so a test that means "exactly one entity
+    changed" has to point the link at that entity's own page too."""
     path = os.path.join(clone, "wiki", "decisions", f"{name}.md")
     with open(path, "w") as f:
-        f.write(decision_page(name, entity_id, as_of=as_of, mentions_entity_page="Acme Corp",
-                              acl=acl))
+        f.write(decision_page(name, entity_id, as_of=as_of,
+                              mentions_entity_page=mentions_entity_page, acl=acl))
     return path
 
 
@@ -249,7 +253,8 @@ def test_only_an_entity_actually_being_rewritten_pays_a_second_parse(tmp_path, m
     commit_all(clone, "chore: three anchored entities")
     sweep(clone, FakeConn(), registry)
 
-    add_decision(clone, "decision-9", entity_id="globex", as_of="2026-08-09")
+    add_decision(clone, "decision-9", entity_id="globex", as_of="2026-08-09",
+                 mentions_entity_page="Globex")
     commit_all(clone, "feat: exactly one entity changed")
 
     parses = _count_parses(monkeypatch)
@@ -320,7 +325,8 @@ def test_the_ceiling_counts_regenerations_not_entities_examined(tmp_path):
     commit_all(clone, "chore: three anchored entities")
     sweep(clone, FakeConn(), registry)                    # everything converged
 
-    add_decision(clone, "decision-9", entity_id="initech", as_of="2026-08-09")
+    add_decision(clone, "decision-9", entity_id="initech", as_of="2026-08-09",
+                 mentions_entity_page="Initech")
     commit_all(clone, "feat: only the LAST entity alphabetically changed")
 
     result = sweep(clone, FakeConn(), registry, max_changes=1)

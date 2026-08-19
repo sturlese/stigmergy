@@ -74,9 +74,12 @@ def entity_own_page(members: list[Member]) -> Member | None:
 
 
 def member_hash(members: list[Member]) -> str:
-    """Staleness hash: sha256 over (path, content_hash, type, as_of, superseded_by, acl) per
-    member, sorted by path — decides cheaply whether the member set changed, without reading a
-    body. Every field beyond `content_hash` is deliberate: `content_hash` covers title+body only,
+    """The MEMBER SET's staleness signal — one of the two a view carries (`backlink_hash` is the
+    other, and the pair is compared together): sha256 over (path, content_hash, type, as_of,
+    superseded_by, acl) per member, sorted by path — decides cheaply whether the member set
+    changed, without reading a body.
+
+    Every field beyond `content_hash` is deliberate: `content_hash` covers title+body only,
     so a frontmatter-only edit (`superseded_by`, an ACL narrowing, an `as_of` or `type` move —
     each rendered or read downstream) would otherwise leave the view silently stale forever, with
     only `--force` to recover it.
@@ -127,9 +130,9 @@ def render_timeline(members: list[Member], *, cap: int = TIMELINE_CAP) -> str:
 
 def backlinks_of(repo: str, entity_page: Member | None, *,
                  view_acl: list[str] | None = None,
-                 exclude_path: str = "") -> list[corpus.PageRow]:
-    """Pages whose wikilinks resolve to the entity's OWN page, from a fresh repo parse. Scans
-    every indexed zone (`views/` included — another entity's view may legitimately link here).
+                 exclude_path: str = "", rows=None) -> list[corpus.PageRow]:
+    """Pages whose wikilinks resolve to the entity's OWN page. Scans every indexed zone (`views/`
+    included — another entity's view may legitimately link here).
 
     A backlink is a governed source OUTSIDE the member set: `visible_to_view` gates whether it
     renders, and is NEVER folded into the intersection itself — a backlink must never NARROW
@@ -140,14 +143,44 @@ def backlinks_of(repo: str, entity_page: Member | None, *,
     `exclude_path` is the view being generated: it always links its own entity page and always
     passes the filter, so without the exclusion the rollup cites itself and the count runs one
     high.
+
+    **`rows` serves the STALENESS SIGNAL only; the WRITE path must keep passing `None`.** The two
+    are different moments with different needs. Writing a view has to see a view written earlier
+    in the SAME pass — `views/` is an indexed zone, so that view is a real backlink source and a
+    snapshot taken before the pass started cannot contain it. Deciding whether a view is stale
+    happens once per entity CHECKED, which is the whole population, and paying a fresh corpus
+    parse there would undo the single-parse argument that makes a fifteen-minute pass affordable.
+    The consequence is bounded and converges: a backlink created by a view written earlier in the
+    same pass is noticed on the NEXT pass, one interval later, rather than never.
     """
     if entity_page is None:
         return []
-    rows = corpus.load_pages(repo)
+    rows = corpus.load_pages(repo) if rows is None else rows
     excluded = {entity_page.path, exclude_path} - {""}
     return sorted((r for r in rows if entity_page.path in r.links and r.path not in excluded
                   and visible_to_view(r.acl, view_acl)),
                  key=lambda r: r.path)
+
+
+def backlink_hash(rows: list[corpus.PageRow]) -> str:
+    """The SECOND staleness signal: sha256 over (path, title) per rendered backlink, in
+    `backlinks_of`'s own path order.
+
+    Beside `member_hash` and never folded into it — that name says what it hashes, and a backlink
+    is not a member. What it covers is the POST-GATE set: `backlinks_of` has already applied
+    `visible_to_view`, so a source a steward narrows to an audience the view does not have drops
+    OUT of these rows and the hash moves, which is what makes the narrowing a regeneration.
+    Hashing the pre-gate candidates instead would fire on any ACL edit anywhere, including the
+    ones that change nothing on the page.
+
+    (path, title) and deliberately nothing body-shaped. A view is itself an indexed backlink
+    source and its body carries its own regeneration date, so a content-sensitive key here would
+    make two views that cite each other regenerate each other every pass, forever. Path and title
+    are also exactly the disclosure this system's existence rule is about: naming a forbidden
+    page needs no body.
+    """
+    key = "|".join(f"{r.path}:{r.title}" for r in rows)
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
 def render_backlinks(rows: list[corpus.PageRow], *, entity_title: str,

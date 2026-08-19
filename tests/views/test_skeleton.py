@@ -204,3 +204,44 @@ def test_sabotage_no_filter_would_leak_a_restricted_backlink(tmp_path):
     assert "wiki/notes/finance-note.md" in sabotaged
     assert filtered != sabotaged, (
         "the filtered and sabotaged backlink sets are identical on this fixture — strengthen it")
+
+
+# ── the backlink staleness signal (#85) ─────────────────────────────────────────────────────────
+def test_backlink_hash_is_taken_over_the_rows_the_view_may_actually_show(tmp_path):
+    """The signal is computed AFTER `visible_to_view`, and that is what makes a narrowing
+    register as a change: the restricted page is one of the rows a `finance` view hashes and none
+    of the rows an open view does. A hash over the pre-gate candidates would be identical for
+    both audiences here — the same value whether the page renders or not — and could never tell
+    the pass that a view had stopped being allowed to cite something."""
+    remote, clone = build_repo(str(tmp_path / "git"), n_decisions=1)
+    _add_finance_note(clone)
+    entity_page = skeleton.entity_own_page(skeleton.members_of(clone, "acme-corp"))
+
+    def _hash(view_acl):
+        return skeleton.backlink_hash(
+            skeleton.backlinks_of(clone, entity_page, view_acl=view_acl))
+
+    assert _hash(None) == _hash(None)                    # pure, and the same twice
+    assert _hash(["finance"]) != _hash(None), (
+        "the finance-scoped backlink renders on one of these views and not the other, so the "
+        "signal must differ — otherwise the ACL gate is invisible to the staleness comparison")
+
+
+def test_backlink_hash_ignores_a_backlink_source_rewriting_its_own_body(tmp_path):
+    """(path, title) and nothing body-shaped, on purpose. A view is itself an indexed backlink
+    source and its body carries its own regeneration date, so a content-sensitive key here would
+    make two views that cite each other regenerate each other every pass, forever. The cheap
+    consequence is this one: a backlink source whose BODY changes does not, by itself, move this
+    signal — its own view is regenerated through `member_hash` if it is a member, and its
+    citation on somebody else's view reads the same either way."""
+    remote, clone = build_repo(str(tmp_path / "git"), n_decisions=1)
+    entity_page = skeleton.entity_own_page(skeleton.members_of(clone, "acme-corp"))
+    before = skeleton.backlink_hash(skeleton.backlinks_of(clone, entity_page))
+
+    decision = os.path.join(clone, "wiki", "decisions", "decision-1.md")
+    with open(decision) as f:
+        text = f.read()
+    with open(decision, "w") as f:
+        f.write(text.replace("Something happened with", "Something ELSE happened with"))
+
+    assert skeleton.backlink_hash(skeleton.backlinks_of(clone, entity_page)) == before

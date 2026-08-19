@@ -133,12 +133,17 @@ def write_registry(root: str, entities: dict) -> None:
         json.dump({"entities": entities}, f)
 
 
-def write_view(root: str, entity_id: str, *, member_hash: str) -> str:
-    """A minimal `views/<id>.md` carrying only the one frontmatter field `list_stale_entities`
-    reads (`member_hash`) — real view files carry far more, but the staleness check touches
-    only this one."""
+def write_view(root: str, entity_id: str, *, member_hash: str, backlink_hash: str) -> str:
+    """A minimal `views/<id>.md` carrying only the frontmatter fields `list_stale_entities` reads
+    — real view files carry far more, but the staleness check touches these two.
+
+    BOTH are required, and that is the point of the signature: since #85 staleness is a PAIR
+    (member set, rendered backlinks), and a fixture that wrote only half of it would describe a
+    view no generator produces — one that reads as permanently stale, which is what a benign twin
+    must never be built on."""
     return write_page(root, "views", f"{entity_id}.md",
-                      frontmatter={"type": "view", "member_hash": member_hash},
+                      frontmatter={"type": "view", "member_hash": member_hash,
+                                   "backlink_hash": backlink_hash},
                       body=f"# {entity_id}\n")
 
 

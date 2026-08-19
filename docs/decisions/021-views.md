@@ -213,3 +213,68 @@ rather than absent: a view's Backlinks section can drift without its `member_has
 elsewhere gaining a wikilink to the entity's own page is not a member-set change — and a withheld
 synthesis over an unchanged member set still has no automatic retry, because the pass converges on
 the same hash. `--force` is the recovery for both, and it is an operator's act by design.
+
+**Superseded by the amendment below**: the backlink half of that paragraph closed with #85. The
+withheld-synthesis half stands.
+
+## Amendment — the audience gate has to run on every pass, not only at generation (2026-08-19, closes #85)
+
+D4 above got the rule right and applied it in one place too few. `kernel.acl.visible_to_view`
+gated the backlink feed **at generation time**, and staleness was `member_hash` alone — a hash over
+the MEMBER set, which a backlink is by definition not part of. So the two gates held for exactly as
+long as nothing changed underneath an already-committed page:
+
+- a steward narrows a cited source to `acl: [board-only]`, and the open view keeps that page's title
+  and path — the disclosure this system's own existence rule is about (*"an unknown page and a
+  forbidden page return the same string, deliberately"*) — while every convergence pass reports
+  `unchanged`, forever;
+- the `delete` repair kind removes a cited source, and the view keeps a dangling `[[...]]`, same
+  silence.
+
+Reproduced against real git during #76 and characterized in `tests/views/test_sweep_convergence.py`
+rather than fixed there, because the cost of the fix is the whole question and deserved its own
+change. **This is a behaviour change to C1's convergence rule**: a pass that used to report
+`unchanged` for these corpora now regenerates, which is one model call per affected entity.
+
+### A2 — a SECOND signal beside `member_hash`, never folded into it
+
+`backlink_hash:` is its own frontmatter field, compared beside `member_hash:`
+(`staleness.view_is_current` over a `ViewSignals` pair). Folding the backlinks into `member_hash`
+would have been fewer fields and one lying name: that hash covers the member set, and a reader who
+trusted the name would have gone on believing a backlink change was a member change.
+
+**What it hashes is what the section RENDERS** — `(path, title)` per row *after* the
+`visible_to_view` gate. That is what makes a narrowing register at all: the source drops out of the
+list, so the hash moves. Hashing the pre-gate candidates would have been both weaker and more
+expensive — identical for a page whether it renders or not, and regenerating on ACL edits that
+change nothing. Nothing body-shaped is in the key, and that is a hard constraint rather than a
+preference: `views/` is an indexed zone, so a view is itself a backlink source, and its body
+carries its own regeneration date — a content-sensitive key would make two views that cite each
+other regenerate each other every pass, forever.
+
+### A3 — the signal may use the batch's shared parse; what gets WRITTEN may not
+
+C2's single corpus parse is what makes a fifteen-minute pass affordable, and #76 deliberately kept
+it out of `skeleton.backlinks_of` because a view written earlier in the same pass is a real backlink
+source a pre-pass snapshot cannot contain. That argument governs the WRITE and only the write. The
+staleness SIGNAL is computed once per entity CHECKED — the whole population — where a fresh parse
+each would undo the optimisation entirely, so it takes the shared parse.
+
+The consequence is bounded, converges, and is now written down in both `views.md` and the code: a
+backlink created by a view written earlier in the SAME pass is noticed on the NEXT pass. One
+interval late, rather than never, at no extra parse.
+
+### A4 — a view with no `backlink_hash:` reads as STALE
+
+Every view on a real deployment predates the field. `None == None` would have quietly reported
+`unchanged` and shipped the leak forever, so the missing-field case is an explicit "no": the first
+pass after this lands regenerates each existing view exactly once, which is precisely what computes
+the signal. It is a one-off cost proportional to the number of views, taken under the per-run
+ceiling like any other regeneration.
+
+### A5 — the detector inherits it, because it never had a definition of its own
+
+`gardener.checks.check_stale_views` reuses `views.staleness.list_stale_entities` verbatim, so it
+began reporting the backlink half without a line changing in `gardener/` — the payoff for a shared
+definition rather than a re-derived one, and the answer to the issue's second half ("nothing detects
+it"). Its finding text now names both feeds; only that string changed.

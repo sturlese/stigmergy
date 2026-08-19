@@ -67,7 +67,7 @@ amount.
 |---|---|---|---|
 | Orphans (`orphan-page`) | non-entity `wiki/` pages with zero inbound wikilinks (the indexed `links` column) | always, except a type on the stated exemption list (entity pages, addressed by `entity:` anchoring, never a wikilink) | info |
 | Aging seeds (`aging-seed`) | `seed`/`developing` pages' `updated` age | older than `STIGMERGY_GARDENER_AGING_SEED_DAYS` (default 30) | warn |
-| Stale views (`stale-view`) | `views.staleness.list_stale_entities` — a view's member set vs. its own `member_hash:` | any mismatch | warn |
+| Stale views (`stale-view`) | `views.staleness.list_stale_entities` — a view's member set vs. its own `member_hash:`, AND the backlinks it would render vs. its own `backlink_hash:` | either mismatch | warn |
 | Anchor concentration (`anchor-concentration`) | the last `STIGMERGY_GARDENER_CONCENTRATION_WINDOW` (default 30) filed pages, by top anchored entity's share | share exceeds `STIGMERGY_GARDENER_CONCENTRATION_SHARE` (default 0.6) | warn |
 | Dead vocabulary (`dead-vocabulary`) | registered entities absent from `views.staleness.list_all_anchored_entities` | zero pages anchored anywhere | info |
 | Company-wide fraction (`company-wide-fraction`) | the last `STIGMERGY_GARDENER_COMPANY_WINDOW` (default 20) filed pages, by share declaring `entity: []` | share exceeds `STIGMERGY_GARDENER_COMPANY_SHARE` (default 0.3) | warn |
@@ -266,7 +266,7 @@ none this run
 ## WARN (5)
 [WARN] anchor-concentration        acme-corp — 14 of the last 18 filings (78%) anchored here, above the 60% threshold  [deterministic]
   action: no command — read a few of the recent filings anchored to Acme Corp and judge whether that's genuinely how lopsided the work has been, or whether unrelated material is defaulting here because picking the right anchor felt like more effort
-[WARN] stale-view                  acme-corp — the view's member set has changed since it was last generated  [deterministic]
+[WARN] stale-view                  acme-corp — the view no longer matches the corpus — its member set or the backlinks it cites have changed since it was last generated  [deterministic]
   action: `stigmergy-views regenerate --entity acme-corp`
 ...
 ## INFO (14)
