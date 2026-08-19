@@ -9,6 +9,70 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
+## [0.3.0] - 2026-08-19
+
+The governed repair loop grows from a design into a working subsystem with four proposal kinds,
+the view layer converges itself, and the `ops/` control files a deployed process trusts stop being
+deploy-time copies. Two adversarial audits ran over the batch — one on the original five issues,
+one on the whole window — and their surviving findings are either fixed here or filed with a
+decision recorded (#101, #102, #103).
+
+### Added
+
+- **The governed repair loop** (ADR 039, #69/#71/#72/#89): a gardener finding gets a path to zero
+  through four proposal kinds — additive edits, one drafted `entity-body` per page, governed
+  `delete` (the one kind no model may propose), and `entity-alias` (two registry entries that are
+  one entity: the model picks the survivor, code computes the sweep, one steward decision per pair
+  permanently). A MODEL proposes, CODE validates twice, a HUMAN approves one at a time.
+- **The view sweep** (#86): a view is never stale, whatever wrote the corpus — a state-based
+  convergence pass on the librarian worker's idle branch, one commit per entity, cooperative
+  shutdown between entities, mutual exclusion by advisory lock.
+- **Two more model checks** (#84, #89): an entity body that is written and says nothing, and two
+  registry entries that denote one company; plus a tenth deterministic check
+  (`anchored-to-superseded-entity`, #88) counting the residual an applied merge cannot sweep up.
+- **The ops-file cache** (ADR 040, #74/#79): the entity registry, the identity roster and the
+  channel scope map ride the derived index as verbatim-TEXT snapshots, refreshed by the push
+  webhook (fetched at the BRANCH ref — a replayed delivery can only install what the branch says
+  now) and reconciled per file by the nightly rebuild (the access files are never cleared over an
+  absent checkout copy). A revocation lands within seconds of its push instead of at the next
+  deploy. The page road gets delivery-id replay protection; an EMPTY snapshot resolves nobody.
+- **The budgets' feedback loop** (#75/#81): every proposer model call records requests and tool
+  calls against its limits — and token counts — into `job_runs.stats`; the edits budget derives
+  from the batch it carries; `kernel.llm.model_override` is the public seam for proving tool-loop
+  properties against the real agent, keyless.
+- **Agentic entity resolution** (#77): a filing near miss is the agent's judgment, with four new
+  filing-eval fixtures pinning it.
+- The meeting distiller sees the corpus it files into (ADR 038); `project` joins the entity types
+  (ADR 037); every review decision records its door, and stale Slack cards close themselves.
+
+### Fixed
+
+- An empty entity-body draft is the park, not a validation error — one model call, not two,
+  forever (#83).
+- Every unfenced prompt-header scalar is hygiened, not only the path — and the seventh prompt
+  builder (`views/synthesis.py`) that the consolidation sweep never reached (#92 follow-up).
+- A backlink that stopped qualifying stops being cited (#85); the view agent names its model
+  instead of inheriting the read path's (#90).
+- The non-additive repair kinds never rebase: a lost push race fails clean instead of landing a
+  diff the gates never judged against that base (#88).
+- The weekly digest reads every model pass's error, so a `partial` run can never render as a
+  clean one; a blank entity body no longer falls between the deterministic and the model halves
+  of the empty-body pair.
+- `STIGMERGY_REPAIR_BATCH` — the one count knob that multiplies a model budget — gains a maximum;
+  entity names refuse control characters; three `entities` refusals stop echoing a foreign
+  exception; non-ASCII stems are written verbatim in frontmatter lists.
+- The registry served by MCP follows `main`, not the deploy (#74); `stigmergy-index --check`
+  lints the copy the server actually serves.
+
+### Changed
+
+- The whole-branch refactor sweep (#92): one definition per fact across fourteen modules —
+  shared seams single-sourced, dead surface dropped, the ordinary/meeting filing copy-paste
+  collapsed, prompt-scalar hygiene folded down into `stigmergy.text`.
+- `_expansion_terms` is bounded by count and term length; the two registry parsers' authority is
+  stated (strict for writing, tolerant for serving); the admin console's Index panel answers
+  freshness for all three cached ops files.
+
 ## [0.2.2] - 2026-08-12
 
 Prose only. No executable code changed in this release, and that is a mechanically verified
