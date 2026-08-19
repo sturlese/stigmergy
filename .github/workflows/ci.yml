@@ -121,7 +121,22 @@ jobs:
         # no hand-pinned digest needed. The drive conversion tests call the REAL pdftotext over
         # a fixture PDF; without the binary they would skip, and a suite that skips in CI is a
         # suite that rots there unnoticed.
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils && pdftotext -v 2>&1 | head -1
+        #
+        # Bounded and retried: a wedged apt mirror used to hang this step until the job's own
+        # 30-minute timeout cancelled the whole run — four runs in one morning, none of them
+        # saying why. Three tries, each with its own five-minute ceiling, and a failure that
+        # arrives in minutes and names the step.
+        timeout-minutes: 12
+        run: |
+          for attempt in 1 2 3; do
+            if timeout 300 sudo apt-get update -qq && timeout 300 sudo apt-get install -y -qq poppler-utils; then
+              break
+            fi
+            echo "apt attempt ${attempt} failed or timed out; retrying" >&2
+            [ "$attempt" = 3 ] && exit 1
+            sleep 10
+          done
+          pdftotext -v 2>&1 | head -1
 
       - name: Tests — the frozen invariant + the index (coverage gate 75%)
         # `--timeout` and `-ra`, not a bare `-q`, and both earn their place:
