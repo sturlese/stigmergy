@@ -7,10 +7,13 @@ from dataclasses import dataclass, field
 
 @dataclass
 class _Usage:
-    """Mirrors the attributes worker.py reads from pydantic-ai's usage object."""
+    """Mirrors the attributes worker.py and the repair spend records read from pydantic-ai's
+    usage object."""
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
+    requests: int = 0
+    tool_calls: int = 0
     details: dict = field(default_factory=dict)
 
 

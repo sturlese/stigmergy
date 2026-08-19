@@ -25,6 +25,7 @@ retry starts from zero, are facts about the library that ENFORCES the bound, and
 its own tool calls would only prove that a test can count.
 """
 import asyncio
+import contextlib
 
 import pytest
 from pydantic_ai.exceptions import UsageLimitExceeded
@@ -450,18 +451,21 @@ class _ScriptedModel:
                                                  {"proposals": proposals})])
 
 
-def _real_agent(monkeypatch, script: _ScriptedModel) -> None:
+@contextlib.contextmanager
+def _real_agent(monkeypatch, script):
     """A REAL pydantic-ai agent — the production builder, the production tools, the production
     limits object — driven by pydantic-ai's own `FunctionModel`.
 
-    Keyless, and honest about what is faked: `kernel.llm.build_model` is the ONE seam where a
-    provider is chosen, so replacing the model there stands in for the external service and leaves
-    everything this file is about untouched. The BUDGET is not faked — the library counts the tool
-    calls and raises `UsageLimitExceeded` itself, which is precisely why the two properties below
-    are not written with a double.
+    Keyless, and honest about what is faked: `kernel.llm.model_override` is the PUBLIC seam where
+    a provider is replaced (issue #81 — this used to require reaching into `build_model`, another
+    package's private-by-convention function), and it stands in for the external service while
+    leaving everything this file is about untouched. The BUDGET is not faked — the library counts
+    the tool calls and raises `UsageLimitExceeded` itself, which is precisely why the properties
+    below are not written with a double.
     """
     monkeypatch.setenv("CLEAN_LLM", "openai")
-    monkeypatch.setattr(kernel_llm, "build_model", lambda *_a, **_k: (FunctionModel(script), None))
+    with kernel_llm.model_override(FunctionModel(script)):
+        yield
 
 
 def _seed_three_distinct(conn) -> int:
@@ -486,10 +490,10 @@ def test_a_batch_that_legitimately_explores_comes_back_with_its_proposals(conn, 
     enforcement: "is 24 enough for three findings that actually explore" is a question about
     pydantic-ai, and a double that counted its own tool calls would answer a different one."""
     model = _ScriptedModel(reads=proposer.MIN_TOOL_CALLS_PER_FINDING * DEFAULT_BATCH_SIZE)
-    _real_agent(monkeypatch, model)
     _seed_three_distinct(conn)
 
-    result = _run(conn, RepairSettings(repo=repo_env.repo))
+    with _real_agent(monkeypatch, model):
+        result = _run(conn, RepairSettings(repo=repo_env.repo))
 
     assert model.reads_per_run == [proposer.MIN_TOOL_CALLS_PER_FINDING * DEFAULT_BATCH_SIZE]
     assert [r for r in result.skip_reasons if "usage-budget" in r] == [], (
@@ -509,11 +513,11 @@ def test_a_retry_starts_from_a_fresh_budget_and_the_library_agrees(conn, repo_en
     affordable, and a retry that could not pay for itself would turn every rejected batch into a
     recorded skip."""
     model = _ScriptedModel(reads=9, flawed_first=True)
-    _real_agent(monkeypatch, model)
     run_id = support.seed_gardener_run(conn)
     support.seed_unlinked_mention(conn, run_id, pages=(support.NOTE_A, support.NOTE_B))
 
-    result = _run(conn, RepairSettings(repo=repo_env.repo))
+    with _real_agent(monkeypatch, model):
+        result = _run(conn, RepairSettings(repo=repo_env.repo))
 
     assert model.reads_per_run == [9, 9], "the corrective retry never happened"
     assert result.proposed == 1, result.skip_reasons
@@ -533,7 +537,6 @@ def test_a_genuinely_exhausted_batch_is_skipped_whole_and_the_body_road_still_ru
     the body road would run away too, and what this test asks of that road is only that it still
     RAN."""
     model = _ScriptedModel(runaway=True)
-    _real_agent(monkeypatch, model)
     monkeypatch.setattr(proposer, "build_entity_body_drafter",
                         lambda *_a, **_k: proposer.FakeEntityBodyDrafter())
     support.seed_entity(repo_env, anchored=2)
@@ -541,7 +544,8 @@ def test_a_genuinely_exhausted_batch_is_skipped_whole_and_the_body_road_still_ru
     support.seed_unlinked_mention(conn, run_id, pages=(support.NOTE_A, support.DECISION))
     support.seed_placeholder_body(conn, run_id)
 
-    result = _run(conn, RepairSettings(repo=repo_env.repo))
+    with _real_agent(monkeypatch, model):
+        result = _run(conn, RepairSettings(repo=repo_env.repo))
 
     budget_reasons = [r for r in result.skip_reasons if "usage-budget-exhausted" in r]
     assert len(budget_reasons) == 2, result.skip_reasons
@@ -620,3 +624,102 @@ def test_a_run_whose_ceiling_filled_on_the_edits_road_never_pays_for_a_body_draf
 
     assert result.proposed == 1
     assert any("run-ceiling-reached(1)" in reason for reason in result.skip_reasons)
+
+
+# ── the spend record: the feedback loop the budgets never had (issue #81) ──────────────────────
+def test_every_model_call_records_its_spend_beside_the_ceiling_it_ran_under(conn, repo_env,
+                                                                            monkeypatch):
+    """`job_runs.stats` recorded that a batch LAPSED and never how close a successful one came, so
+    `MIN_TOOL_CALLS_PER_FINDING` was a reasoned number with no feedback loop behind it — the only
+    signal the system produced was the failure the number was chosen to prevent (issue #75's whole
+    shape). One record per call, with the limits the call ran under and pydantic-ai's own counts,
+    persisted where an operator already reads the run."""
+    model = _ScriptedModel(reads=4)
+    run_id = support.seed_gardener_run(conn)
+    support.seed_unlinked_mention(conn, run_id, pages=(support.NOTE_A, support.NOTE_B))
+
+    with _real_agent(monkeypatch, model):
+        result = _run(conn, RepairSettings(repo=repo_env.repo))
+
+    (call,) = result.model_calls
+    assert call["road"] == schema.KIND_EDITS
+    assert call["tool_calls_limit"] == proposer.batch_limits(1).tool_calls_limit
+    assert call["request_limit"] == proposer.batch_limits(1).request_limit
+    # pydantic-ai's OWN counts: `tool_calls` is the four reads (the structured ANSWER counts
+    # against the LIMIT but not in this usage figure — `batch_limits`' own comment holds for the
+    # bound, not the meter), and `requests` is one per model round: four reads plus the answer.
+    assert call["tool_calls"] == 4
+    assert call["requests"] == 5
+    with conn.cursor() as cur:
+        cur.execute("SELECT stats FROM job_runs WHERE job = %s ORDER BY id DESC LIMIT 1",
+                    (proposer.JOB_NAME,))
+        stats = cur.fetchone()[0]
+    assert stats["model_calls"] == result.model_calls, (
+        "the durable row and the operator's screen disagree about what was spent")
+
+
+def test_the_offline_double_records_the_limits_even_when_it_spends_nothing(conn, repo_env,
+                                                                           monkeypatch):
+    """The keyless twin: under `CLEAN_LLM=fake` the double reports zero usage, and the record
+    still lands with the LIMITS right — the plumbing is the same code path a real night runs, so
+    a broken persistence would be visible on any laptop."""
+    monkeypatch.setenv("CLEAN_LLM", "fake")
+    run_id = support.seed_gardener_run(conn)
+    support.seed_unlinked_mention(conn, run_id, pages=(support.NOTE_A, support.NOTE_B))
+
+    result = _run(conn, RepairSettings(repo=repo_env.repo))
+
+    (call,) = result.model_calls
+    assert call["road"] == schema.KIND_EDITS
+    assert call["tool_calls_limit"] == proposer.batch_limits(1).tool_calls_limit
+    assert call["tool_calls"] == 0 and call["requests"] == 0
+
+
+class _BodyScript:
+    """The body road's scripted model: reads EVERY page the prompt's index names through the real
+    `read_page` tool, then answers with a valid draft citing one of them — the biggest single
+    brief this system builds, driven at full size."""
+
+    __name__ = "scripted-body-model"
+
+    def __init__(self):
+        self.reads_per_run: list[int] = []
+
+    def __call__(self, messages, info) -> ModelResponse:
+        prompt = _user_prompt(messages)
+        pages = [line.split(proposer._PAGE_LINE, 1)[1] for line in prompt.splitlines()
+                 if line.startswith(proposer._PAGE_LINE)]
+        so_far = sum(1 for m in messages for p in m.parts if isinstance(p, ToolCallPart))
+        if so_far == 0:
+            self.reads_per_run.append(0)
+        if so_far < len(pages):
+            self.reads_per_run[-1] += 1
+            return ModelResponse(parts=[ToolCallPart("read_page", {"path": pages[so_far]})])
+        body = ("## What / Who\n\nAcme Corp is what the anchored pages describe.\n\n## Facts\n\n"
+                + "\n".join(f"- noted in [[{p.rsplit('/', 1)[-1].removesuffix('.md')}]]"
+                            for p in pages[:3]))
+        return ModelResponse(parts=[ToolCallPart(info.output_tools[0].name,
+                                                 {"body_markdown": body, "role": ""})])
+
+
+def test_the_largest_brief_this_system_builds_completes_at_full_size(conn, repo_env, monkeypatch):
+    """Issue #81 item 5: `MAX_ANCHORED_PAGES` fenced pages in one prompt plus a read of every one
+    of them is the biggest single model brief here, and nothing had ever driven that shape — so
+    whether `BODY_DRAFT_LIMITS` can actually pay for it was folklore. Real agent, real tools, the
+    library's own enforcement: ten fenced pages in, ten reads, a stored draft out, under budget."""
+    support.seed_entity(repo_env, anchored=proposer.MAX_ANCHORED_PAGES + 2)
+    run_id = support.seed_gardener_run(conn)
+    support.seed_placeholder_body(conn, run_id)
+    model = _BodyScript()
+
+    with _real_agent(monkeypatch, model):
+        result = _run(conn, RepairSettings(repo=repo_env.repo))
+
+    assert model.reads_per_run == [proposer.MAX_ANCHORED_PAGES], (
+        "the brief did not carry the full anchored-page ceiling")
+    assert result.proposed == 1, result.skip_reasons
+    (call,) = result.model_calls
+    assert call["road"] == schema.KIND_ENTITY_BODY
+    assert call["tool_calls"] == proposer.MAX_ANCHORED_PAGES
+    assert call["requests"] == proposer.MAX_ANCHORED_PAGES + 1     # + the answering round
+    assert call["tool_calls_limit"] == proposer.BODY_DRAFT_LIMITS.tool_calls_limit

@@ -320,6 +320,12 @@ that road already had. #75 was the additive road's problem; on the night that fo
 road was the only one that produced anything, and resizing the half that works for the sake of
 symmetry is a change with a risk and no benefit.
 
+Every model call also records what it SPENT beside the ceiling it ran under: `job_runs.stats`
+carries a `model_calls` list — road, requests and tool calls against their limits, token counts —
+so the next change to any budget constant is an observation over real nights instead of a formula
+argued from first principles (issue #81). Before this, the only signal a budget produced was the
+failure it was chosen to prevent.
+
 ## The proposer's own procedure lives in the knowledge repo
 
 The system prompt is a code-owned header plus `.claude/skills/repair-proposer/SKILL.md`, read at run
