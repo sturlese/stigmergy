@@ -18,7 +18,7 @@ import pytest
 from stigmergy.capture import cli as queue_cli
 from stigmergy.capture import queue, schema
 from stigmergy.index import store
-from stigmergy.librarian import cli, config
+from stigmergy.librarian import cli, config, worker
 from tests import testdb
 from tests.librarian import support
 
@@ -131,7 +131,7 @@ def test_once_sweeps_a_stranded_claim_back_to_the_queue_and_says_so(capsys, cli_
     assert exit_code == 0
     assert "swept 1 stranded claim(s) back to the queue" in out
     # and the number in that line carries its human unit, not only its seconds
-    assert f"{config.DEFAULT_VISIBILITY_TIMEOUT_S}s (15 min)" in out
+    assert worker.human_duration(config.DEFAULT_VISIBILITY_TIMEOUT_S) in out
     assert _status_of(conn, ack["id"]) == schema.QUEUED
 
 
@@ -242,7 +242,7 @@ def _status_of(conn, submission_id: int) -> str:
 
 def test_an_interrupted_once_names_the_visibility_timeout_in_seconds(capsys, cli_rig, monkeypatch):
     """The defect itself, and a run on the DEFAULTS: no `--visibility-timeout` is passed, so this
-    is the configuration an operator actually gets (900s = 2 x 300s agent attempts + 120s of gates
+    is the configuration an operator actually gets (1290s = 2 x 300s agent attempts + 120s of gates + 390s of conversion
     + 180s headroom), asserted through `config` rather than retyped."""
     env, conn, argv = cli_rig
     from stigmergy.capture import evidence as evidence_plane
@@ -252,7 +252,8 @@ def test_an_interrupted_once_names_the_visibility_timeout_in_seconds(capsys, cli
     exit_code, out, err = _run(capsys, *argv, "once")
 
     assert exit_code == cli.EXIT_INTERRUPTED
-    assert f"{config.DEFAULT_VISIBILITY_TIMEOUT_S}s (15 min) visibility timeout" in err
+    assert (f"{worker.human_duration(config.DEFAULT_VISIBILITY_TIMEOUT_S)} visibility timeout"
+            in err)
     assert "Traceback" not in err
     # the row really is where the message says it is
     assert _status_of(conn, ack["id"]) == schema.CLAIMED
@@ -340,7 +341,7 @@ def test_the_reclaim_command_the_interrupt_message_names_really_returns_the_item
 def test_the_configured_lease_would_not_have_released_it_which_is_why_the_command_says_zero(
         capsys, cli_rig, monkeypatch):
     """The benign twin of the test above, the same scenario one layer up: the SAME stranded row,
-    reclaimed with the CONFIGURED 900s lease instead of 0, releases nothing. That is exactly why
+    reclaimed with the CONFIGURED 1290s lease instead of 0, releases nothing. That is exactly why
     the message names 0 — advice built from this run's lease would do nothing for fifteen minutes
     while claiming to work."""
     env, conn, argv = cli_rig

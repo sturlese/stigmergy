@@ -129,7 +129,7 @@ def test_visibility_timeout_outlives_one_items_worst_case_rather_than_inheriting
         timeout_s=settings.timeout_s)
     assert settings.visibility_timeout_s == (
         config.MAX_AGENT_ATTEMPTS * settings.timeout_s
-        + config.GATE_BUDGET_S + config.VISIBILITY_HEADROOM_S)
+        + config.GATE_BUDGET_S + config.CONVERSION_BUDGET_S + config.VISIBILITY_HEADROOM_S)
     assert settings.max_attempts == capture_queue.DEFAULT_MAX_ATTEMPTS
 
 
@@ -142,7 +142,8 @@ def test_a_raised_agent_timeout_raises_the_derived_visibility_with_it(monkeypatc
     settings = config.Settings.from_args(_args())
     assert settings.timeout_s == 600
     assert settings.visibility_timeout_s == (
-        config.MAX_AGENT_ATTEMPTS * 600 + config.GATE_BUDGET_S + config.VISIBILITY_HEADROOM_S)
+        config.MAX_AGENT_ATTEMPTS * 600 + config.GATE_BUDGET_S + config.CONVERSION_BUDGET_S
+        + config.VISIBILITY_HEADROOM_S)
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
@@ -159,19 +160,20 @@ def test_a_raised_agent_timeout_raises_the_derived_visibility_with_it(monkeypatc
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 def test_resolved_visibility_timeout_s_is_the_class_default_with_no_env_var(monkeypatch):
     monkeypatch.delenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", raising=False)
-    assert config.resolved_visibility_timeout_s() == 900
+    assert config.resolved_visibility_timeout_s() == 1290
     assert config.resolved_visibility_timeout_s() == config.DEFAULT_VISIBILITY_TIMEOUT_S
 
 
-def test_resolved_visibility_timeout_s_derives_1500_from_stagings_own_env_var(monkeypatch):
+def test_resolved_visibility_timeout_s_derives_1890_from_stagings_own_env_var(monkeypatch):
     """The exact number at stake: staging sets `STIGMERGY_LIBRARIAN_TIMEOUT_S=600`
-    (`fly.toml`), which derives a 1500s lease — 2 agent attempts * 600s + 120s gate budget + 180s
-    headroom, the SAME arithmetic `test_a_raised_agent_timeout_raises_the_derived_visibility_
+    (`fly.toml`), which derives a 1890s lease — 2 agent attempts * 600s + 120s gate budget + 390s conversion
+    + 180s headroom, the SAME arithmetic `test_a_raised_agent_timeout_raises_the_derived_visibility_
     with_it` above pins on `Settings.from_args`."""
     monkeypatch.setenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", "600")
-    assert config.resolved_visibility_timeout_s() == 1500
+    assert config.resolved_visibility_timeout_s() == 1890
     assert config.resolved_visibility_timeout_s() == (
-        config.MAX_AGENT_ATTEMPTS * 600 + config.GATE_BUDGET_S + config.VISIBILITY_HEADROOM_S)
+        config.MAX_AGENT_ATTEMPTS * 600 + config.GATE_BUDGET_S + config.CONVERSION_BUDGET_S
+        + config.VISIBILITY_HEADROOM_S)
 
 
 def test_resolved_visibility_timeout_s_reads_the_env_at_call_time_not_a_value_cached_at_import(
@@ -182,13 +184,13 @@ def test_resolved_visibility_timeout_s_reads_the_env_at_call_time_not_a_value_ca
     once (at import, or memoized on a first call) and handed back unchanged forever after. The
     third call, after `delenv`, closes the loop: a cached value would not go back down."""
     monkeypatch.delenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", raising=False)
-    assert config.resolved_visibility_timeout_s() == 900
+    assert config.resolved_visibility_timeout_s() == 1290
 
     monkeypatch.setenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", "600")
-    assert config.resolved_visibility_timeout_s() == 1500
+    assert config.resolved_visibility_timeout_s() == 1890
 
     monkeypatch.delenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", raising=False)
-    assert config.resolved_visibility_timeout_s() == 900, (
+    assert config.resolved_visibility_timeout_s() == 1290, (
         "went back down once the env var was removed again — a cached/memoized value would not")
 
 
@@ -364,7 +366,7 @@ def test_a_positive_budget_is_the_benign_twin(monkeypatch):
     resolves, and the lease still derives from it."""
     monkeypatch.setenv(config.TIMEOUT_ENV, "600")
     assert config.resolved_timeout_s() == 600
-    assert config.resolved_visibility_timeout_s() == 1500
+    assert config.resolved_visibility_timeout_s() == 1890
 
 
 def test_the_lease_derives_from_this_settings_objects_own_budget(monkeypatch):

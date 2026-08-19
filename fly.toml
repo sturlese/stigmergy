@@ -30,12 +30,13 @@ primary_region = "fra"
 # inside an agent turn, a gitleaks run or a push — so SIGTERM stops it claiming the NEXT item and
 # it exits once the current one reaches a terminal state (`librarian/worker.py`'s docstring).
 #
-# 300s is Fly's ceiling for `kill_timeout`, and one item's worst case is 1320s (2 agent
+# 300s is Fly's ceiling for `kill_timeout`, and one item's worst case is 1710s (2 agent
 # attempts x 600s — `STIGMERGY_LIBRARIAN_TIMEOUT_S` below — + 120s for the gates, the commit and
-# the push — `config.minimum_visibility_timeout_s`). So the platform's window is deliberately
+# the push + 390s for a drive conversion's bounded worst case —
+# `config.minimum_visibility_timeout_s`). So the platform's window is deliberately
 # SHORTER than the work it is waiting for, and pretending otherwise would be the lie: an item
 # still running at 300s is SIGKILLed, and the recovery is the queue's own — the row returns to
-# the queue after the (derived, 1500s) visibility timeout with an attempt burned, and the next
+# the queue after the (derived, 1890s) visibility timeout with an attempt burned, and the next
 # worker files it. That is the documented behaviour, not an accident; the runbook says so, and
 # says to drain the queue before a deploy if you would rather not exercise it.
 kill_signal = "SIGTERM"
@@ -108,12 +109,13 @@ kill_timeout = "300s"
   # real figure-dense Drive deck (7.7 KB extracted, overlapping an entity with existing coverage)
   # exceeded it twice while a simpler deck filed just under it. Deck-sized documents earn a
   # document-sized budget. The visibility timeout DERIVES from this value
-  # (`config.Settings.from_args`: 2×600 + 120 gate budget + 180 headroom = 1500s), so the lease
+  # (`config.Settings.from_args`: 2×600 + 120 gate budget + 390 conversion + 180 headroom =
+  # 1890s), so the lease
   # still outlives one item's worst case. `stigmergy-queue reclaim` has no default horizon — it
-  # refuses without `--visibility-timeout`, and the refusal names 900s, the lease a worker gets
-  # when it is NOT given this longer agent timeout. Sweeping this group with anything below 1500s
+  # refuses without `--visibility-timeout`, and the refusal names 1290s, the lease a worker gets
+  # when it is NOT given this longer agent timeout. Sweeping this group with anything below 1890s
   # redelivers an item that is still being filed — safe (the attempts fence makes the loser
-  # discard) but wasteful, so pass this group's own 1500s.
+  # discard) but wasteful, so pass this group's own 1890s.
   STIGMERGY_LIBRARIAN_TIMEOUT_S = "600"
   # STIGMERGY_REPO (where the clone lives) comes from the image, so the composition and staging share
   # one default; override it here if a machine ever needs the checkout somewhere else.

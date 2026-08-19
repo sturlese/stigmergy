@@ -119,7 +119,8 @@ def test_run_prints_the_same_preamble_once_prints_plus_its_loop_settings(run_rig
     assert preamble and env.repo in preamble and "origin/main@" in preamble
     assert settings_line
     assert "polling every 0.2s" in settings_line
-    assert f"lease {config.DEFAULT_VISIBILITY_TIMEOUT_S}s (15 min)" in settings_line
+    assert (f"lease {worker.human_duration(config.DEFAULT_VISIBILITY_TIMEOUT_S)}"
+            in settings_line)   # derived end to end — a retyped "(N min)" drifts (issue #113)
     assert "Ctrl-C stops after the item in flight" in settings_line
 
 

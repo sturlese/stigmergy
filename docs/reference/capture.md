@@ -173,7 +173,8 @@ N parallel claimers against M queued rows produce exactly M claims, no row claim
 
 A claim is a **lease**: `claimed_at` plus the visibility timeout the claimer states. `claim_next`
 defaults to 300 s (a human-scale `stigmergy-queue claim`); the librarian's worker claims with its own
-derived lease, 900 s by default, because one item can run two agent attempts plus the gates
+derived lease, 1290 s by default, because one item can run two agent attempts plus the gates
+plus a drive conversion's bounded worst case
 (`librarian.config.minimum_visibility_timeout_s`). A worker that dies mid-item leaves a stale claim
 the next claimer's sweep returns to `queued`. That sweep also runs in the librarian's worker loop
 and standalone as `stigmergy-queue reclaim`; `queue.release_expired` has **no default** horizon,
@@ -256,7 +257,7 @@ check against the raw bucket.
 .venv/bin/stigmergy-queue show 7                        # one submission's trace and latencies
 .venv/bin/stigmergy-queue claim --hold 60               # take one item; hold the lease, file nothing
 .venv/bin/stigmergy-queue reclaim --visibility-timeout 0    # release EVERY claimed row, right now
-.venv/bin/stigmergy-queue reclaim --visibility-timeout 900  # ...only ones past the worker's lease
+.venv/bin/stigmergy-queue reclaim --visibility-timeout 1290  # ...only ones past the worker's lease
 
 # the drain: the three things a human can do with a PARKED row
 .venv/bin/stigmergy-queue requeue 7 --by steward --note "registered the entity, try again"
@@ -316,7 +317,7 @@ visibility timeout, or `stigmergy-queue reclaim --visibility-timeout 0`.
 > **On `reclaim` the flag is REQUIRED** and the command refuses without it: this CLI cannot see the
 > lease the other worker holds, and a shorter horizon requeues captures out from under processes
 > still filing them. The refusal names the two values that are almost always right: `0` after you
-> killed the worker yourself, and the worker's own lease (900 s by default) otherwise.
+> killed the worker yourself, and the worker's own lease (1290 s by default) otherwise.
 
 Every command exits **130** on Ctrl-C, never `0` — a real lease may still be outstanding.
 

@@ -947,8 +947,9 @@ def test_cli_reclaim_without_a_horizon_refuses_and_says_what_to_run(clean_queue,
     A second defect in the SAME refusal: it pointed the operator at
     `$STIGMERGY_LIBRARIAN_VISIBILITY_TIMEOUT` — a variable this repo reads NOWHERE (this message was
     its only occurrence in the whole tree). An operator who set it got silently nothing back: the
-    worker's real lease is DERIVED from `$STIGMERGY_LIBRARIAN_TIMEOUT_S` (900s at the class default;
-    e.g. staging's 600s budget derives 1500s — `librarian.config.minimum_visibility_timeout_s`), and
+    worker's real lease is DERIVED from `$STIGMERGY_LIBRARIAN_TIMEOUT_S` (1290s at the class
+    default; e.g. staging's 600s budget derives 1890s —
+    `librarian.config.minimum_visibility_timeout_s`), and
     the resolved number is what `stigmergy-librarian status --json` prints as `visibility_timeout_s`
     (`docs/reference/operator-runbook.md`'s "dead worker mid-item" drill already teaches this exact
     route). The refusal must name the real source, never the dead one.
@@ -972,6 +973,16 @@ def test_cli_reclaim_without_a_horizon_refuses_and_says_what_to_run(clean_queue,
     assert "STIGMERGY_LIBRARIAN_TIMEOUT_S" in captured.err
     assert "stigmergy-librarian status --json" in captured.err
     assert "visibility_timeout_s" in captured.err
+
+
+def test_the_refusals_default_lease_literal_matches_the_librarians_derivation():
+    """The declared duplication's parity pin (issue #113): `capture` cannot import
+    `stigmergy.librarian` (the derivation's module imports this package's queue — the reverse
+    edge is a cycle), so the refusal carries its own copy of the worker's default lease, and
+    THIS is what keeps the copy honest. When the derivation moves, this test names both ends."""
+    from stigmergy.librarian import config as librarian_config
+
+    assert cli.WORKER_DEFAULT_LEASE_S == librarian_config.DEFAULT_VISIBILITY_TIMEOUT_S
 
 
 def test_cli_reclaim_refusal_names_commands_that_actually_run(clean_queue, capsys):

@@ -546,17 +546,18 @@ timeout (900s default) with `attempts` incremented, and the next worker files it
 .venv/bin/stigmergy-queue list                              # depth per status + newest submissions
 .venv/bin/stigmergy-queue show 7                            # one submission's trace and latencies
 .venv/bin/stigmergy-queue reclaim --visibility-timeout 0    # release EVERY claimed row, right now
-.venv/bin/stigmergy-queue reclaim --visibility-timeout 900  # ...only ones past a 900s lease
+.venv/bin/stigmergy-queue reclaim --visibility-timeout 1290  # ...only ones past a 1290s lease
 ```
 
 `--visibility-timeout` is mandatory on `reclaim` and the command refuses without it: it decides
 how dead a worker must be before its work is taken away, and the CLI cannot see the lease that
 worker actually holds — a shorter horizon requeues captures out from under processes still filing
 them. Pass `0` when you know the worker is gone, or the worker's own lease otherwise. That lease is
-DERIVED from the per-item budget rather than fixed: 900s at the default
-`STIGMERGY_LIBRARIAN_TIMEOUT_S`, **1500s on the deployed worker**, which runs at 600.
+DERIVED from the per-item budget rather than fixed: 1290s at the default
+`STIGMERGY_LIBRARIAN_TIMEOUT_S`, **1890s on the deployed worker**, which runs at 600 (the extra
+390s in both is the drive conversion's bounded worst case — the kernel's three vision clocks).
 `stigmergy-librarian status --json` prints the resolved `visibility_timeout_s` for the environment
-it is run in — read it there rather than assuming 900.
+it is run in — read it there rather than assuming the default.
 
 The admin console's Reclaim button states **the same derived lease**, resolving
 `STIGMERGY_LIBRARIAN_TIMEOUT_S` through the worker's own arithmetic per request, so the Worker tab's
