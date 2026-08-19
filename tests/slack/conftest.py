@@ -9,14 +9,13 @@ import pytest
 
 from stigmergy.capture.evidence import MemoryEvidenceStore
 from stigmergy.index import build
+from stigmergy.index import store as index_store
 from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.server.settings import Settings
 from stigmergy.slack.context import SlackContext
 from stigmergy.slack.gateway import FakeSlackGateway
 from stigmergy.slack.settings import SlackSettings, no_link_resolver
 from stigmergy.slack.store import ensure_write_path_schema
-from stigmergy.index import store as index_store
-
 from tests import testdb
 from tests.server.conftest import Fixture
 
