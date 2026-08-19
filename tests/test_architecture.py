@@ -157,6 +157,13 @@ _REVIEW_DECLARED_TRANSITIVE_KERNEL_MODULES = frozenset({
     "stigmergy.kernel",
     "stigmergy.kernel.acl",
     "stigmergy.kernel.frontmatter",
+    # `librarian.config`'s lease derivation imports the drive conversion's three timeout
+    # ceilings from the module that owns them (issue #113: CONVERSION_BUDGET_S is imported,
+    # never retyped, so the lease term cannot drift from the clocks it stands for) — and
+    # `review` reaches `config` through the same librarian primitives it already declares.
+    # Import-time weight only; no provider SDK loads at module level (the kernel's own rule,
+    # pinned above).
+    "stigmergy.kernel.converters",
     # `kernel.registry.save_registry` writes through `fsutil.write_text_atomic` (and
     # `entities.mint._restore` rolls back through the same helper), so an interrupted write cannot
     # leave a truncated `ops/entity-registry.json`.

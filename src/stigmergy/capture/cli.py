@@ -31,6 +31,14 @@ from stigmergy.index import store
 
 _DUMP = {"ensure_ascii": False, "indent": 2}
 
+# The worker's DEFAULT lease, for the reclaim refusal's example command. Spelled here rather
+# than imported: `librarian.config` (where the derivation lives) imports THIS package's queue,
+# so the reverse import would be a cycle — the duplication is declared instead, and
+# `tests/capture/test_cli.py` pins this number to
+# `librarian.config.DEFAULT_VISIBILITY_TIMEOUT_S` so it cannot drift from the arithmetic it
+# copies (2 agent attempts × 300s + 120s gates + 390s conversion + 180s headroom).
+WORKER_DEFAULT_LEASE_S = 1290
+
 # `list`'s `kind` column width, computed from `schema.KINDS` so the next kind cannot break the
 # column's alignment (a hand-picked width did, when `meeting` joined).
 _KIND_WIDTH = max(len(k) for k in schema.KINDS)
@@ -308,16 +316,18 @@ def _cmd_reclaim(conn, args) -> int:
     # No default, deliberately: this CLI cannot see the worker's lease, and a wrong guess
     # requeues a capture out from under a process still filing it.
     if args.visibility_timeout is None:
-        print("stigmergy-queue: reclaim needs --visibility-timeout — how old a claim must be "
-              "before its worker is presumed dead. There is no safe default: this command "
-              "cannot see the worker's configured lease, and a horizon shorter than that lease "
-              "requeues captures out from under running workers.\n"
-              "  after killing a worker, to force redelivery now:\n"
-              "    stigmergy-queue reclaim --visibility-timeout 0\n"
-              "  to sweep genuinely abandoned claims, pass the worker's own lease — read it "
-              "with `stigmergy-librarian status --json` (.visibility_timeout_s; 900 by default, "
-              "derived from $STIGMERGY_LIBRARIAN_TIMEOUT_S):\n"
-              "    stigmergy-queue reclaim --visibility-timeout 900", file=sys.stderr)
+        print(f"stigmergy-queue: reclaim needs --visibility-timeout — how old a claim must be "
+              f"before its worker is presumed dead. There is no safe default: this command "
+              f"cannot see the worker's configured lease, and a horizon shorter than that lease "
+              f"requeues captures out from under running workers.\n"
+              f"  after killing a worker, to force redelivery now:\n"
+              f"    stigmergy-queue reclaim --visibility-timeout 0\n"
+              f"  to sweep genuinely abandoned claims, pass the worker's own lease — read it "
+              f"with `stigmergy-librarian status --json` (.visibility_timeout_s; "
+              f"{WORKER_DEFAULT_LEASE_S} by default, "
+              f"derived from $STIGMERGY_LIBRARIAN_TIMEOUT_S):\n"
+              f"    stigmergy-queue reclaim --visibility-timeout {WORKER_DEFAULT_LEASE_S}",
+              file=sys.stderr)
         return 2
     result = queue.release_expired(conn, visibility_timeout_s=args.visibility_timeout,
                                    max_attempts=args.max_attempts)

@@ -246,7 +246,7 @@ time, and model ids are configuration, never constants.
 | `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S` | 900 | how often the idle loop converges `views/` to the corpus (see [`views.md`](./views.md)). It runs on the IDLE branch only — a busy queue is drained first — and the first pass is at the first idle tick, so a restart converges without waiting an interval out. `0` turns the pass off, leaving the post-meeting hook and `stigmergy-views regenerate` as the only roads; a NEGATIVE value is refused by name, because it would rebuild a worktree and re-parse the corpus on every poll |
 | `STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING` | 10 | how many entities ONE pass may regenerate or remove — each is a model call, and nothing else bounds them. Entities that cost nothing (`unchanged`) do not consume it. What a pass defers is recorded in `job_runs.stats.skip_reasons` and picked up by the next one, since the population is recomputed from state every time. Below `1` is refused by name: every pass would defer everything |
 | (`--poll-interval`) | 3.0 | `run` only; must be > 0 |
-| (`--visibility-timeout`) | 900 | derived: `2 × timeout_s + 120s` gates `+ 180s` headroom |
+| (`--visibility-timeout`) | 1290 | derived: `2 × timeout_s + 120s` gates `+ 390s` conversion (the kernel's three vision clocks — a scanned deck converts BEFORE its first agent pass) `+ 180s` headroom |
 | (`--max-attempts`) | 3 | deliveries before an item is failed; must be ≥ 1 |
 | `STIGMERGY_GITLEAKS_BIN` | `gitleaks` | resolved on PATH, existence checked ONCE at startup |
 | `STIGMERGY_LIBRARIAN_WORKTREE_ROOT` | system temp | where ephemeral worktrees live |
@@ -272,7 +272,7 @@ Nothing is lost. The usual cause is the App installation (revoked or expired) or
 
 **An explicitly passed value is never discarded in silence.** Resolution tests `is None`, not
 falsiness, so `--visibility-timeout 0` reaches `startup_checks` and is refused out loud with the
-arithmetic rather than silently replaced by 900. `--poll-interval 0` and `--max-attempts 0` are
+arithmetic rather than silently replaced by the default. `--poll-interval 0` and `--max-attempts 0` are
 refused for the same reason, each with its own sentence.
 
 ### Two backends behind one port

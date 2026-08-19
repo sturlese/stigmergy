@@ -11,6 +11,7 @@ import tempfile
 from dataclasses import dataclass
 
 from stigmergy.capture import queue
+from stigmergy.kernel import converters
 from stigmergy.librarian.errors import LibrarianConfigError
 
 # The default filing model. PROVIDER-PREFIXED (pydantic-ai reads a bare name as an OpenAI model)
@@ -37,6 +38,16 @@ MAX_AGENT_ATTEMPTS = 2
 # What one item costs BESIDES its agent attempts: the gitleaks and linter runs, the worktree,
 # the commit, the push retries, and up to two gathers for a `wants_gathered` backend.
 GATE_BUDGET_S = 120
+
+# The drive road's conversion, the term the lease was missing (issue #113): a scanned deck pays
+# a bounded rasterization, a page-count read and one vision model request BEFORE its first agent
+# pass, and a lease derived without them redelivers an item that is still converting — safe (the
+# attempts fence makes the loser discard) but a second worker repeats the expensive work.
+# IMPORTED from the kernel's own clocks, never retyped: a term that drifted from the ceilings it
+# stands for would be the lie this derivation exists to prevent. Items that convert nothing
+# simply finish earlier; a lease must outlive the WORST legitimate case.
+CONVERSION_BUDGET_S = (converters.PDF_RASTER_TIMEOUT_S + converters.PDFINFO_TIMEOUT_S
+                       + converters.VISION_CALL_TIMEOUT_S)
 
 # Headroom on top of the worst case. Being wrong in this direction costs a slower recovery from
 # a genuine crash; being wrong in the other direction files a capture twice.
@@ -173,9 +184,10 @@ def minimum_visibility_timeout_s(*, timeout_s: int = DEFAULT_TIMEOUT_S) -> int:
 
     The GATHER is assumed to fit inside `VISIBILITY_HEADROOM_S` rather than being a term here: it
     is the one per-item cost that grows with the size of the knowledge repo. Re-measure at roughly
-    5,000 pages, and past that add a corpus-derived term to `GATE_BUDGET_S`.
+    5,000 pages, and past that add a corpus-derived term to `GATE_BUDGET_S`. Drive CONVERSION is
+    its own term (issue #113): its worst case is the kernel's three vision clocks, not headroom.
     """
-    return MAX_AGENT_ATTEMPTS * int(timeout_s) + GATE_BUDGET_S
+    return MAX_AGENT_ATTEMPTS * int(timeout_s) + GATE_BUDGET_S + CONVERSION_BUDGET_S
 
 
 DEFAULT_VISIBILITY_TIMEOUT_S = minimum_visibility_timeout_s() + VISIBILITY_HEADROOM_S
