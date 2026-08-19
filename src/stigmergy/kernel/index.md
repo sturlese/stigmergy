@@ -19,7 +19,7 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 | `registry.py` | `Registry`, `load_registry` / `registry_from_text` / `save_registry` / `index_entity` — `ops/entity-registry.json`'s one reader/writer, plus `title` / `type_of` and the TWO lookups the registry is asked for: `canonical_id` (which entity does this text MEAN — filing) and `collision_id` (would this new name be confused with one we have — the mint gate). Missing file = empty registry; malformed = loud error. The reader is split path-from-text because the registry also reaches a reader as BYTES now (the index's snapshot, which `index.check` lints through this same parse) |
 | `normalize.py` | `resolution_key(name)` (accents, case and punctuation folded — and nothing that is a judgment), `normalize(name)` (that plus the legal-suffix table: the COLLISION key), `slugify(s)` (≤60 chars) |
 | `fsutil.py` | `write_text_atomic(path, text)` — tmp file + same-directory `os.replace`, so a concurrent reader never sees a partial |
-| `converters.py` | the document HANDS: `method_for_ext`, `extract` (pdf/sheet/docx/office/text → `{method, text}`), `sheet_rows`, `vision_extract` (Gemini OCR, lazy SDK import). Faithful text, no judgment |
+| `converters.py` | the document HANDS: `method_for_ext`, `extract` (pdf/sheet/docx/office/text → `{method, text}`), `sheet_rows`, `vision_extract` (two-form OCR: bare = Gemini native-PDF, provider-prefixed = pydantic-ai over rasterized pages; lazy SDK imports). Faithful text, no judgment |
 
 ## Reuse — one definition per concern
 
@@ -75,9 +75,14 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
   gitleaks matches only within one line. `librarian.gates` scans every surface twice (as written,
   and with adjacent line pairs rejoined) for exactly that; changing what these converters emit
   changes what that gate can see.
-- `converters.vision_extract` reads `VISION_MODEL`, requires `GEMINI_API_KEY`. PDFs ≤14 MB go
-  inline as bytes (the Files API's ASCII header encoding breaks on non-ASCII filenames); larger
-  ones upload through an ASCII-named temp copy. The model id is returned as provenance.
+- `converters.vision_extract` reads `VISION_MODEL`, two forms. BARE (the default
+  `gemini-3-flash-preview`): Gemini native PDF, requires `GEMINI_API_KEY`; PDFs ≤14 MB go inline
+  as bytes (the Files API's ASCII header encoding breaks on non-ASCII filenames), larger ones
+  upload through an ASCII-named temp copy. PROVIDER-PREFIXED
+  (`openrouter:qwen/qwen3-vl-8b-instruct`): pdftoppm-rasterized page images through pydantic-ai,
+  bounded by `MAX_VISION_PAGES` with a spoken cut. The configured id is returned as provenance
+  either way, and `vision_configured` is the one answer to "can this run at all"
+  (`librarian.processing` asks it before paying for a call).
 - `normalize.py`'s suite is `tests/kernel/test_normalize.py`, added with the split that gave it a
   second key; `frontmatter.py`'s lives in `tests/kernel/test_frontmatter.py`. Every case there is
   written against a spelling that DISCRIMINATES the two keys — one both answer alike proves nothing

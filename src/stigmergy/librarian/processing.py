@@ -1175,14 +1175,15 @@ def _with_vision_fallback(path: str, method: str, text: str, name: str) -> str:
     pages = text.count("\f") + 1
     if len(stripped) >= DRIVE_VISION_MIN_CHARS_PER_PAGE * pages:
         return text
-    if not os.environ.get("GEMINI_API_KEY"):
+    if not converters.vision_configured():
         if len(stripped) < DRIVE_MIN_TEXT_CHARS:
             raise _ConversionRefused(
                 f"{name!r} looks like a scanned PDF (no usable text layer) and this worker has "
-                f"no vision OCR configured — the operator can set GEMINI_API_KEY and requeue, "
-                f"or drop a text-layer export instead")
+                f"no vision OCR configured — the operator can set GEMINI_API_KEY (or a "
+                f"provider-prefixed VISION_MODEL) and requeue, or drop a text-layer export "
+                f"instead")
         log.warning("drive conversion: %r yields %d chars over %d page(s) — thin, and no "
-                    "GEMINI_API_KEY to OCR with; proceeding with the text layer", name,
+                    "vision OCR configured; proceeding with the text layer", name,
                     len(stripped), pages)
         return text
     try:

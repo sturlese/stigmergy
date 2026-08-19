@@ -82,8 +82,9 @@ WORKDIR /app
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates git poppler-utils \
  && rm -rf /var/lib/apt/lists/*
-# `poppler-utils` (pdftotext) is the drive flow's text-layer hand (ADR 028 D4): it runs
-# AT THE WORKER, over the evidence blob.
+# `poppler-utils` is the drive flow's document hand (ADR 028 D4), run AT THE WORKER over the
+# evidence blob: `pdftotext` extracts the text layer, and `pdftoppm`/`pdfinfo` from the same
+# package rasterize pages for a provider-prefixed vision OCR (`kernel/converters.py`).
 
 COPY --from=toolchain /usr/local/bin/gitleaks /usr/local/bin/gitleaks
 
