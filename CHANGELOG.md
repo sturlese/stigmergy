@@ -9,6 +9,38 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
+## [0.4.0] - 2026-08-19
+
+The open-models port. Every model seam now runs on any pydantic-ai provider — OpenRouter
+first — and the reference deployment moved to open-weight models behind this repo's own
+instruments: the filing golden passes every bar on `deepseek-v4-flash` at roughly $0.008 per
+capture, the QA golden scores 1.00 on every axis on `glm-5.2`, and the retrieval golden holds
+recall@5 at 0.969 with the same embedding model served through the new host. No gate, ACL,
+fence or eval moved: the seams did.
+
+### Added
+- `ask` takes the two-form model convention — a bare `ANSWER_MODEL` stays the OpenAI Responses
+  API; a provider-prefixed pydantic-ai id authenticates with that provider's own key — and
+  `openrouter` joins the librarian's key preflight and pricing table (#107)
+- the embedder speaks to any OpenAI-compatible `/embeddings` host (`EMBED_BASE_URL`,
+  `EMBED_API_KEY`, `EMBED_MODEL`), with the recorded-model rule keeping every query in its
+  index's vector space; the worker boot strips the embed credential like the OpenAI one (#108)
+- two-form vision OCR: a provider-prefixed `VISION_MODEL` transcribes poppler-rasterized page
+  images through pydantic-ai — bounded pages, a spoken cut — while the bare Gemini form stays
+  byte-for-byte what it was (#109)
+
+### Fixed
+- an empty model-chosen search query is a repairable refusal handed back to the asking agent,
+  instead of a provider 400 that crashed the whole ask (#114)
+- the audit sweep over the port (#114): the OpenAI key never travels to a non-default embedding
+  host; a prefixed `VISION_MODEL` missing its provider's key refuses naming that key instead of
+  advising a requeue that could never work; the rasterizer carries timeouts and a pixel bound
+  against raster-bomb pages; the provider→key table lives once, in the kernel; the worker boot
+  says out loud when one credential wears two names. Deferred halves filed as #110–#113
+- account schemas decode nested structures a provider's tool-calling stringifies — the defect
+  that filed meetings with `decisions` empty on routes returning nested lists as JSON strings
+  (#114)
+
 ## [0.3.1] - 2026-08-19
 
 The three decisions v0.3.0's adversarial review filed (#101, #102, #103), each taken on the side
