@@ -145,8 +145,8 @@ def test_rich_text_never_pays_a_vision_call(tmp_path, monkeypatch):
     monkeypatch.setattr(converters, "vision_extract", no_vision)
     rich = ("line of real prose, repeated enough to clear the per-page bar. " * 20) + "\f" + \
            ("second page prose, also comfortably over the threshold here. " * 20)
-    out = processing._with_vision_fallback(_fake_pdf_path(tmp_path), "pdf", rich, "deck.pdf")
-    assert out == rich
+    out, spend = processing._with_vision_fallback(_fake_pdf_path(tmp_path), "pdf", rich, "deck.pdf")
+    assert out == rich and spend == 0.0
 
 
 def test_thin_text_with_no_key_refuses_below_the_floor(tmp_path, monkeypatch):
@@ -181,7 +181,7 @@ def test_a_prefixed_vision_model_missing_its_key_refuses_naming_that_key(tmp_pat
 def test_thin_but_present_text_without_key_proceeds(tmp_path, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     thin = "a real sentence of some length that clears the absolute floor easily"
-    out = processing._with_vision_fallback(_fake_pdf_path(tmp_path), "pdf", thin, "deck.pdf")
+    out, _spend = processing._with_vision_fallback(_fake_pdf_path(tmp_path), "pdf", thin, "deck.pdf")
     assert out == thin
 
 
@@ -190,7 +190,8 @@ def test_thin_text_with_key_takes_the_ocr_and_keeps_the_longer(tmp_path, monkeyp
     ocr_text = "the full transcription of the scanned deck, page by page, faithfully " * 5
     monkeypatch.setattr(converters, "vision_extract",
                         lambda path: {"method": "vision", "text": ocr_text, "model": "gemini-test"})
-    out = processing._with_vision_fallback(_fake_pdf_path(tmp_path), "pdf", "x\f y", "deck.pdf")
+    out, _spend = processing._with_vision_fallback(_fake_pdf_path(tmp_path), "pdf", "x\f y",
+                                                   "deck.pdf")
     assert out == ocr_text.strip()
 
 
@@ -205,7 +206,7 @@ def test_a_failing_vision_call_degrades_to_the_floor_rule(tmp_path, monkeypatch)
         processing._with_vision_fallback(_fake_pdf_path(tmp_path), "pdf", "x\f y", "deck.pdf")
     thin = "a real sentence of some length that clears the absolute floor easily"
     assert processing._with_vision_fallback(_fake_pdf_path(tmp_path), "pdf", thin,
-                                            "deck.pdf") == thin
+                                            "deck.pdf") == (thin, 0.0)
 
 
 def test_non_pdf_methods_never_consider_vision(tmp_path, monkeypatch):
@@ -213,7 +214,8 @@ def test_non_pdf_methods_never_consider_vision(tmp_path, monkeypatch):
         raise AssertionError("vision_extract is a PDF fallback only")
 
     monkeypatch.setattr(converters, "vision_extract", no_vision)
-    assert processing._with_vision_fallback(_fake_pdf_path(tmp_path), "sheet", "x", "d.xlsx") == "x"
+    assert processing._with_vision_fallback(_fake_pdf_path(tmp_path), "sheet", "x",
+                                            "d.xlsx") == ("x", 0.0)
 
 
 # ── the real pdftotext hand, once, over a real one-page PDF ─────────────────────────────────────
@@ -346,3 +348,61 @@ def test_a_parked_drive_capture_writes_nothing_and_reconverts_on_requeue(rig, cl
     assert support.branch_sha(env.bare) == before
     assert not any(p.startswith("sources/drive/")
                    for p in support.all_ever_committed_paths(env.bare))
+
+
+# ── the OCR pass is BILLED (issue #110) ─────────────────────────────────────────────────────────
+def test_vision_spend_prices_the_pass_by_its_configured_model_id():
+    """OLD BEHAVIOUR: the OCR call's usage was discarded, so a scanned-PDF capture under-reported
+    its true cost — the silent zero `librarian/pricing.py`'s own docstring calls worse than
+    saying nothing."""
+    spend = processing._vision_spend({
+        "model": "openrouter:qwen/qwen3-vl-8b-instruct",
+        "usage": {"input_tokens": 100_000, "output_tokens": 10_000}})
+    assert spend == round(0.117 * 0.1 + 0.455 * 0.01, 6)   # the pricing row, applied
+
+
+def test_an_unpriced_vision_model_degrades_to_a_loud_zero(caplog):
+    """The fallback must degrade, never refuse a capture over bookkeeping — but the zero is
+    LOUD, naming the variable that fixes it."""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        spend = processing._vision_spend({
+            "model": "somewhere:unpriced-vl", "usage": {"input_tokens": 5, "output_tokens": 5}})
+    assert spend == 0.0
+    assert any("no configured price" in r.message and "STIGMERGY_LIBRARIAN_PRICING" in r.message
+               for r in caplog.records)
+
+
+def test_a_no_usage_ocr_result_spends_nothing_silently(caplog):
+    """The benign twin: a result carrying no token counts (the double, an older provider shape)
+    is a real zero, not a warning — noise about nothing teaches operators to ignore the line."""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        assert processing._vision_spend({"model": "gemini-test", "usage": None}) == 0.0
+    assert not caplog.records
+
+
+def test_a_filed_drive_capture_carries_its_conversion_cost(rig, clean_queue, monkeypatch):
+    """End to end on the real road: a thin text layer triggers the fallback, the OCR result
+    carries usage, and the item's report bills it — total `cost_usd` includes the pass and
+    `conversion_cost_usd` names its share, so an expensive OCR is tellable from an expensive
+    filing."""
+    env, deps = rig
+    monkeypatch.setenv("VISION_MODEL", "openrouter:qwen/qwen3-vl-8b-instruct")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test-fake")
+    ocr_text = ("a faithful page-by-page transcription of the scanned document, long enough to "
+                "beat the thin text layer comfortably. " * 6)
+    monkeypatch.setattr(converters, "vision_extract",
+                        lambda path: {"method": "vision", "text": ocr_text,
+                                      "model": "openrouter:qwen/qwen3-vl-8b-instruct",
+                                      "pages": 1, "truncated": False,
+                                      "usage": {"input_tokens": 100_000,
+                                                "output_tokens": 10_000}})
+
+    _, result = _drop_and_process(clean_queue, deps, _tiny_pdf(), drive_name="scanned-deck.pdf")
+
+    expected = round(0.117 * 0.1 + 0.455 * 0.01, 6)
+    assert result.report["conversion_cost_usd"] == expected
+    assert result.report["cost_usd"] >= expected   # the whole spend includes the OCR's share

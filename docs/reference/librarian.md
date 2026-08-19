@@ -511,10 +511,13 @@ What `edits.apply_declared` changed reaches the submitter as `pages_edited` — 
 the filed one that this commit touched. It is distinct from `overlaps_flagged`, which is the agent's
 JUDGMENT about what overlaps.
 
-Reports also carry `cost_usd` — the real dollar spend of the item's agent passes, a pass that died
-mid-run included (a timeout is the honest `0.0`). A backend priced by its own provider passes its
+Reports also carry `cost_usd` — the item's WHOLE model spend: its agent passes, a pass that died
+mid-run included (a timeout is the honest `0.0`), plus the drive road's vision OCR when one ran,
+whose share is also named on its own `conversion_cost_usd` key so an expensive OCR is tellable
+from an expensive filing. A backend priced by its own provider passes its
 number through; one that reports only TOKENS has them multiplied by `librarian/pricing.py`'s
-configured $/MTok table. The rule: present, possibly `0.0`, on every outcome that passed through an
+configured $/MTok table — the vision pass is priced through the same table, and an unpriced
+vision model degrades to a LOUD `$0.00` line rather than refusing the capture. The rule: present, possibly `0.0`, on every outcome that passed through an
 agent loop or the failure road — filed, refused, parked and `failed` alike — and absent only on
 terminal states decided before the loop (a duplicate, a `filed_retry`, a material-level secrets/PII
 rejection). Operators read it from the stored row (`stigmergy-queue show`, the admin console); the
