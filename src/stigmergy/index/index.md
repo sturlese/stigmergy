@@ -3,10 +3,13 @@
 A derived, disposable search layer over a knowledge-repo checkout: Postgres + pgvector, an FTS
 arm and a vector arm fused with RRF, then explainable contract ranking — every hit carries the
 factors that shaped its score. Never a source of truth (git is): `pages_index` is dropped and
-rebuilt at will; `embedding_cache`, `index_meta` and `entity_registry_snapshot` survive. That last
-one caches repo-derived data the SERVER reads rather than anything retrieval queries — the
-knowledge repo's `ops/entity-registry.json`, put here because the deployed process groups hold no
-checkout and were otherwise served a copy baked at deploy time (issue #74). The package knows no
+rebuilt at will; `embedding_cache`, `index_meta`, `ops_file_snapshot` and `webhook_deliveries`
+survive. `ops_file_snapshot` caches repo-derived files the SERVER reads rather than anything
+retrieval queries — the knowledge repo's `ops/entity-registry.json`, `ops/identities.json` and
+`ops/slack-channels.json`, put here because the deployed process groups hold no checkout and were
+otherwise served copies baked at deploy time: a mint had no name until the next rollout (issue
+#74) and a revoked identity kept resolving until it (issue #79). `webhook_deliveries` is the page
+road's replay protection, one row per applied delivery id. The package knows no
 identity — it
 returns rows, and `server.acl.visible()` decides access above it — and imports no writer: it
 carries its own frontmatter parser, so a writer refactor cannot change what gets indexed.
@@ -35,21 +38,31 @@ Narrative doc: [`docs/reference/hybrid-index.md`](../../../docs/reference/hybrid
   one column list `PAGE_COLUMNS` (`_UPSERT_SET` excludes `inlinks` so an update never clobbers
   the rebuild's count), the embedding cache, `read_meta`, autocommit `connect`, `dsn`,
   `host_of_dsn`. Never a second column list, never a non-autocommit reader — `search.fetch_pages`
-  SELECTs through this same `PAGE_COLUMNS`. Also the singleton `entity_registry_snapshot`:
-  `read_entity_registry` (`None` when the database has none — the table is PROBED, so an index
-  built before it existed reads as "no snapshot" rather than erroring), `read_entity_registry_meta`
-  (`source`/`refreshed_at` — the console's "is my registry fresh, and from which sha?"),
-  `write_entity_registry` (creates the table on the way in, so an incremental refresh never waits
-  for a rebuild), `clear_entity_registry` and `ensure_entity_registry_table` (the startup seam that
-  keeps that create from ever racing inside the webhook's transaction). `MAX_ENTITY_REGISTRY_BYTES`
-  bounds what either writer may install — a per-request parse cost, not an ingest cost. The TEXT
-  verbatim — `server.entity_aliases` owns what the bytes mean, and a second interpretation here is
-  the drift a cache must not add.
+  SELECTs through this same `PAGE_COLUMNS`. Also the relpath-keyed `ops_file_snapshot`
+  (`OPS_FILE_RELPATHS` is the one spelling of the three cached files, and
+  `CLEARED_WHEN_CHECKOUT_LACKS` the one per-file reconcile posture): `read_ops_file` (`None` when
+  the database has none — the table is PROBED, so an index built before it existed reads as "no
+  snapshot" rather than erroring; `""` is a real empty snapshot and every access reader fails
+  CLOSED on it), `read_ops_file_meta` (`source`/`refreshed_at` — the console's "is what I am
+  serving fresh, and from which sha?"), `write_ops_file` (creates the table on the way in, so an
+  incremental refresh never waits for a rebuild), `clear_ops_file` (returns whether a snapshot was
+  actually destroyed, which keeps the rebuild's warnings honest) and `ensure_ops_file_table` (the
+  create-only startup seam that keeps the webhook's own create from racing inside its
+  transaction; the rebuild road's `init_schema` is where issue #74's `entity_registry_snapshot`
+  is retired). `MAX_OPS_FILE_BYTES` bounds what either writer may install — a per-request parse
+  cost, not an ingest cost. The TEXT verbatim — each file's own reader owns what the bytes mean,
+  and a second interpretation here is the drift a cache must not add. Beside it,
+  `webhook_deliveries`: `ensure_webhook_dedupe_table`, `delivery_already_applied` and
+  `record_delivery` (called on the webhook's own cursor inside phase 2, so a failed apply never
+  records and manual redelivery still works).
 - `build.py` — `rebuild()`: the one full-rebuild entry point, cache-aware, one transaction (a
-  mid-rebuild failure leaves the previous index standing). It reconciles the registry snapshot
-  inside that same transaction — written from `registry_path(repo)`, CLEARED when the checkout has
-  none or carries an oversized one — the nightly counterpart to the push webhook's incremental
-  refresh. The clear is never silent: a warning, and `entity_registry` in the returned stats.
+  mid-rebuild failure leaves the previous index standing). It reconciles every ops-file snapshot
+  inside that same transaction — the nightly counterpart to the push webhook's incremental
+  refresh — with one decision per file (`_reconcile_ops_files`): written when the checkout
+  carries it, cleared when absent only for the registry, KEPT for the access files (a cron must
+  never restore a deploy-baked roster), kept on oversize for all three (the webhook's own
+  posture). Nothing is silent: `ops_files` in the returned stats, a warning per clear, an error
+  per keep.
 - `check.py` — `run_checks()`: the substrate lint over the live index; errors exit 1 via the CLI.
   `served_registry()` picks WHICH registry copy it lints — the index's snapshot, else the
   `--entity-registry` file — so the console and the server never answer differently about which

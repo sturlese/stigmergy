@@ -15,8 +15,8 @@ path. Bot/app/workflow events and the bot's OWN messages are excluded FIRST
 import time
 from dataclasses import dataclass
 
+from stigmergy.server import ops_files
 from stigmergy.server.errors import IdentityError
-from stigmergy.server.identity import resolve_audiences
 from stigmergy.slack.gateway import SlackApiError
 
 # Slack marks an automated message this way; a genuine human event never carries it.
@@ -180,7 +180,7 @@ def is_configured_workspace(event_team_id: str, configured_team_id: str) -> bool
 
 async def resolve_slack_identity(gateway, cache: UsersInfoCache, *, identities_path: str,
                                  configured_team_id: str, event_team_id: str,
-                                 slack_user_id: str) -> IdentityResult:
+                                 slack_user_id: str, conn=None) -> IdentityResult:
     """The one function every handler calls before constructing a `BrainService`. Callers run
     `is_ignorable_event` FIRST; this function assumes a real human Slack user id and starts at
     the workspace check. **Fails CLOSED on an absent event team**: a missing `event_team_id` (an
@@ -207,7 +207,9 @@ async def resolve_slack_identity(gateway, cache: UsersInfoCache, *, identities_p
         return NoAccess()
 
     try:
-        audiences_tuple = resolve_audiences(identities_path, email)
+        # Snapshot-first through the server's one chooser (`server.ops_files`): the deployed
+        # slack group holds no checkout, and an identity edit must not wait for a deploy.
+        audiences_tuple = ops_files.resolve_identity_audiences(conn, identities_path, email)
     except IdentityError:
         return NoAccess()
     audiences = frozenset(audiences_tuple) if audiences_tuple is not None else None

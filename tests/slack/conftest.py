@@ -15,6 +15,8 @@ from stigmergy.slack.context import SlackContext
 from stigmergy.slack.gateway import FakeSlackGateway
 from stigmergy.slack.settings import SlackSettings, no_link_resolver
 from stigmergy.slack.store import ensure_write_path_schema
+from stigmergy.index import store as index_store
+
 from tests import testdb
 from tests.server.conftest import Fixture
 
@@ -22,6 +24,10 @@ from tests.server.conftest import Fixture
 def connect_or_skip():
     conn = testdb.connect_or_skip("slack")
     ensure_write_path_schema(conn)
+    # Earlier suites' rebuilds may have cached THEIR fixture repos' access files; this suite's
+    # file-road tests must not inherit them (arrange, never inherit — the freshness doctrine).
+    for relpath in (index_store.IDENTITIES_RELPATH, index_store.SLACK_CHANNELS_RELPATH):
+        index_store.clear_ops_file(conn, relpath)
     return conn
 
 

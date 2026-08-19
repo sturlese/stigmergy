@@ -20,7 +20,7 @@ import sys
 
 import pytest
 
-from stigmergy.index import build
+from stigmergy.index import build, store
 from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.server.service import BrainService
 from tests import testdb
@@ -137,6 +137,12 @@ def indexed(fixture):
     """The fixture repo built into postgres (fake embedder). Yields (conn, fixture)."""
     conn = connect_or_skip()
     build.rebuild(conn, fixture.repo, build_embedder("fake"))
+    # The rebuild above just reconciled ops-file snapshots from the fixture repo — in production
+    # that is the point; in a database every suite shares it would silently switch every later
+    # file-road test onto this repo's roster. Access rows are cleared here; a test that wants the
+    # snapshot road writes its own row (the freshness doctrine: arrange, never inherit).
+    for relpath in (store.IDENTITIES_RELPATH, store.SLACK_CHANNELS_RELPATH):
+        store.clear_ops_file(conn, relpath)
     yield conn, fixture
     conn.close()
 

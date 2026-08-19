@@ -69,7 +69,7 @@ class SlackContext:
         return await resolve_slack_identity(
             self.gateway, self.cache, identities_path=self.settings.server.identities_path,
             configured_team_id=self.settings.team_id, event_team_id=event_team_id,
-            slack_user_id=slack_user_id)
+            slack_user_id=slack_user_id, conn=self.conn)
 
     def build_service(self, email: str, audiences, *, rate_limited: bool = True) -> BrainService:
         """A per-identity `BrainService` sharing every process-wide resource. `audiences` accepts

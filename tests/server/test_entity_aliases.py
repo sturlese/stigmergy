@@ -257,7 +257,7 @@ def test_the_relative_path_is_posix_because_a_pushed_path_list_is():
 
 
 def test_no_registry_at_all_parses_to_nothing_rather_than_raising():
-    """`None` is what `read_file` answers for an unset path and what `store.read_entity_registry`
+    """`None` is what `read_file` answers for an unset path and what `store.read_ops_file`
     answers for a database with no snapshot — one shape, two sources, and the fail-OPEN half of
     the parser's contract: resolution finds nothing, the server still serves."""
     assert entity_aliases._entities_from_text(None, SNAPSHOT_ORIGIN) == {}

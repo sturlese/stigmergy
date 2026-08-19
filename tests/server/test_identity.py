@@ -6,6 +6,7 @@ import pytest
 
 from stigmergy.server.errors import IdentityError
 from stigmergy.server.identity import (
+    audiences_from_text,
     default_path,
     hash_token,
     load_token_store,
@@ -65,7 +66,7 @@ def test_no_file_configured_fails_closed():
 
 def test_malformed_json_fails_closed(tmp_path):
     path = _write(tmp_path, "{not valid json")
-    with pytest.raises(IdentityError, match="unreadable or malformed"):
+    with pytest.raises(IdentityError, match="malformed"):
         resolve_audiences(path, "steward")
 
 
@@ -179,3 +180,35 @@ def test_resolve_email_for_token_unrecognized_hash_fails_closed_and_never_enumer
 def test_resolve_email_for_token_success():
     store = {hash_token("real-token"): "ana@example.com"}
     assert resolve_email_for_token(store, "real-token") == "ana@example.com"
+
+
+# ── the text road: the snapshot's own parse, one function under the file road ─────────────────
+def test_audiences_from_text_resolves_exactly_as_the_file_road_does(tmp_path):
+    """One parse under both roads, asserted as behaviour: whatever the file road answers, the
+    text road answers for the same bytes — scope, unrestricted and nobody alike."""
+    data = {"steward": "*", "ana": ["finance"], "ghost-scope": []}
+    path = _write(tmp_path, data)
+    text = json.dumps(data)
+
+    for who in data:
+        assert audiences_from_text(text, who, origin="snapshot") == resolve_audiences(path, who)
+
+
+def test_an_EMPTY_snapshot_text_resolves_nobody_never_everybody():
+    """**The trap the `is not None` fallback order sets, closed.** `store.read_ops_file` returns
+    `""` for a snapshot row holding empty text — falsy, and a truthiness-based fallback would
+    silently hand resolution to the baked FILE, which is exactly the stale roster the snapshot
+    exists to replace. The empty text reaches this parser and fails CLOSED: malformed JSON, an
+    `IdentityError`, nobody resolved."""
+    with pytest.raises(IdentityError, match="malformed"):
+        audiences_from_text("", "steward", origin="snapshot")
+
+
+def test_a_snapshot_of_garbage_fails_closed_with_the_snapshot_named():
+    with pytest.raises(IdentityError, match="snapshot"):
+        audiences_from_text("{not json", "steward", origin="snapshot")
+
+
+def test_an_unknown_identity_in_the_snapshot_fails_closed():
+    with pytest.raises(IdentityError, match="unknown identity"):
+        audiences_from_text('{"ana": ["finance"]}', "ghost@example.com", origin="snapshot")

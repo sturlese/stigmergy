@@ -33,14 +33,10 @@ from stigmergy.admin import routes as admin_routes
 from stigmergy.capture import evidence as evidence_plane
 from stigmergy.capture.schema import ensure_capture_schema
 from stigmergy.index import store
-from stigmergy.server import review, webhook
+from stigmergy.server import ops_files, review, webhook
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
 from stigmergy.server.errors import IdentityError
-from stigmergy.server.identity import (
-    load_token_store,
-    resolve_audiences,
-    resolve_email_for_token,
-)
+from stigmergy.server.identity import load_token_store, resolve_email_for_token
 from stigmergy.server.mcp_server import build_mcp
 from stigmergy.server.ratelimit import RateLimiter
 from stigmergy.server.service import BrainService, open_scoped_resources
@@ -164,7 +160,11 @@ class _BearerAuthMiddleware:
         token = rest.strip() if scheme.lower() == "bearer" else ""
         try:
             email = resolve_email_for_token(self._token_store, token)
-            audiences_tuple = resolve_audiences(self._settings.identities_path, email)
+            # Per request and snapshot-first (`server.ops_files` states the order once): an
+            # identity edit pushed to the knowledge repo takes effect within seconds on a group
+            # that holds no checkout, instead of at the next deploy (issue #79).
+            audiences_tuple = ops_files.resolve_identity_audiences(
+                self._conn, self._settings.identities_path, email)
         except IdentityError as ex:
             log.warning("HTTP auth refused: %s", ex)   # server-side only — never in the response
             await _refuse(scope, receive, send, _UNAUTHORIZED_BODY, 401)
@@ -241,7 +241,8 @@ def build_http_app(settings, *, token_store: dict[str, str]):
     review.ensure_review_schema(conn)   # the review lane's table, same startup pattern
     # Created here rather than only on the webhook's write path: `CREATE TABLE IF NOT EXISTS` is
     # not race-free, and losing that race INSIDE phase 2 rolls the pushed pages back with it.
-    store.ensure_entity_registry_table(conn)
+    store.ensure_ops_file_table(conn)
+    store.ensure_webhook_dedupe_table(conn)
     audit = AuditWriter(conn)
     rate_limiter = RateLimiter()
     # One evidence store for the whole process: constructing it does no I/O, and its boto3 client

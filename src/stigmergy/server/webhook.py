@@ -29,7 +29,6 @@ from stigmergy.capture import ops
 from stigmergy.index import corpus, store
 from stigmergy.librarian import githubapp
 from stigmergy.librarian.errors import LibrarianConfigError
-from stigmergy.server import entity_aliases
 
 log = logging.getLogger(__name__)
 
@@ -135,20 +134,23 @@ def in_zone_changes(changes: dict[str, str]) -> dict[str, str]:
             if path.startswith(prefixes) and corpus.is_indexable_page(path)}
 
 
-def registry_was_pushed(changes: dict[str, str]) -> bool:
-    """Does this push carry a new `ops/entity-registry.json` to cache?
+def ops_files_pushed(changes: dict[str, str]) -> list[str]:
+    """The cached ops files this push touched — the relpaths to refresh, in the store's order.
 
     Asked of the RAW changed paths, never of `in_zone_changes`: `ops/` is not one of `corpus.ZONES`,
-    so the registry is invisible to every filter written for pages — precisely how issue #74 stayed
-    hidden. A `removed` status is False: no governed door deletes this file, so a removal is either
-    a rename away (the nightly rebuild reconciles from the checkout) or an accident, and blanking
-    every entity's name the moment one lands is the worse of the two answers.
+    so these files are invisible to every filter written for pages — precisely how issue #74 stayed
+    hidden. A `removed` status is excluded: no governed door deletes any of them, so a removal is
+    either a rename away (the nightly rebuild reconciles from the checkout, per file) or an
+    accident, and blanking an entity roster — or an identity roster — the moment one lands is the
+    worse of the two answers.
     """
-    return changes.get(entity_aliases.ENTITY_REGISTRY_RELPATH) in ("added", "modified")
+    return [rel for rel in store.OPS_FILE_RELPATHS
+            if changes.get(rel) in ("added", "modified")]
 
 
 def _fetch_file_content(repo_slug: str, path: str, sha: str, token: str, *, opener=None) -> str:
-    """One file's text AT THE PUSHED SHA, via the GitHub Contents API — no clone, no checkout.
+    """One file's text at `sha` — a commit for pages, the BRANCH NAME for ops files (see
+    `process_push`) — via the GitHub Contents API: no clone, no checkout.
     `Accept: application/vnd.github.raw+json` asks GitHub to hand back the raw bytes directly
     rather than a base64-JSON envelope."""
     url = (f"https://api.github.com/repos/{repo_slug}/contents/{urllib.parse.quote(path)}"
@@ -200,7 +202,8 @@ def _propagate_split_chain_supersession(conn, rows: list) -> None:
         store.set_superseded_by(conn, targets, r.superseded_by)
 
 
-def process_push(conn, embedder, payload: dict, settings: WebhookSettings, *, opener=None) -> dict:
+def process_push(conn, embedder, payload: dict, settings: WebhookSettings, *,
+                 delivery_id: str = "", opener=None) -> dict:
     """The core logic, called ONLY after the event/repo/branch checks passed (the caller's job).
     Returns the stats dict written to `job_runs`.
 
@@ -223,7 +226,7 @@ def process_push(conn, embedder, payload: dict, settings: WebhookSettings, *, op
     sha = payload.get("after") or (payload.get("head_commit") or {}).get("id") or ""
     raw_changes = changed_paths_from_push(payload)
     changes = in_zone_changes(raw_changes)
-    refresh_registry = registry_was_pushed(raw_changes)
+    ops_files_to_refresh = ops_files_pushed(raw_changes)
     stats = {"sha": sha, "upserted": 0, "deleted": 0, "skipped": 0, "embedded": 0}
 
     if len(changes) > settings.file_cap:
@@ -243,12 +246,11 @@ def process_push(conn, embedder, payload: dict, settings: WebhookSettings, *, op
     embeddings: dict[str, list[float]] = {}
     fresh: dict[str, list[float]] = {}
     skipped = 0
-    registry_text: str | None = None
     # ONE token per delivery, minted only when something will actually be fetched. It is minted
     # here rather than beside the page fetches because a push can carry the registry and no page at
     # all (a registry regenerate, or a re-mint of an already-indexed entity page), and that push
     # must still be able to fetch.
-    token = githubapp.installation_token() if (to_upsert_paths or refresh_registry) else ""
+    token = githubapp.installation_token() if (to_upsert_paths or ops_files_to_refresh) else ""
     if to_upsert_paths:
         before_hashes = store.current_content_hashes(conn, to_upsert_paths)   # SELECT only
         for path in to_upsert_paths:
@@ -275,22 +277,28 @@ def process_push(conn, embedder, payload: dict, settings: WebhookSettings, *, op
             fresh = dict(zip(keys, vectors, strict=True))
         embeddings = {**cached, **fresh}
 
-    if refresh_registry:
+    ops_file_texts: dict[str, str] = {}
+    for relpath in ops_files_to_refresh:
+        # AT THE BRANCH REF, deliberately not at the pushed sha, and the difference is the whole
+        # replay defense for these files (issue #79): a replayed or delayed delivery re-fetches
+        # what the branch says NOW, so no historical roster or registry is ever installable
+        # through this endpoint — the worst a captured delivery can do is refresh the cache to
+        # the present. Pages keep the sha fetch (their consistency story is the delivery's own
+        # path list); their replay window is closed by the delivery-id dedupe instead.
         fetched = _fetch_file_content(                                        # network
-            settings.repo, entity_aliases.ENTITY_REGISTRY_RELPATH, sha, token, opener=opener)
+            settings.repo, relpath, settings.branch, token, opener=opener)
         size = len(fetched.encode("utf-8"))
-        if size > store.MAX_ENTITY_REGISTRY_BYTES:
+        if size > store.MAX_OPS_FILE_BYTES:
             # Refused, not raised: the PAGES in this same push must still land, and this endpoint's
             # failure mode is never to break the write path. The previous snapshot stays — the
-            # honest floor is a registry that is stale, not one that costs every identity a
-            # multi-megabyte parse on every tool call (see `store.MAX_ENTITY_REGISTRY_BYTES`).
+            # honest floor is a snapshot that is stale, not one that costs every identity a
+            # multi-megabyte parse on every tool call (see `store.MAX_OPS_FILE_BYTES`).
             log.error("webhook: %s at %s is %d bytes, above the %d-byte cap — NOT cached; the "
-                      "previously cached registry stands and the nightly rebuild reconciles",
-                      entity_aliases.ENTITY_REGISTRY_RELPATH, sha, size,
-                      store.MAX_ENTITY_REGISTRY_BYTES)
-            stats["registry_refused_bytes"] = size
+                      "previous snapshot stands and the nightly rebuild reconciles",
+                      relpath, settings.branch, size, store.MAX_OPS_FILE_BYTES)
+            stats.setdefault("ops_files_refused", {})[relpath] = size
         else:
-            registry_text = fetched
+            ops_file_texts[relpath] = fetched
 
     # ── phase 2: one transaction — delete + store any fresh embeddings + upsert, or none of it ──
     with conn.transaction():
@@ -305,15 +313,22 @@ def process_push(conn, embedder, payload: dict, settings: WebhookSettings, *, op
             # everything else phase 2 already guards.
             _propagate_split_chain_supersession(conn, rows)
             stats["upserted"] = len(rows)
-        if registry_text is not None:
+        for relpath, text in ops_file_texts.items():
             # In the SAME transaction as the entity page a mint pushes beside it: the two land
             # together or neither does, so no reader ever sees the page without its metadata.
-            store.write_entity_registry(conn, registry_text, sha)
+            # `source` records the delivery's sha for the operator even though the BYTES came
+            # from the branch ref — "which push refreshed this" is the diagnostic question.
+            store.write_ops_file(conn, relpath, text, sha)
+        if delivery_id:
+            with conn.cursor() as cur:
+                store.record_delivery(cur, delivery_id)
 
-    if registry_text is not None:
+    if ops_file_texts:
         # Only when a refresh actually happened — an ordinary page push's stats dict stays exactly
-        # what it has always been, and `job_runs` says which deliveries touched the registry.
-        stats["registry_refreshed"] = True
+        # what it has always been, and `job_runs` says which deliveries touched which files.
+        stats["ops_files_refreshed"] = sorted(ops_file_texts)
+        if store.ENTITY_REGISTRY_RELPATH in ops_file_texts:
+            stats["registry_refreshed"] = True
     stats["skipped"] = skipped
     stats["embedded"] = len(fresh)
     return stats
@@ -387,9 +402,21 @@ async def webhook_endpoint(request: Request, *, conn, embedder, settings: Webhoo
     if ref != f"refs/heads/{settings.branch}":
         return JSONResponse({"ok": True, "ignored": f"ref={ref!r}"})
 
+    # Replay protection for the PAGE road (the ops files defend themselves by fetching at the
+    # branch ref): a delivery id this database has already applied is acknowledged and not
+    # re-applied — a replayed delivery would re-fetch page content at its own OLD sha, silently
+    # downgrading rows and re-performing old deletions until the nightly rebuild. 200, never an
+    # error: the legitimate sender of a repeat is GitHub's own redelivery button, and the id is
+    # only recorded when an apply COMMITS, so redelivering a failed delivery still works.
+    delivery_id = request.headers.get("x-github-delivery", "")
+    if store.delivery_already_applied(conn, delivery_id):
+        log.warning("webhook: delivery %s was already applied — acknowledged, not re-applied",
+                    delivery_id)
+        return JSONResponse({"ok": True, "ignored": "duplicate delivery"})
+
     try:
         with ops.job_run(conn, JOB_NAME) as job_stats:
-            stats = process_push(conn, embedder, payload, settings)
+            stats = process_push(conn, embedder, payload, settings, delivery_id=delivery_id)
             job_stats.update(stats)
     except LibrarianConfigError as ex:
         # The App credential is absent or half-configured — an operator-visible configuration

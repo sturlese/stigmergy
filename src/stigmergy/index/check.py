@@ -46,7 +46,7 @@ def served_registry(conn, registry_path: str | None) -> tuple[str | None, str]:
     entity-first search, no TOLD boost" — while the server has full records for all of them out of
     the snapshot (issue #74). Two surfaces, one answer, or the console teaches an operator to
     distrust it."""
-    snapshot = store.read_entity_registry(conn)
+    snapshot = store.read_ops_file(conn, store.ENTITY_REGISTRY_RELPATH)
     if snapshot is not None:
         return snapshot, SNAPSHOT_ORIGIN
     return _read_registry_file(registry_path), registry_path or ""

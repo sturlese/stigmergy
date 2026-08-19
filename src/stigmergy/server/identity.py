@@ -24,8 +24,10 @@ def default_path(repo_dir: str | None) -> str:
 
 
 def resolve_audiences(identities_path: str, identity: str | None) -> tuple[str, ...] | None:
-    """Resolve `identity` to its audience tuple, or None for unrestricted. Raises IdentityError
-    on any failure — the caller must not proceed without a resolved scope."""
+    """Resolve `identity` to its audience tuple through the identities FILE, or None for
+    unrestricted. Raises IdentityError on any failure — the caller must not proceed without a
+    resolved scope. A caller holding the file's TEXT already (the index's snapshot) uses
+    `audiences_from_text`, the same parse under this one."""
     if not identity:
         raise IdentityError(
             "no identity given: pass --identity <name> or set STIGMERGY_IDENTITY "
@@ -40,12 +42,29 @@ def resolve_audiences(identities_path: str, identity: str | None) -> tuple[str, 
             '(create it, e.g. {"steward": "*", "ana": ["finance"]})')
     try:
         with open(identities_path, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError) as ex:
-        raise IdentityError(f"identities file unreadable or malformed: {identities_path}: {ex}") from ex
+            text = f.read()
+    except OSError as ex:
+        raise IdentityError(f"identities file unreadable: {identities_path}: {ex}") from ex
+    return audiences_from_text(text, identity, origin=identities_path)
+
+
+def audiences_from_text(text: str, identity: str | None, *, origin: str) -> tuple[str, ...] | None:
+    """`identity` -> audience tuple (None = unrestricted) from the identities file's TEXT — the
+    one parse under both roads, so the index's snapshot and a `--identities` file cannot mean
+    different things. Fail-closed on EVERY path, the module's own rule: malformed JSON, a
+    non-object top level, an unknown identity and a malformed value all raise `IdentityError` —
+    and an EMPTY text is malformed JSON, so an empty snapshot resolves NOBODY, never everybody.
+    `origin` names the source in the operator-facing message only; the HTTP middleware never
+    echoes these sentences to a caller."""
+    if not identity:
+        raise IdentityError("no identity given to resolve")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as ex:
+        raise IdentityError(f"identities malformed: {origin}: {ex}") from ex
     if not isinstance(data, dict):
         raise IdentityError(
-            f"identities file malformed: {identities_path} "
+            f"identities malformed: {origin} "
             '(expected an object mapping name -> "*" | [audiences])')
     if identity not in data:
         known = ", ".join(sorted(data)) or "(none)"
@@ -59,7 +78,7 @@ def resolve_audiences(identities_path: str, identity: str | None) -> tuple[str, 
     if isinstance(value, list):
         return tuple(s for s in (str(a).strip() for a in value) if s)
     raise IdentityError(
-        f"identity {identity!r} has a malformed audience value in {identities_path} "
+        f"identity {identity!r} has a malformed audience value in {origin} "
         f'(expected "*" or a list of audience labels, got {type(value).__name__})')
 
 

@@ -227,10 +227,10 @@ rebuild, the registry only when a steward regenerates and commits it. No ranking
 query reads the registry, and the registry generator never reads the index. Three artifacts, one
 direction each time data moves between them, never a cycle.
 
-The index does CACHE the registry — `entity_registry_snapshot`, written by the push webhook and by
-the nightly rebuild — but purely as a courier for the server, which holds no checkout in
+The index does CACHE the registry — one `ops_file_snapshot` row, written by the push webhook and
+by the nightly rebuild — but purely as a courier for the server, which holds no checkout in
 production; the bytes are stored verbatim and interpreted only by `server/entity_aliases.py`. See
-[hybrid-index.md](./hybrid-index.md#the-registry-rides-along).
+[hybrid-index.md](./hybrid-index.md#the-ops-files-ride-along).
 
 ## Where the code lives
 
