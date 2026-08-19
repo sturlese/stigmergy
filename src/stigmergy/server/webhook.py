@@ -148,13 +148,13 @@ def ops_files_pushed(changes: dict[str, str]) -> list[str]:
             if changes.get(rel) in ("added", "modified")]
 
 
-def _fetch_file_content(repo_slug: str, path: str, sha: str, token: str, *, opener=None) -> str:
-    """One file's text at `sha` — a commit for pages, the BRANCH NAME for ops files (see
-    `process_push`) — via the GitHub Contents API: no clone, no checkout.
+def _fetch_file_content(repo_slug: str, path: str, ref: str, token: str, *, opener=None) -> str:
+    """One file's text at `ref` — the delivery's own commit sha for pages, the BRANCH NAME for ops
+    files (see `process_push`) — via the GitHub Contents API: no clone, no checkout.
     `Accept: application/vnd.github.raw+json` asks GitHub to hand back the raw bytes directly
     rather than a base64-JSON envelope."""
     url = (f"https://api.github.com/repos/{repo_slug}/contents/{urllib.parse.quote(path)}"
-          f"?ref={urllib.parse.quote(sha)}")
+          f"?ref={urllib.parse.quote(ref)}")
     request = urllib.request.Request(
         url, headers={"Authorization": f"Bearer {token}",
                      "Accept": "application/vnd.github.raw+json",
