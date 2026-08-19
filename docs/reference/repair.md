@@ -109,6 +109,13 @@ fourth ADDITIVE op is a new question nobody has asked the gates —
   wiki pages are anchored to that entity — the floor is checked BEFORE the model call, so an entity
   nothing has been written about costs nothing every night. Anchored pages come from the CHECKOUT
   (`entity:` frontmatter, canonicalized through the registry), never from `pages_index`.
+- **When the answer is "nothing yet".** An EMPTY body is the park, not a validation failure: both
+  briefs tell the drafter to return one rather than invent prose, and the proposer recognises it
+  before validating — so the honest answer costs one call, not a call plus a retry restating the
+  instruction the model just followed. Nothing durable is stored, so the page is reported and asked
+  again the next night; that recurrence is deliberate, because the answer changes as soon as the
+  corpus has something to say. The apply-time validator still refuses an empty body, and that is a
+  different moment: there it would erase whatever prose the page already carries.
 - **What the draft may contain.** Markdown sections and nothing else: no `---` line, no H1 of its
   own, no placeholder line left in it, every `[[wikilink]]` resolving to a page that exists (the
   knowledge repo's linter treats a dead link as an error, so a draft carrying one could never be

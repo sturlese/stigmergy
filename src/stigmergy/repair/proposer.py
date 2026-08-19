@@ -973,6 +973,22 @@ TOO_FEW_ANCHORS_REASON = (
 
 DRAFT_REFUSED_REASON = "entity-body draft refused for {path}: {reasons}"
 
+# The park, spelled as an answer rather than as an error — `MERGE_DECLINED_REASON`'s shape one
+# road over, for the same reason. Both briefs tell the drafter to return an empty body when the
+# corpus supports nothing (the skill's "When to write nothing" section, and `_draft_retry` below),
+# and recognising that BEFORE validation is what makes those sentences true: the honest answer
+# costs one call instead of a call, a retry re-stating the instruction the model just followed,
+# and a second refusal (issue #83).
+#
+# **The recurrence is deliberate.** No proposal row is stored, so nothing remembers the decline and
+# the page is reported again the next night — which is the point: "once there is something in this
+# brain to write it from" is the whole reason this road exists, and `MIN_ANCHORED_PAGES` already
+# skips a page with too little evidence at zero cost.
+BODY_DECLINED_REASON = (
+    "entity-body declined for {path}: the proposer read the pages anchored to that entity and "
+    "judged there is nothing yet to write from them, so no body was drafted — the finding stays "
+    "and the next run asks again once the corpus has grown")
+
 
 def _draft_op(path: str, draft: EntityBodyDraft) -> dict:
     """The model's answer as the stored op — SANITIZED at the boundary where model output becomes
@@ -1014,18 +1030,41 @@ def _draft_retry(original: str, reasons: list[str]) -> str:
     ])
 
 
+def _is_park(op: dict) -> bool:
+    """Whether this draft is the PARK — the model answering "there is nothing here to write".
+
+    Asked of the SANITIZED op rather than of the model's field, so a body of whitespace, of line
+    separators, or of control characters is the same answer as an empty one: `_draft_op` has
+    already stripped what a page could not carry, and what survives is what would become prose."""
+    return not str(op.get("body_markdown", "")).strip()
+
+
 async def draft_entity_body(agent, deps: ProposerContext, prompt: str, *, repo: str, path: str,
                             link_names: set[str] | None = None) -> tuple[dict | None, list[str]]:
     """`(op, reasons)` for ONE entity page: one call, one retry carrying the reasons, then SKIP —
     never store an unvalidated body. A draft that fails twice has cost two model calls and nothing
-    else; there is no watermark it could corrupt."""
+    else; there is no watermark it could corrupt.
+
+    `(None, [])` — no op and no reasons — is the PARK and is not a refusal. It is asked BEFORE
+    validation on BOTH answers, not only the first: `_draft_retry` ends by telling the model to
+    return an empty body rather than invent one, so a draft that fails for an unrelated reason can
+    legitimately be answered with the park on the retry.
+
+    `entity_body.validate`'s own `empty-body` refusal is untouched, and the two are not the same
+    moment: this one judges what a model just said, and that one judges a STORED op at apply time,
+    where an empty body would erase somebody's prose.
+    """
     result = await agent.run(prompt, deps=deps, usage_limits=BODY_DRAFT_LIMITS)
     op = _draft_op(path, result.output)
+    if _is_park(op):
+        return None, []
     reasons = validate_draft(repo, op, link_names=link_names)
     if reasons:
         result2 = await agent.run(_draft_retry(prompt, reasons), deps=deps,
                                   usage_limits=BODY_DRAFT_LIMITS)
         op = _draft_op(path, result2.output)
+        if _is_park(op):
+            return None, []
         reasons = validate_draft(repo, op, link_names=link_names)
     return (None if reasons else op), reasons
 
@@ -1314,8 +1353,10 @@ async def _propose_entity_bodies(deps: ProposerContext, fresh: list[dict], *, re
                 what=f"body draft for {path} skipped"))
             continue
         if op is None:
-            skip_reasons.append(DRAFT_REFUSED_REASON.format(path=path,
-                                                            reasons="; ".join(reasons)))
+            # No reasons IS the park: the drafter answered, and the answer was "nothing yet".
+            skip_reasons.append(
+                DRAFT_REFUSED_REASON.format(path=path, reasons="; ".join(reasons)) if reasons
+                else BODY_DECLINED_REASON.format(path=path))
             continue
         accepted.append({"finding_ids": [int(finding["id"])], "ops": [op],
                          "rationale": body_rationale(path, sources),
