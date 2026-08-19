@@ -156,9 +156,16 @@ about a pair.
 (`sweep.ALL_MODEL_CHECK_SLUGS`: `model-contradiction`,
 `model-anchor-fit`, `model-unlinked-mention`, `model-superseded-canon`), all `warn` — none carries
 a real time-bound clock, so none is `sla`. Its input is bounded
-on purpose: every page filed since the last run's watermark, plus a rotating sample of
-`STIGMERGY_GARDENER_SWEEP_SAMPLE` (default 10) unchanged pages, so the sweep steadily re-covers the
-whole corpus over many runs rather than reading it in full every time.
+on purpose, on every axis: the NEWEST `STIGMERGY_GARDENER_SWEEP_CHANGED_CEILING` (default 30)
+pages filed since the last run's watermark, plus a rotating sample of
+`STIGMERGY_GARDENER_SWEEP_SAMPLE` (default 10) unchanged pages, each body clamped to
+`sweep.MAX_SWEEP_PAGE_CHARS` — so the prompt is settings-shaped, never corpus-shaped, even on a
+first run or after a cron outage, and a failed night re-presents a BOUNDED population rather than
+one its own frozen watermark keeps growing. A changed page past the ceiling is deferred, counted
+(`changed_deferred`, plus a skip reason naming the knob) and never lost: it joins the unchanged
+pool, where the rotation reaches it. The pass is deliberately NOT batched instead — its checks
+are about PAIRS, and a batch boundary would silently decide which contradictions are ever
+visible.
 
 **The empty-body pass** judges one thing, `model-empty-entity-body` (`info`): an entity page whose
 body is WRITTEN and says nothing about that entity in particular — no specific facts, nothing named,

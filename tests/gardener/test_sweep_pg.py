@@ -28,7 +28,7 @@ def test_changed_is_every_page_resolved_from_a_filed_capture_since_none(conn, re
     support.seed_filed_capture(conn, result_ref=f"{filed}@sha0")
 
     changed, sampled, stats = sweep.select_pages(conn, since=None, sample_size=10,
-                                                 sample_offset=0)
+                                                 sample_offset=0, changed_ceiling=30)
 
     assert [p["path"] for p in changed] == [filed]
     assert "filed body" in changed[0]["body"]
@@ -43,12 +43,12 @@ def test_changed_excludes_a_filing_older_than_the_given_since(conn, repo):
 
     recent_since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=2)
     changed, _sampled, _stats = sweep.select_pages(conn, since=recent_since, sample_size=10,
-                                                    sample_offset=0)
+                                                    sample_offset=0, changed_ceiling=30)
     assert changed == []
 
     old_since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=20)
     changed2, _sampled2, _stats2 = sweep.select_pages(conn, since=old_since, sample_size=10,
-                                                       sample_offset=0)
+                                                       sample_offset=0, changed_ceiling=30)
     assert [pg["path"] for pg in changed2] == [p]
 
 
@@ -57,7 +57,7 @@ def test_changed_counts_an_unparseable_result_ref_never_guesses_at_it(conn, repo
     support.seed_filed_capture(conn, result_ref="not-a-parseable-ref")
 
     changed, _sampled, stats = sweep.select_pages(conn, since=None, sample_size=10,
-                                                   sample_offset=0)
+                                                   sample_offset=0, changed_ceiling=30)
 
     assert changed == []
     assert stats["unparsed_result_ref"] == 1
@@ -67,7 +67,7 @@ def test_changed_counts_a_filing_whose_page_is_no_longer_indexed(conn, repo):
     support.seed_filed_capture(conn, result_ref="wiki/notes/gone.md@sha0")
 
     changed, _sampled, stats = sweep.select_pages(conn, since=None, sample_size=10,
-                                                   sample_offset=0)
+                                                   sample_offset=0, changed_ceiling=30)
 
     assert changed == []
     assert stats["changed_page_not_indexed"] == 1
@@ -79,7 +79,7 @@ def test_changed_deduplicates_a_page_filed_more_than_once(conn, repo):
     support.seed_filed_capture(conn, result_ref=f"{p}@sha1")
 
     changed, _sampled, _stats = sweep.select_pages(conn, since=None, sample_size=10,
-                                                    sample_offset=0)
+                                                    sample_offset=0, changed_ceiling=30)
 
     assert [pg["path"] for pg in changed] == [p]
 
@@ -91,7 +91,7 @@ def test_sample_excludes_pages_already_counted_as_changed(conn, repo):
     support.seed_filed_capture(conn, result_ref=f"{changed_page}@sha0")
 
     _changed, sampled, _stats = sweep.select_pages(conn, since=None, sample_size=10,
-                                                    sample_offset=0)
+                                                    sample_offset=0, changed_ceiling=30)
 
     assert changed_page not in {p["path"] for p in sampled}
 
@@ -101,7 +101,7 @@ def test_sample_is_bounded_by_sample_size(conn, repo):
         _file_page(conn, repo, f"notes/p{i}.md")
 
     _changed, sampled, _stats = sweep.select_pages(conn, since=None, sample_size=2,
-                                                    sample_offset=0)
+                                                    sample_offset=0, changed_ceiling=30)
 
     assert len(sampled) == 2
 
@@ -110,7 +110,7 @@ def test_sample_size_zero_yields_no_sampled_pages(conn, repo):
     _file_page(conn, repo, "notes/only.md")
 
     _changed, sampled, stats = sweep.select_pages(conn, since=None, sample_size=0,
-                                                   sample_offset=0)
+                                                   sample_offset=0, changed_ceiling=30)
 
     assert sampled == []
     assert stats["next_sample_offset"] == 0
@@ -124,9 +124,9 @@ def test_consecutive_calls_rotate_through_disjoint_pages(conn, repo):
         _file_page(conn, repo, f"notes/p{i}.md")
 
     _changed1, sampled1, stats1 = sweep.select_pages(conn, since=None, sample_size=2,
-                                                      sample_offset=0)
+                                                      sample_offset=0, changed_ceiling=30)
     _changed2, sampled2, _stats2 = sweep.select_pages(
-        conn, since=None, sample_size=2, sample_offset=stats1["next_sample_offset"])
+        conn, since=None, sample_size=2, sample_offset=stats1["next_sample_offset"], changed_ceiling=30)
 
     paths1 = {p["path"] for p in sampled1}
     paths2 = {p["path"] for p in sampled2}
@@ -141,7 +141,7 @@ def test_the_rotation_wraps_around_when_the_offset_runs_past_the_end(conn, repo)
 
     # offset=2 into a 3-page pool, sample_size=2: page[2], then WRAPS to page[0].
     _changed, sampled, stats = sweep.select_pages(conn, since=None, sample_size=2,
-                                                   sample_offset=2)
+                                                   sample_offset=2, changed_ceiling=30)
 
     assert [p["path"] for p in sampled] == [paths[2], paths[0]]
     assert stats["next_sample_offset"] == 1   # (2 + 2) % 3
@@ -153,7 +153,7 @@ def test_an_offset_past_the_current_total_still_resolves_via_modulo(conn, repo):
     paths = [_file_page(conn, repo, f"notes/m{i}.md") for i in range(2)]
 
     _changed, sampled, _stats = sweep.select_pages(conn, since=None, sample_size=1,
-                                                    sample_offset=99)
+                                                    sample_offset=99, changed_ceiling=30)
     assert sampled[0]["path"] in paths
 
 
@@ -168,7 +168,7 @@ def test_an_empty_corpus_selects_nothing_and_never_divides_by_zero(conn, repo):
         cur.execute("DELETE FROM pages_index")
 
     changed, sampled, stats = sweep.select_pages(conn, since=None, sample_size=10,
-                                                 sample_offset=0)
+                                                 sample_offset=0, changed_ceiling=30)
     assert changed == []
     assert sampled == []
     assert stats["next_sample_offset"] == 0
@@ -314,3 +314,36 @@ def test_the_watermark_status_pair_is_the_one_the_stores_completed_run_reads():
     assert sweep.WATERMARK_STATUSES == ["ok", "partial"]
     for status in sweep.WATERMARK_STATUSES:
         assert f"'{status}'" in gardener_store._LATEST_COMPLETED_RUN
+
+
+# ── the changed half is bounded, and the overflow falls to the rotation ────────────────────────
+def test_changed_is_capped_at_the_ceiling_keeping_the_newest(conn, repo):
+    """Red before the fix: the editorial sweep put EVERY page filed since the watermark into one
+    unbatched prompt — on a first run or after a cron outage, the whole corpus. The ceiling keeps
+    the NEWEST filings (the pages most likely to contradict the current corpus); the overflow is
+    counted, and it is not lost: it joins the unchanged pool, where tonight's sample can pick it
+    and the rotation reaches the rest."""
+    paths = [_file_page(conn, repo, f"notes/changed-{i}.md", body=f"body {i}") for i in range(5)]
+    for age, p in enumerate(reversed(paths)):
+        support.seed_filed_capture(conn, result_ref=f"{p}@sha0", finished_days_ago=age)
+
+    changed, sampled, stats = sweep.select_pages(conn, since=None, sample_size=10,
+                                                 sample_offset=0, changed_ceiling=2)
+
+    assert [p["path"] for p in changed] == [paths[4], paths[3]], "the newest two"
+    assert stats["changed_deferred"] == 3
+    # The overflow is in the SAMPLE pool this very run — deferred to the rotation, never dropped.
+    assert set(paths[:3]) <= {p["path"] for p in sampled}
+
+
+def test_a_night_under_the_ceiling_defers_nothing(conn, repo):
+    """The benign twin: an ordinary night's handful of filings is untouched, and the counter says
+    zero rather than being absent — a bound that binds must be tellable from one that never ran."""
+    p = _file_page(conn, repo, "notes/only.md")
+    support.seed_filed_capture(conn, result_ref=f"{p}@sha0")
+
+    changed, _sampled, stats = sweep.select_pages(conn, since=None, sample_size=10,
+                                                  sample_offset=0, changed_ceiling=30)
+
+    assert [c["path"] for c in changed] == [p]
+    assert stats["changed_deferred"] == 0

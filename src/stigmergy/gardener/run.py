@@ -40,6 +40,7 @@ from stigmergy.gardener.schema import JOB_NAME
 from stigmergy.gardener.settings import (
     DUPLICATE_ENTITY_CEILING_ENV,
     EMPTY_BODY_CEILING_ENV,
+    SWEEP_CHANGED_CEILING_ENV,
     GardenerSettings,
 )
 from stigmergy.kernel.registry import Registry, load_registry
@@ -138,17 +139,23 @@ async def _run_sweep_pass(conn, settings: GardenerSettings) -> tuple[list[dict],
     selected_at = datetime.now(UTC)
     since, sample_offset = sweep.previous_run_watermark(conn)
     changed, sampled, select_stats = sweep.select_pages(
-        conn, since=since, sample_size=settings.sweep_sample, sample_offset=sample_offset)
+        conn, since=since, sample_size=settings.sweep_sample, sample_offset=sample_offset,
+        changed_ceiling=settings.sweep_changed_ceiling)
 
     run_stats = {
         "changed": len(changed), "sampled": len(sampled),
         "unparsed_result_ref": select_stats["unparsed_result_ref"],
         "changed_page_not_indexed": select_stats["changed_page_not_indexed"],
         "excluded_unnameable_path": select_stats["excluded_unnameable_path"],
+        "changed_deferred": select_stats["changed_deferred"],
         "next_sample_offset": select_stats["next_sample_offset"],
         "selected_at": selected_at.isoformat(),
         "inserted": 0, "skipped": 0, "skip_reasons": [], "error": "",
     }
+    if select_stats["changed_deferred"]:
+        run_stats["skip_reasons"].append(sweep.SWEEP_CHANGED_CEILING_REASON.format(
+            ceiling=settings.sweep_changed_ceiling, deferred=select_stats["changed_deferred"],
+            env=SWEEP_CHANGED_CEILING_ENV))
     try:
         judge = sweep.build_judge(settings.model)
         accepted, skip_reasons = await sweep.run_sweep(
@@ -164,7 +171,9 @@ async def _run_sweep_pass(conn, settings: GardenerSettings) -> tuple[list[dict],
     findings = [sweep.to_finding(spec, model_name=settings.model) for spec in accepted]
     run_stats["inserted"] = len(findings)
     run_stats["skipped"] = len(skip_reasons)
-    run_stats["skip_reasons"] = skip_reasons
+    # APPENDED, not assigned: the changed-ceiling deferral was recorded before the model ran, and
+    # a model answer must not be able to erase a selection fact.
+    run_stats["skip_reasons"] += skip_reasons
     return findings, run_stats
 
 

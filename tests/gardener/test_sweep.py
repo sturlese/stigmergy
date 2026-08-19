@@ -515,3 +515,21 @@ def test_an_ordinary_entity_page_reaches_the_duplicate_header_intact():
 
     assert "### entity path=wiki/entities/Acme Corp.md id=acme-corp" in (
         sweep.build_duplicate_entity_prompt(pages))
+
+
+def test_a_pasted_transcript_cannot_make_one_page_most_of_the_prompt():
+    """Red before the fix: the editorial prompt fenced bodies WHOLE, so its size was corpus-shaped
+    rather than settings-shaped — one pasted transcript was most of the prompt (issue #101). The
+    sibling passes both bound their input; this pins the same rule here, at the seam the bytes
+    are written."""
+    huge = _page("wiki/notes/transcript.md", body="line of transcript\n" * 5000)
+
+    prompt = sweep.build_prompt(sweep.tag_selected_pages([huge], []))
+
+    assert len(prompt) < sweep.MAX_SWEEP_PAGE_CHARS + 500, "one page's body was not clamped"
+
+
+def test_an_ordinary_body_reaches_the_prompt_verbatim_the_benign_twin():
+    prompt = sweep.build_prompt(sweep.tag_selected_pages([CHANGED_PAGE], []))
+
+    assert CHANGED_PAGE["body"] in prompt, "a clamp that rewrites short bodies judges paraphrase"

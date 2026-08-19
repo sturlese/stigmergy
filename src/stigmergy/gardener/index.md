@@ -134,7 +134,7 @@ both or neither.
   `population`/`excluded_unnameable_path`/`excluded_unregistered`/`excluded_duplicate_id`/
   `considered`/`judged`/`deferred` and no batch counter at all, because that pass is one call by
   construction; `stats['sweep']` counts its own selection exclusions
-  (`unparsed_result_ref`/`changed_page_not_indexed`/`excluded_unnameable_path`). `skipped` means
+  (`unparsed_result_ref`/`changed_page_not_indexed`/`excluded_unnameable_path`/`changed_deferred`). `skipped` means
   validation rejections in EVERY pass, so a dashboard may compare them; a ceiling's own count is
   `deferred`. Every population exclusion is counted into `stats`, never silently dropped.
 
