@@ -146,6 +146,42 @@ def test_the_openai_key_is_never_sent_to_a_non_default_host(monkeypatch):
     assert calls == []                                  # and nothing left the process
 
 
+def test_embed_dimensions_rides_the_request_only_when_set(monkeypatch):
+    """MRL truncation (issue #115): Qwen3-Embedding-8B is 4096-dim native and the index's HNSW
+    ceiling is 4000, so the pairing that fits is the model plus `dimensions`. Sent as the
+    OpenAI-dialect field ONLY when configured — the default request stays byte-for-byte, so a
+    deployment that sets nothing changes nothing."""
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.1]}]})
+
+    monkeypatch.delenv("EMBED_DIMENSIONS", raising=False)
+    OpenAIEmbedder(api_key="sk-test",
+                   transport=httpx.MockTransport(handler)).embed(["x"])
+    assert "dimensions" not in captured
+
+    monkeypatch.setenv("EMBED_DIMENSIONS", "2560")
+    OpenAIEmbedder(api_key="sk-test",
+                   transport=httpx.MockTransport(handler)).embed(["x"])
+    assert captured["dimensions"] == 2560
+
+
+def test_a_malformed_embed_dimensions_is_refused_naming_the_variable(monkeypatch):
+    """An exported-but-wrong value must refuse at construction with the variable named — a
+    dimensions typo that reached the host would either 400 there or, worse, embed into an
+    unintended space."""
+    monkeypatch.setenv("EMBED_DIMENSIONS", "lots")
+    with pytest.raises(RuntimeError, match="EMBED_DIMENSIONS"):
+        OpenAIEmbedder(api_key="sk-test")
+    monkeypatch.setenv("EMBED_DIMENSIONS", "-4")
+    with pytest.raises(RuntimeError, match="EMBED_DIMENSIONS"):
+        OpenAIEmbedder(api_key="sk-test")
+    monkeypatch.setenv("EMBED_DIMENSIONS", "")   # exported-but-empty means unset
+    assert OpenAIEmbedder(api_key="sk-test")._dimensions is None
+
+
 def test_an_explicit_model_beats_the_env_so_queries_stay_in_the_indexes_space(monkeypatch):
     """`embedder_for_model` passes the INDEX's recorded model and must win over $EMBED_MODEL: if
     the env won, changing it under a standing index would embed every query into a different

@@ -56,7 +56,7 @@ CREATE TABLE pages_index (
   tsv tsvector,
   -- halfvec, not vector — and the reason is a hard ceiling, not a preference.
   -- pgvector refuses to build an HNSW index on a column with more than 2000 dimensions, and the
-  -- production embedder (`text-embedding-3-large`) is 3072. `halfvec` raises that ceiling to 4000
+  -- default embedder (`text-embedding-3-large`) is 3072. `halfvec` raises that ceiling to 4000
   -- by storing 16-bit floats, which is the standard recipe for large-dimension embeddings; the
   -- vectors are cosine-normalized and HNSW is approximate anyway, so the precision the index
   -- loses is well below the noise the approximation already introduces.

@@ -17,6 +17,12 @@ DEFAULT_BASE_URL = "https://api.openai.com/v1"
 BASE_URL_ENV = "EMBED_BASE_URL"
 API_KEY_ENV = "EMBED_API_KEY"
 MODEL_ENV = "EMBED_MODEL"
+# Matryoshka (MRL) truncation, sent as the OpenAI-dialect `dimensions` field ONLY when set: the
+# index's HNSW ceiling is 4000 (`store.py`'s halfvec note) and Qwen3-Embedding-8B is 4096
+# native, so the pairing that fits is the model plus this. BUILD and QUERY must agree with the
+# standing index — set once per deployment; a mismatch fails loudly in pgvector (a dimension
+# error), never silently in ranking.
+DIMENSIONS_ENV = "EMBED_DIMENSIONS"
 EMBED_BATCH = 128
 
 # The DEFAULT host's missing-key refusal, importable so the one suite that needs these exact
@@ -36,7 +42,8 @@ class OpenAIEmbedder:
     'openai' kind name the request/response shape, not the company billed."""
 
     def __init__(self, model: str | None = None, api_key: str | None = None,
-                 transport: httpx.BaseTransport | None = None, base_url: str | None = None):
+                 transport: httpx.BaseTransport | None = None, base_url: str | None = None,
+                 dimensions: int | None = None):
         # An EXPLICIT model always beats `$EMBED_MODEL`: `embedder_for_model` passes the index's
         # own recorded model, and a query embedded per-env against an index built per-flag would
         # land in a different vector space without ever failing. The env is the BUILD-time
@@ -51,6 +58,21 @@ class OpenAIEmbedder:
         self._api_key = api_key or os.environ.get(API_KEY_ENV)
         if not self._api_key and base == DEFAULT_BASE_URL:
             self._api_key = os.environ.get("OPENAI_API_KEY")
+        raw_dims = dimensions if dimensions is not None else os.environ.get(DIMENSIONS_ENV)
+        if raw_dims in (None, ""):
+            self._dimensions = None
+        else:
+            try:
+                self._dimensions = int(raw_dims)
+            except (TypeError, ValueError):
+                raise RuntimeError(
+                    f"EMBED_DIMENSIONS must be a whole number of dimensions (got {raw_dims!r}) — "
+                    f"it is the MRL truncation sent to the embedding host, e.g. 2560 for "
+                    f"Qwen3-Embedding-8B under the index's 4000-dimension ceiling") from None
+            if self._dimensions <= 0:
+                raise RuntimeError(
+                    f"EMBED_DIMENSIONS must be positive (got {self._dimensions}) — a vector with "
+                    f"no dimensions embeds nothing")
         # the injectable HTTP seam: production passes None (real network), tests an
         # httpx.MockTransport
         self._transport = transport
@@ -74,9 +96,12 @@ class OpenAIEmbedder:
         vectors: list[list[float]] = []
         with httpx.Client(timeout=120, transport=self._transport) as client:
             for i in range(0, len(texts), EMBED_BATCH):
+                payload = {"model": self.model, "input": texts[i:i + EMBED_BATCH]}
+                if self._dimensions is not None:
+                    payload["dimensions"] = self._dimensions
                 resp = client.post(self._url,
                                    headers={"Authorization": f"Bearer {self._api_key}"},
-                                   json={"model": self.model, "input": texts[i:i + EMBED_BATCH]})
+                                   json=payload)
                 resp.raise_for_status()
                 data = sorted(resp.json()["data"], key=lambda d: d["index"])
                 vectors.extend(d["embedding"] for d in data)

@@ -152,7 +152,11 @@ key refuses loudly instead of borrowing a credential the host did not issue. `EM
 the BUILD-time default model only: the model is recorded in `index_meta` and queries always
 embed with the recorded one, so changing it takes effect at the next `--rebuild`, never
 mid-index — and pointing `EMBED_BASE_URL` at a host that serves a DIFFERENT model under the same
-name deserves a `--rebuild` for the same vector-space reason.
+name deserves a `--rebuild` for the same vector-space reason. `EMBED_DIMENSIONS` is MRL
+truncation, sent as the dialect's `dimensions` field only when set: it is how a 4096-native
+model (Qwen3-Embedding-8B) fits under the schema's 4000-dimension HNSW ceiling, it must agree
+between build and query for a standing index, and a mismatch fails loudly as a pgvector
+dimension error rather than silently in ranking.
 
 Every hit renders its score, arms (`fts`/`vec`), the ranking factors applied and a snippet. There
 are **six** factor labels, and that is the whole set `rank.contract_factors` can emit:

@@ -79,6 +79,8 @@ Narrative doc: [`docs/reference/hybrid-index.md`](../../../docs/reference/hybrid
   `EMBED_BASE_URL` (OpenAI by default) with `EMBED_API_KEY` as its credential and `EMBED_MODEL`
   as the build-time default model; an explicit model (the index's recorded one) always wins, and
   `OPENAI_API_KEY` falls back for the DEFAULT host only — it is never sent to another host.
+  `EMBED_DIMENSIONS` (MRL truncation, request-level `dimensions`) is what fits a 4096-native
+  model under the schema's 4000-dim HNSW ceiling; build and query must agree with the index.
   `backends/fake_embedder.py` — the deterministic keyless double for tests/CI.
 
 ## Reuse / avoid
