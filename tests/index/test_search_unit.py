@@ -6,6 +6,17 @@ import pytest
 from stigmergy.index import search, store
 
 
+def test_an_empty_query_is_a_repairable_refusal_not_a_provider_crash():
+    """OLD BEHAVIOUR: `search_arms(conn, "")` sent the empty string to the embedding PROVIDER,
+    whose 400 (OpenAI and OpenRouter both refuse empty input) crashed the whole ask — surfaced
+    by the qa golden's first DeepSeek run, where the model called search(""). A ValueError is
+    the ask tool's repair channel: the model reads an error string and tries a real query. The
+    guard sits before the meta read, so this needs no database and reaches every caller."""
+    for empty in ("", "   ", None):
+        with pytest.raises(ValueError, match="empty query matches nothing"):
+            search.search_arms(None, empty)
+
+
 def test_no_filters_is_the_empty_clause():
     clause, params = search._filter_clause(None)
     assert clause == "" and params == {}

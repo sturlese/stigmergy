@@ -23,16 +23,17 @@ import json
 import pytest
 
 from stigmergy.capture.evidence import MemoryEvidenceStore
+from stigmergy.index.backends.embedder import MISSING_KEY_MESSAGE
 from stigmergy.server.errors import CapabilityUnavailableError
 from stigmergy.server.mcp_server import build_mcp
 from stigmergy.server.service import UnavailableEmbedder, missing_embedder_reason
 from tests.server.conftest import make_service
 
 # The reason a real keyless start produces: `OpenAIEmbedder`'s own refusal, wrapped by
-# `missing_embedder_reason`. Built through the real function so this suite cannot drift from the
-# sentence the server actually emits.
-KEYLESS_REASON = missing_embedder_reason(
-    "OPENAI_API_KEY is not set, and this index was built with the real embedder.")
+# `missing_embedder_reason`. Built from the embedder's OWN message constant (imported above) — a
+# retyped copy of the sentence drifted once (audit T4) and left this suite permanently green
+# about a message that no longer existed.
+KEYLESS_REASON = missing_embedder_reason(MISSING_KEY_MESSAGE)
 
 
 @pytest.fixture()

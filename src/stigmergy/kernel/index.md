@@ -12,7 +12,7 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 | `llm.py` | `build_model()` (CLEAN_MODEL / CLEAN_REASONING_EFFORT, call-time reads; a bare name means the OpenAI Responses API with an explicit reasoning effort, a `provider:model` string is resolved by pydantic-ai) and `build_processor()` — the ONE fake/real agent dispatch; tool registration stays with the caller via the `tools` hook; optional `model_name` for a caller outside the CLEAN_MODEL convention; `model_override(model)` is the PUBLIC test seam — an explicit pydantic-ai model object (a `FunctionModel`/`TestModel`) that `build_model` answers with inside the block, so any package proves a tool-loop property against the real Agent, keyless, without reaching into this module |
 | `result.py` | `fake_result(output)` — the `(.output, .usage)` envelope every offline double returns from `run()` |
 | `usage_repair.py` | `ensure_usage_extraction_repaired()` — the shim for the pinned pydantic-ai's silent all-zero token extraction on OpenAI reasoning models; idempotent, call-time, defers to the original so it retires itself on a fixed version; installed by every agent-construction site in the process |
-| `settings.py` | `resolve_backend()` — the ONE parse+validation of `$CLEAN_LLM` (`openai`/`fake`/`fake-flawed`), read at call time |
+| `settings.py` | `resolve_backend()` — the ONE parse+validation of `$CLEAN_LLM` (`openai`/`fake`/`fake-flawed`), read at call time — plus `PROVIDER_KEY_ENV`/`provider_of`, the one provider→key table and prefix predicate (framework-free, so keyless modules can consult them; the librarian's preflight re-exports both) |
 | `page.py` | `MAX_BODY_LINES` / `SPLIT_CHUNK_LINES` — the page-as-chunk contract — and `_yaml(v)`, the frontmatter scalar emitter: plain only when the value provably round-trips through `yaml.safe_load`, quoted-and-escaped otherwise |
 | `frontmatter.py` | `split_frontmatter(text) -> (dict, body)` — tolerant: malformed or absent frontmatter degrades to `({}, text)`, never an exception |
 | `acl.py` | `load_acl_config` / `load_acl_config_text`, `resolve_acl` (first matching rule wins), `view_acl` (members INTERSECTION — a rollup must never widen access), `visible_to_view` (the non-member read gate) |
@@ -79,10 +79,14 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
   `gemini-3-flash-preview`): Gemini native PDF, requires `GEMINI_API_KEY`; PDFs ≤14 MB go inline
   as bytes (the Files API's ASCII header encoding breaks on non-ASCII filenames), larger ones
   upload through an ASCII-named temp copy. PROVIDER-PREFIXED
-  (`openrouter:qwen/qwen3-vl-8b-instruct`): pdftoppm-rasterized page images through pydantic-ai,
-  bounded by `MAX_VISION_PAGES` with a spoken cut. The configured id is returned as provenance
-  either way, and `vision_configured` is the one answer to "can this run at all"
-  (`librarian.processing` asks it before paying for a call).
+  (`openrouter:qwen/qwen3-vl-8b-instruct`): pdftoppm-rasterized page images through pydantic-ai
+  — output box bounded by `-scale-to` (a fixed DPI is a raster bomb on a max-MediaBox page),
+  both subprocesses and the model call on their own clocks, at most `MAX_VISION_PAGES` pages
+  with a spoken cut and `pages`/`truncated` returned as data beside it. The configured id is
+  returned as provenance either way, and `vision_config_error` is the one answer to "can this
+  run, and if not why" (`librarian.processing` asks it before paying for a call; a KNOWN prefix
+  with no key is unconfigured with the variable named, an unknown prefix is configured by
+  naming itself).
 - `normalize.py`'s suite is `tests/kernel/test_normalize.py`, added with the split that gave it a
   second key; `frontmatter.py`'s lives in `tests/kernel/test_frontmatter.py`. Every case there is
   written against a spelling that DISCRIMINATES the two keys — one both answer alike proves nothing

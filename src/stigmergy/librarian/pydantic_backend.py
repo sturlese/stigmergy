@@ -63,19 +63,10 @@ def _fault_line(ex: BaseException) -> str:
     return textutil.one_line(textutil.neutralize_fence(str(ex)), MAX_FAULT_MESSAGE_LEN)
 
 # Read by the preflight that refuses a missing key BEFORE the first claim; an unknown prefix
-# simply gets no preflight.
-PROVIDER_KEY_ENV = {
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "google-gla": "GEMINI_API_KEY",
-    "openrouter": "OPENROUTER_API_KEY",
-}
-
-
-def provider_of(model: str) -> str:
-    """The provider prefix of a pydantic-ai model string, or `""` for a bare name."""
-    name = (model or "").strip()
-    return name.split(":", 1)[0] if ":" in name else ""
+# simply gets no preflight. RE-EXPORTED from the kernel (audit T1): the vision gate asks the
+# same question of the same table, and two tables would drift — `kernel.settings` hosts it so
+# this import drags no agent framework into a keyless run.
+from stigmergy.kernel.settings import PROVIDER_KEY_ENV, provider_of  # noqa: E402,F401
 
 
 def prompt_cache_settings(model: str, prompt_cache: str) -> dict | None:

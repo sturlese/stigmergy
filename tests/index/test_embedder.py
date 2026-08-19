@@ -112,6 +112,7 @@ def test_the_default_host_is_openai_exactly_as_before(monkeypatch):
 def test_embed_api_key_wins_and_the_openai_key_stays_the_fallback(monkeypatch):
     """EMBED_API_KEY exists so a non-OpenAI host never silently rides the OpenAI credential; with
     it unset, OPENAI_API_KEY keeps working because it is what every existing deployment sets."""
+    monkeypatch.delenv("EMBED_BASE_URL", raising=False)   # the default host — where fallback lives
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
     monkeypatch.setenv("EMBED_API_KEY", "sk-embed-host")
     seen = {}
@@ -121,6 +122,28 @@ def test_embed_api_key_wins_and_the_openai_key_stays_the_fallback(monkeypatch):
     monkeypatch.delenv("EMBED_API_KEY")
     OpenAIEmbedder(transport=httpx.MockTransport(_capturing_handler(seen))).embed(["x"])
     assert seen["auth"] == "Bearer sk-openai"
+
+
+def test_the_openai_key_is_never_sent_to_a_non_default_host(monkeypatch):
+    """OLD BEHAVIOUR: the fallback was unconditional, so EMBED_BASE_URL + a forgotten
+    EMBED_API_KEY shipped `Authorization: Bearer <OPENAI_API_KEY>` to a third party on the next
+    query — a credential disclosed whether or not the host accepts it (audit S1). Now that
+    configuration refuses at CONSTRUCTION, naming EMBED_API_KEY and the host, and no request is
+    ever issued."""
+    monkeypatch.setenv("EMBED_BASE_URL", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-must-not-travel")
+    monkeypatch.delenv("EMBED_API_KEY", raising=False)
+    calls = []
+
+    with pytest.raises(RuntimeError) as exc_info:
+        OpenAIEmbedder(transport=httpx.MockTransport(
+            lambda r: calls.append(r) or httpx.Response(200, json={"data": []})))
+
+    message = str(exc_info.value)
+    assert "EMBED_API_KEY" in message
+    assert "https://openrouter.ai/api/v1" in message
+    assert "sk-openai-must-not-travel" not in message   # a refusal never carries a secret
+    assert calls == []                                  # and nothing left the process
 
 
 def test_an_explicit_model_beats_the_env_so_queries_stay_in_the_indexes_space(monkeypatch):

@@ -142,6 +142,25 @@ def test_worker_env_strips_the_read_paths_openai_key():
     assert populated["PATH"] == "/usr/bin"
 
 
+def test_shared_credentials_names_a_value_that_survives_under_another_name():
+    """The case the NAME-level strip cannot see (audit S2): one OpenRouter key doing both jobs
+    is stripped as EMBED_API_KEY and survives as OPENROUTER_API_KEY. `main` says it out loud
+    rather than refusing — a small deployment may have chosen exactly that — and the answer is
+    a list of NAMES, because a log line must never carry a secret's value."""
+    shared = bootstrap.shared_credentials({"EMBED_API_KEY": "sk-or-one-key",
+                                           "OPENROUTER_API_KEY": "sk-or-one-key",
+                                           "PATH": "/usr/bin"})
+    assert shared == ["OPENROUTER_API_KEY"]
+
+
+def test_shared_credentials_is_silent_for_genuinely_separate_keys():
+    """The benign twin: distinct credentials — the separation the notice asks for — produce no
+    notice, so the warning cannot become furniture."""
+    assert bootstrap.shared_credentials({"EMBED_API_KEY": "sk-or-embed-only",
+                                         "OPENROUTER_API_KEY": "sk-or-filing-only",
+                                         "OPENAI_API_KEY": "sk-openai"}) == []
+
+
 def test_worker_env_strips_the_embedders_own_key_and_keeps_the_providers(monkeypatch):
     """`EMBED_API_KEY` is the read path's embedder credential under its own name (the key for an
     `$EMBED_BASE_URL` host), so it is stripped exactly as `OPENAI_API_KEY` is — while

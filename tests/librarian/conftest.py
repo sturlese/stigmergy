@@ -79,13 +79,8 @@ def no_ambient_agent_credential(monkeypatch, tmp_path):
     """
     for name in _AGENT_CREDENTIAL_ENV:
         monkeypatch.delenv(name, raising=False)
-    # The drive flow's vision fallback asks `converters.vision_configured()` at call time —
-    # GEMINI_API_KEY for the bare form, a provider-prefixed VISION_MODEL for the pydantic-ai
-    # form. BOTH are cleared for the same reason as the agent credential: whether vision
-    # "exists" is the TEST's decision, never the operator's ambient .env — and no test in this
-    # package may ever reach a real vision API. Tests that want the fallback set one explicitly.
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.delenv("VISION_MODEL", raising=False)
+    # Vision configuration (GEMINI_API_KEY, VISION_MODEL) is cleared REPO-WIDE by
+    # `tests/conftest.py::no_real_vision_anywhere` — one control, not one per package.
 
 
 @pytest.fixture(autouse=True)

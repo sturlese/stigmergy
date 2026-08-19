@@ -435,8 +435,9 @@ downloads (a native Google Doc/Slide/Sheet is exported to PDF by Drive itself), 
 BYTES to evidence, and enqueues exactly ONE `kind="drive"` row whose material is a deterministic
 manifest. No model, no conversion at the door. The worker extracts the text (pdftotext first; one
 bounded vision OCR pass for a scanned PDF when the worker has one configured — `GEMINI_API_KEY`
-for the bare Gemini model, or a provider-prefixed `VISION_MODEL`; OPTIONAL, neither
-means scanned decks refuse honestly) and the librarian files ONE synthesis page plus the verbatim
+for the bare Gemini model, or a provider-prefixed `VISION_MODEL` with its provider's key; the
+prefixed form transcribes at most the first 40 pages and says in-line where it cut; OPTIONAL,
+neither configured means scanned decks refuse honestly) and the librarian files ONE synthesis page plus the verbatim
 `sources/drive/` part(s), atomically, anchored-or-asked-or-parked like every capture.
 
 **The format policy**: pdf · txt/md/json · xlsx/xls/csv/tsv · docx · any native Google file. An

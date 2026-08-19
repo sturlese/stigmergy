@@ -78,6 +78,33 @@ def test_model_override_reaches_the_real_agent_with_no_key_and_no_private_reachi
         build_processor(_Output, "instructions", fake=_Fake)
 
 
+def test_an_explicit_reasoning_effort_wins_over_the_env_and_is_validated(monkeypatch):
+    """The parameter that let the answer path stop carrying a copy of this function (audit T1):
+    a caller's own effort beats $CLEAN_REASONING_EFFORT, and an invalid one is refused naming
+    the caller's value rather than an env var the caller never set."""
+    from stigmergy.kernel import llm
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake")
+    monkeypatch.setenv("CLEAN_REASONING_EFFORT", "high")
+
+    _model, settings = llm.build_model("gpt-5.6-terra", reasoning_effort="low")
+    assert settings["openai_reasoning_effort"] == "low"   # ModelSettings is a TypedDict
+
+    with pytest.raises(RuntimeError, match="invalid reasoning effort"):
+        llm.build_model("gpt-5.6-terra", reasoning_effort="bananas")
+
+
+def test_an_exported_but_empty_clean_model_means_unset(monkeypatch):
+    """`.env.example` invites exactly this shape (`CLEAN_MODEL=` uncommented and blank), and an
+    empty string must mean "use the default", never a confusing provider-side error."""
+    from stigmergy.kernel import llm
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-fake")
+    monkeypatch.setenv("CLEAN_MODEL", "")
+    model, _settings = llm.build_model()
+    assert model.model_name == llm.DEFAULT_MODEL
+
+
 def test_model_override_is_inert_on_the_fake_path(monkeypatch):
     """The benign twin: `CLEAN_LLM=fake` still returns the caller's fake — the override replaces
     the PROVIDER, never the dispatch, so an offline suite that happens to run inside the block is

@@ -1175,16 +1175,17 @@ def _with_vision_fallback(path: str, method: str, text: str, name: str) -> str:
     pages = text.count("\f") + 1
     if len(stripped) >= DRIVE_VISION_MIN_CHARS_PER_PAGE * pages:
         return text
-    if not converters.vision_configured():
+    config_error = converters.vision_config_error()
+    if config_error:
+        # The reason is `converters`' own sentence, so a prefixed-but-keyless VISION_MODEL names
+        # ITS provider's variable instead of sending the operator to GEMINI_API_KEY — advice
+        # that could never fix it (a message with a command in it is an executable promise).
         if len(stripped) < DRIVE_MIN_TEXT_CHARS:
             raise _ConversionRefused(
-                f"{name!r} looks like a scanned PDF (no usable text layer) and this worker has "
-                f"no vision OCR configured — the operator can set GEMINI_API_KEY (or a "
-                f"provider-prefixed VISION_MODEL) and requeue, or drop a text-layer export "
-                f"instead")
-        log.warning("drive conversion: %r yields %d chars over %d page(s) — thin, and no "
-                    "vision OCR configured; proceeding with the text layer", name,
-                    len(stripped), pages)
+                f"{name!r} looks like a scanned PDF (no usable text layer) and {config_error}; "
+                f"or drop a text-layer export instead")
+        log.warning("drive conversion: %r yields %d chars over %d page(s) — thin, and %s; "
+                    "proceeding with the text layer", name, len(stripped), pages, config_error)
         return text
     try:
         ocr = converters.vision_extract(path)
@@ -1197,6 +1198,12 @@ def _with_vision_fallback(path: str, method: str, text: str, name: str) -> str:
                 f"operator's log has the detail; requeue to retry") from ex
         return text
     ocr_text = (ocr.get("text") or "").strip()
+    if ocr.get("truncated"):
+        # The structured half of the in-text cut note: the OPERATOR learns from this line, not
+        # from a sentence inside untrusted-adjacent text.
+        log.warning("drive conversion: %r OCR covered its first %s page(s) only — the "
+                    "%d-page ceiling; the transcription says so in-line", name,
+                    ocr.get("pages"), converters.MAX_VISION_PAGES)
     if len(ocr_text) > len(stripped):
         log.info("drive conversion: %r OCR'd by %s (%d chars over the text layer's %d)", name,
                  ocr.get("model", "vision"), len(ocr_text), len(stripped))

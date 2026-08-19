@@ -177,30 +177,65 @@ VISION_OCR_PROMPT = (
 
 DEFAULT_VISION_MODEL = "gemini-3-flash-preview"
 
-# The prefixed form's bounds: how many pages one OCR call may carry, rasterized at what density.
-# Pages past the ceiling are not transcribed — the text SAYS where it was cut, because a
-# transcription that silently stops reads as complete.
+# The prefixed form's bounds. Pages past the ceiling are not transcribed — the text SAYS where
+# it was cut, because a transcription that silently stops reads as complete. `-scale-to` bounds
+# the OUTPUT box where a fixed DPI does not: a legal max-MediaBox page (200×200 in) at 150 dpi
+# is a raster bomb (30000×30000 px) hiding inside the drive door's 25 MB cap. Both subprocesses
+# and the model request carry their own clocks, so a hostile document costs a bounded slice of
+# the item's lease, never the whole of it.
 MAX_VISION_PAGES = 40
-VISION_RASTER_DPI = 150
+MAX_VISION_RASTER_PX = 2000     # the long side of one rasterized page
+PDF_RASTER_TIMEOUT_S = 120
+PDFINFO_TIMEOUT_S = 30
+VISION_CALL_TIMEOUT_S = 240
+
+
+def vision_config_error() -> str | None:
+    """Why `vision_extract` cannot run, or `None` when it can — the question
+    `librarian.processing` asks BEFORE paying for a call, worded for the refusal it lands in.
+
+    A provider-prefixed model checks its provider's key against the kernel's one table: a KNOWN
+    prefix with no key is the misconfiguration "requeue" can never fix, so it must read as
+    unconfigured with the variable named. An UNKNOWN prefix is configured by naming itself — the
+    same warn-don't-refuse posture as the librarian's preflight, so the gate stays
+    provider-agnostic. The bare Gemini form is configured by its own key."""
+    from stigmergy.kernel.settings import PROVIDER_KEY_ENV, provider_of
+
+    model = os.environ.get("VISION_MODEL") or DEFAULT_VISION_MODEL
+    provider = provider_of(model)
+    if not provider:
+        if os.environ.get("GEMINI_API_KEY"):
+            return None
+        return ("no vision OCR is configured — the operator can set GEMINI_API_KEY (for the "
+                "default Gemini model) or a provider-prefixed VISION_MODEL with its provider's "
+                "key, and requeue")
+    key_env = PROVIDER_KEY_ENV.get(provider)
+    if key_env and not os.environ.get(key_env):
+        return (f"VISION_MODEL names a {provider}: model but {key_env} is not set — the "
+                f"operator can set it and requeue")
+    return None
 
 
 def vision_configured() -> bool:
-    """Whether `vision_extract` can run at all — the question `librarian.processing` asks BEFORE
-    paying for a call. A provider-prefixed `$VISION_MODEL` is configured by NAMING it (its
-    provider's own key is pydantic-ai's check, at call time); the bare Gemini form is configured
-    by `$GEMINI_API_KEY`."""
-    model = os.environ.get("VISION_MODEL", DEFAULT_VISION_MODEL)
-    return ":" in model or bool(os.environ.get("GEMINI_API_KEY"))
+    """`vision_config_error() is None`, for the caller that only branches."""
+    return vision_config_error() is None
 
 
 def _pdf_page_pngs(path: str, cap: int = MAX_VISION_PAGES) -> list[bytes]:
     """The first `cap` pages as PNG bytes, via poppler's pdftoppm — the same package
     `_pdftotext` ships in, so this path owes the image no new toolchain. pdftoppm zero-pads its
-    page numbers, so the lexical sort IS page order."""
+    page numbers, so the lexical sort IS page order (pinned against the real binary by
+    `tests/kernel/test_converters.py`)."""
     with tempfile.TemporaryDirectory() as td:
         prefix = os.path.join(td, "page")
-        r = subprocess.run(["pdftoppm", "-png", "-r", str(VISION_RASTER_DPI), "-l", str(cap),
-                            path, prefix], capture_output=True, text=True)
+        try:
+            r = subprocess.run(["pdftoppm", "-png", "-scale-to", str(MAX_VISION_RASTER_PX),
+                                "-l", str(cap), path, prefix],
+                               capture_output=True, text=True, timeout=PDF_RASTER_TIMEOUT_S)
+        except subprocess.TimeoutExpired as ex:
+            raise RuntimeError(
+                f"pdftoppm exceeded its {PDF_RASTER_TIMEOUT_S}s budget rasterizing this "
+                f"PDF") from ex
         if r.returncode != 0:
             raise RuntimeError(f"pdftoppm rc={r.returncode}: {r.stderr[:500]}")
         pages = []
@@ -213,8 +248,14 @@ def _pdf_page_pngs(path: str, cap: int = MAX_VISION_PAGES) -> list[bytes]:
 
 
 def _pdf_page_count(path: str) -> int:
-    """`pdfinfo`'s Pages figure, `0` when it cannot say — read only to decide the cut note."""
-    r = subprocess.run(["pdfinfo", path], capture_output=True, text=True)
+    """`pdfinfo`'s Pages figure, `0` when it cannot say — read only to decide the cut note, and
+    AFTER the model call, so "cannot say" (missing binary, timeout, bad rc) must degrade to `0`
+    rather than discard a paid transcription."""
+    try:
+        r = subprocess.run(["pdfinfo", path], capture_output=True, text=True,
+                           timeout=PDFINFO_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired):
+        return 0
     if r.returncode != 0:
         return 0
     m = re.search(r"^Pages:\s+(\d+)", r.stdout, re.MULTILINE)
@@ -224,25 +265,36 @@ def _pdf_page_count(path: str) -> int:
 def _vision_extract_pydantic(model: str, path: str, agent_builder=None) -> dict:
     """The prefixed form: page IMAGES to any pydantic-ai model — the pages are decided by CODE,
     so the OCR means the same thing whatever the provider serves it. `agent_builder` is the
-    injectable seam a test drives a scripted model through; production passes none."""
+    injectable seam a test drives a scripted model through; production passes none.
+
+    The agent is built BEFORE the rasterization: a typo'd model must fail before the expensive
+    step, not after it. The returned dict carries `pages`/`truncated` as DATA beside the in-text
+    cut note — the note is for the filing model (which needs to judge completeness), the fields
+    are for code and logs, which must never parse a sentence out of untrusted-adjacent text."""
     from pydantic_ai import Agent, BinaryContent
 
-    from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
-    ensure_usage_extraction_repaired()
+    from stigmergy.kernel.llm import build_model
 
+    # Through `build_model` for one reason: the `model_override` seam (#81) applies here too, so
+    # a test can drive this path with a scripted model. A prefixed string comes back verbatim.
+    resolved, _ = build_model(model)
+    agent = agent_builder(model) if agent_builder else Agent(
+        resolved, model_settings={"timeout": VISION_CALL_TIMEOUT_S})
     pages = _pdf_page_pngs(path)
-    agent = agent_builder(model) if agent_builder else Agent(model)
     parts = [VISION_OCR_PROMPT] + [BinaryContent(data=png, media_type="image/png")
                                    for png in pages]
     result = agent.run_sync(parts)
     text = str(result.output or "")
+    truncated = False
     if len(pages) == MAX_VISION_PAGES:
         total = _pdf_page_count(path)
-        if total == 0 or total > MAX_VISION_PAGES:
+        truncated = total == 0 or total > MAX_VISION_PAGES
+        if truncated:
             text += (f"\n\n[the worker cut this document here: it is longer than the "
                      f"{MAX_VISION_PAGES}-page OCR ceiling, so what you have is its opening "
                      f"and not the whole of it]")
-    return {"method": "vision", "text": text, "model": model}
+    return {"method": "vision", "text": text, "model": model,
+            "pages": len(pages), "truncated": truncated}
 
 
 def vision_extract(path: str, agent_builder=None) -> dict:
@@ -251,7 +303,7 @@ def vision_extract(path: str, agent_builder=None) -> dict:
     requires `GEMINI_API_KEY`; a provider-prefixed pydantic-ai id
     ("openrouter:qwen/qwen3-vl-8b-instruct") sends poppler-rasterized page images instead, and
     authenticates with that provider's own key. Lazy SDK imports on both forms."""
-    model = os.environ.get("VISION_MODEL", DEFAULT_VISION_MODEL)
+    model = os.environ.get("VISION_MODEL") or DEFAULT_VISION_MODEL
     if ":" in model:
         return _vision_extract_pydantic(model, path, agent_builder)
     key = os.environ.get("GEMINI_API_KEY")
