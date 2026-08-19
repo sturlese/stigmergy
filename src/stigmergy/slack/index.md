@@ -12,7 +12,7 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 |---|---|
 | `app.py` | `stigmergy-slack`'s entry point: Bolt async app, Socket Mode, event registration, `acquire_singleton_lock`, and the poller and doorbell as two background tasks. Read it first when tracing an event; only it and `bolt_gateway.py` may import `slack_bolt`/`slack_sdk` |
 | `identity.py` | Slack profile email -> `ops/identities.json` via `resolve_audiences`; `is_ignorable_event`; `is_configured_workspace`; `UsersInfoCache`; the five-way `IdentityResult` |
-| `channels.py` | `ops/slack-channels.json` — a channel's audience scope, empty-set default for anything unlisted |
+| `channels.py` | `ops/slack-channels.json` — a channel's audience scope, empty-set default for anything unlisted; `channel_audiences_live` prefers the index's snapshot over the baked file (`server.ops_files`' order), so a scoping edit lands without a deploy |
 | `context.py` | `SlackContext` (process-wide conn, embedder, rate limiter, audit, evidence, cache, link resolver, "Show it here" tokens), `resolve_slack_identity`, `build_service`, and the two seams `decline` and `post_or_log` |
 | `mention.py` | `@brain <question>` and DMs: placeholder, channel/DM scope split, retrieval-set comparison, edit-retry-then-fallback |
 | `capture.py` | the 🧠 gesture: public channels only, verbatim thread material, provenance hints, reserve-then-fill dedup, progress-reaction lifecycle (`mark_in_progress`/`finish_progress`, driven from `app.py`) |

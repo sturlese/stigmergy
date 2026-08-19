@@ -58,3 +58,48 @@ def test_default_path_joins_ops_slack_channels_json_under_the_repo():
 
 def test_default_path_is_empty_with_no_repo():
     assert default_path(None) == ""
+
+
+# ── the text road, and the live chooser over a real snapshot ───────────────────────────────────
+def test_channel_audiences_from_text_answers_exactly_as_the_file_road_does(channels_path):
+    """One parse under both roads: whatever the file road answers, the text road answers for the
+    same bytes — a listed channel's labels and the unlisted channel's empty set alike."""
+    text = json.dumps({"C_FINANCE": ["finance"]})
+    from stigmergy.slack.channels import channel_audiences_from_text
+
+    assert channel_audiences_from_text(text, "C_FINANCE", origin="snapshot") == {"finance"}
+    assert channel_audiences_from_text(text, "C_ELSE", origin="snapshot") == set()
+
+
+def test_an_empty_snapshot_text_fails_closed_rather_than_reading_as_unscoped():
+    """On the snapshot road "no scoping declared" is spelled `{}` — a committed statement — never
+    bytes that failed to arrive. An empty text is malformed and raises, the same posture the
+    identity roster takes."""
+    from stigmergy.slack.channels import channel_audiences_from_text
+
+    with pytest.raises(IdentityError):
+        channel_audiences_from_text("", "C_FINANCE", origin="snapshot")
+
+
+def test_channel_audiences_live_prefers_the_snapshot_and_falls_back_to_the_file(channels_path):
+    """The deployed resolution, against a REAL snapshot row: a channel scoped by a pushed edit is
+    scoped within seconds on a group that holds no checkout, and a database with no snapshot
+    leaves the file road byte-for-byte as it was."""
+    from stigmergy.index import store as index_store
+    from stigmergy.slack.channels import channel_audiences_live
+    from tests import testdb
+
+    conn = testdb.connect_or_skip("slack")
+    try:
+        index_store.clear_ops_file(conn, index_store.SLACK_CHANNELS_RELPATH)
+        assert channel_audiences_live(conn, channels_path, "C_FINANCE") == {"finance"}, (
+            "no snapshot: the file road answers")
+
+        index_store.write_ops_file(conn, index_store.SLACK_CHANNELS_RELPATH,
+                                   json.dumps({"C_FINANCE": ["finance", "leadership"]}),
+                                   "pushed-sha")
+        assert channel_audiences_live(conn, channels_path, "C_FINANCE") == {
+            "finance", "leadership"}, "a snapshot present: the pushed scope wins over the file"
+    finally:
+        index_store.clear_ops_file(conn, index_store.SLACK_CHANNELS_RELPATH)
+        conn.close()

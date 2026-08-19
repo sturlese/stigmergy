@@ -1035,9 +1035,11 @@ def snapshot(webhook_conn):
     `--entity-registry` file, so a leftover here changes what an unrelated suite's
     `describe_entity` resolves — order-dependently, which is the kind of failure that reproduces
     on nobody's laptop."""
-    store.clear_entity_registry(webhook_conn)
+    for relpath in store.OPS_FILE_RELPATHS:
+        store.clear_ops_file(webhook_conn, relpath)
     yield webhook_conn
-    store.clear_entity_registry(webhook_conn)
+    for relpath in store.OPS_FILE_RELPATHS:
+        store.clear_ops_file(webhook_conn, relpath)
 
 
 @pytest.fixture()
@@ -1055,7 +1057,7 @@ def pushed_pages(webhook_conn):
 
 
 def _registry_content(conn) -> str | None:
-    return store.read_entity_registry(conn)
+    return store.read_ops_file(conn, store.ENTITY_REGISTRY_RELPATH)
 
 
 def _token_spy(monkeypatch) -> list:
@@ -1070,18 +1072,21 @@ def _token_spy(monkeypatch) -> list:
     return calls
 
 
-def test_registry_was_pushed_reads_the_raw_paths_and_only_added_or_modified():
-    """The predicate itself. `added`/`modified` refresh; a `removed` does NOT, because no governed
-    door deletes this file — a removal is either a rename away (the nightly rebuild reconciles from
-    the checkout) or an accident, and blanking every entity's name the moment one lands is the
-    worse of the two answers. The last assertion is the one that pins WHERE it is asked: the
-    page filter drops this path entirely, so a predicate built on `in_zone_changes` could never
-    fire at all."""
-    assert webhook.registry_was_pushed({REGISTRY_RELPATH: "added"}) is True
-    assert webhook.registry_was_pushed({REGISTRY_RELPATH: "modified"}) is True
-    assert webhook.registry_was_pushed({REGISTRY_RELPATH: "removed"}) is False
-    assert webhook.registry_was_pushed({"wiki/notes/a.md": "modified"}) is False
-    assert webhook.registry_was_pushed({}) is False
+def test_ops_files_pushed_reads_the_raw_paths_and_only_added_or_modified():
+    """The predicate itself, now over every cached ops file. `added`/`modified` refresh; a
+    `removed` does NOT, because no governed door deletes any of these files — a removal is either
+    a rename away (the nightly rebuild reconciles from the checkout, per file) or an accident, and
+    blanking an entity roster — or an identity roster — the moment one lands is the worse of the
+    two answers. The last assertion is the one that pins WHERE it is asked: the page filter drops
+    these paths entirely, so a predicate built on `in_zone_changes` could never fire at all."""
+    assert webhook.ops_files_pushed({REGISTRY_RELPATH: "added"}) == [REGISTRY_RELPATH]
+    assert webhook.ops_files_pushed({REGISTRY_RELPATH: "modified"}) == [REGISTRY_RELPATH]
+    assert webhook.ops_files_pushed({REGISTRY_RELPATH: "removed"}) == []
+    assert webhook.ops_files_pushed({"wiki/notes/a.md": "modified"}) == []
+    assert webhook.ops_files_pushed({}) == []
+    assert webhook.ops_files_pushed(
+        {store.IDENTITIES_RELPATH: "modified", store.SLACK_CHANNELS_RELPATH: "added",
+         REGISTRY_RELPATH: "modified"}) == list(store.OPS_FILE_RELPATHS)
     assert webhook.in_zone_changes({REGISTRY_RELPATH: "modified"}) == {}
 
 
@@ -1091,7 +1096,7 @@ def test_a_push_that_removes_the_registry_leaves_the_snapshot_untouched(snapshot
     and only the second one keeps every entity's name resolving. `registry_refreshed` stays out of
     the stats, so `job_runs` never claims a refresh that did not happen."""
     from stigmergy.index.backends.embedder import build_embedder
-    store.write_entity_registry(snapshot, SEEDED_REGISTRY, "seed-sha")
+    store.write_ops_file(snapshot, store.ENTITY_REGISTRY_RELPATH, SEEDED_REGISTRY, "seed-sha")
     payload = _push_payload(commits=[{"added": [], "modified": [],
                                       "removed": [REGISTRY_RELPATH]}])
 
@@ -1170,7 +1175,7 @@ def test_an_over_cap_push_that_also_touches_the_registry_defers_the_registry_too
     of a bulk change is worse than a stale one, and a registry refreshed against pages that were
     deferred is exactly a half-applied push. The nightly rebuild reconciles both together."""
     from stigmergy.index.backends.embedder import build_embedder
-    store.write_entity_registry(snapshot, SEEDED_REGISTRY, "seed-sha")
+    store.write_ops_file(snapshot, store.ENTITY_REGISTRY_RELPATH, SEEDED_REGISTRY, "seed-sha")
     paths = [f"wiki/webhook-test/registry-cap-{i}.md" for i in range(5)]
     pushed_pages.extend(paths)      # deferred means none of them land — unless the cap regresses
     contents = {p: f"---\ntitle: Cap {i}\nverification: verified\n---\nBody {i}."
@@ -1202,7 +1207,7 @@ def test_a_failing_registry_write_rolls_the_page_back_with_it(snapshot, monkeypa
     the registry write is the LAST statement in the block, so only a failure there proves the page
     upsert before it is genuinely inside the same transaction."""
     from stigmergy.index.backends.embedder import build_embedder
-    store.write_entity_registry(snapshot, SEEDED_REGISTRY, "seed-sha")
+    store.write_ops_file(snapshot, store.ENTITY_REGISTRY_RELPATH, SEEDED_REGISTRY, "seed-sha")
     path = "wiki/webhook-test/registry-rollback.md"
     pushed_pages.append(path)
     text = ("---\ntitle: Registry Rollback\nentity: pushed\nverification: verified\n---\n"
@@ -1215,7 +1220,7 @@ def test_a_failing_registry_write_rolls_the_page_back_with_it(snapshot, monkeypa
 
     def boom(*args, **kwargs):
         raise RuntimeError("simulated registry-snapshot failure mid-transaction")
-    monkeypatch.setattr(store, "write_entity_registry", boom)
+    monkeypatch.setattr(store, "write_ops_file", boom)
 
     with pytest.raises(RuntimeError, match="simulated registry-snapshot failure"):
         webhook.process_push(snapshot, build_embedder("fake"), payload, _settings(),
@@ -1227,3 +1232,163 @@ def test_a_failing_registry_write_rolls_the_page_back_with_it(snapshot, monkeypa
         cur.execute("SELECT count(*) FROM pages_index WHERE path = %s", (path,))
         assert cur.fetchone()[0] == 0             # the page rolled back WITH the registry write
     assert _registry_content(snapshot) == SEEDED_REGISTRY
+
+
+# ── the ops files are fetched at the BRANCH ref, and that is the replay defense ────────────────
+def _capturing_opener(file_contents: dict[str, str], seen_refs: dict[str, str]):
+    """`_fake_opener`, additionally recording WHICH ref each path was fetched at — the fact the
+    branch-ref tests are about."""
+    def opener(request, timeout=30):
+        parsed = urllib.parse.urlparse(request.full_url)
+        path = urllib.parse.unquote(parsed.path.split("/contents/", 1)[1])
+        seen_refs[path] = urllib.parse.parse_qs(parsed.query).get("ref", [""])[0]
+        if path not in file_contents:
+            raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, None)
+        return _FakeGithubResponse(file_contents[path].encode("utf-8"))
+    return opener
+
+
+def test_ops_files_are_fetched_at_the_branch_ref_and_pages_at_the_pushed_sha(snapshot):
+    """**The replay defense for the access files, pinned at the seam it lives in.** A page is
+    fetched at the delivery's own sha — its consistency story is the delivery's path list. An ops
+    file is fetched at the BRANCH ref, so a replayed or delayed delivery re-fetches what the
+    branch says NOW and no historical roster is ever installable through this endpoint. Pinning
+    the URL is pinning the defense: `ref=<sha>` here would be issue #79 item 1 reopened."""
+    from stigmergy.index.backends.embedder import build_embedder
+    page = "wiki/notes/a-note.md"
+    seen: dict[str, str] = {}
+    payload = _push_payload(sha="deadbeef", commits=[{
+        "added": [page, store.IDENTITIES_RELPATH], "modified": [], "removed": []}])
+
+    webhook.process_push(snapshot, build_embedder("fake"), payload, _settings(),
+                         opener=_capturing_opener({
+                             page: "---\ntitle: A Note\n---\nbody",
+                             store.IDENTITIES_RELPATH: '{"ana@example.com": ["finance"]}'}, seen))
+
+    assert seen[page] == "deadbeef"
+    assert seen[store.IDENTITIES_RELPATH] == BRANCH
+    store.delete_pages(snapshot, [page])
+
+
+def test_a_replayed_delivery_reinstalls_what_the_branch_says_now_not_what_it_said_then(snapshot):
+    """The defense OBSERVED, not inferred from a URL: an old delivery replayed after a revocation
+    re-fetches the roster at the branch ref, so what lands is the CURRENT file — the replay is a
+    no-op, not a restoration. (With the sha road this same replay would have re-installed the
+    pre-revocation roster; that road no longer exists for these files.)"""
+    from stigmergy.index.backends.embedder import build_embedder
+    old_payload = _push_payload(sha="oldsha111", commits=[{
+        "added": [store.IDENTITIES_RELPATH], "modified": [], "removed": []}])
+    current = '{"steward@example.com": "*"}'    # ana was revoked since that delivery
+
+    webhook.process_push(snapshot, build_embedder("fake"), old_payload, _settings(),
+                         opener=_fake_opener({store.IDENTITIES_RELPATH: current}))
+
+    assert store.read_ops_file(snapshot, store.IDENTITIES_RELPATH) == current
+
+
+def test_a_push_carrying_identities_and_channels_refreshes_both_snapshots(snapshot):
+    from stigmergy.index.backends.embedder import build_embedder
+    identities = '{"ana@example.com": ["finance"]}'
+    channels = '{"C123": ["finance"]}'
+    payload = _push_payload(commits=[{
+        "added": [store.IDENTITIES_RELPATH], "modified": [store.SLACK_CHANNELS_RELPATH],
+        "removed": []}])
+
+    stats = webhook.process_push(snapshot, build_embedder("fake"), payload, _settings(),
+                                 opener=_fake_opener({store.IDENTITIES_RELPATH: identities,
+                                                      store.SLACK_CHANNELS_RELPATH: channels}))
+
+    assert store.read_ops_file(snapshot, store.IDENTITIES_RELPATH) == identities
+    assert store.read_ops_file(snapshot, store.SLACK_CHANNELS_RELPATH) == channels
+    assert stats["ops_files_refreshed"] == sorted([store.IDENTITIES_RELPATH,
+                                                   store.SLACK_CHANNELS_RELPATH])
+    assert "registry_refreshed" not in stats
+
+
+# ── the delivery-id dedupe: the page road's own replay defense ─────────────────────────────────
+def test_a_delivery_id_already_applied_is_acknowledged_and_not_reapplied(snapshot):
+    """A replayed page delivery re-fetches content at its own OLD sha — a downgrade, and for a
+    `removed` list a re-deletion — so a delivery id that already COMMITTED is refused a second
+    apply. Proven at the `process_push` + `delivery_already_applied` seam the endpoint runs."""
+    from stigmergy.index.backends.embedder import build_embedder
+    page = "wiki/notes/replayed.md"
+    payload = _push_payload(sha="abc111", commits=[{"added": [page], "modified": [],
+                                                    "removed": []}])
+    opener = _fake_opener({page: "---\ntitle: Replayed\n---\nversion one"})
+    with snapshot.cursor() as cur:   # arrange: the shared database remembers earlier runs
+        cur.execute("DELETE FROM webhook_deliveries WHERE delivery_id IN (%s, %s)",
+                    ("delivery-1", "delivery-2"))
+
+    assert store.delivery_already_applied(snapshot, "delivery-1") is False
+    webhook.process_push(snapshot, build_embedder("fake"), payload, _settings(),
+                         delivery_id="delivery-1", opener=opener)
+
+    assert store.delivery_already_applied(snapshot, "delivery-1") is True
+    # The benign twin: a DIFFERENT delivery is not a replay.
+    assert store.delivery_already_applied(snapshot, "delivery-2") is False
+    store.delete_pages(snapshot, [page])
+    with snapshot.cursor() as cur:
+        cur.execute("DELETE FROM webhook_deliveries WHERE delivery_id = %s", ("delivery-1",))
+
+
+def test_a_failed_delivery_records_nothing_so_manual_redelivery_still_works(snapshot,
+                                                                            monkeypatch):
+    """GitHub's redelivery button is the LEGITIMATE sender of a repeated id, and it exists for
+    deliveries that failed. The id is recorded inside phase 2's transaction, so an apply that
+    rolls back never records itself — asserted by making the upsert blow up mid-transaction."""
+    from stigmergy.index.backends.embedder import build_embedder
+    page = "wiki/notes/failing.md"
+    payload = _push_payload(commits=[{"added": [page], "modified": [], "removed": []}])
+
+    def boom(*a, **kw):
+        raise RuntimeError("phase 2 dies mid-transaction")
+
+    monkeypatch.setattr(store, "upsert_pages", boom)
+    with pytest.raises(RuntimeError):
+        webhook.process_push(snapshot, build_embedder("fake"), payload, _settings(),
+                             delivery_id="delivery-3",
+                             opener=_fake_opener({page: "---\ntitle: F\n---\nbody"}))
+
+    assert store.delivery_already_applied(snapshot, "delivery-3") is False
+
+
+def test_an_empty_delivery_id_is_never_deduped(snapshot):
+    """The guard's own benign twin: an origin that stamps no id gets no dedupe — two id-less
+    deliveries must both apply, never collide on `""`."""
+    assert store.delivery_already_applied(snapshot, "") is False
+    with snapshot.cursor() as cur:
+        store.record_delivery(cur, "")
+    assert store.delivery_already_applied(snapshot, "") is False
+
+
+def test_a_duplicate_delivery_through_the_real_endpoint_is_acknowledged_and_not_reapplied(
+        webhook_conn, fixture, webhook_env, monkeypatch):
+    """The endpoint half of the dedupe: same signed body, same `X-GitHub-Delivery` id, twice.
+    The second response is a 200 (GitHub must never see an error for a replay) that says
+    `duplicate delivery`, and the page fetcher is never called again — asserted by making the
+    second fetch impossible."""
+    page = "wiki/webhook-test/deduped.md"
+    payload = _push_payload(commits=[{"added": [page], "modified": [], "removed": []}])
+    body = json.dumps(payload).encode()
+    headers = {"X-Hub-Signature-256": _sign(SECRET, body), "X-GitHub-Event": "push",
+               "X-GitHub-Delivery": "dedupe-e2e-1"}
+    texts = {page: "---\ntitle: Deduped\n---\nversion one"}
+    monkeypatch.setattr(webhook, "_fetch_file_content",
+                        lambda repo, path, sha, token, opener=None: texts[path])
+    app = build_test_http_app(fixture, {})
+
+    try:
+        with run_http_server(app) as url:
+            base = url.rsplit("/", 1)[0]
+            first = httpx.post(f"{base}{webhook.WEBHOOK_PATH}", content=body, headers=headers)
+            texts.clear()   # a re-apply would now KeyError inside the endpoint -> 500
+            second = httpx.post(f"{base}{webhook.WEBHOOK_PATH}", content=body, headers=headers)
+
+        assert first.status_code == 200 and first.json().get("upserted") == 1
+        assert second.status_code == 200
+        assert second.json().get("ignored") == "duplicate delivery"
+    finally:
+        store.delete_pages(webhook_conn, [page])
+        with webhook_conn.cursor() as cur:
+            cur.execute("DELETE FROM webhook_deliveries WHERE delivery_id = %s",
+                        ("dedupe-e2e-1",))

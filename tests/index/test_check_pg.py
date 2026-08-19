@@ -49,7 +49,7 @@ def checked(tmp_path):
     # `entity_registry_snapshot` singleton every suite shares — and `check.served_registry` prefers
     # that snapshot over the file a caller names. Left behind, it decides what an unrelated
     # module's substrate check lints, by collection order.
-    store.clear_entity_registry(conn)
+    store.clear_ops_file(conn, store.ENTITY_REGISTRY_RELPATH)
     conn.close()
 
 

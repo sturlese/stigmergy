@@ -475,6 +475,29 @@ def test_index_state_and_substrate_check_run_over_the_real_store(service):
     assert check["errors"] == 0 and isinstance(check["findings"], list)
 
 
+def test_index_state_answers_freshness_for_every_cached_ops_file(service, conn):
+    """The operator question issues #74 and #79 were found through — "is what I am serving fresh,
+    and from which sha?" — has no surface but this one, and until now nothing asserted the panel
+    at all. One file's snapshot present, the other two absent: the state names all three, with
+    the snapshot's source and a `None` that the console renders as "no snapshot"."""
+    for relpath in index_store.OPS_FILE_RELPATHS:
+        index_store.clear_ops_file(conn, relpath)   # arrange, never inherit a leftover snapshot
+    index_store.write_ops_file(conn, index_store.IDENTITIES_RELPATH,
+                               '{"ana@example.com": ["finance"]}', "abc123def")
+    try:
+        state = service.index_state()
+
+        assert set(state["ops_files"]) == set(index_store.OPS_FILE_RELPATHS)
+        identities = state["ops_files"][index_store.IDENTITIES_RELPATH]
+        assert identities["source"] == "abc123def"
+        assert identities["refreshed_at"]            # ISO string, rendered as an age
+        assert state["ops_files"][index_store.SLACK_CHANNELS_RELPATH] is None
+        assert state["entity_registry"] == state["ops_files"][index_store.ENTITY_REGISTRY_RELPATH]
+    finally:
+        for relpath in index_store.OPS_FILE_RELPATHS:
+            index_store.clear_ops_file(conn, relpath)
+
+
 def test_a_registry_the_loader_refuses_reads_as_a_refusal_not_a_500(conn, admin_settings,
                                                                     tmp_path):
     """OLD BEHAVIOUR: a 500 with the class name and nothing else. `index_substrate_check` caught
@@ -490,7 +513,7 @@ def test_a_registry_the_loader_refuses_reads_as_a_refusal_not_a_500(conn, admin_
     # SERVER serves, and a snapshot left in the shared singleton by any earlier module would be
     # that copy — so this test would lint a perfectly good registry and never reach the refusal it
     # is about. Whether it passes must not depend on collection order.
-    index_store.clear_entity_registry(conn)
+    index_store.clear_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH)
     registry = tmp_path / "entity-registry.json"
     registry.write_text(json.dumps({"entities": {"acme": {"aliases": []}}}))   # no 'name'
     broken = AdminService(conn, server_settings=Settings(entity_registry_path=str(registry)),

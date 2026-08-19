@@ -284,16 +284,19 @@ class AdminService:
     # ── index ─────────────────────────────────────────────────────────────────────────────────
     def index_state(self) -> dict:
         return {"meta": index_store.read_meta(self._conn), "zones": self._zone_counts(),
-                "entity_registry": self._entity_registry_state(),
+                "entity_registry": self._ops_file_state(index_store.ENTITY_REGISTRY_RELPATH),
+                "ops_files": {relpath: self._ops_file_state(relpath)
+                              for relpath in index_store.OPS_FILE_RELPATHS},
                 "webhook": self._job_runs((WEBHOOK_JOB,), limit=10)}
 
-    def _entity_registry_state(self) -> dict | None:
-        """Which registry copy this stack is serving, and how fresh it is — `None` when the index
-        carries no snapshot, which is the console's way of saying "every server here is answering
-        from its own `--entity-registry` file". The registry the deployed groups read is a database
-        row no operator holds a checkout of, so "is it fresh, and from which sha?" has no other
-        surface (issue #74)."""
-        state = index_store.read_entity_registry_meta(self._conn)
+    def _ops_file_state(self, relpath: str) -> dict | None:
+        """Which copy of one `ops/` control file this stack is serving, and how fresh — `None`
+        when the index carries no snapshot, which is the console's way of saying "every server
+        here is answering from its own file". The copies the deployed groups read are database
+        rows no operator holds a checkout of, so "is it fresh, and from which sha?" has no other
+        surface (issues #74 and #79) — and for `ops/identities.json` the question is who can READ,
+        not what ranks first."""
+        state = index_store.read_ops_file_meta(self._conn, relpath)
         if state is None:
             return None
         return {"source": _clean(state["source"]), "refreshed_at": state["refreshed_at"]}

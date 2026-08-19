@@ -266,9 +266,16 @@ process with no checkout goes stale the moment a governed mint pushes a new enti
 webhook refreshed `pages_index` so the entity's PAGE was served within seconds, while
 `describe_entity` answered `{"name": "", "type": "", "aliases": []}` and every alias of that entity
 resolved nowhere — silently, until the next deploy re-baked the file (issue #74). So the registry
-is now cached in the derived index (`entity_registry_snapshot`), refreshed by the same webhook that
+is cached in the derived index (an `ops_file_snapshot` row), refreshed by the same webhook that
 refreshes the pages and reconciled by the same nightly rebuild — which covers the `slack` group
-too, a process with neither a checkout nor a webhook of its own.
+too, a process with neither a checkout nor a webhook of its own. Since issue #79 the two
+access-scoping files ride the same cache: `ops/identities.json` (every HTTP request's and Slack
+event's audience resolution prefers the snapshot — `server/ops_files.py` states the order once)
+and `ops/slack-channels.json` (a channel's scope, `slack/channels.channel_audiences_live`), so a
+revocation or a scoping edit lands within seconds of its push instead of at the next deploy. The
+ops files are fetched at the BRANCH ref, so a replayed webhook delivery can only ever install what
+the branch currently says; and the readers stay fail-closed — an EMPTY snapshot is malformed and
+resolves nobody, never everybody.
 `BrainService._registry_source` reads that snapshot wherever the database has one and falls back to
 the `--entity-registry` file where it does not (a local `--repo` run, an index built before the
 table existed). The memo behind it is dropped at every `_call`/`call_async` seam, so one
@@ -277,6 +284,18 @@ a promise the shape can keep: `ask` rides `call_async` and each `search` inside 
 again, so a webhook landing mid-answer can leave one `ask` resolving against two registries (a rank
 perturbation, never a wrong answer). Both roads parse through the same `entity_aliases` functions,
 so a malformed registry raises identically whichever one it came from.
+
+**Two registry parsers, and which one is authoritative for what.** `kernel.registry` and
+`server/entity_aliases` deliberately do not share a reader, and they disagree on strictness:
+`kernel.registry` REFUSES a nameless entity, `entity_aliases` serves it with an empty display
+name. That split is the decision, not a drift. `kernel.registry` is authoritative for what a
+VALID registry IS — every writer runs it (the mint door, `entities.generator`, the substrate
+lint), so nothing this system produces can ever be the degraded case. `entity_aliases` is
+authoritative for SERVING — on the hot path of every entity tool, a hand-edited registry with one
+broken record should cost that record's name, not every identity's `describe_entity`. The
+consequence an operator will meet: `stigmergy-index --check` can refuse a registry the server is
+serving happily, and that is the lint doing its job — it reports that the SUBSTRATE is broken
+while the service degrades gracefully; fix the file, not the lint.
 
 **The inversion this creates for local development.** A `stigmergy-server --repo <checkout>` used to
 pick up a working-tree edit to `ops/entity-registry.json` on the very next call — the file was read
@@ -610,6 +629,7 @@ else ([operator-runbook.md](./operator-runbook.md#the-two-databases)):
 | `test_entity_first_search_pg.py` | entity-first resolution at `BrainService.search` AND through the real `search_brain` MCP surface |
 | `test_entity_aliases.py` | `entity_aliases` as a pure file contract: `load_aliases`/`load_registry`/`resolve_entity`/`resolve_exact`, registry-missing fail-open vs registry-malformed raise |
 | `test_registry_freshness_pg.py` | an entity minted after the rollout is served with its name, type and aliases: the webhook refreshes the registry snapshot, and a push that does not touch the registry (or a database with no snapshot) leaves the `--entity-registry` file answering |
+| `test_ops_files_pg.py` | `server.ops_files`' one preference order over a real snapshot row: the file road with no snapshot, a pushed revocation live without a deploy, and the `""`-vs-`None` trap — an EMPTY identities snapshot resolves nobody, never the baked file |
 | `test_entity_tools_neutralization_pg.py` | a hostile registry/page title never escapes through `list_entities`/`describe_entity` |
 | `test_settings_entity_registry.py` | the `--entity-registry` precedence: an explicit path beats the `--repo` convention, and production passes no `--repo` at all |
 | `test_keyless_capability.py` | a keyless process still starts, `read_page` and the capture tools still work, and `search_brain`/`ask` say which capability is missing |

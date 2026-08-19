@@ -141,7 +141,8 @@ async def handle_mention(ctx, *, event_team_id: str, channel_id: str, thread_ts:
         effective_audiences = asker_audiences
     else:
         try:
-            effective_audiences = channels.channel_audiences(ctx.settings.channels_path, channel_id)
+            effective_audiences = channels.channel_audiences_live(
+                ctx.conn, ctx.settings.channels_path, channel_id)
         except IdentityError:
             # Fail-closed is right; total silence is not — the same honest server-error copy every
             # other unexpected failure gets, with a correlation ref.
