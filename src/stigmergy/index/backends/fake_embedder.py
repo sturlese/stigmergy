@@ -15,6 +15,7 @@ class FakeEmbedder:
 
     model = "fake-hashed-bow-256"
     dim = DIM
+    host = "fake"    # its own name-space marker, recorded in index_meta like the real host
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         out = []
