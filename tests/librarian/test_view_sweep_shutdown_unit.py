@@ -8,7 +8,9 @@ worth:
 - does a worker that is BUSY ever pay for a pass? (the developer's idle-branch test proves the
   pass runs when the queue is empty and never that it does not run when it is not);
 - does a signal that arrives MID-pass cost the shutdown a whole poll interval on top of the pass?
-- the pass is deliberately not cancellable — is that actually true, and what bounds the delay?
+- the WORKER never interrupts a running pass — cancellation is the pass's own cooperative
+  `should_stop`, consulted between entities (`tests/views/test_sweep_convergence.py` makes it
+  fire), so the shutdown-delay bound is ONE entity's regeneration, not a ceiling's worth;
 - the interval is scheduled off the pass's START. That is what stops a faulting pass re-attempting
   every tick; it also means a pass slower than its own interval is due again the moment it ends.
 
@@ -95,9 +97,10 @@ def test_a_worker_with_work_in_the_queue_never_starts_a_maintenance_pass(rig, mo
 # ── a signal arriving mid-pass ─────────────────────────────────────────────────────────────────
 def test_a_signal_arriving_mid_pass_stops_the_loop_without_a_second_pass_or_a_poll_wait(
         rig, idle_loop):
-    """SIGTERM during a pass: the handler flips `stopping`, and the pass — which cannot be
-    cancelled — runs to completion. What must NOT happen afterwards is the loop paying its poll
-    interval on the way out, or starting another pass.
+    """SIGTERM during a pass: the handler flips `stopping`, and the worker never cancels the
+    pass from outside — it runs to wherever its own cooperative stop takes it. What must NOT
+    happen afterwards is the loop paying its poll interval on the way out, or starting another
+    pass.
 
     `_sleep` slices on the real clock and re-checks `stopping`, so the assertion is an UPPER bound
     on elapsed wall time and never a sleep waiting for something to happen: with a 4s poll interval
@@ -123,18 +126,19 @@ def test_a_signal_arriving_mid_pass_stops_the_loop_without_a_second_pass_or_a_po
     assert passes["n"] == 1, "the loop started a second pass after the signal"
     assert elapsed < 1.0, (
         f"shutdown waited {elapsed:.2f}s after the pass finished — a signal must not cost a "
-        f"whole 4s poll interval on top of an uncancellable pass")
+        f"whole 4s poll interval on top of the pass it already waited out")
 
 
-def test_the_pass_is_not_cancellable_and_still_reports_what_it_did(rig):
-    """"Deliberately not cancellable" is a claim worth checking rather than believing: a flag
-    flipped mid-pass must not truncate the pass, and must not suppress its report either. A
-    shutdown that swallowed the line describing commits it had just pushed would leave an operator
-    with pushed work and no record of it on the way out.
+def test_the_worker_never_interrupts_a_running_pass_and_still_reports_what_it_did(rig):
+    """The WORKER's half of shutdown: it hands the flags to the pass and never cancels it from
+    outside, and a flag flipped mid-pass must not suppress the report either — a shutdown that
+    swallowed the line describing commits it had just pushed would leave an operator with pushed
+    work and no record of it on the way out.
 
-    The consequence is the shutdown-delay bound, and it is arithmetic rather than an assertion:
-    nothing interrupts the pass, so a SIGTERM can wait for up to `view_sweep_ceiling`
-    regenerations — one synthesis call each — before the process exits.
+    The PASS's half — stopping between entities when the flag it was handed flips — is a property
+    of `views.regenerate.run` and is proven there, against the real loop
+    (`tests/views/test_sweep_convergence.py`). Together they bound the shutdown delay at one
+    entity's regeneration.
     """
     env, deps = rig
     printed: list[str] = []
@@ -152,7 +156,8 @@ def test_the_pass_is_not_cancellable_and_still_reports_what_it_did(rig):
     w = _worker(deps, sweeper=sweeper, clock=_Clock(), on_output=printed.append)
 
     assert w.maybe_sweep_views() is True
-    assert finished["ok"], "the pass was cut short by a flag it must not observe"
+    assert finished["ok"], ("the worker cut the pass short from outside — stopping "
+                            "between entities is the pass\u2019s own cooperative call")
     assert any("1 regenerated" in line for line in printed)
 
 
