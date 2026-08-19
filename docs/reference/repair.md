@@ -164,7 +164,8 @@ a file, so it carries two op shapes:
 - **What a steward is authorizing.** `target_paths` carries the FULL touched set, deleted and
   scrubbed alike, so the review lane's per-path steward guard covers the whole blast radius: the
   steward of the page being removed is not automatically the steward of every page the sweep would
-  rewrite. `STIGMERGY_REPAIR_MAX_PLAN_BYTES` bounds how much one approval may be.
+  rewrite. `STIGMERGY_REPAIR_MAX_PLAN_BYTES` bounds how much one approval may be, shared with the
+  entity-alias kind because both store whole pages.
 - **How the apply proves it.** The plan is RECOMPUTED from the fresh clone and refused unless it is
   identical to the stored one, op for op and byte for byte — a page that gained a link since the
   proposal was made is a different sweep, and performing the old one would leave the dead link this
@@ -285,7 +286,7 @@ committed there.
 | `STIGMERGY_REPAIR_MAX_OPS` | `6` | how much ONE approval is allowed to be |
 | `STIGMERGY_REPAIR_MAX_PROPOSALS` | `20` | how many approvals one RUN may ask for |
 | `STIGMERGY_REPAIR_BATCH` | `3` | findings per model call — and, through that, how large the call's usage budget is |
-| `STIGMERGY_REPAIR_MAX_PLAN_BYTES` | `100000` | how much ONE deletion may be, in the bytes its stored plan carries |
+| `STIGMERGY_REPAIR_MAX_PLAN_BYTES` | `100000` | how much ONE approval may be, in the bytes its stored plan carries — shared by the two kinds that store whole pages, `delete` and `entity-alias` |
 | `STIGMERGY_REPO` | — | the checkout to propose against |
 | `STIGMERGY_INDEX_DSN` | — | where the proposals live |
 

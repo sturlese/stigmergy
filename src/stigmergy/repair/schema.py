@@ -197,6 +197,12 @@ DELETE_OP_NAME = "delete-page"
 SCRUB_OP_NAME = "scrub-page"
 DELETE_OP_FIELDS = (OP_KIND_KEY, "path")
 SCRUB_OP_FIELDS = (OP_KIND_KEY, "path", "expected_before_hash", "planned_after")
+# The GROUP, beside the names, `ALIAS_IDENTITY_OP_NAMES` below being the precedent: four surfaces
+# have to know "every op this kind performs" — the kind's own validator, the CLI preview, the
+# console's op cleaner and the applier — and each rebuilding the tuple is how a fifth op reaches a
+# steward rendered as something else. `tests/test_architecture.py` pins both preview tables against
+# these two.
+DELETE_OP_NAMES = (DELETE_OP_NAME, SCRUB_OP_NAME)
 
 # The `entity-alias` kind's four op names, and its ONE op shape. Every op in a merge carries the
 # whole file it would write, exactly as a scrub does and for the identical reason: what each one
@@ -209,6 +215,8 @@ RETIRE_OP_NAME = "retire-absorbed"
 REANCHOR_OP_NAME = "reanchor-page"
 REGISTRY_OP_NAME = "regenerate-registry"
 ALIAS_OP_FIELDS = (OP_KIND_KEY, "path", "expected_before_hash", "planned_after")
+# All four as one group, `DELETE_OP_NAMES` above and for the same reason.
+ALIAS_OP_NAMES = (ALIAS_OP_NAME, RETIRE_OP_NAME, REANCHOR_OP_NAME, REGISTRY_OP_NAME)
 # The two ops that say WHICH pair this merge is about — the question a steward answers, as against
 # the pages the answer would also touch.
 ALIAS_IDENTITY_OP_NAMES = (ALIAS_OP_NAME, RETIRE_OP_NAME)

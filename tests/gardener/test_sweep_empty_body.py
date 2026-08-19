@@ -208,8 +208,8 @@ def test_the_ceiling_bounds_the_batch_and_records_exactly_what_it_deferred(repo)
     pages, stats = sweep.select_empty_body_pages(checks.entity_zone_pages(repo), ceiling=2)
 
     assert len(pages) == 2
-    assert stats == {"population": 5, "excluded_placeholder": 0, "considered": 5, "judged": 2,
-                     "deferred": 3, "ceiling": 2}
+    assert stats == {"population": 5, "excluded_unnameable_path": 0, "excluded_placeholder": 0,
+                     "considered": 5, "judged": 2, "deferred": 3, "ceiling": 2}
 
 
 def test_a_ceiling_that_does_not_bind_defers_nothing_the_benign_twin(repo):
@@ -515,8 +515,8 @@ def test_the_ceiling_is_spent_on_judgeable_pages_only_and_binds_at_the_boundary(
     pages, stats = sweep.select_empty_body_pages(checks.entity_zone_pages(repo), ceiling=3)
 
     assert len(pages) == 3
-    assert stats == {"population": 5, "excluded_placeholder": 2, "considered": 3, "judged": 3,
-                     "deferred": 0, "ceiling": 3}
+    assert stats == {"population": 5, "excluded_unnameable_path": 0, "excluded_placeholder": 2,
+                     "considered": 3, "judged": 3, "deferred": 0, "ceiling": 3}
 
 
 def test_in_batches_of_an_empty_population_is_no_batches_at_all():

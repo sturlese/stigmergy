@@ -118,8 +118,11 @@ def _resolution_note(anchoring: dict, registry=None) -> str:
     anchoring = anchoring if isinstance(anchoring, dict) else {}
     if str(anchoring.get("kind", "")).lower() != "entity":
         return ""
-    # Registry-resolvable or not, the sentence is the same: `_anchor_phrase` above already says
-    # which ids the page carries, and this says why.
+    # `registry` is UNUSED and stays in the signature for symmetry with `_anchor_phrase`: the two
+    # are called as a pair at both call sites, from the same two facts, and a caller having to
+    # remember which of them takes the registry is how one of them gets the wrong one. Registry-
+    # resolvable or not, the sentence is the same — `_anchor_phrase` already says which ids the
+    # page carries, and this says why.
     del registry
     return _clean(anchoring.get("reason", ""), RATIONALE_WIDTH)
 

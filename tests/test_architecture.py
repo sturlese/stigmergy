@@ -2176,9 +2176,12 @@ _GARDENER_ALLOWED_PREFIXES = (
     "stigmergy.kernel.llm",              # build_processor — the ONE fake/real LLM dispatch
     "stigmergy.kernel.result",           # fake_result — the offline-double result envelope
     "stigmergy.text",                    # fence/sanitize/clamp — page bodies are untrusted input and
-                                       # the model's own rationale/excerpt echo them;
-                                       # dependency-free, the bottom of the stack, already granted
-                                       # to `views` for the identical reason
+                                       # the model's own rationale/excerpt echo them — plus
+                                       # prompt_scalar/is_one_line, the hygiene the three prompt
+                                       # builders' UNFENCED `### path=` headers need and which the
+                                       # librarian used to own alone; dependency-free, the bottom
+                                       # of the stack, already granted to `views` for the identical
+                                       # reason
 )
 # cli.py's extra, documented reach: the one DB-connection seam (mirroring capture.cli's one
 # permitted edge), the real Slack client construction (mirroring stigmergy.slack.app being the one
@@ -2794,6 +2797,35 @@ def test_the_repair_preview_renders_every_callout_kind_the_applier_performs():
     from stigmergy.repair import cli as _repair_cli
 
     assert _repair_cli._CALLOUT_PHRASES == _page.CALLOUT_STYLES
+
+
+def test_the_repair_preview_renders_every_op_the_two_non_additive_kinds_perform():
+    """The COVERAGE half of the test above, for the two kinds whose ops are not the additive shape.
+
+    Both preview consumers dispatch on a table and fall through to the ADDITIVE rendering for an op
+    name they do not know — so a fifth op inside the `delete` or `entity-alias` kind would show a
+    steward `+ related: [[]]`, a change that is not the one they would authorize, and the console
+    would hand them a link column the op does not have. Set EQUALITY, both directions: the phantom
+    direction is what keying the table off `schema` already prevents, and the direction that hurts
+    is an op the applier performs and the preview has never heard of.
+
+    The admin cleaner is pinned to the same two tuples rather than to a hand-built copy — it used
+    to rebuild both from the individual names, which is the same defect one surface over."""
+    from stigmergy.admin import service as _admin_service
+    from stigmergy.repair import cli as _repair_cli
+    from stigmergy.repair import schema as _repair_schema
+
+    assert set(_repair_cli._DELETE_PHRASES) == set(_repair_schema.DELETE_OP_NAMES)
+    assert set(_repair_cli._MERGE_PHRASES) == set(_repair_schema.ALIAS_OP_NAMES)
+    assert set(_admin_service.DELETE_OP_NAMES) == set(_repair_schema.DELETE_OP_NAMES)
+    assert set(_admin_service.ALIAS_OP_NAMES) == set(_repair_schema.ALIAS_OP_NAMES)
+    # And the groups are what each kind's own validator admits, so "the applier performs it" and
+    # "the preview renders it" are the same list rather than two lists that agree today.
+    from stigmergy.repair import deletion as _deletion
+    from stigmergy.repair import entity_alias as _entity_alias
+
+    assert set(_deletion.OP_NAMES) == set(_repair_schema.DELETE_OP_NAMES)
+    assert set(_entity_alias.OP_NAMES) == set(_repair_schema.ALIAS_OP_NAMES)
 
 
 def test_the_index_and_the_server_spell_the_entity_registry_path_the_same_way():

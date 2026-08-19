@@ -1,18 +1,22 @@
 """The agent seam: findings in, PROPOSALS out — never a change, ever.
 
 The proposer is structurally incapable of writing: its two tools read, and no third one exists.
-What it produces is a declaration — a set of additive edits, or one page's drafted body — and CODE
-decides twice whether that declaration is admissible: here, at propose time, ending in the kind's
-real validator against the real checkout; and again in `remote.apply_via_clone`, against the fresh
-clone, through the same eight gates. Neither validation trusts the other, because they are
-answering the same question about two different trees.
+What it produces is a declaration — a set of additive edits, one page's drafted body, or which of
+two identities survives a merge — and CODE decides twice whether that declaration is admissible:
+here, at propose time, ending in the kind's real validator against the real checkout; and again in
+`remote.apply_via_clone`, against the fresh clone, through the same eight gates. Neither
+validation trusts the other, because they are answering the same question about two different
+trees.
 
-TWO ROADS, split by the finding's check and never mixed. The additive road takes a BATCH of
+FOUR ROADS, split by the finding's check and never mixed. The additive road takes a BATCH of
 findings and answers in the librarian's own edit vocabulary. The body road takes ONE entity page
 whose body does not say what the corpus knows about that entity — still the template it was minted
 with, or written and empty of it — and answers with the body it should have, only when at least
 `MIN_ANCHORED_PAGES` pages are anchored to that entity, a floor enforced before the model is asked
-at all.
+at all. The merge road takes ONE duplicate-identity finding, shows the model both entity pages and
+the pages anchored to each, and turns the survivor it names into a sweep CODE computes. The fourth
+asks no model at all: exact-duplicate `sources/` pages are a lookup, so `deletion` derives that
+deletion deterministically and this file only carries it to the store.
 
 Its judgment — which finding is worth repairing, which shape fits, what an entity page should say,
 when a finding has gone stale and deserves NOTHING — lives in a skill in the knowledge repo, read
@@ -48,7 +52,7 @@ from stigmergy.librarian import edits, gather
 from stigmergy.librarian import page as page_policy
 from stigmergy.repair import deletion, entity_alias, entity_body, schema, store
 from stigmergy.repair.errors import RepairError
-from stigmergy.text import clamp, fence, sanitize
+from stigmergy.text import clamp, fence, is_one_line, one_line, sanitize
 
 log = logging.getLogger(__name__)
 
@@ -637,18 +641,6 @@ DETAILS_MARKER = "## the findings' own words, and the pages they name"
 _PAGE_LINE = "page: "
 
 
-def _one_line(path: str) -> bool:
-    """A path that cannot be named on ONE line is not named at all.
-
-    `text.sanitize` strips control characters and deliberately keeps `\\n` — it defends terminals,
-    not line structure — so a page whose FILENAME carries one would emit a second line inside the
-    unfenced index, and a second line there is a forged `### finding` header the model reads as a
-    real finding. Filenames may contain newlines on every filesystem this runs on.
-    """
-    text = str(path or "")
-    return "\n" not in text and "\r" not in text
-
-
 def build_prompt(findings: list[dict], pages: dict[str, str]) -> str:
     """The index, the marker, then the fenced halves.
 
@@ -661,7 +653,7 @@ def build_prompt(findings: list[dict], pages: dict[str, str]) -> str:
     for f in findings:
         lines.append(f"### finding id={f['id']} check={ps(f['check'])}")
         for subject in (f.get("subjects") or ()):
-            if _one_line(subject):
+            if is_one_line(subject):
                 lines.append(f"{_PAGE_LINE}{ps(subject)}")
         lines.append("")
     lines += [DETAILS_MARKER, ""]
@@ -671,7 +663,7 @@ def build_prompt(findings: list[dict], pages: dict[str, str]) -> str:
         lines.append("")
     # Dropped from BOTH halves or from neither: a body under no header belongs to whatever page
     # was named last, which is a worse answer than not showing it.
-    for path in sorted(p for p in pages if _one_line(p)):
+    for path in sorted(p for p in pages if is_one_line(p)):
         lines.append(f"### page {ps(path)}")
         lines.append(fence(pages[path]))
         lines.append("")
@@ -693,15 +685,15 @@ def build_entity_body_prompt(entity_path: str, entity_text: str, pages: dict[str
     """
     ps = gather.prompt_scalar
     lines = ["## the entity page whose body is being drafted", ""]
-    if _one_line(entity_path):
+    if is_one_line(entity_path):
         lines.append(f"{_ENTITY_PAGE_LINE}{ps(entity_path)}")
     lines += ["", "## the pages anchored to this entity", ""]
-    for path in sorted(p for p in pages if _one_line(p)):
+    for path in sorted(p for p in pages if is_one_line(p)):
         lines.append(f"{_PAGE_LINE}{ps(path)}")
     lines += ["", DETAILS_MARKER, ""]
-    if _one_line(entity_path):
+    if is_one_line(entity_path):
         lines += [f"### page {ps(entity_path)}", fence(entity_text), ""]
-    for path in sorted(p for p in pages if _one_line(p)):
+    for path in sorted(p for p in pages if is_one_line(p)):
         lines += [f"### page {ps(path)}", fence(pages[path]), ""]
     return "\n".join(lines)
 
@@ -723,16 +715,16 @@ def build_entity_alias_prompt(candidates: list[str], entity_texts: dict[str, str
     ps = gather.prompt_scalar
     lines = ["## the two entity pages that may be one entity", ""]
     for path in candidates:
-        if _one_line(path):
+        if is_one_line(path):
             lines.append(f"{_CANDIDATE_PAGE_LINE}{ps(path)}")
     lines += ["", "## the pages anchored to either of them", ""]
-    for path in sorted(p for p in pages if _one_line(p)):
+    for path in sorted(p for p in pages if is_one_line(p)):
         lines.append(f"{_PAGE_LINE}{ps(path)}")
     lines += ["", DETAILS_MARKER, ""]
     for path in candidates:
-        if _one_line(path):
+        if is_one_line(path):
             lines += [f"### page {ps(path)}", fence(entity_texts.get(path, "")), ""]
-    for path in sorted(p for p in pages if _one_line(p)):
+    for path in sorted(p for p in pages if is_one_line(p)):
         lines += [f"### page {ps(path)}", fence(pages[path]), ""]
     return "\n".join(lines)
 
@@ -1343,6 +1335,20 @@ MERGE_DECLINED_REASON = (
 
 MERGE_REFUSED_REASON = "entity-alias refused for {pair}: {reason}"
 
+# How much of an unnameable path a skip reason quotes: a path is a filename somebody chose, and a
+# skip reason is read in a log line.
+MAX_SKIP_PATH_CHARS = 200
+
+# The pair one of whose pages cannot be NAMED on one line. `build_entity_alias_prompt` drops such a
+# path from both halves of the prompt — the `candidate:` line and the fenced body — so the model
+# would be choosing between two identities having been shown one, and `choose_survivor` would then
+# accept the unseen page as the survivor and hand `entity_alias.plan` the other as `absorbed`. The
+# guard is kept on BOTH sides or on neither: this is the second side.
+UNNAMEABLE_PAIR_REASON = (
+    "entity-alias skipped for finding {finding_id}: {path} cannot be named on one line, so the "
+    "merge prompt could not show it — and a survivor chosen between two pages the proposer only "
+    "saw one of is not a decision about a pair")
+
 
 async def _propose_entity_aliases(deps: ProposerContext, fresh: list[dict], *, repo: str, settings,
                                   skill_text: str, budget: int,
@@ -1377,6 +1383,13 @@ async def _propose_entity_aliases(deps: ProposerContext, fresh: list[dict], *, r
                                                          n=len(candidates),
                                                          distinct=len({*candidates})))
             continue
+        unnameable = next((p for p in candidates if not is_one_line(p)), "")
+        if unnameable:
+            # `one_line`, not `sanitize`: the path's own newline is the whole reason this pair
+            # is being skipped, and a skip reason lands in `job_runs.stats` and an operator's log.
+            skip_reasons.append(UNNAMEABLE_PAIR_REASON.format(
+                finding_id=finding.get("id"), path=one_line(unnameable, MAX_SKIP_PATH_CHARS)))
+            continue
         pair = " + ".join(candidates)
         if agent is None:
             agent = build_entity_merge_chooser(skill_text, model_name=settings.model)
@@ -1408,7 +1421,7 @@ async def _propose_entity_aliases(deps: ProposerContext, fresh: list[dict], *, r
             # `job_runs.stats`. NOT a raise: one awkward pair must not stop the night's other roads.
             skip_reasons.append(MERGE_REFUSED_REASON.format(pair=pair, reason=str(ex)))
             continue
-        oversize = entity_alias.oversize_reason(ops, settings.max_delete_plan_bytes)
+        oversize = entity_alias.oversize_reason(ops, settings.max_plan_bytes)
         if oversize:
             skip_reasons.append(oversize)
             continue
@@ -1474,7 +1487,7 @@ def _propose_duplicate_sources(*, repo: str, settings, answered_page_sets: set,
             # actionable half; the operator reads it in `job_runs.stats`.
             skip_reasons.append(DUPLICATE_REFUSED_REASON.format(path=doomed[0], reason=str(ex)))
             continue
-        oversize = deletion.oversize_reason(ops, settings.max_delete_plan_bytes)
+        oversize = deletion.oversize_reason(ops, settings.max_plan_bytes)
         if oversize:
             skip_reasons.append(oversize)
             continue
@@ -1545,7 +1558,7 @@ def _store_valid_proposals(conn, repo: str, accepted: list[dict], *, run_id: int
 
 def _validate_for_kind(repo: str, kind: str, ops: list) -> list:
     """The LAST propose-time proof, dispatched on kind — and in every case it is the very function
-    the applier will run against its own clone. Three trees' worth of questions, one validator per
+    the applier will run against its own clone. Four kinds' worth of questions, one validator per
     kind; a proposal that would not apply is never stored, so a steward is never shown a question
     whose answer cannot be carried out."""
     if kind == schema.KIND_ENTITY_BODY:

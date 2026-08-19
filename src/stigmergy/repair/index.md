@@ -171,7 +171,7 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   `MAX_BODY_LINES` (110) and `MAX_ROLE_CHARS` (200). Those three are CONSTANTS rather than env
   settings on purpose: the real ceiling is the knowledge repo's contract linter, so an operator
   raising them could only produce proposals the gates then refuse. The delete road adds
-  `settings.max_delete_plan_bytes` (100000) — a SIZE rather than an op count, because that kind's
+  `settings.max_plan_bytes` (100000) — a SIZE rather than an op count, because that kind's
   ops carry whole pages so the apply can recompute and byte-compare them; the merge road SHARES
   that setting, since both store whole pages for the identical reason and one ceiling governs how
   much stored content one approval may carry. The merge road holds `MERGE_CHOICE_LIMITS` (the body

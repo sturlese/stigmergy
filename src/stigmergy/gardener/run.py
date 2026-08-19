@@ -99,7 +99,8 @@ def _run_all_checks(conn, repo: str, registry: Registry, settings: GardenerSetti
     """`filing_population_stats` and `age_population_stats` are shared sink dicts the checks
     write their exclusion counters into — every excluded row is counted, never silently
     dropped. `entity_zone_pages` is the run's ONE walk of the entity zone (module docstring),
-    passed in rather than taken because the empty-body pass judges the identical list."""
+    passed in rather than taken because the two model passes over that zone judge the identical
+    list."""
     findings: list[dict] = []
     findings += checks.check_orphans(conn)
     aging_seed_stats: dict = {}
@@ -142,6 +143,7 @@ async def _run_sweep_pass(conn, settings: GardenerSettings) -> tuple[list[dict],
         "changed": len(changed), "sampled": len(sampled),
         "unparsed_result_ref": select_stats["unparsed_result_ref"],
         "changed_page_not_indexed": select_stats["changed_page_not_indexed"],
+        "excluded_unnameable_path": select_stats["excluded_unnameable_path"],
         "next_sample_offset": select_stats["next_sample_offset"],
         "selected_at": selected_at.isoformat(),
         "inserted": 0, "skipped": 0, "skip_reasons": [], "error": "",
@@ -172,8 +174,8 @@ async def _run_empty_body_pass(zone_pages: list[dict], settings: GardenerSetting
     raises.
 
     `walk_exclusions` is what that walk REFUSED (unconfined, unreadable, oversized). It is
-    recorded here, in the one stats block that describes the entity zone, even though both
-    consumers of the walk lost those pages: a page missing from both checks and from the
+    recorded here, in the one stats block that describes the entity zone, even though every
+    consumer of the walk lost those pages: a page missing from the checks and from the
     population count would let the pass report full coverage of a population it silently
     excluded.
 
@@ -315,7 +317,7 @@ async def run_gardener(conn, *, repo: str, settings: GardenerSettings, channels_
 
         filing_population_stats: dict = {}
         age_population_stats: dict = {}
-        # THE walk of the entity zone for this run — both consumers judge this exact list.
+        # THE walk of the entity zone for this run — every consumer judges this exact list.
         walk_exclusions: dict = {}
         entity_zone_pages = checks.entity_zone_pages(repo, walk_stats=walk_exclusions)
         findings = _run_all_checks(conn, repo, registry, settings, filing_population_stats,
@@ -323,8 +325,8 @@ async def run_gardener(conn, *, repo: str, settings: GardenerSettings, channels_
         run_stats["filing_population_exclusions"] = filing_population_stats
         run_stats["age_population_exclusions"] = age_population_stats
 
-        # Both model passes' findings join the deterministic ones BEFORE the aggregate counts, so
-        # the counts always describe exactly what got persisted.
+        # All three model passes' findings join the deterministic ones BEFORE the aggregate
+        # counts, so the counts always describe exactly what got persisted.
         sweep_findings, sweep_stats = await _run_sweep_pass(conn, settings)
         run_stats["sweep"] = sweep_stats
         findings += sweep_findings

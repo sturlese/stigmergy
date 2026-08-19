@@ -30,7 +30,7 @@ import yaml
 
 from stigmergy.librarian import edits, gates
 from stigmergy.librarian import page as page_policy
-from stigmergy.repair import schema
+from stigmergy.repair import deletion, schema
 from stigmergy.repair.errors import RepairError
 
 # The op name IS the proposal kind: one vocabulary word for one shape (`schema.py`).
@@ -42,6 +42,17 @@ OP_KIND = schema.KIND_ENTITY_BODY
 # posture `remote.GITLEAKS_BIN_ENV` takes one module over. Entity birth stays identity-only
 # (ADR 016); this reaches the same folder to write CONTENT and nothing else.
 ENTITY_ZONE_PREFIX = "wiki/entities/"
+
+# What `deletion.page_refusal` — the ONE confinement predicate this package has — says on this
+# kind's behalf. The checks are shared because they are a security predicate; the sentences are not,
+# because a steward reads them and they have to name what a BODY DRAFT would have done to the page.
+# `require_readable` is left off deliberately: the read below is a separate finding
+# (`unreadable-target`), since a page that exists but cannot be decoded is a different problem from
+# one that is not there.
+_NOT_A_PAGE_WHY = "declared a body draft for {path}, which is not a page"
+_OUTSIDE_WORKTREE_WHY = "declared a body draft for {path}, which resolves outside the worktree"
+_SYMLINK_WHY = "declared a body draft for {path}, which is a symlink and not a page"
+_MISSING_WHY = "declared a body draft for {path}, which does not exist in the repo"
 
 # What one draft may be. Constants rather than env-tunable settings, deliberately: the real ceiling
 # is the KNOWLEDGE repo's contract linter, which vetoes any page whose body exceeds 150 lines
@@ -175,25 +186,13 @@ def validate(worktree: str, ops, *, link_names: set[str] | None = None) -> list[
         return [_finding("outside-lane",
                          f"declared a body draft for {path}, which is not an entity page — this "
                          f"kind rewrites nothing outside {ENTITY_ZONE_PREFIX}", path)]
-    basename = path.rsplit("/", 1)[-1]
-    if basename.startswith(".") or not basename.endswith(".md"):
-        return [_finding("not-a-page", f"declared a body draft for {path}, which is not a page",
-                         path)]
-    # Containment RESOLVED rather than inferred from the string's shape: everything above is a
-    # shape check, and a symlinked directory component satisfies every one of them.
-    if not page_policy.is_inside(worktree, path):
-        return [_finding("outside-worktree",
-                         f"declared a body draft for {path}, which resolves outside the worktree",
-                         path)]
+    code, sentence = deletion.page_refusal(
+        worktree, path, not_a_page_why=_NOT_A_PAGE_WHY,
+        outside_worktree_why=_OUTSIDE_WORKTREE_WHY, symlink_why=_SYMLINK_WHY,
+        missing_why=_MISSING_WHY)
+    if code:
+        return [_finding(code, sentence, path)]
     full = os.path.join(worktree, path)
-    if os.path.islink(full):
-        return [_finding("symlinked-target",
-                         f"declared a body draft for {path}, which is a symlink and not a page",
-                         path)]
-    if not os.path.isfile(full):
-        return [_finding("missing-target",
-                         f"declared a body draft for {path}, which does not exist in the repo",
-                         path)]
     try:
         with open(full, encoding="utf-8") as f:
             text = f.read()

@@ -398,3 +398,53 @@ def test_the_two_roads_agree_on_a_malformed_registry_too(tmp_path):
         entity_aliases.load_aliases(str(path))
     with pytest.raises(ValueError, match="entities"):
         entity_aliases.aliases_from_text(path.read_text(encoding="utf-8"), str(path))
+
+
+# ── one resolution fold, read path and write path ─────────────────────────────────────────────
+# `resolve_exact` asks the question `kernel.registry.Registry.canonical_id` asks — "which entity
+# does this text name?" — and until this test the two answered it through two implementations that
+# agreed only by coincidence. #77 split the registry key in two and the server never got the memo.
+
+_SHARED_REGISTRY = {
+    "cofers-sl": {"name": "Cofers S.L.", "type": "organization", "aliases": ["Cöfers S.L."]},
+    "halcyon-grid": {"name": "Halcyon Grid", "type": "organization", "aliases": []},
+}
+
+
+@pytest.mark.parametrize("text", [
+    "Cofers S.L.", "cofers s.l.", "Cöfers S.L.", "Cofers", "cofers-sl", "Halcyon Grid",
+    "halcyon-grid", "nobody registers this",
+], ids=lambda t: t)
+def test_the_server_and_the_registry_resolve_a_name_to_the_same_entity(tmp_path, text):
+    """The read path (`server.entity_aliases.resolve_exact`, over the registry FILE) and the write
+    path (`Registry.canonical_id`, over the same registry in memory) must name the same entity for
+    the same text. Two implementations of one fold is how the MCP server and the librarian come to
+    disagree about which entity a name means — the worker anchors a page to an id the service would
+    never resolve back, and nothing anywhere reports the mismatch."""
+    from stigmergy.kernel.registry import load_registry as load_kernel_registry
+
+    path = entity_aliases.default_path(_write_registry(tmp_path, _SHARED_REGISTRY))
+    aliases = entity_aliases.load_aliases(path)
+    registry = load_kernel_registry(path)
+
+    assert entity_aliases.resolve_exact(aliases, text) == registry.canonical_id(text)
+
+
+def test_the_shared_fold_is_the_narrow_one_not_the_collision_key(tmp_path):
+    """**The benign twin, and the reason the legal form is in the fixture above.** The agreement
+    must be with `canonical_id`'s NARROW fold, not with the mint gate's coarse one: `normalize`
+    strips legal suffixes, so `Cofers S.L.` and a hypothetical entity named plain `Cofers` collide
+    there on purpose. Without this assertion the test above would pass just as well for a `_norm`
+    that had silently become `normalize` — and the server would then resolve `Cofers` to an entity
+    whose registered name nothing spells that way."""
+    from stigmergy.kernel.normalize import normalize, resolution_key
+
+    assert resolution_key("Cofers S.L.") != resolution_key("Cofers")
+    assert normalize("Cofers S.L.") == normalize("Cofers")
+
+    path = entity_aliases.default_path(_write_registry(tmp_path, _SHARED_REGISTRY))
+    aliases = entity_aliases.load_aliases(path)
+
+    assert entity_aliases.resolve_exact(aliases, "Cofers S.L.") == "cofers-sl"
+    # The name nothing registers stays unresolved — the coarse fold would have claimed it.
+    assert entity_aliases.resolve_exact(aliases, "Cofers") is None
