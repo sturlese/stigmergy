@@ -50,8 +50,10 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    # Only if your App is not named `stigmergy-librarian` — its slug is what the bot commits as.
    fly secrets set STIGMERGY_LIBRARIAN_APP_LOGIN="my-librarian"
    fly secrets set ANTHROPIC_API_KEY="sk-ant-..."
-   # OPTIONAL, worker only: the Drive door's OCR fallback for a scanned PDF. Unset means a
-   # scanned deck refuses honestly instead of being OCR'd (see "Capture from Drive").
+   # OPTIONAL, worker only: the Drive door's OCR fallback for a scanned PDF. Two forms: this key
+   # serves the bare Gemini VISION_MODEL; a provider-prefixed VISION_MODEL secret
+   # ("openrouter:qwen/qwen3-vl-8b-instruct", with OPENROUTER_API_KEY) OCRs rasterized pages
+   # instead. Neither set means a scanned deck refuses honestly (see "Capture from Drive").
    fly secrets set GEMINI_API_KEY="..."
    # the Slack transport (`slack` group) — or `make slack-secrets` to stage all three from .env
    fly secrets set SLACK_APP_TOKEN="xapp-..."
@@ -432,7 +434,8 @@ defaults with none set). `--submitted-by` defaults to `$STIGMERGY_MEETING_OPERAT
 downloads (a native Google Doc/Slide/Sheet is exported to PDF by Drive itself), uploads the ORIGINAL
 BYTES to evidence, and enqueues exactly ONE `kind="drive"` row whose material is a deterministic
 manifest. No model, no conversion at the door. The worker extracts the text (pdftotext first; one
-bounded Gemini OCR pass for a scanned PDF when the worker has `GEMINI_API_KEY` — OPTIONAL, absent
+bounded vision OCR pass for a scanned PDF when the worker has one configured — `GEMINI_API_KEY`
+for the bare Gemini model, or a provider-prefixed `VISION_MODEL`; OPTIONAL, neither
 means scanned decks refuse honestly) and the librarian files ONE synthesis page plus the verbatim
 `sources/drive/` part(s), atomically, anchored-or-asked-or-parked like every capture.
 

@@ -3,6 +3,7 @@
 Each one returns faithful text; the judgment (quality, representation, cleanup) belongs to the agent.
 """
 import os
+import re
 import subprocess
 import tempfile
 
@@ -174,10 +175,85 @@ VISION_OCR_PROMPT = (
     "the content exactly as it appears."
 )
 
+DEFAULT_VISION_MODEL = "gemini-3-flash-preview"
 
-def vision_extract(path: str) -> dict:
-    """OCR a scanned/visual PDF via Gemini (native-PDF, single call). Lazy SDK import."""
-    model = os.environ.get("VISION_MODEL", "gemini-3-flash-preview")
+# The prefixed form's bounds: how many pages one OCR call may carry, rasterized at what density.
+# Pages past the ceiling are not transcribed — the text SAYS where it was cut, because a
+# transcription that silently stops reads as complete.
+MAX_VISION_PAGES = 40
+VISION_RASTER_DPI = 150
+
+
+def vision_configured() -> bool:
+    """Whether `vision_extract` can run at all — the question `librarian.processing` asks BEFORE
+    paying for a call. A provider-prefixed `$VISION_MODEL` is configured by NAMING it (its
+    provider's own key is pydantic-ai's check, at call time); the bare Gemini form is configured
+    by `$GEMINI_API_KEY`."""
+    model = os.environ.get("VISION_MODEL", DEFAULT_VISION_MODEL)
+    return ":" in model or bool(os.environ.get("GEMINI_API_KEY"))
+
+
+def _pdf_page_pngs(path: str, cap: int = MAX_VISION_PAGES) -> list[bytes]:
+    """The first `cap` pages as PNG bytes, via poppler's pdftoppm — the same package
+    `_pdftotext` ships in, so this path owes the image no new toolchain. pdftoppm zero-pads its
+    page numbers, so the lexical sort IS page order."""
+    with tempfile.TemporaryDirectory() as td:
+        prefix = os.path.join(td, "page")
+        r = subprocess.run(["pdftoppm", "-png", "-r", str(VISION_RASTER_DPI), "-l", str(cap),
+                            path, prefix], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise RuntimeError(f"pdftoppm rc={r.returncode}: {r.stderr[:500]}")
+        pages = []
+        for name in sorted(os.listdir(td)):
+            with open(os.path.join(td, name), "rb") as f:
+                pages.append(f.read())
+    if not pages:
+        raise RuntimeError("pdftoppm produced no pages — the PDF may be corrupt or empty")
+    return pages
+
+
+def _pdf_page_count(path: str) -> int:
+    """`pdfinfo`'s Pages figure, `0` when it cannot say — read only to decide the cut note."""
+    r = subprocess.run(["pdfinfo", path], capture_output=True, text=True)
+    if r.returncode != 0:
+        return 0
+    m = re.search(r"^Pages:\s+(\d+)", r.stdout, re.MULTILINE)
+    return int(m.group(1)) if m else 0
+
+
+def _vision_extract_pydantic(model: str, path: str, agent_builder=None) -> dict:
+    """The prefixed form: page IMAGES to any pydantic-ai model — the pages are decided by CODE,
+    so the OCR means the same thing whatever the provider serves it. `agent_builder` is the
+    injectable seam a test drives a scripted model through; production passes none."""
+    from pydantic_ai import Agent, BinaryContent
+
+    from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
+    ensure_usage_extraction_repaired()
+
+    pages = _pdf_page_pngs(path)
+    agent = agent_builder(model) if agent_builder else Agent(model)
+    parts = [VISION_OCR_PROMPT] + [BinaryContent(data=png, media_type="image/png")
+                                   for png in pages]
+    result = agent.run_sync(parts)
+    text = str(result.output or "")
+    if len(pages) == MAX_VISION_PAGES:
+        total = _pdf_page_count(path)
+        if total == 0 or total > MAX_VISION_PAGES:
+            text += (f"\n\n[the worker cut this document here: it is longer than the "
+                     f"{MAX_VISION_PAGES}-page OCR ceiling, so what you have is its opening "
+                     f"and not the whole of it]")
+    return {"method": "vision", "text": text, "model": model}
+
+
+def vision_extract(path: str, agent_builder=None) -> dict:
+    """OCR a scanned/visual PDF. TWO forms of `$VISION_MODEL`, the same convention CLEAN_MODEL
+    and ANSWER_MODEL follow: a bare name (the default) is Gemini's native-PDF single call and
+    requires `GEMINI_API_KEY`; a provider-prefixed pydantic-ai id
+    ("openrouter:qwen/qwen3-vl-8b-instruct") sends poppler-rasterized page images instead, and
+    authenticates with that provider's own key. Lazy SDK imports on both forms."""
+    model = os.environ.get("VISION_MODEL", DEFAULT_VISION_MODEL)
+    if ":" in model:
+        return _vision_extract_pydantic(model, path, agent_builder)
     key = os.environ.get("GEMINI_API_KEY")
     if not key:
         raise RuntimeError("method=vision requires GEMINI_API_KEY (Google AI Studio); not set in the environment")

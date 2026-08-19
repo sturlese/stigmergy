@@ -222,6 +222,7 @@ def test_docx_extraction(tmp_path):
 
 def test_vision_fails_fast_without_key(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("VISION_MODEL", raising=False)   # the bare default form is under test
     with pytest.raises(RuntimeError, match="GEMINI_API_KEY"):
         converters.vision_extract("/nonexistent.pdf")
 
@@ -262,6 +263,98 @@ def test_vision_extract_inline_small_pdf(monkeypatch, tmp_path):
     assert res["text"] == "ocr result"
     assert res["model"]                      # provenance present
     assert calls["contents"][0][1] == "application/pdf"   # inline part, not Files API
+
+
+# ── the two-form vision dispatch: bare = Gemini (above), prefixed = pydantic-ai over pages ──────
+class FakeVisionAgent:
+    """The `agent_builder` seam's double: records what the prefixed path sends, answers once."""
+
+    def __init__(self, output="transcribed text"):
+        self.output = output
+        self.parts = None
+
+    def run_sync(self, parts):
+        self.parts = parts
+        return types.SimpleNamespace(output=self.output)
+
+
+def test_vision_prefixed_model_sends_rasterized_pages_to_the_pydantic_path(monkeypatch):
+    """OLD BEHAVIOUR: `vision_extract` was welded to the Gemini SDK, so OCR could not run on any
+    other provider. A provider-prefixed VISION_MODEL now takes the pydantic-ai road: page images
+    rasterized by CODE, one transcription back, GEMINI_API_KEY never consulted."""
+    monkeypatch.setenv("VISION_MODEL", "openrouter:qwen/qwen3-vl-8b-instruct")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(converters, "_pdf_page_pngs",
+                        lambda path, cap=converters.MAX_VISION_PAGES: [b"png-1", b"png-2"])
+    agent = FakeVisionAgent()
+
+    res = converters.vision_extract("/scan.pdf", agent_builder=lambda model: agent)
+
+    assert res == {"method": "vision", "text": "transcribed text",
+                   "model": "openrouter:qwen/qwen3-vl-8b-instruct"}
+    assert agent.parts[0] == converters.VISION_OCR_PROMPT
+    assert [p.data for p in agent.parts[1:]] == [b"png-1", b"png-2"]
+    assert {p.media_type for p in agent.parts[1:]} == {"image/png"}
+
+
+def test_vision_prefixed_says_where_it_cut_a_document_over_the_page_ceiling(monkeypatch):
+    """A transcription that silently stops reads as complete — the cap must speak."""
+    monkeypatch.setenv("VISION_MODEL", "openrouter:qwen/qwen3-vl-8b-instruct")
+    cap = converters.MAX_VISION_PAGES
+    monkeypatch.setattr(converters, "_pdf_page_pngs", lambda path, cap=cap: [b"p"] * cap)
+    monkeypatch.setattr(converters, "_pdf_page_count", lambda path: cap + 5)
+
+    res = converters.vision_extract("/big.pdf", agent_builder=lambda model: FakeVisionAgent())
+
+    assert "cut this document here" in res["text"]
+    assert str(cap) in res["text"]
+
+
+def test_vision_prefixed_exactly_at_the_ceiling_is_not_called_cut(monkeypatch):
+    """The benign twin: a document of exactly MAX_VISION_PAGES pages was transcribed WHOLE, and
+    calling it cut would teach readers to distrust complete transcriptions."""
+    monkeypatch.setenv("VISION_MODEL", "openrouter:qwen/qwen3-vl-8b-instruct")
+    cap = converters.MAX_VISION_PAGES
+    monkeypatch.setattr(converters, "_pdf_page_pngs", lambda path, cap=cap: [b"p"] * cap)
+    monkeypatch.setattr(converters, "_pdf_page_count", lambda path: cap)
+
+    res = converters.vision_extract("/exact.pdf", agent_builder=lambda model: FakeVisionAgent())
+
+    assert "cut this document here" not in res["text"]
+
+
+def test_pdf_page_pngs_drives_pdftoppm_with_the_documented_bounds(monkeypatch):
+    """The rasterizer's contract: poppler's pdftoppm (the same package pdftotext ships in), PNG,
+    the documented DPI, capped with -l, pages back in page order."""
+    seen = {}
+
+    def fake_run(cmd, capture_output, text):
+        seen["cmd"] = cmd
+        prefix = cmd[-1]
+        for i in (1, 2):
+            with open(f"{prefix}-{i}.png", "wb") as f:
+                f.write(f"png-{i}".encode())
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    pages = converters._pdf_page_pngs("/x.pdf", cap=7)
+
+    assert pages == [b"png-1", b"png-2"]
+    assert seen["cmd"][:5] == ["pdftoppm", "-png", "-r", str(converters.VISION_RASTER_DPI), "-l"]
+    assert seen["cmd"][5:] == ["7", "/x.pdf", seen["cmd"][-1]]
+
+
+def test_vision_configured_knows_both_forms(monkeypatch):
+    """`librarian.processing` pays for a call only when this says it can run — a prefixed model
+    is configured by naming itself, the bare form by its key."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("VISION_MODEL", raising=False)
+    assert converters.vision_configured() is False
+    monkeypatch.setenv("GEMINI_API_KEY", "fake")
+    assert converters.vision_configured() is True
+    monkeypatch.delenv("GEMINI_API_KEY")
+    monkeypatch.setenv("VISION_MODEL", "openrouter:qwen/qwen3-vl-8b-instruct")
+    assert converters.vision_configured() is True
 
 
 def test_sheet_profile_reports_the_widest_rows_column_count(tmp_path):
