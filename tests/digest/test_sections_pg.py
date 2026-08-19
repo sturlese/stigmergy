@@ -97,7 +97,7 @@ def test_corpus_health_reads_a_partial_run_a_sweep_failure_must_not_blank_the_se
 
     assert health["state"] == "ok"
     assert health["total"] == 1
-    assert health["sweep_incomplete"] is True
+    assert health["model_passes_incomplete"] == ["sweep"]
 
 
 def test_corpus_health_the_benign_twin_a_completed_sweep_is_not_flagged_incomplete(conn):
@@ -107,7 +107,7 @@ def test_corpus_health_the_benign_twin_a_completed_sweep_is_not_flagged_incomple
 
     health = sections.gather_corpus_health(conn, since=SINCE_7D)
 
-    assert health["sweep_incomplete"] is False
+    assert health["model_passes_incomplete"] == []
 
 
 def test_corpus_health_an_ok_run_with_no_sweep_stats_at_all_is_not_flagged_incomplete(conn):
@@ -117,7 +117,7 @@ def test_corpus_health_an_ok_run_with_no_sweep_stats_at_all_is_not_flagged_incom
 
     health = sections.gather_corpus_health(conn, since=SINCE_7D)
 
-    assert health["sweep_incomplete"] is False
+    assert health["model_passes_incomplete"] == []
 
 
 def test_corpus_health_prefers_the_latest_run_when_an_older_ok_run_also_exists(conn):
@@ -133,7 +133,31 @@ def test_corpus_health_prefers_the_latest_run_when_an_older_ok_run_also_exists(c
 
     assert health["run_date"] == _days_ago(1).date()
     assert health["total"] == 1
-    assert health["sweep_incomplete"] is True
+    assert health["model_passes_incomplete"] == ["sweep"]
+
+
+def test_corpus_health_a_partial_run_from_a_NON_sweep_pass_is_not_rendered_clean(conn):
+    """Red before the fix: the flag read `stats.sweep.error` alone, so a run committed 'partial'
+    because the EMPTY-BODY or the DUPLICATE-IDENTITY pass failed rendered in the weekly digest as
+    a clean run — the exact silent-clean-bill failure ADR 024's amendment says this surface exists
+    to end, closed in the terminal report and left open one layer up."""
+    support.seed_gardener_run(conn, finished_days_ago=1, status="partial", findings=[
+        {"check": "stale-view", "severity": "warn"}],
+        extra_stats={"sweep": {"error": ""}, "empty_body": {"error": "AgentRunError"}})
+
+    health = sections.gather_corpus_health(conn, since=SINCE_7D)
+
+    assert health["model_passes_incomplete"] == ["empty_body"]
+
+
+def test_corpus_health_names_every_pass_that_did_not_complete(conn):
+    support.seed_gardener_run(conn, finished_days_ago=1, status="partial", findings=[],
+        extra_stats={"sweep": {"error": "SweepGarbage"},
+                     "duplicate_entity": {"error": "AgentRunError"}})
+
+    health = sections.gather_corpus_health(conn, since=SINCE_7D)
+
+    assert health["model_passes_incomplete"] == ["duplicate_entity", "sweep"]
 
 
 # ── corpus deltas: pages filed, the meeting blind spot, entities born ───────────────────────────

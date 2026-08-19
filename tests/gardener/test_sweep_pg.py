@@ -265,7 +265,7 @@ def test_previous_run_watermark_a_failed_sweep_leaves_the_next_runs_since_unchan
 
 def test_previous_run_watermark_advances_past_a_run_whose_OTHER_model_pass_failed(conn):
     """A run whose editorial sweep SUCCEEDED and whose empty-body pass failed commits
-    `status='partial'` — that status is an aggregate over two independent passes. Reading `'ok'`
+    `status='partial'` — that status is an aggregate over the run's model passes. Reading `'ok'`
     only, this watermark stayed pinned at the last flawless run: `since` never advanced, so
     `select_pages` put every page filed since into ONE unbatched prompt that grew every night
     until it killed the editorial sweep too, and `next_sample_offset` re-judged the same rotating
@@ -302,3 +302,15 @@ def test_previous_run_watermark_skips_a_run_whose_own_sweep_failed_whatever_the_
     _since, offset = sweep.previous_run_watermark(conn)
 
     assert offset == 7
+
+
+def test_the_watermark_status_pair_is_the_one_the_stores_completed_run_reads():
+    """`('ok', 'partial')` is spelled as a SQL literal in `store._LATEST_COMPLETED_RUN` and as a
+    Python list in `sweep.WATERMARK_STATUSES` — two different questions that happen to share one
+    pair, which #92's comment rewrite turned from a declared divergence into an undeclared
+    duplication. Pinned equal, so a status added to one cannot silently miss the other."""
+    from stigmergy.gardener import store as gardener_store
+
+    assert sweep.WATERMARK_STATUSES == ["ok", "partial"]
+    for status in sweep.WATERMARK_STATUSES:
+        assert f"'{status}'" in gardener_store._LATEST_COMPLETED_RUN

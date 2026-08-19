@@ -56,7 +56,7 @@ def _visible_pages(conn, paths: list[str], *, audiences: set[str]) -> dict[str, 
 # ── corpus health ────────────────────────────────────────────────────────────────────────────────
 def gather_corpus_health(conn, *, since) -> dict:
     """`{"state": "never_run"}`, `{"state": "stale", ...}` or `{"state": "ok", ...}` — the three
-    honest cases. `sweep_incomplete` is read off the run's own `stats` blob (a `'partial'` run's
+    honest cases. `model_passes_incomplete` is read off the run's own `stats` blob (a `'partial'` run's
     deterministic findings are complete but its sweep failed) so a reader never infers "the sweep
     found nothing" from "the sweep did not complete"."""
     run = gardener_store.latest_completed_run(conn)
@@ -78,10 +78,16 @@ def gather_corpus_health(conn, *, since) -> dict:
         counts[sev] = counts.get(sev, 0) + 1
         by_check = checks_by_severity.setdefault(sev, {})
         by_check[chk] = by_check.get(chk, 0) + 1
-    sweep_incomplete = bool(((run["stats"] or {}).get("sweep") or {}).get("error"))
+    # An AGGREGATE over every model pass the run carries, not one pass's key: a run committed
+    # 'partial' because the empty-body or the duplicate-identity pass failed used to render as a
+    # clean run here — the silent clean bill this surface exists to end, closed in the terminal
+    # report and left open one layer up. Sorted, so the rendered sentence is stable.
+    stats = run["stats"] or {}
+    incomplete = sorted(name for name in ("sweep", "empty_body", "duplicate_entity")
+                        if (stats.get(name) or {}).get("error"))
     return {"state": "ok", "run_date": finished_at.date(), "total": len(findings),
             "counts_by_severity": counts, "checks_by_severity": checks_by_severity,
-            "sweep_incomplete": sweep_incomplete}
+            "model_passes_incomplete": incomplete}
 
 
 # ── corpus deltas — both queries bounded by the same `now` `run.run_digest` resolves first ───────

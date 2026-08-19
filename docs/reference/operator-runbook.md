@@ -704,7 +704,7 @@ backlinks the page renders). Re-running against an unchanged corpus is a no-op.
 |---|---|---|
 | `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S` | `900` | how often the idle worker converges `views/`. `0` turns the pass off entirely; a negative value is refused at startup |
 | `STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING` | `10` | how many entities ONE pass may regenerate or remove — each is a model call. The surplus is picked up by the next pass |
-| `STIGMERGY_VIEWS_MODEL` | the librarian's own (`anthropic:claude-sonnet-5`) | the model a view's synthesis is WRITTEN with. It defaults to the filing model rather than to `CLEAN_MODEL` because every unattended caller runs inside the worker, whose boot strips `$OPENAI_API_KEY` on purpose — a view agent inheriting the read path's model can only raise there. One model per artifact: this moves the worker and an operator's own `stigmergy-views regenerate` together |
+| `STIGMERGY_VIEWS_MODEL` | the librarian's DEFAULT (`anthropic:claude-sonnet-5`) | the model a view's synthesis is WRITTEN with. It defaults to the librarian's compile-time default rather than to `CLEAN_MODEL`, because every unattended caller runs inside the worker, whose boot strips `$OPENAI_API_KEY` on purpose — a view agent inheriting the read path's model can only raise there. Note the edge: setting `STIGMERGY_LIBRARIAN_MODEL` moves the FILING agent and not this one — views and repair each hold their own knob, one model per artifact. One knob moves the worker and an operator's own `stigmergy-views regenerate` together |
 
 The pass records itself in `job_runs` under the job name `views-sweep` (distinct from `views`, an
 operator's own run, and `views-on-meeting`, the post-filing hook), and prints a `view sweep:` line

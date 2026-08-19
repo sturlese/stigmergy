@@ -245,6 +245,33 @@ def test_a_written_entity_page_is_the_benign_twin(repo):
     assert checks.check_entity_placeholder_bodies(checks.entity_zone_pages(repo)) == []
 
 
+def test_an_entity_body_that_is_blank_below_the_title_fires_the_deterministic_check(repo):
+    """Red before the fix: a body that is EMPTY (or an H1 and nothing else) carries no placeholder
+    line, and the model pass's rubric asks about a body that is "WRITTEN but says nothing" — which
+    a blank one is not. The page fell between the two halves of a pair documented as covering the
+    question with nothing between them. Blank is decidable without a model, so it belongs here,
+    free and exact, with the same finding and the same repair."""
+    support.write_page(repo, "wiki", "entities/Meridian Partners.md",
+                       frontmatter=PLACEHOLDER_ENTITY, body="# Meridian Partners\n")
+
+    findings = checks.check_entity_placeholder_bodies(checks.entity_zone_pages(repo))
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f["check"] == checks.CHECK_ENTITY_PLACEHOLDER_BODY
+    assert f["subject"] == "wiki/entities/Meridian Partners.md"
+    assert "nothing at all" in f["detail"]
+
+
+def test_a_wholly_empty_entity_body_fires_it_too(repo):
+    support.write_page(repo, "wiki", "entities/Meridian Partners.md",
+                       frontmatter=PLACEHOLDER_ENTITY, body="")
+
+    findings = checks.check_entity_placeholder_bodies(checks.entity_zone_pages(repo))
+
+    assert [f["check"] for f in findings] == [checks.CHECK_ENTITY_PLACEHOLDER_BODY]
+
+
 def test_a_placeholder_on_a_note_page_is_not_this_checks_business(repo):
     """Population: `wiki/entities/` and nothing else. A note drafted around an angle-marked
     placeholder is a filing question, not an identity with no content."""

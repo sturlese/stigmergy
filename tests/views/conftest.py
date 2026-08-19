@@ -80,10 +80,11 @@ def build_repo(root: str, *, entity_id: str = "acme-corp", entity_name: str = "A
 
 
 def registry_of(entity_id: str = "acme-corp", entity_name: str = "Acme Corp") -> Registry:
+    """`entities` only, deliberately: the views layer reads `registry.entities` and never resolves
+    a name (`regenerate.py` is the one consumer). The two keyed maps stay empty — a half-filled
+    `by_alias` here used to read as if resolution mattered to views, and it does not."""
     reg = Registry()
     reg.entities[entity_id] = {"name": entity_name, "type": "organization", "aliases": []}
-    reg.by_alias[entity_id] = entity_id
-    reg.by_alias[entity_name.lower()] = entity_id
     return reg
 
 

@@ -180,10 +180,12 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
         # worker's. A `LibrarianConfigError` out of an elapsed budget meets the `except
         # LibrarianError` seam above and the row lands `failed` with a sentence, not a hung thread.
         subprocess_timeout_s=REPAIR_SUBPROCESS_TIMEOUT_S,
-        # The five TOLD facts, and the only place in this system that grants any of them: which
-        # zones THIS apply owns, which single page's prose its approval covers, which paths it may
-        # remove, which non-page file it derived from the pages in this same commit, and — for
-        # every page whose bytes were computed ahead of time — exactly what they are. Every one is
+        # Every caller-scoped fact the gates are TOLD is granted here and nowhere else in this
+        # loop: which zones THIS apply owns, which single page's prose its approval covers, which
+        # paths it may remove, which non-page file it derived from the pages in this same commit,
+        # and — for every page whose bytes were computed ahead of time — exactly what they are.
+        # (`provenance_pages` is also granted by the librarian's own source-attachment flow, which
+        # is why this sentence names no count.) Every one is
         # derived from the ops that were just performed, never from `target_paths` — the two are
         # cross-checked against each other a few lines above, so deriving a permission from the
         # same fact the cross-check judges would make one stored column able to widen the other.

@@ -11,6 +11,7 @@ from psycopg import errors as pg_errors
 from pydantic_ai.exceptions import AgentRunError
 
 from stigmergy.gardener import checks, run, schema, sweep
+from stigmergy.gardener import settings as settings_module
 from stigmergy.gardener.errors import GardenerError
 from stigmergy.gardener.settings import GardenerSettings
 from stigmergy.slack.gateway import FakeSlackGateway
@@ -644,6 +645,11 @@ def test_run_gardener_the_empty_body_ceiling_stops_the_pass_and_records_what_it_
     assert empty_body["judged"] == 1
     assert empty_body["deferred"] == 2
     assert any("2 entity page(s)" in reason for reason in empty_body["skip_reasons"])
+    # The reason's "$VARIABLE raises this" promise, pinned at the CALL SITE: the unit tests format
+    # the template with a name they themselves supply, which proves only that the template writes
+    # a `$` — a call site passing the wrong constant would leave them green.
+    assert any(f"${settings_module.EMPTY_BODY_CEILING_ENV}" in reason
+               for reason in empty_body["skip_reasons"])
     assert len([f for f in result.findings
                 if f["check"] == sweep.CHECK_MODEL_EMPTY_ENTITY_BODY]) == 1
 
@@ -992,6 +998,9 @@ def test_run_gardener_the_duplicate_identity_ceiling_records_what_it_deferred(co
     assert duplicate["deferred"] == 1
     assert result.duplicate_entity_deferred_count == 1
     assert any("1 registered entity page(s)" in reason for reason in duplicate["skip_reasons"])
+    # The same call-site pin as the empty-body twin above.
+    assert any(f"${settings_module.DUPLICATE_ENTITY_CEILING_ENV}" in reason
+               for reason in duplicate["skip_reasons"])
 
 
 def test_run_gardener_a_duplicate_identity_failure_alone_still_commits_partial(conn, repo,

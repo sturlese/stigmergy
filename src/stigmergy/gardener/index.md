@@ -129,10 +129,12 @@ both or neither.
   `'error'`. `stats['sweep']['selected_at']` is the editorial sweep's watermark; neither of the
   other two keeps one, because both cover their population every run — and no watermark is read off
   that status, only off its own pass's recorded `error`. `stats['empty_body']` carries
-  `population`/`excluded_placeholder`/`considered`/`judged`/`deferred`/`unjudged`/
-  `walk_exclusions`; `stats['duplicate_entity']` carries
-  `population`/`excluded_unregistered`/`excluded_duplicate_id`/`considered`/`judged`/`deferred`
-  and no batch counter at all, because that pass is one call by construction. `skipped` means
+  `population`/`excluded_unnameable_path`/`excluded_placeholder`/`considered`/`judged`/`deferred`/
+  `unjudged`/`walk_exclusions`; `stats['duplicate_entity']` carries
+  `population`/`excluded_unnameable_path`/`excluded_unregistered`/`excluded_duplicate_id`/
+  `considered`/`judged`/`deferred` and no batch counter at all, because that pass is one call by
+  construction; `stats['sweep']` counts its own selection exclusions
+  (`unparsed_result_ref`/`changed_page_not_indexed`/`excluded_unnameable_path`). `skipped` means
   validation rejections in EVERY pass, so a dashboard may compare them; a ceiling's own count is
   `deferred`. Every population exclusion is counted into `stats`, never silently dropped.
 

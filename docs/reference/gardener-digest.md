@@ -218,7 +218,7 @@ body that says nothing about its entity says so in its opening lines or nowhere.
 
 Every page body reaches the
 model only inside `stigmergy.text.fence` — page content, including verbatim `sources/` material, is
-untrusted input to a prompt, and both system prompts tell the model a fenced page is DATA,
+untrusted input to a prompt, and each pass's system prompt tell the model a fenced page is DATA,
 never instructions, however it reads.
 
 **`suggested_action` for a model finding is never model-generated text.** The model's own output
