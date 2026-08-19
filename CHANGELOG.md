@@ -9,6 +9,33 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
+## [0.3.1] - 2026-08-19
+
+The three decisions v0.3.0's adversarial review filed (#101, #102, #103), each taken on the side
+of simplicity: no new pass machinery, one new knob where two siblings already had theirs, and two
+of the three fixes ride seams that already existed.
+
+### Fixed
+
+- **The editorial sweep is bounded on every axis — and deliberately not by batching** (#101). Its
+  checks are about PAIRS, and a batch boundary would silently decide which contradictions are ever
+  visible. Instead: the changed half keeps the newest `STIGMERGY_GARDENER_SWEEP_CHANGED_CEILING`
+  (default 30) filings, every fenced body is clamped, and the prompt becomes settings-shaped —
+  never corpus-shaped, even on a first run or after a cron outage. The overflow is counted, named,
+  and never lost: it joins the unchanged pool the rotating sample already covers. A failed night
+  re-presents a bounded population, so the frozen-watermark loop degrades to a bounded retry.
+- **The view sweep yields to arriving work, and a hung synthesis has a clock** (#102).
+  `should_stop` becomes a reason-string contract: the worker's own callable says "the process is
+  shutting down" or "a capture is waiting in the queue", and the recorded deferral repeats those
+  words — a capture submitted mid-pass now costs one entity's regeneration, not a whole ceiling's.
+  `SYNTHESIS_TIMEOUT_S` turns a provider that stops answering into the existing withheld shape
+  instead of a hung worker loop with no lease, no row and no log line.
+- **The night's one number bounds the asks, not only the inbox** (#103). The per-finding repair
+  roads (body, merge) stop at `max_proposals_per_run` asks with a recorded `ask-ceiling-reached`
+  reason — a night of declined drafts, which store nothing by design, is now a bounded bill. The
+  recurrence stays deliberate; what is bounded is its nightly cost, and the spend records from
+  #81 show how close a night comes.
+
 ## [0.3.0] - 2026-08-19
 
 The governed repair loop grows from a design into a working subsystem with four proposal kinds,
