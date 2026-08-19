@@ -68,7 +68,8 @@ change both or neither.
 - Window resolution: `--since` -> the last completed run's `stats['until']` -> `now -
   window_days` (first run only).
 - `gather_corpus_health` returns one of three states (`never_run` / `stale` / `ok`, the last with
-  `sweep_incomplete`); `gather_corpus_deltas` returns `pages_filed_count`/`pages_filed_titles`/
+  `model_passes_incomplete` — an aggregate over every model pass's recorded `error`, so a
+  `partial` run can never render as a clean one); `gather_corpus_deltas` returns `pages_filed_count`/`pages_filed_titles`/
   `entities_born_count` — an approval COUNT with no names: every door writes the `review_decisions`
   row and every row carries `extra` (at minimum its `source`), but only a minting approve fills in
   `entity_id`, so a list of names would read as complete and would not be. The copy says "approved"
