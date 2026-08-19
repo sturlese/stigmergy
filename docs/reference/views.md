@@ -42,7 +42,9 @@ the worker is idle,      a meeting files          stigmergy-views regenerate
                        NO  → skeleton (timeline, backlinks — pure code)
                                ║
                                ╚═ synthesis.write_synthesis (bounded agent, no verifier)
-                                    draft finishes → shipped     budget exhausted first → withheld
+                                    draft finishes → shipped
+                                    budget exhausted, or the wall clock
+                                    (SYNTHESIS_TIMEOUT_S) fires first → withheld
                              │
                              ▼
                    render.render → write_text_atomic → writer.commit_and_push (App bot)

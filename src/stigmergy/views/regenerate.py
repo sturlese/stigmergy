@@ -269,10 +269,9 @@ BRANCH_MOVED_REASON = (
     "pushing this entity, so the corpus parse the rest of the batch would have used describes a "
     "tree that is gone — {deferred} further entity(ies) were not checked; the next run re-derives "
     "them from the new tip")
-SHUTTING_DOWN_REASON = (
-    "shutting-down: this run stopped between entities because the process is shutting down — "
-    "{deferred} further entity(ies) in the population were not checked; the next run will see "
-    "them")
+STOPPED_EARLY_REASON = (
+    "stopped-early({why}): this run stopped between entities — {deferred} further entity(ies) in "
+    "the population were not checked; the next run will see them")
 # One id per line rather than a count: a count says a corpus has typos in it, a name says WHICH
 # page to fix, and `job_runs.stats` is the only surface an unattended pass has.
 UNUSABLE_ID_REASON = (
@@ -346,11 +345,15 @@ async def run(repo: str, conn, entity_ids: list[str], *, registry: Registry, bra
     caller needs a bound. It counts `_BILLED_ACTIONS`, not entities, and `None` (every operator
     call) is unbounded — a human who typed the command is the bound.
 
-    `should_stop` is the COOPERATIVE shutdown check, consulted between entities and nowhere else:
+    `should_stop` is the COOPERATIVE pause check, consulted between entities and nowhere else:
     one entity is one commit, so any prefix of this loop is a valid repo state, while inside an
-    entity there is a synthesis call and a push that must not be torn in half. It is what keeps a
-    signal from waiting out a whole ceiling's worth of model calls. `None` (every operator call)
-    never stops — a human who typed the command has Ctrl-C.
+    entity there is a synthesis call and a push that must not be torn in half. It answers with the
+    REASON to stop ("" / falsy = keep going) — the worker's own callable says whether a signal
+    landed or a capture is waiting, and the recorded deferral repeats its words, so an operator
+    reads WHY the pass yielded rather than one sentence that covers two causes. It is what keeps
+    a signal (or an arriving capture, issue #102) from waiting out a whole ceiling's worth of
+    model calls. `None` (every operator call) never stops — a human who typed the command has
+    Ctrl-C.
 
     `rows` is the single corpus parse, threaded down; see `regenerate_entity` for the two
     conditions it survives this loop under. The second one — no foreign commit mid-batch — is
@@ -371,8 +374,9 @@ async def run(repo: str, conn, entity_ids: list[str], *, registry: Registry, bra
                         ceiling=max_changes, deferred=remaining))
                     stats.update(result.stats)
                     break
-                if should_stop is not None and should_stop():
-                    result.skip_reasons.append(SHUTTING_DOWN_REASON.format(deferred=remaining))
+                if should_stop is not None and (why := should_stop()):
+                    result.skip_reasons.append(STOPPED_EARLY_REASON.format(why=why,
+                                                                           deferred=remaining))
                     stats.update(result.stats)
                     break
                 outcome = await regenerate_entity(repo, entity_id, registry=registry, branch=branch,

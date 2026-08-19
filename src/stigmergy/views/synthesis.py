@@ -5,6 +5,7 @@ time, and an invented CLAIM passes every figure check anyway — `render.SYNTHES
 on the page rather than letting silence read as a check. The one road to a page shipping without
 a synthesis is `UsageLimitExceeded` against `VIEW_LIMITS`.
 """
+import asyncio
 import os
 from dataclasses import dataclass
 
@@ -24,6 +25,13 @@ from stigmergy.views.skeleton import Member
 VIEW_LIMITS = UsageLimits(request_limit=6, tool_calls_limit=6)
 MAX_PAGE_READS = 4
 PAGE_EXCERPT = 5000
+
+# The wall clock beside the count: `VIEW_LIMITS` bounds a model's APPETITE and says nothing about
+# a hung provider call — and the unattended caller is the worker's only loop, with no lease to
+# expire and no `job_runs` row until the pass returns (issue #102). A CONSTANT, not an env knob:
+# no operator tunes "how long may one synthesis hang"; the point is that it cannot be forever.
+# Generous — six requests at fifty seconds each — so it can only fire on a genuine stall.
+SYNTHESIS_TIMEOUT_S = 300.0
 
 
 class ViewOutput(BaseModel):
@@ -171,17 +179,19 @@ def _member_lines(members: list[Member]) -> str:
     return "\n".join(lines)
 
 
-async def write_synthesis(agent, entity_id: str, repo: str,
-                          members: list[Member]) -> SynthesisResult:
-    """One synthesis pass: the agent writes a draft, or it does not. `UsageLimitExceeded` is the
-    one withheld outcome, caught here as `shipped=False` — a page with no synthesis section,
-    rather than a section with nothing behind it.
+async def write_synthesis(agent, entity_id: str, repo: str, members: list[Member],
+                          timeout_s: float = SYNTHESIS_TIMEOUT_S) -> SynthesisResult:
+    """One synthesis pass: the agent writes a draft, or it does not. `UsageLimitExceeded` and a
+    run past `timeout_s` are the two withheld outcomes, both `shipped=False` — a page with no
+    synthesis section, rather than a section with nothing behind it or a worker loop hung on a
+    provider that stopped answering.
     """
     ctx = ViewContext(entity_id=entity_id, repo=repo, members=members)
     prompt = (f"entity: {prompt_header_scalar(entity_id)}\npages:\n{_member_lines(members)}"
               "\n\nWrite the synthesis.")
     try:
-        result = await agent.run(prompt, deps=ctx, usage_limits=VIEW_LIMITS)
-    except UsageLimitExceeded:
+        async with asyncio.timeout(timeout_s):
+            result = await agent.run(prompt, deps=ctx, usage_limits=VIEW_LIMITS)
+    except (UsageLimitExceeded, TimeoutError):
         return SynthesisResult(body_markdown="", shipped=False)
     return SynthesisResult(body_markdown=result.output.body_markdown, shipped=True)

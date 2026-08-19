@@ -162,10 +162,13 @@ stopped after 1 item(s)
 its interval has elapsed AND the pass actually moved something — the same rule the claim-sweep line
 follows, for the same reason: a line printed every interval is a line nobody reads. The pass is
 where a view stops being stale whatever wrote the corpus; [`views.md`](./views.md) is the account,
-and the two knobs are in the table above. A shutdown signal stops it at the next entity boundary —
-one entity is one commit, so a stopped sweep leaves a coherent repo, the remainder is recorded as
-deferred, and the next pass picks it up. Nothing can stop it INSIDE an entity, and nothing needs
-to: the bound on shutdown delay is one entity's regeneration, not a ceiling's worth. A fault is logged and swallowed —
+and the two knobs are in the table above. A shutdown signal — or a capture arriving in the
+queue — stops it at the next entity boundary, each cause recorded in its own words: one entity is
+one commit, so a stopped sweep leaves a coherent repo, the remainder is deferred, and the next
+idle tick picks it up. Nothing can stop it INSIDE an entity, and nothing needs to: the bound on a
+shutdown, and on a capture's wait, is one entity's regeneration (itself wall-clocked —
+`views.synthesis.SYNTHESIS_TIMEOUT_S` turns a hung provider call into a withheld synthesis rather
+than a hung worker), never a ceiling's worth. A fault is logged and swallowed —
 filing must never depend on a rollup — leaving a `job_runs` error row under `views-sweep`.
 
 **Ctrl-C is less than a cooperative cancel**: nothing can abort a running `process_item` — there is
