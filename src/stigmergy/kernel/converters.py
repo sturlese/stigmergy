@@ -274,7 +274,12 @@ def _vision_extract_pydantic(model: str, path: str, agent_builder=None) -> dict:
     from pydantic_ai import Agent, BinaryContent
 
     from stigmergy.kernel.llm import build_model
+    from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
 
+    # Installed HERE beside this module's own `Agent(...)` — every agent-construction site
+    # installs the repair (idempotent), and `tests/kernel/test_usage_repair.py` holds that rule
+    # textually, on purpose.
+    ensure_usage_extraction_repaired()
     # Through `build_model` for one reason: the `model_override` seam (#81) applies here too, so
     # a test can drive this path with a scripted model. A prefixed string comes back verbatim.
     resolved, _ = build_model(model)

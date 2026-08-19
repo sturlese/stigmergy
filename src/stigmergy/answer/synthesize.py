@@ -143,13 +143,17 @@ def build_synthesizer(settings):
     from pydantic_ai import Agent, RunContext
 
     from stigmergy.kernel.llm import build_model
+    from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
 
     # Deliberately `build_model`, never `build_processor`: ANSWER_LLM is its own fake/real
     # switch, checked above — only the model construction is shared. `build_model` is the
     # two-form convention's one implementation (bare name = OpenAI Responses + this call's own
-    # reasoning effort; provider-prefixed = pydantic-ai, that provider's own key), it installs
-    # the usage-extraction repair itself, and it honors `model_override` (#81), so the real
-    # answer agent is drivable by a scripted model with no key.
+    # reasoning effort; provider-prefixed = pydantic-ai, that provider's own key), and it honors
+    # `model_override` (#81), so the real answer agent is drivable by a scripted model with no
+    # key. The repair is installed HERE TOO, beside the `Agent(...)` this module constructs —
+    # every agent-construction site installs it (idempotent), and the guard in
+    # `tests/kernel/test_usage_repair.py` holds the rule textually, on purpose.
+    ensure_usage_extraction_repaired()
     model, model_settings = build_model(settings.model,
                                         reasoning_effort=settings.reasoning_effort)
     agent = Agent(model, output_type=AnswerOutput, instructions=ANSWER_SYS,
