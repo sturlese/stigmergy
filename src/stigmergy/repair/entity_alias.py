@@ -616,14 +616,23 @@ def apply_declared(worktree: str, ops) -> tuple[list[str], list[gates.Finding]]:
     try:
         generator.regenerate(worktree)
     except EntityError as ex:
+        # Guards an INTERLEAVING: `plan` just re-read these same pages through this same reader,
+        # so by the time this line runs, every refusal the generator has is a fact about a corpus
+        # some other process mutated in the last few milliseconds. Unreachable single-threaded —
+        # which is why no test drives it — and kept anyway, because "another writer got in" is
+        # exactly the moment an approval must not be performed on.
         return [], [_finding("registry-refused",
                              f"the entity registry could not be regenerated after the merge: {ex}",
                              REGISTRY_RELPATH)]
     produced = deletion.read_text(worktree, REGISTRY_RELPATH)
     if produced != planned[REGISTRY_RELPATH]:
+        # Reachable, and tested firing: the page serializer and the page parser are not a perfect
+        # round trip (`json.dumps` writes U+0085 raw; PyYAML folds it back to a space), so an
+        # alias only a YAML escape can spell survives the plan and comes back different from the
+        # regenerate. The byte-compare is what turns that from a silently wrong registry into a
+        # refusal a steward can read.
         return [], [_finding(REGISTRY_DRIFT_CODE,
                              f"the registry {generator.FIX_COMMAND} produced is not the registry "
                              f"this merge planned, so the approval does not describe what would "
                              f"land", REGISTRY_RELPATH)]
-    return sorted({survivor_path(ops), absorbed_path(ops), REGISTRY_RELPATH,
-                   *reanchored_paths(ops)}), []
+    return schema.target_paths(ops), []

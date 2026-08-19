@@ -119,6 +119,7 @@ def _run_all_checks(conn, repo: str, registry: Registry, settings: GardenerSetti
         conn, window=settings.company_window, share_threshold=settings.company_share,
         population_stats=filing_population_stats)
     findings += checks.check_company_page_names_entity(conn, registry)
+    findings += checks.check_anchored_to_superseded_entity(conn)
     return findings
 
 
