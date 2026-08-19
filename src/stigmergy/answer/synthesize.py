@@ -140,32 +140,22 @@ def build_synthesizer(settings):
         raise RuntimeError(f"invalid ANSWER_LLM: {settings.llm!r} (use 'openai' or 'fake')")
     if settings.llm == "fake":
         return FakeSynthesizer()
-    import os
-
     from pydantic_ai import Agent, RunContext
-    from pydantic_ai.models.openai import OpenAIResponsesModel, OpenAIResponsesModelSettings
-    from pydantic_ai.providers.openai import OpenAIProvider
 
+    from stigmergy.kernel.llm import build_model
     from stigmergy.kernel.usage_repair import ensure_usage_extraction_repaired
 
-    # Deliberately not `kernel.llm.build_processor`: this call needs the per-question model AND
-    # reasoning effort from `AnswerSettings`, which `build_model`'s env-read signature cannot
-    # express; the usage repair is therefore installed here too.
+    # Deliberately `build_model`, never `build_processor`: ANSWER_LLM is its own fake/real
+    # switch, checked above — only the model construction is shared. `build_model` is the
+    # two-form convention's one implementation (bare name = OpenAI Responses + this call's own
+    # reasoning effort; provider-prefixed = pydantic-ai, that provider's own key), and it honors
+    # `model_override` (#81), so the real answer agent is drivable by a scripted model with no
+    # key. The repair is installed HERE TOO, beside the `Agent(...)` this module constructs —
+    # every agent-construction site installs it (idempotent), and the guard in
+    # `tests/kernel/test_usage_repair.py` holds the rule textually, on purpose.
     ensure_usage_extraction_repaired()
-    if ":" in settings.model:
-        # The SAME two-form convention CLEAN_MODEL and the librarian's model follow: a
-        # provider-prefixed id ("openrouter:z-ai/glm-5.2") is resolved by pydantic-ai, whose
-        # provider reads its OWN env key (openrouter: → OPENROUTER_API_KEY) — which is what lets
-        # `ask` run on a provider the Responses API cannot name. ANSWER_REASONING_EFFORT stays a
-        # bare-name setting: it is the Responses API's own knob, not a portable one.
-        model, model_settings = settings.model, None
-    else:
-        key = os.environ.get("OPENAI_API_KEY")
-        if not key:
-            raise RuntimeError("OPENAI_API_KEY is required for ANSWER_LLM=openai")
-        model = OpenAIResponsesModel(settings.model, provider=OpenAIProvider(api_key=key))
-        model_settings = OpenAIResponsesModelSettings(
-            openai_reasoning_effort=settings.reasoning_effort)
+    model, model_settings = build_model(settings.model,
+                                        reasoning_effort=settings.reasoning_effort)
     agent = Agent(model, output_type=AnswerOutput, instructions=ANSWER_SYS,
                   model_settings=model_settings, deps_type=SynthesisContext)
 

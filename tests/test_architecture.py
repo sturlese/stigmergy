@@ -85,7 +85,8 @@ def test_the_kernel_never_imports_an_agent_framework_at_module_level(path):
     """A keyless offline run must never load a provider SDK — the rule, applied where the
     dispatch lives. `kernel.llm` imports `pydantic_ai.Agent` for its type surface, but the
     model/provider construction (`build_model`) is imported INSIDE the openai branch, and
-    `converters.vision_extract` imports the Gemini SDK only when vision is actually used."""
+    `converters.vision_extract` imports its SDKs (the Gemini one on the bare form, pydantic-ai
+    on the provider-prefixed form) only when vision is actually used."""
     offenders = [f"{path.name}:{line} -> {mod}"
                  for mod, line in _module_level_all(path)
                  if mod.startswith(("google.genai", "pydantic_ai.models", "pydantic_ai.providers"))]

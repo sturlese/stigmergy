@@ -146,10 +146,13 @@ make db-up                                   # postgres+pgvector + minio (docker
 ```
 
 The real embedder speaks OpenAI's `/embeddings` dialect to whichever host `EMBED_BASE_URL` names
-(OpenAI by default; `EMBED_API_KEY` is that host's credential, with `OPENAI_API_KEY` as the
-fallback). `EMBED_MODEL` is the BUILD-time default model only: the model is recorded in
-`index_meta` and queries always embed with the recorded one, so changing it takes effect at the
-next `--rebuild`, never mid-index.
+(OpenAI by default; `EMBED_API_KEY` is that host's credential). `OPENAI_API_KEY` remains the
+fallback for the DEFAULT host only — it is never sent to an `EMBED_BASE_URL` host, whose missing
+key refuses loudly instead of borrowing a credential the host did not issue. `EMBED_MODEL` is
+the BUILD-time default model only: the model is recorded in `index_meta` and queries always
+embed with the recorded one, so changing it takes effect at the next `--rebuild`, never
+mid-index — and pointing `EMBED_BASE_URL` at a host that serves a DIFFERENT model under the same
+name deserves a `--rebuild` for the same vector-space reason.
 
 Every hit renders its score, arms (`fts`/`vec`), the ranking factors applied and a snippet. There
 are **six** factor labels, and that is the whole set `rank.contract_factors` can emit:

@@ -122,6 +122,20 @@ def no_real_llm_anywhere(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_real_vision_anywhere(monkeypatch):
+    """The same doctrine, one seam over: the drive flow's vision-OCR fallback goes live off
+    ambient configuration alone. Before the two-form VISION_MODEL a stray call needed
+    GEMINI_API_KEY; now a provider-prefixed VISION_MODEL plus that provider's key — both
+    plausible in the `.env` that `make test` exports — is enough for any test in any package
+    that reaches `librarian.processing._with_vision_fallback` to make a real, paid OCR call.
+    One package's conftest remembering was not a control (its own words, two fixtures up), so
+    the clearing lives HERE. A test that wants the fallback sets its own configuration
+    explicitly."""
+    monkeypatch.delenv("VISION_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def no_spawned_child_outlives_its_test():
     """**No test may leave a process running behind it** — the third reading of the same doctrine,
     one resource over from the two fixtures above.

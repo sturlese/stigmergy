@@ -42,14 +42,17 @@ def model_override(model):
         _MODEL_OVERRIDE = previous
 
 
-def build_model(model_name: str | None = None):
+def build_model(model_name: str | None = None, *, reasoning_effort: str | None = None):
     """Model + settings for the agents. Without an explicit name, CLEAN_MODEL is resolved HERE,
     at call time, never at import — this is the single place that reads it.
 
-    Two forms of CLEAN_MODEL: a bare name ("gpt-5.6-terra") means the OpenAI Responses API with
-    an EXPLICIT reasoning effort (never the API's implicit default; requires OPENAI_API_KEY); a
-    provider-prefixed pydantic-ai string ("anthropic:claude-sonnet-4-5") is resolved by
-    pydantic-ai, whose provider reads its own env key.
+    Two forms — and this function is the convention's ONE implementation (audit T1): a bare name
+    ("gpt-5.6-terra") means the OpenAI Responses API with an EXPLICIT reasoning effort (never the
+    API's implicit default; requires OPENAI_API_KEY); a provider-prefixed pydantic-ai string
+    ("anthropic:claude-sonnet-4-5", "openrouter:z-ai/glm-5.2") is resolved by pydantic-ai, whose
+    provider reads its own env key. `reasoning_effort` (bare form only) wins over
+    $CLEAN_REASONING_EFFORT — it is how a caller with its own effort setting (the answer path)
+    names it here instead of carrying a copy of this function.
     """
     if _MODEL_OVERRIDE is not None:
         return _MODEL_OVERRIDE, None
@@ -64,15 +67,19 @@ def build_model(model_name: str | None = None):
     # installs the repair. Idempotent — see `kernel.usage_repair`.
     ensure_usage_extraction_repaired()
 
-    model_name = model_name or os.environ.get("CLEAN_MODEL", DEFAULT_MODEL)
+    # `or` on both reads, so an exported-but-empty variable means "unset" instead of becoming a
+    # confusing provider-side error — .env.example invites exactly that shape.
+    model_name = model_name or os.environ.get("CLEAN_MODEL") or DEFAULT_MODEL
     if ":" in model_name:
         return model_name, None
     key = os.environ.get("OPENAI_API_KEY")
     if not key:
         raise RuntimeError("OPENAI_API_KEY is required (set it in the environment / .env)")
-    effort = os.environ.get("CLEAN_REASONING_EFFORT", DEFAULT_REASONING_EFFORT)
+    effort = (reasoning_effort or os.environ.get("CLEAN_REASONING_EFFORT")
+              or DEFAULT_REASONING_EFFORT)
     if effort not in _VALID_EFFORTS:
-        raise RuntimeError(f"invalid CLEAN_REASONING_EFFORT: {effort!r} (use one of {_VALID_EFFORTS})")
+        source = "reasoning effort" if reasoning_effort else "CLEAN_REASONING_EFFORT"
+        raise RuntimeError(f"invalid {source}: {effort!r} (use one of {_VALID_EFFORTS})")
     model = OpenAIResponsesModel(model_name, provider=OpenAIProvider(api_key=key))
     return model, OpenAIResponsesModelSettings(openai_reasoning_effort=effort)
 

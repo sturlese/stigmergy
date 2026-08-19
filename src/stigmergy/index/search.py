@@ -109,6 +109,14 @@ def search_arms(conn, query: str, *, embedder=None, k: int = rank.TOP_K,
     `fts_expansion`, the registry's other names for it, appended to the LEXICAL arm only (an OR
     of lexemes can only ADD candidates) — the vector arm embeds the raw query untouched, because
     expansion is a lexical repair, not a semantic one."""
+    # BEFORE the meta read, so the refusal is pure and reaches every caller: the ask agent's
+    # search tool turns a ValueError into an error string the model repairs from. OLD BEHAVIOUR:
+    # an empty model-chosen query reached the embedding PROVIDER, whose 400 (OpenAI and
+    # OpenRouter both refuse empty input) crashed the whole ask instead of repairing one tool
+    # call — surfaced by the qa golden's first DeepSeek run.
+    if not (query or "").strip():
+        raise ValueError("an empty query matches nothing — search for the words the material "
+                         "actually uses")
     meta = read_meta(conn)
     if meta is None:
         raise EmptyIndexError("the index is empty — run `stigmergy-index --rebuild --repo <dir>` first")

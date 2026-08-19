@@ -186,6 +186,19 @@ def prepare(*, repo: str, url: str, branch: str, env: dict | None = None) -> git
 
 
 # ── the constructed configuration the worker is exec'd with ────────────────────────────────────
+def shared_credentials(environ: dict | None = None) -> list[str]:
+    """The SURVIVING variable names whose values equal a stripped read-path secret's — the case
+    the name-level strip cannot see (audit S2): one OpenRouter key doing both jobs is stripped
+    as EMBED_API_KEY and survives as OPENROUTER_API_KEY. That may be exactly what a small
+    deployment chose, so `main` says it out loud rather than refusing; giving the embed host its
+    own key is what makes the separation real. Names only — no value may travel to a log."""
+    source = os.environ if environ is None else environ
+    stripped_values = {value for name, value in source.items()
+                       if name in READ_PATH_ONLY_ENV and value}
+    return sorted(name for name, value in source.items()
+                  if name not in READ_PATH_ONLY_ENV and value and value in stripped_values)
+
+
 def worker_env(environ: dict | None = None) -> dict:
     """The environment the deployed worker actually runs with: everything the app carries,
     MINUS the read path's secrets, PLUS the one fact only this module knows.
@@ -269,6 +282,12 @@ def main(argv=None, *, execute=os.execvpe) -> int:
         # deserves to find the answer in the logs.
         print(f"stigmergy-librarian-boot: not passing {', '.join(stripped)} to the worker — the "
               f"write path does not use the read path's embedder", flush=True)
+    shared = shared_credentials()
+    if shared:
+        print(f"stigmergy-librarian-boot: {', '.join(shared)} carries the same value as a "
+              f"stripped read-path secret — a name-level strip cannot separate one credential "
+              f"wearing two names; give the embed host its own key to make the separation real",
+              flush=True)
     execute(argv_out[0], argv_out, env_out)
     return 0        # unreachable after a successful exec; a test's stub returns here
 

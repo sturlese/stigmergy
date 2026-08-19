@@ -772,3 +772,49 @@ def test_the_settings_default_backend_is_still_the_offline_double():
     moves, every test in this repository starts needing a provider key."""
     assert config.Settings().backend == "double"
     assert dataclasses.replace(config.Settings(), backend="pydantic").backend == "pydantic"
+
+
+# ── stringified nested structures: a provider quirk the schema must absorb ────────────────────
+def test_a_provider_that_stringifies_nested_structures_is_decoded_at_the_boundary():
+    """OLD BEHAVIOUR: a ValidationError, and the framework's single output retry burned on a
+    SERIALIZATION quirk rather than a content problem. Measured directly: GLM-5.2 through
+    OpenRouter's tool-calling returned `triage='{}'` — the JSON *string*, not the object — and
+    the filing golden's two meeting captures then validated with every nested list empty
+    (decisions 0/2), because the model's retry flattened the account into something that passed.
+    The producer is a MODEL behind a provider's tool-calling; decoding a bracketed string on a
+    field DECLARED as a structure is the same inbound tolerance `_fold_a_singular_name_into_the_
+    list` already extends."""
+    account = pydantic_backend.MeetingAccount.model_validate({
+        "decision": "file",
+        "meeting_title": "Q3 rollout sync",
+        "attendees": '["Ana", "Marc"]',
+        "decisions": ('[{"title": "Expand to Madrid", "body": "September.", '
+                      '"anchoring": "{\\"kind\\": \\"company\\", \\"reason\\": \\"org\\"}"}]'),
+        "triage": "{}",
+    })
+    assert account.attendees == ["Ana", "Marc"]
+    assert [d.title for d in account.decisions] == ["Expand to Madrid"]
+    assert account.decisions[0].anchoring.kind == "company"   # stringified INSIDE stringified
+
+
+def test_prose_that_merely_looks_like_json_stays_prose():
+    """The benign twin: content fields are declared `str`, so a body or the notes OPENING with a
+    bracket are never decoded — the shield is the field's ANNOTATION, not a guess about text."""
+    account = pydantic_backend.MeetingAccount.model_validate({
+        "decision": "file", "meeting_title": "Notes",
+        "meeting_notes": '{"looks": "like json"} but is prose',
+        "decisions": [{"title": "T", "body": '["still prose: the field is a str"]'}],
+    })
+    assert account.meeting_notes.startswith('{"looks"')
+    assert account.decisions[0].body == '["still prose: the field is a str"]'
+
+
+def test_the_singular_name_fold_still_runs_after_a_stringified_triage_is_decoded():
+    """Composition with the existing inbound tolerance: the parent decodes the stringified
+    `triage`, THEN the nested model folds the singular `name` — parent validation precedes
+    child validation, so the two repairs cannot race."""
+    account = pydantic_backend.FilingAccount.model_validate({
+        "decision": "triage",
+        "triage": '{"kind": "unresolved-entity", "name": "Quillon Labs"}',
+    })
+    assert account.triage.names == ["Quillon Labs"]

@@ -157,6 +157,27 @@ def test_thin_text_with_no_key_refuses_below_the_floor(tmp_path, monkeypatch):
     assert "GEMINI_API_KEY" in str(ex.value)
 
 
+def test_a_prefixed_vision_model_missing_its_key_refuses_naming_that_key(tmp_path, monkeypatch):
+    """A KNOWN provider prefix with no key is the misconfiguration "requeue" can never fix, so
+    it must read as unconfigured with the provider's OWN variable named — not as configured
+    (rasterize, fail at the provider, tell the submitter to requeue), and not with advice to set
+    GEMINI_API_KEY, which could never fix it either. OLD BEHAVIOUR: `vision_configured()`
+    returned True for any prefixed model, so this capture burned a rasterization and got a
+    requeue loop."""
+    monkeypatch.setenv("VISION_MODEL", "openrouter:qwen/qwen3-vl-8b-instruct")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    called = []
+    monkeypatch.setattr(converters, "vision_extract",
+                        lambda *a, **k: called.append(1))
+
+    with pytest.raises(processing._ConversionRefused) as ex:
+        processing._with_vision_fallback(_fake_pdf_path(tmp_path), "pdf", "x\f y", "deck.pdf")
+
+    assert "OPENROUTER_API_KEY" in str(ex.value)
+    assert "GEMINI_API_KEY" not in str(ex.value)
+    assert called == []                       # never rasterized, never paid
+
+
 def test_thin_but_present_text_without_key_proceeds(tmp_path, monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     thin = "a real sentence of some length that clears the absolute floor easily"

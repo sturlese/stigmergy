@@ -18,7 +18,7 @@ import json
 import logging
 import os
 import threading
-from typing import Literal
+from typing import Literal, get_origin
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -63,19 +63,10 @@ def _fault_line(ex: BaseException) -> str:
     return textutil.one_line(textutil.neutralize_fence(str(ex)), MAX_FAULT_MESSAGE_LEN)
 
 # Read by the preflight that refuses a missing key BEFORE the first claim; an unknown prefix
-# simply gets no preflight.
-PROVIDER_KEY_ENV = {
-    "openai": "OPENAI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "google-gla": "GEMINI_API_KEY",
-    "openrouter": "OPENROUTER_API_KEY",
-}
-
-
-def provider_of(model: str) -> str:
-    """The provider prefix of a pydantic-ai model string, or `""` for a bare name."""
-    name = (model or "").strip()
-    return name.split(":", 1)[0] if ":" in name else ""
+# simply gets no preflight. RE-EXPORTED from the kernel (audit T1): the vision gate asks the
+# same question of the same table, and two tables would drift — `kernel.settings` hosts it so
+# this import drags no agent framework into a keyless run.
+from stigmergy.kernel.settings import PROVIDER_KEY_ENV, provider_of  # noqa: E402,F401
 
 
 def prompt_cache_settings(model: str, prompt_cache: str) -> dict | None:
@@ -120,12 +111,54 @@ def _needed(field: str, instead: str) -> str:
     return f"`{field}` is required and came back empty. {instead}"
 
 
+def _wants_structure(annotation) -> bool:
+    """Is this field DECLARED as a structure — a list or a nested model? The shield that keeps
+    `StructuredInbound` away from content: a `str` field's prose is never decoded, however
+    JSON-shaped it looks, because its annotation says prose."""
+    if get_origin(annotation) in (list, dict):
+        return True
+    return isinstance(annotation, type) and issubclass(annotation, BaseModel)
+
+
+class StructuredInbound(BaseModel):
+    """Every schema below extends THIS, not `BaseModel`: the producer is a MODEL behind a
+    provider's tool-calling, and more than one provider serializes a nested list or object as
+    its JSON STRING. Measured directly (2026-08-19): GLM-5.2 through OpenRouter returned
+    `triage='{}'` — the string — so validation failed, the framework's single output retry
+    burned on a SERIALIZATION quirk, and the model's second attempt flattened the account into
+    empty lists that validated: the filing golden's meeting captures filed with decisions 0/2.
+
+    INBOUND ONLY, structured fields only, and never at correctness's expense: a bracketed
+    string on a field whose annotation is a list or nested model is `json.loads`ed; anything
+    that does not parse stays as it arrived for the ordinary validation to refuse. The same
+    tolerance `OrdinaryTriage._fold_a_singular_name_into_the_list` already extends, one level
+    up — parent validation precedes child validation, so the two repairs compose."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _decode_stringified_structures(cls, data):
+        if not isinstance(data, dict):
+            return data
+        out = dict(data)
+        for name, field in cls.model_fields.items():
+            value = out.get(name)
+            if not isinstance(value, str) or not _wants_structure(field.annotation):
+                continue
+            stripped = value.strip()
+            if stripped.startswith(("[", "{")):
+                try:
+                    out[name] = json.loads(stripped)
+                except ValueError:
+                    pass
+        return out
+
+
 # ── the one shape BOTH accounts declare ───────────────────────────────────────────────────────
 # An edit means the same thing on either flow — `agent._parse_edits` bounds it once,
 # `edits.apply_declared` performs it once and `gate_body_rewrite` judges it once — so the two
 # accounts name ONE model rather than each carrying its own idea of what an edit is. The name is
 # the ordinary account's, from the flow that had the field first.
-class OrdinaryEdit(BaseModel):
+class OrdinaryEdit(StructuredInbound):
     """One DECLARED edit to a page that already exists — performed by the worker, never by this
     agent (`edits.py`)."""
     path: str = ""
@@ -134,7 +167,7 @@ class OrdinaryEdit(BaseModel):
     note: str = ""
 
 
-class MeetingAnchoring(BaseModel):
+class MeetingAnchoring(StructuredInbound):
     """One decision's own anchor. `kind` is `entity` (with `entities`) or `company` (with a written
     `reason`); the registry, not this schema, decides whether a name resolves."""
     kind: str = ""
@@ -142,32 +175,32 @@ class MeetingAnchoring(BaseModel):
     entities: list[str] = Field(default_factory=list)
 
 
-class MeetingDecision(BaseModel):
+class MeetingDecision(StructuredInbound):
     """One decision page's content — a title, a drafted body, and its OWN anchor."""
     title: str = ""
     body: str = ""
     anchoring: MeetingAnchoring = Field(default_factory=MeetingAnchoring)
 
 
-class MeetingActionItem(BaseModel):
+class MeetingActionItem(StructuredInbound):
     owner: str = ""
     action: str = ""
     done: bool = False
 
 
-class MeetingFinding(BaseModel):
+class MeetingFinding(StructuredInbound):
     """A steering attempt the agent noticed. Only `category` travels — never the payload."""
     category: str = ""
 
 
-class MeetingTriage(BaseModel):
+class MeetingTriage(StructuredInbound):
     """Why the capture was parked, when `decision` is `triage`."""
     kind: str = ""
     names: list[str] = Field(default_factory=list)
     judged_type: str = ""
 
 
-class MeetingAccount(BaseModel):
+class MeetingAccount(StructuredInbound):
     """The whole account of one meeting: `decision` is `file` or `triage`, and the rest is the page
     set's CONTENT — never a page path, because code decides every path in this flow.
 
@@ -232,7 +265,7 @@ class MeetingAccount(BaseModel):
 # Same mirror discipline, minus fields this backend must not declare: `page_path` (a field the
 # model could fill is a path the model could steer) and top-level `title`/`page_type` (two
 # declaration sites would let one account carry two answers).
-class OrdinaryAnchoring(BaseModel):
+class OrdinaryAnchoring(StructuredInbound):
     """This page's anchor. `kind` is `entity` (with `entities`) or `company` (with a written
     `reason`); the registry, not this schema, decides whether a name resolves."""
     kind: str = ""
@@ -240,7 +273,7 @@ class OrdinaryAnchoring(BaseModel):
     entities: list[str] = Field(default_factory=list)
 
 
-class OrdinaryPage(BaseModel):
+class OrdinaryPage(StructuredInbound):
     """The page itself — the title it is filed under, its type, and its whole body. No path: the
     worker derives the folder from the type and the filename from the title."""
     title: str = ""
@@ -248,12 +281,12 @@ class OrdinaryPage(BaseModel):
     body: str = ""
 
 
-class OrdinaryOverlap(BaseModel):
+class OrdinaryOverlap(StructuredInbound):
     path: str = ""
     note: str = ""
 
 
-class OrdinaryFinding(BaseModel):
+class OrdinaryFinding(StructuredInbound):
     """A steering attempt the agent noticed. Only `category` travels — never the payload."""
     category: str = ""
 
@@ -261,7 +294,7 @@ class OrdinaryFinding(BaseModel):
 # This docstring is the JSON-schema DESCRIPTION the structured model reads, not a note to a
 # reader here — which is why `names` has to be named in it, and why there is no longer a singular
 # field beside it to reach for. A field described nowhere is a field the model will not reach for.
-class OrdinaryTriage(BaseModel):
+class OrdinaryTriage(StructuredInbound):
     """Why the capture was parked, when `decision` is `triage`. For an `unresolved-entity` park,
     `names` carries every unresolved entity, each on its own — one name is a list of one. Never
     crowd several into one entry: a steward registers them one at a time, and a joined string is
@@ -291,7 +324,7 @@ class OrdinaryTriage(BaseModel):
         return {**data, "names": [single]}
 
 
-class FilingAccount(BaseModel):
+class FilingAccount(StructuredInbound):
     """The whole account of one ordinary capture: `decision` is `file` or `triage`, and the rest is
     judgment plus the page's own CONTENT.
 

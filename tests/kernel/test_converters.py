@@ -291,7 +291,8 @@ def test_vision_prefixed_model_sends_rasterized_pages_to_the_pydantic_path(monke
     res = converters.vision_extract("/scan.pdf", agent_builder=lambda model: agent)
 
     assert res == {"method": "vision", "text": "transcribed text",
-                   "model": "openrouter:qwen/qwen3-vl-8b-instruct"}
+                   "model": "openrouter:qwen/qwen3-vl-8b-instruct",
+                   "pages": 2, "truncated": False}
     assert agent.parts[0] == converters.VISION_OCR_PROMPT
     assert [p.data for p in agent.parts[1:]] == [b"png-1", b"png-2"]
     assert {p.media_type for p in agent.parts[1:]} == {"image/png"}
@@ -308,6 +309,7 @@ def test_vision_prefixed_says_where_it_cut_a_document_over_the_page_ceiling(monk
 
     assert "cut this document here" in res["text"]
     assert str(cap) in res["text"]
+    assert res["truncated"] is True and res["pages"] == cap
 
 
 def test_vision_prefixed_exactly_at_the_ceiling_is_not_called_cut(monkeypatch):
@@ -321,15 +323,17 @@ def test_vision_prefixed_exactly_at_the_ceiling_is_not_called_cut(monkeypatch):
     res = converters.vision_extract("/exact.pdf", agent_builder=lambda model: FakeVisionAgent())
 
     assert "cut this document here" not in res["text"]
+    assert res["truncated"] is False
 
 
 def test_pdf_page_pngs_drives_pdftoppm_with_the_documented_bounds(monkeypatch):
     """The rasterizer's contract: poppler's pdftoppm (the same package pdftotext ships in), PNG,
-    the documented DPI, capped with -l, pages back in page order."""
+    the output box BOUNDED with -scale-to (a fixed DPI is a raster bomb on a max-MediaBox page),
+    capped with -l, its own clock, pages back in page order."""
     seen = {}
 
-    def fake_run(cmd, capture_output, text):
-        seen["cmd"] = cmd
+    def fake_run(cmd, capture_output, text, timeout):
+        seen["cmd"], seen["timeout"] = cmd, timeout
         prefix = cmd[-1]
         for i in (1, 2):
             with open(f"{prefix}-{i}.png", "wb") as f:
@@ -340,21 +344,111 @@ def test_pdf_page_pngs_drives_pdftoppm_with_the_documented_bounds(monkeypatch):
     pages = converters._pdf_page_pngs("/x.pdf", cap=7)
 
     assert pages == [b"png-1", b"png-2"]
-    assert seen["cmd"][:5] == ["pdftoppm", "-png", "-r", str(converters.VISION_RASTER_DPI), "-l"]
+    assert seen["cmd"][:5] == ["pdftoppm", "-png", "-scale-to",
+                               str(converters.MAX_VISION_RASTER_PX), "-l"]
     assert seen["cmd"][5:] == ["7", "/x.pdf", seen["cmd"][-1]]
+    assert seen["timeout"] == converters.PDF_RASTER_TIMEOUT_S
 
 
-def test_vision_configured_knows_both_forms(monkeypatch):
-    """`librarian.processing` pays for a call only when this says it can run — a prefixed model
-    is configured by naming itself, the bare form by its key."""
+def test_a_hung_rasterizer_degrades_instead_of_hanging_the_item(monkeypatch):
+    """`subprocess.TimeoutExpired` becomes the same RuntimeError shape every converter failure
+    takes, so `_with_vision_fallback` degrades to the text layer instead of crashing."""
+    def hung(cmd, capture_output, text, timeout):
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    monkeypatch.setattr(subprocess, "run", hung)
+    with pytest.raises(RuntimeError, match="pdftoppm exceeded"):
+        converters._pdf_page_pngs("/x.pdf")
+
+
+def _pdf_with_pages(n: int) -> bytes:
+    """A minimal, real, n-page PDF — hand-written 1.4 syntax, one text object per page, the same
+    approach `tests/librarian/test_drive_processing_pg.py`'s `_tiny_pdf` takes for one page."""
+    objects = []
+    page_ids = list(range(3, 3 + 2 * n, 2))
+    kids = " ".join(f"{i} 0 R" for i in page_ids)
+    objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
+    objects.append(f"<< /Type /Pages /Kids [{kids}] /Count {n} >>".encode())
+    for k, pid in enumerate(page_ids, start=1):
+        content = f"BT /F1 24 Tf 72 700 Td (Page {k}) Tj ET".encode()
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents {pid + 1} 0 R "
+            f"/Resources << /Font << /F1 << /Type /Font /Subtype /Type1 "
+            f"/BaseFont /Helvetica >> >> >> >>".encode())
+        objects.append(b"<< /Length %d >>\nstream\n%s\nendstream" % (len(content), content))
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for i, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n%s\nendobj\n" % (i, body)
+    xref_at = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objects) + 1)
+    for off in offsets:
+        out += b"%010d 00000 n \n" % off
+    out += (b"trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n"
+            % (len(objects) + 1, xref_at))
+    return bytes(out)
+
+
+def _require_pdftoppm():
+    import shutil
+    if shutil.which("pdftoppm"):
+        return
+    import os
+    if os.environ.get("STIGMERGY_TEST_DSN"):
+        pytest.fail("$STIGMERGY_TEST_DSN is set (CI mode) but pdftoppm is not on PATH — refusing "
+                    "to skip the rasterizer-order test silently. poppler-utils ships it beside "
+                    "pdftotext (see .github/workflows/ci.yml).")
+    pytest.skip("pdftoppm not on PATH (brew install poppler) — the prefixed vision form's hand")
+
+
+def test_the_real_pdftoppm_zero_pads_so_lexical_sort_is_page_order(tmp_path):
+    """The load-bearing claim behind `_pdf_page_pngs`'s `sorted(...)`, pinned against the REAL
+    binary — never fake what you are claiming to prove. Twelve pages is the threshold: at nine,
+    an unpadded naming scheme still sorts correctly and this test would prove nothing."""
+    _require_pdftoppm()
+    path = tmp_path / "twelve.pdf"
+    path.write_bytes(_pdf_with_pages(12))
+
+    import subprocess as sp
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+    r = sp.run(["pdftoppm", "-png", "-scale-to", "200", str(path), str(outdir / "page")],
+               capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr[:300]
+    names = sorted(p.name for p in outdir.iterdir())
+    assert names[0] == "page-01.png" and names[-1] == "page-12.png"
+    assert names == [f"page-{i:02d}.png" for i in range(1, 13)]
+
+    pages = converters._pdf_page_pngs(str(path))
+    assert len(pages) == 12
+
+
+def test_vision_config_error_knows_both_forms_and_names_the_right_variable(monkeypatch):
+    """`librarian.processing` pays for a call only when this returns None. A KNOWN provider
+    prefix with no key is unconfigured and the reason names THAT provider's variable (audit S3);
+    an unknown prefix is configured by naming itself — the librarian preflight's own
+    warn-don't-refuse posture; the bare form is configured by its key."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("VISION_MODEL", raising=False)
-    assert converters.vision_configured() is False
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    assert "GEMINI_API_KEY" in converters.vision_config_error()
+
     monkeypatch.setenv("GEMINI_API_KEY", "fake")
-    assert converters.vision_configured() is True
+    assert converters.vision_config_error() is None
+
     monkeypatch.delenv("GEMINI_API_KEY")
     monkeypatch.setenv("VISION_MODEL", "openrouter:qwen/qwen3-vl-8b-instruct")
-    assert converters.vision_configured() is True
+    reason = converters.vision_config_error()
+    assert "OPENROUTER_API_KEY" in reason and "GEMINI_API_KEY" not in reason
+    assert converters.vision_configured() is False
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-fake")
+    assert converters.vision_config_error() is None
+
+    monkeypatch.setenv("VISION_MODEL", "custom-lab:experimental-vl")   # unknown prefix
+    monkeypatch.delenv("OPENROUTER_API_KEY")
+    assert converters.vision_config_error() is None
 
 
 def test_sheet_profile_reports_the_widest_rows_column_count(tmp_path):

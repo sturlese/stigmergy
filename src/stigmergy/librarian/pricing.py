@@ -21,17 +21,18 @@ from stigmergy.librarian.errors import LibrarianConfigError
 
 PRICING_ENV = "STIGMERGY_LIBRARIAN_PRICING"
 
-# When the figures below were last set by a human. Printed in the refusal, so somebody reading
-# a surprising number knows how old the arithmetic behind it is.
+# When a human last touched the figures below. Printed in the refusal, so somebody reading a
+# surprising number knows how old the arithmetic behind it is; each row's own comment says what
+# was actually verified and when.
 AS_OF = "2026-08-19"
 
 # `{model id: (input, cached input, cache write, output)}`, US dollars per MILLION tokens.
 #
-# Anthropic's row is verified; the other two deliberately set cached input AND cache write equal
-# to input — neither provider's real fractions is verified here, over-stating a cost is the safe
-# direction, and no caching path is built for either provider, so both figures are unreachable.
-# Correct a row through `$STIGMERGY_LIBRARIAN_PRICING` for one deployment, or an edit here plus
-# a new `AS_OF` for all of them.
+# Anthropic's row is verified; every non-Anthropic row deliberately sets cached input AND cache
+# write equal to input — no other provider's real fractions is verified here, over-stating a
+# cost is the safe direction, and only the Anthropic caching path is built, so those figures are
+# unreachable elsewhere. Correct a row through `$STIGMERGY_LIBRARIAN_PRICING` for one
+# deployment, or an edit here plus a new `AS_OF`.
 #
 # The bare `claude-sonnet-5` is deliberately ABSENT: a bare name reaches pydantic-ai as an
 # OPENAI model and `worker._check_pydantic_backend` refuses it before this table is consulted —
