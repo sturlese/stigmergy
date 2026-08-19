@@ -417,13 +417,21 @@ PUSH_BACKOFF_CAP_S = 2.0
 
 def push(worktree: str, *, branch: str, remote_url: str = "", config_env: dict | None = None,
          author_name: str = "", author_email: str = "", attempts: int = PUSH_ATTEMPTS,
-         timeout_s: float | None = None) -> str:
+         timeout_s: float | None = None, rebase: bool = True) -> str:
     """Push the worktree's HEAD to `branch`, rebasing on a race. **Returns the sha that actually
     landed**: a rebase REWRITES the commit, and the pre-push sha becomes `result_ref` while naming
     an object no reachable history holds. A genuine conflict FAILS the item rather than being
     resolved — a librarian with merge judgment can silently drop a human's edit. `remote_url`
     carries no credential: the token travels in `config_env`, argv being world-readable, and the
     retry `fetch` carries it too or fails differently from the push it retries.
+
+    `rebase=False` turns a rejected push into a clean failure instead: nothing lands, and the
+    caller recomputes from the new state. It exists for the non-additive repair kinds, whose
+    apply proved its diff against ONE base — a rebase replays that diff onto a base the gates
+    never judged, and once it has happened the commit is already on main, so no after-the-fact
+    check could refuse it without marking a landed change failed. A filed page has no such
+    proof-against-a-base (its gates ran on content, not position), which is why the default
+    stays a rebase.
 
     `timeout_s` bounds EVERY leg of the loop, not only the first push: a retry that reached an
     unbounded fetch would be a budget with a hole in it. `None` is the worker's shape (a lease, and
@@ -438,6 +446,12 @@ def push(worktree: str, *, branch: str, remote_url: str = "", config_env: dict |
             # Re-read HEAD: a rebase on an earlier iteration already moved it.
             return run("rev-parse", "HEAD", cwd=worktree, timeout=timeout_s).stdout.strip()
         stderr = _scrub(proc.stderr).strip()
+        if not rebase:
+            raise GitError(
+                f"the branch moved while this change was being applied, and this caller never "
+                f"rebases — what was approved was judged against the OLD tip, so nothing landed; "
+                f"approve it again once it has been re-proposed against the current corpus: "
+                f"{stderr[:STDERR_LIMIT]}")
         if attempt == attempts:
             # Distinct wording from the conflict case: an operator must not hunt for an overlap.
             raise GitError(

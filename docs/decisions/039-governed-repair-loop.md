@@ -624,3 +624,26 @@ pre-model skip recognises the question under a new finding id too (D3).
 - **No three-way merge.** A finding names exactly two entity pages, enforced from both ends in
   `gardener.sweep` and asked again by the proposer. Three identities collapsing into one is three
   decisions a steward cannot separate, and it is two merges.
+
+## Amendment — a lost race for the non-additive kinds fails clean (2026-08-19, part of #88)
+
+`gitcmd.push` rebases and retries, and for a filed page that is correct: its gates judged content,
+not a position against a base, so the same additive diff replayed onto the moved tip is exactly
+what was approved. The two non-additive kinds are different in kind, not degree — their apply is a
+proof against a base (recompute, byte-compare, then perform), and a rebase replays the approved
+diff onto a tip the gates never judged. For `delete` that can leave a dead link a fresh plan would
+have scrubbed; for `entity-alias` it can leave a page anchored to the retired identity, which C6's
+permanent dismissal memory then makes unfixable inside this loop.
+
+The two roads not taken, and why: re-running the gates after a rebase reaches the same refusal by
+a longer road (`expected_bytes` was computed against the old base, so the byte-compare fails) —
+and by then the commit is already on `main`, so the row would be marked `failed` for a change that
+LANDED, which is dishonest. Detecting the rebase afterwards has the same flaw. So `push` gained a
+way to not rebase at all, and `delete` and `entity-alias` use it: a rejected push fails clean,
+nothing lands, the row is `failed`, and the next propose recomputes from state — the same shape
+the view sweep's mid-batch stop takes, for the same reason.
+
+The trade, stated honestly: the view sweep pushes up to its ceiling every fifteen minutes, so a
+repair apply racing it is realistic and these applies will occasionally fail and need
+re-approving. That is the correct side to fail on — a failed apply is recoverable, a wrong write
+is not.

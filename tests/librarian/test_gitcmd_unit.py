@@ -527,6 +527,69 @@ def test_push_returns_the_committed_sha_unchanged_when_there_was_no_race(tmp_pat
     assert gitcmd.run("rev-parse", "main", cwd=str(bare)).stdout.strip() == committed
 
 
+def _raced_remote(tmp_path):
+    """A worker clone with a commit ready, and a remote that moved after it was cloned — the
+    non-conflicting race every rebase test here starts from."""
+    bare = tmp_path / "origin.git"
+    gitcmd.run("init", "--bare", "--quiet", "-b", "main", str(bare))
+    seed = tmp_path / "seed"
+    _init_repo(str(seed))
+    gitcmd.run("remote", "add", "origin", str(bare), cwd=str(seed))
+    gitcmd.run("push", "--quiet", "-u", "origin", "main", cwd=str(seed))
+    worker_clone = tmp_path / "worker"
+    _clone(str(bare), str(worker_clone))
+    with open(os.path.join(worker_clone, "approved-repair.md"), "w", encoding="utf-8") as f:
+        f.write("what the gates approved\n")
+    committed = gitcmd.commit(str(worker_clone), message="fix: the approved repair",
+                              author_name="t", author_email="t@example.com")
+    with open(os.path.join(seed, "someone-elses-edit.md"), "w", encoding="utf-8") as f:
+        f.write("a steward's own edit\n")
+    gitcmd.run("add", "-A", cwd=str(seed))
+    gitcmd.run("commit", "--quiet", "-m", "steward's edit", cwd=str(seed),
+              env={"GIT_AUTHOR_NAME": "s", "GIT_AUTHOR_EMAIL": "s@example.com",
+                   "GIT_COMMITTER_NAME": "s", "GIT_COMMITTER_EMAIL": "s@example.com"})
+    gitcmd.run("push", "--quiet", "origin", "main", cwd=str(seed))
+    return bare, worker_clone, committed
+
+
+def test_push_with_rebase_off_fails_clean_on_a_race_and_lands_nothing(tmp_path):
+    """Red before the fix: `push` always rebased and retried, and for the non-additive repair
+    kinds that is the one window where what lands is not what was judged — the gates approved a
+    diff against one base, the rebase replays it onto another, and for a merge that silently
+    leaves a page on a retired identity. Once the rebase has happened the commit is already on
+    main, so detecting it afterwards could only mark a landed change `failed` — the honest shape
+    is to never rebase: fail clean, land nothing, let the next propose recompute from state."""
+    bare, worker_clone, _committed = _raced_remote(tmp_path)
+
+    with pytest.raises(gitcmd.GitError) as err:
+        gitcmd.push(str(worker_clone), branch="main", rebase=False,
+                    author_name="librarian", author_email="librarian@example.com")
+
+    assert "branch moved" in str(err.value)
+    assert "nothing landed" in str(err.value)
+    # NOTHING landed: the remote's history is exactly the racer's, with no repair commit in it.
+    log = gitcmd.run("log", "--format=%s", "main", cwd=str(bare)).stdout
+    assert "approved repair" not in log
+    assert "steward's edit" in log
+
+
+def test_push_with_rebase_off_still_lands_the_ordinary_unraced_push(tmp_path):
+    """The benign twin: no race, no difference — the flag only decides what happens on a
+    rejection, never what an ordinary push does."""
+    bare = tmp_path / "origin.git"
+    gitcmd.run("init", "--bare", "--quiet", "-b", "main", str(bare))
+    worker_clone = tmp_path / "worker"
+    _init_repo(str(worker_clone))
+    gitcmd.run("remote", "add", "origin", str(bare), cwd=str(worker_clone))
+    with open(os.path.join(worker_clone, "approved-repair.md"), "w", encoding="utf-8") as f:
+        f.write("what the gates approved\n")
+    committed = gitcmd.commit(str(worker_clone), message="fix: the approved repair",
+                              author_name="t", author_email="t@example.com")
+
+    assert gitcmd.push(str(worker_clone), branch="main", rebase=False) == committed
+    assert gitcmd.run("rev-parse", "main", cwd=str(bare)).stdout.strip() == committed
+
+
 def test_push_a_genuine_conflict_fails_the_item_rather_than_being_resolved(tmp_path):
     bare = tmp_path / "origin.git"
     gitcmd.run("init", "--bare", "--quiet", "-b", "main", str(bare))

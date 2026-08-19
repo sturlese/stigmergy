@@ -50,8 +50,8 @@ judgment — code itself.
 
 Only findings one of the three MODEL-proposed kinds could actually close reach the proposer — the
 fourth kind, `delete`, answers no finding at all and is proposed by a person or derived from
-duplicate content hashes. The corpus has fifteen checks in all — nine deterministic and six model —
-so the other NINE are absent by NAME rather than by oversight: an aging seed needs somebody to write,
+duplicate content hashes. The corpus has sixteen checks in all — ten deterministic and six model —
+so the other TEN are absent by NAME rather than by oversight: an aging seed needs somebody to write,
 a stale view needs a regeneration (the periodic sweep converges those, issue #76), an anchor that no
 longer fits is a judgment about a page's subject. None of them is an edit, a body or a merge this
 vocabulary can express.
@@ -392,6 +392,15 @@ Three independent checks, each chosen because the other two cannot see what it s
 Then `gitcmd.commit(gated_entries=…)` closes the last window: the diff the gates approved is the
 diff that lands, bytes included. The commit is authored by the librarian App, its message names the
 proposal and the findings it answers, and it carries an `Approved-by:` trailer naming the human.
+
+The push closes one more, for the two NON-ADDITIVE kinds: it never rebases. Their apply is a proof
+against a base — recompute, byte-compare, perform — and a rebase would replay the approved diff
+onto a tip the gates never judged: a delete can leave a dead link a fresh plan would have scrubbed,
+a merge can leave a page anchored to the retired identity forever. A push that loses the race (the
+view sweep pushes up to its ceiling every interval, so it is a race that happens) fails CLEAN —
+nothing lands, the row is `failed`, and re-approving the re-proposed repair is the recovery. The
+additive kinds keep `gitcmd.push`'s ordinary rebase-and-retry: their gates judged content, not a
+position against a base, so a backlink replayed onto the moved tip is exactly what was approved.
 
 **A failed apply stays failed.** The status becomes `failed`, the `error` column says why in a
 sentence written to be read by a steward, and the approved status is not restored. A silent revert

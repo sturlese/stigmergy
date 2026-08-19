@@ -365,3 +365,54 @@ def test_the_merge_road_shares_the_one_skill_with_the_other_two(repo_env):
     for build in (proposer.build_system_prompt, proposer.build_entity_body_system_prompt,
                   proposer.build_entity_alias_system_prompt):
         assert "repair-proposer (test fixture)" in build(skill)
+
+
+# ── the seam between the sweep half and the merge half, pinned end to end ──────────────────────
+def test_the_sweeps_own_finding_reaches_a_plan_the_merge_road_accepts(conn, repo_env, settings):
+    """The contract nothing else asserts, driven through every seam that carries it: the REAL
+    `run_duplicate_entity_sweep` validates the judge's answer against its batch, the REAL
+    `to_finding` shapes `subjects`, the REAL gardener writer stores it, and the proposer hands the
+    pair to `entity_alias.plan` — which consumes them as PATHS. The two halves were written days
+    apart, they happen to agree, and every other merge test seeds its finding directly, so this is
+    the one place a drift between them (ids instead of relpaths, a re-ordered pair, a re-shaped
+    `subjects` column) goes red.
+
+    The judge is a hand double, deliberately: `FakeDuplicateEntitySweep` groups by the SAME
+    normalize fold the generator refuses at mint time, so the pairs it can flag are exactly the
+    pairs `entity_alias.plan` refuses — structurally blind to the pair a real model would flag.
+    A double may stand in for the judgment; the VALIDATION it is subjected to stays real."""
+    from stigmergy.gardener import store as gardener_store
+    from stigmergy.kernel.result import fake_result
+
+    pages = support.seed_duplicate_pair(repo_env)
+
+    class _FlagsThePair:
+        async def run(self, prompt, *, deps=None, usage_limits=None):
+            return fake_result(gardener_sweep.SweepBatchOutput(findings=[
+                gardener_sweep.SweepFindingSpec(
+                    check=gardener_sweep.CHECK_MODEL_DUPLICATE_ENTITY,
+                    subject=[pages["survivor"], pages["absorbed"]],
+                    rationale="both entries broker the same freight contracts",
+                    excerpt="Cofers Holdings brokers the same contracts")]))
+
+    batch = [{"path": pages["survivor"], "id": "cofers", "name": "Cofers", "type": "organization",
+              "aliases": [], "body": "a written body"},
+             {"path": pages["absorbed"], "id": "cofers-holdings", "name": "Cofers Holdings",
+              "type": "organization", "aliases": ["Cofers Grupo"], "body": "a written body"}]
+    accepted, rejected = asyncio.run(
+        gardener_sweep.run_duplicate_entity_sweep(_FlagsThePair(), batch))
+    assert [spec["check"] for spec in accepted] == [gardener_sweep.CHECK_MODEL_DUPLICATE_ENTITY]
+    assert rejected == []
+
+    run_id = support.seed_gardener_run(conn)
+    gardener_store.insert_findings(
+        conn, run_id,
+        [gardener_sweep.to_finding(spec, model_name="seam-test") for spec in accepted])
+
+    result = _propose(conn, settings)
+
+    assert result.proposed == 1
+    (row,) = store.pending_proposals(conn)
+    assert row["kind"] == schema.KIND_ENTITY_ALIAS
+    assert {entity_alias.survivor_path(row["ops"]), entity_alias.absorbed_path(row["ops"])} == {
+        pages["survivor"], pages["absorbed"]}
