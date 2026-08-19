@@ -16,7 +16,7 @@ from pydantic_ai.usage import UsageLimits
 from stigmergy.kernel.llm import build_processor
 from stigmergy.kernel.result import fake_result
 from stigmergy.librarian import config as librarian_config
-from stigmergy.text import fence
+from stigmergy.text import fence, is_one_line, prompt_header_scalar, prompt_scalar
 from stigmergy.views.skeleton import Member
 
 # The per-view budget. `read_page` is the only tool and serves at most `MAX_PAGE_READS` real
@@ -45,7 +45,10 @@ class ViewContext:
 def read_page_impl(ctx: ViewContext, path: str) -> str:
     if ctx.page_reads >= MAX_PAGE_READS:
         return "read_page budget exhausted — write the synthesis with what you have."
-    if path not in {m.path for m in ctx.members}:
+    if path not in {m.path for m in ctx.members} or not is_one_line(path):
+        # The one-line half is not redundant with the membership check: a member whose path cannot
+        # be named on one line is left out of the prompt's index, so offering it here would be the
+        # only place it could still forge the `== path ==` header this returns.
         return f"{path} is not one of this entity's pages"
     ctx.page_reads += 1
     try:
@@ -55,7 +58,7 @@ def read_page_impl(ctx: ViewContext, path: str) -> str:
         return f"page file missing: {path}"
     # `stigmergy.text.fence` neutralizes an in-band fence token — a body carrying the literal
     # closing delimiter could otherwise close the fence early and be read as instructions.
-    return f"== {path} ==\n{fence(body[:PAGE_EXCERPT])}"
+    return f"== {prompt_scalar(path)} ==\n{fence(body[:PAGE_EXCERPT])}"
 
 
 VIEW_SYS = """You write the SYNTHESIS section of a company knowledge-base view for one
@@ -146,6 +149,27 @@ class SynthesisResult:
     shipped: bool   # False only when the bounded agent ran out of budget before a draft existed
 
 
+def _member_lines(members: list[Member]) -> str:
+    """The member index — the UNFENCED half of this prompt, and the half #92's sweep never reached.
+
+    Every value on these lines comes off a page's own frontmatter (`skeleton.members_of` over
+    `corpus.PageRow`), so a title carrying a newline injects a line the model reads as structure,
+    and a path is a filename somebody chose. The two halves get the two different rules the
+    gardener's headers get: a PATH that cannot be named on one line drops its member entirely,
+    because collapsing a filename's whitespace names a different file (and `read_page_impl` refuses
+    the same path, so nothing is left half-offered); everything else is collapsed in place.
+    """
+    lines = []
+    for m in members:
+        if not is_one_line(m.path):
+            continue
+        line = f"- {prompt_scalar(m.path)} · {prompt_header_scalar(m.title)}"
+        if m.as_of:
+            line += f" · as_of {prompt_header_scalar(m.as_of)}"
+        lines.append(line + (" · SUPERSEDED" if m.superseded_by else ""))
+    return "\n".join(lines)
+
+
 async def write_synthesis(agent, entity_id: str, repo: str,
                           members: list[Member]) -> SynthesisResult:
     """One synthesis pass: the agent writes a draft, or it does not. `UsageLimitExceeded` is the
@@ -153,10 +177,8 @@ async def write_synthesis(agent, entity_id: str, repo: str,
     rather than a section with nothing behind it.
     """
     ctx = ViewContext(entity_id=entity_id, repo=repo, members=members)
-    member_lines = "\n".join(
-        f"- {m.path} · {m.title}" + (f" · as_of {m.as_of}" if m.as_of else "")
-        + (" · SUPERSEDED" if m.superseded_by else "") for m in members)
-    prompt = f"entity: {entity_id}\npages:\n{member_lines}\n\nWrite the synthesis."
+    prompt = (f"entity: {prompt_header_scalar(entity_id)}\npages:\n{_member_lines(members)}"
+              "\n\nWrite the synthesis.")
     try:
         result = await agent.run(prompt, deps=ctx, usage_limits=VIEW_LIMITS)
     except UsageLimitExceeded:
