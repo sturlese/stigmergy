@@ -142,6 +142,17 @@ def test_worker_env_strips_the_read_paths_openai_key():
     assert populated["PATH"] == "/usr/bin"
 
 
+def test_worker_env_strips_the_embedders_own_key_and_keeps_the_providers(monkeypatch):
+    """`EMBED_API_KEY` is the read path's embedder credential under its own name (the key for an
+    `$EMBED_BASE_URL` host), so it is stripped exactly as `OPENAI_API_KEY` is — while
+    `OPENROUTER_API_KEY`, a PROVIDER key the filing model may authenticate with, must pass
+    through: stripping it would make `openrouter:` models undeployable with nothing to say why."""
+    populated = bootstrap.worker_env({"EMBED_API_KEY": "sk-embed-host",
+                                      "OPENROUTER_API_KEY": "sk-or-keep-me"})
+    assert "EMBED_API_KEY" not in populated
+    assert populated["OPENROUTER_API_KEY"] == "sk-or-keep-me"
+
+
 def test_worker_env_keeps_everything_else_from_the_source_environment():
     source = {"HOME": "/home/app", "STIGMERGY_REPO": "/home/app/knowledge", "TZ": "UTC"}
     env = bootstrap.worker_env(source)

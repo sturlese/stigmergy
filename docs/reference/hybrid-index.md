@@ -13,7 +13,7 @@ ranking. Never a source of truth — wipe it and rebuild it from git whenever co
 | Module | Does |
 |---|---|
 | `corpus.py` | repo checkout → `PageRow`s: zone walk over `ZONES = ("wiki", "sources", "views")` — an **include list and nothing else**, which is why `ops/` (the registry, identities, templates) never reaches retrieval. (There is deliberately no `EXCLUDED_ZONES` constant beside it: an include-list needs no exclude-list.) Also: tolerant frontmatter parsing, `entity_list`'s fail-CLOSED normalization of both `entity:` dialects, the wikilink graph → `inlinks` AND resolved outbound `links` (`resolve_links`/`by_stem_index` — the one algorithm the webhook shares), the build-time `superseded_by` propagation onto split-chain siblings, `content_hash` of the embedded text; `page_row` is the public single-file parser both `load_pages` and the incremental webhook call |
-| `backends/embedder.py` | OpenAI `text-embedding-3-large` + `build_embedder` — the one fake/real dispatch (deferred fake import) |
+| `backends/embedder.py` | the OpenAI-dialect embedder — `text-embedding-3-large` on OpenAI by default; any OpenAI-compatible `/embeddings` host via `EMBED_BASE_URL` + `EMBED_API_KEY`, build-time default model via `EMBED_MODEL` — plus `build_embedder`, the one fake/real dispatch (deferred fake import) |
 | `backends/fake_embedder.py` | deterministic hashed bag-of-words double (tests/CI; keyless) |
 | `store.py` | all SQL DDL and writes: `pages_index` (dropped/recreated per rebuild; carries `links` + its GIN index and `generated_at`), `embedding_cache` (survives; keyed by model + content_hash), `index_meta`, `ops_file_snapshot` (survives; the relpath-keyed cache of the knowledge repo's `ops/` control files, read/written/cleared through `read_ops_file`/`write_ops_file`/`clear_ops_file` — see "The ops files ride along" below), `webhook_deliveries` (survives; the applied-delivery ids behind the webhook's replay protection); `upsert_pages`/`delete_pages`/`current_content_hashes` are the webhook's incremental primitives, beside `insert_pages`, never a second row shape; `existing_paths` is the webhook's one-query snapshot for outbound-link resolution; `pages_with_page_id_prefix`/`set_superseded_by` are the webhook's split-chain propagation primitives. `create_search_indexes` runs **after** the bulk load, never before |
 | `build.py` | `rebuild(conn, repo_dir, embedder, fts_config="english")` — the full rebuild, cache-aware: init schema → insert rows → build the search indexes → reconcile the entity-registry snapshot from the checkout |
@@ -137,13 +137,19 @@ See [capture.md](./capture.md).
 
 ```sh
 make db-up                                   # postgres+pgvector + minio (docker-compose.yml; loopback-only)
-.venv/bin/stigmergy-index --rebuild --repo ../stigmergy-brain            # real embedder: needs OPENAI_API_KEY
+.venv/bin/stigmergy-index --rebuild --repo ../stigmergy-brain            # real embedder: needs OPENAI_API_KEY (or EMBED_BASE_URL + EMBED_API_KEY)
 .venv/bin/stigmergy-index --rebuild --repo ../stigmergy-brain --embedder fake   # keyless (tests/CI double)
 
 .venv/bin/stigmergy-search "How much was the deposit on the Kestrel Lodge booking?"
 .venv/bin/stigmergy-search "globex quarterly revenue" --filter entity=globex -k 10
 .venv/bin/stigmergy-search "revenue" --current-only --json      # drop superseded instead of demoting
 ```
+
+The real embedder speaks OpenAI's `/embeddings` dialect to whichever host `EMBED_BASE_URL` names
+(OpenAI by default; `EMBED_API_KEY` is that host's credential, with `OPENAI_API_KEY` as the
+fallback). `EMBED_MODEL` is the BUILD-time default model only: the model is recorded in
+`index_meta` and queries always embed with the recorded one, so changing it takes effect at the
+next `--rebuild`, never mid-index.
 
 Every hit renders its score, arms (`fts`/`vec`), the ranking factors applied and a snippet. There
 are **six** factor labels, and that is the whole set `rank.contract_factors` can emit:
