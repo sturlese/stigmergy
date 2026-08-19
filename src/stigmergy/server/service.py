@@ -41,6 +41,13 @@ NAV_CAP = 20
 # embedder call or the LLM call it would trigger, and before it can bloat an `audit_log` row.
 MAX_ARG_CHARS = 8192
 
+# Bounds on entity-first search's alias expansion (`_expansion_terms`): how many of a registry
+# record's other names may join the lexical arm's OR-query, and how long one may be. Sized far
+# above any real record — a company has a handful of spellings, not dozens — and far below what
+# an edited registry could otherwise spend per request.
+MAX_EXPANSION_TERMS = 12
+MAX_EXPANSION_TERM_CHARS = 100
+
 DEFAULT_SUBMISSION_LIMIT = 20
 
 # What a malformed registry's message names when the bytes came from the index rather than from a
@@ -271,7 +278,7 @@ class BrainService:
         the memo would have expired anyway).
         """
         if self._registry_memo is None:
-            snapshot = store.read_entity_registry(self.conn)
+            snapshot = store.read_ops_file(self.conn, store.ENTITY_REGISTRY_RELPATH)
             path = self.settings.entity_registry_path
             self._registry_memo = ((snapshot, _SNAPSHOT_ORIGIN) if snapshot is not None
                                    else (entity_aliases.read_file(path), path or ""))
@@ -297,13 +304,21 @@ class BrainService:
 
     def _expansion_terms(self, entity_id: str | None) -> tuple[str, ...]:
         """The registry's OTHER names for an entity, as extra OR-lexemes for the lexical arm only
-        — the vector arm embeds the raw query untouched."""
+        — the vector arm embeds the raw query untouched.
+
+        BOUNDED, by count and by term length, because a registry is content somebody edits: an
+        entity with ten thousand aliases is a legal file, and unbounded every one of them became
+        an OR-lexeme in the tsquery of every search that resolved the entity — a per-request cost
+        an editor can set for everyone (issue #79). The first N in registry order, so which
+        aliases expand is stable and inspectable rather than dependent on anything here."""
         if not entity_id:
             return ()
         record = self._registry_records().get(entity_id)
         if not record:
             return ()
-        return tuple(t for t in (record.get("name") or "", *(record.get("aliases") or ())) if t)
+        terms = (t for t in (record.get("name") or "", *(record.get("aliases") or ()))
+                 if t and len(t) <= MAX_EXPANSION_TERM_CHARS)
+        return tuple(terms)[:MAX_EXPANSION_TERMS]
 
     def _run_search(self, query: str, filters: dict | None, max_results: int,
                     include_superseded: bool, entity_hint: str | None = None) -> dict:
@@ -837,7 +852,8 @@ def build_service(settings: Settings, conn=None) -> BrainService:
     review.ensure_review_schema(conn)
     # Created single-threaded here so the webhook's own `IF NOT EXISTS` has nothing left to race:
     # losing that race inside its phase-2 transaction would roll the pushed pages back with it.
-    store.ensure_entity_registry_table(conn)
+    store.ensure_ops_file_table(conn)
+    store.ensure_webhook_dedupe_table(conn)
     # `store_from_env` does no I/O, so a server whose bucket is unreachable still serves reads.
     return BrainService(settings, conn, embedder, audiences, identity=settings.identity,
                         audit=AuditWriter(conn), evidence=evidence_plane.store_from_env())

@@ -88,7 +88,7 @@ def main() -> int:
 def _settings_for(args, identity_name: str) -> Settings:
     """The measured server's settings — one construction site, so what the instrument runs is
     inspectable. `entity_registry_path` is the FALLBACK source, exactly as on a real server: where
-    the measured database carries an `entity_registry_snapshot`, the service answers from that and
+    the measured database carries a registry snapshot in `ops_file_snapshot`, the service answers from that and
     this path is never read (`BrainService._registry_source`). It must still be set for a database
     that has none, or entity-first resolution is off under measurement while live on the deployed
     server."""
@@ -107,7 +107,7 @@ def _run(args, golden) -> int:
         meta = store.read_meta(conn)
         if meta is None:
             sys.exit("the index is empty — pass --rebuild --repo <dir> or build it first")
-        if args.entity_registry and store.read_entity_registry(conn) is not None:
+        if args.entity_registry and store.read_ops_file(conn, store.ENTITY_REGISTRY_RELPATH) is not None:
             # A flag that silently does nothing is worse than no flag: this database carries a
             # registry snapshot, and the service prefers it, so the run measures the registry the
             # INDEX was built from — not the file named here. `--rebuild --repo <dir>` is what

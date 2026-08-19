@@ -88,9 +88,9 @@ def freshness(tmp_path_factory):
     conn = testdb.connect_or_skip("index")
     fx = _Fixture(str(tmp_path_factory.mktemp("registry-freshness")))
     build.rebuild(conn, fx.repo, build_embedder("fake"))
-    store.clear_entity_registry(conn)
+    store.clear_ops_file(conn, store.ENTITY_REGISTRY_RELPATH)
     yield conn, fx
-    store.clear_entity_registry(conn)
+    store.clear_ops_file(conn, store.ENTITY_REGISTRY_RELPATH)
     conn.close()
 
 
@@ -174,7 +174,7 @@ def test_a_push_that_does_not_touch_the_registry_leaves_the_baked_file_answering
                                  opener=_fake_opener({NOTE_PAGE: note_text}))
 
     assert "registry_refreshed" not in stats
-    assert store.read_entity_registry(conn) is None
+    assert store.read_ops_file(conn, store.ENTITY_REGISTRY_RELPATH) is None
     # Still exactly what the image baked: `cofers` known, `ferrovial-nexus` bare.
     out = _service(conn, fx).describe_entity("cofers")
     assert out["entity"]["name"] == "Cofers"
@@ -188,7 +188,7 @@ def test_with_no_snapshot_at_all_the_baked_file_is_still_the_answer(freshness):
     database whose index predates this change (no snapshot row) must behave EXACTLY as before —
     the file road is the fallback, not a removed road."""
     conn, fx = freshness
-    assert store.read_entity_registry(conn) is None
+    assert store.read_ops_file(conn, store.ENTITY_REGISTRY_RELPATH) is None
     out = _service(conn, fx).describe_entity("Cofers SL")   # a baked-file alias
     assert out["entity"]["id"] == "cofers"
     assert out["entity"]["name"] == "Cofers"
@@ -232,7 +232,7 @@ def test_a_malformed_snapshot_fails_loudly_as_registryerror_on_every_registry_re
     whichever tool reported it."""
     from stigmergy.server.errors import RegistryError
     conn, fx = freshness
-    store.write_entity_registry(conn, TRUNCATED_SNAPSHOT, "4b49997aa9a7")
+    store.write_ops_file(conn, store.ENTITY_REGISTRY_RELPATH, TRUNCATED_SNAPSHOT, "4b49997aa9a7")
 
     with pytest.raises(RegistryError):
         read(_service(conn, fx))
@@ -251,7 +251,7 @@ def test_a_malformed_snapshot_leaks_neither_a_path_nor_the_snapshot_bytes_to_a_c
     the snapshot's own bytes, which are repo content this identity may have no right to see and
     which nothing has ACL-scoped on the way out of a parse failure."""
     conn, fx = freshness
-    store.write_entity_registry(conn, TRUNCATED_SNAPSHOT, "4b49997aa9a7")
+    store.write_ops_file(conn, store.ENTITY_REGISTRY_RELPATH, TRUNCATED_SNAPSHOT, "4b49997aa9a7")
 
     out = _mcp_text(_service(conn, fx), tool, **args)
 
@@ -266,7 +266,7 @@ def test_a_well_formed_snapshot_still_answers_through_the_same_closures(freshnes
     fires for a healthy registry costs every entity tool at once, and the malformed assertions
     above would pass just as well against a `describe_entity` that always errored."""
     conn, fx = freshness
-    store.write_entity_registry(conn, json.dumps(PUSHED_REGISTRY), "4b49997aa9a7")
+    store.write_ops_file(conn, store.ENTITY_REGISTRY_RELPATH, json.dumps(PUSHED_REGISTRY), "4b49997aa9a7")
 
     out = _mcp_text(_service(conn, fx), "describe_entity", entity="Nexus")
 
@@ -287,7 +287,7 @@ def test_one_long_lived_service_sees_a_snapshot_written_after_its_first_call(fre
     before = svc.describe_entity("ferrovial-nexus")
     assert before["entity"]["name"] == ""          # the baked file, which never knew this entity
 
-    store.write_entity_registry(conn, json.dumps(PUSHED_REGISTRY), "4b49997aa9a7")
+    store.write_ops_file(conn, store.ENTITY_REGISTRY_RELPATH, json.dumps(PUSHED_REGISTRY), "4b49997aa9a7")
 
     after = svc.describe_entity("ferrovial-nexus")
     assert after["entity"]["name"] == "Ferrovial Nexus"
@@ -302,14 +302,15 @@ def test_one_tool_call_reads_the_registry_exactly_once(freshness, monkeypatch):
     assertion; 3 means the memo stopped working, and 0 means the snapshot road is no longer being
     consulted at all."""
     conn, fx = freshness
-    store.write_entity_registry(conn, json.dumps(PUSHED_REGISTRY), "4b49997aa9a7")
-    real = store.read_entity_registry
+    store.write_ops_file(conn, store.ENTITY_REGISTRY_RELPATH, json.dumps(PUSHED_REGISTRY), "4b49997aa9a7")
+    real = store.read_ops_file
     calls = []
 
-    def counting(c):
-        calls.append(1)
-        return real(c)
-    monkeypatch.setattr(store, "read_entity_registry", counting)
+    def counting(c, relpath):
+        if relpath == store.ENTITY_REGISTRY_RELPATH:
+            calls.append(1)
+        return real(c, relpath)
+    monkeypatch.setattr(store, "read_ops_file", counting)
 
     svc = _service(conn, fx)
     out = svc.describe_entity("Nexus")
@@ -330,12 +331,12 @@ def test_a_rebuild_from_a_repo_with_no_registry_hands_the_answer_back_to_the_fil
     The repo this fixture rebuilds from carries pages and no `ops/entity-registry.json`, which is
     exactly the "before its first mint" state a real knowledge repo starts in."""
     conn, fx = freshness
-    store.write_entity_registry(conn, json.dumps(PUSHED_REGISTRY), "4b49997aa9a7")
+    store.write_ops_file(conn, store.ENTITY_REGISTRY_RELPATH, json.dumps(PUSHED_REGISTRY), "4b49997aa9a7")
     assert _service(conn, fx).describe_entity("Nexus")["entity"]["id"] == "ferrovial-nexus"
 
     build.rebuild(conn, fx.repo, build_embedder("fake"))
 
-    assert store.read_entity_registry(conn) is None
+    assert store.read_ops_file(conn, store.ENTITY_REGISTRY_RELPATH) is None
     svc = _service(conn, fx)
     assert svc.describe_entity("cofers")["entity"]["name"] == "Cofers"      # the baked file
     assert svc.describe_entity("ferrovial-nexus")["entity"]["name"] == ""   # which never knew it
@@ -369,5 +370,5 @@ def test_every_test_module_that_writes_a_registry_snapshot_also_clears_it():
             offenders.append(str(path.relative_to(tests_root)))
     assert not offenders, (
         "these test modules write the entity-registry snapshot and never clear it — add a "
-        "`store.clear_entity_registry(conn)` teardown, or the next suite to run inherits this "
+        "`store.clear_ops_file(conn, store.ENTITY_REGISTRY_RELPATH)` teardown, or the next suite to run inherits this "
         "one's registry:\n  " + "\n  ".join(offenders))

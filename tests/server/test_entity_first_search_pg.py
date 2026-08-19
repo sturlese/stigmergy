@@ -232,3 +232,36 @@ def test_the_entity_named_by_the_query_still_outranks_its_sibling(service_entity
     assert any("entity:borealis" in f for f in borealis["factors"]), (
         "the boost is TOLD by the resolved id, and it is what ranks the named entity first now "
         "that nothing filters the others out")
+
+
+# ── the expansion is bounded, because a registry is content somebody edits ─────────────────────
+def test_expansion_terms_are_bounded_by_count_and_length(service_entity_first_indexed):
+    """Red before the fix: an entity with ten thousand aliases is a LEGAL registry, and every one
+    of them became an OR-lexeme in the tsquery of every search that resolved the entity — a
+    per-request cost an editor could set for everyone (issue #79 item 6). The first N in registry
+    order survive; a term longer than the cap is dropped rather than truncated, because half an
+    alias matches pages the whole one never named."""
+    from stigmergy.server import service as service_module
+    conn, fx = service_entity_first_indexed
+    svc = _service(conn, fx)
+    record = {"name": "Borealis Logistics",
+              "aliases": [f"alias-{i}" for i in range(10_000)] + ["x" * 500]}
+
+    # Through the real record lookup: the memo holds this call's registry TEXT, exactly as
+    # `_registry_source` would have left it.
+    svc._registry_memo = (json.dumps({"entities": {"borealis": record}}), "test")
+
+    terms = svc._expansion_terms("borealis")
+
+    assert len(terms) == service_module.MAX_EXPANSION_TERMS
+    assert terms[0] == "Borealis Logistics", "the display name expands first, in registry order"
+    assert all(len(t) <= service_module.MAX_EXPANSION_TERM_CHARS for t in terms)
+
+
+def test_an_ordinary_record_expands_every_spelling_it_has(service_entity_first_indexed):
+    """The benign twin: a real record — a name and a handful of aliases — is nowhere near the
+    bound, and every spelling still expands."""
+    conn, fx = service_entity_first_indexed
+    svc = _service(conn, fx)
+
+    assert svc._expansion_terms("borealis") == ("Borealis Inc", "BorealisCo")

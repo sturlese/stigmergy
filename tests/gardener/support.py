@@ -20,6 +20,7 @@ from stigmergy.capture.evidence import MemoryEvidenceStore
 from stigmergy.gardener import schema as gardener_schema
 from stigmergy.gardener.schema import JOB_NAME, ensure_gardener_schema
 from stigmergy.index import build as index_build
+from stigmergy.index import store as index_store
 from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.server import review
 from tests import testdb
@@ -194,8 +195,15 @@ def rebuild_index(conn, repo: str):
     """`pages_index`, for real, from `repo`'s own files — `index.build.rebuild` drops and
     recreates the table, so this IS the isolation between tests that need it. Exercise the real
     builder over a real repo, never hand-crafted rows a parsing bug could silently disagree
-    with."""
-    return index_build.rebuild(conn, repo, build_embedder("fake"))
+    with.
+
+    The access-file snapshots the rebuild reconciles from this repo are cleared on the way out:
+    in a database every suite shares they would silently switch a later suite's file-road
+    identity or channel resolution onto this repo's copies (arrange, never inherit)."""
+    stats = index_build.rebuild(conn, repo, build_embedder("fake"))
+    for relpath in (index_store.IDENTITIES_RELPATH, index_store.SLACK_CHANNELS_RELPATH):
+        index_store.clear_ops_file(conn, relpath)
+    return stats
 
 
 # ── capture_queue fixtures: "the last N filings", the population the windowed checks share, and

@@ -52,3 +52,40 @@ def test_openai_path_builds_a_real_agent_and_runs_tools_hook(monkeypatch):
     agent = build_processor(_Output, "sys", fake=lambda flawed: _Fake(flawed),
                             tools=seen.append)
     assert seen == [agent]
+
+
+def test_model_override_reaches_the_real_agent_with_no_key_and_no_private_reaching(monkeypatch):
+    """The public seam issue #81 asked for: any package proves a tool-loop property against the
+    REAL Agent — pydantic-ai's own enforcement — by installing an explicit model object, with no
+    API key in the environment and no reaching into this module's private functions. Before this,
+    a suite needed `monkeypatch.setattr(kernel_llm, "build_model", ...)`, a cross-package reach
+    into a private-by-convention seam."""
+    from pydantic_ai import Agent
+    from pydantic_ai.models.test import TestModel
+
+    from stigmergy.kernel import llm
+
+    monkeypatch.setenv("CLEAN_LLM", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    with llm.model_override(TestModel(custom_output_args={"reason": "seam"})):
+        agent = build_processor(_Output, "instructions", fake=_Fake)
+        assert isinstance(agent, Agent)
+        assert agent.run_sync("hi").output.reason == "seam"
+
+    # The override dies with the block: outside it, the openai path wants its key again.
+    with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
+        build_processor(_Output, "instructions", fake=_Fake)
+
+
+def test_model_override_is_inert_on_the_fake_path(monkeypatch):
+    """The benign twin: `CLEAN_LLM=fake` still returns the caller's fake — the override replaces
+    the PROVIDER, never the dispatch, so an offline suite that happens to run inside the block is
+    unchanged."""
+    from pydantic_ai.models.test import TestModel
+
+    from stigmergy.kernel import llm
+
+    monkeypatch.setenv("CLEAN_LLM", "fake")
+    with llm.model_override(TestModel()):
+        assert isinstance(build_processor(_Output, "instructions", fake=_Fake), _Fake)

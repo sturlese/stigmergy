@@ -5,6 +5,7 @@
 registration stays with the caller via the `tools` hook. Imports nothing from the package except
 settings, so any agent module can use it without inheriting the converter/tooling stack.
 """
+import contextlib
 import os
 from collections.abc import Callable
 from typing import Any
@@ -17,6 +18,29 @@ DEFAULT_MODEL = "gpt-5.6-terra"
 DEFAULT_REASONING_EFFORT = "medium"
 _VALID_EFFORTS = ("minimal", "low", "medium", "high")
 
+_MODEL_OVERRIDE = None
+
+
+@contextlib.contextmanager
+def model_override(model):
+    """An explicit pydantic-ai model OBJECT that `build_model` answers with (settings `None`)
+    until the block exits — the public seam a suite proves a tool-loop property through
+    (issue #81).
+
+    Any package can now drive its REAL agent — the `Agent`, the registered tools, pydantic-ai's
+    own `UsageLimits` enforcement — with a scripted `FunctionModel`/`TestModel`, no API key and no
+    reaching into this module's private functions. A double that counts its own tool calls proves
+    the test can count; a budget property is only real under the library that enforces it.
+    Composes with `CLEAN_LLM=openai`, which is what makes `build_processor` construct the real
+    `Agent` at all. Not re-entrant across threads, like the env vars beside it."""
+    global _MODEL_OVERRIDE
+    previous = _MODEL_OVERRIDE
+    _MODEL_OVERRIDE = model
+    try:
+        yield
+    finally:
+        _MODEL_OVERRIDE = previous
+
 
 def build_model(model_name: str | None = None):
     """Model + settings for the agents. Without an explicit name, CLEAN_MODEL is resolved HERE,
@@ -27,6 +51,9 @@ def build_model(model_name: str | None = None):
     provider-prefixed pydantic-ai string ("anthropic:claude-sonnet-4-5") is resolved by
     pydantic-ai, whose provider reads its own env key.
     """
+    if _MODEL_OVERRIDE is not None:
+        return _MODEL_OVERRIDE, None
+
     from pydantic_ai.models.openai import OpenAIResponsesModel, OpenAIResponsesModelSettings
     from pydantic_ai.providers.openai import OpenAIProvider
 

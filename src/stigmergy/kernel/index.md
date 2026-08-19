@@ -9,7 +9,7 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 
 | Module | What it is |
 |---|---|
-| `llm.py` | `build_model()` (CLEAN_MODEL / CLEAN_REASONING_EFFORT, call-time reads; a bare name means the OpenAI Responses API with an explicit reasoning effort, a `provider:model` string is resolved by pydantic-ai) and `build_processor()` — the ONE fake/real agent dispatch; tool registration stays with the caller via the `tools` hook; optional `model_name` for a caller outside the CLEAN_MODEL convention |
+| `llm.py` | `build_model()` (CLEAN_MODEL / CLEAN_REASONING_EFFORT, call-time reads; a bare name means the OpenAI Responses API with an explicit reasoning effort, a `provider:model` string is resolved by pydantic-ai) and `build_processor()` — the ONE fake/real agent dispatch; tool registration stays with the caller via the `tools` hook; optional `model_name` for a caller outside the CLEAN_MODEL convention; `model_override(model)` is the PUBLIC test seam — an explicit pydantic-ai model object (a `FunctionModel`/`TestModel`) that `build_model` answers with inside the block, so any package proves a tool-loop property against the real Agent, keyless, without reaching into this module |
 | `result.py` | `fake_result(output)` — the `(.output, .usage)` envelope every offline double returns from `run()` |
 | `usage_repair.py` | `ensure_usage_extraction_repaired()` — the shim for the pinned pydantic-ai's silent all-zero token extraction on OpenAI reasoning models; idempotent, call-time, defers to the original so it retires itself on a fixed version; installed by every agent-construction site in the process |
 | `settings.py` | `resolve_backend()` — the ONE parse+validation of `$CLEAN_LLM` (`openai`/`fake`/`fake-flawed`), read at call time |

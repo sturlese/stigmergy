@@ -288,10 +288,11 @@ def test_a_removal_earlier_in_the_same_pass_leaves_no_stale_backlink_behind(tmp_
 
 # ── an interrupted pass leaves a coherent repo ─────────────────────────────────────────────────
 def test_an_interrupted_pass_leaves_every_view_it_did_commit_coherent(tmp_path, monkeypatch):
-    """The pass is deliberately not cancellable, so the safety argument is not "it stops cleanly"
-    but "one commit per entity means any prefix of it is a valid repo state". A `KeyboardInterrupt`
-    at the third entity must leave the first two views complete — frontmatter, `member_hash` and
-    all — and the rest simply absent, which is exactly what the next pass's population is derived
+    """There is no cancellation point INSIDE an entity — the cooperative stop only acts between
+    them — so the safety argument for any harder interruption is not "it stops cleanly" but "one
+    commit per entity means any prefix of it is a valid repo state". A `KeyboardInterrupt` at the
+    third entity must leave the first two views complete — frontmatter, `member_hash` and all —
+    and the rest simply absent, which is exactly what the next pass's population is derived
     from."""
     remote, clone, registry, ids = _population_far_above_the_ceiling(tmp_path, n=5)
     real = regenerate.regenerate_entity
@@ -430,6 +431,87 @@ def test_a_backlink_the_view_may_not_show_never_makes_it_permanently_stale(tmp_p
     view = _view(clone)
     assert "nightingale" not in view
     assert "acl:" not in view.split("---")[1]      # and it did not narrow the view either
+
+# ── the cooperative stop, and the mid-batch rebase guard ───────────────────────────────────────
+class _StopAfter:
+    """A `should_stop` that answers False `n` times and True forever after — the shape
+    `Worker._stop_requested` takes when a signal lands mid-pass."""
+
+    def __init__(self, n: int):
+        self.remaining = n
+
+    def __call__(self) -> bool:
+        self.remaining -= 1
+        return self.remaining < 0
+
+
+def test_a_stop_requested_mid_pass_stops_between_entities_with_the_remainder_deferred(tmp_path):
+    """The cooperative shutdown, made to FIRE against the real loop. Until now nothing in the
+    suite called `run` with a `should_stop` that ever flipped, so "a signal is honoured between
+    entities" was a docstring — and the shutdown-delay bound it buys (ONE entity's regeneration,
+    not a whole ceiling's worth) was claimed in two documents and proven nowhere."""
+    remote, clone, registry, ids = _population_far_above_the_ceiling(tmp_path, n=5)
+
+    result = _sweep(clone, registry, should_stop=_StopAfter(1))
+
+    assert result.stats["written"] == 1, "the entity in flight completes; no new one starts"
+    (reason,) = result.skip_reasons
+    assert reason == regenerate.SHUTTING_DOWN_REASON.format(deferred=4)
+    assert len(_views_on_remote(remote)) == 1
+
+
+def test_a_stop_flag_that_never_flips_never_truncates_a_pass(tmp_path):
+    """The benign twin: the deployed worker hands `should_stop` on EVERY pass, so the flag's mere
+    presence must cost nothing — only its answer may."""
+    remote, clone, registry, ids = _population_far_above_the_ceiling(tmp_path, n=3)
+
+    result = _sweep(clone, registry, should_stop=lambda: False)
+
+    assert result.stats["written"] == 3
+    assert result.skip_reasons == []
+    assert len(_views_on_remote(remote)) == 3
+
+
+def test_a_foreign_commit_landing_mid_batch_stops_the_batch_with_the_remainder_deferred(
+        tmp_path, monkeypatch):
+    """The third early stop, driven end to end: a commit from OUTSIDE the run lands on the branch
+    while the batch is pushing, the next push rebases onto it, and the batch must stop — the
+    shared corpus parse now describes a tree that is gone, and every remaining entity would be
+    summarized off post-rebase bytes under a pre-rebase member set. The race is real: a second
+    clone pushes between entities, exactly what a capture filing or an applied repair does."""
+    remote, clone, registry, ids = _population_far_above_the_ceiling(tmp_path, n=4)
+    racer = os.path.join(str(tmp_path), "racer")
+    git("clone", "--quiet", remote, racer, cwd=str(tmp_path))
+    real = regenerate.regenerate_entity
+    calls: list[str] = []
+
+    async def racing(repo, entity_id, **kw):
+        outcome = await real(repo, entity_id, **kw)
+        calls.append(entity_id)
+        if len(calls) == 1:
+            os.makedirs(os.path.join(racer, "wiki", "notes"), exist_ok=True)
+            with open(os.path.join(racer, "wiki", "notes", "raced.md"), "w") as f:
+                f.write("---\ntype: note\ntitle: Raced\n---\n\n# Raced\n")
+            git("add", "--all", cwd=racer)
+            git("commit", "--quiet", "-m", "feat: a foreign commit mid-batch", cwd=racer,
+                env=_COMMIT_ENV)
+            # The racer clones before the batch starts, so entity 1's own push has already moved
+            # the branch under it — rebase onto the tip first, as any real racer would.
+            git("pull", "--quiet", "--rebase", cwd=racer, env=_COMMIT_ENV)
+            git("push", "--quiet", cwd=racer)
+        return outcome
+
+    monkeypatch.setattr(regenerate, "regenerate_entity", racing)
+
+    result = _sweep(clone, registry)
+
+    # Entity 1 pushed clean; the racer then moved the branch; entity 2's push rebased — and THAT
+    # is where the batch must stop: two written, two deferred, said out loud.
+    assert result.stats["written"] == 2
+    assert len(calls) == 2
+    (reason,) = result.skip_reasons
+    assert reason == regenerate.BRANCH_MOVED_REASON.format(entity_id=ids[1], deferred=2)
+    assert len(_views_on_remote(remote)) == 2
 
 
 def test_the_benign_twin_a_corpus_where_nothing_changed_still_costs_nothing(tmp_path, monkeypatch):

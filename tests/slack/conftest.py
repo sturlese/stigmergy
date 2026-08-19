@@ -9,6 +9,7 @@ import pytest
 
 from stigmergy.capture.evidence import MemoryEvidenceStore
 from stigmergy.index import build
+from stigmergy.index import store as index_store
 from stigmergy.index.backends.embedder import build_embedder
 from stigmergy.server.settings import Settings
 from stigmergy.slack.context import SlackContext
@@ -22,6 +23,10 @@ from tests.server.conftest import Fixture
 def connect_or_skip():
     conn = testdb.connect_or_skip("slack")
     ensure_write_path_schema(conn)
+    # Earlier suites' rebuilds may have cached THEIR fixture repos' access files; this suite's
+    # file-road tests must not inherit them (arrange, never inherit — the freshness doctrine).
+    for relpath in (index_store.IDENTITIES_RELPATH, index_store.SLACK_CHANNELS_RELPATH):
+        index_store.clear_ops_file(conn, relpath)
     return conn
 
 

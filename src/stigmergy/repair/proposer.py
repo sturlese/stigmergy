@@ -122,6 +122,24 @@ BODY_DRAFT_LIMITS = UsageLimits(request_limit=26, tool_calls_limit=24)
 USAGE_BUDGET_REASON = ("usage-budget-exhausted: {what} — the model spent its request budget "
                        "mid-work; the next run retries it")
 
+
+def _spend(road: str, result, limits: UsageLimits) -> dict:
+    """One model call's spend beside the ceiling it ran under — what `job_runs.stats` was missing
+    (issue #81): it recorded that a batch LAPSED and never how close a successful one came, so
+    every budget constant here was a reasoned number with no feedback loop behind it, and the only
+    signal the system produced was the failure the number was chosen to prevent. With these rows,
+    the next change to `MIN_TOOL_CALLS_PER_FINDING` or `BODY_DRAFT_LIMITS` is an observation over
+    real nights instead of a formula argued from first principles. Token counts ride along for
+    the same reason — the known gap that nothing persists what a run costs."""
+    usage = result.usage() if callable(getattr(result, "usage", None)) else result.usage
+    return {"road": road,
+            "requests": int(getattr(usage, "requests", 0) or 0),
+            "request_limit": limits.request_limit,
+            "tool_calls": int(getattr(usage, "tool_calls", 0) or 0),
+            "tool_calls_limit": limits.tool_calls_limit,
+            "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+            "output_tokens": int(getattr(usage, "output_tokens", 0) or 0)}
+
 # ── which findings have a path to zero at all ─────────────────────────────────────────────────
 # TWO roads, and a finding rides exactly one of them: the check decides, and the vocabularies do
 # not mix. A finding answered in the other road's shape would be a backlink proposed for a page
@@ -773,16 +791,20 @@ def _merge_retry(original: str, reasons: list[str], candidates: list[str]) -> st
     ])
 
 
-async def choose_survivor(agent, deps: ProposerContext, prompt: str,
-                          candidates: list[str]) -> tuple[str, str, list[str]]:
+async def choose_survivor(agent, deps: ProposerContext, prompt: str, candidates: list[str],
+                          spend: list | None = None) -> tuple[str, str, list[str]]:
     """`(survivor, rationale, reasons)` for ONE pair: one call, one retry carrying the reasons,
     then SKIP — never store an unvalidated choice. A choice that fails twice has cost two model
     calls and nothing else."""
     result = await agent.run(prompt, deps=deps, usage_limits=MERGE_CHOICE_LIMITS)
+    if spend is not None:
+        spend.append(_spend(schema.KIND_ENTITY_ALIAS, result, MERGE_CHOICE_LIMITS))
     survivor, rationale, reasons = validate_merge_choice(result.output, candidates)
     if reasons:
         result2 = await agent.run(_merge_retry(prompt, reasons, candidates), deps=deps,
                                   usage_limits=MERGE_CHOICE_LIMITS)
+        if spend is not None:
+            spend.append(_spend(schema.KIND_ENTITY_ALIAS, result2, MERGE_CHOICE_LIMITS))
         survivor, rationale, reasons = validate_merge_choice(result2.output, candidates)
     return ("" if reasons else survivor), rationale, reasons
 
@@ -898,7 +920,8 @@ def validate_batch(output: ProposalBatch, *, corpus_paths: set[str], link_names:
 
 async def run_proposer(agent, deps: ProposerContext, prompt: str, *, corpus_paths: set[str],
                        link_names: set[str], finding_ids: set[int], max_ops: int,
-                       max_proposals: int, usage_limits) -> tuple[list[dict], list[str]]:
+                       max_proposals: int, usage_limits,
+                       spend: list | None = None) -> tuple[list[dict], list[str]]:
     """`(accepted, skip_reasons)` for ONE batch: one call, one retry carrying the reasons, then
     SKIP — never insert unvalidated.
 
@@ -913,12 +936,16 @@ async def run_proposer(agent, deps: ProposerContext, prompt: str, *, corpus_path
     could corrupt by being skipped. The reasons are counted into `job_runs.stats` instead.
     """
     result = await agent.run(prompt, deps=deps, usage_limits=usage_limits)
+    if spend is not None:
+        spend.append(_spend(schema.KIND_EDITS, result, usage_limits))
     accepted, rejected = validate_batch(result.output, corpus_paths=corpus_paths,
                                         link_names=link_names, finding_ids=finding_ids,
                                         max_ops=max_ops, max_proposals=max_proposals)
     if rejected:
         retry = _retry_prompt(prompt, rejected, max_ops=max_ops, max_proposals=max_proposals)
         result2 = await agent.run(retry, deps=deps, usage_limits=usage_limits)
+        if spend is not None:
+            spend.append(_spend(schema.KIND_EDITS, result2, usage_limits))
         accepted, rejected = validate_batch(result2.output, corpus_paths=corpus_paths,
                                             link_names=link_names, finding_ids=finding_ids,
                                             max_ops=max_ops, max_proposals=max_proposals)
@@ -1040,7 +1067,8 @@ def _is_park(op: dict) -> bool:
 
 
 async def draft_entity_body(agent, deps: ProposerContext, prompt: str, *, repo: str, path: str,
-                            link_names: set[str] | None = None) -> tuple[dict | None, list[str]]:
+                            link_names: set[str] | None = None,
+                            spend: list | None = None) -> tuple[dict | None, list[str]]:
     """`(op, reasons)` for ONE entity page: one call, one retry carrying the reasons, then SKIP —
     never store an unvalidated body. A draft that fails twice has cost two model calls and nothing
     else; there is no watermark it could corrupt.
@@ -1055,6 +1083,8 @@ async def draft_entity_body(agent, deps: ProposerContext, prompt: str, *, repo: 
     where an empty body would erase somebody's prose.
     """
     result = await agent.run(prompt, deps=deps, usage_limits=BODY_DRAFT_LIMITS)
+    if spend is not None:
+        spend.append(_spend(schema.KIND_ENTITY_BODY, result, BODY_DRAFT_LIMITS))
     op = _draft_op(path, result.output)
     if _is_park(op):
         return None, []
@@ -1062,6 +1092,8 @@ async def draft_entity_body(agent, deps: ProposerContext, prompt: str, *, repo: 
     if reasons:
         result2 = await agent.run(_draft_retry(prompt, reasons), deps=deps,
                                   usage_limits=BODY_DRAFT_LIMITS)
+        if spend is not None:
+            spend.append(_spend(schema.KIND_ENTITY_BODY, result2, BODY_DRAFT_LIMITS))
         op = _draft_op(path, result2.output)
         if _is_park(op):
             return None, []
@@ -1098,12 +1130,16 @@ class ProposeResult:
     skipped_invalid: int
     proposal_ids: list[int] = field(default_factory=list)
     skip_reasons: list[str] = field(default_factory=list)
+    # One record per model call, beside the ceiling it ran under — see `_spend`. Bounded by the
+    # run's own shape: at most two calls (the corrective retry) per batch, draft or pair, and the
+    # proposal ceiling bounds those.
+    model_calls: list[dict] = field(default_factory=list)
 
     @property
     def stats(self) -> dict:
         return {"findings_seen": self.findings_seen, "proposed": self.proposed,
                 "skipped_known": self.skipped_known, "skipped_invalid": self.skipped_invalid,
-                "skip_reasons": self.skip_reasons}
+                "skip_reasons": self.skip_reasons, "model_calls": self.model_calls}
 
 
 def proposable_findings(findings: list[dict]) -> list[dict]:
@@ -1202,6 +1238,7 @@ async def _propose_run(conn, *, settings, repo: str = "") -> ProposeResult:
     ceiling = settings.max_proposals_per_run
     accepted: list[dict] = []
     skip_reasons: list[str] = []
+    model_calls: list[dict] = []
     if fresh:
         deps = ProposerContext(repo)
         # The additive road first, then the body road on what is left of the run's budget. The
@@ -1209,19 +1246,20 @@ async def _propose_run(conn, *, settings, repo: str = "") -> ProposeResult:
         # something has to be asked first for "what is left" to mean anything.
         got, reasons = await _propose_edits(
             deps, [f for f in fresh if f.get("check") in EDIT_PROPOSABLE_CHECKS],
-            repo=repo, settings=settings, skill_text=skill_text, ceiling=ceiling)
+            repo=repo, settings=settings, skill_text=skill_text, ceiling=ceiling,
+            spend=model_calls)
         accepted += got
         skip_reasons += reasons
         got, reasons = await _propose_entity_bodies(
             deps, [f for f in fresh if f.get("check") in BODY_PROPOSABLE_CHECKS],
             repo=repo, settings=settings, skill_text=skill_text,
-            budget=ceiling - len(accepted), ceiling=ceiling)
+            budget=ceiling - len(accepted), ceiling=ceiling, spend=model_calls)
         accepted += got
         skip_reasons += reasons
         got, reasons = await _propose_entity_aliases(
             deps, [f for f in fresh if f.get("check") in ALIAS_PROPOSABLE_CHECKS],
             repo=repo, settings=settings, skill_text=skill_text,
-            budget=ceiling - len(accepted), ceiling=ceiling)
+            budget=ceiling - len(accepted), ceiling=ceiling, spend=model_calls)
         accepted += got
         skip_reasons += reasons
 
@@ -1249,7 +1287,7 @@ async def _propose_run(conn, *, settings, repo: str = "") -> ProposeResult:
     result = ProposeResult(
         run_id=None, findings_seen=len(candidates), proposed=len(proposal_ids),
         skipped_known=skipped_known, skipped_invalid=len(skip_reasons),
-        proposal_ids=proposal_ids, skip_reasons=skip_reasons)
+        proposal_ids=proposal_ids, skip_reasons=skip_reasons, model_calls=model_calls)
     # The job row LAST, and after the proposals are on the table: a run that recorded itself and
     # then failed to store anything would read as "nothing to propose".
     result.run_id = capture_ops.record_job_run(conn, JOB_NAME, status="ok", stats=result.stats)
@@ -1265,7 +1303,8 @@ RUN_CEILING_REASON = (
 
 
 async def _propose_edits(deps: ProposerContext, fresh: list[dict], *, repo: str, settings,
-                         skill_text: str, ceiling: int) -> tuple[list[dict], list[str]]:
+                         skill_text: str, ceiling: int,
+                         spend: list | None = None) -> tuple[list[dict], list[str]]:
     """The additive road, unchanged: batches of findings to one model call each, until the run's
     ceiling is full."""
     if not fresh:
@@ -1288,7 +1327,7 @@ async def _propose_edits(deps: ProposerContext, fresh: list[dict], *, repo: str,
                 # The findings this call actually carries, not `settings.batch_size`: the last
                 # batch of a run is usually short, and paying it a full batch's allowance is the
                 # honest reading of a budget that exists to cover the work in the prompt.
-                usage_limits=batch_limits(len(batch)))
+                usage_limits=batch_limits(len(batch)), spend=spend)
         except UsageLimitExceeded:
             skip_reasons.append(USAGE_BUDGET_REASON.format(
                 what=f"batch of {len(batch)} finding(s) skipped"))
@@ -1314,8 +1353,8 @@ async def _propose_edits(deps: ProposerContext, fresh: list[dict], *, repo: str,
 
 
 async def _propose_entity_bodies(deps: ProposerContext, fresh: list[dict], *, repo: str, settings,
-                                 skill_text: str, budget: int,
-                                 ceiling: int) -> tuple[list[dict], list[str]]:
+                                 skill_text: str, budget: int, ceiling: int,
+                                 spend: list | None = None) -> tuple[list[dict], list[str]]:
     """The body road: ONE model call per entity page, and only for an entity the corpus has
     something to say about.
 
@@ -1347,7 +1386,7 @@ async def _propose_entity_bodies(deps: ProposerContext, fresh: list[dict], *, re
             op, reasons = await draft_entity_body(
                 agent, deps, build_entity_body_prompt(path, _page_body(deps, path),
                                                       {p: _page_body(deps, p) for p in sources}),
-                repo=repo, path=path, link_names=link_names)
+                repo=repo, path=path, link_names=link_names, spend=spend)
         except UsageLimitExceeded:
             skip_reasons.append(USAGE_BUDGET_REASON.format(
                 what=f"body draft for {path} skipped"))
@@ -1392,8 +1431,8 @@ UNNAMEABLE_PAIR_REASON = (
 
 
 async def _propose_entity_aliases(deps: ProposerContext, fresh: list[dict], *, repo: str, settings,
-                                  skill_text: str, budget: int,
-                                  ceiling: int) -> tuple[list[dict], list[str]]:
+                                  skill_text: str, budget: int, ceiling: int,
+                                  spend: list | None = None) -> tuple[list[dict], list[str]]:
     """The merge road: ONE model call per duplicate-identity finding, and the model answers with a
     CHOICE that code turns into a sweep.
 
@@ -1440,7 +1479,7 @@ async def _propose_entity_aliases(deps: ProposerContext, fresh: list[dict], *, r
                 agent, deps,
                 build_entity_alias_prompt(candidates,
                                           {p: _page_body(deps, p) for p in candidates}, anchored),
-                candidates)
+                candidates, spend=spend)
         except UsageLimitExceeded:
             skip_reasons.append(USAGE_BUDGET_REASON.format(what=f"merge choice for {pair} skipped"))
             continue

@@ -95,7 +95,7 @@ def entity_docs_indexed(tmp_path_factory):
     conn = connect_or_skip()
     build.rebuild(conn, fx.repo, build_embedder("fake"))
     yield conn, fx
-    index_store.clear_entity_registry(conn)
+    index_store.clear_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH)
     conn.close()
 
 
@@ -157,7 +157,7 @@ def test_list_entities_registry_missing_serves_ids_only(entity_docs_indexed):
     rebuild — which cached this repo's registry — has to be cleared for a bogus path to be the
     whole answer."""
     conn, fx = entity_docs_indexed
-    index_store.clear_entity_registry(conn)
+    index_store.clear_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH)
     svc = _service(conn, fx, fx.STEWARD, entity_registry_path="/nonexistent/entity-registry.json")
     out = svc.list_entities()
     assert out["entities"]
@@ -170,7 +170,7 @@ def test_list_entities_registry_malformed_raises_loudly(entity_docs_indexed, tmp
     naming the registry's filesystem PATH left the service; every reader now goes through
     `_registry_records`, which converts it (`errors.RegistryError`'s own reason for existing)."""
     conn, fx = entity_docs_indexed
-    index_store.clear_entity_registry(conn)      # the file road is the one under test
+    index_store.clear_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH)      # the file road is the one under test
     bad = tmp_path / "bad-registry.json"
     bad.write_text(json.dumps({"not-entities": {}}))
     svc = _service(conn, fx, fx.STEWARD, entity_registry_path=str(bad))
@@ -387,7 +387,7 @@ def duplicate_self_anchor_indexed(tmp_path_factory):
     conn = connect_or_skip()
     build.rebuild(conn, fx.repo, build_embedder("fake"))
     yield conn, fx
-    index_store.clear_entity_registry(conn)
+    index_store.clear_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH)
     conn.close()
 
 
