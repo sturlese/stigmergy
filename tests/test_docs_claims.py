@@ -141,6 +141,26 @@ def test_every_stigmergy_command_the_reference_docs_run_is_a_real_entry_point():
                         + "\n  ".join(ghosts))
 
 
+# The environment names these guards can SEE (issue #111). `STIGMERGY_*` is the house prefix;
+# the model-seam family is enumerated BY NAME rather than wildcarded, because the literal scan
+# cannot tell an env var from a module constant — `EMBED_BATCH` is code, not configuration, and
+# a wildcard would demand `.env.example` lines for things no operator can set. Adding a seam env
+# means adding it here, which is the point: invisible-to-the-guards was the defect.
+_SEAM_ENVS = ("EMBED_BASE_URL", "EMBED_API_KEY", "EMBED_MODEL", "EMBED_DIMENSIONS",
+              "CLEAN_LLM", "CLEAN_MODEL", "CLEAN_REASONING_EFFORT",
+              "ANSWER_LLM", "ANSWER_MODEL", "ANSWER_REASONING_EFFORT", "VISION_MODEL")
+_ENV_NAME_RE = re.compile(r"\bSTIGMERGY_[A-Z0-9_]+\b|\b(?:" + "|".join(_SEAM_ENVS) + r")\b")
+
+
+def test_the_guards_see_the_model_seam_family():
+    """The fix's own pin, both halves: every enumerated seam env is visible to the pattern the
+    two guards share, and a module CONSTANT that merely wears the family's prefix is not — the
+    benign twin that keeps the enumeration from quietly becoming a wildcard."""
+    for name in _SEAM_ENVS:
+        assert _ENV_NAME_RE.search(f"set {name} first"), name
+    assert not _ENV_NAME_RE.search("EMBED_BATCH is a module constant, not configuration")
+
+
 def test_every_environment_variable_the_reference_docs_name_is_read_somewhere():
     """`src/` and `tests/` are where Python reads one; `.github/workflows/` and the cron templates
     in `deploy/workflows/` are where Actions does
@@ -148,8 +168,8 @@ def test_every_environment_variable_the_reference_docs_name_is_read_somewhere():
     in none of the three is one an operator would set to no effect."""
     def declared(paths) -> set[str]:
         return {name for path in paths if path.is_file()
-                for name in re.findall(r"\bSTIGMERGY_[A-Z0-9_]+\b",
-                                       path.read_text(encoding="utf-8", errors="ignore"))}
+                for name in _ENV_NAME_RE.findall(
+                    path.read_text(encoding="utf-8", errors="ignore"))}
 
     read = (declared((ROOT / "src").rglob("*.py"))
             | declared((ROOT / "tests").rglob("*.py"))
@@ -159,7 +179,7 @@ def test_every_environment_variable_the_reference_docs_name_is_read_somewhere():
 
     ghosts = sorted({f"{_rel(doc)}: {name}"
                      for doc in sorted(REFERENCE.glob("*.md"))
-                     for name in re.findall(r"\bSTIGMERGY_[A-Z0-9_]+\b", _text(doc))
+                     for name in _ENV_NAME_RE.findall(_text(doc))
                      if name not in read})
     assert not ghosts, ("the reference docs name variables nothing reads:\n  " + "\n  ".join(ghosts))
 
@@ -189,16 +209,17 @@ CONFIG_EXCEPTIONS = {
 
 
 def _configured_names() -> set[str]:
-    return set(re.findall(r"\bSTIGMERGY_[A-Z0-9_]+\b", _text(CONFIG_EXAMPLE)))
+    return set(_ENV_NAME_RE.findall(_text(CONFIG_EXAMPLE)))
 
 
 def _names_read_by_the_code() -> set[str]:
-    """Every `STIGMERGY_*` literal in `src/`. Literal-scanned rather than parsed, exactly like the
+    """Every `STIGMERGY_*` (and enumerated seam-env — issue #111) literal in `src/`.
+    Literal-scanned rather than parsed, exactly like the
     docs check next door — which is also why a variable name must never be wrapped across a line
     break: this cannot see one, and neither can a human grepping for it."""
     return {name for path in (ROOT / "src").rglob("*.py")
-            for name in re.findall(r"\bSTIGMERGY_[A-Z0-9_]+\b",
-                                   path.read_text(encoding="utf-8", errors="ignore"))}
+            for name in _ENV_NAME_RE.findall(
+                path.read_text(encoding="utf-8", errors="ignore"))}
 
 
 def test_every_setting_the_code_reads_is_offered_to_an_operator():
