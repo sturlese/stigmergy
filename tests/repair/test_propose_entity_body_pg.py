@@ -410,3 +410,105 @@ def test_the_drafters_frame_states_what_the_skill_cannot_widen():
 @pytest.mark.parametrize("field", ["body_markdown", "role"])
 def test_the_draft_schema_asks_for_exactly_the_two_fields_the_op_carries(field):
     assert field in proposer.EntityBodyDraft.model_fields
+
+
+# ── the park: an empty body is the answer both briefs ask for ──────────────────────────────────
+class _Empties:
+    """A drafter that answers with an empty body, counting the calls it was asked for.
+
+    The counting is the whole point of the class: what #83 is about is not WHETHER the empty draft
+    is stored (it never was) but what the honest answer COSTS, and the only way to see a cost is
+    to count calls.
+    """
+
+    def __init__(self, first: str = ""):
+        self.calls: list[str] = []
+        self.first = first
+
+    async def run(self, prompt, *, deps=None, usage_limits=None):
+        from stigmergy.kernel.result import fake_result
+        self.calls.append(prompt)
+        body = self.first if len(self.calls) == 1 else ""
+        return fake_result(proposer.EntityBodyDraft(body_markdown=body))
+
+
+def test_an_empty_body_is_the_PARK_and_costs_one_model_call_not_two(conn, repo_env, settings,
+                                                                    monkeypatch):
+    """**The answer this road's own brief asks for, priced as an answer.** Before #83 an empty
+    body was routed through the validator's error path: the retry brief re-stated the very
+    instruction the model had just followed ("Return an EMPTY body rather than inventing one"),
+    the model obeyed again, and the page was refused a second time — two calls, every run, for
+    every entity whose corpus says nothing, forever.
+
+    The recurrence itself is deliberate and stays: nothing durable remembers a decline, so the
+    page is re-asked once the corpus has grown, which is the road's whole reason to exist.
+    """
+    double = _Empties()
+    monkeypatch.setattr(proposer, "build_entity_body_drafter", lambda *a, **kw: double)
+    _seed(conn, repo_env)
+
+    result = _propose(conn, settings)
+
+    assert len(double.calls) == 1, "an empty body is an answer, not a validation error to retry"
+    assert result.proposed == 0
+    assert store.pending_proposals(conn) == []
+    assert any("declined" in reason and support.ENTITY_PAGE in reason
+               for reason in result.skip_reasons)
+
+
+def test_an_empty_body_arriving_on_the_RETRY_is_the_park_too(conn, repo_env, settings,
+                                                             monkeypatch):
+    """The half a check placed only before the first validation would miss. `_draft_retry` ends
+    with "Return an EMPTY body rather than inventing one", so a first draft that fails for an
+    UNRELATED reason can be answered with the park — and routing that through the error path
+    records a refusal for an answer the retry brief explicitly asked for."""
+    double = _Empties(first=proposer.FakeEntityBodyDrafter.FLAWED_BODY)
+    monkeypatch.setattr(proposer, "build_entity_body_drafter", lambda *a, **kw: double)
+    _seed(conn, repo_env)
+
+    result = _propose(conn, settings)
+
+    assert len(double.calls) == 2, "a real validation failure still gets its one corrective retry"
+    assert result.proposed == 0
+    assert any("declined" in reason for reason in result.skip_reasons)
+    assert not any("refused" in reason for reason in result.skip_reasons)
+
+
+def test_a_declined_draft_records_a_sentence_that_names_the_page(conn, repo_env, settings,
+                                                                  monkeypatch):
+    """The benign half of the reason vocabulary: a park is recorded through its OWN sentence, not
+    through the refusal template with an empty reason list — which reads as
+    `entity-body draft refused for X: ` and tells an operator that something went wrong."""
+    monkeypatch.setattr(proposer, "build_entity_body_drafter", lambda *a, **kw: _Empties())
+    _seed(conn, repo_env)
+
+    result = _propose(conn, settings)
+
+    (reason,) = [r for r in result.skip_reasons if support.ENTITY_PAGE in r]
+    assert not reason.rstrip().endswith(":"), "a refusal with no reasons is a malformed sentence"
+    assert "nothing yet to write" in reason
+
+
+def test_a_flawed_draft_still_gets_its_one_corrective_retry_and_is_then_refused(conn, repo_env,
+                                                                                monkeypatch):
+    """The benign twin for the park check: recognising an empty body early must not disarm the
+    retry for the failures it was built for. `fake-flawed` keeps a placeholder line in BOTH
+    answers, so the road must end in a refusal — with reasons — rather than in a park."""
+    monkeypatch.setenv("CLEAN_LLM", "fake-flawed")
+    _seed(conn, repo_env)
+
+    result = _propose(conn, settings=RepairSettings(repo=repo_env.repo))
+
+    assert result.proposed == 0
+    assert any("refused" in reason and "placeholder" in reason for reason in result.skip_reasons)
+
+
+def test_the_validator_still_refuses_an_empty_body_at_apply_time(repo_env):
+    """Two moments, two answers, and this is the one that must NOT move. The proposer never stores
+    an empty draft, so the validator is the backstop for a stored op — and there an empty body
+    would erase whatever prose the page already carries."""
+    support.seed_entity(repo_env, anchored=2)
+    op = {schema.OP_KIND_KEY: schema.KIND_ENTITY_BODY, "path": support.ENTITY_PAGE,
+          "body_markdown": "", "role": ""}
+
+    assert [f.code for f in entity_body.validate(repo_env.repo, [op])] == ["empty-body"]

@@ -1,6 +1,8 @@
 """views.staleness — the READ-ONLY half of view regeneration. Staleness has one definition, and
-it lives here: `skeleton.member_hash` over the current member set vs the view's recorded
-`member_hash:` frontmatter.
+it lives here: TWO signals, compared as a pair against the ones the view recorded on itself —
+`skeleton.member_hash` over the current member set, and `skeleton.backlink_hash` over the
+backlinks it would render now. One name each, because `member_hash` covers the member set and
+nothing else, and a view's Backlinks section is fed by pages that are not members (#85).
 
 This module must not import `views.regenerate` (or `writer`/`synthesis`): `gardener.checks`
 imports THIS module, and `regenerate` module-level-imports the git write stack the gardener must
@@ -9,8 +11,10 @@ re-exports every name below.
 """
 import os
 import re
+from dataclasses import dataclass
 
 from stigmergy.index import corpus
+from stigmergy.kernel.acl import view_acl
 from stigmergy.views import skeleton
 from stigmergy.views.errors import ViewError
 
@@ -49,16 +53,89 @@ def view_path(repo: str, entity_id: str) -> str:
     return os.path.join(repo, *view_relpath(entity_id).split("/"))
 
 
-def existing_member_hash(repo: str, entity_id: str) -> str | None:
-    """The view's recorded `member_hash:` frontmatter field, or `None` when no view exists
-    yet."""
+@dataclass(frozen=True)
+class ViewSignals:
+    """A view's staleness signals, always read and computed as a PAIR — one per feed the page
+    renders: `member_hash` for the member set, `backlink_hash` for the backlinks.
+
+    The two `None`s mean different things and neither means "matches nothing". A `member_hash` of
+    `None` is "there is no view here, or no member set to build one from". A `backlink_hash` of
+    `None` is "a view written before that field existed", which `view_is_current` reads as STALE:
+    every view on a real deployment predates the field, and the one pass that regenerates each of
+    them is precisely what computes the missing signal.
+    """
+    member_hash: str | None = None
+    backlink_hash: str | None = None
+
+
+def _frontmatter_str(fm: dict, key: str) -> str | None:
+    value = fm.get(key)
+    return str(value) if value else None
+
+
+def existing_signals(repo: str, entity_id: str) -> ViewSignals:
+    """Both signals the view recorded on itself, off ONE read of its frontmatter — a pass opens
+    one file per entity and this keeps it at one. Absent view or absent field is `None`."""
     path = view_path(repo, entity_id)
     if not os.path.exists(path):
-        return None
+        return ViewSignals()
     with open(path, encoding="utf-8") as f:
         fm, _ = corpus.split_frontmatter(f.read())
-    value = fm.get("member_hash")
-    return str(value) if value else None
+    return ViewSignals(member_hash=_frontmatter_str(fm, "member_hash"),
+                       backlink_hash=_frontmatter_str(fm, "backlink_hash"))
+
+
+def existing_member_hash(repo: str, entity_id: str) -> str | None:
+    """The view's recorded `member_hash:` frontmatter field, or `None` when no view exists yet.
+
+    Kept as its own name because it is read as an EXISTENCE probe — "is there a view here at all"
+    — where the answer decides between a refusal and a removal, never between fresh and stale.
+    The staleness question is `view_is_current`'s, over the pair."""
+    return existing_signals(repo, entity_id).member_hash
+
+
+def current_signals(repo: str, entity_id: str, members: list[skeleton.Member], *,
+                    rows=None) -> ViewSignals:
+    """What a view generated from `members` RIGHT NOW would record — the ONE computation of the
+    pair, so `list_stale_entities` (which is also the gardener's population) and
+    `regenerate.regenerate_entity` cannot come to disagree about what "stale" means.
+
+    The backlink half is computed exactly as the section is RENDERED: the same audience
+    (`view_acl` over the members, the value the page's own `acl:` is), the same self-exclusion,
+    and the same `visible_to_view` gate. That is what makes a narrowed or deleted source register
+    — it simply stops being one of these rows.
+
+    An empty member set is `ViewSignals()`: no view is generated from nothing, which never equals
+    a stored pair, and that is what puts an orphaned view into the removal population.
+
+    `rows` is the batch's shared corpus parse. It reaches `backlinks_of` HERE and must not on the
+    write path — see that function for the one-interval lag it buys and why the trade is the
+    right way round.
+    """
+    if not members:
+        return ViewSignals()
+    audience = view_acl([m.acl for m in members])
+    backlinks = skeleton.backlinks_of(repo, skeleton.entity_own_page(members),
+                                      view_acl=audience,
+                                      exclude_path=view_relpath(entity_id), rows=rows)
+    return ViewSignals(member_hash=skeleton.member_hash(members),
+                       backlink_hash=skeleton.backlink_hash(backlinks))
+
+
+def view_is_current(*, existing: ViewSignals, current: ViewSignals) -> bool:
+    """Is the view on disk what the corpus would produce right now? BOTH signals must match.
+
+    Every early return is a "no", and each one is a different fact: no view (or nothing to build
+    one from), and a view predating `backlink_hash:`. The last one is stated rather than left to
+    fall out of the comparison, because `None == None` would have quietly reported `unchanged`
+    and shipped #85's leak forever — a view whose backlink source was narrowed after generation
+    would have kept citing it, title and path, and every pass would have called that current.
+    """
+    if existing.member_hash is None or current.member_hash is None:
+        return False
+    if existing.backlink_hash is None:
+        return False
+    return existing == current
 
 
 def existing_view_ids(repo: str) -> set[str]:
@@ -76,20 +153,22 @@ def existing_view_ids(repo: str) -> set[str]:
 
 
 def list_stale_entities(repo: str, *, rows=None) -> list[str]:
-    """`--stale`'s population: entities with an EXISTING view whose member set no longer
-    matches. Also `gardener.checks.check_stale_views`'s population, reused verbatim so the two
-    can never disagree about what "stale" means.
+    """`--stale`'s population: entities with an EXISTING view that is no longer what the corpus
+    would produce — its member set moved, or the backlinks it cites did. Also
+    `gardener.checks.check_stale_views`'s population, reused verbatim so the detector and the
+    actor can never disagree about what "stale" means, and the reason the gardener sees the
+    backlink half for free.
 
-    The repo is parsed ONCE for the whole sweep and handed down to `skeleton.members_of`: a parse
-    per entity is O(views x corpus). `rows` lets a caller that already holds a parse pass it in;
-    the parser itself is deliberately NOT memoized, because a stale cache under a writer is worse
-    than a re-parse."""
+    The repo is parsed ONCE for the whole sweep and handed down to `skeleton.members_of` and
+    `current_signals`: a parse per entity is O(views x corpus). `rows` lets a caller that already
+    holds a parse pass it in; the parser itself is deliberately NOT memoized, because a stale
+    cache under a writer is worse than a re-parse."""
     rows = corpus.load_pages(repo) if rows is None else rows
     out = []
     for entity_id in sorted(existing_view_ids(repo)):
         members = skeleton.members_of(repo, entity_id, rows=rows)
-        h = skeleton.member_hash(members) if members else None
-        if h != existing_member_hash(repo, entity_id):
+        if not view_is_current(existing=existing_signals(repo, entity_id),
+                               current=current_signals(repo, entity_id, members, rows=rows)):
             out.append(entity_id)
     return out
 

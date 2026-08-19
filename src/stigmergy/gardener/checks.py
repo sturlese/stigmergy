@@ -40,10 +40,19 @@ CHECK_DATE_BEARING_BODY_LINK = "date-bearing-body-link"
 # an entity page, and the repair proposer drafts that page's body from the pages anchored to it.
 CHECK_ENTITY_PLACEHOLDER_BODY = "entity-placeholder-body"
 
+# The residual an applied `entity-alias` merge leaves behind and can never sweep up itself: the
+# absorbed id stays REGISTERED (the page stays by governance, and the knowledge repo's contract
+# linter refuses an alias naming an existing page), so a capture filed later spelling that name
+# anchors its history to the retired identity — and the loop cannot re-propose the pair, because
+# the decision's `content_key` is permanent. This count is where that accumulation is visible, and
+# the measurable target the filing-time fix (issue #77's other half) converges to zero.
+CHECK_ANCHORED_TO_SUPERSEDED_ENTITY = "anchored-to-superseded-entity"
+
 ALL_CHECK_SLUGS = (
     CHECK_ORPHAN_PAGE, CHECK_AGING_SEED, CHECK_STALE_VIEW, CHECK_ANCHOR_CONCENTRATION,
     CHECK_DEAD_VOCABULARY, CHECK_COMPANY_WIDE_FRACTION, CHECK_COMPANY_PAGE_NAMES_ENTITY,
     CHECK_DATE_BEARING_BODY_LINK, CHECK_ENTITY_PLACEHOLDER_BODY,
+    CHECK_ANCHORED_TO_SUPERSEDED_ENTITY,
 )
 
 # The tail of every "this page may be anchored wrong" action — `check_company_page_names_entity`
@@ -189,9 +198,11 @@ def check_aging_seeds(conn, *, threshold_days: int, population_stats: dict | Non
 # ── stale views — file-based, no DB ──────────────────────────────────────────────────────────
 def check_stale_views(repo: str) -> list[dict]:
     """Population: every entity `views.staleness.list_stale_entities` names — reused verbatim,
-    never re-derived. Staleness is a member-hash mismatch, not an age. Import `views.staleness`,
-    never `views.regenerate`: the latter would load the git write stack into every gardener
-    process.
+    never re-derived. Staleness is a signal mismatch, not an age — the member hash OR the backlink
+    hash, whichever moved — and reusing that function rather than re-deriving it is exactly why
+    this check inherited the backlink half (#85) without a line changing here. Import
+    `views.staleness`, never `views.regenerate`: the latter would load the git write stack into
+    every gardener process.
 
     This finding HAS an actor, and it is not here: the librarian worker's periodic convergence
     sweep regenerates over a SUPERSET of this population (it also creates views that never existed
@@ -200,7 +211,8 @@ def check_stale_views(repo: str) -> list[dict]:
     return [
         build_finding(
             check=CHECK_STALE_VIEW, severity=SEVERITY_WARN, subject=entity_id,
-            detail="the view's member set has changed since it was last generated",
+            detail="the view no longer matches the corpus — its member set or the backlinks it "
+                   "cites have changed since it was last generated",
             # Backticks baked into the stored string, so `--json` and the printed report carry
             # the identical value; the runnable command is the text between them.
             suggested_action=f"`stigmergy-views regenerate --entity {entity_id}`",
@@ -405,6 +417,51 @@ def check_company_page_names_entity(conn, registry: Registry) -> list[dict]:
                     f"should have been anchored to {registry.title(entity_id) or entity_id} "
                     f"instead; {REANCHOR_BY_HAND}"),
             ))
+    return findings
+
+
+# ── pages anchored to a retired identity ──────────────────────────────────────────────────────
+# The population is the whole point, so it is spelled out: the KNOWLEDGE zone only, minus the
+# entity zone itself. The absorbed page keeps its self-anchor forever BY DESIGN (its history is
+# its own), and its `views/` rollup keeps declaring the id as a member set of one — a predicate
+# alone would therefore report two permanent, unfixable findings per merge, forever: the exact
+# disease the repair loop exists to end. With those out, the count is exactly zero the moment a
+# merge lands, and every finding is a page somebody can actually re-anchor.
+_ANCHORED_TO_SUPERSEDED_SQL = """
+WITH retired AS (
+  SELECT DISTINCT unnest(entity) AS id
+  FROM pages_index
+  WHERE path LIKE %(entity_zone)s AND superseded_by <> ''
+)
+SELECT p.path, array_agg(r.id ORDER BY r.id)
+FROM pages_index p
+JOIN retired r ON r.id = ANY(p.entity)
+WHERE p.zone = 'wiki' AND p.path NOT LIKE %(entity_zone)s
+GROUP BY p.path
+ORDER BY p.path
+"""
+
+
+def check_anchored_to_superseded_entity(conn) -> list[dict]:
+    """Knowledge pages whose `entity:` names an id whose OWN entity page declares
+    `superseded_by:` — anchored to a retired identity. See `CHECK_ANCHORED_TO_SUPERSEDED_ENTITY`
+    for why the loop cannot fix this itself and this count is the residual's one visible surface.
+    True or false by inspection, so it is a deterministic check and never a model question."""
+    with conn.cursor() as cur:
+        cur.execute(_ANCHORED_TO_SUPERSEDED_SQL, {"entity_zone": "/".join(_ENTITY_ZONE) + "/%"})
+        rows = cur.fetchall()
+    findings = []
+    for path, retired_ids in rows:
+        listed = ", ".join(f"`{i}`" for i in retired_ids)
+        findings.append(build_finding(
+            check=CHECK_ANCHORED_TO_SUPERSEDED_ENTITY, severity=SEVERITY_INFO, subject=path,
+            detail=(f"anchored to {listed}, a superseded identity — its page names the surviving "
+                    f"one in `superseded_by:`, and this page's history sits on the retired side "
+                    f"of that merge"),
+            suggested_action=(
+                "no command — move the page's anchor to the surviving identity (the retired "
+                f"entity's own page names it in `superseded_by:`); {REANCHOR_BY_HAND}"),
+        ))
     return findings
 
 

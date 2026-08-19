@@ -36,8 +36,8 @@ def render_synthesis(synthesis_body: str, shipped: bool, generated_date: str) ->
 
 
 def render(entity_id: str, entity_title: str, members: list[Member], *, member_hash: str,
-          timeline_md: str, backlinks_md: str, synthesis_body: str, shipped: bool,
-          now: datetime.datetime | None = None) -> str:
+          backlink_hash: str, timeline_md: str, backlinks_md: str, synthesis_body: str,
+          shipped: bool, now: datetime.datetime | None = None) -> str:
     """The full view page: frontmatter + body. Returns the rendered text (not yet written to
     disk — `views.writer` owns that)."""
     now = now or datetime.datetime.now(datetime.UTC)
@@ -57,9 +57,13 @@ def render(entity_id: str, entity_title: str, members: list[Member], *, member_h
          f"entity: [{_yaml(entity_id)}]", "tags: [view]", "tier: 3",
          f'content_hash: "sha256:{body_hash}"', f'generated_at: "{generated_at}"',
          f"members: {len(members)}",
-         # The persisted staleness signal, on the derived page itself and git-versioned — never
-         # in a side-channel state file that can drift from the page it describes.
-         f'member_hash: "{member_hash}"']
+         # The persisted staleness signals, on the derived page itself and git-versioned — never
+         # in a side-channel state file that can drift from the page it describes. TWO fields,
+         # one per feed the page renders: `member_hash` would start lying if the backlinks were
+         # folded into it, and a comparison that reads a missing `backlink_hash:` as a match is
+         # exactly the silence #85 was filed for — so `backlink_hash` is REQUIRED here, and a
+         # view written without one reads as stale until it has been regenerated once.
+         f'member_hash: "{member_hash}"', f'backlink_hash: "{backlink_hash}"']
     acl = view_acl([m.acl for m in members])
     if acl is not None:
         # The INTERSECTION of the members' audiences — a rollup never widens access. An empty

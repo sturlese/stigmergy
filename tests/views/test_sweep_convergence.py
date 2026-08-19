@@ -322,45 +322,40 @@ def test_an_interrupted_pass_leaves_every_view_it_did_commit_coherent(tmp_path, 
     assert _views_on_remote(remote) == {f"views/{i}.md" for i in ids}
 
 
-# ── what the staleness definition does NOT cover, and #76 is what makes that matter ────────────
+# ── the SECOND staleness signal: the backlinks a view cites (#85) ──────────────────────────────
 _BACKLINK_SOURCE = ('---\ntype: decision\ntitle: "Project Nightingale"\nas_of: "2026-08-02"\n'
                     'created: "2026-08-02"\nupdated: "2026-08-02"\nstatus: developing\n{acl}'
                     'tags: [decision]\n---\n\n# Project Nightingale\n\nSee [[Acme Corp]].\n')
 
 
+def _view(clone: str, entity_id: str = "acme-corp") -> str:
+    return open(os.path.join(clone, "views", f"{entity_id}.md")).read()
+
+
 @pytest.mark.parametrize("how", ["deleted", "restricted"])
-def test_a_backlink_that_stopped_qualifying_survives_a_convergence_pass(tmp_path, how):
-    """**CHARACTERIZATION of a known defect — issue #85. This test asserts what the system DOES,
-    which is not what it should do.**
+def test_a_backlink_that_stopped_qualifying_must_not_survive_a_convergence_pass(tmp_path, how):
+    """**This was the CHARACTERIZATION of #85 and is now its regression test.**
 
-    A view keeps citing a backlink that has stopped qualifying, and no pass will notice, because
-    staleness is defined solely by `member_hash` and a backlink source is not a member. Both halves
-    below are real and neither is fixed here:
+    OLD BEHAVIOUR, asserted here until #85 landed: `{'written': 0, 'unchanged': 1}`, and the view
+    still citing `[[nightingale]]` and its path — forever, since staleness was `member_hash`
+    alone and a backlink source is not a member. `--force` was the whole recovery.
 
-    - `deleted` — the `delete` repair kind removes the backlink source and the view keeps a
-      dangling `[[...]]` pointing at a path that no longer exists. The gardener's `dead-link`-shaped
-      checks cannot see it: they read the corpus, where the link is real until the view is
-      regenerated.
-    - `restricted` — a steward narrows the source's `acl`. `skeleton.backlinks_of` gates every
-      backlink through `kernel.acl.visible_to_view` **at generation time only**, so the
-      already-committed view keeps that page's STEM and PATH (`render_backlinks` links by file
-      stem) readable by everyone the view is readable by. That is in tension with this system's own
-      existence-leak rule (an unknown page and a forbidden page return the same string,
-      deliberately) and with the invariant #76 and ADR 021 both state — a view "cannot widen access
-      to what it summarizes".
+    Both halves are real and both are now closed by the same signal, `skeleton.backlink_hash`
+    over the rows the section RENDERS:
 
-    **Why it is characterized here and not fixed here.** It is PRE-EXISTING: both halves are as old
-    as `backlinks_of` and neither was introduced by the convergence pass, which only made them
-    permanent rather than eventual. The honest fix — folding a backlink signal (path + acl per row)
-    into the staleness comparison, or recording a `backlink_hash` beside `member_hash` — makes
-    every backlink change a regeneration, which is a model call per affected entity per pass, and
-    that cost argument deserves its own change rather than a rider on this one.
+    - `deleted` — the `delete` repair kind removes the backlink source, and the view kept a
+      dangling `[[...]]` to a path that no longer existed. The gardener's `dead-link`-shaped
+      checks could not see it either: they read the corpus, where the link is real until the view
+      is regenerated.
+    - `restricted` — a steward narrows the source's `acl`. `backlinks_of` gates every backlink
+      through `kernel.acl.visible_to_view`, so the narrowed page drops OUT of the rendered rows,
+      the hash moves, and the pass regenerates the view without it. Before the fix that gate ran
+      at generation time only, so an already-committed view kept the page's STEM and PATH readable
+      by everyone the view was readable by — the existence leak, not merely staleness: this
+      system's own rule is that an unknown page and a forbidden one return the same string.
 
-    **What would make this test change**: #85 landing. When a backlink signal enters the staleness
-    definition these assertions invert — the pass reports `written` instead of `unchanged` and the
-    citation is gone — and this test becomes the one the tester wrote first, which is preserved
-    verbatim in the issue. Until then the last block below is the whole recovery: `--force`, an
-    operator's act, which is what `docs/reference/views.md`'s limits section documents.
+    The last block is the convergence half, and it is what makes this a fix rather than a
+    thrashing loop: the pass that dropped the citation must be the LAST one that pays for it.
     """
     remote, clone = build_repo(str(tmp_path / "git"), n_decisions=1)
     source = os.path.join(clone, "wiki", "decisions", "nightingale.md")
@@ -368,8 +363,7 @@ def test_a_backlink_that_stopped_qualifying_survives_a_convergence_pass(tmp_path
         f.write(_BACKLINK_SOURCE.format(acl=""))
     _commit_all(clone, "chore: a non-member page that links to the entity page")
     _sweep(clone, registry_of())
-    assert "wiki/decisions/nightingale.md" in open(
-        os.path.join(clone, "views", "acme-corp.md")).read()
+    assert "wiki/decisions/nightingale.md" in _view(clone)
 
     if how == "deleted":
         os.remove(source)
@@ -380,19 +374,63 @@ def test_a_backlink_that_stopped_qualifying_survives_a_convergence_pass(tmp_path
 
     result = _sweep(clone, registry_of())
 
-    # The defect, stated as behaviour: the member set did not change, so the pass has nothing to
-    # compare the Backlinks section against and reports the view as current.
-    assert result.stats["unchanged"] == 1 and result.stats["written"] == 0
-    view = open(os.path.join(clone, "views", "acme-corp.md")).read()
-    assert "[[nightingale]]" in view, "the citation the pass should have dropped (#85)"
-    assert "wiki/decisions/nightingale.md" in view, (
+    assert result.stats["written"] == 1 and result.stats["unchanged"] == 0, (
+        "the member set did not change, and the view must be stale anyway — its Backlinks "
+        f"section no longer matches the corpus: {result.stats}")
+    view = _view(clone)
+    assert "[[nightingale]]" not in view, "the citation the pass had to drop (#85)"
+    assert "wiki/decisions/nightingale.md" not in view, (
         "and its path — which for the `restricted` case is the existence leak, not just staleness")
+    # The ACL invariant is UNCHANGED by all this: a backlink is a non-member feed, so it is
+    # excluded from the list and never folded into `view_acl`. Every member here is open, so the
+    # view stays open even though the page it stopped citing is board-only.
+    assert "acl:" not in view.split("---")[1], (
+        "a backlink must never NARROW the view — only drop out of its Backlinks section")
 
-    # And the recovery that does exist, which is what keeps this a limit rather than a trap.
-    forced = _sweep(clone, registry_of(), force=True)
-    assert forced.stats["written"] == 1
-    view = open(os.path.join(clone, "views", "acme-corp.md")).read()
+    converged = _sweep(clone, registry_of())
+    assert converged.stats["unchanged"] == 1 and converged.stats["written"] == 0, (
+        "the pass that dropped the citation recorded the new signal, so the next one has nothing "
+        "to do — a fix that regenerated on every pass would be a per-interval model call forever")
+
+
+def test_a_page_that_gains_a_link_to_the_entity_page_makes_the_view_stale(tmp_path):
+    """The ADDITIVE direction, which `docs/reference/views.md` documented as an accepted limit
+    until #85 closed it: a page elsewhere gains a wikilink to the entity's own page. It anchors
+    no entity, so no member set moves anywhere — and the view has to notice all the same, because
+    what it renders changed."""
+    remote, clone = build_repo(str(tmp_path / "git"), n_decisions=1)
+    _sweep(clone, registry_of())
+    assert "[[nightingale]]" not in _view(clone)
+
+    with open(os.path.join(clone, "wiki", "decisions", "nightingale.md"), "w") as f:
+        f.write(_BACKLINK_SOURCE.format(acl=""))
+    _commit_all(clone, "chore: a page nobody anchored gains a link to the entity page")
+
+    result = _sweep(clone, registry_of())
+
+    assert result.stats["written"] == 1
+    assert "wiki/decisions/nightingale.md" in _view(clone)
+
+
+def test_a_backlink_the_view_may_not_show_never_makes_it_permanently_stale(tmp_path):
+    """The benign twin of the `restricted` case above, and the specificity half of that defense:
+    a source that is board-only from the START is excluded from the rendered rows, so it is
+    excluded from the hash too. A signal computed over the PRE-gate candidate set would have
+    matched nothing on disk here and regenerated this view on every pass, forever, while the page
+    never changed by one character."""
+    remote, clone = build_repo(str(tmp_path / "git"), n_decisions=1)
+    with open(os.path.join(clone, "wiki", "decisions", "nightingale.md"), "w") as f:
+        f.write(_BACKLINK_SOURCE.format(acl="acl: [board-only]\n"))
+    _commit_all(clone, "chore: a restricted page links the entity page")
+
+    first = _sweep(clone, registry_of())
+    second = _sweep(clone, registry_of())
+
+    assert first.stats["written"] == 1
+    assert second.stats["unchanged"] == 1 and second.stats["written"] == 0
+    view = _view(clone)
     assert "nightingale" not in view
+    assert "acl:" not in view.split("---")[1]      # and it did not narrow the view either
 
 # ── the cooperative stop, and the mid-batch rebase guard ───────────────────────────────────────
 class _StopAfter:
@@ -475,3 +513,61 @@ def test_a_foreign_commit_landing_mid_batch_stops_the_batch_with_the_remainder_d
     assert reason == regenerate.BRANCH_MOVED_REASON.format(entity_id=ids[1], deferred=2)
     assert len(_views_on_remote(remote)) == 2
 
+
+def test_the_benign_twin_a_corpus_where_nothing_changed_still_costs_nothing(tmp_path, monkeypatch):
+    """**The cost property, and the reason this fix needed one.** A second hash on every staleness
+    check is a second chance to be unstable, and an unstable one regenerates every view every
+    fifteen minutes — a model call per entity per interval, on a corpus nobody touched.
+
+    Deliberately run over a corpus that HAS backlinks in every shape the signal can see: an
+    ordinary page linking the entity page, a restricted one that is filtered out, and the views
+    the first pass itself wrote (`views/` is an indexed zone, so they are backlink sources too).
+    Both counters are asserted, because they answer different questions: `written` is what the
+    repo was told, the synthesis count is what was BILLED."""
+    remote, clone = build_repo(str(tmp_path / "git"), n_decisions=2)
+    with open(os.path.join(clone, "wiki", "decisions", "nightingale.md"), "w") as f:
+        f.write(_BACKLINK_SOURCE.format(acl=""))
+    with open(os.path.join(clone, "wiki", "decisions", "board-only.md"), "w") as f:
+        f.write(_BACKLINK_SOURCE.format(acl="acl: [board-only]\n").replace(
+            "Project Nightingale", "Board Only"))
+    _commit_all(clone, "chore: backlinks of every shape the signal can see")
+    _sweep(clone, registry_of())
+    commits_before = len(remote_log(remote).splitlines())
+
+    calls = _count_syntheses(monkeypatch)
+    result = _sweep(clone, registry_of())
+
+    assert (result.stats["unchanged"], result.stats["written"], result.stats["removed"]) == (1, 0, 0)
+    assert calls == [], f"a converged corpus called the model {len(calls)} time(s)"
+    assert len(remote_log(remote).splitlines()) == commits_before, (
+        "a converged pass pushed a commit — an unstable backlink hash rewrites the whole "
+        "population every interval")
+
+
+def test_a_view_written_before_the_backlink_signal_existed_is_regenerated_exactly_once(tmp_path,
+                                                                                       monkeypatch):
+    """Every view on a real deployment predates `backlink_hash:`, and the comparison had to say
+    which way that reads. STALE, deliberately: the one pass that regenerates each of them is
+    precisely what computes the missing signal, and the alternative — `None` matching `None` —
+    would have reported `unchanged` and shipped #85's leak forever.
+
+    Exactly ONCE is the other half of the claim: a missing field that stayed missing would be a
+    model call per entity per interval, which is the same bill as an unstable hash."""
+    remote, clone = build_repo(str(tmp_path / "git"), n_decisions=1)
+    _sweep(clone, registry_of())
+    path = os.path.join(clone, "views", "acme-corp.md")
+    with open(path) as f:
+        old_shape = "".join(line for line in f if not line.startswith("backlink_hash:"))
+    with open(path, "w") as f:
+        f.write(old_shape)
+    assert "backlink_hash:" not in old_shape
+    _commit_all(clone, "chore: a view as the previous release wrote it")
+
+    calls = _count_syntheses(monkeypatch)
+    first = _sweep(clone, registry_of())
+    second = _sweep(clone, registry_of())
+
+    assert first.stats["written"] == 1, "a view with no backlink signal must read as STALE"
+    assert "backlink_hash:" in _view(clone)
+    assert second.stats["unchanged"] == 1 and second.stats["written"] == 0
+    assert len(calls) == 1, f"regenerated {len(calls)} times, not once — the field never stuck"

@@ -38,6 +38,7 @@ from stigmergy.text import (
     fence,
     is_one_line,
     parse_result_ref,
+    prompt_header_scalar,
     prompt_scalar,
     sanitize,
 )
@@ -321,16 +322,20 @@ def build_prompt(pages: list[dict]) -> str:
     is a structural fact the model is never asked to use; it exists so `FakeGardenerSweep` and
     tests can tell the two halves apart from the prompt alone.
 
-    The header is the UNFENCED half, so every scalar in it goes through `prompt_scalar` and a page
-    whose path is not one line is dropped entirely: a filename carrying a newline forges a second
-    `### path=` header the model reads as trusted structure, and a U+2028 splits the block.
-    `select_pages` already excluded and COUNTED such a page — this is the same rule enforced where
-    the bytes are actually written, so no caller of this function can lose it."""
+    The header is the UNFENCED half, so EVERY scalar in it is hygiened and the two scalars are
+    hygiened differently. A page whose PATH is not one line is dropped entirely — a path may not be
+    collapsed, because a filename carrying two spaces folded into one names no file, and
+    `select_pages` already excluded and COUNTED such a page; this is the same rule enforced where
+    the bytes are actually written, so no caller of this function can lose it. An `entity` id is
+    not a filename and nothing resolves it back to one, so it is COLLAPSED
+    (`prompt_header_scalar`) rather than dropping the page with it. Either way a newline in either
+    scalar would forge a second `### path=` header the model reads as trusted structure."""
     sections = []
     for page in pages:
         if not is_one_line(page["path"]):
             continue
-        entities = ",".join(prompt_scalar(e) for e in (page.get("entity") or [])) or "(none)"
+        entities = ",".join(prompt_header_scalar(e)
+                            for e in (page.get("entity") or [])) or "(none)"
         changed = "true" if page.get("changed") else "false"
         header = f"### path={prompt_scalar(page['path'])} entity={entities} changed={changed}"
         body = page.get("body") or "(no content)"
@@ -388,15 +393,18 @@ def build_duplicate_entity_prompt(pages: list[dict]) -> str:
     registry id, a slug — and `id=` sits after `path=` so a path containing spaces (which entity
     page names routinely do) still parses back unambiguously. Everything a person wrote is fenced.
 
-    Code-derived is not the same as harmless: the path half is a FILENAME somebody chose, so the
-    header is hygiened exactly as `build_prompt`'s is and a page whose path is not one line is
-    dropped, its exclusion already counted by `select_duplicate_entity_pages`.
+    Code-derived is not the same as harmless. The path half is a FILENAME somebody chose, so a page
+    whose path is not one line is dropped, its exclusion already counted by
+    `select_duplicate_entity_pages`; the id half is derived from a page's own `title:`, so it is
+    collapsed. Hygiened exactly as `build_prompt`'s header is, scalar for scalar — the two headers
+    have the same shape and must not have two answers to the same question.
     """
     sections = []
     for page in pages:
         if not is_one_line(page["path"]):
             continue
-        header = f"### entity path={prompt_scalar(page['path'])} id={prompt_scalar(page['id'])}"
+        header = (f"### entity path={prompt_scalar(page['path'])} "
+                  f"id={prompt_header_scalar(page['id'])}")
         identity = _DUPLICATE_IDENTITY_BLOCK.format(
             name=page.get("name") or "(unnamed)",
             type=page.get("type") or "(unset)",

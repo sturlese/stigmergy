@@ -682,7 +682,7 @@ had a view at all. `stigmergy-views` is for when you do not want to wait:
 
 ```sh
 .venv/bin/stigmergy-views regenerate --entity acme-corp           # exactly this entity
-.venv/bin/stigmergy-views regenerate --stale                      # every entity whose view no longer matches its members
+.venv/bin/stigmergy-views regenerate --stale                      # every entity whose view no longer matches its members or its backlinks
 .venv/bin/stigmergy-views regenerate --sweep                      # what the worker's periodic pass does, right now
 .venv/bin/stigmergy-views regenerate --entity acme-corp --force   # bypass staleness; re-attempt a withheld synthesis
 ```
@@ -694,7 +694,8 @@ whose members have all disappeared. Prefer `--sweep` when you want the repo corr
 
 A withheld synthesis is not a bug: the skeleton (timeline, backlinks) still ships, and
 `--force` is the operator-triggered retry — the periodic pass will not retry one on its own,
-because the member hash did not change. Re-running against an unchanged member set is a no-op.
+because neither staleness signal changed (`member_hash` over the members, `backlink_hash` over the
+backlinks the page renders). Re-running against an unchanged corpus is a no-op.
 
 **The two knobs on the periodic pass** (both on the librarian worker, both documented in full in
 [`librarian.md`](./librarian.md)'s environment table):

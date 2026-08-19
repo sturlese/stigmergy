@@ -1080,6 +1080,69 @@ def test_an_approved_merge_lands_as_ONE_commit_containing_exactly_the_four_chang
     assert "Cofers Grupo" in _remote_page(repo_env.bare, "ops/entity-registry.json")
 
 
+def _race_the_remote_after(monkeypatch, bare, tmp_root):
+    """Arrange a REAL race: after `_perform` finishes inside the apply's own clone, a second clone
+    pushes a foreign commit to the bare remote — what a capture filing or a view sweep does at any
+    moment. Everything downstream (gates, commit, push, the rejection) stays real."""
+    real_perform = remote._perform
+
+    def racing(clone, kind, ops):
+        result = real_perform(clone, kind, ops)
+        racer = os.path.join(tmp_root, "racer")
+        if not os.path.exists(racer):
+            gitcmd.run("clone", "--quiet", bare, racer)
+            with open(os.path.join(racer, "raced.md"), "w", encoding="utf-8") as f:
+                f.write("a foreign commit\n")
+            gitcmd.run("add", "-A", cwd=racer)
+            gitcmd.run("commit", "--quiet", "-m", "feat: raced", cwd=racer,
+                      env={"GIT_AUTHOR_NAME": "r", "GIT_AUTHOR_EMAIL": "r@example.com",
+                           "GIT_COMMITTER_NAME": "r", "GIT_COMMITTER_EMAIL": "r@example.com"})
+            gitcmd.run("push", "--quiet", "origin", "main", cwd=racer)
+        return result
+
+    monkeypatch.setattr(remote, "_perform", racing)
+
+
+def test_a_merge_racing_a_foreign_push_fails_clean_and_lands_nothing(conn, repo_env, monkeypatch,
+                                                                     tmp_path):
+    """Red before the fix: `gitcmd.push` rebased and retried for every kind, and for the
+    non-additive kinds that is the one window where what lands is not what was judged — the apply
+    proved its plan byte-for-byte against ONE base, and a rebase replays the approved diff onto a
+    tip the gates never saw. A lost race now fails CLEAN: nothing lands, the row can be re-proposed
+    against the corpus as it stands."""
+    pages = support.seed_duplicate_pair(repo_env)
+    proposal = _merge_proposal(conn, repo_env.repo, pages["survivor"], pages["absorbed"])
+    _race_the_remote_after(monkeypatch, repo_env.bare, str(tmp_path))
+
+    with pytest.raises(RepairError):
+        remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                               approved_by=APPROVER)
+
+    log = gitcmd.run("log", "--format=%s", "main", cwd=repo_env.bare).stdout
+    assert "raced" in log
+    assert "repair(entity-alias)" not in log, "the merge landed on a base its gates never judged"
+    survivor = _remote_page(repo_env.bare, pages["survivor"])
+    assert "Cofers Grupo" not in survivor, "half a merge is on the remote"
+
+
+def test_an_additive_repair_racing_a_foreign_push_still_rebases_and_lands(conn, repo_env,
+                                                                          monkeypatch, tmp_path):
+    """The benign twin, one kind over: the additive kinds keep the rebase — their gates judged
+    CONTENT, not a position against a base, so replaying a backlink onto the moved tip is exactly
+    as approved. Turning the rebase off for everything would fail every apply that races the view
+    sweep, for no safety at all."""
+    proposal = _proposal(conn, BACKLINK_OPS)
+    _race_the_remote_after(monkeypatch, repo_env.bare, str(tmp_path))
+
+    result = remote.apply_via_clone(repo_env.bare, "main", None, proposal=proposal,
+                                    approved_by=APPROVER)
+
+    log = gitcmd.run("log", "--format=%s", "main", cwd=repo_env.bare).stdout
+    assert "raced" in log
+    assert result["commit"] == _remote_head(repo_env.bare)
+    assert "[[a-decision-from-a-previous-meeting]]" in _remote_page(repo_env.bare, support.NOTE_A)
+
+
 def test_the_absorbed_entitys_page_still_EXISTS_on_the_remote_after_the_merge(conn, repo_env):
     """An identity is retired through governance, not `rm` (ADR 016, ADR 039's second amendment).
     The page stays, demoted and superseded, and knowing that these two names were once two

@@ -95,6 +95,32 @@ def prompt_scalar(value: str) -> str:
     return sanitize(str(value or "")).translate(_LINE_SEPARATORS)
 
 
+# The `###` that opens every unfenced prompt-section header, neutralized the way the fence token
+# is and for the identical reason: a scalar that can spell the delimiter can forge the structure.
+_SECTION_TOKEN = "###"
+_SECTION_NEUTRALIZED = "#⁠##"   # U+2060 WORD JOINER: invisible, breaks the token
+
+
+def prompt_header_scalar(value: str) -> str:
+    """One untrusted scalar rendered into an unfenced prompt HEADER that is not a path: collapsed
+    onto one line, and unable to spell a header of its own.
+
+    Two steps, each closing half of the same hole. **Collapse** folds `\\n`, `\\r`, U+2028/U+2029
+    and every other Unicode whitespace to a single space — `prompt_scalar` alone does not, because
+    `sanitize` defends terminals rather than line structure and deliberately keeps `\\n`.
+    **Neutralize** breaks any in-band `###`, because the readers of these headers are not
+    line-anchored: a model reads structure loosely, and the offline doubles parse with a regex
+    whose section pattern can match mid-line. Collapsing alone would have left a forged header
+    sitting on the real one's line, still parseable as a second page.
+
+    NOT interchangeable with `prompt_scalar`, and the split is the point: a PATH is dropped rather
+    than rewritten (`is_one_line`), because a filename carrying two spaces collapsed into one names
+    no file. Everything else in a header — an entity id, a page id — is context the model reads and
+    never resolves back to a file, so rewriting it costs nothing and loses no page.
+    """
+    return " ".join(prompt_scalar(value).split()).replace(_SECTION_TOKEN, _SECTION_NEUTRALIZED)
+
+
 def is_one_line(path: str) -> bool:
     """A path that cannot be named on ONE line is not named at all.
 

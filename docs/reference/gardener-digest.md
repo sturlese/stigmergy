@@ -13,7 +13,7 @@ commands add on top of them. Code maps, one per command:
 
 ```
 stigmergy-gardener                                  stigmergy-digest
-  ├─ 9 deterministic checks   (checks.py)            ├─ corpus health          (the LATEST
+  ├─ 10 deterministic checks  (checks.py)            ├─ corpus health          (the LATEST
   │    pages_index / capture_queue / the registry /  │    completed gardener run's findings —
   │    the repo checkout                             │    reused, never re-derived)
   ├─ model editorial sweep    (sweep.py)             └─ corpus deltas          (capture_queue
@@ -53,13 +53,13 @@ package still detects and fixes nothing, and it neither imports nor calls the on
 The narrative is [repair.md](./repair.md), decided in
 [ADR 039](../decisions/039-governed-repair-loop.md).
 
-## The nine deterministic checks
+## The ten deterministic checks
 
 `checks.ALL_CHECK_SLUGS` is the list, and the report prints `len()` of it rather than a
 hand-written number, so the count in this document is the only copy that can go stale. Each check
 is a query over `pages_index`, `capture_queue`, the entity registry or the repo checkout — none
 interprets meaning. The five thresholds named below are settings, env-tunable
-(`gardener.settings.GardenerSettings`), and they cover three of the nine checks; the other six
+(`gardener.settings.GardenerSettings`), and they cover three of the ten checks; the other seven
 have no threshold to tune, because staleness is a hash mismatch and an orphan is a zero, not an
 amount.
 
@@ -67,13 +67,14 @@ amount.
 |---|---|---|---|
 | Orphans (`orphan-page`) | non-entity `wiki/` pages with zero inbound wikilinks (the indexed `links` column) | always, except a type on the stated exemption list (entity pages, addressed by `entity:` anchoring, never a wikilink) | info |
 | Aging seeds (`aging-seed`) | `seed`/`developing` pages' `updated` age | older than `STIGMERGY_GARDENER_AGING_SEED_DAYS` (default 30) | warn |
-| Stale views (`stale-view`) | `views.staleness.list_stale_entities` — a view's member set vs. its own `member_hash:` | any mismatch | warn |
+| Stale views (`stale-view`) | `views.staleness.list_stale_entities` — a view's member set vs. its own `member_hash:`, AND the backlinks it would render vs. its own `backlink_hash:` | either mismatch | warn |
 | Anchor concentration (`anchor-concentration`) | the last `STIGMERGY_GARDENER_CONCENTRATION_WINDOW` (default 30) filed pages, by top anchored entity's share | share exceeds `STIGMERGY_GARDENER_CONCENTRATION_SHARE` (default 0.6) | warn |
 | Dead vocabulary (`dead-vocabulary`) | registered entities absent from `views.staleness.list_all_anchored_entities` | zero pages anchored anywhere | info |
 | Company-wide fraction (`company-wide-fraction`) | the last `STIGMERGY_GARDENER_COMPANY_WINDOW` (default 20) filed pages, by share declaring `entity: []` | share exceeds `STIGMERGY_GARDENER_COMPANY_SHARE` (default 0.3) | warn |
 | Company page naming an entity (`company-page-names-entity`) | every company-wide, non-provenance page's body, tested against every registered name/id/alias (word-bounded, case-insensitive) | any verbatim match | warn |
 | Date-bearing body link (`date-bearing-body-link`) | every `wiki/`, `sources/`, `views/` page's BODY prose, read from the repo checkout, for a `[[YYYY-MM-DD-…]]` wikilink target | any match — one finding per page, naming the first offending stem | warn |
 | Entity placeholder body (`entity-placeholder-body`) | every `wiki/entities/` page's BODY, read from the repo checkout, for a line that is wholly angle-marked (`<…>`) — the entity template's unwritten spans | any such line survives — the identity exists and says nothing about itself | info |
+| Anchored to a superseded entity (`anchored-to-superseded-entity`) | knowledge pages (`wiki/`, minus the entity zone) whose `entity:` names an id whose own entity page declares `superseded_by:` | any such anchor — the page's history sits on the retired side of an applied merge | info |
 
 **`stale-view` is the one check with an actor outside this package, and that is a division of
 labour rather than a gap.** The librarian worker's periodic view sweep converges `views/` to the
@@ -92,6 +93,8 @@ holding a veto. It lives here now under the same slug — deliberately the same
 string, so an operator's grep finds both eras — and the line it draws is the house rule: **gates veto
 the irreversible, the gardener flags conventions.**
 
+**`anchored-to-superseded-entity` is the residual of an applied merge, counted where it accrues.** A merge moves the absorbed entity's aliases and never its name, so the absorbed id stays registered and a capture filed later spelling that name anchors to the retired identity — and the repair loop can never re-propose the pair (its `content_key` is a permanent decision). The population excludes the entity zone and the machine zones on purpose: the absorbed page's own self-anchor and its member-set-of-one view are BY DESIGN and would otherwise be two permanent, unfixable findings per merge. The count is exactly zero the moment a merge lands; what it measures afterwards is the accumulation the filing-time fix (issue #77's other half) exists to end.
+
 **`entity-placeholder-body` is one of the two checks with a repair kind of its own.** Entity birth
 is identity-only by design (ADR 016): `stigmergy-entities create` copies `ops/templates/entity.md`
 verbatim, so a minted page carries the template's angle-marked placeholders until somebody writes
@@ -108,7 +111,7 @@ Its literal-ness is also its gap, and the gap is wide: a body somebody WROTE tha
 other deterministic one. That half is the model pass's, `model-empty-entity-body`, described under
 "The model passes" below; the two are disjoint by construction and share one repair.
 
-**None of the nine checks is `sla` severity.** The `sla` severity band itself exists — the schema
+**None of the ten checks is `sla` severity.** The `sla` severity band itself exists — the schema
 carries it (`SEVERITIES`), the report prints an `sla` section and the notice-composing code is
 live — but nothing produces one, so in practice the SLA notice has **no producer**: see "The SLA
 notice", below.
@@ -134,7 +137,7 @@ property of the check, not a gap in its copy.
 
 ## The model passes — "only what the tool can't see"
 
-The nine checks stay exact and model-free; the model half is the judgment one, built on a
+The ten checks stay exact and model-free; the model half is the judgment one, built on a
 PydanticAI structured-extraction pattern: one
 prompt, one structured call through `stigmergy.kernel.llm.build_processor`, one retry
 carrying the validation error as its brief, then log-and-skip — never insert unvalidated.
@@ -252,7 +255,7 @@ gardener report" below.
 $ stigmergy-gardener
 # Gardener report — run #128, completed 2026-07-31T05:07:03Z
 
-checked 412 pages, 38 entities — 9 deterministic checks, plus a model sweep over 6 changed page(s)
+checked 412 pages, 38 entities — 10 deterministic checks, plus a model sweep over 6 changed page(s)
 and 10 sampled unchanged page(s), and a body sweep over 24 entity page(s), and an identity sweep
 over 38 registered entity(ies)
 
@@ -266,7 +269,7 @@ none this run
 ## WARN (5)
 [WARN] anchor-concentration        acme-corp — 14 of the last 18 filings (78%) anchored here, above the 60% threshold  [deterministic]
   action: no command — read a few of the recent filings anchored to Acme Corp and judge whether that's genuinely how lopsided the work has been, or whether unrelated material is defaulting here because picking the right anchor felt like more effort
-[WARN] stale-view                  acme-corp — the view's member set has changed since it was last generated  [deterministic]
+[WARN] stale-view                  acme-corp — the view no longer matches the corpus — its member set or the backlinks it cites have changed since it was last generated  [deterministic]
   action: `stigmergy-views regenerate --entity acme-corp`
 ...
 ## INFO (14)
@@ -301,7 +304,7 @@ opposite convention from the digest, below.
 
 ## The SLA notice
 
-**Stated plainly: this mechanism has no producer.** Every one of the nine
+**Stated plainly: this mechanism has no producer.** Every one of the ten
 deterministic checks is `info` or `warn`, and so is every one of the six model
 slugs. Nothing in this codebase constructs a finding with `SEVERITY_SLA`. The machinery below is
 therefore live code with a dead input — and not by accident: the

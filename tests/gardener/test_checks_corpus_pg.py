@@ -167,4 +167,88 @@ def test_aging_seed_a_calendar_invalid_updated_value_is_skipped_and_counted_not_
     assert [f["subject"] for f in findings] == ["wiki/onboarding/new-hire-draft.md"]
     assert stats["malformed_updated"] == 1
 
+# ── pages anchored to a retired identity ────────────────────────────────────────────────────────
+def _merged_pair(repo, *, anchored_note: bool = True):
+    """The state an applied `entity-alias` merge leaves behind: the absorbed entity's page stays
+    (governance), keeps its self-anchor (by design — its own history is its own), and declares
+    `superseded_by:` naming the survivor. Optionally one NOTE still anchored to the retired id —
+    the accumulation this check exists to count."""
+    support.write_page(repo, "wiki", "entities/Cofers.md",
+                       frontmatter={"type": "entity", "title": "Cofers", "entity": ["cofers"],
+                                   "status": "developing", "updated": _days_ago(1)})
+    support.write_page(repo, "wiki", "entities/Cofers Holdings.md",
+                       frontmatter={"type": "entity", "title": "Cofers Holdings",
+                                   "entity": ["cofers-holdings"], "status": "developing",
+                                   "superseded_by": "[[Cofers]]", "updated": _days_ago(1)})
+    if anchored_note:
+        support.write_page(repo, "wiki", "notes/late-capture.md",
+                           frontmatter={"type": "note", "title": "Late Capture",
+                                       "entity": ["cofers-holdings"], "status": "developing",
+                                       "updated": _days_ago(1)})
+
+
+def test_a_page_anchored_to_a_retired_identity_is_reported(conn, repo):
+    """The residual an applied merge cannot sweep up: the absorbed id stays REGISTERED (the
+    absorbed page stays by governance and the contract linter refuses an alias naming an existing
+    page), so a capture filed later spelling that name anchors to the retired identity — and the
+    repair loop can never re-propose the pair (`content_key` is permanent). Until the filing-time
+    fix lands, this count is the only place the accumulation is visible."""
+    _merged_pair(repo)
+    support.rebuild_index(conn, repo)
+
+    findings = checks.check_anchored_to_superseded_entity(conn)
+
+    assert len(findings) == 1
+    f = findings[0]
+    assert f["check"] == checks.CHECK_ANCHORED_TO_SUPERSEDED_ENTITY
+    assert f["severity"] == "info"
+    assert f["subject"] == "wiki/notes/late-capture.md"
+    assert "cofers-holdings" in f["detail"]
+    assert "superseded" in f["detail"]
+
+
+def test_the_absorbed_pages_own_self_anchor_never_fires_this_check(conn, repo):
+    """**The population rule that keeps the baseline at zero.** The absorbed page keeps its
+    self-anchor forever, BY DESIGN (its own history is its own), and its view keeps declaring the
+    id as a member set of one — so a check whose predicate were only "anchored to a superseded id"
+    would report two permanent, unfixable findings per merge, forever: exactly the disease this
+    loop exists to end. The entity zone and the machine zones are outside the population, and the
+    moment a merge lands the count is exactly zero."""
+    _merged_pair(repo, anchored_note=False)
+    support.write_page(repo, "views", "cofers-holdings.md",
+                       frontmatter={"type": "view", "title": "Cofers Holdings",
+                                   "entity": ["cofers-holdings"]},
+                       body="A derived rollup.")
+    support.rebuild_index(conn, repo)
+
+    assert checks.check_anchored_to_superseded_entity(conn) == []
+
+
+def test_a_page_anchored_to_a_LIVE_identity_fires_nothing(conn, repo):
+    """The benign twin: anchoring is the system working. Only a superseded id makes an anchor a
+    finding."""
+    support.write_page(repo, "wiki", "entities/Acme.md",
+                       frontmatter={"type": "entity", "title": "Acme", "entity": ["acme"],
+                                   "status": "developing", "updated": _days_ago(1)})
+    support.write_page(repo, "wiki", "notes/ordinary.md",
+                       frontmatter={"type": "note", "title": "Ordinary", "entity": ["acme"],
+                                   "status": "developing", "updated": _days_ago(1)})
+    support.rebuild_index(conn, repo)
+
+    assert checks.check_anchored_to_superseded_entity(conn) == []
+
+
+def test_a_page_anchored_to_both_a_live_and_a_retired_id_names_only_the_retired_one(conn, repo):
+    _merged_pair(repo, anchored_note=False)
+    support.write_page(repo, "wiki", "notes/both.md",
+                       frontmatter={"type": "note", "title": "Both",
+                                   "entity": ["cofers", "cofers-holdings"],
+                                   "status": "developing", "updated": _days_ago(1)})
+    support.rebuild_index(conn, repo)
+
+    findings = checks.check_anchored_to_superseded_entity(conn)
+
+    assert [f["subject"] for f in findings] == ["wiki/notes/both.md"]
+    assert "cofers-holdings" in findings[0]["detail"]
+    assert "'cofers'" not in findings[0]["detail"]
 

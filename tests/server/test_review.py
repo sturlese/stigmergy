@@ -2362,6 +2362,38 @@ def test_a_pending_repair_is_in_the_unrestricted_queue_and_not_in_a_scoped_one(e
     assert not [i for i in scoped["items"] if i["kind"] == review.KIND_REPAIR_PROPOSAL]
 
 
+def test_a_pending_merge_says_WHICH_identity_survives_on_the_queue_item(env, conn):
+    """The whole decision of a merge is its direction, and `target_paths` — a sorted list — cannot
+    say it: a steward reading the queue would otherwise see two entity pages and only the
+    model-authored rationale to tell survivor from absorbed. `merge_direction` is the code-owned
+    half, derived from `ops` and never from `target_paths` (the cross-check judges one against the
+    other, so a display built from the judged thing would let a column vouch for itself)."""
+    ops = [{"op": repair_schema.ALIAS_OP_NAME, "path": "wiki/entities/Cofers.md",
+            "expected_before_hash": "a" * 64, "planned_after": "x"},
+           {"op": repair_schema.RETIRE_OP_NAME, "path": "wiki/entities/Cofers Holdings.md",
+            "expected_before_hash": "b" * 64, "planned_after": "y"},
+           {"op": repair_schema.REANCHOR_OP_NAME, "path": "wiki/notes/Holdings Renewal.md",
+            "expected_before_hash": "c" * 64, "planned_after": "z"}]
+    _propose(conn, ops, rationale="the shorter name is the one the contracts use")
+
+    queue = review.review_queue(make_service(env, conn, identity_name=STEWARD))
+
+    item = next(i for i in queue["items"] if i["kind"] == review.KIND_REPAIR_PROPOSAL)
+    assert item["merge"] == {"survivor": "wiki/entities/Cofers.md",
+                             "absorbed": "wiki/entities/Cofers Holdings.md", "reanchored": 1}
+
+
+def test_a_non_merge_repair_carries_no_merge_key_at_all(env, conn):
+    """The benign twin: an additive proposal has no direction, and a key that were always present
+    (empty for three kinds of four) would read as a field somebody forgot to fill."""
+    _propose(conn, [_op("wiki/notes/Renewals.md")])
+
+    queue = review.review_queue(make_service(env, conn, identity_name=STEWARD))
+
+    item = next(i for i in queue["items"] if i["kind"] == review.KIND_REPAIR_PROPOSAL)
+    assert "merge" not in item
+
+
 def test_the_inboxs_limit_bounds_the_repair_half_of_it_too(env, conn):
     """Red before the fix: repair items were collected BEFORE the limit and outside it, so
     `_collect_open_items(limit=n)` answered with every pending proposal on the table however small

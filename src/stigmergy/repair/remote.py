@@ -216,9 +216,20 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
     # would name an object no reachable history holds. There is no lease to re-assert here —
     # nothing else is racing for this proposal, because the row moved out of `pending` before the
     # clone was made.
+    #
+    # The NON-ADDITIVE kinds never rebase. Their apply is a proof against a base — recompute,
+    # byte-compare, then perform — and a rebase replays the approved diff onto a tip the gates
+    # never judged: a delete can leave a dead link a fresh plan would have scrubbed, a merge can
+    # leave a page anchored to the retired identity forever. A lost race there fails CLEAN (the
+    # row lands `failed`, nothing is pushed) and the next propose recomputes from state — the
+    # same shape the view sweep takes at a mid-batch rebase, for the same reason. Since the view
+    # sweep pushes up to its ceiling every interval, losing this race is realistic, and a failed
+    # apply a steward re-approves is the correct side to fail on: a wrong write is not
+    # recoverable.
     landed = gitcmd.push(clone, branch=branch, remote_url=remote_url, config_env=config_env,
                          author_name=author[0], author_email=author[1],
-                         timeout_s=REPAIR_GIT_TIMEOUT_S)
+                         timeout_s=REPAIR_GIT_TIMEOUT_S,
+                         rebase=kind not in (schema.KIND_DELETE, schema.KIND_ENTITY_ALIAS))
     return {"commit": landed, "paths": list(edited), **_outcome_detail(kind, ops)}
 
 

@@ -190,6 +190,50 @@ def test_the_planned_registry_is_what_the_real_generator_produces(worktree):
     assert _read(worktree, REGISTRY) == predicted
 
 
+def test_an_alias_with_adversarial_but_roundtrippable_characters_still_applies_clean(tmp_path):
+    """The round-trip property behind the byte-compare, at its hard edge: quotes, YAML comment
+    and mapping markers, and non-ASCII all survive `yaml_list` -> page -> `generator` intact, so
+    the registry the apply produces is byte-identical to the plan's prediction and the merge
+    lands. Without this twin, the drift test below would read as "the byte-compare fires on
+    anything unusual" — it does not; it fires on the ONE class that genuinely diverges."""
+    root = str(tmp_path / "repo")
+    _write(root, SURVIVOR, _entity("Cofers", "cofers"))
+    _write(root, ABSORBED, _entity("Cofers Holdings", "cofers-holdings",
+                                   aliases=['Grupo "Cofers"', "Cofers: SL #1", "Nubelo Andalucía"]))
+    generator.regenerate(root)
+    ops = _plan(root)
+
+    edited, findings = entity_alias.apply_declared(root, ops)
+
+    assert findings == []
+    assert _read(root, REGISTRY) == entity_alias.expected_bytes(ops)[REGISTRY]
+
+
+def test_an_alias_only_a_yaml_escape_can_spell_makes_the_registry_drift_refusal_FIRE(tmp_path):
+    """`registry-drift` had never been seen to fire, and the reason it CAN is precise: the page
+    serializer (`json.dumps`) writes U+0085 NEL as a raw byte, and PyYAML — YAML 1.1 — folds a raw
+    NEL inside a double-quoted scalar to a space on the way back in. So an absorbed alias spelled
+    with the `\\x85` escape (a hand edit; the wiki zone is people's to edit) survives the PLAN
+    intact, is written RAW into the survivor's `aliases:` line, and comes back FOLDED when the real
+    generator re-reads it — the registry produced is not the registry predicted, byte for byte,
+    and the approval no longer describes what would land. The refusal is the difference between
+    PREDICTING a file and ASSERTING one, and this is the one honest way to watch it work: no
+    monkeypatched generator, a genuinely lossy round trip."""
+    root = str(tmp_path / "repo")
+    _write(root, SURVIVOR, _entity("Cofers", "cofers"))
+    absorbed_text = _entity("Cofers Holdings", "cofers-holdings").replace(
+        "aliases: []", 'aliases: ["Cofers\\x85Nubelo"]')
+    _write(root, ABSORBED, absorbed_text)
+    generator.regenerate(root)
+    ops = _plan(root)
+
+    edited, findings = entity_alias.apply_declared(root, ops)
+
+    assert edited == []
+    assert [f.code for f in findings] == [entity_alias.REGISTRY_DRIFT_CODE]
+    assert findings[0].locator == REGISTRY
+
+
 def test_after_the_merge_the_absorbed_entitys_spellings_resolve_to_the_SURVIVOR(worktree):
     """**The point of the alias, pinned rather than assumed.** A capture or a question naming
     `Cofers Grupo` reaches the surviving identity, and therefore the pages that were re-anchored
@@ -233,6 +277,23 @@ def test_the_registry_op_is_stored_even_when_the_file_comes_out_identical(worktr
     assert entity_alias.registry_paths(ops) == [REGISTRY]
     assert entity_alias.expected_bytes(ops)[REGISTRY] == before
     assert REGISTRY not in schema.target_paths(ops)
+
+
+def test_an_apply_whose_registry_came_out_identical_does_not_claim_it_in_the_ledger(worktree):
+    """Red before the fix: `apply_declared` returned a hand-built set that ALWAYS named the
+    registry, so the governance ledger's `paths` claimed a file the commit does not contain for
+    every ordinary merge (an absorbed entity with no alias to move). The honest set is
+    `schema.target_paths(ops)` — the same fact the diff cross-check judges, so the ledger and the
+    cross-check can never disagree about what an approval touched."""
+    _write(worktree, ABSORBED, _entity("Cofers Holdings", "cofers-holdings"))
+    generator.regenerate(worktree)
+    ops = _plan(worktree)
+
+    edited, findings = entity_alias.apply_declared(worktree, ops)
+
+    assert findings == []
+    assert REGISTRY not in edited
+    assert edited == schema.target_paths(ops)
 
 
 # ── what the plan refuses, and why ────────────────────────────────────────────────────────────
