@@ -7,7 +7,7 @@ import os
 
 from stigmergy.gardener import checks
 from stigmergy.kernel.registry import load_registry
-from stigmergy.views import skeleton
+from stigmergy.views import skeleton, staleness
 from tests.gardener import support
 
 
@@ -15,12 +15,24 @@ def _load_registry(repo: str):
     return load_registry(os.path.join(repo, "ops", "entity-registry.json"))
 
 
+def _write_current_view(repo: str, entity_id: str) -> str:
+    """A view carrying the signals the corpus would produce for it RIGHT NOW — both of them,
+    computed through the same `views.staleness` the check reads, so the twin stays benign as the
+    definition grows (it grew once already, in #85, and a fixture spelling out only `member_hash`
+    silently stopped describing a current view)."""
+    members = skeleton.members_of(repo, entity_id)
+    signals = staleness.current_signals(repo, entity_id, members)
+    return support.write_view(repo, entity_id, member_hash=signals.member_hash,
+                              backlink_hash=signals.backlink_hash)
+
+
 # ── stale views ─────────────────────────────────────────────────────────────────────────────────
 def test_stale_view_fires_when_the_stored_member_hash_does_not_match(repo):
     support.write_page(repo, "wiki", "entities/acme-corp.md",
                        frontmatter={"type": "entity", "title": "Acme Corp",
                                    "entity": ["acme-corp"], "status": "developing"})
-    support.write_view(repo, "acme-corp", member_hash="not-the-real-hash")
+    support.write_view(repo, "acme-corp", member_hash="not-the-real-hash",
+                       backlink_hash="not-the-real-hash-either")
 
     findings = checks.check_stale_views(repo)
 
@@ -36,10 +48,29 @@ def test_stale_view_the_benign_twin_a_fresh_view_fires_nothing(repo):
     support.write_page(repo, "wiki", "entities/acme-corp.md",
                        frontmatter={"type": "entity", "title": "Acme Corp",
                                    "entity": ["acme-corp"], "status": "developing"})
-    real_hash = skeleton.member_hash(skeleton.members_of(repo, "acme-corp"))
-    support.write_view(repo, "acme-corp", member_hash=real_hash)
+    _write_current_view(repo, "acme-corp")
 
     assert checks.check_stale_views(repo) == []
+
+
+def test_stale_view_fires_when_only_the_backlinks_moved(repo):
+    """#85's second half — "nothing detects it" — and the reason `check_stale_views` reuses
+    `list_stale_entities` verbatim instead of re-deriving a member-hash comparison of its own:
+    when the definition of stale grew a backlink signal, this check inherited it without a line
+    changing in `gardener/`. The member set here is untouched; a page that anchors NO entity
+    gains a wikilink to the entity's own page, so only what the view RENDERS moved."""
+    support.write_page(repo, "wiki", "entities/acme-corp.md",
+                       frontmatter={"type": "entity", "title": "Acme Corp",
+                                   "entity": ["acme-corp"], "status": "developing"})
+    _write_current_view(repo, "acme-corp")
+    assert checks.check_stale_views(repo) == []
+
+    support.write_page(repo, "wiki", "notes/nightingale.md",
+                       frontmatter={"type": "note", "title": "Project Nightingale",
+                                   "status": "developing"},
+                       body="See [[acme-corp]].\n")
+
+    assert [f["subject"] for f in checks.check_stale_views(repo)] == ["acme-corp"]
 
 
 def test_stale_view_survives_a_hand_written_page_sitting_in_views(repo):
@@ -58,8 +89,7 @@ def test_stale_view_survives_a_hand_written_page_sitting_in_views(repo):
     support.write_page(repo, "wiki", "entities/acme-corp.md",
                        frontmatter={"type": "entity", "title": "Acme Corp",
                                    "entity": ["acme-corp"], "status": "developing"})
-    real_hash = skeleton.member_hash(skeleton.members_of(repo, "acme-corp"))
-    support.write_view(repo, "acme-corp", member_hash=real_hash)
+    _write_current_view(repo, "acme-corp")
     support.write_page(repo, "views", "README.md",
                        frontmatter={"type": "view", "title": "About these views"},
                        body="Generated pages live here.\n")
@@ -73,7 +103,8 @@ def test_stale_view_still_fires_beside_a_hand_written_page(repo):
     support.write_page(repo, "wiki", "entities/acme-corp.md",
                        frontmatter={"type": "entity", "title": "Acme Corp",
                                    "entity": ["acme-corp"], "status": "developing"})
-    support.write_view(repo, "acme-corp", member_hash="sha256:stale-and-wrong")
+    support.write_view(repo, "acme-corp", member_hash="sha256:stale-and-wrong",
+                       backlink_hash="sha256:stale-and-wrong")
     support.write_page(repo, "views", "README.md",
                        frontmatter={"type": "view", "title": "About these views"},
                        body="Generated pages live here.\n")

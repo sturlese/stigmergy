@@ -16,7 +16,7 @@ def _members(acls=(None, None)):
 
 def _render(members, shipped=True):
     return render.render("acme-corp", "Acme Corp", members, member_hash="deadbeef",
-                         timeline_md="tl", backlinks_md="bl",
+                         backlink_hash="feedface", timeline_md="tl", backlinks_md="bl",
                          synthesis_body="## Status\nAll good.", shipped=shipped)
 
 
@@ -34,7 +34,10 @@ def test_frontmatter_carries_the_view_fields_and_no_verdict():
     for field in ("type: view", 'title: "Acme Corp — view"', "tags: [view]", "tier: 3",
                  "members: 2"):
         assert field in fm
-    assert "content_hash:" in fm and "generated_at:" in fm and "member_hash:" in fm
+    # BOTH staleness signals, one per feed the page renders — a view missing `backlink_hash:` is
+    # read as stale forever after (#85), so its absence here would be a defect, not a detail.
+    assert "content_hash:" in fm and "generated_at:" in fm
+    assert 'member_hash: "deadbeef"' in fm and 'backlink_hash: "feedface"' in fm
     # nothing computes a verdict, so the page must not claim one
     assert "verification:" not in fm
 

@@ -189,9 +189,11 @@ def check_aging_seeds(conn, *, threshold_days: int, population_stats: dict | Non
 # ── stale views — file-based, no DB ──────────────────────────────────────────────────────────
 def check_stale_views(repo: str) -> list[dict]:
     """Population: every entity `views.staleness.list_stale_entities` names — reused verbatim,
-    never re-derived. Staleness is a member-hash mismatch, not an age. Import `views.staleness`,
-    never `views.regenerate`: the latter would load the git write stack into every gardener
-    process.
+    never re-derived. Staleness is a signal mismatch, not an age — the member hash OR the backlink
+    hash, whichever moved — and reusing that function rather than re-deriving it is exactly why
+    this check inherited the backlink half (#85) without a line changing here. Import
+    `views.staleness`, never `views.regenerate`: the latter would load the git write stack into
+    every gardener process.
 
     This finding HAS an actor, and it is not here: the librarian worker's periodic convergence
     sweep regenerates over a SUPERSET of this population (it also creates views that never existed
@@ -200,7 +202,8 @@ def check_stale_views(repo: str) -> list[dict]:
     return [
         build_finding(
             check=CHECK_STALE_VIEW, severity=SEVERITY_WARN, subject=entity_id,
-            detail="the view's member set has changed since it was last generated",
+            detail="the view no longer matches the corpus — its member set or the backlinks it "
+                   "cites have changed since it was last generated",
             # Backticks baked into the stored string, so `--json` and the printed report carry
             # the identical value; the runnable command is the text between them.
             suggested_action=f"`stigmergy-views regenerate --entity {entity_id}`",

@@ -158,8 +158,8 @@ def _report_single(o: regenerate.RegenOutcome, args) -> int:
              f"entity yet.", file=sys.stderr)
     elif o.action == "unchanged":
         print(f"{_who(o.entity_id, o.entity_name)} is already up to date — {o.member_count} "
-             f"page(s). Nothing was written; the member set has not changed since the last "
-             f"regeneration.")
+             f"page(s). Nothing was written; neither its member set nor the backlinks it cites "
+             f"have changed since the last regeneration.")
     elif o.action == "removed":
         # `o.message` is the WHOLE explanation (see `_RemovalCause`): each road carries its own,
         # and there is no sentence true of both to close with. The tail that used to be appended
