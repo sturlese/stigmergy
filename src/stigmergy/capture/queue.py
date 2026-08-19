@@ -628,6 +628,15 @@ def searchable_latencies_ms(conn, *, job_name: str, limit: int = LATENCY_WINDOW)
         return [float(row[0]) for row in cur.fetchall() if row[0] is not None]
 
 
+def work_waiting(conn) -> bool:
+    """Is anything QUEUED right now? An EXISTS, not a count — the caller is the worker's view
+    sweep asking between entities whether to yield the loop back to the queue (issue #102), and
+    the answer it needs is one bit."""
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT EXISTS (SELECT 1 FROM capture_queue WHERE status = '{schema.QUEUED}')")
+        return bool(cur.fetchone()[0])
+
+
 def counts_by_status(conn) -> dict[str, int]:
     """Queue depth per status; every declared status is present, zero included."""
     with conn.cursor() as cur:

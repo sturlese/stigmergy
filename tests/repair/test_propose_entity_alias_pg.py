@@ -22,6 +22,7 @@ import asyncio
 
 from stigmergy.gardener import sweep as gardener_sweep
 from stigmergy.repair import entity_alias, proposer, schema, store
+from stigmergy.repair.settings import RepairSettings
 from tests.repair import support
 
 
@@ -416,3 +417,31 @@ def test_the_sweeps_own_finding_reaches_a_plan_the_merge_road_accepts(conn, repo
     assert row["kind"] == schema.KIND_ENTITY_ALIAS
     assert {entity_alias.survivor_path(row["ops"]), entity_alias.absorbed_path(row["ops"])} == {
         pages["survivor"], pages["absorbed"]}
+
+
+def test_a_night_of_declined_pairs_is_bounded_by_the_ask_ceiling(conn, repo_env, monkeypatch):
+    """Issue #103's shape on this road: a declined pair stores nothing and is remembered nowhere
+    (C6 keys DECISIONS, not declines — deliberately, the answer may change), so its recurrence
+    used to cost the model call every night, unbounded. The night's one number now bounds the
+    asks too, and the deferral says so."""
+    calls = {"n": 0}
+
+    class _Parks:
+        async def run(self, prompt, *, deps=None, usage_limits=None):
+            from stigmergy.kernel.result import fake_result
+            calls["n"] += 1
+            return fake_result(proposer.EntityMergeChoice(
+                survivor="", rationale="not one entity"))
+
+    monkeypatch.setattr(proposer, "build_entity_merge_chooser", lambda *a, **kw: _Parks())
+    pages = support.seed_duplicate_pair(repo_env)
+    run_id = support.seed_gardener_run(conn)
+    for _ in range(3):
+        support.seed_duplicate_entity_finding(conn, run_id,
+                                              pages=(pages["survivor"], pages["absorbed"]))
+
+    result = _propose(conn, RepairSettings(repo=repo_env.repo, max_proposals_per_run=1))
+
+    assert result.proposed == 0
+    assert calls["n"] == 1, "the road kept asking past the night's own number"
+    assert any("ask-ceiling-reached(1)" in reason for reason in result.skip_reasons)

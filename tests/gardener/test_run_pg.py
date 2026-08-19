@@ -1051,3 +1051,31 @@ def test_run_gardener_a_duplicate_identity_failure_does_not_freeze_the_editorial
     since, _offset = sweep.previous_run_watermark(conn)
     assert since is not None, ("a failed identity pass must not cost the editorial sweep its "
                               "watermark")
+
+
+def test_run_gardener_the_changed_ceiling_defers_to_the_rotation_and_names_its_knob(
+        conn, repo, monkeypatch):
+    """The editorial sweep's own bound, end to end and with the call-site env pin its two sibling
+    ceilings carry: a catch-up night (here: a first run over five filings) judges the newest
+    `$STIGMERGY_GARDENER_SWEEP_CHANGED_CEILING` and records what it deferred — into stats AND into
+    a skip reason naming the knob, because a bound that binds in silence reads as a small night."""
+    monkeypatch.setenv(settings_module.SWEEP_CHANGED_CEILING_ENV, "2")
+    support.write_registry(repo, {})
+    paths = []
+    for i in range(5):
+        paths.append(support.write_page(
+            repo, "wiki", f"notes/burst-{i}.md",
+            frontmatter={"type": "note", "title": f"Burst {i}", "entity": [],
+                        "status": "developing", "updated": "2026-07-01"},
+            body=f"burst body {i}"))
+    support.rebuild_index(conn, repo)
+    for p in paths:
+        support.seed_filed_capture(conn, result_ref=f"{p}@sha0")
+
+    result = _run(conn, repo, settings=GardenerSettings.from_args())
+
+    sweep_stats = result.stats["sweep"]
+    assert sweep_stats["changed"] == 2
+    assert sweep_stats["changed_deferred"] == 3
+    assert any(f"${settings_module.SWEEP_CHANGED_CEILING_ENV}" in reason
+               for reason in sweep_stats["skip_reasons"])

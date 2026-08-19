@@ -1301,6 +1301,18 @@ RUN_CEILING_REASON = (
     "proposal(s) from the last batch and {unseen} further finding(s) were not proposed; the next "
     "run will see them")
 
+# The bound on what a per-finding road may ASK, not only on what it may store (issue #103): a
+# declined or refused draft stores nothing and is remembered nowhere — deliberately, for the park
+# (#83: the answer changes as soon as the corpus grows) — so `max_proposals_per_run` alone let a
+# corpus full of thin entities spend an unbounded number of model calls a night while storing
+# nothing. The ask-budget is the SAME number: the night's one figure now bounds both what a run
+# may put in front of stewards and how many findings a road may put in front of the model. No new
+# knob, and the recurrence stays deliberate — what is bounded is its nightly bill.
+ASK_CEILING_REASON = (
+    "ask-ceiling-reached({ceiling}): this run asked the model about {asked} finding(s) on this "
+    "road and stopped — {unseen} more wait for the next run; a declined draft is re-asked once "
+    "the corpus grows, and this bound is what keeps that recurrence a bounded bill")
+
 
 async def _propose_edits(deps: ProposerContext, fresh: list[dict], *, repo: str, settings,
                          skill_text: str, ceiling: int,
@@ -1368,10 +1380,15 @@ async def _propose_entity_bodies(deps: ProposerContext, fresh: list[dict], *, re
     skip_reasons: list[str] = []
     agent = None
     link_names = None
+    asked = 0
     for index, finding in enumerate(fresh):
         if len(accepted) >= budget:
             skip_reasons.append(RUN_CEILING_REASON.format(
                 ceiling=ceiling, dropped=0, unseen=len(fresh) - index))
+            break
+        if asked >= ceiling:
+            skip_reasons.append(ASK_CEILING_REASON.format(
+                ceiling=ceiling, asked=asked, unseen=len(fresh) - index))
             break
         path = next((str(p) for p in (finding.get("subjects") or []) if p), "")
         sources = anchored_pages(deps, path)
@@ -1382,6 +1399,7 @@ async def _propose_entity_bodies(deps: ProposerContext, fresh: list[dict], *, re
         if agent is None:
             agent = build_entity_body_drafter(skill_text, model_name=settings.model)
             link_names = edits.page_names(repo)
+        asked += 1
         try:
             op, reasons = await draft_entity_body(
                 agent, deps, build_entity_body_prompt(path, _page_body(deps, path),
@@ -1446,10 +1464,17 @@ async def _propose_entity_aliases(deps: ProposerContext, fresh: list[dict], *, r
     accepted: list[dict] = []
     skip_reasons: list[str] = []
     agent = None
+    asked = 0
     for index, finding in enumerate(fresh):
         if len(accepted) >= budget:
             skip_reasons.append(RUN_CEILING_REASON.format(
                 ceiling=ceiling, dropped=0, unseen=len(fresh) - index))
+            break
+        if asked >= ceiling:
+            # The same shape one road over: a declined pair (C6 keys DECISIONS, not declines)
+            # comes back the next night, and this is what bounds that recurrence's bill.
+            skip_reasons.append(ASK_CEILING_REASON.format(
+                ceiling=ceiling, asked=asked, unseen=len(fresh) - index))
             break
         candidates = [str(p) for p in (finding.get("subjects") or []) if p]
         # DISTINCTNESS as well as the count, and the two are one question. `subjects` naming one
@@ -1474,6 +1499,7 @@ async def _propose_entity_aliases(deps: ProposerContext, fresh: list[dict], *, r
         if agent is None:
             agent = build_entity_merge_chooser(skill_text, model_name=settings.model)
         anchored = _merge_anchored_pages(deps, candidates)
+        asked += 1
         try:
             survivor, rationale, reasons = await choose_survivor(
                 agent, deps,

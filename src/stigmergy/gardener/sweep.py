@@ -283,6 +283,13 @@ MIN_DUPLICATE_ENTITY_POPULATION = 2
 # not in the page at all.
 MAX_DUPLICATE_ENTITY_PROMPT_CHARS = 600
 
+# The editorial sweep's own per-page input bound (issue #101). Its prompt carries up to
+# changed-ceiling + sample pages, each body previously WHOLE — so one pasted transcript could be
+# most of the prompt, and the prompt's size was corpus-shaped rather than settings-shaped. The
+# figure is the empty-body pass's own input bound: enough body to judge meaning, bounded enough
+# that the whole prompt is (ceiling + sample) × this, a number an operator can reason about.
+MAX_SWEEP_PAGE_CHARS = 4000
+
 DUPLICATE_ENTITY_SYS = f"""You are the identity half of a corpus-health sweep for a company
 knowledge base. You are given every registered entity of this brain — its id, and, fenced below it,
 the name, type and aliases it is registered under plus the opening of its own page — and you judge
@@ -338,7 +345,7 @@ def build_prompt(pages: list[dict]) -> str:
                             for e in (page.get("entity") or [])) or "(none)"
         changed = "true" if page.get("changed") else "false"
         header = f"### path={prompt_scalar(page['path'])} entity={entities} changed={changed}"
-        body = page.get("body") or "(no content)"
+        body = clamp(page.get("body") or "", MAX_SWEEP_PAGE_CHARS) or "(no content)"
         sections.append(f"{header}\n{fence(body)}")
     return "\n\n".join(sections)
 
@@ -848,6 +855,12 @@ EMPTY_BODY_CEILING_REASON = (
     "run-ceiling({ceiling}): {deferred} entity page(s) were not judged for an empty body this "
     "run — nothing was found about them because nothing looked; raise ${env} to judge them all")
 
+# The editorial sweep's own spelling of the same fact — a different tail, because its overflow is
+# NOT unseen forever: it joins the unchanged pool and the rotating sample reaches it.
+SWEEP_CHANGED_CEILING_REASON = (
+    "changed-ceiling({ceiling}): {deferred} changed page(s) were deferred to the rotating sample "
+    "this run — the newest {ceiling} were judged; raise ${env} to judge more per run")
+
 
 def select_empty_body_pages(zone_pages: list[dict], *, ceiling: int) -> tuple[list[dict], dict]:
     """`(pages, stats)` — every entity page from `checks.entity_zone_pages`'s walk that the
@@ -947,12 +960,21 @@ def previous_run_watermark(conn):
     return since, offset
 
 
-def select_pages(conn, *, since, sample_size: int, sample_offset: int
-                 ) -> tuple[list[dict], list[dict], dict]:
-    """`(changed, sampled, stats)`: `changed` is every indexed page resolved from a
-    `capture_queue` row filed at or after `since` (`None` = unbounded); `sampled` is up to
+def select_pages(conn, *, since, sample_size: int, sample_offset: int,
+                 changed_ceiling: int) -> tuple[list[dict], list[dict], dict]:
+    """`(changed, sampled, stats)`: `changed` is up to `changed_ceiling` of the NEWEST indexed
+    pages resolved from `capture_queue` rows filed at or after `since` (`None` = unbounded — a
+    first run, which is exactly why the ceiling exists: unbounded, that prompt was the whole
+    corpus and its failure froze the watermark that would shrink it); `sampled` is up to
     `sample_size` pages from the remaining population, rotating through a stable path ordering by
     `sample_offset` so consecutive runs cover different pages.
+
+    The ceiling's overflow joins the unchanged pool — tonight's sample may pick it, the rotation
+    reaches the rest — so it bounds how fast the changed stream is prioritized, never whether a
+    page is judged. Counted into `stats["changed_deferred"]`, and the run names the knob in a
+    skip reason when it binds. The pass is deliberately NOT batched instead: its checks are about
+    PAIRS (a contradiction is visible only when both pages share one prompt), and a batch
+    boundary would silently decide which pairs are ever compared.
 
     Deliberately does NOT apply `_recent_filed_pages`'s provenance exclusion: that exists so
     `entity: []` is never miscounted in a numeric fraction, and the sweep reads CONTENT —
@@ -961,7 +983,7 @@ def select_pages(conn, *, since, sample_size: int, sample_offset: int
     have to drop from its unfenced header anyway; `stats["next_sample_offset"]` is what the next
     run continues the rotation from."""
     stats = {"unparsed_result_ref": 0, "changed_page_not_indexed": 0,
-             "excluded_unnameable_path": 0}
+             "excluded_unnameable_path": 0, "changed_deferred": 0}
     with conn.cursor() as cur:
         cur.execute("SELECT path, entity, body FROM pages_index ORDER BY path")
         all_rows = cur.fetchall()
@@ -998,6 +1020,13 @@ def select_pages(conn, *, since, sample_size: int, sample_offset: int
             continue
         seen.add(path)
         changed_paths.append(path)
+    # `_CHANGED_FILED_REFS_SQL` orders newest first, so the cut keeps the newest filings and the
+    # overflow LEAVES `seen` — it is unchanged-pool material from this run's own point of view.
+    if len(changed_paths) > changed_ceiling:
+        stats["changed_deferred"] = len(changed_paths) - changed_ceiling
+        for path in changed_paths[changed_ceiling:]:
+            seen.discard(path)
+        changed_paths = changed_paths[:changed_ceiling]
     changed = [by_path[p] for p in changed_paths]
 
     unchanged_pool = sorted(p for p in by_path if p not in seen)

@@ -43,6 +43,15 @@ DEFAULT_GARDENER_MODEL = "gpt-5.6-luna"
 SWEEP_SAMPLE_ENV = "STIGMERGY_GARDENER_SWEEP_SAMPLE"
 DEFAULT_SWEEP_SAMPLE = 10
 
+# How many CHANGED pages one editorial sweep may carry — the bound the pass's own population
+# never had (issue #101): "changed since the watermark" is unbounded, and on a first run or after
+# a cron outage it is the whole corpus, in one prompt, whose failure freezes the watermark that
+# would shrink it. The overflow is never lost — it joins the unchanged pool, where the rotating
+# sample reaches it — so this bounds how fast the changed stream is prioritized, not whether a
+# page is ever judged. Sized well above an ordinary night's filings.
+SWEEP_CHANGED_CEILING_ENV = "STIGMERGY_GARDENER_SWEEP_CHANGED_CEILING"
+DEFAULT_SWEEP_CHANGED_CEILING = 30
+
 # ── the empty-body pass's own two bounds ─────────────────────────────────────────────────────
 # Deliberately NOT a sample size: that pass covers its whole population (entity pages are a
 # bounded set), so these two bound the model SPEND over it rather than choosing which pages are
@@ -152,6 +161,7 @@ class GardenerSettings:
     digest_channel_id: str = ""
     model: str = DEFAULT_GARDENER_MODEL
     sweep_sample: int = DEFAULT_SWEEP_SAMPLE
+    sweep_changed_ceiling: int = DEFAULT_SWEEP_CHANGED_CEILING
     empty_body_batch: int = DEFAULT_EMPTY_BODY_BATCH
     empty_body_ceiling: int = DEFAULT_EMPTY_BODY_CEILING
     duplicate_entity_ceiling: int = DEFAULT_DUPLICATE_ENTITY_CEILING
@@ -171,6 +181,8 @@ class GardenerSettings:
             digest_channel_id=os.environ.get(DIGEST_CHANNEL_ID_ENV, ""),
             model=os.environ.get(MODEL_ENV) or DEFAULT_GARDENER_MODEL,
             sweep_sample=int_setting(SWEEP_SAMPLE_ENV, DEFAULT_SWEEP_SAMPLE),
+            sweep_changed_ceiling=int_setting(SWEEP_CHANGED_CEILING_ENV,
+                                              DEFAULT_SWEEP_CHANGED_CEILING),
             empty_body_batch=int_setting(EMPTY_BODY_BATCH_ENV, DEFAULT_EMPTY_BODY_BATCH,
                                          why=_EMPTY_BODY_COUNT_WHY,
                                          maximum=MAX_EMPTY_BODY_BATCH),

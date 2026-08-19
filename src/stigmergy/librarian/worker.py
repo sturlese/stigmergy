@@ -308,7 +308,8 @@ def run_view_sweep(conn, deps: processing.Deps, *, should_stop=None) -> views_re
     `Worker.maybe_sweep_views`, which logs and swallows, leaving the one unattended loop in the
     system to refuse silently every interval.
 
-    `should_stop` is threaded down to `views.regenerate.run`, which consults it BETWEEN entities.
+    `should_stop` is threaded down to `views.regenerate.run`, which consults it BETWEEN entities
+    and stops on the reason it answers with.
     """
     settings = deps.settings
     base = gitcmd.base_ref(deps.repo, settings.branch)
@@ -502,10 +503,19 @@ class Worker:
         # `views/` before it waits an interval, the same posture `sweep()` above already takes.
         self._view_sweep_due_at: float | None = None
 
-    def _stop_requested(self) -> bool:
-        """Either shutdown flag, as a CALLABLE — read at the moment it is asked, never captured.
-        Handed to the view sweep, which consults it between entities."""
-        return self.stopping or self.releasing
+    def _sweep_pause_reason(self) -> str:
+        """Why the view sweep should yield between entities, or `""` — read at the moment it is
+        asked, never captured. Two causes, each in its own words because the recorded deferral
+        repeats them: a shutdown signal landed, or a capture is WAITING in the queue — a pass that
+        held the worker's only loop through a whole ceiling of syntheses would put up to ten model
+        calls and pushes between a capture and its filing, the exact latency the queue exists to
+        avoid (issue #102). Stopping costs one interval and loses nothing: the population is
+        recomputed from state on the next idle tick."""
+        if self.stopping or self.releasing:
+            return "the process is shutting down"
+        if queue.work_waiting(self.conn):
+            return "a capture is waiting in the queue"
+        return ""
 
     def install_signal_handlers(self) -> None:
         signal.signal(signal.SIGINT, self._on_sigint)
@@ -581,9 +591,10 @@ class Worker:
         `job_runs` error row by the time one reaches here — because filing must never depend on a
         rollup. That is the post-meeting hook's posture, for the same reason.
 
-        The pass is handed `self._stop_requested` rather than a copy of the flags: it is consulted
-        between entities, and by then the flags may have flipped. Not starting one is still the
-        first guard — a shutdown must not pick up a fresh multi-entity pass on its way out.
+        The pass is handed `self._sweep_pause_reason` rather than a copy of any flag: it is
+        consulted between entities, and by then a signal may have landed or a capture may have
+        arrived. Not starting one is still the first guard — a shutdown must not pick up a fresh
+        multi-entity pass on its way out.
         """
         interval = float(self.deps.settings.view_sweep_interval_s)
         if interval <= config.VIEW_SWEEP_OFF or self.stopping or self.releasing:
@@ -596,7 +607,7 @@ class Worker:
         # the instant it finished.
         self._view_sweep_due_at = now + interval
         try:
-            result = self._view_sweep(self.conn, self.deps, should_stop=self._stop_requested)
+            result = self._view_sweep(self.conn, self.deps, should_stop=self._sweep_pause_reason)
         except Exception:  # noqa: BLE001 — best-effort maintenance; see the docstring
             log.error("the periodic view sweep failed; the queue keeps draining", exc_info=True)
             return True

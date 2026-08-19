@@ -197,3 +197,37 @@ def test_an_ordinary_member_reaches_the_index_verbatim(tmp_path):
 
     assert "- wiki/entities/Acme Corp SL.md · Acme Corp SL · as_of 2026-07-20" in double.prompt
     assert "entity: acme-corp" in double.prompt
+
+
+# ── the wall clock beside the count (issue #102) ────────────────────────────────────────────────
+class _HangsForever:
+    """A provider that stops answering: the exact fault `VIEW_LIMITS` cannot see — a count bounds
+    appetite, and a hung call consumes none of it."""
+
+    async def run(self, prompt, *, deps=None, usage_limits=None):
+        await asyncio.sleep(3600)
+
+
+def test_a_hung_provider_call_becomes_a_withheld_synthesis_not_a_hung_worker(tmp_path):
+    """Red before the fix: `write_synthesis` had no clock, and its unattended caller is the
+    worker's ONLY loop — no lease to expire, no `job_runs` row until the pass returns, nothing in
+    a log. The hang now becomes the existing withheld shape: the view still ships, captioned as
+    synthesis-less, and the loop moves to the next entity."""
+    result = asyncio.run(synthesis.write_synthesis(
+        _HangsForever(), "acme-corp", _write_repo(tmp_path), _members(), timeout_s=0.05))
+
+    assert result.shipped is False
+    assert result.body_markdown == ""
+
+
+def test_an_ordinary_synthesis_is_untouched_by_the_clock_the_benign_twin(tmp_path, monkeypatch):
+    """The production default is generous on purpose — six requests at fifty seconds each — so
+    the clock can only fire on a genuine stall, never on a slow-but-working call."""
+    monkeypatch.setenv("CLEAN_LLM", "fake")
+    agent = synthesis.build_view_agent()
+
+    result = asyncio.run(synthesis.write_synthesis(
+        agent, "acme-corp", _write_repo(tmp_path), _members()))
+
+    assert result.shipped is True
+    assert result.body_markdown.strip()

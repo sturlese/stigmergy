@@ -233,3 +233,44 @@ def test_the_lock_released_the_next_sweep_proceeds(clean_queue, tmp_path):
     assert result.stats["written"] == 2
     ((job, status, _stats, error),) = _rows(clean_queue, regenerate.SWEEP_JOB_NAME)
     assert (job, status, error) == (regenerate.SWEEP_JOB_NAME, "ok", "")
+
+
+# ── the pause reason: real flags, a real queue, real Postgres (issue #102) ─────────────────────
+def test_the_workers_pause_reason_names_a_waiting_capture_and_yields_the_sweep(clean_queue, rig):
+    """The wiring end of the cooperative pause: the worker's own callable answers with WORDS, and
+    each cause gets its own — a shutdown signal, or a capture waiting in a REAL queue. This is the
+    method `maybe_sweep_views` hands the pass, so a capture submitted one second into a ten-entity
+    pass costs one entity's regeneration, never the whole pass (issue #102)."""
+    from stigmergy.capture import queue as capture_queue
+    from stigmergy.capture.evidence import MemoryEvidenceStore
+    env, deps = rig
+    w = worker.Worker(clean_queue, deps, on_output=lambda _m: None)
+
+    assert w._sweep_pause_reason() == "", "an idle worker with an empty queue pauses nothing"
+
+    capture_queue.submit(clean_queue, MemoryEvidenceStore(), kind="raw",
+                         material="a capture that must not wait out a sweep",
+                         hints=None, submitted_by="ana@example.com")
+    assert w._sweep_pause_reason() == "a capture is waiting in the queue"
+
+    w.stopping = True
+    assert w._sweep_pause_reason() == "the process is shutting down", (
+        "a signal outranks a waiting capture — the reason an operator reads must be the one that "
+        "actually ends the process")
+
+
+def test_the_pass_is_handed_the_pause_reason_method_itself(clean_queue, rig, monkeypatch):
+    """The one line that wires the seam, pinned: `maybe_sweep_views` passes the worker's OWN
+    callable, so the pass consults live state between entities rather than a copy of it."""
+    env, deps = rig
+    seen = {}
+
+    def sweeper(conn, d, **kw):
+        seen.update(kw)
+        return regenerate.RunResult()
+
+    w = worker.Worker(clean_queue, deps, on_output=lambda _m: None, view_sweep=sweeper,
+                      now=lambda: 1000.0)
+
+    assert w.maybe_sweep_views() is True
+    assert seen["should_stop"] == w._sweep_pause_reason

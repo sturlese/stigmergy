@@ -159,7 +159,10 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
 - Bounds: `settings.max_ops_per_proposal` (6) is how much ONE approval may be;
   `settings.max_proposals_per_run` (20) is how many approvals one NIGHT may ask for — a batch over
   it is refused whole with a named reason the retry carries, and the run stops batching once it is
-  full, recording what it left for the next pass; `MAX_RATIONALE_CHARS` 400, `MAX_NOTE_CHARS` 300,
+  full, recording what it left for the next pass. The SAME number bounds what a per-finding road
+  may ASK the model about (`ASK_CEILING_REASON`, issue #103): a declined draft or pair stores
+  nothing and is remembered nowhere — deliberately, the answer changes as the corpus grows — so
+  without it a corpus of thin entities could spend unbounded calls a night while storing nothing; `MAX_RATIONALE_CHARS` 400, `MAX_NOTE_CHARS` 300,
   `MAX_PAGE_BODY_CHARS` 12000, `MAX_SKILL_BYTES` 256 KiB. The model budget is DERIVED from the
   batch, not fixed: `batch_limits(n)` pays `MIN_TOOL_CALLS_PER_FINDING` (6) per finding plus one
   finding's worth of orientation for the call itself, and `REQUEST_HEADROOM_OVER_TOOLS` (2) above

@@ -512,3 +512,47 @@ def test_the_validator_still_refuses_an_empty_body_at_apply_time(repo_env):
           "body_markdown": "", "role": ""}
 
     assert [f.code for f in entity_body.validate(repo_env.repo, [op])] == ["empty-body"]
+
+
+# ── the ask ceiling: the night's one number bounds the bill, not only the inbox (issue #103) ───
+def test_a_night_of_parks_is_bounded_by_the_ask_ceiling_and_says_so(conn, repo_env, monkeypatch):
+    """Red before the fix: `max_proposals_per_run` bounded what a run STORED, and a declined
+    draft stores nothing — deliberately (#83: the park is re-asked once the corpus grows) — so a
+    corpus full of thin entities could spend an unbounded number of model calls a night while
+    storing nothing, invisible everywhere but the bill. The ask-budget is the SAME number the
+    night already has: no new knob, the recurrence stays deliberate, its nightly cost is bounded
+    and the deferral is recorded."""
+    calls = {"n": 0}
+
+    class _AlwaysParks:
+        async def run(self, prompt, *, deps=None, usage_limits=None):
+            from stigmergy.kernel.result import fake_result
+            calls["n"] += 1
+            return fake_result(proposer.EntityBodyDraft(body_markdown=""))
+
+    monkeypatch.setattr(proposer, "build_entity_body_drafter", lambda *a, **kw: _AlwaysParks())
+    support.seed_entity(repo_env, anchored=2)
+    run_id = support.seed_gardener_run(conn)
+    for n in range(4):
+        support.seed_finding(conn, run_id, check=gardener_sweep.CHECK_MODEL_EMPTY_ENTITY_BODY,
+                             subjects=[support.ENTITY_PAGE], detail=f"thin body, night {n}",
+                             severity="info")
+
+    settings = RepairSettings(repo=repo_env.repo, max_proposals_per_run=2)
+    result = _propose(conn, settings)
+
+    assert result.proposed == 0
+    assert calls["n"] == 2, "the road kept asking past the night's own number"
+    assert any("ask-ceiling-reached(2)" in reason for reason in result.skip_reasons)
+
+
+def test_a_productive_night_is_untouched_by_the_ask_ceiling(conn, repo_env, settings):
+    """The benign twin: a road whose asks are STORED is already bounded by the proposal ceiling,
+    and the ask bound — the same number — cannot fire first. One finding, one call, one proposal,
+    no ceiling sentence of either kind."""
+    _seed(conn, repo_env)
+
+    result = _propose(conn, settings)
+
+    assert result.proposed == 1
+    assert not any("ceiling" in reason for reason in result.skip_reasons)

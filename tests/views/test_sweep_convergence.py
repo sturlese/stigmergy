@@ -434,15 +434,16 @@ def test_a_backlink_the_view_may_not_show_never_makes_it_permanently_stale(tmp_p
 
 # ── the cooperative stop, and the mid-batch rebase guard ───────────────────────────────────────
 class _StopAfter:
-    """A `should_stop` that answers False `n` times and True forever after — the shape
-    `Worker._stop_requested` takes when a signal lands mid-pass."""
+    """A `should_stop` that answers `""` `n` times and a REASON forever after — the contract
+    `Worker._sweep_pause_reason` speaks: the callable says WHY to yield, or nothing."""
 
-    def __init__(self, n: int):
+    def __init__(self, n: int, why: str = "the process is shutting down"):
         self.remaining = n
+        self.why = why
 
-    def __call__(self) -> bool:
+    def __call__(self) -> str:
         self.remaining -= 1
-        return self.remaining < 0
+        return self.why if self.remaining < 0 else ""
 
 
 def test_a_stop_requested_mid_pass_stops_between_entities_with_the_remainder_deferred(tmp_path):
@@ -456,7 +457,8 @@ def test_a_stop_requested_mid_pass_stops_between_entities_with_the_remainder_def
 
     assert result.stats["written"] == 1, "the entity in flight completes; no new one starts"
     (reason,) = result.skip_reasons
-    assert reason == regenerate.SHUTTING_DOWN_REASON.format(deferred=4)
+    assert reason == regenerate.STOPPED_EARLY_REASON.format(
+        why="the process is shutting down", deferred=4)
     assert len(_views_on_remote(remote)) == 1
 
 
@@ -465,7 +467,7 @@ def test_a_stop_flag_that_never_flips_never_truncates_a_pass(tmp_path):
     presence must cost nothing — only its answer may."""
     remote, clone, registry, ids = _population_far_above_the_ceiling(tmp_path, n=3)
 
-    result = _sweep(clone, registry, should_stop=lambda: False)
+    result = _sweep(clone, registry, should_stop=lambda: "")
 
     assert result.stats["written"] == 3
     assert result.skip_reasons == []
@@ -571,3 +573,19 @@ def test_a_view_written_before_the_backlink_signal_existed_is_regenerated_exactl
     assert "backlink_hash:" in _view(clone)
     assert second.stats["unchanged"] == 1 and second.stats["written"] == 0
     assert len(calls) == 1, f"regenerated {len(calls)} times, not once — the field never stuck"
+
+
+def test_an_arriving_capture_pauses_the_pass_between_entities_in_its_own_words(tmp_path):
+    """Issue #102's first half at the seam: the same callable that says "shutting down" can say
+    "a capture is waiting", and the recorded deferral repeats THOSE words — an operator reading
+    `job_runs` learns why the pass yielded, not one sentence covering two causes."""
+    remote, clone, registry, ids = _population_far_above_the_ceiling(tmp_path, n=3)
+
+    result = _sweep(clone, registry,
+                    should_stop=_StopAfter(1, why="a capture is waiting in the queue"))
+
+    assert result.stats["written"] == 1
+    (reason,) = result.skip_reasons
+    assert "a capture is waiting in the queue" in reason
+    assert reason == regenerate.STOPPED_EARLY_REASON.format(
+        why="a capture is waiting in the queue", deferred=2)
