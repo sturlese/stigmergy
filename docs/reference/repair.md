@@ -291,7 +291,7 @@ committed there.
 |---|---|---|
 | `STIGMERGY_REPAIR_MODEL` | the librarian's own default model | which model proposes |
 | `STIGMERGY_REPAIR_MAX_OPS` | `6` | how much ONE approval is allowed to be |
-| `STIGMERGY_REPAIR_MAX_PROPOSALS` | `20` | how many approvals one RUN may ask for |
+| `STIGMERGY_REPAIR_MAX_PROPOSALS` | `20` | how many approvals one RUN may ask for — and how many findings a per-finding road may put in front of the model at all, so a night of declined drafts (which store nothing, deliberately) is a bounded bill rather than an invisible one |
 | `STIGMERGY_REPAIR_BATCH` | `3` | findings per model call — and, through that, how large the call's usage budget is |
 | `STIGMERGY_REPAIR_MAX_PLAN_BYTES` | `100000` | how much ONE approval may be, in the bytes its stored plan carries — shared by the two kinds that store whole pages, `delete` and `entity-alias` |
 | `STIGMERGY_REPO` | — | the checkout to propose against |
