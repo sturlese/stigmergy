@@ -381,11 +381,12 @@ def test_the_kernel_model_builder_installs_before_it_can_refuse(spy, monkeypatch
 
 
 def test_the_answer_synthesizer_installs_the_repair(spy, monkeypatch):
-    """`ask` does not go through `build_model` — it owns its own tool wiring — so the repair is
-    installed here too. Without it `audit_log.result.usage` records zeros for every ask.
-
-    Driven to the keyless outcome (no `OPENAI_API_KEY`, so it refuses); the install precedes the
-    refusal, which is the same ordering property as above.
+    """Without the repair, `audit_log.result.usage` records zeros for every ask. Since the
+    openrouter-port hardening `ask` goes through `build_model` — which installs it — AND this
+    module installs it beside its own `Agent(...)` construction, because the textual guard below
+    holds every agent-building module to that rule. The property pinned here is the ORDERING:
+    installed before the keyless refusal. The count is deliberately not pinned — two sites
+    installing an idempotent repair is the doctrine, not a defect.
     """
     import types
 
@@ -398,7 +399,7 @@ def test_the_answer_synthesizer_installs_the_repair(spy, monkeypatch):
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         synthesize.build_synthesizer(settings)
 
-    assert spy == [1]
+    assert spy, "the repair must be installed before the keyless refusal"
 
 
 def test_the_offline_answer_path_installs_nothing(spy):
