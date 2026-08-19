@@ -216,8 +216,11 @@ a client could spoof on any of the three. Config and the response shape are in
 [server.md](./server.md#the-ask-tool--the-answering-loop). Keyless everywhere with
 `ANSWER_LLM=fake` (the deterministic `FakeSynthesizer` answers from the first lexically-relevant
 search hit and refuses when nothing matches) — enough to exercise the whole path in demos and CI.
-The real model (`ANSWER_LLM=openai`, default `gpt-5.6-terra`) needs `OPENAI_API_KEY`; a missing key
-yields a clean error, never a traceback.
+The real path (`ANSWER_LLM=openai`, default `gpt-5.6-terra`) takes the two-form model convention:
+a bare `ANSWER_MODEL` is the OpenAI Responses API and needs `OPENAI_API_KEY`; a provider-prefixed
+pydantic-ai id (`openrouter:z-ai/glm-5.2`) authenticates with that provider's own key
+(`OPENROUTER_API_KEY`). A missing key yields a clean error naming the right variable, never a
+traceback.
 
 ## Measured, not assumed
 

@@ -315,8 +315,8 @@ same eight gates and the same cross-check as anything else in the diff.
 with no provider prefix (pydantic-ai reads a bare name as an OpenAI model, so inheriting it silently
 would file through a provider nobody chose), a model with no configured price, and a missing
 provider key (`anthropic:`→`ANTHROPIC_API_KEY`, `google-gla:`→`GEMINI_API_KEY`,
-`openai:`→`OPENAI_API_KEY`; an unrecognized prefix is a warning, not a refusal — the adapter stays
-provider-agnostic). `double` reads no model at all and is silent about it. The librarian skill is
+`openai:`→`OPENAI_API_KEY`, `openrouter:`→`OPENROUTER_API_KEY`; an unrecognized prefix is a
+warning, not a refusal — the adapter stays provider-agnostic). `double` reads no model at all and is silent about it. The librarian skill is
 proven at the base commit for every backend that INJECTS it (`agent.SKILL_READING_BACKENDS`); the
 offline double reads none.
 

@@ -23,7 +23,7 @@ PRICING_ENV = "STIGMERGY_LIBRARIAN_PRICING"
 
 # When the figures below were last set by a human. Printed in the refusal, so somebody reading
 # a surprising number knows how old the arithmetic behind it is.
-AS_OF = "2026-08-12"
+AS_OF = "2026-08-19"
 
 # `{model id: (input, cached input, cache write, output)}`, US dollars per MILLION tokens.
 #
@@ -50,6 +50,13 @@ PRICES = {
     # The Flash family's standing shape at the time of writing, NOT a confirmed 3.6 figure —
     # an order of magnitude, to correct before quoting. Cached figures UNVERIFIED, set to input.
     "google-gla:gemini-3.6-flash": (0.30, 0.30, 0.30, 2.50),
+    # OpenRouter serves one id through several underlying hosts and lists the default route's
+    # price; a pricier route can serve a given call, so correct these against the real bill —
+    # AS_OF says when a human last read the listing. Cached input and cache write UNVERIFIED
+    # (the discount varies per underlying host), set equal to input, the direction that can only
+    # over-state. Both rows read from openrouter.ai/api/v1/models on the AS_OF date.
+    "openrouter:z-ai/glm-5.2": (0.966, 0.966, 0.966, 3.036),
+    "openrouter:deepseek/deepseek-v4-flash": (0.083, 0.083, 0.083, 0.165),
 }
 
 _TOKENS_PER_UNIT = 1_000_000

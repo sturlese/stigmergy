@@ -99,8 +99,10 @@ kill_timeout = "300s"
   # refused at startup rather than left to file through a provider nobody chose. Explicit here
   # rather than inherited from `config.DEFAULT_MODEL` for the same reason the backend is: this is
   # the deployment where the value actually spends money, and it should be readable in the file an
-  # operator opens. It is the model staging already runs — the retired backend named the same one
-  # under its bare spelling. It authenticates with the app-wide ANTHROPIC_API_KEY secret.
+  # operator opens. It authenticates with the app-wide ANTHROPIC_API_KEY secret. A deployment that
+  # files through another provider overrides this with a Fly SECRET of the same name — secrets take
+  # precedence over `[env]` — plus that provider's own key (for example `openrouter:z-ai/glm-5.2`
+  # with OPENROUTER_API_KEY), leaving this template pristine.
   STIGMERGY_LIBRARIAN_MODEL = "anthropic:claude-sonnet-5"
   # Tuned BY MEASUREMENT (ADR 028): the default 300s was calibrated for paste-sized captures; a
   # real figure-dense Drive deck (7.7 KB extracted, overlapping an entity with existing coverage)

@@ -68,6 +68,7 @@ PROVIDER_KEY_ENV = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "google-gla": "GEMINI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
 }
 
 
