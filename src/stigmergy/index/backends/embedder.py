@@ -51,6 +51,10 @@ class OpenAIEmbedder:
         self.model = model or os.environ.get(MODEL_ENV) or DEFAULT_MODEL
         base = (base_url or os.environ.get(BASE_URL_ENV) or DEFAULT_BASE_URL).rstrip("/")
         self._url = base + "/embeddings"
+        # WHERE this embeds — recorded in index_meta beside model and dim at rebuild, compared
+        # at query time: the same model name on two hosts is not provably the same vector space
+        # (issue #112). A base URL, never a credential.
+        self.host = base
         # The OpenAI key is the fallback for the OpenAI HOST and nowhere else — precedence is
         # not isolation, and a bearer token sent to a host that did not issue it is DISCLOSED to
         # that host whether or not it is accepted (audit S1). A non-default host with no

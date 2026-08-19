@@ -14,7 +14,7 @@ from datetime import date
 
 from stigmergy.index import rank
 from stigmergy.index.backends.embedder import embedder_for_model
-from stigmergy.index.errors import EmptyIndexError
+from stigmergy.index.errors import EmptyIndexError, StigmergyIndexError
 from stigmergy.index.store import PAGE_COLUMNS, read_meta
 
 # The only columns a caller may filter on.
@@ -121,6 +121,18 @@ def search_arms(conn, query: str, *, embedder=None, k: int = rank.TOP_K,
     if meta is None:
         raise EmptyIndexError("the index is empty — run `stigmergy-index --rebuild --repo <dir>` first")
     embedder = embedder or embedder_for_model(meta["model"])
+    # BEFORE the first embedding: the same model name on two hosts is not provably the same
+    # vector space, and a mismatched query embeds into noise WITHOUT failing — the one failure
+    # mode worse than an error (issue #112). An index without a recorded host (built before the
+    # column existed) skips the check until its next rebuild records one.
+    recorded_host = (meta.get("host") or "").strip()
+    live_host = (getattr(embedder, "host", "") or "").strip()
+    if recorded_host and live_host and recorded_host != live_host:
+        raise StigmergyIndexError(
+            f"this index was built against the embedding host {recorded_host} and the embedder "
+            f"is configured for {live_host} — the same model name on two hosts is not provably "
+            f"the same vector space. Point $EMBED_BASE_URL back at the recorded host, or "
+            f"rebuild against the new one (`stigmergy-index --rebuild --repo <dir>`)")
     q_emb = embedder.embed([query])[0]
     fts_query = " ".join((query, *fts_expansion)) if fts_expansion else query
     fts = fts_ranking(conn, fts_query, meta["fts_config"], filters)

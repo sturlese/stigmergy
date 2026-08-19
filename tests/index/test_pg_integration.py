@@ -244,3 +244,54 @@ def test_search_on_an_empty_index_fails_loudly():
             search.search(conn, "anything")
     finally:
         conn.close()
+
+
+# ── index_meta records the embedding HOST (issue #112) ────────────────────────────────────────
+# Each of the three rebuilds for itself: the empty-index test above DROPS index_meta and a test
+# that inherits its neighbour's wreckage fails about ordering, not about hosts.
+def test_rebuild_records_the_embedders_host_in_index_meta(conn):
+    """The same model name on two hosts is not provably the same vector space, so the rebuild
+    records WHERE it embedded beside model and dim. The fake embedder's `host` is its own
+    name-space marker, exactly as its model string is."""
+    build.rebuild(conn, FIXTURE, build_embedder("fake"))
+    meta = store.read_meta(conn)
+    assert meta["host"] == "fake"
+
+
+class _MustNotEmbed:
+    """An embedder whose host disagrees with the index: embedding through it IS the bug."""
+    host = "https://other.example/v1"
+    model = "fake-hashed-bow-256"
+
+    def embed(self, texts):
+        raise AssertionError("the host-mismatch refusal must fire BEFORE any embedding")
+
+
+def test_a_host_mismatch_refuses_before_embedding_anything(conn):
+    """OLD BEHAVIOUR: nothing compared hosts, so moving $EMBED_BASE_URL under a standing index
+    embedded every query into whatever the new host serves under the same name — noise without
+    an error, the failure mode `backends/embedder.py`'s own docstring calls the worst one."""
+    from stigmergy.index.errors import StigmergyIndexError
+
+    build.rebuild(conn, FIXTURE, build_embedder("fake"))
+    with pytest.raises(StigmergyIndexError) as ex:
+        search.search_arms(conn, "globex", embedder=_MustNotEmbed())
+
+    msg = str(ex.value)
+    assert "fake" in msg and "https://other.example/v1" in msg
+    assert "--rebuild" in msg
+
+
+def test_an_index_without_a_recorded_host_skips_the_check(conn):
+    """The benign twin, and the upgrade path: an index built before the column existed carries
+    no host, and refusing every query until the next rebuild would turn an upgrade into an
+    outage. Restored in `finally` — the fixture connection is module-scoped."""
+    build.rebuild(conn, FIXTURE, build_embedder("fake"))
+    with conn.cursor() as cur:
+        cur.execute("UPDATE index_meta SET host = ''")
+    try:
+        hits = search.search_arms(conn, "globex")
+        assert hits
+    finally:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE index_meta SET host = %s", ("fake",))

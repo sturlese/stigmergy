@@ -105,7 +105,8 @@ def rebuild(conn, repo_dir: str, embedder, fts_config: str = "english") -> dict:
     # as savepoints): a failure mid-rebuild must leave the previous index, never an
     # empty-but-valid one a concurrent reader would answer from with silent zero hits.
     with conn.transaction():
-        store.init_schema(conn, dim=dim, model=embedder.model, fts_config=fts_config)
+        store.init_schema(conn, dim=dim, model=embedder.model, fts_config=fts_config,
+                          host=getattr(embedder, "host", ""))
         if fresh:
             store.store_embeddings(conn, embedder.model, fresh)
         store.insert_pages(conn, rows, embeddings, fts_config)

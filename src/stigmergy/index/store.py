@@ -154,8 +154,10 @@ CREATE TABLE IF NOT EXISTS index_meta (
   model text NOT NULL,
   dim integer NOT NULL,
   fts_config text NOT NULL,
-  built_at timestamptz NOT NULL DEFAULT now()   -- when this index was last rebuilt; the server
+  built_at timestamptz NOT NULL DEFAULT now(),  -- when this index was last rebuilt; the server
   --                                               returns it so staleness is self-diagnosing
+  host text NOT NULL DEFAULT ''                 -- WHERE it embedded: the same model name on two
+  --                                               hosts is not provably the same vector space
 )
 """
 
@@ -190,7 +192,8 @@ def connect(conninfo: str | None = None) -> psycopg.Connection:
     return psycopg.connect(conninfo or dsn(), autocommit=True)
 
 
-def init_schema(conn: psycopg.Connection, dim: int, model: str, fts_config: str) -> None:
+def init_schema(conn: psycopg.Connection, dim: int, model: str, fts_config: str,
+                host: str = "") -> None:
     with conn.transaction(), conn.cursor() as cur:
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
         # TARGETED BY NAME, and it must stay that way: this database also holds the DURABLE half
@@ -213,16 +216,18 @@ def init_schema(conn: psycopg.Connection, dim: int, model: str, fts_config: str)
         # (`build.rebuild`), so a copy of the old row would be overwritten before anything read it.
         cur.execute("DROP TABLE IF EXISTS entity_registry_snapshot")
         cur.execute(_META_DDL)
-        # index_meta is a SURVIVING table, so an older database may lack `built_at`: add the
-        # column additively rather than force a wipe.
+        # index_meta is a SURVIVING table, so an older database may lack `built_at` or `host`:
+        # add the columns additively rather than force a wipe.
         cur.execute("ALTER TABLE index_meta ADD COLUMN IF NOT EXISTS built_at timestamptz"
                     " NOT NULL DEFAULT now()")
-        cur.execute("INSERT INTO index_meta (model, dim, fts_config, built_at)"
-                    " VALUES (%s, %s, %s, now())"
+        cur.execute("ALTER TABLE index_meta ADD COLUMN IF NOT EXISTS host text"
+                    " NOT NULL DEFAULT ''")
+        cur.execute("INSERT INTO index_meta (model, dim, fts_config, built_at, host)"
+                    " VALUES (%s, %s, %s, now(), %s)"
                     " ON CONFLICT (singleton) DO UPDATE SET model = EXCLUDED.model,"
                     " dim = EXCLUDED.dim, fts_config = EXCLUDED.fts_config,"
-                    " built_at = EXCLUDED.built_at",
-                    (model, dim, fts_config))
+                    " built_at = EXCLUDED.built_at, host = EXCLUDED.host",
+                    (model, dim, fts_config, host))
 
 
 def create_search_indexes(conn) -> None:
@@ -247,17 +252,18 @@ def read_meta(conn: psycopg.Connection) -> dict | None:
         if cur.fetchone()[0] is None:
             return None
         try:
-            cur.execute("SELECT model, dim, fts_config, built_at FROM index_meta")
+            cur.execute("SELECT model, dim, fts_config, built_at, host FROM index_meta")
         except psycopg.errors.UndefinedColumn:
-            # an older index_meta predating built_at reads as "needs a rebuild" rather than a raw
-            # crash — the caller's empty-index path surfaces the `--rebuild` hint.
+            # an older index_meta predating built_at/host reads as "needs a rebuild" rather than
+            # a raw crash — the caller's empty-index path surfaces the `--rebuild` hint.
             return None
         row = cur.fetchone()
     if not row:
         return None
     # built_at ships as an ISO-8601 string: the server serializes it into JSON tool output.
     return {"model": row[0], "dim": row[1], "fts_config": row[2],
-            "built_at": row[3].isoformat() if row[3] is not None else None}
+            "built_at": row[3].isoformat() if row[3] is not None else None,
+            "host": row[4] or ""}
 
 
 def read_ops_file(conn: psycopg.Connection, relpath: str) -> str | None:
