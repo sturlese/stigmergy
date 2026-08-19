@@ -30,11 +30,13 @@ EXIT_CONFIG = 2         # same value `stigmergy-librarian` uses for "the tool ca
 # property can be made true. It makes `openai:` filing models unusable on the DEPLOYED worker
 # by design: `OPENAI_API_KEY` is also `pydantic_backend.PROVIDER_KEY_ENV`'s credential, and the
 # missing-key refusal names this dead end because "export it" is the one fix that cannot work
-# there. The intersection of this tuple with `PROVIDER_KEY_ENV` is pinned by
+# there. `EMBED_API_KEY` is the same credential under the embedder's own name — the key for an
+# `$EMBED_BASE_URL` host — and is NOT any provider family's key, so stripping it closes no model
+# off. The intersection of this tuple with `PROVIDER_KEY_ENV` is pinned by
 # `tests/librarian/test_pydantic_preflight.py::test_the_only_provider_key_the_deployed_worker_
 # strips_is_the_read_paths_own`, so a second entry cannot silently make another provider family
 # undeployable.
-READ_PATH_ONLY_ENV = ("OPENAI_API_KEY",)
+READ_PATH_ONLY_ENV = ("OPENAI_API_KEY", "EMBED_API_KEY")
 
 # The credential helper a cloned checkout is pointed at, so the fetch before every claim and the
 # push after it both authenticate as the App (see `gitcredential`). `!` is git's own "run this

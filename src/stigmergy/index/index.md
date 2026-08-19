@@ -75,8 +75,10 @@ Narrative doc: [`docs/reference/hybrid-index.md`](../../../docs/reference/hybrid
   raises `SystemExit`.
 - `backends/embedder.py` — `OpenAIEmbedder` plus `build_embedder`/`embedder_for_model`, the one
   fake/real dispatch (fake imported deferred; never suggest it as a keyless substitute — a
-  mismatched vector space returns noise, not an error). `backends/fake_embedder.py` — the
-  deterministic keyless double for tests/CI.
+  mismatched vector space returns noise, not an error). 'openai' names the DIALECT: the host is
+  `EMBED_BASE_URL` (OpenAI by default) with `EMBED_API_KEY` as its credential and `EMBED_MODEL`
+  as the build-time default model; an explicit model (the index's recorded one) always wins.
+  `backends/fake_embedder.py` — the deterministic keyless double for tests/CI.
 
 ## Reuse / avoid
 

@@ -40,7 +40,8 @@ def index_main(argv=None) -> None:
                     help=f"Postgres DSN (default: ${store.DSN_ENV} or {store.DSN_DEFAULT})")
     ap.add_argument("--embedder", choices=["openai", "fake"], default="openai",
                     help="fake = deterministic offline double (tests/CI only)")
-    ap.add_argument("--model", default=None, help="embedding model (default per embedder)")
+    ap.add_argument("--model", default=None,
+                    help="embedding model (default: $EMBED_MODEL, then the embedder's own)")
     ap.add_argument("--fts-config", default="english", help="Postgres text-search config")
     args = ap.parse_args(argv)
 
