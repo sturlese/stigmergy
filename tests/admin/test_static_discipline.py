@@ -11,12 +11,20 @@ from stigmergy.admin import routes
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 STATIC = pathlib.Path(routes.__file__).parent / "static"
+# The frontend is one module per view under `assets/views/`; the three this file reads by name are
+# the captures view (the disposition buttons), the entities view (the mint form) and the repairs
+# view (the per-kind change renderers). A check that went looking for a monolith would go blind.
+CAPTURES_VIEW = STATIC / "assets" / "views" / "captures.js"
+ENTITIES_VIEW = STATIC / "assets" / "views" / "entities.js"
+REPAIRS_VIEW = STATIC / "assets" / "views" / "repairs.js"
 
 BANNED_SINKS = re.compile(
     r"\binnerHTML\b|\bouterHTML\b|\binsertAdjacentHTML\b|\bdocument\.write\b"
     r"|\beval\s*\(|\bnew\s+Function\b")
 
-EXTERNAL_REF = re.compile(r"""(?:src|href)\s*=\s*["']https?://""")
+# Both spellings of an attribute — HTML (`href="https://…"`) and the object-literal form this
+# frontend actually writes (`href: "https://…"`) — plus a stylesheet `url(https://…)`.
+EXTERNAL_REF = re.compile(r"""(?:src|href)\s*[:=]\s*["']https?://|url\(\s*["']?https?://""")
 
 # `el(tag, { ...props... }, ...children)` (ui.js) — the properties object is whatever sits
 # between the opening `{` right after the tag string and its balanced closing `}`, whether the
@@ -174,7 +182,7 @@ def _function_body(text, name):
     """The source of `function name(...)`'s body, braces included."""
     match = re.search(r"\bfunction\s+" + re.escape(name) + r"\s*\(", text)
     assert match, (
-        f"views.js no longer defines a function named {name} — this check's target moved and it "
+        f"entities.js no longer defines a function named {name} — this check's target moved and it "
         "is now asserting about nothing; repoint it at whatever opens the mint modal")
     brace = text.index("{", text.index(")", match.end()))
     body = _balanced(text, brace, "{", "}")
@@ -194,6 +202,8 @@ def test_the_static_files_ship_inside_the_package():
     assert (STATIC / "index.html").is_file()
     assert (STATIC / "assets" / "app.js").is_file()
     assert (STATIC / "assets" / "styles.css").is_file()
+    for view in (CAPTURES_VIEW, ENTITIES_VIEW, REPAIRS_VIEW):
+        assert view.is_file(), f"{view.name} moved — every check below that reads it by name is blind"
 
 
 def test_no_html_string_sink_anywhere_in_the_shipped_js():
@@ -242,15 +252,15 @@ def test_no_element_carries_both_a_title_hint_and_a_disabled_flag():
 
 
 def test_the_disabled_disposition_hint_is_rendered_as_visible_text():
-    """The twin to the ban above: `disabledHint` (views.js) is the sentence explaining why a
+    """The twin to the ban above: `disabledHint` (captures.js) is the sentence explaining why a
     disposition button is disabled. Proving `title:` is gone is not enough — the reason must
     actually land somewhere a user can read it. This asserts `disabledHint` is ALSO used as this
     file's own hints/notes are (`el(tag, {...}, hintVariable)`, e.g. `confirmForm`'s
     `el("span", {class: "hint"}, f.hint)` in ui.js) — passed as a text CHILD — not only ever as an
     attribute value nothing renders."""
-    views = (STATIC / "assets" / "views.js").read_text(encoding="utf-8")
+    views = CAPTURES_VIEW.read_text(encoding="utf-8")
     assert "const disabledHint" in views, (
-        "views.js no longer defines disabledHint by that name — update this check's target")
+        "captures.js no longer defines disabledHint by that name — update this check's target")
     text_child_uses = 0
     for match in re.finditer(r"\bdisabledHint\b", views):
         before = views[:match.start()].rstrip()
@@ -261,14 +271,16 @@ def test_the_disabled_disposition_hint_is_rendered_as_visible_text():
         text_child_uses += 1
     assert text_child_uses, (
         "disabledHint appears only as its own `const` declaration and as a `title:` attribute "
-        "value in views.js — no occurrence is passed as a text child anywhere, so the reason "
+        "value in captures.js — no occurrence is passed as a text child anywhere, so the reason "
         "renders nowhere a user can read it; pass disabledHint as a child argument to a "
         "text-bearing el() the way this file's own inline hints/notes are rendered")
 
 
 def test_the_console_loads_no_external_resource():
-    """Self-contained by CSP AND by construction: no http(s) src/href in any shipped file —
-    the only absolute URLs the app ever renders are GitHub run links built from API data."""
+    """Self-contained by CSP AND by construction: no http(s) src/href literal in any shipped file,
+    in either attribute spelling, and no `url(https://…)` in the stylesheet — the only absolute
+    URLs the app ever renders are GitHub run links built from API data, and those are gated on the
+    `https://github.com/` prefix (`test_the_one_external_link_is_gated_on_githubs_own_host`)."""
     offenders = []
     for path in _files(".js", ".html", ".css"):
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
@@ -277,18 +289,67 @@ def test_the_console_loads_no_external_resource():
     assert not offenders, "external resource reference in the console:\n  " + "\n  ".join(offenders)
 
 
+def test_the_external_reference_grep_sees_the_object_literal_spelling():
+    """The instrument's own specificity, stated: the pattern must catch the `el("a", {href:
+    "https://…"})` form this frontend writes, not only the HTML-attribute form it never uses, or
+    the ban above is green over the one spelling that could ship."""
+    assert EXTERNAL_REF.search('el("a", { href: "https://evil.example/x" })')
+    assert EXTERNAL_REF.search("href='http://evil.example'")
+    assert EXTERNAL_REF.search("background: url(https://evil.example/a.png)")
+    assert not EXTERNAL_REF.search('href: r.html_url'), "a URL from API data is not a literal"
+
+
+def test_the_one_external_link_is_gated_on_githubs_own_host():
+    """The Jobs page renders the Actions run link from an API response. A scheme allowlist is the
+    difference between "a link to the logs" and "a link to wherever a compromised response
+    says": the anchor is built only behind a `https://github.com/` prefix check."""
+    jobs = (STATIC / "assets" / "views" / "jobs.js").read_text(encoding="utf-8")
+    anchor = jobs.index("href: r.html_url")
+    guard = jobs.rfind('startsWith("https://github.com/")', 0, anchor)
+    assert guard != -1 and anchor - guard < 400, (
+        "jobs.js renders the run link without the github.com prefix guard immediately before it")
+
+
+def test_every_confirm_form_states_its_consequence():
+    """A button that spends, posts or commits says what it will do before it does: every
+    `confirmForm({…})` call site carries a `consequence:` key of its own, and `ui.js` throws on
+    an empty one — so a new workflow without a sentence fails loudly in development rather than
+    shipping a blank line over Dispatch."""
+    ui = (STATIC / "assets" / "ui.js").read_text(encoding="utf-8")
+    assert "has no consequence sentence" in ui, "confirmForm no longer refuses an empty consequence"
+    missing = []
+    for path in sorted((STATIC / "assets" / "views").glob("*.js")):
+        text = path.read_text(encoding="utf-8")
+        for match in re.finditer(r"\bconfirmForm\(\s*\{", text):
+            body = _balanced(text, match.end() - 1, "{", "}") or ""
+            if not re.search(r"\bconsequence\s*[:,}]", body):   # `consequence:` or the shorthand
+                missing.append(f"{path.name}:{text.count(chr(10), 0, match.start()) + 1}")
+    assert not missing, "confirmForm calls with no consequence of their own:\n  " + "\n  ".join(missing)
+
+
+def test_the_retention_purge_dispatch_defaults_to_a_dry_run():
+    """The one workflow that deletes user material: its Run-now form's dry-run box starts TICKED,
+    so the default path lists what would go and touches nothing."""
+    jobs = (STATIC / "assets" / "views" / "jobs.js").read_text(encoding="utf-8")
+    dry_run = re.search(r"""name:\s*["']dry_run["'][^}]*\}""", jobs)
+    assert dry_run, "jobs.js no longer declares the dry_run field"
+    assert re.search(r"value:\s*true", dry_run.group(0)), (
+        "the dry_run checkbox is unticked by default — the default path of the purge dispatch "
+        "is the real purge")
+
+
 def test_admin_console_docs_do_not_promise_an_unreachable_hover_reason():
-    """docs/reference/admin-console.md's Queue bullet promises the three disposition buttons are
-    "disabled ... with the reason on hover" — an affordance no browser delivers on a disabled
+    """docs/reference/admin-console.md's Captures bullet once promised the three disposition buttons
+    are "disabled ... with the reason on hover" — an affordance no browser delivers on a disabled
     control (see the two tests above). Pinned the way `tests/test_readme_claims.py`
     pins README claims against the code: a documented affordance must be checkable against what
     ships, or it rots silently the moment the two drift."""
     doc = (ROOT / "docs" / "reference" / "admin-console.md").read_text(encoding="utf-8")
-    start = doc.index("- **Queue**")
-    end = doc.index("- **Crons**", start)
+    start = doc.index("- **Captures**")
+    end = doc.index("- **Entities**", start)
     queue_bullet = doc[start:end]
     assert "reason on hover" not in queue_bullet, (
-        "docs/reference/admin-console.md's Queue bullet still promises 'reason on hover' — a "
+        "docs/reference/admin-console.md's Captures bullet still promises 'reason on hover' — a "
         "disabled button fires no pointer events in any browser, so that tooltip never shows; "
         "once the fix renders the reason as visible inline text, restate this sentence to match")
 
@@ -306,6 +367,12 @@ def test_admin_console_docs_do_not_promise_an_unreachable_hover_reason():
 # (`tests/entities/test_situations.py`), and delivered as `mint_name_prefill` on both entity routes
 # (`tests/admin/test_routes_pg.py`) and on the review item the Slack door reads
 # (`tests/server/test_review.py`). That is the seam this section used to ask for, and it exists.
+#
+# The entities view's name cards add one road the rule did not have to consider: a steward who
+# clicks "Mint «X»" on ONE name's card has chosen that name by hand, and `entityApproveFlow` is
+# handed exactly the string they clicked. That is a human pick, not a count — the decision "is a
+# default safe" is still the server's, and the checks below still hold: the field's own expression
+# resolves through the decided prefill, and no length is ever compared against one here.
 #
 # WHAT THIS INSTRUMENT PROVES, AND WHAT IT CANNOT. Every test in this section reads the SOURCE TEXT
 # of a shipped frontend asset. There is no JS runtime in this suite, so none of them can open the
@@ -330,10 +397,10 @@ def test_no_confirm_form_prefill_is_wired_to_the_joined_subject_display_string()
     too. `label:`/`hint:` are deliberately NOT scanned — showing a steward the joined string as
     read-only context is a legitimate display use (`entityDetailView`'s `kv` table does it); only
     what lands in an INPUT the steward submits is the defect."""
-    views = (STATIC / "assets" / "views.js").read_text(encoding="utf-8")
+    views = ENTITIES_VIEW.read_text(encoding="utf-8")
     descriptors = list(_confirm_form_field_descriptors(views))
     assert len(descriptors) >= 5, (
-        f"only {len(descriptors)} confirmForm field descriptors found in views.js — the form "
+        f"only {len(descriptors)} confirmForm field descriptors found in entities.js — the form "
         "shape changed and this scan went blind; repoint it before trusting a green run")
     assert any(_value_expression(d) for _, d in descriptors), (
         "no descriptor carries a `value:` at all — either prefills moved out of the descriptor "
@@ -344,7 +411,7 @@ def test_no_confirm_form_prefill_is_wired_to_the_joined_subject_display_string()
         if expression and JOINED_SUBJECT.search(expression):
             line = views.count("\n", 0, start) + 1
             name = re.search(r"""name\s*:\s*["']([^"']+)""", descriptor)
-            offenders.append(f"views.js:{line}: field {name.group(1) if name else '?'} — "
+            offenders.append(f"entities.js:{line}: field {name.group(1) if name else '?'} — "
                              f"value: {expression}")
     assert not offenders, (
         "a form field prefills from the JOINED subject display string — for a park naming several "
@@ -362,7 +429,7 @@ def test_the_mint_flow_never_reaches_for_the_joined_subject_at_all():
     context — it collects the metadata a mint writes — so inside THIS function the joined display
     string has no legitimate reader at all, and banning the whole name is both simpler and
     stricter than tracing the assignment."""
-    views = (STATIC / "assets" / "views.js").read_text(encoding="utf-8")
+    views = ENTITIES_VIEW.read_text(encoding="utf-8")
     body = _function_body(views, "entityApproveFlow")
     assert "confirmForm" in body, (
         "entityApproveFlow no longer opens a confirmForm — the mint door moved and this check is "
@@ -382,7 +449,7 @@ def test_the_mint_name_field_still_carries_a_prefill():
     retypes the same name every time learns to stop reading the field, which is how the next
     wrong value gets submitted. The common case is one unresolved name, and it must keep its
     default."""
-    views = (STATIC / "assets" / "views.js").read_text(encoding="utf-8")
+    views = ENTITIES_VIEW.read_text(encoding="utf-8")
     body = _function_body(views, "entityApproveFlow")
     descriptors = [d for _, d in _confirm_form_field_descriptors(body)
                    if re.search(r"""name\s*:\s*["']name["']""", d)]
@@ -421,7 +488,7 @@ def test_the_mint_flow_reads_the_per_name_list_and_never_counts_it_again():
     own sentence states no number at all, deliberately: the decision was taken on the raw row
     while these bullets are the post-`_clean` survivors, so any count named there could contradict
     the list it introduces on exactly the park the rule exists for."""
-    views = (STATIC / "assets" / "views.js").read_text(encoding="utf-8")
+    views = ENTITIES_VIEW.read_text(encoding="utf-8")
     body = _function_body(views, "entityApproveFlow")
     assert re.search(r"\bsubjects\b", body), (
         "entityApproveFlow never reads `subjects` — the per-name list `admin.service._situation` "
@@ -505,7 +572,7 @@ def test_the_name_prefills_own_expression_is_the_decided_field_and_nothing_else(
     The key string is asserted against the shaper that emits it, so a rename on either side fails
     here instead of silently handing the browser `undefined` — a prefill that quietly becomes empty
     for every park, with no listing either, is invisible from this side of the wire."""
-    views = (STATIC / "assets" / "views.js").read_text(encoding="utf-8")
+    views = ENTITIES_VIEW.read_text(encoding="utf-8")
     body = _function_body(views, "entityApproveFlow")
     descriptors = [d for _, d in _confirm_form_field_descriptors(body)
                    if re.search(r"""name\s*:\s*["']name["']""", d)]
@@ -528,11 +595,38 @@ def test_the_name_prefills_own_expression_is_the_decided_field_and_nothing_else(
         "AND compares a name count of its own — the browser is overriding, or second-guessing, the "
         "one decision. One of the two wins on some input, and nobody knows which without reading "
         "this expression, which is exactly the state the consolidation ended")
+    # The substring match above is satisfied by `subjects[0] || row.mint_name_prefill` — the C-3
+    # defect wearing the right field name — so the expression's OTHER sources are pinned too: the
+    # steward's own click (`chosen`, the function's parameter), the blank-name road (`opts.blank`),
+    # and nothing else. A new identifier here is a new source of a minted name.
+    identifiers = set(re.findall(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*", resolved))
+    allowed = {"opts.blank", "chosen", "String", "row.mint_name_prefill"}
+    assert identifiers <= allowed, (
+        f"the `Name` prefill expression ({resolved!r}) draws on {sorted(identifiers - allowed)} — "
+        "the only values that may reach the field are the decided prefill and the name the steward "
+        "clicked; anything else is a second policy over an irreversible mint")
     service = (ROOT / "src" / "stigmergy" / "admin" / "service.py").read_text(encoding="utf-8")
     assert "mint_name_prefill" in service, (
-        "views.js prefills from `row.mint_name_prefill` but `admin/service.py` never mentions that "
+        "entities.js prefills from `row.mint_name_prefill` but `admin/service.py` never mentions that "
         "key — the shaper renamed or dropped it and the browser now reads `undefined`, which "
         "prefills nothing AND lists nothing: an unexplained empty required field on every approval")
+
+
+def test_a_per_name_mint_button_is_offered_only_for_a_mintable_name():
+    """The per-name cards are the road the prefill rule never had to consider: a button per
+    unresolved name, each handing `entityApproveFlow` the string it carries. The librarian's
+    placeholder for a park that named nothing arrives as such a name (`subjects_of` does not
+    filter it), so the card must read the server's `mintable` verdict and offer no button for
+    it. Pinned here as a grep — the Python half (`tests/admin/test_console_reads_pg.py`) pins
+    that the flag is sent and that the terminal gate refuses the value anyway."""
+    views = ENTITIES_VIEW.read_text(encoding="utf-8")
+    body = _function_body(views, "nameCard")
+    assert "mintable" in body, "nameCard never reads the server's `mintable` verdict"
+    mint_button = body.index("`Mint «${name}»`")
+    gate = body.rfind("if (!mintable)", 0, mint_button)
+    assert gate != -1, (
+        "the per-name Mint button is rendered before any `mintable` check — the placeholder gets "
+        "a button")
 
 
 def test_the_several_names_case_still_lists_the_names_for_the_steward():
@@ -543,7 +637,7 @@ def test_the_several_names_case_still_lists_the_names_for_the_steward():
 
     It reds if the listing is dropped while the prefill is preserved, which is the plausible
     accident now that this function reads a decided value and needs `names` for nothing else."""
-    views = (STATIC / "assets" / "views.js").read_text(encoding="utf-8")
+    views = ENTITIES_VIEW.read_text(encoding="utf-8")
     body = _function_body(views, "entityApproveFlow")
     assert re.search(r"\.map\s*\(", body), (
         "entityApproveFlow no longer iterates anything — with several unresolved names the steward "
@@ -559,7 +653,6 @@ def test_the_several_names_case_still_lists_the_names_for_the_steward():
 # makes about it — not what a steward sees. That is enough for the one regression that matters,
 # because the defect was a SENTENCE: the panel promised every op was additive and nothing was
 # rewritten, which stopped being true the day `entity-body` landed.
-REPAIRS_VIEW = STATIC / "assets" / "views.js"
 
 
 def test_the_repair_detail_wires_in_the_drafted_body_itself():
