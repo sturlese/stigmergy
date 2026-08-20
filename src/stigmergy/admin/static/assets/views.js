@@ -346,7 +346,7 @@ function cronCard(w, live) {
   const dispatchConsequence = {
     "index-rebuild.yml": "runs a FULL staging index rebuild in GitHub Actions — real embedder, real spend, against the staging database.",
     "retention-purge.yml": "runs the capture-queue retention purge in GitHub Actions against staging.",
-    "gardener.yml": "runs the nine deterministic checks AND the model editorial sweep in GitHub Actions — real model spend; findings persist to staging.",
+    "gardener.yml": "runs the deterministic checks AND the model editorial sweep in GitHub Actions — real model spend; findings persist to staging.",
     "repair-propose.yml": "reads the latest gardener findings and proposes repairs in GitHub Actions — real model spend. It applies nothing: every proposal lands pending, for the Repairs tab.",
   }[w.file];
   return el("div", { class: "card" },
@@ -431,7 +431,7 @@ export async function gardenerView(host) {
             class: "btn small primary", disabled: !META.github.configured,
             onclick: () => dispatchFlow(
               gardenerWorkflow,
-              "runs the nine deterministic checks AND the model editorial sweep in GitHub Actions — real model spend; findings persist to staging."),
+              "runs the deterministic checks AND the model editorial sweep in GitHub Actions — real model spend; findings persist to staging."),
           }, icon("play", 14), "Run now")),
         !META.github.configured
           ? el("div", { class: "sub" }, "needs the GitHub token — or run `stigmergy-gardener` locally")

@@ -719,7 +719,7 @@ def test_run_gardener_an_empty_body_pass_failure_alone_still_commits_partial(con
 
 def test_run_gardener_both_model_passes_failing_is_still_one_partial_run(conn, repo, monkeypatch):
     """`CLEAN_LLM=fake-flawed` fails BOTH doubles at once. Two failures, one status — the run is
-    `partial`, not `error`, because the nine deterministic checks completed and their findings are
+    `partial`, not `error`, because the deterministic checks completed and their findings are
     exactly as trustworthy as on any other night."""
     monkeypatch.setenv("CLEAN_LLM", "fake-flawed")
     support.write_registry(repo, {})
