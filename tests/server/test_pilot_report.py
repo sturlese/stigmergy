@@ -273,3 +273,65 @@ def test_answer_shape_by_day_agrees_with_answer_shape_on_the_same_rows(clean_pil
                       pilot_report.SHAPE_CITED: whole["answered_with_citation"],
                       pilot_report.SHAPE_UNCITED: whole["answered_no_citation"]}
     assert whole["total"] == sum(summed.values()), "neither read counts the unrecorded or errored"
+
+
+def test_answer_shape_by_day_reads_a_legacy_citation_list_the_way_shape_of_does(
+        clean_pilot_report_db):
+    """THE REGRESSION. OLD BEHAVIOUR: the SQL mirror cast `result ->> 'citations'` to `int`, so a
+    row whose `citations` is the pre-`audit_summary` LIST (`["wiki/…md", …]`, which is what most
+    rows on a deployment that has been running a while carry) raised
+    `InvalidTextRepresentation: invalid input syntax for type integer` — and because the console's
+    `metrics` call is fetched by eight of its eleven pages, one legacy row turned almost the whole
+    console into "the operation failed (InvalidTextRepresentation)".
+
+    `shape_of` never had the problem: it asks Python truthiness, for which a non-empty list, a
+    non-zero count and a non-empty string are all "there is a citation". The mirror must answer
+    the same question of the same JSON, whatever a past writer put in the column — so it compares
+    the JSONB value against the falsy set instead of casting it to a type it may not be."""
+    conn = clean_pilot_report_db
+    _write_ask_row(conn, identity="a", result={"refused": False, "citations": ["wiki/a.md", "wiki/b.md"]})
+    _write_ask_row(conn, identity="a", result={"refused": False, "citations": []})
+    _write_ask_row(conn, identity="a", result={"refused": True, "citations": ["wiki/c.md"]})
+    _write_ask_row(conn, identity="a", result={"refused": False, "citations": 3})
+
+    by_day = pilot_report.answer_shape_by_day(conn, days=30)
+
+    assert len(by_day) == 1
+    today = by_day[0]
+    assert today[pilot_report.SHAPE_CITED] == 2, "a non-empty list counts, and so does a count"
+    assert today[pilot_report.SHAPE_UNCITED] == 1, "an EMPTY list is no citation, like a zero"
+    assert today[pilot_report.SHAPE_REFUSED] == 1, "refused wins over citations, in both shapes"
+
+    whole = pilot_report.answer_shape(conn)
+    assert (today[pilot_report.SHAPE_CITED], today[pilot_report.SHAPE_UNCITED],
+            today[pilot_report.SHAPE_REFUSED]) == (
+        whole["answered_with_citation"], whole["answered_no_citation"], whole["refused"])
+
+
+def test_shape_of_and_its_sql_mirror_agree_on_every_json_shape_a_writer_could_leave(
+        clean_pilot_report_db):
+    """The mirror's contract, asked of the shapes a JSONB column can actually hold — no cast can
+    survive all of these, which is why neither side casts. Each row is written, read back through
+    the grouped query, and compared with `shape_of`'s own answer for the same value."""
+    conn = clean_pilot_report_db
+    cases = [
+        {"refused": False, "citations": ["wiki/a.md"]},      # legacy list
+        {"refused": False, "citations": []},                  # legacy empty list
+        {"refused": False, "citations": 2},                   # today's count
+        {"refused": False, "citations": 0},
+        {"refused": False},                                   # no citations key at all
+        {"refused": True},
+        {"refused": False, "citations": None},
+        {"refused": None, "citations": 1},                    # a null where a bool was expected
+        {"refused": False, "citations": "wiki/a.md"},         # a bare string
+        {"refused": False, "citations": ""},
+    ]
+    expected = {pilot_report.SHAPE_CITED: 0, pilot_report.SHAPE_UNCITED: 0,
+                pilot_report.SHAPE_REFUSED: 0}
+    for result in cases:
+        _write_ask_row(conn, identity="a", result=result)
+        expected[pilot_report.shape_of(result)] += 1
+
+    [today] = pilot_report.answer_shape_by_day(conn, days=30)
+
+    assert {shape: today[shape] for shape in expected} == expected
