@@ -216,11 +216,6 @@ def vision_config_error() -> str | None:
     return None
 
 
-def vision_configured() -> bool:
-    """`vision_config_error() is None`, for the caller that only branches."""
-    return vision_config_error() is None
-
-
 def _pdf_page_pngs(path: str, cap: int = MAX_VISION_PAGES) -> list[bytes]:
     """The first `cap` pages as PNG bytes, via poppler's pdftoppm — the same package
     `_pdftotext` ships in, so this path owes the image no new toolchain. pdftoppm zero-pads its

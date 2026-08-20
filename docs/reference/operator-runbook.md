@@ -36,6 +36,10 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    ```sh
    # the server (`app` group)
    fly secrets set STIGMERGY_INDEX_DSN="postgresql://...supabase.../stigmergy"
+   # The READ path's two model keys, and which ones you set follows what you configured:
+   # OPENAI_API_KEY serves both defaults (the embedder and `ask`); an EMBED_BASE_URL host takes
+   # EMBED_API_KEY instead, and a provider-prefixed ANSWER_MODEL takes that provider's own key
+   # (`openrouter:` -> OPENROUTER_API_KEY).
    fly secrets set OPENAI_API_KEY="sk-..."
    fly secrets set STIGMERGY_TOKEN_STORE='{"<sha256hex>": "steward@example.com"}'
    # the evidence plane (R2 — server AND worker read it)
@@ -49,6 +53,9 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    fly secrets set STIGMERGY_LIBRARIAN_PRIVATE_KEY="$(cat ~/.config/stigmergy/librarian.private-key.pem)"
    # Only if your App is not named `stigmergy-librarian` — its slug is what the bot commits as.
    fly secrets set STIGMERGY_LIBRARIAN_APP_LOGIN="my-librarian"
+   # The FILING model's own provider key — whichever STIGMERGY_LIBRARIAN_MODEL names
+   # (`anthropic:` -> ANTHROPIC_API_KEY, `openrouter:` -> OPENROUTER_API_KEY,
+   # `google-gla:` -> GEMINI_API_KEY). A missing one is refused at startup, by name.
    fly secrets set ANTHROPIC_API_KEY="sk-ant-..."
    # OPTIONAL, worker only: the Drive door's OCR fallback for a scanned PDF. Two forms: this key
    # serves the bare Gemini VISION_MODEL; a provider-prefixed VISION_MODEL secret
@@ -247,11 +254,13 @@ Four standing rules:
   the count includes it. Two workers actually draining is `worker=3`. Read the STATE column,
   never the count. On a pinned deployment the standby does not exist at all.
 - **The kill window is shorter than one item.** Fly caps `kill_timeout` at 300s; one item's
-  worst case on the deployed worker is 1320s (two agent attempts at the deployed
-  `STIGMERGY_LIBRARIAN_TIMEOUT_S=600`, plus 120s for the gates, the commit and the push). A deploy
+  worst case on the deployed worker is 1710s (two agent attempts at the deployed
+  `STIGMERGY_LIBRARIAN_TIMEOUT_S=600`, plus 120s for the gates, the commit and the push, plus
+  390s for a drive conversion — a scanned deck rasterizes and OCRs before its first agent pass).
+  A deploy
   or `fly machine stop` SIGTERMs (the worker stops claiming and exits at the next terminal
   state), but an item still running at 300s is SIGKILLed — the row returns after the derived
-  1500s visibility timeout with an attempt burned, and the next worker files it. Drain first if
+  1890s visibility timeout with an attempt burned, and the next worker files it. Drain first if
   you would rather not exercise that: `make librarian-status` shows what is in flight.
 
 The first worker line after a deploy is the one worth reading:
@@ -540,7 +549,7 @@ material and don't paste it into shared trackers.
 ### A dead worker mid-item — lease redelivery
 
 A dead worker costs one delivery, never a capture: the row returns to `queued` after the visibility
-timeout (900s default) with `attempts` incremented, and the next worker files it. Observe and force:
+timeout (1290s default) with `attempts` incremented, and the next worker files it. Observe and force:
 
 ```sh
 .venv/bin/stigmergy-queue list                              # depth per status + newest submissions
@@ -561,7 +570,7 @@ it is run in — read it there rather than assuming the default.
 
 The admin console's Reclaim button states **the same derived lease**, resolving
 `STIGMERGY_LIBRARIAN_TIMEOUT_S` through the worker's own arithmetic per request, so the Worker tab's
-meter and the button agree with `status --json` (1500s on staging). Two conditions make that hold:
+meter and the button agree with `status --json` (1890s on staging). Two conditions make that hold:
 `fly.toml`'s `[env]` is app-wide, so the console process reads the variable the worker resolved; and
 the worker command passes no `--visibility-timeout`, which would beat the derivation and which the
 console cannot see. It does **not** hold in the local composition, where `docker-compose.yml` gives
@@ -778,7 +787,7 @@ per request is the baked `/app/identities.json`, not the one in your checkout. A
 to cut off a leaked token faster than a deploy** — if that is not fast enough,
 `fly scale count app=0 -a $FLY_APP` takes the public surface down entirely.
 
-### The librarian GitHub App + the Anthropic key
+### The librarian GitHub App + the filing model's provider key
 
 Both live in Fly secrets, which are app-wide — the public server's environment carries them too,
 the accepted residual of one app for three process groups. If either is suspected:
@@ -787,8 +796,13 @@ the accepted residual of one app for three process groups. If either is suspecte
    Every push then fails, in-flight items land `failed`, and **nothing is lost**: the captures
    stay in the queue and the evidence plane. Generate a new private key, `fly secrets set` it,
    reinstall, redeploy.
-2. **Anthropic** — revoke the key in the Anthropic console, `fly secrets set ANTHROPIC_API_KEY=…`
-   with a new one; the worker's items fail unauthenticated until the redeploy, then requeue.
+2. **The filing model's provider** — revoke the key in that provider's console and
+   `fly secrets set` a new one under the variable that model reads (`anthropic:` models read
+   `ANTHROPIC_API_KEY`, `openrouter:` ones `OPENROUTER_API_KEY`); the worker's items fail
+   unauthenticated until the redeploy, then requeue. One key serving two seams — the same
+   credential set as both the filing provider's and the embedder's `EMBED_API_KEY` — is two
+   rotations, and `stigmergy-librarian-boot` says so at startup when it sees the same value
+   survive under another name.
 3. Confirm with `git log --format='%an %ae %s' -20` in the knowledge repo that nothing was
    authored by an identity you do not recognize.
 
@@ -898,7 +912,7 @@ kill -9 <that pid>                            # mid-item, no goodbye
 .venv/bin/stigmergy-queue list                  # still `claimed` — the lease is honest about the hold
 .venv/bin/stigmergy-queue reclaim --visibility-timeout 0   # force redelivery now — you killed it, so
                                                          # there is no lease left to respect (the
-                                                         # worker's own horizon is 900s, derived
+                                                         # worker's own horizon is 1290s, derived
                                                          # from the per-item budget)
 .venv/bin/stigmergy-queue show <id>             # attempts incremented; the row is `queued` again
 ```
@@ -928,7 +942,7 @@ clean substrate-check report at the end. Any diff is a real nondeterminism bug, 
 | Ceiling | Value | Where |
 |---|---|---|
 | overall, per identity | 30 requests/min (token bucket, starts full: 30th ok, 31st refused) | `src/stigmergy/server/ratelimit.py` |
-| `ask`, per identity | an ADDITIONAL 10/min bucket (the OpenAI-backed synthesizer is the expensive resource) | same |
+| `ask`, per identity | an ADDITIONAL 10/min bucket (the synthesizer spends a model call per question — the expensive resource, whichever provider serves it) | same |
 | one `ask`'s internal budget | 6 model requests / 8 tool calls per question | `src/stigmergy/answer/synthesize.py` |
 
 **A daily spend ceiling does NOT exist — by ruling, not by omission**: a leaked token is bounded

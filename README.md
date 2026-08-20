@@ -179,13 +179,13 @@ by name with its reason, and pruning tests that fail when a declared exception s
 - A **git repository for your knowledge** — see
   [the knowledge-repo contract](./docs/reference/knowledge-repo.md) for its layout and for the
   short list of files it has to carry before anything will index or file.
-- API keys only when you want real models, and they are not interchangeable: by default
-  `OPENAI_API_KEY` serves the embedder and the `ask` model, and every seam is movable — a
-  provider-prefixed model id (`ANSWER_MODEL=openrouter:…`, `VISION_MODEL=openrouter:…`) or an
-  OpenAI-compatible embedding host (`EMBED_BASE_URL` + `EMBED_API_KEY`) authenticates with that
-  provider's own key instead. The librarian files through `STIGMERGY_LIBRARIAN_BACKEND=pydantic`
-  on any provider-prefixed pydantic-ai model (`anthropic:claude-sonnet-5` by default), same
-  rule. The test suite is keyless by construction, and so is the walkthrough below.
+- API keys only when you want real models, and **every seam reads its own provider's key** rather
+  than one shared credential. `OPENAI_API_KEY` serves both defaults — the embedder and the `ask`
+  model — and a seam moves by being pointed somewhere else: a provider-prefixed model id
+  (`ANSWER_MODEL`, `VISION_MODEL`, and `STIGMERGY_LIBRARIAN_MODEL`, which the librarian files
+  through under `STIGMERGY_LIBRARIAN_BACKEND=pydantic`) authenticates with that provider's key,
+  and embeddings take any OpenAI-compatible host (`EMBED_BASE_URL` + `EMBED_API_KEY`). The test
+  suite is keyless by construction, and so is the walkthrough below.
 
 ## Quick start
 

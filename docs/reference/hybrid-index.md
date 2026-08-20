@@ -52,8 +52,10 @@ page's own `role`/`aliases`). None of the three is a column — they feed the `t
 they are searchable lexically and not filterable.
 
 **`embedding` is `halfvec`, not `vector` — a hard ceiling, not a preference.** pgvector
-refuses to build an HNSW index above 2000 dimensions and the production embedder
+refuses to build an HNSW index above 2000 dimensions and the default embedder
 (`text-embedding-3-large`) is 3072; `halfvec` raises the ceiling to 4000 by storing 16-bit floats.
+That remaining ceiling is what `EMBED_DIMENSIONS` is for: a model whose native width is over it
+(Qwen3-Embedding-8B, 4096) is asked for a shorter vector rather than being unusable here.
 The vectors are cosine-normalized and HNSW is approximate anyway, so the precision lost sits well
 below the noise the approximation already introduces. Changing the COLUMN rather than casting at
 the two call sites is deliberate: a cast in the query that disagrees with the cast in the index

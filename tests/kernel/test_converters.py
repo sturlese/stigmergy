@@ -459,7 +459,6 @@ def test_vision_config_error_knows_both_forms_and_names_the_right_variable(monke
     monkeypatch.setenv("VISION_MODEL", "openrouter:qwen/qwen3-vl-8b-instruct")
     reason = converters.vision_config_error()
     assert "OPENROUTER_API_KEY" in reason and "GEMINI_API_KEY" not in reason
-    assert converters.vision_configured() is False
 
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-fake")
     assert converters.vision_config_error() is None
