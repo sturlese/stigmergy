@@ -381,10 +381,10 @@ def test_only_capture_cli_may_import_the_index():
 
     **This assertion was once split in two, and putting it back together moved code rather than
     narrowing the rule.** A steward's `--reason` was reaching a submitter unsanitized, and the
-    right fix moved the cleaning BELOW both CLIs into `capture.dispositions`, where no future
-    caller can skip it. That import went red here for a reason that had nothing to do with a
-    database: `sanitize`/`clamp` lived in `index/rank.py` only because they were first written to
-    render search hits.
+    right fix moved the cleaning BELOW both CLIs into the capture package (today
+    `capture.schema.clean_note`), where no future caller can skip it. That import went red here
+    for a reason that had nothing to do with a database: `sanitize`/`clamp` lived in
+    `index/rank.py` only because they were first written to render search hits.
 
     The rule was right and the location was wrong. Rather than narrow this test to the connection
     and let a rule say one thing while meaning another, the two functions moved to `stigmergy.text`,

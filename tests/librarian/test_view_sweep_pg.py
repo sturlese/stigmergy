@@ -185,15 +185,15 @@ def _anchor_a_page(env) -> None:
     committed and pushed the way any door leaves one, with no view hook involved."""
     from tests.librarian import support
     with open(os.path.join(env.repo, "wiki", "notes", "Sweep Row Fixture.md"), "w") as f:
-        f.write('---\ntype: note\ntitle: "Sweep Row Fixture"\nentity: [acme]\n'
+        f.write('---\ntype: note\ntitle: "Sweep Row Fixture"\nentity: [acme-corp]\n'
                 'as_of: "2026-08-17"\ncreated: "2026-08-17"\nupdated: "2026-08-17"\n'
                 'status: developing\ntags: [note]\n---\n\n# Sweep Row Fixture\n\nA page.\n')
     entity_md = os.path.join(env.repo, "wiki", "entities", "Acme Corp.md")
     with open(entity_md) as f:
         text = f.read()
     with open(entity_md, "w") as f:
-        f.write(text.replace("type: entity\n", "type: entity\nentity: [acme]\n", 1))
-    support.commit_and_push(env.repo, "feat: a page anchored to acme")
+        f.write(text.replace("type: entity\n", "type: entity\nentity: [acme-corp]\n", 1))
+    support.commit_and_push(env.repo, "feat: a page anchored to acme-corp")
 
 
 # ── the sweep lock: two sweepers is a supported shape, and one of them yields ──────────────────

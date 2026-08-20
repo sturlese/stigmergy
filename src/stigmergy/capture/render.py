@@ -50,7 +50,7 @@ def format_age(ms) -> str:
 
 def clean_for_terminal(text: str, width: int = 0) -> str:
     """Untrusted captured text on its way to a terminal: control characters stripped (a capture
-    can contain ANSI escapes), newlines flattened, clipped word-safe — a hard slice through
-    `brain_reply(...)` printed under "run this" is an invalid call, and a message containing a
-    command is an executable promise."""
+    can contain ANSI escapes), newlines flattened, clipped word-safe — a hard slice through a
+    command printed under "run this" is an invalid call, and a message containing a command is an
+    executable promise."""
     return textutil.clamp(textutil.sanitize(text or "").replace("\n", " ⏎ "), width)

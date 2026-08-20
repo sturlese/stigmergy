@@ -49,7 +49,7 @@ from tests.server.conftest import make_review_service as make_service
 
 def _fix_preexisting_fixture_drift(env) -> None:
     """`tests/librarian/fixtures/repo/` predates the registry-consistency rule: its `Acme Corp`
-    entry is hand-authored under the curated id `acme`, while the id a derived-view generator
+    entry is hand-authored under the curated id `acme-corp`, while the id a derived-view generator
     computes from the PAGE TITLE is `acme-corp` (`slugify` keeps "corp"; only `normalize`, the
     ALIAS matcher, strips it) — invisible to every OTHER test against this fixture and entirely
     real to `entities.mint._refuse_drift`, reached now through the governed mint door

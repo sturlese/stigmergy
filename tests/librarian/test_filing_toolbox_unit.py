@@ -559,7 +559,7 @@ def test_the_outcome_file_is_the_other_permitted_write(write_env):
     and no way to say what it did."""
     env, box = write_env
 
-    payload = box.write_page(agent_module.OUTCOME_FILENAME, '{"decision": "triage"}')
+    payload = box.write_page(agent_module.OUTCOME_FILENAME, '{"decision": "file"}')
 
     assert payload["written"] == agent_module.OUTCOME_FILENAME
     assert pathlib.Path(env.repo, agent_module.OUTCOME_FILENAME).exists()
@@ -661,7 +661,7 @@ def test_the_name_list_is_bounded_and_reports_the_real_total(tmp_path):
 
 def test_resolve_entities_answers_the_registry_and_says_no_when_the_answer_is_no(toolbox):
     """`resolved: false` is a REAL answer and the brief's third anchoring outcome depends on it: a
-    name the registry does not know is a park, never an invention. An unresolved name comes back as
+    name the registry does not know is a PROPOSAL, never an invention. An unresolved name comes back as
     itself rather than being dropped, because a shorter list would read as "I did not ask".
 
     It now comes back with `near` as well — the registered entities that name partly spells. Here
@@ -674,7 +674,7 @@ def test_resolve_entities_answers_the_registry_and_says_no_when_the_answer_is_no
 
     assert [row["asked"] for row in payload["entities"]] == ["Acme", "Halcyon Grid"]
     resolved, unresolved = payload["entities"]
-    assert resolved["resolved"] is True and resolved["id"] == "acme"
+    assert resolved["resolved"] is True and resolved["id"] == "acme-corp"
     assert resolved["name"] == "Acme Corp" and "Acme" in resolved["aliases"]
     assert resolved["page"] == "wiki/entities/Acme Corp.md", (
         "the entity's own page is what makes the answer actionable — `gather.entity_page` finds it")
@@ -683,13 +683,13 @@ def test_resolve_entities_answers_the_registry_and_says_no_when_the_answer_is_no
 
 def test_a_near_miss_the_registry_cannot_resolve_comes_back_as_a_candidate_to_judge(toolbox):
     """The other direction, and the one issue #77 is about: a spelling the registry does not carry
-    is not "not registered, park" any more — it is a JUDGMENT the agent has to make, and it can only
+    is not "not registered, propose" by reflex — it is a JUDGMENT the agent has to make, and it can only
     make it about candidates it can see.
 
     `Acme Corp Holdings` resolves to nothing (`canonical_id` folds accents and punctuation and
     deliberately not a qualifier or a legal form — see `kernel.normalize`), so the tool answers
-    `resolved: false` AND hands over the registered `acme` as a near miss. Anchoring is still
-    declaring that id and still meeting `gate_anchoring`; being unsure is still the park. What
+    `resolved: false` AND hands over the registered `acme-corp` as a near miss. Anchoring is still
+    declaring that id and still meeting `gate_anchoring`; a genuinely new thing is a proposal. What
     changed is that the candidate reaches the agent at all.
     """
     payload = toolbox.resolve_entities(["Acme Corp Holdings"])
@@ -697,7 +697,7 @@ def test_a_near_miss_the_registry_cannot_resolve_comes_back_as_a_candidate_to_ju
     row = payload["entities"][0]
     assert row["resolved"] is False, (
         "a near miss must never resolve by itself — that is the suffix list this issue retired")
-    assert [near["id"] for near in row["near"]] == ["acme"]
+    assert [near["id"] for near in row["near"]] == ["acme-corp"]
 
 
 def test_a_name_list_past_the_ceiling_is_bounded_rather_than_asked_in_full(toolbox):
@@ -715,7 +715,7 @@ def test_a_registered_entity_with_no_page_yet_resolves_with_page_null(tmp_path):
     An entity is minted in `ops/entity-registry.json` by the steward flow; its page is written
     separately, and until it is, the registry knows the entity and the checkout has no page for it.
     `null` is not `resolved: false` — a model must be able to tell "this is an entity, anchor to it"
-    from "this is not registered, park" — so it is asserted as its own outcome rather than folded
+    from "this is not registered, propose" — so it is asserted as its own outcome rather than folded
     into either neighbour.
     """
     env = support.build_repo(str(tmp_path / "git"))
@@ -797,7 +797,7 @@ def test_the_checkout_is_parsed_ONCE_however_often_the_model_searches(toolbox, m
     monkeypatch.setattr(gather, "load_corpus", _counting)
     fresh = FilingToolbox(toolbox.worktree, top_k=3, excerpt_lines=2)
 
-    for query in ("renewal", "acme", "window", "note"):
+    for query in ("renewal", "acme-corp", "window", "note"):
         fresh.search_pages(query)
     fresh.resolve_entities(["Acme"])
 
@@ -1043,10 +1043,10 @@ def test_the_confinement_a_MODEL_meets_is_the_one_this_file_tested(tmp_path):
         if turn == 3:
             return ModelResponse(parts=[ToolCallPart("write_page", {
                 "path": agent_module.OUTCOME_FILENAME,
-                "content": json.dumps({"decision": "triage",
-                                       "triage": {"kind": "unresolved-entity",
-                                                  "name": "Halcyon Grid"},
-                                       "summary": "parked after looking"})})])
+                "content": json.dumps({"decision": "file", "title": "Halcyon Grid",
+                                       "page_path": "wiki/notes/Halcyon Grid.md",
+                                       "page_type": "note",
+                                       "summary": "filed after looking"})})])
         return ModelResponse(parts=[TextPart("done")])
 
     backend = PydanticFilingAgent(
@@ -1065,6 +1065,6 @@ def test_the_confinement_a_MODEL_meets_is_the_one_this_file_tested(tmp_path):
         "the allowed read came back empty — a refusal-only run proves nothing about the rule")
     assert written["written"] == agent_module.OUTCOME_FILENAME
     # ...and the account really did travel on the file channel rather than in the final message
-    assert run.outcome.decision == "triage"
+    assert run.outcome.decision == "file"
     assert not pathlib.Path(env.repo, agent_module.OUTCOME_FILENAME).exists(), (
         "`read_outcome` drains the channel: a leftover account would reach the diff")

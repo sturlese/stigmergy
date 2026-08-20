@@ -1,5 +1,7 @@
-"""The queue's one non-additive migration: `resolved` joins the status CHECK constraint, and a
-constraint cannot be widened in place — `schema.py`'s own comment names the risk directly:
+"""The queue's one non-additive migration: the status CHECK constraint is SWAPPED when the
+vocabulary moves — `resolved` joined it once, and the parked pair (`needs_input`/`triage`) has
+since RETIRED from it, with every row still parked returned to the queue first — and a
+constraint cannot be edited in place — `schema.py`'s own comment names the risk directly:
 "DROP ... IF EXISTS followed by ADD is idempotent as a PAIR", which is exactly the property a
 table that already exists from an earlier release needs `ensure_capture_schema` to hold.
 
@@ -118,13 +120,34 @@ def test_ensure_capture_schema_is_idempotent_run_twice_on_the_same_old_table(old
     _insert(old_table_conn, schema.RESOLVED)       # the constraint still accepts it afterward
 
 
-def test_a_status_from_before_the_widening_still_satisfies_the_constraint(old_table_conn):
-    """The expand half of an expand/contract with no contract half scheduled (schema.py: "every
-    status the old code writes is still accepted"): a process still writing one of the original
-    seven statuses across the same migration keeps working."""
+def test_a_parked_row_is_returned_to_the_queue_and_the_retired_words_are_refused_afterward(
+        old_table_conn):
+    """The contract half, landed: a table holding rows in the retired states (a deployment mid-
+    upgrade) migrates cleanly — each parked row goes back to `queued` with an event on its history
+    saying why, so nothing a person was waiting on is lost, it is filed — and the swapped CHECK
+    then refuses the retired words. Asserted both ways, because a CHECK that still admitted
+    `triage` would let an older worker park a row nothing reads any more."""
+    parked = [_insert(old_table_conn, retired) for retired in schema.RETIRED_STATUSES]
+    with old_table_conn.cursor() as cur:
+        cur.execute("UPDATE capture_queue SET claimed_at = now(), error = 'which entity?'"
+                    " WHERE id = ANY(%s)", (parked,))
+
     schema.ensure_capture_schema(old_table_conn)
-    _insert(old_table_conn, schema.QUEUED)         # must not raise
-    _insert(old_table_conn, schema.TRIAGE)         # must not raise
+
+    with old_table_conn.cursor() as cur:
+        cur.execute("SELECT status, error, claimed_at, trace FROM capture_queue WHERE id = ANY(%s)",
+                    (parked,))
+        rows = cur.fetchall()
+    assert [row[0] for row in rows] == [schema.QUEUED] * len(parked)
+    assert all(row[1] == "" and row[2] is None for row in rows)
+    for _status, _error, _claimed, trace in rows:
+        assert trace[-1]["event"] == schema.MIGRATION_EVENT
+        assert trace[-1]["actor"] == schema.MIGRATION_ACTOR
+        assert "proposed" in trace[-1]["note"]
+    _insert(old_table_conn, schema.QUEUED)         # the living vocabulary still lands
+    for retired in schema.RETIRED_STATUSES:
+        with pytest.raises(psycopg.errors.CheckViolation):
+            _insert(old_table_conn, retired)
 
 
 def test_the_migrated_constraint_still_refuses_an_unknown_status(old_table_conn):
@@ -168,7 +191,8 @@ def test_the_second_run_is_a_true_no_op_the_constraint_keeps_its_identity(old_ta
 
     assert second_oid == first_oid, (
         "the constraint was dropped and re-added on a run that should have been a no-op — the "
-        "guard's `NOT EXISTS` check fired when the constraint already named every current status")
+        "guard's `NOT EXISTS` check fired when the constraint already named every current status "
+        "and none of the retired ones")
 
 
 def test_two_concurrent_ensure_capture_schema_calls_neither_raise(old_table_conn):

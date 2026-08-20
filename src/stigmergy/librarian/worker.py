@@ -446,10 +446,7 @@ def _finish(conn, item: dict, result) -> None:
     try:
         queue.finish(conn, item["id"], status=result.status,
                      expected_attempts=item["attempts"], result_ref=result.result_ref,
-                     error=result.error, report=result.report,
-                     # Set only on a park worth re-filing; `None` everywhere else, which `finish`
-                     # reads as "do not touch the column".
-                     outcome=result.outcome)
+                     error=result.error, report=result.report)
     except QueueStateError as ex:
         # Do not retry: the lease is gone and another worker owns the row (see `process_next`).
         log.error("could not finish item %s: %s", item["id"], ex)

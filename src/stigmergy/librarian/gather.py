@@ -324,6 +324,13 @@ def _mentions(haystack: str, spelling: str) -> bool:
     return bool(tokens) and f" {' '.join(tokens)} " in haystack
 
 
+def mentions(text: str, spelling: str) -> bool:
+    """`_mentions` over raw text — THE one reading of "does the material name this". Shared with
+    `librarian.identity`, which refuses a proposed entity the material never spells: a second
+    tokenizer there would let a name pass one rule and fail the other."""
+    return _mentions(f" {' '.join(_tokens(text))} ", spelling)
+
+
 def _token_runs(spelling: str, *, proper_only: bool = False) -> list[str]:
     """Every contiguous whole-token run of one spelling, space-joined. `proper_only` drops the run
     that IS the whole spelling, which the named rule already owns. Ordered and deduplicated, so two

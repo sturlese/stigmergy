@@ -151,40 +151,6 @@ def test_cli_list_withholds_the_material_of_a_row_a_secrets_refusal_bounced(clea
     assert planted not in capsys.readouterr().out        # the machine surface too
 
 
-# ── list/show render a PARKED row: who is waited on, for how long, and the exact reply command,
-# with the needs_input/triage age surfaced on both ───────────────────────────────────────────────
-def test_cli_list_human_readable_shows_who_is_waited_on_and_the_reply_command(clean_queue, capsys):
-    ack = _submit(clean_queue)
-    claimed = queue.claim_next(clean_queue)
-    queue.finish(clean_queue, ack["id"], status=schema.NEEDS_INPUT,
-                expected_attempts=claimed["attempts"],
-                error="needs_input — which entity is this about?")
-
-    rc = cli.main(["--dsn", store.dsn(), "list"])
-
-    captured = capsys.readouterr()
-    assert rc == 0
-    assert f"waiting on: {ALICE}" in captured.out
-    assert "parked" in captured.out
-    assert f"answer with:  {schema.reply_invocation(ack['id'])}" in captured.out
-    assert f"stigmergy-queue show {ack['id']}" in captured.out
-    # the full multi-line question is NOT printed on `list` — only the invocation
-    assert "needs_input — which entity" not in captured.out
-
-
-def test_cli_list_human_readable_shows_a_triage_row_waiting_on_a_steward(clean_queue, capsys):
-    ack = _submit(clean_queue)
-    claimed = queue.claim_next(clean_queue)
-    queue.finish(clean_queue, ack["id"], status=schema.TRIAGE,
-                expected_attempts=claimed["attempts"], error="parked for the steward")
-
-    rc = cli.main(["--dsn", store.dsn(), "list"])
-
-    captured = capsys.readouterr()
-    assert rc == 0
-    assert "waiting on: a steward" in captured.out
-
-
 def test_cli_list_human_readable_notes_a_purged_payload(clean_queue, capsys):
     ack = _submit(clean_queue)
     claimed = queue.claim_next(clean_queue)
@@ -258,69 +224,25 @@ def test_cli_show_human_readable_notes_a_purged_payload(clean_queue, capsys):
     assert "purged by retention" in captured.out
 
 
-def test_cli_show_human_readable_prints_the_whole_question_and_the_reply_invocation(clean_queue,
-                                                                                    capsys):
-    """`show` prints the question WHOLE (`_print_note`'s own docstring), never clipped — it is
-    what a steward reads before deciding whether to reply on somebody's behalf."""
+def test_cli_show_human_readable_prints_a_rows_legacy_history_with_actor_and_note(clean_queue,
+                                                                                 capsys):
+    """A row written while captures could park carries a `trace` of what people did to it; the
+    events retired with the parks but the column did not, and `show` still tells the story —
+    sanitized, never clipped. Seeded directly, the way such a row exists in a deployment."""
     ack = _submit(clean_queue)
     claimed = queue.claim_next(clean_queue)
-    question = (f"needs_input — capture #{ack['id']} is parked on one question before it can be "
-               "filed: your material seems to be about \"Nebula Systems\".")
-    queue.finish(clean_queue, ack["id"], status=schema.NEEDS_INPUT,
-                expected_attempts=claimed["attempts"], error=question)
+    queue.finish(clean_queue, ack["id"], status=schema.FILED, expected_attempts=claimed["attempts"],
+                result_ref="wiki/notes/X.md@abc")
+    with clean_queue.cursor() as cur:
+        cur.execute("UPDATE capture_queue SET trace = %s WHERE id = %s",
+                    (json.dumps([{"at": "2026-08-20T10:00:00+00:00", "event": "requeued",
+                                  "actor": "steward", "note": "have another go"}]), ack["id"]))
 
     rc = cli.main(["--dsn", store.dsn(), "show", str(ack["id"])])
 
     captured = capsys.readouterr()
     assert rc == 0
-    assert "question" in captured.out
-    assert "Nebula Systems" in captured.out
-    assert f"answer with {schema.reply_invocation(ack['id'])}" in captured.out
-    assert f"waiting on: {ALICE}" in captured.out
-    # the `asked` trace event is suppressed while still needs_input (it IS the question above) —
-    # printed once, not twice, on the one screen where both would otherwise appear
-    assert captured.out.count("Nebula Systems") == 1
-    assert "(the question, printed above)" in captured.out
-
-
-def test_cli_show_human_readable_prints_the_reply_once_the_row_has_moved_on(clean_queue, capsys):
-    """`reply` survives past `needs_input` (it is not cleared by the transition into `triage`),
-    and `show` prints it once the question block is gone — the only surviving copy of what the
-    submitter said, on the row that used to ask it."""
-    from stigmergy.capture import queue as queue_module
-
-    ack = _submit(clean_queue)
-    claimed = queue.claim_next(clean_queue)
-    queue.finish(clean_queue, ack["id"], status=schema.NEEDS_INPUT,
-                expected_attempts=claimed["attempts"], error="which entity?")
-    queue_module.record_reply(clean_queue, ack["id"], answer="Ghost Company Inc", actor=ALICE)
-    reclaimed = queue.claim_next(clean_queue)
-    queue.finish(clean_queue, ack["id"], status=schema.TRIAGE,
-                expected_attempts=reclaimed["attempts"], error="still unresolved")
-
-    rc = cli.main(["--dsn", store.dsn(), "show", str(ack["id"])])
-
-    captured = capsys.readouterr()
-    assert rc == 0
-    assert "reply       Ghost Company Inc" in captured.out
-    assert "waiting on: a steward" in captured.out
-
-
-def test_cli_show_human_readable_lists_the_disposition_events_with_actor_and_note(clean_queue,
-                                                                                  capsys):
-    from stigmergy.capture import dispositions
-
-    ack = _submit(clean_queue)
-    claimed = queue.claim_next(clean_queue)
-    queue.finish(clean_queue, ack["id"], status=schema.TRIAGE,
-                expected_attempts=claimed["attempts"], error="parked")
-    dispositions.requeue(clean_queue, ack["id"], actor="steward", note="have another go")
-
-    rc = cli.main(["--dsn", store.dsn(), "show", str(ack["id"])])
-
-    captured = capsys.readouterr()
-    assert rc == 0
-    assert schema.EVENT_REQUEUED in captured.out
+    assert "requeued" in captured.out
     assert "by steward" in captured.out
     assert "have another go" in captured.out
 
@@ -728,190 +650,6 @@ def test_cli_purge_human_readable_names_the_survivors(clean_queue, capsys):
     assert rc == 0
     assert "purged payload+hints of 1 terminal submission" in captured.out
     assert "result_ref survive" in captured.out
-
-
-# ── the steward's drain: requeue / resolve / reject ─────────────────────────────────────────────
-def _parked_row(conn, *, status=schema.TRIAGE):
-    ack = _submit(conn)
-    claimed = queue.claim_next(conn)
-    queue.finish(conn, ack["id"], status=status, expected_attempts=claimed["attempts"],
-                error="which entity?" if status == schema.TRIAGE else "")
-    return ack["id"]
-
-
-def test_cli_requeue_json_reports_the_row_back_in_the_queue(clean_queue, capsys):
-    row_id = _parked_row(clean_queue)
-
-    rc = cli.main(["--dsn", store.dsn(), "--json", "requeue", str(row_id), "--by", "steward",
-                  "--note", "try again"])
-
-    out = json.loads(capsys.readouterr().out)
-    assert rc == 0
-    assert out["status"] == "queued"
-    with clean_queue.cursor() as cur:
-        cur.execute("SELECT status FROM capture_queue WHERE id = %s", (row_id,))
-        assert cur.fetchone()[0] == "queued"
-
-
-def test_cli_requeue_human_readable_names_the_row_and_the_unchanged_attempts(clean_queue, capsys):
-    row_id = _parked_row(clean_queue)
-
-    rc = cli.main(["--dsn", store.dsn(), "requeue", str(row_id), "--by", "steward"])
-
-    captured = capsys.readouterr()
-    assert rc == 0
-    assert f"requeued #{row_id}" in captured.out
-    assert "attempts unchanged" in captured.out
-    assert "claimable now" in captured.out
-
-
-def test_cli_resolve_json_echoes_page_and_commit(clean_queue, capsys):
-    row_id = _parked_row(clean_queue)
-
-    rc = cli.main(["--dsn", store.dsn(), "--json", "resolve", str(row_id), "--by", "steward",
-                  "--note", "folded into the page",
-                  "--page", "wiki/entities/Jordan Reyes.md", "--commit", "abc123"])
-
-    out = json.loads(capsys.readouterr().out)
-    assert rc == 0
-    assert out["status"] == "resolved"
-    assert out["warning"] == ""
-    with clean_queue.cursor() as cur:
-        cur.execute("SELECT status, result_ref, report FROM capture_queue WHERE id = %s",
-                    (row_id,))
-        status, result_ref, report = cur.fetchone()
-    assert status == "resolved"
-    assert result_ref == "wiki/entities/Jordan Reyes.md@abc123"
-    assert "wiki/entities/Jordan Reyes.md@abc123" in report["summary"]
-
-
-def test_cli_resolve_human_readable_prints_the_page_and_commit(clean_queue, capsys):
-    row_id = _parked_row(clean_queue)
-
-    rc = cli.main(["--dsn", store.dsn(), "resolve", str(row_id), "--by", "steward",
-                  "--note", "folded in", "--page", "wiki/entities/X.md",
-                  "--commit", "abc123"])
-
-    captured = capsys.readouterr()
-    assert rc == 0
-    assert f"resolved #{row_id}" in captured.out
-    assert "wiki/entities/X.md" in captured.out
-    assert "abc123" in captured.out
-    assert captured.err == ""   # no missing-pointer warning when both are given
-
-
-def test_cli_resolve_with_no_page_and_no_commit_warns_on_stderr(clean_queue, capsys):
-    """The missing-pointer warning is a real finding, not decoration (`_cmd_resolve`'s own
-    docstring): `resolve` still does what it was asked, but says out loud what that costs."""
-    row_id = _parked_row(clean_queue)
-
-    rc = cli.main(["--dsn", store.dsn(), "resolve", str(row_id), "--by", "steward", "--note", "done"])
-
-    captured = capsys.readouterr()
-    assert rc == 0
-    assert f"resolved #{row_id}" in captured.out
-    assert "no --page and no --commit" in captured.err
-
-
-def test_cli_resolve_json_warning_field_is_empty_string_when_a_pointer_is_given(clean_queue,
-                                                                                capsys):
-    row_id = _parked_row(clean_queue)
-    cli.main(["--dsn", store.dsn(), "--json", "resolve", str(row_id), "--by", "steward",
-             "--note", "done", "--commit", "abc123"])
-    out = json.loads(capsys.readouterr().out)
-    assert out["warning"] == ""
-
-
-def test_cli_resolve_json_warning_field_names_the_gap_when_neither_is_given(clean_queue, capsys):
-    row_id = _parked_row(clean_queue)
-    cli.main(["--dsn", store.dsn(), "--json", "resolve", str(row_id), "--by", "steward",
-             "--note", "done"])
-    out = json.loads(capsys.readouterr().out)
-    assert "no --page and no --commit" in out["warning"]
-
-
-def test_cli_reject_json_records_the_reason(clean_queue, capsys):
-    row_id = _parked_row(clean_queue)
-
-    rc = cli.main(["--dsn", store.dsn(), "--json", "reject", str(row_id), "--by", "steward",
-                  "--reason", "wrong venue"])
-
-    out = json.loads(capsys.readouterr().out)
-    assert rc == 0
-    assert out["status"] == "rejected"
-    with clean_queue.cursor() as cur:
-        cur.execute("SELECT status, report FROM capture_queue WHERE id = %s", (row_id,))
-        status, report = cur.fetchone()
-    assert status == "rejected"
-    assert "wrong venue" in report["summary"]
-
-
-def test_cli_reject_human_readable_names_the_actor(clean_queue, capsys):
-    row_id = _parked_row(clean_queue)
-    rc = cli.main(["--dsn", store.dsn(), "reject", str(row_id), "--by", "steward",
-                  "--reason", "no"])
-    captured = capsys.readouterr()
-    assert rc == 0
-    assert f"rejected #{row_id}" in captured.out
-    assert "by: steward" in captured.out
-
-
-# ── the drain's refusals surface as ONE clean line through main()'s `except CaptureError` ───────
-def test_cli_requeue_a_claimed_row_is_refused_with_exit_1_and_no_traceback(clean_queue, capsys):
-    row_id = _parked_row(clean_queue)
-    cli.main(["--dsn", store.dsn(), "requeue", str(row_id), "--by", "steward"])   # -> queued
-    queue.claim_next(clean_queue)                                             # -> claimed
-
-    rc = cli.main(["--dsn", store.dsn(), "requeue", str(row_id), "--by", "steward"])
-
-    captured = capsys.readouterr()
-    assert rc == 1
-    assert "stigmergy-queue:" in captured.err
-    assert "currently claimed" in captured.err
-    assert "Traceback" not in captured.err
-
-
-def test_cli_resolve_a_nonexistent_id_is_refused_with_exit_1(clean_queue, capsys):
-    rc = cli.main(["--dsn", store.dsn(), "resolve", "999999999", "--by", "steward", "--note", "x"])
-    captured = capsys.readouterr()
-    assert rc == 1
-    assert "does not exist" in captured.err
-
-
-def test_cli_reject_a_queued_row_is_refused_never_parked(clean_queue, capsys):
-    ack = _submit(clean_queue)   # queued — never claimed, never parked
-    rc = cli.main(["--dsn", store.dsn(), "reject", str(ack["id"]), "--by", "steward",
-                  "--reason", "x"])
-    captured = capsys.readouterr()
-    assert rc == 1
-    assert "acts only on a PARKED row" in captured.err
-
-
-# ── SIGINT during a disposition exits cleanly, no traceback ─────────────────────────────────────
-def test_cli_generic_interrupt_during_resolve_exits_130_no_traceback_row_untouched(
-        clean_queue, capsys, monkeypatch):
-    """The same generic Ctrl-C net proven above for `list`
-    (`test_cli_generic_interrupt_during_a_subcommand_exits_130_stderr_only_stdout_untouched`),
-    exercised on `resolve` specifically: a disposition is a single UPDATE statement (module
-    docstring: "nothing was left half-written"), so an interrupt here must leave the row exactly
-    as it was — still parked, not resolved."""
-    row_id = _parked_row(clean_queue)
-
-    def boom(_conn, _args):
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(cli, "_cmd_resolve", boom)
-
-    rc = cli.main(["--dsn", store.dsn(), "resolve", str(row_id), "--by", "steward", "--note", "x"])
-
-    captured = capsys.readouterr()
-    assert rc == 130
-    assert captured.out == ""
-    assert "stigmergy-queue: interrupted during `resolve`" in captured.err
-    assert "Traceback" not in captured.err
-    with clean_queue.cursor() as cur:
-        cur.execute("SELECT status FROM capture_queue WHERE id = %s", (row_id,))
-        assert cur.fetchone()[0] == schema.TRIAGE   # left exactly as it was, not half-resolved
 
 
 # ── build_parser: the argument surface itself (a regression here breaks every subcommand) ──────

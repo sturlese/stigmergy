@@ -242,21 +242,20 @@ def test_a_page_declared_as_null_is_simply_the_old_shape():
     assert agent_module.parse_outcome({**OLD_SHAPE, "page": None}).page is None
 
 
-def test_a_page_on_a_TRIAGE_decision_parses_without_becoming_a_filing():
-    """A park that also carried page content is a shape the schema permits and the FLOW must not
-    act on: `_one_pass` returns at the triage branch before `_write_ordinary_page` is reached, so
-    the content is inert. Pinned because the opposite — code writing a page for a capture the agent
-    decided to park — would file material the steward was being asked about."""
+def test_a_page_on_a_TRIAGE_decision_is_refused_as_no_decision_at_all():
+    """OLD BEHAVIOUR: a `triage` account carrying page content parsed, and the flow returned at
+    the triage branch so the content stayed inert. There is no triage branch: the only decision is
+    `file`, a name the registry lacks is PROPOSED, and an account still parking is a shape fault
+    the corrective retry repairs."""
     parked = {"decision": "triage",
               "triage": {"kind": "unresolved-entity", "name": "Halcyon Grid"},
               "page": {"title": "Halcyon Grid Renewal", "page_type": "note", "body": "text"},
               "summary": "parked on an unregistered name"}
 
-    outcome = agent_module.parse_outcome(parked)
+    with pytest.raises(OutcomeShapeError) as raised:
+        agent_module.parse_outcome(parked)
 
-    assert outcome.decision == "triage"
-    assert outcome.triage["kind"] == "unresolved-entity"
-    assert outcome.page is not None, "the field parses; acting on it is the flow's decision"
+    assert [f.code for f in raised.value.findings] == ["unknown-decision"]
 
 
 # ── what the CALLER requires, keyed on the backend that ran ────────────────────────────────────

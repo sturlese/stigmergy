@@ -9,7 +9,6 @@ DELIVERIES vs AGENT attempts); empty renders as `(none)`; echoed values go throu
 """
 from stigmergy import text as textutil
 from stigmergy.capture import schema
-from stigmergy.librarian import page as page_policy
 
 NONE_LABEL = "(none)"
 
@@ -20,11 +19,6 @@ RATIONALE_WIDTH = 400
 # packages must agree on sits with the column that stores it.
 SEARCHABILITY_NOTE = schema.SEARCHABILITY_NOTE
 base_report = schema.base_report
-
-# Never a silently truncated candidate list: below the cutover the full registry, above it NONE
-# plus the count. A ranked subset reads as "not registered" to someone who cannot know it was cut.
-MAX_QUESTION_CANDIDATES = 20
-
 
 def _clean(text: str, width: int = 0) -> str:
     """Untrusted text on its way to a human — `stigmergy.text.clamp` + `sanitize`, the same seam
@@ -129,7 +123,7 @@ def _resolution_note(anchoring: dict, registry=None) -> str:
 
 def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps: list,
           findings: list, pages_edited: list = (), agent_rationale: str = "", registry=None,
-          source_pages: list = ()) -> dict:
+          source_pages: list = (), entities_proposed: list = (), aliases_proposed: list = ()) -> dict:
     """The ordinary success: page, commit and anchor, plus the not-searchable-yet clause in the same
     sentence. `pages_edited` is what code actually wrote from the agent's declared edits, while
     `overlaps_flagged` is the agent's JUDGMENT about which pages overlap — a different field.
@@ -137,6 +131,10 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
     An entity anchor's `reason` rides beside the anchor as `anchor_reason` and in the sentence,
     never folded into `anchored_to`: that field names the identity a read path branches on, and a
     rationale glued onto it would make one field two facts.
+
+    `entities_proposed` / `aliases_proposed` are the identities this filing CREATED unconfirmed
+    (`librarian.identity`): the submitter is told the page landed AND that a steward still confirms
+    the name, because "filed" alone would read as "the registry agreed".
     """
     anchor = _anchor_phrase(anchoring, registry)
     resolution = _resolution_note(anchoring, registry)
@@ -156,6 +154,8 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
     if source_paths:
         summary += (f" The captured material itself is filed verbatim at "
                     f"{_listed(source_paths)}, and the page cites it in `sources:`.")
+    proposed, proposed_aliases = _proposed_lists(entities_proposed, aliases_proposed)
+    summary += proposals_clause(proposed, proposed_aliases)
     return base_report(
         status=schema.FILED, summary=summary,
         page_path=page_path, commit=commit, anchored_to=anchor,
@@ -165,46 +165,44 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
         pages_edited=[_clean(path, 200) for path in _as_list(pages_edited)],
         agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
         findings=list(_as_list(findings)),
+        entities_proposed=proposed, aliases_proposed=proposed_aliases,
         **({"source_pages": source_paths} if source_paths else {}))
 
 
+# ── proposals: what a filing created unconfirmed ──────────────────────────────────────────────
+def _proposed_lists(entities_proposed, aliases_proposed) -> tuple[list, list]:
+    """The two lists as the report carries them — cleaned, identity fields through the identity
+    cleaner, never a raw object from the worker."""
+    proposed = [{"id": _clean_identity((e or {}).get("id", ""), 80),
+                 "name": _clean_identity((e or {}).get("name", ""), 120),
+                 "type": _clean((e or {}).get("type", ""), 40)}
+                for e in _as_list(entities_proposed) if isinstance(e, dict)]
+    aliases = [{"entity": _clean_identity((a or {}).get("entity", ""), 80),
+                "alias": _clean_identity((a or {}).get("alias", ""), 120)}
+               for a in _as_list(aliases_proposed) if isinstance(a, dict)]
+    return proposed, aliases
+
+
+def proposals_clause(proposed: list, proposed_aliases: list) -> str:
+    """The sentence telling a submitter the page landed AND an identity still waits on a person.
+    Empty when nothing was proposed, so an ordinary filing's sentence is unchanged."""
+    parts = []
+    if proposed:
+        named = _listed([f"{e['name']} (`{e['id']}`)" for e in proposed])
+        parts.append(f"It proposes {_plural(len(proposed), 'new entity', 'new entities')}: "
+                     f"{named} — created unconfirmed, so the page is anchored now and a steward "
+                     f"confirms, merges or declines the identity from the inbox.")
+    if proposed_aliases:
+        named = _listed([f"\"{a['alias']}\" for `{a['entity']}`" for a in proposed_aliases])
+        parts.append(f"It proposes {_plural(len(proposed_aliases), 'new spelling')}: {named} — "
+                     f"the spelling resolves now, and a steward confirms or declines it.")
+    return (" " + " ".join(parts)) if parts else ""
+
+
 # ── filed_meeting: the report for a page SET ──────────────────────────────────────────────────
-def _reuse_lines(reuse: dict) -> list:
-    """What happened to a distillation that had been parked; empty for every ordinary filing. Two
-    shapes otherwise: reused (the parked decisions filed unchanged) and re-distilled (the DIFF).
-    `dropped` is listed FIRST — a decision that disappeared between two passes is the finding."""
-    if not reuse:
-        return []
-    if reuse.get("reused"):
-        titles = reuse.get("decisions") or []
-        return ["",
-                f"  reuse              re-filed the distillation from the parked pass — "
-                f"{len(titles)} decision(s) preserved, the transcript was not read again"]
-    dropped, added, kept = (reuse.get("dropped") or [], reuse.get("added") or [],
-                           reuse.get("kept") or [])
-    # Two ways reach this branch, so the wording is about the CAPTURE rather than this pass: the
-    # transcript was read again here, or an earlier pass re-read it and parked a smaller one.
-    head = ("the parked distillation could not be re-filed, so the transcript was read again."
-            if reuse.get("model_ran", True) else
-            "an EARLIER pass re-read the transcript and parked a smaller distillation; this pass "
-            "re-filed that one.")
-    lines = ["",
-             f"  ⚠ RE-DISTILLED     {head} Against the FIRST park: {len(kept)} decision(s) "
-             f"survived, {len(dropped)} did not, {len(added)} are new."]
-    if dropped:
-        lines.append(f"    DROPPED (was in the parked pass, is not being filed now): "
-                     f"{_listed([_clean(t, 120) for t in dropped])}")
-        lines.append("    Read those before accepting this filing — a decision that vanishes "
-                     "between two passes is the failure this diff exists to surface.")
-    if added:
-        lines.append(f"    new (not in the parked pass): "
-                     f"{_listed([_clean(t, 120) for t in added])}")
-    return lines
-
-
 def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, commit: str,
                   pages_edited: list = (), agent_rationale: str = "", registry=None,
-                  reuse: dict | None = None) -> dict:
+                  entities_proposed: list = (), aliases_proposed: list = ()) -> dict:
     """`filed`'s sibling for a page SET: N >= 1 source pages, a meeting page, and N decision pages,
     each with its OWN anchor outcome. `decisions` is `[{"path": ..., "anchoring": ...}]`, and
     `result_ref` names the MEETING PAGE alone or `dedup.Match.page_path`'s `rsplit("@")` breaks.
@@ -245,7 +243,10 @@ def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, com
     lines.append(f"  overlaps_flagged  {NONE_LABEL}")
     lines.append(f"  pages_edited      {_listed(edited_paths)}")
     lines.append(f"  agent_rationale   {_clean(agent_rationale, RATIONALE_WIDTH) or NONE_LABEL}")
-    lines += _reuse_lines(reuse or {})
+    proposed, proposed_aliases = _proposed_lists(entities_proposed, aliases_proposed)
+    if proposed or proposed_aliases:
+        lines.append("")
+        lines.append("  " + proposals_clause(proposed, proposed_aliases).strip())
     return base_report(
         status=schema.FILED, summary="\n".join(lines), page_path=meeting_page, commit=commit,
         agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
@@ -253,7 +254,7 @@ def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, com
         # The structured sibling of the rendered lines above, for a caller that branches on facts.
         filed_meeting={"source_pages": [_clean(p, 200) for p in source_pages],
                       "meeting_page": meeting_page, "decisions": decision_rows},
-        **({"distillation_reuse": reuse} if reuse else {}))
+        entities_proposed=proposed, aliases_proposed=proposed_aliases)
 
 
 def filed_retry(*, original_id: int, page_path: str, commit: str) -> dict:
@@ -344,242 +345,6 @@ def rejected_forged_field(*, findings: list = ()) -> dict:
     return _rejected(schema.REASON_MALFORMED_FRONTMATTER, summary, findings=list(findings))
 
 
-# ── needs_input: the one question a capture gets ──────────────────────────────────────────────
-# Written once because it is restated at three touchpoints: this question, `brain_reply`'s
-# acknowledgement, and the tester briefing.
-ONE_ASK_CLAUSE = ("This is the only question this capture gets: if your answer still can't be "
-                  "matched to a registered entity, it goes to a steward too, rather than asking a "
-                  "second time.")
-
-# Rather than a blank parenthesis — the "nothing is silently omitted" rule.
-NO_ALIASES = "no other names on file"
-
-
-def _candidate_lines(candidates) -> list[str]:
-    """One `- Name (also known as: …)` line per registry entity, bounded and sanitized: a newline in
-    a curated name would forge this list's structure, which sits directly above a stated command."""
-    lines = []
-    for candidate in _as_list(candidates):
-        name = _clean((candidate or {}).get("name", ""), 120)
-        if not name:
-            continue
-        aliases = [_clean(a, 80) for a in _as_list((candidate or {}).get("aliases")) if _clean(a)]
-        lines.append(f"  - {name} (also known as: {', '.join(aliases) or NO_ALIASES})")
-    return lines
-
-
-# ── several unresolved names, still ONE ask ───────────────────────────────────────────────────
-# ONE builder serves both counts and BOTH flows, so the base clause names no transcript. What is at
-# stake IS flow-specific, and that half lives in `MEETING_CONSEQUENCE_SEVERAL`: telling an ordinary
-# submitter his note's decisions cannot be linked describes something that does not exist, and
-# instructions a reader knows are not about him are instructions he stops reading.
-ONE_ASK_CLAUSE_SEVERAL = (
-    "This is the only question this capture gets, for all {n} at once: if even one of them is "
-    "still unplaced after your reply, the whole {noun} parks for a steward.")
-
-MEETING_CONSEQUENCE_SEVERAL = (
-    " Not just the decision that names it — a meeting page can never link a decision that was "
-    "never filed.")
-
-
-def _parked_noun(meeting: bool) -> str:
-    """What the submitter's own material IS, in his words. A transcript became a whole page set,
-    and "capture" would hide from him how much is stuck behind one unplaced name."""
-    return "meeting" if meeting else "capture"
-
-
-def _numbered_names(names: list[str]) -> str:
-    return "\n".join(f'  {i}. "{_clean(name, 120)}"' for i, name in enumerate(names, start=1))
-
-
-def _named_only(values, clean) -> list[str]:
-    """The values that are ACTUALLY a name, normalised. Surrounding whitespace is not part of a
-    name: the same string is quoted back at the submitter AND offered to a steward as
-    `birth.prepare --name`, where `" Jack "` and `"Jack"` mint two registry entities that will
-    never match each other. `entities.birth._prepare` refuses a whitespace-only name outright,
-    so a blank is not a name here either — `_clean` alone cannot see this, because `sanitize`
-    and `clamp` never strip."""
-    return [name for name in (clean(v, 120).strip() for v in _as_list(values)) if name]
-
-
-def _one_name_question(*, submission_id, name: str, lines: list[str], total: int) -> str:
-    """The question a capture with exactly ONE unresolved name gets. Kept as its own sentence
-    rather than folded into the plural wording: "your material names 1 things" is how a reader
-    learns nobody read what he was sent. The SHAPE of the report is the same either way — this
-    decides only the prose."""
-    head = (f"{schema.NEEDS_INPUT} — capture #{submission_id} is parked on one question before it "
-            f"can be filed: your material seems to be about \"{name}\", and the entity "
-            f"registry doesn't recognize that name.")
-    if not total:
-        return (f"{schema.NEEDS_INPUT} — capture #{submission_id} is parked on one question before "
-                f"it can be filed: your material seems to be about \"{name}\", and nothing is "
-                f"registered in the entity registry yet — there is nothing to match it against.\n\n"
-                f"Reply saying it's new (or, if you think it should already be registered, say what "
-                f"you expected) — a steward takes it from there either way; your material stays "
-                f"archived until they do. This is the only question this capture gets.")
-    if lines:
-        return (f"{head} Here is everything registered today:\n\n"
-                + "\n".join(lines)
-                + "\n\nReply naming one of these exactly if your material is about it. If it's new, "
-                  "or you're not sure, say so — a steward takes it from there; your material stays "
-                  f"archived either way. {ONE_ASK_CLAUSE}")
-    return (f"{head} The registry has {total} entities registered today — too many to list "
-            f"here.\n\nAnswer with the exact name of whatever your material is actually about "
-            f"and we'll match it, aliases included. If it's new, or you're not sure, say so — a "
-            f"steward takes it from there; your material stays archived either way. "
-            f"{ONE_ASK_CLAUSE}")
-
-
-def _several_names_question(*, submission_id, names: list[str], lines: list[str], total: int,
-                            clause: str) -> str:
-    """The question a capture with MORE THAN ONE unresolved name gets: the names listed numbered
-    and UNCAPPED, because every one of them is something the reply is REQUIRED to place."""
-    n = len(names)
-    head = (f"{schema.NEEDS_INPUT} — capture #{submission_id} is parked on one question before it "
-            f"can be filed: your material names {n} things the entity registry doesn't "
-            f"recognize:\n\n{_numbered_names(names)}\n")
-    if not total:
-        return (f"{head}\nNothing is registered in the entity registry yet, so there is nothing "
-                f"to match any of them against.\n\nReply saying, for each of the {n}, that it's "
-                f"new (or, if you think one should already be registered, say what you expected) "
-                f"— a steward takes it from there either way; your material stays archived until "
-                f"they do. {clause}")
-    if lines:
-        return (f"{head}\nHere is everything registered today:\n\n" + "\n".join(lines)
-                + f"\n\nReply once, covering all {n}: for each name above, say which registered "
-                  f"entity it is, that it's new, or that you're not sure — a steward takes over any "
-                  f"you can't place; your material stays archived either way. {clause}")
-    return (f"{head}\nThe registry has {total} entities registered today — too many to list "
-            f"here.\n\nAnswer with the exact name of whatever each of the {n} is actually "
-            f"about and we'll match it, aliases included; for any that's new, or you're not "
-            f"sure, say so — a steward takes it from there. {clause}")
-
-
-def needs_input(*, submission_id, names: list[str], candidates=(),
-                total_candidates: int | None = None, agent_rationale: str = "",
-                findings: list = (), meeting: bool = False) -> dict:
-    """The librarian's one question, CODE-BUILT rather than agent prose, for ANY number of
-    unresolved names — there is no singular sibling and no singular key.
-
-    Three candidate shapes: a registry under `MAX_QUESTION_CANDIDATES` is shown whole, an empty one
-    says so, one too large names the count and lists NOTHING. For a human, never a repair brief
-    (`gates.anchoring_brief` is that). The invocation is on its own line AND travels as
-    `reply_invocation`, because a reader's LLM paraphrase could compress the command away and leave
-    the promise false of what he saw. `meeting` selects the flow's own noun and consequence for the
-    several-names clause; it changes no structure, only what the sentence claims is at stake.
-
-    `unresolved_names` is ALWAYS the written key, a list even for one name. The retired
-    `unresolved_name` is read-only legacy — see `capture.schema.SITUATION_NAME_KEY`.
-    """
-    names = _named_only(names, _clean) or [schema.UNNAMED_ENTITY_PLACEHOLDER]
-    n = len(names)
-    invocation = schema.reply_invocation(submission_id)
-    lines = _candidate_lines(candidates)
-    total = len(_as_list(candidates)) if total_candidates is None else int(total_candidates)
-
-    if n == 1:
-        body = _one_name_question(submission_id=submission_id, name=names[0], lines=lines,
-                                  total=total)
-        reply_line = invocation
-        question = f"which entity is {names[0]}?"
-    else:
-        clause = (ONE_ASK_CLAUSE_SEVERAL.format(n=n, noun=_parked_noun(meeting))
-                  + (MEETING_CONSEQUENCE_SEVERAL if meeting else ""))
-        body = _several_names_question(submission_id=submission_id, names=names, lines=lines,
-                                       total=total, clause=clause)
-        reply_line = invocation.replace('<your answer>', f'<your answer, covering all {n}>')
-        question = f"which entities are {', '.join(names)}?"
-
-    summary = f"{body}\n\nReply with:\n  {reply_line}"
-    return base_report(status=schema.NEEDS_INPUT, summary=summary,
-                       agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
-                       findings=list(_as_list(findings)),
-                       open_question=question,
-                       # The command as a FACT beside the sentence stating it — and it must be the
-                       # SAME substituted form the summary carries:
-                       # `slack.poller._needs_input_prose` strips this suffix by exact match to
-                       # build the Slack card.
-                       reply_invocation=reply_line, unresolved_names=names)
-
-
-# ── triage ────────────────────────────────────────────────────────────────────────────────────
-def triage_entity(*, names: list[str], agent_rationale: str = "", findings: list = (),
-                  asked: bool = False, meeting: bool = False) -> dict:
-    """Parked because the thing it is about is not a registered entity — the triage flavor that may
-    still resolve, so it must not collapse into `triage_type`'s string. `asked` is the one thing it
-    distinguishes, and must, or a person who just replied is told no follow-up exists.
-
-    ONE builder for any number of names, writing `schema.SITUATION_NAMES_KEY` — a list even for one
-    name — and never the singular key: steward tooling reads it per name, so approving one is never
-    blocked by another. `meeting` only names the parked thing as its submitter knows it (see
-    `_parked_noun`), which the one-name sentence has no slot for.
-    """
-    # `_clean_identity`: an entity NAME is a field a steward is invited to paste into a shell. The
-    # no-name fallback is the SHARED constant, never a second copy of the words: the key below
-    # carries it onto the parked row, and the two surfaces that refuse it by value
-    # (`entities.cli._suggestable`, `entities.situations.mint_name_prefill`) compare against that
-    # same constant — a local literal here silently unrefuses it.
-    clean_names = _named_only(names, _clean_identity) or [schema.UNNAMED_ENTITY_PLACEHOLDER]
-    n = len(clean_names)
-    tail = ("You already answered the one question this capture gets, and the answer still "
-            "doesn't match a registered entity — so a steward takes it from here and you won't be "
-            "asked again. Nothing further is needed from you; your material stays archived until "
-            "it's reviewed." if asked else
-            "Nothing further is needed from you — no question is coming about this one; your "
-            "material stays archived until it's reviewed.")
-    if n == 1:
-        # One name reads as one name — see `_one_name_question` for why the plural wording is not
-        # stretched over it.
-        name = clean_names[0]
-        summary = (f"{schema.TRIAGE} — parked, not filed. Your material seems to be about "
-                   f"\"{name}\", which the entity registry doesn't recognize yet, so it can't "
-                   f"be anchored. A steward will register {name} as a new entity or place "
-                   f"this where it actually belongs. {tail}")
-        question = f"which entity is {name}?"
-    else:
-        quoted = [f'"{name}"' for name in clean_names]
-        listed = ", ".join(quoted[:-1]) + f" and {quoted[-1]}"
-        summary = (f"{schema.TRIAGE} — parked, not filed. Your material named {n} things the entity "
-                   f"registry doesn't recognize — {listed} — and at least one of them still "
-                   f"doesn't match a registered entity. A steward will register whichever of these "
-                   f"are new, or place this {_parked_noun(meeting)} where it actually belongs. "
-                   f"{tail}")
-        question = f"which entities are {', '.join(clean_names)}?"
-    return base_report(status=schema.TRIAGE, summary=summary,
-                       agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
-                       findings=list(_as_list(findings)),
-                       asked=bool(asked),
-                       # `stigmergy-entities` selects approvable rows on this key and pre-fills
-                       # `--name` from here rather than by parsing `open_question`.
-                       **{schema.SITUATION_KEY: schema.SITUATION_UNRESOLVED_ENTITY,
-                          schema.SITUATION_NAMES_KEY: clean_names},
-                       open_question=question)
-
-
-def triage_type(*, judged_type: str, agent_rationale: str = "", findings: list = ()) -> dict:
-    """Parked because the fast lane does not file that type — the triage flavor that, as submitted,
-    never resolves. The label carries its own article and is dropped in whole; an UNKNOWN type
-    cannot be articled, so carrying `material` is the fallback's job, not every label's."""
-    # The same fallback word `processing._triage` uses, so a missing field renders one way.
-    clean_type = _clean(judged_type, 60) or "unknown"
-    # Label, list and count come from `page.PAGE_TYPES`, so the table's count cannot go stale here.
-    label = page_policy.label_for(clean_type) or f"{clean_type} material"
-    fast_lane = page_policy.FAST_LANE_TYPE_LIST
-    count = len(page_policy.FAST_LANE_TYPES)
-    summary = (f"{schema.TRIAGE} — parked, not filed. This reads like {label}, and the "
-               f"fast lane only files {count} page types ({fast_lane}); {clean_type} needs a "
-               f"steward's review before it can exist here. Nothing was written to the graph; "
-               f"your material stays archived.")
-    return base_report(status=schema.TRIAGE, summary=summary,
-                       agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
-                       findings=list(_as_list(findings)),
-                       # Reaches `stigmergy-entities` too: `person`/`team`/`product` material is an
-                       # identity situation a steward may answer by minting the entity.
-                       **{schema.SITUATION_KEY: schema.SITUATION_UNSUPPORTED_TYPE,
-                          schema.SITUATION_TYPE_KEY: clean_type},
-                       open_question=f"where does {label} belong?")
-
-
 # ── failed ────────────────────────────────────────────────────────────────────────────────────
 def failed_system(*, attempts: int, stage: str, reason: str, agent_attempts: int = 0,
                   cost_usd: float = 0.0, findings: list = ()) -> dict:
@@ -624,6 +389,14 @@ def render_prose(report: dict) -> str:
         lines.append(f"  overlaps_flagged {_listed(report.get('overlaps_flagged'))}")
         lines.append(f"  pages_edited     {_listed(report.get('pages_edited'))}")
         lines.append(f"  agent_rationale  {report.get('agent_rationale') or NONE_LABEL}")
+        proposed = report.get("entities_proposed") or []
+        if proposed:
+            lines.append("  entities_proposed "
+                         + _listed([f"{e.get('name')} ({e.get('id')})" for e in proposed]))
+        if report.get("aliases_proposed"):
+            lines.append("  aliases_proposed "
+                         + _listed([f"{a.get('alias')} -> {a.get('entity')}"
+                                    for a in report["aliases_proposed"]]))
     elif status == schema.FILED:
         # The meeting case, explicit rather than a fallthrough: nothing is left to append.
         pass

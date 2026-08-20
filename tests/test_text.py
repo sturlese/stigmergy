@@ -2,8 +2,8 @@
 
 These tests moved here from `tests/index/test_rank.py` when the functions did: `sanitize`/`clamp`
 lived in `index/rank.py` only because they were first written to render search hits, and that
-accident is what made `capture.dispositions` — which cleans a steward's note before a submitter
-reads it — collide with the rule that the queue must not depend on the search index. A
+accident is what made the capture queue's note cleaning — a steward's note, cleaned before a
+submitter reads it — collide with the rule that the queue must not depend on the search index. A
 dependency-free module at the bottom of the stack can be imported by everyone precisely because
 it imports no one. The functions are unchanged; only their address is.
 """

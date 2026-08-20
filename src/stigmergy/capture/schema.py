@@ -16,7 +16,7 @@ import re
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from stigmergy.capture.errors import ReplyRejected, SubmissionRejected
+from stigmergy.capture.errors import SubmissionRejected
 
 log = logging.getLogger(__name__)
 
@@ -25,24 +25,28 @@ QUEUED = "queued"
 CLAIMED = "claimed"
 FILED = "filed"
 REJECTED = "rejected"
-# A steward handled this by hand: its own terminal state, never a reuse of `rejected`.
+# LEGACY, read-only. A steward closed the row by hand, back when a capture could park on a
+# person. Nothing writes it since the parked states retired: rows carrying it stay readable and
+# purgeable, because rewriting a closed row's history would lie about what happened to it.
 RESOLVED = "resolved"
-NEEDS_INPUT = "needs_input"
-TRIAGE = "triage"
 FAILED = "failed"
 
-STATUSES = (QUEUED, CLAIMED, FILED, REJECTED, RESOLVED, NEEDS_INPUT, TRIAGE, FAILED)
+STATUSES = (QUEUED, CLAIMED, FILED, REJECTED, RESOLVED, FAILED)
 
-# Terminal = will not move again on its own. The parked pair is NOT terminal: retention purges
-# terminal rows only, and must never delete material a human is being asked about.
+# The two states a capture used to wait on a person in, RETIRED: a name nothing resolves to is
+# proposed as an entity and filed now (`librarian.identity`), and the steward confirms it from the
+# inbox afterwards. Rows still in either state are returned to `queued` at startup
+# (`_CAPTURE_QUEUE_PARKED_MIGRATION`) and re-filed under that rule; the status CHECK is swapped so
+# the words cannot come back. Named rather than deleted so the migration and the CHECK guard spell
+# them once.
+RETIRED_STATUSES = ("needs_input", "triage")
+
+# Terminal = will not move again on its own; retention purges terminal rows only.
 TERMINAL_STATUSES = frozenset({FILED, REJECTED, RESOLVED, FAILED})
 
-# The two states a human is waited on in, and the only two a disposition may move a row out of.
-PARKED_STATUSES = frozenset({NEEDS_INPUT, TRIAGE})
-
-# States a claim can be finished into; the parked pair keep `finished_at` NULL. `resolved` is
-# absent: a steward holds no lease, so its transition is `queue.dispose`, never the fenced one.
-FINISHED_STATUSES = frozenset({FILED, REJECTED, FAILED}) | PARKED_STATUSES
+# States a claim can be finished into — every one terminal. `resolved` is absent: nothing reaches
+# it any more.
+FINISHED_STATUSES = frozenset({FILED, REJECTED, FAILED})
 
 # ── why a refused row is where it is, as a CODE beside the sentence ───────────────────────────
 # "May this row's material be echoed back" must branch on a code, never on prose. Declared here
@@ -51,8 +55,9 @@ REASON_SECRET = "secret"
 REASON_PII = "pii"
 REASON_DUPLICATE = "duplicate"
 REASON_STEERING = "steering"
-# A steward declined by hand — needed because `queue._MATERIAL_WITHHELD` fails CLOSED on a
-# `rejected` row with NO code. Not in `WITHHELD_REASONS`: a judgment call is not a match.
+# LEGACY, read-only: a steward declined a parked row by hand, when rows could park. Kept so the
+# rows that carry it keep reading as a judgment call rather than a match — `queue._MATERIAL_WITHHELD`
+# fails CLOSED on a `rejected` row with NO code. Not in `WITHHELD_REASONS`.
 REASON_STEWARD = "steward"
 # A drafted page whose frontmatter cannot be re-serialized after server-owned fields are stripped
 # and restamped: content-caused, which is what routes it to `rejected` rather than `failed`.
@@ -62,33 +67,6 @@ REJECTION_REASONS = (REASON_SECRET, REASON_PII, REASON_DUPLICATE,
                      REASON_STEERING, REASON_STEWARD, REASON_MALFORMED_FRONTMATTER)
 # The key the code travels under inside the `report` JSONB column.
 REASON_CODE_KEY = "reason_code"
-
-# ── which KIND of parked situation a `triage` row is ──────────────────────────────────────────
-# A read path branches on this code, never on the summary's prose. IDENTICAL to
-# `librarian.agent.TRIAGE_KINDS`, declared here because the consumers may not import it.
-SITUATION_UNRESOLVED_ENTITY = "unresolved-entity"
-SITUATION_UNSUPPORTED_TYPE = "unsupported-type"
-SITUATIONS = (SITUATION_UNRESOLVED_ENTITY, SITUATION_UNSUPPORTED_TYPE)
-SITUATION_KEY = "situation"
-
-# The two facts a steward needs beside the sentence — reading them out of prose is parsing.
-# `SITUATION_NAME_KEY` is READ-ONLY LEGACY INPUT: nothing writes it any more (a park writes
-# `SITUATION_NAMES_KEY`, a list, whatever the count), and it is NOT deleted because rows carrying
-# it are never migrated — a queue row written before the collapse still has to read correctly, so
-# `entities.situations.subjects_of` keeps its fallback permanently.
-SITUATION_NAME_KEY = "entity_name"      # LEGACY, read only: the one name a pre-collapse park wrote
-SITUATION_TYPE_KEY = "judged_type"      # `unsupported-type`: the type the fast lane will not file
-
-# THE key an `unresolved-entity` park writes — a JSON list, one entry or many, authoritative
-# whenever present, iterated independently per name (a steward approves one without the others).
-SITUATION_NAMES_KEY = "entity_names"
-
-# The one word for "nothing was named at all" — written by `librarian.report`'s park builders and
-# refused BY VALUE by both mint surfaces (`entities.cli._suggestable`, the ready-to-run command;
-# `entities.situations.mint_name_prefill`, the form default). It is syntactically an ordinary name,
-# so offering it would mint a garbage entity that then resolves for every capture saying it. All
-# three sides read THIS constant: a local copy of the words unrefuses it at whichever end holds it.
-UNNAMED_ENTITY_PLACEHOLDER = "something unnamed"
 
 # The refusals whose point is that a value must not travel. Suppressed, not redacted: gitleaks
 # reports a rule and a line, never a guaranteed span.
@@ -101,8 +79,7 @@ WITHHELD_MATERIAL_NOTE = (
 
 # ── the queue's echo window ───────────────────────────────────────────────────────────────────
 # The secrets/PII gate runs only once a row leaves `claimed`, so the excerpt is withheld while
-# `queued`/`claimed`. Keyed on "has the gate run", NOT on `TERMINAL_STATUSES`, which would keep
-# withholding through the parked states where a human must read the material.
+# `queued`/`claimed`. Keyed on "has the gate run", its own question, not on `TERMINAL_STATUSES`.
 WITHHELD_PENDING_NOTE = (
     "not shown yet — nothing has scanned this material for secrets or personal data yet, so it "
     "stays out of this view while the capture is `queued` or `claimed`; it appears here as soon "
@@ -146,15 +123,14 @@ def withheld_reason(status: str, report) -> str:
 
 
 # ── the `report` column's SHAPE ───────────────────────────────────────────────────────────────
-# The vocabulary is the queue's; the wording belongs to each writer (`capture.dispositions` for
-# steward reports, `librarian.report` for fast-lane ones).
+# The vocabulary is the queue's; the wording belongs to the one writer, `librarian.report`.
 SEARCHABILITY_NOTE = ("Becomes searchable at the next index rebuild or at the webhook's "
                       "incremental upsert, whichever lands first.")
 
 
 def base_report(*, status: str, summary: str, **facts) -> dict:
-    """THE shared shape: every terminal and parked state goes through here, so none ships
-    without the fields the others carry."""
+    """THE shared shape: every terminal state goes through here, so none ships without the fields
+    the others carry."""
     report = {
         "status": status,
         "summary": summary,
@@ -171,47 +147,31 @@ def base_report(*, status: str, summary: str, **facts) -> dict:
     return report
 
 
-# The MCP tool a `needs_input` question tells the submitter to run — spelled here because
-# `librarian` composes the question, `server` mounts the tool, and neither may import the other.
-REPLY_TOOL = "brain_reply"
-
-
-def reply_invocation(submission_id) -> str:
-    """The exact call a submitter runs to answer this row's one question. Also exposed structurally
-    (`reply_hint`), since an LLM relay will not preserve the prose verbatim."""
-    return f'{REPLY_TOOL}(submission_id={submission_id}, answer="<your answer>")'
-
-
 # ── the row's own history: what HUMANS did to it ──────────────────────────────────────────────
-# `audit_log` records the CALL; `trace` records the ROW. `report` owns fast-lane outcomes.
-EVENT_ASKED = "asked"
-EVENT_REPLIED = "replied"
-EVENT_REQUEUED = "requeued"
-EVENT_RESOLVED = "resolved"
-EVENT_REJECTED = "rejected"
+# `trace` is a read-only record now: the events a human could perform on a row (ask, reply,
+# requeue, resolve, reject) retired with the parked states, and the column keeps what was done
+# before that so an old row still tells its story. The one writer left is the startup migration
+# that returns a still-parked row to the queue, and it names itself in the event it appends.
+MIGRATION_ACTOR = "migration"
+MIGRATION_EVENT = "requeued"
+MIGRATION_NOTE = ("the parked states retired — a capture about a name the registry does not know "
+                  "is filed with the entity proposed, for a steward to confirm; re-filed under "
+                  "that rule")
 
-# The actor recorded for the one event no human performs.
-ACTOR_LIBRARIAN = "librarian"
-
-# Bounds on the column; the OLDEST events are dropped. The `asked` note carries the question
-# verbatim — the surviving copy once the next pass rewrites `report`.
-MAX_TRACE_EVENTS = 20
-MAX_TRACE_NOTE_CHARS = 2000
-
-# Hand-mirrors `librarian.agent.MAX_PROSE_LEN` — `capture` sits below `librarian`. Move both.
-MAX_REPLY_CHARS = 2000
+# ── what a steward types beside a decision ────────────────────────────────────────────────────
+# One sentence quoted inside a sentence code composes — past this it reads as a document that
+# lost its formatting.
+MAX_NOTE_CHARS = 500
 
 
-def prepare_reply(answer: str) -> str:
-    """Validate a submitter's reply, raising `ReplyRejected` BEFORE the row is touched. Safe to
-    echo: a static limit and the caller's own size, never another identity or a path."""
-    if not isinstance(answer, str) or not answer.strip():
-        raise ReplyRejected("answer is empty — there is nothing to record")
-    if len(answer) > MAX_REPLY_CHARS:
-        raise ReplyRejected(
-            f"answer too long: {len(answer)} characters (max {MAX_REPLY_CHARS}) — say which entity, "
-            f"or that it's new, in fewer words")
-    return answer
+def clean_note(text: str, width: int = MAX_NOTE_CHARS) -> str:
+    """THE seam every operator-typed string crosses on its way into a ledger row or a report:
+    control characters stripped, newlines flattened, then clipped word-safe. Below every surface
+    because a seam a caller can skip is not a seam — one CLI once cleaned its note while its
+    sibling passed it raw, and ANSI escapes reached a reader's terminal. The exact expression
+    `librarian.report._clean` uses, so the two packages' sentences render alike on one screen."""
+    from stigmergy import text as textutil
+    return textutil.clamp(textutil.sanitize(str(text or "")).replace("\n", " ").strip(), width)
 
 
 # What `stigmergy-index --rebuild` must leave standing. `audit_log` is `server.audit`'s but named
@@ -539,37 +499,47 @@ CREATE TABLE IF NOT EXISTS capture_queue (
 )
 """
 # `report` — the librarian's structured account of one item, NULL when never processed. `error`
-# beside it keeps its one-line human meaning, rendered as the `needs_input` question.
+# beside it keeps its one-line human meaning.
 _CAPTURE_QUEUE_REPORT_COLUMN = """
 ALTER TABLE capture_queue ADD COLUMN IF NOT EXISTS report JSONB
 """
 
-# The human loop's additive columns; each nullable, none backfilled.
-#  * `asked_at`  — stamped on the FIRST transition into `needs_input` and NEVER cleared, which is
-#                  what makes the one-ask budget survive a reply, a requeue and a redelivery.
-#  * `parked_at` — when the row entered its CURRENT park; not `finished_at`, which stays NULL on a
-#                  parked row because retention counts from it.
-#  * `reply`     — the submitter's answer, verbatim and bounded by `MAX_REPLY_CHARS`.
-#  * `trace`     — append-only record of what HUMANS did to the row.
+# The retired human loop's columns, still CREATED on a fresh database and never dropped: the
+# rows written while captures could park keep their `asked_at`, `parked_at`, `reply`, `trace` and
+# `outcome`, and a reader of an old row must find the columns it expects. Nothing writes the first
+# four any more; `trace` gains one event per migrated row (below) and nothing after.
 _CAPTURE_QUEUE_HUMAN_LOOP_COLUMNS = (
     "ALTER TABLE capture_queue ADD COLUMN IF NOT EXISTS asked_at TIMESTAMPTZ",
     "ALTER TABLE capture_queue ADD COLUMN IF NOT EXISTS parked_at TIMESTAMPTZ",
     "ALTER TABLE capture_queue ADD COLUMN IF NOT EXISTS reply TEXT",
     "ALTER TABLE capture_queue ADD COLUMN IF NOT EXISTS trace JSONB",
 )
-
-# `outcome` — the agent's account of the last pass, kept across a park so a re-file reuses it. Its
-# own column, not a `report` key: `report` crosses to the submitter, this holds page bodies.
 _CAPTURE_QUEUE_OUTCOME_COLUMN = (
     "ALTER TABLE capture_queue ADD COLUMN IF NOT EXISTS outcome JSONB"
 )
 
-# The one non-additive migration: a new status must REPLACE this CHECK, which cannot be widened in
-# place. It must stay ONE `DO` statement — one transaction even on the autocommit connection this
-# runs on. As a DROP-then-ADD pair it reintroduces three failures: the live queue is briefly
-# unconstrained, every process start takes the ACCESS EXCLUSIVE lock, and two concurrent starters
-# race into `DuplicateObject`. The guard skips the swap once the constraint already names every
-# status in `STATUSES` (`quote_literal` keeps one name from matching inside another).
+# A row still parked when the parked states retired goes back to the queue, to be filed under the
+# rule that replaced the park — nothing a person was waiting on is lost, it is simply filed. Runs
+# BEFORE the CHECK swap below, which would otherwise refuse to constrain a table holding a word it
+# no longer lists; a no-op on every later start, because no row can enter the retired states.
+_RETIRED_LITERALS = ", ".join(f"'{s}'" for s in RETIRED_STATUSES)
+_CAPTURE_QUEUE_PARKED_MIGRATION = f"""
+UPDATE capture_queue
+SET status = '{QUEUED}', error = '', claimed_at = NULL, parked_at = NULL,
+    trace = COALESCE(trace, '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+        'at', to_jsonb(now()), 'event', '{MIGRATION_EVENT}', 'actor', '{MIGRATION_ACTOR}',
+        'note', '{MIGRATION_NOTE}'))
+WHERE status IN ({_RETIRED_LITERALS})
+"""
+
+# The one non-additive migration: a status that arrives or retires must REPLACE this CHECK, which
+# cannot be edited in place. It must stay ONE `DO` statement — one transaction even on the
+# autocommit connection this runs on. As a DROP-then-ADD pair it reintroduces three failures: the
+# live queue is briefly unconstrained, every process start takes the ACCESS EXCLUSIVE lock, and
+# two concurrent starters race into `DuplicateObject`. The guard skips the swap once the constraint
+# names every status in `STATUSES` and none in `RETIRED_STATUSES` (`quote_literal` keeps one name
+# from matching inside another) — both halves, or a constraint still admitting a retired word would
+# read as current forever.
 _CAPTURE_QUEUE_STATUS_CHECK = f"""
 DO $$
 BEGIN
@@ -579,6 +549,8 @@ BEGIN
           AND c.conname = '{_STATUS_CHECK_NAME}'
           AND (SELECT bool_and(pg_get_constraintdef(c.oid) LIKE '%' || quote_literal(s) || '%')
                FROM unnest(ARRAY[{_STATUS_LITERALS}]) AS s)
+          AND NOT (SELECT bool_or(pg_get_constraintdef(c.oid) LIKE '%' || quote_literal(r) || '%')
+                   FROM unnest(ARRAY[{_RETIRED_LITERALS}]) AS r)
     ) THEN
         ALTER TABLE capture_queue DROP CONSTRAINT IF EXISTS {_STATUS_CHECK_NAME};
         ALTER TABLE capture_queue ADD CONSTRAINT {_STATUS_CHECK_NAME}
@@ -635,7 +607,7 @@ CREATE INDEX IF NOT EXISTS ingest_errors_source_doc_idx
 
 _ALL_DDL = (_CAPTURE_QUEUE_DDL, _CAPTURE_QUEUE_REPORT_COLUMN,
             *_CAPTURE_QUEUE_HUMAN_LOOP_COLUMNS, _CAPTURE_QUEUE_OUTCOME_COLUMN,
-            _CAPTURE_QUEUE_STATUS_CHECK,
+            _CAPTURE_QUEUE_PARKED_MIGRATION, _CAPTURE_QUEUE_STATUS_CHECK,
             _QUEUE_STATUS_INDEX, _QUEUE_SUBMITTER_INDEX, _QUEUE_CLAIMED_INDEX,
             _JOB_RUNS_DDL, _JOB_RUNS_INDEX, _INGEST_ERRORS_DDL, _INGEST_ERRORS_INDEX)
 

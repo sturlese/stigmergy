@@ -95,7 +95,7 @@ def _fix_preexisting_fixture_drift(env) -> None:
     — a cross-file fixture-sharing import reads as a redefinition to the linter, the same reason
     this file already duplicates `_park_capture`/`no_real_github_app`. `tests/librarian/
     fixtures/repo/`'s `Acme Corp` entry predates the registry-consistency rule (its curated id
-    `acme` disagrees with `slugify`'s own `acme-corp`), which `entities.mint._refuse_drift` catches
+    `acme-corp` disagrees with `slugify`'s own `acme-corp`), which `entities.mint._refuse_drift` catches
     on ANY mint attempt against this fixture, regardless of what is being minted — only a test that
     actually reaches `entities.mint.mint` (a REAL mint through the Slack modal, below) needs this
     fixed first."""

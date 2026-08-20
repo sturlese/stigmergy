@@ -19,8 +19,8 @@ from stigmergy.kernel.fsutil import write_text_atomic
 from stigmergy.librarian import config as librarian_config
 from stigmergy.librarian import gates
 
-# Repo-relative, slash-separated.
-TEMPLATE_RELPATH = "ops/templates/entity.md"
+# Repo-relative, slash-separated; the generator owns the knowledge repo's identity layout.
+TEMPLATE_RELPATH = generator.TEMPLATE_RELPATH
 
 # The same env var `librarian.config.Settings.gitleaks_bin` reads. Spelled twice because
 # `stigmergy.entities` must not import a worker's `Settings` to ask one question; the duplication

@@ -13,6 +13,12 @@ that ring). A kind is reviewed in the console and over MCP until somebody writes
 
 KIND_ENTITY_PROPOSAL = "entity-proposal"
 KIND_PARKED_CAPTURE = "parked-capture"
+# An identity the librarian created with `approved_by` empty, waiting on a steward's Approve,
+# Merge or Decline; `item_id` is the entity's registry id. `alias-proposal` is one spelling the
+# librarian appended to a registered entity's `proposed_aliases:`; `item_id` is `<id>:<alias>`.
+# The librarian reads the ledger through these kinds to refuse re-proposing what was declined.
+KIND_IDENTITY_PROPOSAL = "identity-proposal"
+KIND_ALIAS_PROPOSAL = "alias-proposal"
 # The gardener's findings, turned into a concrete additive edit by `stigmergy.repair` and waiting
 # on a steward. Unlike the other two it has no submitter — nobody asked for it — which is why it
 # appears in the MANAGEMENT read of the inbox only (`server.review._collect_open_items`).

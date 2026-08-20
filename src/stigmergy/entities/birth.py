@@ -175,6 +175,12 @@ def prepare(*, canonical_id: str, name: str, entity_type: str, aliases=(), role:
                     aliases=cleaned_aliases, role=_clean_role(role))
 
 
+def clean_aliases(aliases, *, name: str) -> tuple[str, ...]:
+    """`_clean_aliases`, for the one caller outside `prepare`: the librarian proposing a spelling
+    for an entity that already exists holds it to the same rules a birth does."""
+    return _clean_aliases(aliases, name=name)
+
+
 def _clean_aliases(aliases, *, name: str) -> tuple[str, ...]:
     """De-duplicated, order-preserving, never an alias for the name itself, and held to the name's
     own character set.

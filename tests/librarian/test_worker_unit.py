@@ -24,7 +24,7 @@ def test_startup_checks_returns_the_resolved_repo_acl_config_and_registry(rig):
     env, deps = rig
     resolved = worker.startup_checks(deps.settings)
     assert resolved["repo"] == env.repo
-    assert resolved["registry"].canonical_id("Acme Corp") == "acme"
+    assert resolved["registry"].canonical_id("Acme Corp") == "acme-corp"
     assert resolved["acl_config"] is not None or resolved["acl_config"] is None  # never raises
     assert resolved["reaped"] == 0                      # nothing to reap on a fresh repo
 

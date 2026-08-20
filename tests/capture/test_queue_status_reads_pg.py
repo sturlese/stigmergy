@@ -160,17 +160,6 @@ def test_only_filed_rows_count(clean_queue, memory_evidence):
     assert len(queue.filed_latencies_ms(clean_queue)) == 1
 
 
-def test_a_triaged_row_contributes_nothing_because_it_has_no_finished_at(clean_queue,
-                                                                        memory_evidence):
-    """`triage` leaves `finished_at` NULL on purpose (`queue.finish`: a row waiting for a human is
-    not done), so it cannot produce a capture->filed duration at all."""
-    _submit(clean_queue, memory_evidence, "parked")
-    item = queue.claim_next(clean_queue, visibility_timeout_s=300)
-    queue.finish(clean_queue, item["id"], status=schema.TRIAGE,
-                 expected_attempts=item["attempts"], error="unresolved entity")
-    assert queue.filed_latencies_ms(clean_queue) == []
-
-
 def test_the_sample_equals_the_traces_own_total_latency(clean_queue, memory_evidence):
     """The declared duplication, checked. `get_submission_trace` computes `total_latency_ms` for ONE
     row in Python; this query computes the same difference for many in SQL. They are two expressions

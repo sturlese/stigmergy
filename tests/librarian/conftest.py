@@ -116,12 +116,15 @@ def conn():
 @pytest.fixture()
 def clean_queue(conn):
     """Each test gets an empty `capture_queue`/`job_runs`/`ingest_errors` — same isolation posture
-    as `tests/capture/conftest.py::clean_queue`. Safe to wipe: `conn` can only ever be the test
-    database, `tests.testdb` raises before it opens anything else."""
+    as `tests/capture/conftest.py::clean_queue` — and an empty `review_decisions`, because the
+    librarian READS the ledger now (a declined identity is never proposed again) and a decline one
+    test records would refuse another test's proposal of the same name. Safe to wipe: `conn` can
+    only ever be the test database, `tests.testdb` raises before it opens anything else."""
     with conn.cursor() as cur:
         cur.execute("DELETE FROM capture_queue")
         cur.execute("DELETE FROM job_runs")
         cur.execute("DELETE FROM ingest_errors")
+        cur.execute("DELETE FROM review_decisions")
     return conn
 
 

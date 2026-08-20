@@ -334,20 +334,21 @@ def test_a_drive_capture_tells_the_agent_the_source_half_is_handled(rig, clean_q
     assert recording.agent.flow_notes[-1] == ""
 
 
-# ── parks and the outcome contract compose unchanged (D1: it IS the fast lane) ──────────────────
-def test_a_parked_drive_capture_writes_nothing_and_reconverts_on_requeue(rig, clean_queue):
-    """ADR 028 D8: "the SAME capture resumes, reusing its stored distillation" is the document
-    flow's property, not the fast lane's — a parked drive capture re-runs the agent AND the
-    conversion on its next delivery, and files the same set, anchored, once the name resolves.
-    The park itself must leave no source part behind."""
+# ── proposals and the outcome contract compose unchanged (D1: it IS the fast lane) ────────────
+def test_a_drive_capture_about_a_new_name_files_the_document_the_note_and_the_proposed_entity(
+        rig, clean_queue):
+    """OLD BEHAVIOUR: parked with nothing written, re-converted on requeue. A document about a
+    name the registry does not know now lands whole, in one commit: the source parts, the
+    synthesis anchored to the newborn entity, and the entity's own page for a steward to confirm."""
     env, deps = rig
-    before = support.branch_sha(env.bare)
-    material = f"DOUBLE:triage-entity=Umbrella Corp\n{DOC_TEXT}"
+    material = f"DOUBLE:propose=Umbrella Corp\n{DOC_TEXT}"
     item, result = _drop_and_process(clean_queue, deps, material.encode("utf-8"))
-    assert result.status == schema.NEEDS_INPUT
-    assert support.branch_sha(env.bare) == before
-    assert not any(p.startswith("sources/drive/")
-                   for p in support.all_ever_committed_paths(env.bare))
+    assert result.status == schema.FILED, result.report.get("summary")
+    _, sha = result.result_ref.rsplit("@", 1)
+    changed = support.changed_paths(env.bare, sha)
+    assert any(p.startswith("sources/drive/") for p in changed)
+    assert "wiki/entities/Umbrella Corp.md" in changed
+    assert result.report["entities_proposed"][0]["id"] == "umbrella-corp"
 
 
 # ── the OCR pass is BILLED (issue #110) ─────────────────────────────────────────────────────────

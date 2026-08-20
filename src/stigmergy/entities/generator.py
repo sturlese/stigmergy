@@ -24,6 +24,9 @@ log = logging.getLogger(__name__)
 # Repo-relative, slash-separated — git paths first, filesystem paths second.
 ENTITIES_RELDIR = "wiki/entities"
 REGISTRY_RELPATH = "ops/entity-registry.json"
+# The page every new entity is rendered from — the knowledge repo's own source of truth for the
+# page's shape, read from the checkout and never reproduced on this side.
+TEMPLATE_RELPATH = "ops/templates/entity.md"
 
 # The PAGE-side spelling of the two lifecycle facts; `kernel.registry` carries the registry side,
 # and `registry_of` is where the two meet. `approved_by` PRESENT AND EMPTY is a proposal — the

@@ -48,7 +48,7 @@ class Fixture:
                     "as_of": "2026-03", "verification": "verified"},
                    "Monthly KPI digest for Initech — ARR reached 512000 usd. quarterly revenue.")
         write_page(self.repo, "wiki/finance/acme-payroll.md",
-                   {"type": "report", "title": "Acme payroll summary", "entity": "acme",
+                   {"type": "report", "title": "Acme payroll summary", "entity": "acme-corp",
                     "as_of": "2026-01", "verification": "verified", "acl": "['finance']"},
                    "Payroll summary for Acme — total compensation 750000 usd in 2026. quarterly revenue.")
         # a superseded (open) page, for the read_page banner and the demotion surface
@@ -95,8 +95,8 @@ class Fixture:
         # layer had to build for itself. `acl: ['finance']` mirrors the ACME_PAGE scoping above
         # deliberately, so the SAME two identities (ANA/ENG) exercise both a real page and a
         # derived one with the fixture's existing dichotomy.
-        write_page(self.repo, "views/acme.md",
-                   {"type": "view", "title": "Acme — view", "entity": "['acme']",
+        write_page(self.repo, "views/acme-corp.md",
+                   {"type": "view", "title": "Acme — view", "entity": "['acme-corp']",
                     "tags": "[view]", "tier": 3, "verification": "verified",
                     "acl": "['finance']"},
                    "## Timeline\n\nView rollup for Acme. quarterly revenue synthesis.")
@@ -107,7 +107,7 @@ class Fixture:
             }))
 
     ACME_PAGE = "wiki/finance/acme-payroll.md"
-    VIEW_PAGE = "views/acme.md"
+    VIEW_PAGE = "views/acme-corp.md"
     OPEN_PAGE = "wiki/notes/initech-kpi.md"
     SUPERSEDED_PAGE = "wiki/notes/old-kpi.md"
     EMPTY_ACL_PAGE = "wiki/notes/globex-widget-empty-acl.md"

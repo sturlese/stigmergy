@@ -86,11 +86,10 @@ def prompt_cache_settings(model: str, prompt_cache: str) -> dict | None:
 
 # ── the accounts, as schemas instead of a file ────────────────────────────────────────────────
 # These mirror what `agent.parse_*_outcome` REQUIRES, not everything it ACCEPTS — a deliberate
-# asymmetry, and the one place to look when the two look out of step. The parser tolerates a
-# singular `triage.name` inbound and folds it into a one-element list; `OrdinaryTriage` offers only
-# `names`, because a schema is what the model is ASKED for and asking for one field in two spellings
-# is how a park ends up declaring both. Everything the model must answer is here in the same shape
-# the file channel carries, so the boundary parse stays shared.
+# asymmetry, and the one place to look when the two look out of step: a schema is what the model is
+# ASKED for, and asking for one field in two spellings is how an account ends up declaring both.
+# Everything the model must answer is here in the same shape the file channel carries, so the
+# boundary parse stays shared.
 #
 # BOUNDS are deliberately NOT restated — a second set would drift from the one the file channel is
 # judged by. REQUIREDNESS is: a defaulted field makes an omission INVISIBLE, so the framework
@@ -130,9 +129,8 @@ class StructuredInbound(BaseModel):
 
     INBOUND ONLY, structured fields only, and never at correctness's expense: a bracketed
     string on a field whose annotation is a list or nested model is `json.loads`ed; anything
-    that does not parse stays as it arrived for the ordinary validation to refuse. The same
-    tolerance `OrdinaryTriage._fold_a_singular_name_into_the_list` already extends, one level
-    up — parent validation precedes child validation, so the two repairs compose."""
+    that does not parse stays as it arrived for the ordinary validation to refuse. Parent
+    validation precedes child validation, so a nested model's own repairs compose with this."""
 
     @model_validator(mode="before")
     @classmethod
@@ -193,16 +191,36 @@ class MeetingFinding(StructuredInbound):
     category: str = ""
 
 
-class MeetingTriage(StructuredInbound):
-    """Why the capture was parked, when `decision` is `triage`."""
-    kind: str = ""
-    names: list[str] = Field(default_factory=list)
-    judged_type: str = ""
+# These docstrings are the JSON-schema DESCRIPTIONS the model reads, not notes to a reader here.
+class NewEntity(StructuredInbound):
+    """An entity the material is about that the registry does not know — PROPOSE it here and
+    anchor to its `name`. Fill every field: `name` spelled exactly as the material spells it,
+    `entity_type` (person, organization, product, tool, repository, place or project), `role` (one
+    line on what it is), `aliases` (the other spellings the material uses for it), `summary` (the
+    What / Who paragraph of its page), `facts` (what the material establishes about it, one line
+    each) and `connections` (`[[Page]] — why`, naming pages that exist or the page you are filing).
+    The worker creates the entity page from this, unconfirmed, and a steward confirms it."""
+    name: str = ""
+    entity_type: str = ""
+    role: str = ""
+    aliases: list[str] = Field(default_factory=list)
+    summary: str = ""
+    facts: list[str] = Field(default_factory=list)
+    connections: list[str] = Field(default_factory=list)
+
+
+class NewAlias(StructuredInbound):
+    """A spelling the material uses for a REGISTERED entity that the registry does not list yet:
+    `entity` is that entity's id (or registered name) and `alias` the spelling, exactly as the
+    material writes it. The worker records it as a proposed spelling; a steward confirms it."""
+    entity: str = ""
+    alias: str = ""
 
 
 class MeetingAccount(StructuredInbound):
-    """The whole account of one meeting: `decision` is `file` or `triage`, and the rest is the page
-    set's CONTENT — never a page path, because code decides every path in this flow.
+    """The whole account of one meeting: `decision` is `file` (the one decision there is), and
+    the rest is the page set's CONTENT — never a page path, because code decides every path in
+    this flow.
 
     **Given the SAME treatment as `FilingAccount`, on a flow where the defect had not fired yet.**
     The mechanism is identical — a defaulted `decision` means the framework's output validation
@@ -222,42 +240,26 @@ class MeetingAccount(StructuredInbound):
     edits: list[OrdinaryEdit] = Field(default_factory=list)
     summary: str = ""
     findings: list[MeetingFinding] = Field(default_factory=list)
-    triage: MeetingTriage = Field(default_factory=MeetingTriage)
+    new_entities: list[NewEntity] = Field(default_factory=list)
+    new_aliases: list[NewAlias] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _complete_for_its_decision(self):
         """`FilingAccount._complete_for_its_decision`'s twin, mirroring
         `agent.parse_meeting_outcome`'s required-field rules and no others."""
-        if self.decision == "file":
-            if not (self.meeting_title or "").strip():
+        if not (self.meeting_title or "").strip():
+            raise ValueError(_needed(
+                "meeting_title",
+                "It names the meeting page the worker is about to write, and the drop's own "
+                "title hint is not a substitute for what the transcript turned out to be."))
+        for n, decided in enumerate(self.decisions, start=1):
+            if not (decided.title or "").strip():
                 raise ValueError(_needed(
-                    "meeting_title",
-                    "It names the meeting page the worker is about to write, and the drop's own "
-                    "title hint is not a substitute for what the transcript turned out to be."))
-            for n, decided in enumerate(self.decisions, start=1):
-                if not (decided.title or "").strip():
-                    raise ValueError(_needed(
-                        f"decisions[{n - 1}].title",
-                        "Every decision you describe becomes its own page, and the title is that "
-                        "page's name — decision number "
-                        f"{n} has none."))
-            return self
-
-        kind = (self.triage.kind or "").strip()
-        if kind not in agent_module.TRIAGE_KINDS:
-            raise ValueError(_needed(
-                "triage.kind",
-                f"Parking says WHY: one of {', '.join(agent_module.TRIAGE_KINDS)}."))
-        # A meeting always collects the PLURAL shape (a transcript can fail to anchor on several
-        # names at once), and so does `FilingAccount` — one rule, both flows. Neither schema offers
-        # the singular `name` the FILE channel still tolerates inbound: see the section comment
-        # above the accounts for why what is ASKED FOR is narrower than what is accepted.
-        if kind == agent_module.TRIAGE_UNRESOLVED_ENTITY and not [
-                n for n in self.triage.names if (n or "").strip()]:
-            raise ValueError(_needed(
-                "triage.names",
-                "They are the names a steward has to register, and the whole of what the "
-                "submitter is told about this park."))
+                    f"decisions[{n - 1}].title",
+                    "Every decision you describe becomes its own page, and the title is that "
+                    "page's name — decision number "
+                    f"{n} has none."))
+        _complete_proposals(self.new_entities)
         return self
 
 
@@ -291,42 +293,9 @@ class OrdinaryFinding(StructuredInbound):
     category: str = ""
 
 
-# This docstring is the JSON-schema DESCRIPTION the structured model reads, not a note to a
-# reader here — which is why `names` has to be named in it, and why there is no longer a singular
-# field beside it to reach for. A field described nowhere is a field the model will not reach for.
-class OrdinaryTriage(StructuredInbound):
-    """Why the capture was parked, when `decision` is `triage`. For an `unresolved-entity` park,
-    `names` carries every unresolved entity, each on its own — one name is a list of one. Never
-    crowd several into one entry: a steward registers them one at a time, and a joined string is
-    not any of them."""
-    kind: str = ""
-    names: list[str] = Field(default_factory=list)
-    judged_type: str = ""
-
-    @model_validator(mode="before")
-    @classmethod
-    def _fold_a_singular_name_into_the_list(cls, data):
-        """The producer is a MODEL and pydantic DROPS unknown keys: a `name`-shaped account would
-        validate into an EMPTY `names`, be refused for "no `triage.names`", and burn the single
-        `OUTPUT_RETRIES` on a field-name mismatch.
-
-        INBOUND ONLY, and never at the plural's expense: no field is added, `names` stays the one
-        thing downstream reads, and an account sending both keeps `names` untouched.
-        """
-        if not isinstance(data, dict):
-            return data
-        single = data.get("name")
-        if not isinstance(single, str) or not single.strip():
-            return data
-        existing = data.get("names")
-        if isinstance(existing, list) and any(str(n).strip() for n in existing):
-            return data
-        return {**data, "names": [single]}
-
-
 class FilingAccount(StructuredInbound):
-    """The whole account of one ordinary capture: `decision` is `file` or `triage`, and the rest is
-    judgment plus the page's own CONTENT.
+    """The whole account of one ordinary capture: `decision` is `file` (the one decision there
+    is), and the rest is judgment plus the page's own CONTENT.
 
     `decision` is REQUIRED and enum-constrained, and the two halves it obliges are checked below —
     see the section comment above for the paid run that established why.
@@ -339,52 +308,44 @@ class FilingAccount(StructuredInbound):
     edits: list[OrdinaryEdit] = Field(default_factory=list)
     summary: str = ""
     findings: list[OrdinaryFinding] = Field(default_factory=list)
-    triage: OrdinaryTriage = Field(default_factory=OrdinaryTriage)
+    new_entities: list[NewEntity] = Field(default_factory=list)
+    new_aliases: list[NewAlias] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _complete_for_its_decision(self):
-        """What THIS decision obliges — the conditional half a field-by-field schema cannot say.
-        `OrdinaryPage`'s own fields stay optional on purpose: a `triage` account legitimately
-        carries no page, so requiring them individually would refuse the correct outcome for a
-        capture this brain cannot place. The obligation is on the PAIRING."""
-        if self.decision == "file":
-            if not (self.page.title or "").strip():
-                raise ValueError(_needed(
-                    "page.title",
-                    "It is the page's name, its filename and the commit subject a human reads in "
-                    "`git log`, and there is nothing else to derive it from."))
-            if not (self.page.page_type or "").strip():
-                raise ValueError(_needed(
-                    "page.page_type",
-                    "Name the TYPE (note, decision or concept) — never a folder or a path; the "
-                    "worker puts the page where a page of that type goes."))
-            if not (self.page.body or "").strip():
-                raise ValueError(_needed(
-                    "page.body",
-                    "The worker writes the page from this account, so the page's own text has to "
-                    "be in it: return the whole page below its H1, with no frontmatter block. If "
-                    "this capture should not be filed at all, park it with `decision`: \"triage\" "
-                    "instead."))
-            return self
-
-        kind = (self.triage.kind or "").strip()
-        if kind not in agent_module.TRIAGE_KINDS:
+        """What a filing obliges — the conditional half a field-by-field schema cannot say. The
+        page's own fields stay optional on the schema so the refusal can NAME the missing one."""
+        if not (self.page.title or "").strip():
             raise ValueError(_needed(
-                "triage.kind",
-                f"Parking says WHY: one of {', '.join(agent_module.TRIAGE_KINDS)}."))
-        # One table, one lookup, whichever SHAPE the required field has: an `unresolved-entity`
-        # park owes a `names` LIST (a capture can name more than one, and one name is a list of
-        # one, exactly as `MeetingAccount` requires), an `unsupported-type` park owes a string. A
-        # list of blanks satisfies neither.
-        required = agent_module.TRIAGE_REQUIRED_FIELD[kind]
-        value = getattr(self.triage, required, "")
-        declared = ([v for v in value if (v or "").strip()] if isinstance(value, list)
-                    else (value or "").strip())
-        if not declared:
+                "page.title",
+                "It is the page's name, its filename and the commit subject a human reads in "
+                "`git log`, and there is nothing else to derive it from."))
+        if not (self.page.page_type or "").strip():
             raise ValueError(_needed(
-                f"triage.{required}",
-                f"It is the one thing the submitter is told about a {kind!r} park."))
+                "page.page_type",
+                "Name the TYPE (note, decision or concept) — never a folder or a path; the "
+                "worker puts the page where a page of that type goes."))
+        if not (self.page.body or "").strip():
+            raise ValueError(_needed(
+                "page.body",
+                "The worker writes the page from this account, so the page's own text has to "
+                "be in it: return the whole page below its H1, with no frontmatter block."))
+        _complete_proposals(self.new_entities)
         return self
+
+
+def _complete_proposals(new_entities) -> None:
+    """The three fields without which a proposed entity has no page — mirrored from
+    `agent._parse_new_entities`, the file channel's own rule, so both channels refuse the same
+    half-proposal one road earlier than the worker would."""
+    for n, proposed in enumerate(new_entities):
+        for field_name, why in (("name", "an entity is a name before it is anything else"),
+                                ("entity_type", "one of person, organization, product, tool, "
+                                                "repository, place or project"),
+                                ("summary", "the What / Who paragraph a steward reads before "
+                                            "approving the identity")):
+            if not (getattr(proposed, field_name, "") or "").strip():
+                raise ValueError(_needed(f"new_entities[{n}].{field_name}", f"{why}."))
 
 
 # The ONE per-backend part of the preamble. TWO numbered points, because the shared point after
@@ -403,7 +364,8 @@ ORDINARY_AGENTIC_ENVIRONMENT = (
     "   - `resolve_entities(names)` — the entity registry's own answer for a list of names: the "
     "canonical id, the aliases and the entity's page when one exists. A name it does not resolve "
     "verbatim comes back with `near` — the registered entities that name partly spells — which are "
-    "candidates for you to judge, not answers.\n"
+    "candidates for you to judge, not answers. A name that is genuinely new is proposed in your "
+    "account (`new_entities`), never written to `wiki/entities/` yourself.\n"
     "   - `write_page(path, content)` — the ONLY way you write anything, and the only writes it "
     "permits are ONE new `.md` page in this repo's fast-lane knowledge folders and your own "
     "outcome file. A page that already exists is not writable, however its name is spelled.\n"
@@ -612,13 +574,14 @@ class FilingToolbox:
 
     def resolve_entities(self, names) -> dict:
         """The registry's own answer for each name. `resolved: false` is a REAL answer the brief's
-        third anchoring outcome depends on — a name the registry does not know is a park, never an
-        invention — so an unresolved name is returned as itself rather than dropped.
+        third anchoring outcome depends on — a name the registry does not know is a PROPOSAL,
+        never an invention — so an unresolved name is returned as itself rather than dropped.
 
         An unresolved name carries `near`: the registered entities that name partly spells, through
         `gather.match_registry` — the SAME rule that built the seeded block, so asking again cannot
         get a different set. They are candidates to JUDGE. Resolving one is still declaring its id
-        and still meeting `gate_anchoring`; being unsure is still the park.
+        and still meeting `gate_anchoring`. A resolved entity says whether it is still `proposed`
+        (unconfirmed by a steward): it anchors exactly the same, and the agent should know it.
         """
         ps = gather.prompt_scalar
         registry = self.registry()
@@ -642,6 +605,7 @@ class FilingToolbox:
                 "id": ps(cid),
                 "name": ps(str(entity.get("name") or "")),
                 "aliases": [ps(str(a)) for a in (entity.get("aliases") or [])],
+                "proposed": bool(entity.get("proposed")),
                 "page": ps(gather.entity_page(rows, cid, registry.canonical_id)) or None,
             })
         return {"entities": out}
@@ -699,8 +663,7 @@ class PydanticFilingAgent:
         pricing.require_priced(settings.model)
 
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
-            corrective: str = "", reply: str = "", flow_note: str = "",
-            gathered: str = "") -> AgentRun:
+            corrective: str = "", flow_note: str = "", gathered: str = "") -> AgentRun:
         """The ordinary flow: file ONE capture, ITERATING over the checkout. Deliberately NOT
         parallel to `run_meeting` — a meeting is handed everything it could need, while an
         ordinary capture is one paragraph about a brain of unknown shape whose pages need not use
@@ -708,7 +671,7 @@ class PydanticFilingAgent:
         import asyncio
         return asyncio.run(self._run(
             worktree=worktree, material=material, hints=hints, submitted_by=submitted_by,
-            corrective=corrective, reply=reply, flow_note=flow_note, gathered=gathered))
+            corrective=corrective, flow_note=flow_note, gathered=gathered))
 
     def _register_tools(self, filer, toolbox: "FilingToolbox") -> None:
         """Register the five tools on one `Agent`, binding each to `toolbox`'s own body.
@@ -782,10 +745,11 @@ class PydanticFilingAgent:
             judgment, not answers — read the corpus and decide whether the material really is about
             one of them, and anchor by declaring THAT entity's id.
 
-            If none of them is it, or you are not sure which, park the capture as
-            `unresolved-entity`. Never invent an entity id, and never fall back to company-wide
-            scope to get something filed: a wrong anchor corrupts a timeline silently, a park costs
-            one question.
+            If none of them is it, the thing is NEW: propose it in your account's `new_entities`
+            (every field filled) and anchor to its name — the worker creates the entity page
+            beside yours and a steward confirms it. Never invent an entity id, and never fall back
+            to company-wide scope to get something filed: a wrong anchor corrupts a timeline
+            silently, a proposal costs a steward one click.
             """
             return _tool_payload(toolbox.resolve_entities(names))
 
@@ -805,7 +769,7 @@ class PydanticFilingAgent:
             """
             return _tool_payload(toolbox.write_page(path, content))
 
-    async def _run(self, *, worktree, material, hints, submitted_by, corrective, reply="",
+    async def _run(self, *, worktree, material, hints, submitted_by, corrective,
                    flow_note="", gathered="") -> AgentRun:
         import asyncio
 
@@ -829,7 +793,7 @@ class PydanticFilingAgent:
             header=ORDINARY_AGENTIC_SYSTEM_PROMPT_HEADER)
         prompt = agent_module.build_prompt(
             material=material, hints=hints, submitted_by=submitted_by, gathered_block=gathered,
-            outcome_channel=ORDINARY_AGENTIC_OUTCOME_CHANNEL, corrective=corrective, reply=reply,
+            outcome_channel=ORDINARY_AGENTIC_OUTCOME_CHANNEL, corrective=corrective,
             flow_note=flow_note)
 
         # Its OWN narrow try: the blanket handler below would report a configuration fault as
@@ -915,19 +879,18 @@ class PydanticFilingAgent:
         run.tool_calls = int(getattr(usage, "tool_calls", 0) or 0)
 
     def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
-                    source_page_path: str, corrective: str = "", reply: str = "",
-                    gathered: str = "") -> AgentRun:
+                    source_page_path: str, corrective: str = "", gathered: str = "") -> AgentRun:
         """One structured call: the brief as instructions, the item as the prompt, a typed account
         back. Deliberately tool-less — everything it could fetch is already in the prompt, `gathered`
         included, and code writes every page in the set."""
         import asyncio
         return asyncio.run(self._run_meeting(
             worktree=worktree, material=material, meeting_meta=meeting_meta, registry=registry,
-            source_page_path=source_page_path, corrective=corrective, reply=reply,
+            source_page_path=source_page_path, corrective=corrective,
             gathered=gathered))
 
     async def _run_meeting(self, *, worktree, material, meeting_meta, registry, source_page_path,
-                           corrective, reply="", gathered="") -> AgentRun:
+                           corrective, gathered="") -> AgentRun:
         import asyncio
 
         # Imported HERE, never at module scope — see the module docstring.
@@ -952,7 +915,7 @@ class PydanticFilingAgent:
             header=MEETING_SYSTEM_PROMPT_HEADER)
         prompt = agent_module.build_meeting_prompt(
             material=material, meeting_meta=meeting_meta, registry=registry,
-            source_page_path=source_page_path, corrective=corrective, reply=reply,
+            source_page_path=source_page_path, corrective=corrective,
             gathered_block=gathered, outcome_channel=OUTCOME_CHANNEL)
 
         # Their OWN narrow try: the blanket handler below would report a configuration fault as

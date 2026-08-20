@@ -20,8 +20,8 @@ from stigmergy.librarian.errors import LibrarianConfigError
 ACL_V1 = '{"default": [], "rules": [{"path": "wiki/**", "acl": []}]}'
 ACL_V2_NARROWED = '{"default": [], "rules": [{"path": "wiki/**", "acl": ["leadership"]}]}'
 
-REGISTRY_V1 = '{"entities": {"acme": {"name": "Acme", "type": "organization", "aliases": []}}}'
-REGISTRY_V2 = ('{"entities": {"acme": {"name": "Acme", "type": "organization", "aliases": []}, '
+REGISTRY_V1 = '{"entities": {"acme-corp": {"name": "Acme", "type": "organization", "aliases": []}}}'
+REGISTRY_V2 = ('{"entities": {"acme-corp": {"name": "Acme", "type": "organization", "aliases": []}, '
               '"globex": {"name": "Globex", "type": "organization", "aliases": []}}}')
 
 LINTER_V1 = "#!/usr/bin/env python3\nVERSION = 1\n"
@@ -94,7 +94,7 @@ def test_an_uncommitted_registry_edit_does_not_change_what_load_registry_reads(t
 
     registry = base_inputs.load_registry(repo, _base(sha1))
     assert registry.canonical_id("Globex") is None        # V2-only entity must not be visible
-    assert registry.canonical_id("Acme") == "acme"
+    assert registry.canonical_id("Acme") == "acme-corp"
 
 
 def test_an_uncommitted_linter_edit_does_not_change_what_linter_at_materializes(two_commit_repo):

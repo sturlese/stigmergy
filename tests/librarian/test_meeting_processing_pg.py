@@ -12,7 +12,7 @@ import pathlib
 
 import pytest
 
-from stigmergy.capture import dispositions, queue, schema
+from stigmergy.capture import queue, schema
 from stigmergy.librarian import agent as agent_module
 from stigmergy.librarian import gates, processing, worker
 from stigmergy.librarian import page as page_policy
@@ -190,49 +190,36 @@ def test_decision_pages_carry_the_required_frontmatter(rig, clean_queue):
     assert f"submitted_by: {support.DEFAULT_SUBMITTER}" in page_text
 
 
-# ── an ordinary capture claiming type: meeting still parks (zone confinement) ───────────────────
-def test_an_ordinary_capture_claiming_meeting_type_still_parks(rig, clean_queue):
+# ── an ordinary capture claiming type: meeting is the librarian's fault (zone confinement) ──────
+def test_an_ordinary_capture_claiming_meeting_type_is_refused_as_the_librarians_fault(
+        rig, clean_queue):
     env, deps = rig
     # submit through the ORDINARY kind, not "meeting" — the fast lane's own whitelist must still
     # refuse `type: meeting` for a row claimed by the ordinary flow.
-    support.submit(clean_queue, deps, "DOUBLE:triage-type=meeting\nA note about a meeting.")
+    support.submit(clean_queue, deps, "DOUBLE:type=meeting\nA note about a meeting.")
     item, result = worker.process_next(clean_queue, deps)
-    assert result.status == schema.TRIAGE
+    assert result.status == schema.FAILED, result.report.get("summary")
     assert item["kind"] != schema.MEETING
 
 
-# ── several unresolved names produce ONE ask naming all of them ─────────────────────────────────
-def test_several_unresolved_names_produce_one_ask_naming_all(rig, clean_queue):
+# ── several unregistered names are PROPOSED together, and the whole set files ──────────────────
+def test_several_unregistered_names_are_proposed_together_and_the_set_files(rig, clean_queue):
+    """OLD BEHAVIOUR: one ask naming both, the whole set parked until a person answered. The
+    distiller proposes both entities in its account; code creates both pages beside the set, each
+    decision anchored to its own newborn, one commit."""
     env, deps = rig
     item, result = _file_meeting(
         clean_queue, deps,
-        "DOUBLE:meeting-triage=Nebula Systems,Quantum Labs\nA transcript about two prospects.")
-    assert result.status == schema.NEEDS_INPUT
-    assert "Nebula Systems" in result.report["summary"]
-    assert "Quantum Labs" in result.report["summary"]
-    assert result.report.get("unresolved_names") == ["Nebula Systems", "Quantum Labs"]
-
-
-def test_a_non_resolving_reply_parks_the_whole_capture_atomically(rig, clean_queue):
-    env, deps = rig
-    before = support.branch_sha(env.bare)
-    ack = support.submit_meeting(clean_queue, deps,
-                                 "DOUBLE:meeting-triage=Nebula Systems,Quantum Labs\nTranscript.")
-    worker.process_next(clean_queue, deps)   # -> needs_input, asked_at stamped
-    queue.record_reply(clean_queue, ack["id"], answer="Nebula Systems, still not sure", actor=support.DEFAULT_SUBMITTER)
-    item, result = worker.process_next(clean_queue, deps)
-    assert result.status == schema.TRIAGE
-    assert support.branch_sha(env.bare) == before   # nothing committed
-
-
-def test_a_resolving_reply_files_the_whole_set(rig, clean_queue):
-    env, deps = rig
-    ack = support.submit_meeting(clean_queue, deps,
-                                 "DOUBLE:meeting-triage=Acme Corp\nTranscript about Acme.")
-    worker.process_next(clean_queue, deps)   # -> needs_input
-    queue.record_reply(clean_queue, ack["id"], answer="Acme Corp", actor=support.DEFAULT_SUBMITTER)
-    item, result = worker.process_next(clean_queue, deps)
-    assert result.status == schema.FILED
+        "DOUBLE:meeting-propose=Nebula Systems,Quantum Labs\nA transcript about two prospects, "
+        "Nebula Systems and Quantum Labs.")
+    assert result.status == schema.FILED, result.report.get("summary")
+    _, sha = result.result_ref.rsplit("@", 1)
+    changed = support.changed_paths(env.bare, sha)
+    assert "wiki/entities/Nebula Systems.md" in changed and "wiki/entities/Quantum Labs.md" in changed
+    assert [e["id"] for e in result.report["entities_proposed"]] == ["nebula-systems", "quantum-labs"]
+    anchors = [row["anchored_to"] for row in result.report["filed_meeting"]["decisions"]]
+    assert anchors == ["Nebula Systems (`nebula-systems`)", "Quantum Labs (`quantum-labs`)"]
+    assert "It proposes 2 new entities" in result.report["summary"]
 
 
 
@@ -1139,7 +1126,7 @@ def test_only_the_touched_entitys_view_regenerates_a_sibling_is_untouched(
     # it must touch `views/acme.md` and NOTHING under `views/globex.md`.
     _, meeting_sha = result.result_ref.rsplit("@", 1)
     view_changed = support.changed_paths(env.repo, after_all)
-    assert "views/acme.md" in view_changed
+    assert "views/acme-corp.md" in view_changed
     assert "views/globex.md" not in view_changed
     assert meeting_sha != after_all                        # confirms a SECOND commit really landed
 
@@ -1158,329 +1145,6 @@ def test_only_the_touched_entitys_view_regenerates_a_sibling_is_untouched(
 # Its one unique assertion (the transcript's date reaches the filed decision page) moved up into
 # that test; the convention's own red proof and benign twin live in
 # `tests/gardener/test_checks_dossiers.py::check_date_bearing_body_links`.
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-# A re-file after a park must not throw the distillation away.
-#
-# THE FINDING, from a real-agent run over a 55 KB transcript, in the sequence that produced it:
-#
-#   1. Pass 2 distilled SIX decisions and was refused `anchoring/unresolved`. Nothing was wrong
-#      with the distillation; the entity it anchored on simply did not exist in the registry yet.
-#      The refused diff lists all six.
-#   2. A steward minted the entity and requeued.
-#   3. Pass 3 threw that distillation away, re-read the 55 KB from scratch, and produced THREE.
-#      Two of the three lost decisions are ones an attendee confirms were really taken.
-#
-# The filed decisions read as faithful, and were incomplete. No test could have produced this:
-# every gate was correct, every page was lint-clean, and the second distillation looked perfectly
-# plausible on its own.
-#
-# The rig below is that sequence, with the one substitution a test needs: a re-distillation is made
-# DELIBERATELY LOSSY, so "the decisions were preserved" is a claim about the reuse rather than about
-# the double happening to be deterministic.
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-_UNREGISTERED = "Ledgerly"
-_PARKING_MATERIAL = ("DOUBLE:decisions=2\n"
-                     f"DOUBLE:meeting-anchor={_UNREGISTERED}\n"
-                     "Alice and Bob agreed to make Ledgerly the single source of truth for internal "
-                     "fund data, and to extract it in two tracks.")
-
-
-class _LossyMeetingAgent:
-    """An agent whose `run_meeting` produces FEWER decisions than the parked pass did, and counts
-    its calls.
-
-    This is the substitution that makes the test prove something. The offline double is
-    deterministic, so re-running it over identical material would produce the identical
-    distillation and "the decisions survived" would be true whether or not any reuse happened. A
-    model is not deterministic — that is the entire finding — so the second pass here drops a
-    decision on purpose. If the reuse works, `calls` stays at zero and both decisions file; if it
-    does not, the loss is visible as exactly the shape a human caught by hand.
-    """
-
-    def __init__(self, inner):
-        self.inner = inner
-        self.calls = 0
-
-    def run(self, **kw):
-        return self.inner.run(**kw)
-
-    def run_meeting(self, **kw):
-        self.calls += 1
-        run = self.inner.run_meeting(**kw)
-        if run.outcome is not None and len(run.outcome.decisions) > 1:
-            run.outcome = dataclasses.replace(
-                run.outcome, decisions=tuple(run.outcome.decisions[:1]),
-                summary="a lossy re-distillation: one decision dropped")
-        return run
-
-
-def _register(env, deps, name: str) -> None:
-    """A steward mints the entity: `ops/entity-registry.json` gains it AND a real anchored page
-    lands on `main`, in one pushed commit — the shape governed entity birth actually produces
-    (`entities.birth.commit_message`: "Registry regenerated from wiki/entities/ in the same
-    commit").
-
-    **Written into the REPO, not into `deps.registry`.** `process_meeting_item` reloads the
-    registry from the base commit on every pass (`base_inputs.load_registry(deps.repo, base)`), so
-    an in-memory mutation would be invisible to the gate this test turns on — and the test would
-    then be asserting something production cannot do. The in-memory copy is updated too, because
-    the post-filing view hook reads `deps.registry`.
-    """
-    entity_id = name.lower()
-    deps.registry.entities[entity_id] = {"name": name, "type": "organization", "aliases": []}
-    os.makedirs(os.path.join(env.repo, "wiki", "entities"), exist_ok=True)
-    page = _GLOBEX_PAGE.replace("Globex", name).replace("globex", entity_id)
-    with open(os.path.join(env.repo, "wiki", "entities", f"{name}.md"), "w") as f:
-        f.write(page)
-    registry_path = os.path.join(env.repo, "ops", "entity-registry.json")
-    with open(registry_path, encoding="utf-8") as f:
-        data = json.load(f)
-    data["entities"][entity_id] = {"name": name, "type": "organization", "aliases": []}
-    with open(registry_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-    support.commit_and_push(env.repo, f"feat(entity): a steward mints {name}")
-
-
-def _outcome_column(conn, submission_id):
-    with conn.cursor() as cur:
-        cur.execute("SELECT outcome FROM capture_queue WHERE id = %s", (submission_id,))
-        return cur.fetchone()[0]
-
-
-def test_a_park_keeps_the_distillation_it_produced(clean_queue, rig):
-    """Step 1 of the walk: a complete, correct distillation refused for a reason that has nothing
-    to do with its content. The decisions must survive the park, in the row itself — they used to
-    exist only inside a discarded ephemeral worktree and a refused-diff file."""
-    env, deps = rig
-    item, result = _file_meeting(clean_queue, deps, _PARKING_MATERIAL)
-    assert result.status == schema.TRIAGE          # parked on `anchoring/unresolved`
-    assert _UNREGISTERED in result.report["summary"]
-
-    stored = _outcome_column(clean_queue, item["id"])
-    assert stored is not None, "the parked distillation was thrown away — this is the defect"
-    assert stored["version"] == processing.OUTCOME_REUSE_VERSION
-    titles = [d["title"] for d in stored["raw"]["decisions"]]
-    assert len(titles) == 2, f"both decisions must survive the park, got {titles}"
-
-
-def test_the_re_file_reuses_the_parked_distillation_and_spends_no_agent_pass(clean_queue, rig):
-    """The whole sequence, as the walk ran it: park → mint → requeue → filed, with the parked
-    decisions preserved and the model never asked to read the transcript again."""
-    env, deps = rig
-    item, result = _file_meeting(clean_queue, deps, _PARKING_MATERIAL)
-    assert result.status == schema.TRIAGE
-
-    _register(env, deps, _UNREGISTERED)                       # the steward mints it...
-    dispositions.requeue(clean_queue, item["id"], actor="steward@example.com", note="minted")
-
-    lossy = _LossyMeetingAgent(deps.agent)                    # ...and the model would now LOSE one
-    _, refiled = worker.process_next(clean_queue, dataclasses.replace(deps, agent=lossy))
-
-    assert refiled.status == schema.FILED
-    assert lossy.calls == 0, (
-        "the re-file called the agent again — that is the defect: a good distillation discarded "
-        "because of an anchoring failure that had nothing to do with its content")
-    filed = refiled.report["filed_meeting"]["decisions"]
-    assert len(filed) == 2, (
-        f"the re-file filed {len(filed)} decision page(s) where the parked pass had 2 — knowledge "
-        f"was lost between the park and the re-file, which is exactly the defect this guards")
-    # ...and the pages really are in the repo, anchored to the newly minted entity — read back
-    # from the bare remote's object database, never from the (removed) worktree.
-    for row in filed:
-        page = support.read_filed_page(env.bare, "main", row["path"])
-        assert f'entity: ["{_UNREGISTERED.lower()}"]' in page, (
-            f"the re-filed decision page is not anchored to the minted entity:\n{page[:400]}")
-
-
-def test_the_reused_filing_says_so_in_the_report(clean_queue, rig):
-    """An operator reading a re-filed meeting must be able to tell which happened. The alternative
-    used to be silence, and silence is what let the loss through."""
-    env, deps = rig
-    item, _ = _file_meeting(clean_queue, deps, _PARKING_MATERIAL)
-    _register(env, deps, _UNREGISTERED)
-    dispositions.requeue(clean_queue, item["id"], actor="steward@example.com", note="minted")
-
-    _, refiled = worker.process_next(clean_queue, deps)
-    assert refiled.report["distillation_reuse"]["reused"] is True
-    assert "re-filed the distillation from the parked pass" in refiled.report["summary"]
-    assert "the transcript was not read again" in refiled.report["summary"]
-
-
-def test_a_genuine_re_distillation_diffs_the_two_outcomes(clean_queue, rig, monkeypatch):
-    """**The instrument, which is the other half of the fix.** When the stored outcome genuinely
-    cannot be re-filed, the model runs again — and the report must DIFF what changed, because a
-    fresh distillation looks perfectly plausible on its own and diffing is the only reason the
-    original loss was ever noticed.
-
-    Forced here by making the stored outcome un-refilable (its declared anchor is still
-    unresolvable — the steward minted nothing) while the fresh pass anchors normally and drops a
-    decision. So: 2 parked, 1 filed, and the report has to name the one that vanished."""
-    env, deps = rig
-    item, _ = _file_meeting(clean_queue, deps, _PARKING_MATERIAL)
-    parked_titles = [d["title"] for d in _outcome_column(clean_queue, item["id"])["raw"]["decisions"]]
-    dispositions.requeue(clean_queue, item["id"], actor="steward@example.com",
-                         note="requeued without minting anything")
-
-    # The fresh pass ignores the `meeting-anchor` directive (so it CAN anchor) and drops one.
-    real_run_meeting = deps.agent.run_meeting
-
-    def _anchoring_but_lossy(**kw):
-        run = real_run_meeting(**{**kw, "material": kw["material"].replace(
-            f"DOUBLE:meeting-anchor={_UNREGISTERED}\n", "")})
-        run.outcome = dataclasses.replace(run.outcome,
-                                          decisions=tuple(run.outcome.decisions[:1]))
-        return run
-
-    monkeypatch.setattr(deps.agent, "run_meeting", _anchoring_but_lossy)
-    _, refiled = worker.process_next(clean_queue, deps)
-
-    assert refiled.status == schema.FILED
-    reuse = refiled.report["distillation_reuse"]
-    assert reuse["reused"] is False
-    assert len(reuse["dropped"]) == 1, (
-        f"a decision vanished between the parked pass ({parked_titles}) and this filing, and the "
-        f"report did not name it: {reuse}")
-    assert "RE-DISTILLED" in refiled.report["summary"]
-    assert "DROPPED" in refiled.report["summary"]
-
-
-def test_a_changed_reply_re_runs_the_model_rather_than_reusing(clean_queue, rig):
-    """The reuse precondition that is not about the material. The submitter's reply is INPUT to the
-    distillation (`agent.build_prompt` hands it to the model), and in the real walk pass 2 came
-    AFTER a `brain_reply` — so this is a live case, not a hypothetical. A new answer means new
-    information, and reusing an outcome produced without it would silently ignore what the human
-    just said."""
-    env, deps = rig
-    item, _ = _file_meeting(clean_queue, deps, _PARKING_MATERIAL)
-    _register(env, deps, _UNREGISTERED)
-    dispositions.requeue(clean_queue, item["id"], actor="steward@example.com", note="minted")
-    with clean_queue.cursor() as cur:   # the submitter answers, after the park
-        cur.execute("UPDATE capture_queue SET reply = %s WHERE id = %s",
-                    ("it is about Ledgerly, the fund data platform", item["id"]))
-
-    counting = _LossyMeetingAgent(deps.agent)
-    _, refiled = worker.process_next(clean_queue, dataclasses.replace(deps, agent=counting))
-    assert counting.calls == 1, "a new reply must reach the model, not be skipped by a reuse"
-    assert refiled.status == schema.FILED
-
-
-def test_a_terminal_row_does_not_keep_the_distillation(clean_queue, rig):
-    """Retention hygiene, and the reason it is not merely tidiness: the stored value holds the full
-    drafted body of every page. Once a row is filed nothing can ever reuse it, so keeping it beside
-    a closed row is accumulation with no consumer — the shape `capture.retention` exists to
-    prevent."""
-    env, deps = rig
-    item, result = _file_meeting(clean_queue, deps,
-                                 "DOUBLE:decisions=2\nA transcript about Acme's renewal.")
-    assert result.status == schema.FILED
-    assert _outcome_column(clean_queue, item["id"]) is None
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-# A CHAIN of parks — the first version of the fix above reproduced the very loss it was written to
-# prevent, one step earlier, inside itself.
-#
-# `queue.finish`'s COALESCE REPLACES on a non-None value, so this sequence lost knowledge with
-# nothing reporting it:
-#
-#   park (2 decisions stored) → steward requeues having minted the WRONG name → the reuse is
-#   vetoed → the fresh model run yields 1 → **the 1 overwrites the 2** → mint the right name →
-#   requeue → the reuse re-files 1 decision and the report says "1 decision(s) preserved".
-#
-# Preserved from the *last* park, and silent about the loss before it — reassuring about exactly
-# the failure the instrument exists to surface. `first_park_titles` is carried forward untouched so
-# the diff outlives the chain and a process restart, and a park that shrinks the distillation says
-# so at the pass that caused it rather than waiting for a filing that may never come.
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-class _TruncatingMeetingAgent:
-    """Keeps only the first decision, and keeps DECLARING the unresolved anchor so the pass parks
-    again — which is what forms the chain. Distinct from `_LossyMeetingAgent` above, which is used
-    on a pass that is expected to FILE."""
-
-    def __init__(self, inner):
-        self.inner = inner
-        self.calls = 0
-
-    def run(self, **kw):
-        return self.inner.run(**kw)
-
-    def run_meeting(self, **kw):
-        self.calls += 1
-        run = self.inner.run_meeting(**kw)
-        if run.outcome is not None and len(run.outcome.decisions) > 1:
-            run.outcome = dataclasses.replace(run.outcome,
-                                              decisions=tuple(run.outcome.decisions[:1]))
-        return run
-
-
-def test_a_second_park_does_not_silently_replace_a_richer_first_one(clean_queue, rig):
-    """Step 2 of the chain, in isolation: the stored outcome IS replaced (this function does not
-    overrule the gates about which distillation is fileable), but the first park's titles survive
-    and the park report names what was dropped — at the pass that dropped it."""
-    env, deps = rig
-    item, first = _file_meeting(clean_queue, deps, _PARKING_MATERIAL)
-    assert first.status == schema.TRIAGE
-    original = [d["title"] for d in _outcome_column(clean_queue, item["id"])["raw"]["decisions"]]
-    assert len(original) == 2
-
-    # requeued WITHOUT minting: the reuse is vetoed, so the model re-runs — and loses one
-    dispositions.requeue(clean_queue, item["id"], actor="steward@example.com", note="not yet")
-    truncating = _TruncatingMeetingAgent(deps.agent)
-    _, second = worker.process_next(clean_queue, dataclasses.replace(deps, agent=truncating))
-
-    assert second.status == schema.TRIAGE and truncating.calls >= 1
-    stored = _outcome_column(clean_queue, item["id"])
-    assert len(stored["raw"]["decisions"]) == 1          # the smaller set really did replace it...
-    assert stored["first_park_titles"] == original       # ...and the original survives for the diff
-    # ...and the loss is REPORTED here, not deferred to a filing that may never happen
-    assert second.report["distillation_loss"]["dropped"] == [original[1]]
-    assert "SMALLER distillation" in second.report["summary"]
-
-
-def test_across_a_chain_of_parks_the_filing_diffs_against_the_FIRST_park(clean_queue, rig):
-    """The whole chain, end to end and three hops deep. The filing must not say "preserved": a
-    decision the capture started with is missing, and the report has to name it even though no
-    model ran on the pass that filed."""
-    env, deps = rig
-    item, _ = _file_meeting(clean_queue, deps, _PARKING_MATERIAL)
-    original = [d["title"] for d in _outcome_column(clean_queue, item["id"])["raw"]["decisions"]]
-
-    dispositions.requeue(clean_queue, item["id"], actor="steward@example.com", note="not yet")
-    _, second = worker.process_next(
-        clean_queue, dataclasses.replace(deps, agent=_TruncatingMeetingAgent(deps.agent)))
-    assert second.status == schema.TRIAGE
-
-    _register(env, deps, _UNREGISTERED)                  # NOW the steward mints it
-    dispositions.requeue(clean_queue, item["id"], actor="steward@example.com", note="minted")
-    counting = _LossyMeetingAgent(deps.agent)
-    _, filed = worker.process_next(clean_queue, dataclasses.replace(deps, agent=counting))
-
-    assert filed.status == schema.FILED
-    assert counting.calls == 0                           # the stored (smaller) outcome was reused
-    reuse = filed.report["distillation_reuse"]
-    assert reuse["reused"] is False, (
-        "the filing claimed the parked distillation was preserved. It preserved the LAST park; a "
-        "decision this capture started with is missing, which is the loss this diff exists for")
-    assert reuse["model_ran"] is False                   # ...and no model ran on THIS pass
-    assert reuse["dropped"] == [original[1]]
-    assert "an EARLIER pass re-read the transcript" in filed.report["summary"]
-    assert "DROPPED" in filed.report["summary"]
-
-
-def test_a_clean_single_park_still_reports_preserved_the_benign_twin(clean_queue, rig):
-    """The benign twin. The chain logic must not make every reuse report a loss: one park, one
-    mint, one re-file — nothing dropped, and the report says preserved. Without this, a
-    `_reuse_note` that always took the diff branch would pass both tests above."""
-    env, deps = rig
-    item, _ = _file_meeting(clean_queue, deps, _PARKING_MATERIAL)
-    _register(env, deps, _UNREGISTERED)
-    dispositions.requeue(clean_queue, item["id"], actor="steward@example.com", note="minted")
-
-    _, filed = worker.process_next(clean_queue, deps)
-    assert filed.status == schema.FILED
-    assert filed.report["distillation_reuse"]["reused"] is True
-    assert "distillation_loss" not in filed.report
 
 # ── removed with ingest-time figure verification, and named rather than dropped in silence ──────
 # A check that stops running must be impossible to miss, so what left is listed here instead of

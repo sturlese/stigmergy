@@ -144,6 +144,12 @@ def read_filed_page(repo: str, ref: str, path: str) -> str:
     return gitcmd.run("show", f"{ref}:{path}", cwd=repo).stdout
 
 
+def commit_message_body(repo: str, sha: str) -> str:
+    """The whole commit message, subject and body — what `git log` answers "where did this entity
+    come from" with."""
+    return gitcmd.run("log", "-1", "--format=%B", sha, cwd=repo).stdout
+
+
 def commit_subject(repo: str, sha: str) -> str:
     """One commit's subject line — the surface a title's characters have to survive into as well as
     the filename, the H1 and the `title` field."""
