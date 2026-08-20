@@ -9,6 +9,59 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
+## [Unreleased]
+
+The admin console grows up from a quick ops skin into a control room a steward or an admin can
+read without the runbook open: grouped navigation, a unified inbox, plain-language labels for every
+system word (the raw word one hover away), a "how to read this page" explainer per page, and
+charts — every one with a table twin — in the README's own "colour is who decides" key, validated
+for colour-vision deficiency in both modes.
+
+### Added
+- `/admin/api/inbox` — everything parking on a human as ONE list, the same read the Slack
+  doorbell rings from (`server.review.items_for_doorbell`), with per-kind counts; the sidebar badge
+  is its count
+- `/admin/api/entities/registry` and `/admin/api/entities/resolve` — the registry this server
+  serves (the index's snapshot, else the `--entity-registry` file) and the pre-mint check over it
+  with the mint gate's own folds: `registered` (requeue, nothing to mint), `collides` (the gate
+  will refuse it — alias it in the knowledge repo instead of minting a twin), `similar` (advisory),
+  `clear`. Both entity routes attach a verdict per unresolved name; the Approve form checks the
+  Name and every Alias live as the steward types; the Entities page carries a searchable registry
+  browser
+- `/admin/api/metrics?days=` — captures by arrival day and outcome (`queue.outcomes_by_day`, new
+  beside `counts_by_status`), capture→filed samples, `ask` outcomes per day shaped with the pilot
+  report's own predicates, calls per day/tool/identity, each job's run history, the latest
+  decisions, repair counts
+- `/admin/api/meta` ships every closed vocabulary the console renders (statuses with their parked
+  and terminal subsets, situations, repair kinds, severities, item kinds, decision doors), so the
+  frontend never hardcodes a list that could drift
+- the Dashboard's live write path — the window's captures flowing through the model's draft and
+  code's gates into landed / parked / refused / could-not-finish, with real counts
+
+### Changed
+- the console's pages: Dashboard, Inbox, Captures, Entities, Repairs, Gardener, Index, Worker,
+  Jobs, Digest, Activity (the old tab names `overview`/`queue`/`crons` still route); every page
+  opens with a collapsible explainer, pages with a time axis share one 7/30/90-day window
+- the frontend is one module per page under `static/assets/views/`, with `copy.js` (the
+  vocabulary), `charts.js` (SVG charts built with `createElementNS`) and `state.js`; the static
+  discipline tests follow the split
+- the Jobs page renders no levers at all without the GitHub token, instead of disabled ones
+
+### Fixed
+- the shell and its assets carry `cache-control: no-cache` — a deploy that renames a module no
+  longer leaves a browser running the old `app.js` against new imports for hours (a blank page)
+- inline `style` attributes, which `style-src 'self'` silently refused, are gone: every style goes
+  through the CSSOM
+- the librarian's placeholder for a park that named nothing (`something unnamed`) is refused by
+  value at the terminal name gate (`entities.birth`) — every mint door, not only the prefill rule;
+  `entities.situations.is_mintable_name` is the one comparison, and the console's per-name checks
+  carry it as `mintable` so no surface offers a button for it
+- `metrics` runs off the event loop and every read of a table that only grows is bounded in SQL:
+  `decisions.recent_decisions` (the ledger feed), `repair.store.counts_by_status` (the whole-table
+  histogram), a ceiling on the pending proposals the console reads, `pilot_report.answer_shape_by_day`
+  (the report's own classifier, grouped in SQL and pinned against the Python original)
+- the pre-mint similarity listing folds the registry once per request, not once per name
+
 ## [0.5.0] - 2026-08-20
 
 v0.4.0's follow-up tracker, emptied: the five issues the open-models port filed against itself
