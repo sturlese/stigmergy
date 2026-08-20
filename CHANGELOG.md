@@ -9,13 +9,14 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
-## [Unreleased]
+## [0.6.0] - 2026-08-20
 
 The admin console grows up from a quick ops skin into a control room a steward or an admin can
 read without the runbook open: grouped navigation, a unified inbox, plain-language labels for every
 system word (the raw word one hover away), a "how to read this page" explainer per page, and
 charts — every one with a table twin — in the README's own "colour is who decides" key, validated
-for colour-vision deficiency in both modes.
+for colour-vision deficiency in both modes — which a steward can now choose between, or leave to
+the device.
 
 ### Added
 - `/admin/api/inbox` — everything parking on a human as ONE list, the same read the Slack
@@ -64,6 +65,18 @@ for colour-vision deficiency in both modes.
   histogram), a ceiling on the pending proposals the console reads, `pilot_report.answer_shape_by_day`
   (the report's own classifier, grouped in SQL and pinned against the Python original)
 - the pre-mint similarity listing folds the registry once per request, not once per name
+- `answer_shape_by_day`'s SQL mirror of `shape_of` no longer casts `result ->> 'citations'` to
+  `int`. `audit_log.result` is JSONB with nothing under it, and an `ask` row older than
+  `audit_summary` carries `citations` as the LIST of page paths — so the cast raised on real data
+  while every test that fed it today's integer stayed green, and since eight of the console's
+  eleven pages fetch `metrics`, one legacy row rendered almost the whole console as failed. The
+  mirror now asks the question `shape_of` asks — truthiness — as a JSONB comparison against the
+  falsy set, which cannot raise whatever a past writer left in the column
+- the deterministic-check count is gone from the prose that nothing pins: six sites said "nine"
+  and the live workflow said "eight" for a tuple of ten. The package docstrings, the console's two
+  copies of the cron description and the cron template now say "the deterministic checks", which
+  survives the next one being added; the sites that state the number derive it. Beside it, a guard
+  that every `*.py` a code map names in backticks exists
 
 ## [0.5.0] - 2026-08-20
 
