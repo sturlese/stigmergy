@@ -20,11 +20,11 @@ measures.
 
 | Entry | File |
 |---|---|
-| `make retrieval-golden` → Recall@5 per arm | `run_retrieval.py` (needs `make db-up`. The target passes neither `--rebuild` nor `--repo`, so it scores whatever index is already in the local database. Pass `RETRIEVAL_ARGS="--rebuild --repo evals/corpus"` to measure the corpus, the way `qa-golden` bakes in) |
+| `make retrieval-golden` → Recall@5 per arm | `run_retrieval.py` (needs `make db-up`. The target passes neither `--rebuild` nor `--repo`, so it scores whatever index is already in the local database. Pass `RETRIEVAL_ARGS="--rebuild --repo evals/corpus"` to measure the corpus, the way `qa-golden` bakes in — and `EMBEDDER=openai`, because this target's default embedder is the fake one: a plumbing self-check, never a measurement) |
 | retrieval golden set | `retrieval_golden.json` — page-id expectations, part of them carrying `filters.entity` |
-| `make qa-golden` → honesty · groundedness · refutation · retry rate · seconds/question | `run_qa.py` (needs `make db-up` + `OPENAI_API_KEY`) |
+| `make qa-golden` → honesty · groundedness · refutation · retry rate · seconds/question | `run_qa.py` (needs `make db-up` and TWO credentials that need not be the same one: the embedder's — `OPENAI_API_KEY`, or `EMBED_API_KEY` when `$EMBED_BASE_URL` points at another host — and the answer model's, since `--model` IS `ANSWER_MODEL` in both its forms: a bare name is OpenAI, a provider-prefixed candidate authenticates with its own provider's key) |
 | QA golden set | `qa_golden.json`; ACL-probe identities in `qa_identities.json` |
-| `make filing-golden` → nine quality facets, each with its own denominator | `run_filing.py` (needs `make db-up`, `gitleaks` on PATH, and the filing model's provider key. `BACKEND=double` is the keyless plumbing self-check; `--kinds` measures one kind of capture only) |
+| `make filing-golden` → nine quality facets, each with its own denominator | `run_filing.py` (needs `make db-up`, `gitleaks` on PATH, and the filing model's provider key. `BACKEND=double` is the keyless plumbing self-check; `--kinds` measures a subset of the capture kinds) |
 | filing golden (14 captures, 16 scored phases) | `filing/captures/manifest.json` (what is submitted) + `filing/expected/expectations.json` (the yardstick), kept apart on purpose |
 | `make gates` → one verdict, one exit code | `run_gates.py`; the armed thresholds live in `bars.py`. It arms the two READ instruments only |
 | the frozen reference corpus | `corpus/` — committed pages + `PROVENANCE.json` + its own `ops/entity-registry.json`. For `run_qa.py`, `--repo` is also what gives `Settings` an alias map; without it entity-first resolution is inert for the whole measurement. Guarded keylessly by `tests/evals/test_golden_corpus_fixture.py` |
@@ -43,7 +43,9 @@ index from `--repo` when asked, and scores Recall@5 for four arms: `fts`, `vec`,
 question through the full answering loop. `_score` is deliberately non-literal: numeric equivalence
 via `answer/numbers.py`, date equivalence, and `cites` accepting any page in an expected chain.
 `_aggregate` reports the three quality axes with separate denominators, plus retry rate and
-seconds/question — latency numbers that carry no bar.
+seconds/question — latency numbers that carry no bar. The CANDIDATE is `--model`, and it rides both
+the report and the history row: the goldens are model-parameterized on purpose, so one series holds
+runs from several models and a score is only ever read beside the model that produced it.
 
 **`run_filing.py`** — submits each golden capture through `capture.queue.submit` and drains it with
 `worker.process_next`, one at a time, against a throwaway bare-remote-plus-clone seeded from
@@ -65,7 +67,8 @@ denominators and quietly reward not asking.
 `--kinds` measures a SUBSET and everything downstream is recomputed from it: `_check_set` derives
 the per-facet denominators instead of holding them against `EXPECTED_DENOMINATORS` (which pins the
 whole shipped set and only it) and refuses a subset that scores no facet; the caption and the
-history row both record the kinds measured.
+history row both record the kinds measured — as they do the backend and `--model`, this
+instrument's own candidate.
 
 Three things it does before measuring anything, all in `_run` and all unconditional: it deletes the
 librarian App's five environment variables and pins `$CLEAN_LLM` to the fake backend (`make` exports

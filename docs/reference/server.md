@@ -214,7 +214,7 @@ synthesized `verified` would read as "the first attempt was clean" for a run tha
 | Var (flag) | Default | Meaning |
 |---|---|---|
 | `ANSWER_LLM` (`--answer-llm`) | `openai` | `fake` runs the whole path **keyless** (demo/CI/evals); an invalid value fails fast at startup |
-| `ANSWER_MODEL` | `gpt-5.6-terra` | the synthesizer model (`OPENAI_API_KEY` required for `openai`) |
+| `ANSWER_MODEL` | `gpt-5.6-terra` | the synthesizer model, in two forms: a bare name is the OpenAI Responses API (`OPENAI_API_KEY`); a provider-prefixed pydantic-ai id (`openrouter:z-ai/glm-5.2`) authenticates with that provider's own key |
 | `ANSWER_REASONING_EFFORT` | `medium` | reasoning effort for the OpenAI Responses model |
 
 Note there is no CLI flag for the model or the reasoning effort: `--answer-llm` picks the BACKEND,

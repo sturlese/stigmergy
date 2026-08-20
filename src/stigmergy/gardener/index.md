@@ -4,11 +4,11 @@ Narrative doc: [`docs/reference/gardener-digest.md`](../../../docs/reference/gar
 Siblings that read the findings store and never recompute a check: [`digest`](../digest/index.md)
 and [`admin`](../admin/index.md).
 
-`stigmergy-gardener` runs four passes — nine deterministic checks, a bounded model editorial
-sweep over changed-plus-sampled pages, a model empty-body pass over every entity page in the
-checkout, and a model identity pass over the registry entries behind that same zone — and emits
-**findings only**, persisted to `gardener_findings` with a `job_runs` row and printed as a
-severity-grouped report. It fixes nothing, writes nothing, vetoes nothing: no git
+`stigmergy-gardener` runs four passes — every deterministic check `checks.ALL_CHECK_SLUGS` names, a
+bounded model editorial sweep over changed-plus-sampled pages, a model empty-body pass over every
+entity page in the checkout, and a model identity pass over the registry entries behind that same
+zone — and emits **findings only**, persisted to `gardener_findings` with a `job_runs` row and
+printed as a severity-grouped report. It fixes nothing, writes nothing, vetoes nothing: no git
 plumbing, no literal path under `wiki/`, both pinned by `tests/test_architecture.py`, which also
 pins every import edge and the threshold-literal ban.
 
@@ -18,7 +18,7 @@ pins every import edge and the threshold-literal ban.
 |---|---|
 | `cli.py` | `stigmergy-gardener [--repo] [--dsn] [--channels] [--json]` — one command. The only module here that imports `stigmergy.index.store`, `stigmergy.librarian.config` or `stigmergy.slack.bolt_gateway` |
 | `run.py` | `run_gardener` — the one function the CLI calls: run everything, persist findings + a `job_runs` row in ONE transaction, re-fetch, post the SLA notice. Owns `RunResult` |
-| `checks.py` | The nine deterministic checks, `ALL_CHECK_SLUGS`, `build_finding` (the one finding-dict assembler, shared with all three model passes), `count_indexed_pages`, `_recent_filed_pages`, and `entity_zone_pages`/`placeholder_lines` — the confinement-checked walk of the entity zone (run ONCE per run by `run.py`) and the one spelling of "still its template". `check_entity_placeholder_bodies` and `sweep.select_empty_body_pages` are pure functions of that walk's list |
+| `checks.py` | Every deterministic check and `ALL_CHECK_SLUGS`, the one list of their slugs — how many there are is pinned against that tuple by `tests/test_readme_claims.py` and `tests/test_docs_claims.py`, so a new check moves the documents that COUNT them and needs no number here. Also `build_finding` (the one finding-dict assembler, shared with all three model passes), `count_indexed_pages`, `_recent_filed_pages`, and `entity_zone_pages`/`placeholder_lines` — the confinement-checked walk of the entity zone (run ONCE per run by `run.py`) and the one spelling of "still its template". `check_entity_placeholder_bodies` and `sweep.select_empty_body_pages` are pure functions of that walk's list |
 | `sweep.py` | ALL THREE model passes: the shared schema, `_validate` (its `allowed_slugs` and `min_subject_pages` are what keep the three vocabularies and shapes apart), `_run_batch`, `to_finding`. The editorial four — `SWEEP_SYS`, `build_prompt`, `run_sweep`, `build_judge`, `FakeGardenerSweep`, page selection (`previous_run_watermark`, `select_pages`). The empty-body fifth — `EMPTY_BODY_SYS`, `build_empty_body_prompt`, `run_empty_body_sweep`, `build_empty_body_judge`, `FakeEmptyBodySweep`, `select_empty_body_pages`/`in_batches`. The duplicate-identity sixth — `DUPLICATE_ENTITY_SYS`, `build_duplicate_entity_prompt`, `run_duplicate_entity_sweep`, `build_duplicate_entity_judge`, `FakeDuplicateEntitySweep`, `entity_id_for`/`select_duplicate_entity_pages`. That pass is NEVER batched: it asks about a PAIR, and a pair whose halves fell in different batches is invisible to every batch |
 | `store.py` | `gardener_findings` persistence: `insert_findings`, `findings_for_run`, `latest_completed_run` |
 | `report.py` | The terminal report: `render_report`, `render_json`, `sweep_summary_text`. Pure text from plain data. Every model pass names its own failure there, and each ceiling names what it deferred |

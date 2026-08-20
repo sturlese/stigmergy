@@ -130,7 +130,7 @@ the same names.
 ```
 filing into /path/to/stigmergy-brain against origin/main@a1b2c3d4e5f6
   swept 1 stranded claim(s) back to the queue and failed 0 that had burned every delivery
-  (claims held longer than 900s (15 min))
+  (claims held longer than 1290s (21 min 30s))
 #42 filed — wiki/notes/Acme renewal.md@9f8e7d…, anchored to Acme Corp. Becomes searchable…
 ```
 
@@ -149,7 +149,7 @@ refused-diff line: that path is only on the prose road, on stderr.
 
 ```
 filing into /path/to/stigmergy-brain against origin/main@a1b2c3d4e5f6
-  polling every 3s; lease 900s (15 min); Ctrl-C stops after the item in flight
+  polling every 3s; lease 1290s (21 min 30s); Ctrl-C stops after the item in flight
 #42 -> filed
 view sweep: 12 of 12 entity(ies) checked — 1 regenerated, 0 removed, 11 already current
 ^C
@@ -180,7 +180,7 @@ the NEXT item is claimed; only a hard kill returns the row to the queue.
 
 ```
 queue: queued=2 · claimed=1 · filed=37 · triage=4
-in flight: #58 (raw) by ana@example.com attempts=2/3 held 3612.4s of 900s (15 min)
+in flight: #58 (raw) by ana@example.com attempts=2/3 held 3612.4s of 1290s (21 min 30s)
   LEASE EXPIRED — a live worker would have finished or renewed it by now; the next sweep returns it
   to the queue with an attempt burned
   to return it right now, with no librarian running:  stigmergy-queue reclaim --visibility-timeout 0
@@ -234,7 +234,7 @@ time, and model ids are configuration, never constants.
 | `STIGMERGY_REPO` (`--repo`) | `../stigmergy-brain` | the knowledge-repo checkout the worktrees branch from |
 | `STIGMERGY_LIBRARIAN_BRANCH` (`--branch`) | `main` | the branch the fast lane commits to |
 | `STIGMERGY_LIBRARIAN_BACKEND` (`--backend`) | `double` | `pydantic` is the real one: an ordinary capture is an ITERATING run with five tools over the checkout, seeded with the gathered context, writing its own page (see below); a meeting transcript is one structured call. `double` is the offline double. Any other value — including `sdk`, which a stale deployment may still carry — is refused at startup by name |
-| `STIGMERGY_LIBRARIAN_MODEL` | `anthropic:claude-sonnet-5` | a Sonnet-class model is right for routine filing. PROVIDER-PREFIXED: pydantic-ai reads a bare name as an OpenAI model, so a worker without a prefix is refused at startup |
+| `STIGMERGY_LIBRARIAN_MODEL` | `anthropic:claude-sonnet-5` | the filing model, and the seam worth MEASURING before moving rather than reasoning about: `make filing-golden` scores a candidate on the bars this flow is actually judged by, and open-weight models have passed all of them. PROVIDER-PREFIXED: pydantic-ai reads a bare name as an OpenAI model, so a worker without a prefix is refused at startup |
 | `STIGMERGY_LIBRARIAN_PRICING` | — | `{"<model>": [input, cached input, cache write, output]}`, dollars per MILLION tokens, merged per id over `librarian/pricing.py`'s own table. Only the backends that report tokens rather than dollars read it. A legacy 3-figure row (`[input, cached input, output]`) is still accepted, with the cache write rate taken equal to the input rate |
 | `STIGMERGY_LIBRARIAN_PROMPT_CACHE` | `5m` | Anthropic prompt caching on the ORDINARY run only ([ADR 036](../decisions/036-librarian-prompt-caching.md)): `off` \| `5m` \| `1h`, refused by name for anything else. Has no effect on a non-Anthropic model or on the meeting flow, which makes one call and would only pay the cache-write premium for a read that never happens |
 | `STIGMERGY_LIBRARIAN_MAX_TURNS` | 30 | the ORDINARY run's iteration budget — how many model requests one capture may spend going round with its tools, handed to pydantic-ai as `UsageLimits(request_limit=…)`. Exceeding it is a refusal that names this variable, never a silent stop. The meeting flow does not read it: it makes one call and derives its own ceiling. A value below **2** is refused by name at startup (an iterating run needs at least two requests — one to call a tool, one to finish — so a `1` would fail every ordinary capture at full model cost); a malformed value still fails the boot with a Python error rather than a named one |

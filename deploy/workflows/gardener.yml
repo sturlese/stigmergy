@@ -65,7 +65,7 @@ jobs:
       # Findings + job_runs persisted, the severity-grouped report printed, an SLA notice posted
       # (SlackApiError/GardenerError on that ONE precondition are the only things that make this
       # step itself fail — the deterministic checks and the sweep are otherwise independent).
-      - name: stigmergy-gardener — nine deterministic checks + the model editorial sweep
+      - name: stigmergy-gardener — the deterministic checks + the model editorial sweep
         run: stigmergy-gardener --repo stigmergy-knowledge
         env:
           STIGMERGY_INDEX_DSN: ${{ secrets.INDEX_DSN }}

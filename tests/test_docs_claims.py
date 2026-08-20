@@ -111,6 +111,36 @@ def test_every_relative_link_outside_docs_resolves(label, docs):
     assert not broken, f"links in {label} that point at nothing:\n  " + "\n  ".join(broken)
 
 
+# A code map's whole job is to say what each module is FOR, so it names modules constantly, in
+# backticks, and a renamed or deleted one leaves a sentence that reads authoritative and points at
+# nothing. This is deliberately an EXISTENCE check and no more: what a module does is prose no test
+# can settle, which is why these files still have to be read by a person.
+_MODULE_TOKEN = re.compile(r"`([A-Za-z0-9_][A-Za-z0-9_./-]*\.py)`")
+
+
+def _python_files_that_exist() -> set[str]:
+    """Every Python file in the project under both spellings a map uses — the bare name
+    (`converters.py`) and one directory of context (`backends/embedder.py`)."""
+    names = set()
+    for path in ROOT.rglob("*.py"):
+        if ".venv" in path.parts or "__pycache__" in path.parts:
+            continue
+        names.add(path.name)
+        names.add(f"{path.parent.name}/{path.name}")
+    return names
+
+
+def test_every_python_module_a_code_map_names_exists():
+    known = _python_files_that_exist()
+    assert known, "no Python files found — this check has lost its source of truth"
+    ghosts = sorted({f"{_rel(doc)}: {token}"
+                     for doc in CODE_MAPS
+                     for token in _MODULE_TOKEN.findall(_text(doc))
+                     if token not in known and token.rsplit("/", 1)[-1] not in known})
+    assert not ghosts, ("code maps name Python modules that do not exist — a rename or a deletion "
+                        "left the sentence behind:\n  " + "\n  ".join(ghosts))
+
+
 # ── what the reference docs tell an operator to run, and to set ───────────────────────────────
 # Both checks are scoped to `reference/` on purpose: these are instructions someone follows, and
 # an instruction naming something that no longer exists costs a debugging session. The class is

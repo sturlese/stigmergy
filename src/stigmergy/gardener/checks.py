@@ -1,4 +1,6 @@
-"""The nine deterministic checks. Each returns a list of finding dicts, never touches
+"""The deterministic checks — `ALL_CHECK_SLUGS` below is the list, and the COUNT belongs to it
+rather than to this sentence, which is how the number drifted to "eight" and "nine" in six other
+places while the tuple grew to ten. Each returns a list of finding dicts, never touches
 `gardener_findings` (`store.py`'s job) and never prints (`report.py`'s).
 
 Population invariants: the two windowed checks resolve "the last N filings" out of

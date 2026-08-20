@@ -161,9 +161,9 @@ def test_a_prefixed_vision_model_missing_its_key_refuses_naming_that_key(tmp_pat
     """A KNOWN provider prefix with no key is the misconfiguration "requeue" can never fix, so
     it must read as unconfigured with the provider's OWN variable named — not as configured
     (rasterize, fail at the provider, tell the submitter to requeue), and not with advice to set
-    GEMINI_API_KEY, which could never fix it either. OLD BEHAVIOUR: `vision_configured()`
-    returned True for any prefixed model, so this capture burned a rasterization and got a
-    requeue loop."""
+    GEMINI_API_KEY, which could never fix it either. OLD BEHAVIOUR: any prefixed model counted
+    as configured whether or not its key was set, so this capture burned a rasterization, failed
+    at the provider, and got a requeue loop."""
     monkeypatch.setenv("VISION_MODEL", "openrouter:qwen/qwen3-vl-8b-instruct")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     called = []

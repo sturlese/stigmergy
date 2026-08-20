@@ -49,7 +49,7 @@ def build_model(model_name: str | None = None, *, reasoning_effort: str | None =
     Two forms — and this function is the convention's ONE implementation (audit T1): a bare name
     ("gpt-5.6-terra") means the OpenAI Responses API with an EXPLICIT reasoning effort (never the
     API's implicit default; requires OPENAI_API_KEY); a provider-prefixed pydantic-ai string
-    ("anthropic:claude-sonnet-4-5", "openrouter:z-ai/glm-5.2") is resolved by pydantic-ai, whose
+    ("anthropic:claude-sonnet-5", "openrouter:z-ai/glm-5.2") is resolved by pydantic-ai, whose
     provider reads its own env key. `reasoning_effort` (bare form only) wins over
     $CLEAN_REASONING_EFFORT — it is how a caller with its own effort setting (the answer path)
     names it here instead of carrying a copy of this function.

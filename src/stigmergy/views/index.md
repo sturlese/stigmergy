@@ -30,7 +30,7 @@ agent's budget (`UsageLimitExceeded`).
 | Module | What it is |
 |---|---|
 | `cli.py` | `stigmergy-views regenerate` with a required target (`--entity` / `--stale` / `--all` / `--sweep`) plus `--force` |
-| `regenerate.py` | Orchestration: `regenerate_entity` (one entity, one commit), `run` (the shared batch base — one `job_runs` row per batch, the per-run ceiling) and `sweep` (the semantic wrapper: `run` over the union population off one corpus parse). Owns `RegenOutcome`, `RunResult`, `RUN_CEILING_REASON` |
+| `regenerate.py` | Orchestration: `regenerate_entity` (one entity, one commit), `run` (the shared batch base — one `job_runs` row per batch, the per-run ceiling, the cooperative `should_stop`) and `sweep` (the semantic wrapper: `run` over the union population off one corpus parse, under the deployment-wide advisory lock `VIEW_SWEEP_LOCK_KEY`). Owns `RegenOutcome`, `RunResult` and the whole `skip_reasons` vocabulary, because nothing here is deferred or skipped silently: `RUN_CEILING_REASON`, `STOPPED_EARLY_REASON` and `BRANCH_MOVED_REASON` (the three ways a batch stops early), `UNUSABLE_ID_REASON` (an id no view file can be named from) and `SWEEP_IN_FLIGHT_REASON` (another sweeper holds the lock) |
 | `staleness.py` | The READ-ONLY half: `view_relpath`/`view_path`, `ViewSignals` with `existing_signals`/`current_signals`/`view_is_current` (the staleness definition itself), `existing_member_hash` (the existence probe), `existing_view_ids`, `list_stale_entities`, `list_all_anchored_entities`, `list_sweep_entities` (the union). Imports neither `writer` nor `synthesis` |
 | `skeleton.py` | The deterministic half: `members_of`, `member_hash`, `backlinks_of`/`backlink_hash`, timeline and backlinks rendering, `entity_own_page` |
 | `synthesis.py` | The bounded agent: `build_view_agent`, `write_synthesis` (count-bounded by `VIEW_LIMITS` AND wall-clocked by `SYNTHESIS_TIMEOUT_S` — a hung provider call becomes a withheld synthesis, never a hung worker loop), `FakeViewWriter`, `ViewContext` and its `read_page` tool |
@@ -55,11 +55,17 @@ Downstream: `librarian.processing` imports `views.regenerate` (the post-meeting 
   `backlink_hash:` is STALE, never a match — that is what regenerates the views a deployment
   already has.
 - `regenerate.run` — route ANY new batch caller through it: incremental stats, its own error
-  row for `KeyboardInterrupt` (which `ops.job_run` cannot see), and `max_changes`, the per-run
-  ceiling every unattended caller needs. `None` means unbounded, which is what an operator who
-  typed a command already is.
+  row for `KeyboardInterrupt` (which `ops.job_run` cannot see), `max_changes`, the per-run
+  ceiling every unattended caller needs, and `should_stop`, the cooperative pause it asks BETWEEN
+  entities (one entity is one commit, so any prefix of the loop is a valid repo state; inside one
+  there is a synthesis call and a push that must not be torn in half). `None` means unbounded and
+  never stopping, which is what an operator who typed a command already is.
 - `regenerate.sweep` — the ONE answer to "which population converges `views/`". `--sweep` and the
   worker's idle pass both call it; a caller assembling its own union would be the second answer.
+  It also holds the mutual exclusion: two sweepers are a supported SHAPE (N workers, plus an
+  operator's `--sweep`) and a broken run, so the pass runs under one advisory lock and losing the
+  race is a `skip_reason` with no `job_runs` row. The named populations (`--entity`/`--stale`/
+  `--all`) are deliberately outside it.
 - `staleness.list_sweep_entities` — that population, read-only and git-free, so a future
   findings-only reader can ask the same question the gardener already asks `list_stale_entities`.
 - `rows=` on `members_of` / `list_*` / `regenerate_entity` / `run` — ONE `corpus.load_pages` for a
@@ -109,9 +115,13 @@ Downstream: `librarian.processing` imports `views.regenerate` (the post-meeting 
   append contradicted the de-registration one, where every page still anchors the entity.
 - `RunResult.stats`: `checked`/`population`/`deferred`/`written`/`withheld`/`removed`/`unchanged`/
   `refused`/`skip_reasons` — a property, read by both `--json` and `job_runs.stats`. `checked` is
-  what the run visited and `population` what it was asked about; they differ only when
-  `max_changes` stopped it, and `skip_reasons` then carries `RUN_CEILING_REASON`, whose wording is
-  `repair.proposer.RUN_CEILING_REASON`'s on purpose.
+  what the run visited and `population` what it was asked about; they differ when the run stopped
+  early, and `skip_reasons` then says WHICH of the three reasons stopped it — its ceiling
+  (`RUN_CEILING_REASON`, worded as `repair.proposer.RUN_CEILING_REASON` is on purpose), the
+  caller's own pause (`STOPPED_EARLY_REASON`, repeating the reason `should_stop` answered with),
+  or a foreign commit landing mid-batch under a shared corpus parse (`BRANCH_MOVED_REASON`).
+  Nothing is deferred silently: the population is recomputed from state, so the next pass sees
+  whatever this one left.
 - `SWEEP_JOB_NAME` (`views-sweep`) — the periodic pass's own `job_runs.job`, distinct from `views`
   (an operator's run) and `views-on-meeting` (the post-filing hook), so a history says which of the
   three did the work.
