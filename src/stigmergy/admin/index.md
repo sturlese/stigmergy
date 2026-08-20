@@ -34,7 +34,7 @@ an `ops/` control file every MCP identity already reads through `list_entities`.
 | `github.py` | `ActionsGateway` — the Jobs page's only reach out of this process (`workflows`/`runs`/`dispatch`/`set_enabled`), `urllib` with an injectable opener, a 60 s read cache that mutations clear, and `ActionsError` carrying the status and never the token |
 | `schema.py` | `admin_actions`: `ensure_admin_schema` (behind `capture.schema.startup_ddl_lock`), `record_action` (never raises), `recent_actions` |
 | `cli.py` | `stigmergy-admin-token` — mints the one credential: 32 random bytes, plaintext printed once beside its `STIGMERGY_ADMIN_TOKEN_HASH=` line, nothing stored |
-| `static/` | the SPA, no build step: `index.html` + `assets/app.js` (shell, grouped nav with the inbox badge, hash router with the old tab names as aliases, login), `api.js` (the one fetch seam), `state.js` (the server's meta + the chart window), `copy.js` (the VOCABULARY — every system word's human label, meaning and who decides; the per-page explainers), `ui.js` (DOM helpers, pills, the confirm-with-form modal with live field checks, tooltips), `charts.js` (SVG charts built with `createElementNS`, each with a table twin), `views/` (one module per page: `dashboard`, `inbox`, `captures`, `entities`, `repairs`, `gardener`, `index`, `worker`, `jobs`, `digest`, `activity`, plus `common.js` for the loading wrapper, the mutation helper, the report renderer and the trace timeline), `styles.css` |
+| `static/` | the SPA, no build step: `index.html` + `assets/app.js` (shell, grouped nav with the inbox badge, hash router with the old tab names as aliases, login), `theme.js` (the ONE classic script: it stamps the chosen theme on `<html>` before the first paint — a module would be deferred and flash, an inline script is refused by the CSP), `api.js` (the one fetch seam), `state.js` (the server's meta + the chart window), `copy.js` (the VOCABULARY — every system word's human label, meaning and who decides; the per-page explainers), `ui.js` (DOM helpers, pills, the confirm-with-form modal with live field checks, tooltips, the theme picker), `charts.js` (SVG charts built with `createElementNS`, each with a table twin), `views/` (one module per page: `dashboard`, `inbox`, `captures`, `entities`, `repairs`, `gardener`, `index`, `worker`, `jobs`, `digest`, `activity`, plus `common.js` for the loading wrapper, the mutation helper, the report renderer and the trace timeline), `styles.css` |
 
 Exactly one module imports this package — `server/transport_http.py`, pinned by
 `test_only_the_http_transport_composes_the_admin_branch`.
@@ -264,6 +264,14 @@ aliases} | null, "similar": [{id, name, type, aliases, why}]}`, beside `registry
 `retention-purge.yml` declares the only dispatch input (`dry_run`); an undeclared key is refused by
 name before the gateway is touched. `test_the_console_schedule_table_matches_the_workflow_files`
 parses the real YAML.
+
+**Frontend theme**: every colour token is declared ONCE as `light-dark(light, dark)` on `:root`,
+so a token added to one theme and forgotten in the other cannot exist; the three states are two
+one-line rules (`:root[data-theme="light"|"dark"] { color-scheme: … }`) plus the absence of the
+attribute for Auto, and `@supports not (color: light-dark(…))` keeps an old browser on the light
+palette rather than on none. `theme.js` and `ui.js` each spell the storage key and the two state
+names — a classic script cannot be imported by a module — and `test_static_discipline.py` pins the
+two spellings against each other.
 
 **Frontend**: each view module exports `render(host, params?) → cleanup?`, dispatched from
 `app.js`'s `GROUPS` (the sidebar, grouped by the job a person came to do) and `DETAIL_ROUTES`;

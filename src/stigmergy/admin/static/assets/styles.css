@@ -1,69 +1,85 @@
 /* Stigmergy Ops — the console's one stylesheet.
    Tokens: surfaces and ink; ONE interactive accent (blue — actions are blue); and the KEY, the
    README's "colour is who decides" — human amber · model violet · code grey · git green · broke
-   red — which every status, chart and timeline wears. Validated for colour-vision deficiency in
-   both modes (dataviz six checks); amber sits under 3:1 on the light surface, so it always ships
-   with its word and a table twin. Charts' categorical slots (tools) are separate. */
+   red — which every status, chart and timeline wears. Charts' categorical slots (tools) are
+   separate.
+
+   Each token is declared ONCE, as `light-dark(light, dark)`, and the three theme states are two
+   one-line rules at the bottom of this block. That is not tidiness: with two parallel token
+   blocks, a token added to one and forgotten in the other is invisible until somebody opens the
+   console in that mode. Here it cannot happen — a token has both values or it does not compile.
+   The `@supports` fallback below keeps a browser without `light-dark()` on the light palette
+   rather than on no palette at all.
+
+   The key's five colours sit inside the dataviz lightness band and clear 3:1 on both surfaces,
+   with two deliberate deviations, each mitigated: `--k-code` is grey because grey IS its meaning
+   (code decided), not a hue slot; and amber sits at 2.2:1 on the light surface, so it never
+   carries meaning alone — every status ships with its word, and every chart with a table twin.
+   Red and green are never adjacent in a stack (`copy.js`'s OUTCOME_ORDER), which is the pair
+   CVD separation is tightest on. */
 
 :root {
-  color-scheme: light;
-  --page: #f6f6f3;
-  --surface: #ffffff;
-  --surface-2: #f1f0eb;
-  --surface-3: #e8e7e1;
-  --ink: #151513;
-  --ink-2: #57564f;
-  --muted: #8a8882;
-  --hairline: #e5e4dd;
-  --border: rgba(21, 21, 19, 0.10);
-  --accent: #2a78d6;
+  color-scheme: light dark;
+  --page: light-dark(#f6f6f3, #0f1110);
+  --surface: light-dark(#ffffff, #181a19);
+  --surface-2: light-dark(#f1f0eb, #212322);
+  --surface-3: light-dark(#e8e7e1, #2a2c2a);
+  --ink: light-dark(#151513, #f3f2ed);
+  --ink-2: light-dark(#57564f, #c3c2b7);
+  --muted: light-dark(#8a8882, #8a8882);
+  --hairline: light-dark(#e5e4dd, #2b2d2b);
+  --border: light-dark(rgba(21, 21, 19, 0.10), rgba(255, 255, 255, 0.10));
+  --accent: light-dark(#2a78d6, #3987e5);
   --accent-ink: #ffffff;
-  --accent-soft: rgba(42, 120, 214, 0.12);
-  --k-human: #eda100;
-  --k-model: #4a3aa7;
-  --k-code: #898781;
-  --k-git: #008300;
-  --k-fail: #e34948;
-  --k-other: #c3c2b7;
-  --k-human-soft: rgba(237, 161, 0, 0.16);
-  --k-model-soft: rgba(74, 58, 167, 0.12);
-  --k-code-soft: rgba(137, 135, 129, 0.16);
-  --k-git-soft: rgba(0, 131, 0, 0.12);
-  --k-fail-soft: rgba(227, 73, 72, 0.12);
-  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #4a3aa7;
-  --shadow: 0 1px 2px rgba(21, 21, 19, 0.04), 0 10px 30px rgba(21, 21, 19, 0.05);
+  --accent-soft: light-dark(rgba(42, 120, 214, 0.12), rgba(57, 135, 229, 0.18));
+  --k-human: light-dark(#eda100, #c98500);
+  --k-model: light-dark(#4a3aa7, #9085e9);
+  --k-code: light-dark(#898781, #898781);
+  --k-git: light-dark(#008300, #1f9a1f);
+  --k-fail: light-dark(#e34948, #e66767);
+  --k-other: light-dark(#c3c2b7, #55544f);
+  --k-human-soft: light-dark(rgba(237, 161, 0, 0.16), rgba(201, 133, 0, 0.22));
+  --k-model-soft: light-dark(rgba(74, 58, 167, 0.12), rgba(144, 133, 233, 0.18));
+  --k-code-soft: light-dark(rgba(137, 135, 129, 0.16), rgba(137, 135, 129, 0.20));
+  --k-git-soft: light-dark(rgba(0, 131, 0, 0.12), rgba(31, 154, 31, 0.18));
+  --k-fail-soft: light-dark(rgba(227, 73, 72, 0.13), rgba(230, 103, 103, 0.18));
+  --s1: light-dark(#2a78d6, #3987e5);
+  --s2: light-dark(#eb6834, #d95926);
+  --s3: light-dark(#1baf7a, #199e70);
+  --s4: light-dark(#eda100, #c98500);
+  --s5: light-dark(#e87ba4, #d55181);
+  --s6: light-dark(#4a3aa7, #9085e9);
+  /* `light-dark()` takes COLOURS, so the shadow is expressed as its colours: transparent in dark
+     is the `none` the dark theme wants, without a second declaration to keep in step. */
+  --shadow-near: light-dark(rgba(21, 21, 19, 0.04), transparent);
+  --shadow-far: light-dark(rgba(21, 21, 19, 0.05), transparent);
+  --shadow: 0 1px 2px var(--shadow-near), 0 10px 30px var(--shadow-far);
   --radius: 14px;
   --radius-s: 9px;
   --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
+/* The three states. Auto stamps nothing and `color-scheme: light dark` follows the OS; a chosen
+   theme stamps `data-theme` on <html> (theme.js, before the first paint) and pins the scheme,
+   which is what makes an explicit LIGHT choice beat an OS in dark mode and vice versa. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+@supports not (color: light-dark(#000, #fff)) {
   :root {
-    color-scheme: dark;
-    --page: #0f1110;
-    --surface: #181a19;
-    --surface-2: #212322;
-    --surface-3: #2a2c2a;
-    --ink: #f3f2ed;
-    --ink-2: #c3c2b7;
-    --muted: #8a8882;
-    --hairline: #2b2d2b;
-    --border: rgba(255, 255, 255, 0.10);
-    --accent: #3987e5;
-    --accent-soft: rgba(57, 135, 229, 0.18);
-    --k-human: #c98500;
-    --k-model: #9085e9;
-    --k-git: #1f9a1f;
-    --k-fail: #e66767;
-    --k-other: #55544f;
-    --k-human-soft: rgba(201, 133, 0, 0.22);
-    --k-model-soft: rgba(144, 133, 233, 0.18);
-    --k-code-soft: rgba(137, 135, 129, 0.20);
-    --k-git-soft: rgba(31, 154, 31, 0.18);
-    --k-fail-soft: rgba(230, 103, 103, 0.18);
-    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #9085e9;
-    --shadow: none;
+    color-scheme: light;
+    --page: #f6f6f3; --surface: #ffffff; --surface-2: #f1f0eb; --surface-3: #e8e7e1;
+    --ink: #151513; --ink-2: #57564f; --muted: #8a8882; --hairline: #e5e4dd;
+    --border: rgba(21, 21, 19, 0.10); --accent: #2a78d6;
+    --accent-soft: rgba(42, 120, 214, 0.12);
+    --k-human: #eda100; --k-model: #4a3aa7; --k-code: #898781; --k-git: #008300;
+    --k-fail: #e34948; --k-other: #c3c2b7;
+    --k-human-soft: rgba(237, 161, 0, 0.16); --k-model-soft: rgba(74, 58, 167, 0.12);
+    --k-code-soft: rgba(137, 135, 129, 0.16); --k-git-soft: rgba(0, 131, 0, 0.12);
+    --k-fail-soft: rgba(227, 73, 72, 0.13);
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #4a3aa7;
+    --shadow-near: rgba(21, 21, 19, 0.04); --shadow-far: rgba(21, 21, 19, 0.05);
   }
 }
 
@@ -126,6 +142,9 @@ h1, h2, h3 { font-weight: 650; letter-spacing: -0.015em; }
 
 .keylegend { padding: 10px 10px 4px; border-top: 1px solid var(--hairline); margin-top: 8px; }
 .keyrow { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-2); padding: 2px 0; }
+.themerow { padding: 10px 10px 4px; display: flex; flex-direction: column; gap: 6px; }
+.segmented.themes button { padding: 5px 12px; display: inline-flex; align-items: center; justify-content: center; }
+.segmented.themes svg { width: 15px; height: 15px; }
 
 .main { padding: 22px 32px 64px; max-width: 1380px; width: 100%; margin: 0 auto; min-width: 0; }
 .topbar { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
@@ -146,6 +165,8 @@ h1, h2, h3 { font-weight: 650; letter-spacing: -0.015em; }
   .nav-item { width: auto; }
   .brand { padding-bottom: 4px; width: 100%; }
   .nav-spacer, .nav-foot, .keylegend { display: none; }
+  .themerow { padding: 4px 8px; flex-direction: row; align-items: center; }
+  .themerow .eyebrow { display: none; }
   .main { padding: 16px 16px 40px; }
 }
 

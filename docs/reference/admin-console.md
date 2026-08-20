@@ -89,9 +89,16 @@ console:
   violet is the model (it drafted, gathered or proposed — never the last word), grey is code (a
   gate, a lease, a schedule decided), green is git (it landed in the knowledge repo), red is
   something that could not finish. Every status, chart segment and timeline dot wears the key, and
-  the sidebar carries the legend. The palette is validated for colour-vision deficiency in both
-  light and dark mode; amber sits under 3:1 on the light surface, so it always ships with its word
-  and every chart has a table twin one toggle away.
+  the sidebar carries the legend. The five colours sit inside the perceptual band the dataviz
+  method asks for and clear 3:1 on both surfaces, with two deliberate deviations, each mitigated:
+  grey is grey because grey IS the meaning (code decided), not a hue slot; and amber sits at 2.2:1
+  on the light surface, so it never carries meaning alone — every status ships with its word, and
+  every chart with a table twin one toggle away. Red and green are never adjacent in a stack,
+  which is the pair colour-vision deficiency separates worst.
+- **Light, dark, or whatever the device says.** The appearance picker in the sidebar (and on the
+  login screen) offers Auto, Light and Dark; the choice is remembered in this browser and stamped
+  before the first paint, so a chosen dark theme never flashes light on the way in. Auto follows
+  the device's own setting, and an explicit choice beats it in both directions.
 - **System words get a human label, and the system word stays reachable.** `needs_input` renders
   as "Waiting on its submitter", `triage` as "Waiting on a steward", `filed` as "Landed in git";
   hovering the pill shows the raw word and its one-line meaning. The closed vocabularies
