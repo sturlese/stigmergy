@@ -109,6 +109,25 @@ def latest_decisions(conn) -> dict[tuple[str, str], dict]:
                 for kind, item_id, verdict, actor, source, created_at in cur.fetchall()}
 
 
+_RECENT = """
+SELECT item_kind, item_id, verdict, actor, extra->>'source', created_at FROM review_decisions
+ORDER BY created_at DESC, id DESC
+LIMIT %s
+"""
+
+
+def recent_decisions(conn, *, limit: int) -> list[dict]:
+    """The last `limit` rows of the ledger, newest first — every decision, not the latest per
+    item. For a feed. `limit` is required: this table is append-only and never truncated, so an
+    unbounded read grows for the life of the deployment, and the one caller that needs the whole
+    table (`latest_decisions`, the doorbell's closing pass) already has its own read."""
+    with conn.cursor() as cur:
+        cur.execute(_RECENT, (max(1, int(limit)),))
+        return [{"item_kind": kind, "item_id": item_id, "verdict": verdict, "actor": actor,
+                 "source": source or "", "created_at": created_at}
+                for kind, item_id, verdict, actor, source, created_at in cur.fetchall()]
+
+
 _LATEST_FOR_ITEM = """
 SELECT verdict, actor, extra->>'source', created_at FROM review_decisions
 WHERE item_kind = %s AND item_id = %s

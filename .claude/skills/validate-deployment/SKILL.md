@@ -74,13 +74,15 @@ Tell the operator what to do; read the outcome from the database and the logs.
 
 ## Block 4 — the admin console, tab by tab
 
-Overview (parked / queue depth / in-flight / cron truth / index freshness) · Queue (the drain
-lives in each row's **detail card**, not in the list; Reclaim and Retention purge are the
-list-level buttons) · Crons (Run-now, Enable, Disable for the four workflows — needs the
-fine-grained PAT) · Gardener · Repairs (pending proposals, recently decided ones, and the
-proposer's own run history) · Digest (Preview is byte-identical to the post) · Index (the
-substrate check runs in-process) · Entities (read-only: it renders the mint command) ·
-Activity · Worker.
+Dashboard (the inbox count, the write path drawn live, captures and questions per day, health
+tiles) · Inbox (everything parking on a human, one list — the doorbell's own read) · Captures (the
+drain lives in each row's **detail**, not in the list; Reclaim and Retention purge are the
+list-level buttons) · Entities (each unresolved name checked against the served registry —
+registered / collides / similar / clear — and a real Approve form that checks the name live) ·
+Repairs (pending proposals, recently decided ones, and the proposer's own run history) · Gardener ·
+Index (the substrate check runs in-process) · Worker · Jobs (Run now, Enable, Disable for the four
+workflows — needs the fine-grained PAT; without it the page is read-only and says so) · Digest
+(Preview is byte-identical to the post) · Activity.
 
 Three things worth proving here specifically:
 

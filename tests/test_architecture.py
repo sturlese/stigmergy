@@ -2917,6 +2917,11 @@ _ADMIN_ALLOWED_IMPORT_PREFIXES = (
                                      # `stigmergy.entities.remote` is not in this set
     "stigmergy.review_kinds",         # KIND_ENTITY_PROPOSAL — the ledger row's item_kind, the same
                                      # dependency-free bottom module stigmergy.slack reads it from
+    "stigmergy.kernel.registry",      # `registry_from_text` + `Registry.collision_id`/`canonical_id`
+                                     # — the console's pre-mint registry check asks the MINT GATE'S
+                                     # OWN fold over the served snapshot, never a second "collides"
+    "stigmergy.kernel.normalize",     # `normalize` — the advisory "looks similar" listing tokenises
+                                     # with the same fold the collision key is built from
     "stigmergy.server.identity",      # hash_token — one hashing scheme, never a second
     "stigmergy.server.errors",
     "stigmergy.server.review",        # ensure_review_schema (compose-time DDL) + record_decision (the

@@ -18,8 +18,8 @@ plus an `Approved-by:` trailer naming the human.
 | Module | What it is |
 |---|---|
 | `cli.py` | `stigmergy-entities` — `list · show · approve · reject · create · regenerate [--check]`; a thin adapter over `mint.mint` (derives `author` from the steward's clone via `clone.preflight`); owns the printed-command safety (`_suggestable`) and is the only module here that opens a database connection. `approve` and `reject` both write the `review_decisions` row through `capture.decisions` — below the `entities` -> `server` edge — naming this door with `decisions.SOURCE_CLI`, required on every ledger write |
-| `situations.py` | which parked (`triage`) rows are an identity decision — `classify`, `subject_of` / `subjects_of` / `mint_name_prefill`, the two semantic entry points (`list_pending_situations`, `get_situation`) and the write guard (`require_situation`) |
-| `birth.py` | resolve-before-mint as a pure function of a proposal and a registry (`prepare`, `recheck`, `_refuse_collisions`) and the page renderer (`render_page`, `_yaml_str`, `commit_message`) |
+| `situations.py` | which parked (`triage`) rows are an identity decision — `classify`, `subject_of` / `subjects_of` / `mint_name_prefill` / `is_mintable_name` (the one comparison that refuses the librarian's no-name placeholder, asked by the prefill rule and by any surface offering a park's names one by one), the two semantic entry points (`list_pending_situations`, `get_situation`) and the write guard (`require_situation`) |
+| `birth.py` | resolve-before-mint as a pure function of a proposal and a registry (`prepare`, `recheck`, `_refuse_collisions`), the terminal name gate every door passes (`_clean_name` — forbidden characters, control characters, and the librarian's no-name placeholder refused by value) and the page renderer (`render_page`, `_yaml_str`, `commit_message`) |
 | `generator.py` | the registry generator: `read_entity_pages`, `derive_registry`, `registry_of`, `compare` (semantic drift), `check` / `regenerate`, `canonical_id_for` |
 | `clone.py` | the working copy's checks and push: `preflight` (branch/identity/clean/in-sync), `commit_and_push` with fetch-regenerate-retry, `write_page` / `discard_untracked`. Never repairs, never force-pushes |
 | `mint.py` | the ONE mint orchestration `cli._mint` and `remote.mint_via_clone` both call: drift refusal, the gate against the registry the commit will PUBLISH, the template render, `generator.regenerate`, the gitleaks scan, ONE commit, bounded rebase-and-retry |
@@ -43,7 +43,7 @@ plus an `Approved-by:` trailer naming the human.
   `--json`, both admin entity routes) reads one already-decided value instead of computing it over
   whatever shape of the row it happens to hold. Both mint doors — the Slack modal (`slack.render`,
   handed the same value on the review item `server.review` builds) and the admin console's Approve
-  form (`admin/static/assets/views.js`) — OBEY it: they render it, and list `subjects` when it is
+  form (`admin/static/assets/views/entities.js`) — OBEY it: they render it, and list `subjects` when it is
   `""`. Neither counts the names again, so no door can disagree about WHEN a default is safe.
   The offered STRING can still differ between them: sanitization is per transport — the console
   strips control characters out of what it renders, Slack and MCP do not. What that can no longer

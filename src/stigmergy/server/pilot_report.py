@@ -44,6 +44,56 @@ def questions_per_identity_per_week(conn, *, since: datetime | None = None) -> d
     return {identity: dict(weeks) for identity, weeks in counts.items()}
 
 
+SHAPE_REFUSED = "refused"
+SHAPE_CITED = "answered_with_citation"
+SHAPE_UNCITED = "answered_no_citation"
+
+
+def shape_of(result) -> str:
+    """The ONE reading of an `ask` result summary: a refusal, an answer with a citation, or an
+    answer without one — in that precedence. Every surface that classifies an answer calls this
+    (the report below, the console's per-day chart), so two charts cannot disagree about what an
+    answer was. `result` is whatever `audit_log.result` holds for a successful call."""
+    if not isinstance(result, dict):
+        return SHAPE_UNCITED
+    if result.get("refused"):
+        return SHAPE_REFUSED
+    return SHAPE_CITED if result.get("citations") else SHAPE_UNCITED
+
+
+# `shape_of` as SQL, for the grouped per-day read: the same precedence (refused first), the same
+# truthiness (a JSON `true`, a non-zero citation count). `tests/server/test_pilot_report.py` pins
+# the two against each other on the same rows, so the SQL cannot drift from the function it mirrors.
+_SHAPE_SQL = f"""
+CASE WHEN COALESCE((result ->> 'refused')::boolean, false) THEN '{SHAPE_REFUSED}'
+     WHEN COALESCE((result ->> 'citations')::int, 0) > 0 THEN '{SHAPE_CITED}'
+     ELSE '{SHAPE_UNCITED}' END
+"""
+
+
+def answer_shape_by_day(conn, *, days: int) -> list[dict]:
+    """`answer_shape` with a time axis, grouped in SQL: one row per UTC day of the last `days`
+    with the three shapes, plus the calls that errored and the successful ones that recorded no
+    shape at all — counted apart, never folded into an answer shape. Bounded by the window and
+    aggregated in the database, so a year of questions is a few hundred rows, not a fetch of every
+    result."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT (ts AT TIME ZONE 'UTC')::date AS day,"
+            " CASE WHEN outcome <> 'ok' THEN 'errors'"
+            f"      WHEN result IS NULL THEN 'unrecorded' ELSE {_SHAPE_SQL} END AS shape, count(*)"
+            " FROM audit_log WHERE tool = 'ask' AND ts >= now() - make_interval(days => %s)"
+            " GROUP BY 1, 2 ORDER BY 1", (max(1, int(days)),))
+        rows = cur.fetchall()
+    by_day: dict[str, dict] = {}
+    for day, shape, count in rows:
+        bucket = by_day.setdefault(day.isoformat(), {
+            "day": day.isoformat(), SHAPE_CITED: 0, SHAPE_UNCITED: 0, SHAPE_REFUSED: 0,
+            "errors": 0, "unrecorded": 0})
+        bucket[shape] = int(count)
+    return [by_day[day] for day in sorted(by_day)]
+
+
 def answer_shape(conn, *, since: datetime | None = None) -> dict:
     """% answered-with-citation vs honest refusal, from `ask`'s `audit_log.result` summary —
     never the question or answer text. Only successful calls with a recorded result count."""
@@ -55,8 +105,9 @@ def answer_shape(conn, *, since: datetime | None = None) -> dict:
         results = [row[0] for row in cur.fetchall()]
 
     total = len(results)
-    refused = sum(1 for r in results if r.get("refused"))
-    answered_with_citation = sum(1 for r in results if not r.get("refused") and r.get("citations"))
+    shapes = [shape_of(r) for r in results]
+    refused = shapes.count(SHAPE_REFUSED)
+    answered_with_citation = shapes.count(SHAPE_CITED)
     answered_no_citation = total - refused - answered_with_citation
     return {
         "total": total,

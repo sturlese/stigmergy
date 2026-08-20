@@ -645,6 +645,22 @@ def counts_by_status(conn) -> dict[str, int]:
     return {status: counted.get(status, 0) for status in schema.STATUSES}
 
 
+def outcomes_by_day(conn, *, days: int) -> list[dict]:
+    """`counts_by_status` over time: captures that ARRIVED in the last `days` days, bucketed by
+    their UTC arrival day and their CURRENT status — `[{"day": "YYYY-MM-DD", "status", "count"}]`,
+    ascending, with no row for an empty day. Beside `counts_by_status` because it is the same fact
+    with a time axis, and a surface drawing "what happened to what arrived" must not carry its own
+    query over this table."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT (created_at AT TIME ZONE 'UTC')::date AS day, status, count(*)"
+            " FROM capture_queue WHERE created_at >= now() - make_interval(days => %s)"
+            " GROUP BY 1, 2 ORDER BY 1, 2", (max(1, int(days)),))
+        rows = cur.fetchall()
+    return [{"day": day.isoformat(), "status": status, "count": int(count)}
+            for day, status, count in rows]
+
+
 def _millis(start, end) -> float | None:
     if not isinstance(start, datetime) or not isinstance(end, datetime):
         return None

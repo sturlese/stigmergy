@@ -581,3 +581,17 @@ def test_require_situation_returns_the_row_when_it_really_is_a_pending_situation
     row = situations.require_situation(_FakeConn(), 41, action="approve")
     assert row["situation"] == schema.SITUATION_UNRESOLVED_ENTITY
     assert row["subject"] == "Acme"
+
+
+# ── `is_mintable_name`: the one comparison every listing of a park's names shares ───────────────
+def test_is_mintable_name_refuses_exactly_the_placeholder_stripped():
+    """The per-name surfaces (the console's "Mint «X»" cards) ask THIS rather than re-deriving the
+    comparison; `mint_name_prefill` asks it too, so the prefill and the per-name listing cannot
+    disagree about the one value neither may offer."""
+    assert situations.is_mintable_name(schema.UNNAMED_ENTITY_PLACEHOLDER) is False
+    assert situations.is_mintable_name(f"  {schema.UNNAMED_ENTITY_PLACEHOLDER}\t") is False
+    assert situations.is_mintable_name("Acme Corp") is True
+    assert situations.is_mintable_name("Something Unnamed Records") is True, "by value, not substring"
+    assert situations.is_mintable_name("") is True, (
+        "emptiness is the gate's refusal (`birth._clean_name`), not this predicate's — a blank is "
+        "not the placeholder")

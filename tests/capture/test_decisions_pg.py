@@ -155,3 +155,26 @@ def test_a_row_written_before_this_column_existed_reads_back_as_an_empty_source(
     latest = decisions.latest_decisions(clean_ledger)[(KIND_ENTITY_PROPOSAL, "9")]
 
     assert latest["source"] == ""
+
+
+# ── `recent_decisions`: the feed read, bounded in SQL ───────────────────────────────────────────
+def test_recent_decisions_returns_the_newest_rows_bounded_every_decision_not_the_latest_per_item(
+        clean_ledger):
+    """Three decisions on two items: `latest_decisions` collapses to two (one per item);
+    `recent_decisions` is the FEED — every row, newest first, and the limit is applied in SQL so an
+    append-only table never comes back whole."""
+    for verdict, actor in (("reject", "ana"), ("approve", "marc")):
+        decisions.record_decision(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL, item_id="7",
+                                  verdict=verdict, actor=actor, source="admin")
+    decisions.record_decision(clean_ledger, item_kind=KIND_PARKED_CAPTURE, item_id="9",
+                              verdict="requeue", actor="pau", source="mcp")
+
+    rows = decisions.recent_decisions(clean_ledger, limit=10)
+    assert [(r["item_kind"], r["item_id"], r["verdict"], r["actor"], r["source"]) for r in rows] == [
+        (KIND_PARKED_CAPTURE, "9", "requeue", "pau", "mcp"),
+        (KIND_ENTITY_PROPOSAL, "7", "approve", "marc", "admin"),
+        (KIND_ENTITY_PROPOSAL, "7", "reject", "ana", "admin")]
+    assert len(decisions.latest_decisions(clean_ledger)) == 2, "the per-item read collapses"
+
+    assert len(decisions.recent_decisions(clean_ledger, limit=2)) == 2
+    assert len(decisions.recent_decisions(clean_ledger, limit=0)) == 1, "the bound is at least one"

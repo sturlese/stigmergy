@@ -14,6 +14,7 @@ from stigmergy.repair.schema import (
     STATUS_APPROVED,
     STATUS_FAILED,
     STATUS_PENDING,
+    STATUSES,
 )
 
 # Every column a reader needs, in one place: three queries return the same shape, and a row that
@@ -87,6 +88,16 @@ def pending_proposals(conn, limit: int | None = None) -> list[dict]:
         else:
             cur.execute(_PENDING_PROPOSALS + " LIMIT %s", (max(int(limit), 0),))
         return [_row(r) for r in cur.fetchall()]
+
+
+def counts_by_status(conn) -> dict[str, int]:
+    """How many proposals sit in each status, over the WHOLE table — every declared status
+    present, zero included. The one aggregate a surface may draw a part-to-whole from: counting a
+    bounded page of rows instead silently understates history the moment the page fills."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT status, count(*) FROM repair_proposals GROUP BY status")
+        counted = dict(cur.fetchall())
+    return {status: int(counted.get(status, 0)) for status in STATUSES}
 
 
 _RECENT_DECIDED = f"""
