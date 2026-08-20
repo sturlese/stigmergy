@@ -571,6 +571,71 @@ def _yaml_scalar(value: str) -> str:
     return json.dumps(str(value), ensure_ascii=False)
 
 
+# ── one frontmatter field, rewritten in place ─────────────────────────────────────────────────
+# The line editors every governed rewrite of an existing page shares: the repair loop's merge
+# (`repair.entity_alias`) and the identity decisions (`entities.decide`) both set one scalar or one
+# list on a page somebody else authored, and two writers of "replace this field's line" would be
+# two opinions about block sequences, re-cased keys and where a new line may land.
+def front_and_tail(text: str) -> tuple[list[str], str]:
+    """`(frontmatter lines, everything from the closing fence onward)`.
+
+    The tail is taken FROM THE FILE rather than reassembled: a page whose closing `---` has no
+    newline after it must not gain one, because a page that gained a byte is a page in a repair's
+    blast radius for a change nobody made. Raises `ValueError` for a page with no block at all —
+    such a page declares no field to rewrite.
+    """
+    front, rest = split_frontmatter(text or "")
+    if len(text or "") == len(rest):
+        raise ValueError("this page has no `---` frontmatter block, so it declares no fields")
+    head = (text or "")[:len(text or "") - len(rest)]
+    return front.split("\n"), ("---" + ("\n" if head.endswith("\n") else "") + rest)
+
+
+def rebuild(front_lines: list[str], tail: str) -> str:
+    """The inverse of `front_and_tail`."""
+    return "---\n" + "\n".join(front_lines) + "\n" + tail
+
+
+def list_field_values(front_lines: list[str], key: str) -> list[str]:
+    """A frontmatter LIST field's current values, `[]` for an absent or unreadable one."""
+    start, raw = top_level_key_line(front_lines, key)
+    if start < 0:
+        return []
+    inline = raw.strip()
+    if inline:
+        return _parse_list_value(inline)
+    _start, end = top_level_key_span(front_lines, key)
+    return _parse_list_value(
+        "\n".join(line.strip() for line in front_lines[start + 1:end] if line.strip()))
+
+
+def with_list_field(front_lines: list[str], key: str, values: list[str]) -> list[str]:
+    """A frontmatter LIST field rewritten to exactly `values`, IN PLACE.
+
+    Always a flow list, always on the field's own single line: the fields this rewrites have
+    shapes nobody chose (the entity template writes `aliases: []`), and reproducing a block
+    sequence's indentation would be a second opinion about a shape `with_related_link` already
+    owns. A field the page does not declare is APPENDED at the end of the frontmatter, which is
+    the one place a new line cannot land inside somebody else's block.
+    """
+    start, _raw = top_level_key_line(front_lines, key)
+    line = f"{key}: {_yaml_list(values)}"
+    if start < 0:
+        return [*front_lines, line]
+    _start, end = top_level_key_span(front_lines, key)
+    return front_lines[:start] + [line] + front_lines[end:]
+
+
+def with_scalar_field(front_lines: list[str], key: str, value: str) -> list[str]:
+    """A frontmatter SCALAR field rewritten to `value`, IN PLACE, with the same append rule."""
+    start, _raw = top_level_key_line(front_lines, key)
+    line = f"{key}: {_yaml_scalar(value)}"
+    if start < 0:
+        return [*front_lines, line]
+    _start, end = top_level_key_span(front_lines, key)
+    return front_lines[:start] + [line] + front_lines[end:]
+
+
 # Public aliases for `repair.entity_body` and `repair.deletion`, which write one frontmatter scalar
 # and one frontmatter LIST of their own: a page whose `related:` line was re-emitted by a different
 # escaper is a page the contract linter reads differently from the one this module wrote.

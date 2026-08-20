@@ -474,3 +474,43 @@ def test_add_source_citation_adds_the_line_when_the_draft_has_none():
     text, values = page_policy.add_source_citation(drafted, "acme-thread")
     assert values == ["[[acme-thread]]"]
     assert 'sources: ["[[acme-thread]]"]' in text
+
+
+# ── the shared frontmatter line editors (`repair.entity_alias` and `entities.decide` both write
+# through these; one opinion about block sequences, re-cased keys and where a new line lands) ────
+_ENTITY_PAGE = ('---\ntype: entity\ntitle: "Globex"\naliases: []\nrelated:\n  - "[[A]]"\n'
+                'entity: ["globex"]\n---\n\n# Globex\n')
+
+
+def test_front_and_tail_round_trips_byte_for_byte():
+    front, tail = page_policy.front_and_tail(_ENTITY_PAGE)
+    assert front[0] == "type: entity"
+    assert page_policy.rebuild(front, tail) == _ENTITY_PAGE
+
+
+def test_front_and_tail_refuses_a_page_with_no_block():
+    with pytest.raises(ValueError, match="no `---` frontmatter block"):
+        page_policy.front_and_tail("# Just a body\n")
+
+
+def test_list_field_values_reads_flow_and_block_shapes():
+    front, _ = page_policy.front_and_tail(_ENTITY_PAGE)
+    assert page_policy.list_field_values(front, "entity") == ["globex"]
+    assert page_policy.list_field_values(front, "related") == ["[[A]]"]
+    assert page_policy.list_field_values(front, "aliases") == []
+    assert page_policy.list_field_values(front, "nope") == []
+
+
+def test_with_list_field_rewrites_in_place_and_appends_an_absent_field():
+    front, tail = page_policy.front_and_tail(_ENTITY_PAGE)
+    rewritten = page_policy.with_list_field(front, "related", ["[[A]]", "[[B]]"])
+    assert rewritten[3] == 'related: ["[[A]]", "[[B]]"]'     # the block collapsed onto ONE line
+    assert len(rewritten) == len(front) - 1
+    appended = page_policy.with_list_field(front, "proposed_aliases", ["GX"])
+    assert appended[-1] == 'proposed_aliases: ["GX"]' and appended[:-1] == front
+
+
+def test_with_scalar_field_rewrites_in_place_and_appends_an_absent_field():
+    front, _ = page_policy.front_and_tail(_ENTITY_PAGE)
+    assert page_policy.with_scalar_field(front, "title", "Globex Corp")[1] == 'title: "Globex Corp"'
+    assert page_policy.with_scalar_field(front, "approved_by", "marc")[-1] == 'approved_by: "marc"'

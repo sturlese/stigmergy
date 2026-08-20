@@ -97,3 +97,50 @@ def test_a_top_level_array_registry_is_refused_loudly_not_an_attribute_error(tmp
     p.write_text('[{"name": "Acme"}]', encoding="utf-8")
     with pytest.raises(ValueError, match="top level must be an object"):
         load_registry(str(p))
+
+
+# ── the lifecycle keys: a proposal resolves like an approval, and absence is not a proposal ──────
+def test_a_proposed_entity_and_its_proposed_aliases_resolve_and_round_trip(tmp_path):
+    """The librarian files a capture about a new name by creating the entity itself, unconfirmed.
+    The whole point of proposing rather than parking is that nothing waits: the next capture using
+    the name — or the proposed spelling — anchors to the same id. So both are keyed like approved
+    spellings, and both survive `save_registry`/`load_registry` with their lifecycle intact."""
+    from stigmergy.kernel.registry import entry, registry_text
+
+    reg = Registry()
+    reg.entities["scircle"] = entry("Scircle", "organization", proposed=True)
+    reg.entities["ferrovial-nexus"] = entry("Ferrovial Nexus", "organization", ["FN"],
+                                            approved_by="marc", proposed_aliases=["Ferrovial"])
+    for cid, e in reg.entities.items():
+        from stigmergy.kernel.registry import index_entity
+        index_entity(reg, cid, e)
+    assert reg.canonical_id("Scircle") == "scircle"
+    assert reg.canonical_id("Ferrovial") == "ferrovial-nexus"       # the PROPOSED spelling
+    assert reg.collision_id("scircle ltd") == "scircle"              # a proposal blocks a twin too
+    assert reg.is_proposed("scircle") and not reg.is_proposed("ferrovial-nexus")
+    assert reg.proposed_ids() == ["scircle"]
+    assert reg.proposed_alias_pairs() == [("ferrovial-nexus", "Ferrovial")]
+
+    path = str(tmp_path / "entity-registry.json")
+    save_registry(path, reg)
+    written = json.loads(pathlib.Path(path).read_text())
+    assert written["entities"]["scircle"] == {
+        "aliases": [], "approved_by": "", "name": "Scircle", "proposed": True,
+        "proposed_aliases": [], "type": "organization"}
+    assert written["entities"]["ferrovial-nexus"]["proposed_aliases"] == ["Ferrovial"]
+    again = load_registry(path)
+    assert again.is_proposed("scircle") and again.canonical_id("Ferrovial") == "ferrovial-nexus"
+    assert registry_text(again) == registry_text(reg)
+
+
+def test_a_registry_written_before_the_lifecycle_keys_reads_as_approved(tmp_path):
+    """The benign twin, and the migration in one line: every entity in a pre-lifecycle file was
+    born through a steward's door. Absent is NOT proposed — or the day this shipped, every
+    deployment's inbox would have asked a steward to re-approve their whole registry."""
+    path = _registry_file(tmp_path, {
+        "globex": {"name": "Globex", "type": "organization", "aliases": ["GX"]}})
+    reg = load_registry(path)
+    assert reg.is_proposed("globex") is False
+    assert reg.proposed_ids() == [] and reg.proposed_alias_pairs() == []
+    assert reg.entities["globex"]["approved_by"] == ""
+    assert reg.is_proposed("never-registered") is False   # unknown is refused elsewhere, by name

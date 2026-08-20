@@ -36,11 +36,16 @@ sources: []
 <One clear paragraph: what this entity is and why it's in the brain.>
 """
 
+# The registry's full on-disk shape, lifecycle keys included (`kernel.registry.registry_text`
+# writes every key on every entry), so a fresh regeneration of the seeded repo is byte-identical.
+# The two seeded PAGES carry no `approved_by` at all — they predate the field — and read as
+# approved, which is exactly what `proposed: false` with an empty approver says.
 REGISTRY = {
     "entities": {
-        "jordan-reyes": {"aliases": ["Jordan Reyes Gaya"], "name": "Jordan Reyes",
-                          "type": "person"},
-        "stigmergy": {"aliases": ["The Company Brain"], "name": "Stigmergy", "type": "product"},
+        "jordan-reyes": {"aliases": ["Jordan Reyes Gaya"], "approved_by": "", "name": "Jordan Reyes",
+                          "proposed": False, "proposed_aliases": [], "type": "person"},
+        "stigmergy": {"aliases": ["The Company Brain"], "approved_by": "", "name": "Stigmergy",
+                      "proposed": False, "proposed_aliases": [], "type": "product"},
     }
 }
 

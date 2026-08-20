@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 
 from stigmergy.entities.errors import EntityError
 from stigmergy.kernel import frontmatter as graph_pages
+from stigmergy.kernel import registry as registry_module
 from stigmergy.kernel.normalize import normalize, slugify
 from stigmergy.kernel.registry import Registry, index_entity, load_registry, save_registry
 
@@ -23,6 +24,14 @@ log = logging.getLogger(__name__)
 # Repo-relative, slash-separated — git paths first, filesystem paths second.
 ENTITIES_RELDIR = "wiki/entities"
 REGISTRY_RELPATH = "ops/entity-registry.json"
+
+# The PAGE-side spelling of the two lifecycle facts; `kernel.registry` carries the registry side,
+# and `registry_of` is where the two meet. `approved_by` PRESENT AND EMPTY is a proposal — the
+# librarian wrote the page and nobody has confirmed the identity; a page with no such key at all
+# predates the field and was born through a steward's door, so it reads as approved. Absent is
+# not proposed, or every entity minted before this field existed would land in the inbox.
+APPROVED_BY_KEY = "approved_by"
+PROPOSED_ALIASES_KEY = "proposed_aliases"
 
 # The only command this subsystem tells anyone to run — a message containing a command is an
 # executable promise. This exact string is also written by hand in the knowledge repo's own
@@ -54,12 +63,16 @@ def canonical_id_for(name: str) -> str:
 
 @dataclass(frozen=True)
 class PageEntity:
-    """One entity page's identity claim, as the generator read it."""
+    """One entity page's identity claim, as the generator read it — and its lifecycle: whether
+    a person has confirmed it yet, who, and which spellings still wait for one."""
     canonical_id: str
     name: str
     entity_type: str
     aliases: tuple[str, ...]
     relpath: str
+    proposed: bool = False
+    approved_by: str = ""
+    proposed_aliases: tuple[str, ...] = ()
 
 
 def entities_dir(repo: str) -> str:
@@ -70,11 +83,11 @@ def registry_path(repo: str) -> str:
     return os.path.join(repo, *REGISTRY_RELPATH.split("/"))
 
 
-def _aliases_of(front: dict) -> tuple[str, ...]:
-    """`aliases` as a tuple of clean strings. A scalar is accepted as a one-element list — the
+def _list_of(front: dict, key: str) -> tuple[str, ...]:
+    """A list field as a tuple of clean strings. A scalar is accepted as a one-element list — the
     linter already flags it, and refusing here would let one lint error block every other
     entity's registration."""
-    declared = front.get("aliases")
+    declared = front.get(key)
     if declared is None or declared == "":
         return ()
     values = declared if isinstance(declared, list) else [declared]
@@ -122,11 +135,15 @@ def read_entity_pages(repo: str) -> list[PageEntity]:
                 f"{relpath} has the title {name!r}, which produces no usable registry id — it is "
                 f"all punctuation or non-Latin characters. Titles become ids by slug, so this one "
                 f"cannot be registered as written")
+        approved_by = front.get(APPROVED_BY_KEY)
         out.append(PageEntity(
             canonical_id=canonical_id, name=name,
             entity_type=str(front.get("entity_type") or DEFAULT_ENTITY_TYPE).strip()
             or DEFAULT_ENTITY_TYPE,
-            aliases=_aliases_of(front), relpath=relpath))
+            aliases=_list_of(front, "aliases"), relpath=relpath,
+            proposed=approved_by is not None and not str(approved_by).strip(),
+            approved_by=str(approved_by or "").strip(),
+            proposed_aliases=_list_of(front, PROPOSED_ALIASES_KEY)))
 
     duplicates = _duplicate_ids(out)
     if duplicates:
@@ -195,8 +212,9 @@ def registry_of(entities) -> Registry:
     """
     registry = Registry()
     for entity in entities:
-        registry.entities[entity.canonical_id] = {
-            "name": entity.name, "type": entity.entity_type, "aliases": list(entity.aliases)}
+        registry.entities[entity.canonical_id] = registry_module.entry(
+            entity.name, entity.entity_type, entity.aliases, proposed=entity.proposed,
+            approved_by=entity.approved_by, proposed_aliases=entity.proposed_aliases)
     _index(registry)
     return registry
 
@@ -241,7 +259,16 @@ class RegenerateOutcome:
 
 def _describe(entity: dict) -> str:
     aliases = ", ".join(entity.get("aliases") or ()) or "none"
-    return f"name: {entity.get('name')}, type: {entity.get('type')}, aliases: {aliases}"
+    return (f"name: {entity.get('name')}, type: {entity.get('type')}, aliases: {aliases}, "
+            f"{_lifecycle(entity)}")
+
+
+def _lifecycle(entity: dict) -> str:
+    """One entry's lifecycle in the words a steward acts in."""
+    if entity.get(registry_module.PROPOSED_KEY):
+        return "proposed (nobody has approved it yet)"
+    approver = entity.get(registry_module.APPROVED_BY_KEY) or ""
+    return f"approved by {approver}" if approver else "approved (before approvals were recorded)"
 
 
 def compare(derived: Registry, committed: Registry, *,
@@ -283,7 +310,26 @@ def compare(derived: Registry, committed: Registry, *,
                 f"{REGISTRY_RELPATH} carries alias(es) "
                 f"{', '.join(repr(a) for a in missing)} for {mine['name']!r} that {page} no longer "
                 f"declares — run `{FIX_COMMAND}` to fix it")))
+        # The lifecycle is a registry FACT like the type: an approval the page records and the
+        # registry does not is an entity the inbox keeps asking about, and the reverse is an
+        # identity nobody confirmed that every reader treats as confirmed.
+        if _lifecycle(mine) != _lifecycle(theirs):
+            out.append(Divergence(canonical_id, (
+                f"{mine['name']!r} ({page}) is {_lifecycle(mine)} but {REGISTRY_RELPATH} says "
+                f"{_lifecycle(theirs)} — run `{FIX_COMMAND}` to fix it")))
+        proposed_key = registry_module.PROPOSED_ALIASES_KEY
+        mine_proposed = sorted(set(mine.get(proposed_key) or ()))
+        theirs_proposed = sorted(set(theirs.get(proposed_key) or ()))
+        if mine_proposed != theirs_proposed:
+            out.append(Divergence(canonical_id, (
+                f"{mine['name']!r} ({page}) has the proposed alias(es) "
+                f"{_fmt_list(mine_proposed)} but {REGISTRY_RELPATH} has {_fmt_list(theirs_proposed)} "
+                f"— run `{FIX_COMMAND}` to fix it")))
     return out
+
+
+def _fmt_list(values) -> str:
+    return ", ".join(repr(v) for v in values) or "none"
 
 
 def check(repo: str) -> RegenerateOutcome:
