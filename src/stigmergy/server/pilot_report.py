@@ -61,12 +61,26 @@ def shape_of(result) -> str:
     return SHAPE_CITED if result.get("citations") else SHAPE_UNCITED
 
 
+# Python truthiness, as a JSONB comparison: a value is falsy iff it is absent, JSON null, false,
+# zero, an empty string, an empty array or an empty object — exactly what `if value:` answers for
+# a decoded JSON value, and the only reading that CANNOT raise.
+#
+# It replaced a cast (`(result ->> 'citations')::int`), and the difference is not style: this
+# column is JSONB with no CHECK under it, and what a past writer left there is permanent. Most
+# `ask` rows on a deployment that has been running a while carry `citations` as the pre-
+# `audit_summary` LIST of page paths, so the cast raised `InvalidTextRepresentation` on real data
+# while every test that fed it today's integer stayed green.
+def _truthy_sql(expression: str) -> str:
+    return (f"({expression} IS NOT NULL AND {expression} NOT IN "
+            f"('null'::jsonb, 'false'::jsonb, '0'::jsonb, '\"\"'::jsonb, '[]'::jsonb, '{{}}'::jsonb))")
+
+
 # `shape_of` as SQL, for the grouped per-day read: the same precedence (refused first), the same
-# truthiness (a JSON `true`, a non-zero citation count). `tests/server/test_pilot_report.py` pins
-# the two against each other on the same rows, so the SQL cannot drift from the function it mirrors.
+# truthiness. `tests/server/test_pilot_report.py` pins the two against each other over every JSON
+# shape the column can hold, so the SQL cannot drift from the function it mirrors.
 _SHAPE_SQL = f"""
-CASE WHEN COALESCE((result ->> 'refused')::boolean, false) THEN '{SHAPE_REFUSED}'
-     WHEN COALESCE((result ->> 'citations')::int, 0) > 0 THEN '{SHAPE_CITED}'
+CASE WHEN {_truthy_sql("result -> 'refused'")} THEN '{SHAPE_REFUSED}'
+     WHEN {_truthy_sql("result -> 'citations'")} THEN '{SHAPE_CITED}'
      ELSE '{SHAPE_UNCITED}' END
 """
 
