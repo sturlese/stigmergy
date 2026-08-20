@@ -161,17 +161,21 @@ plus an `Approved-by:` trailer naming the human.
 
 Pinned in `tests/test_architecture.py`: this package imports `capture`, `stigmergy.kernel` and a
 declared set of `librarian` modules (`gitcmd`/`errors`, `config`, `gates`, `githubapp`); `cli.py`
-additionally reaches `stigmergy.index` for the one connection seam. The `librarian.gates` edge is
+additionally reaches `stigmergy.index` for the one connection seam and `stigmergy.review_kinds` for
+the kind its ledger row names — the root module exists so two packages that may not import each
+other still spell that string once. The `librarian.gates` edge is
 the secrets scanner and only that: `approve`/`create` commit `--no-verify`, so this scan is the
 one that runs — the governed door into `main` (where a secret can never be deleted from) must not
 be the unscanned one. It never imports `server` or `answer`; `librarian`, `capture` and `views`
-never import it back. Two inbound edges exist, both named, symbol-scoped exceptions with their own
-architecture tests: `stigmergy.server.review` (the review inbox: `situations`,
+never import it back. Three inbound edges exist, each a named, symbol-scoped exception with its own
+architecture test. Two are MINT doors: `stigmergy.server.review` (the review inbox: `situations`,
 `generator.canonical_id_for`/`ENTITY_TYPES`, `remote`, the two error names) and `stigmergy.admin`
 (the console: `situations`, `generator`, `errors`) — both walk the same governed mint door
 (`remote.mint_via_clone` -> `mint.mint`), the console reaching it through
-`server.review.mint_and_record_approval` rather than through `remote` itself, and neither edge is
-a license for the other to widen.
+`server.review.mint_and_record_approval` rather than through `remote` itself. The third is not a
+door at all: `stigmergy.repair.entity_alias` reaches `generator` and `errors` to REGENERATE
+`ops/entity-registry.json` inside a governed merge commit, because the registry has exactly one
+writer and hand-building that file would be a second. No edge is a license for another to widen.
 
 ## Proofs that live elsewhere
 

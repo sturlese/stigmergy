@@ -32,7 +32,9 @@ Narrative doc: [`docs/reference/hybrid-index.md`](../../../docs/reference/hybrid
 - `search.py` — the shared base query every caller rides: both arms under the same
   `_filter_clause` and pool, `FILTER_COLUMNS` (the one list of filterable columns; `entity` is
   membership over `text[]`), `search()`/`search_arms()`, the told parameters `entity_hint` and
-  `fts_expansion` (lexical arm only). Never add a raw `acl` filter — enforcement is above.
+  `fts_expansion` (lexical arm only). An EMPTY query is a `ValueError` raised before the meta read,
+  so the ask agent's search tool repairs one tool call instead of dying on the embedding provider's
+  400. Never add a raw `acl` filter — enforcement is above.
 - `store.py` — all SQL DDL and writes: `init_schema` drops `pages_index` BY NAME (the durable
   tables share the database), `create_search_indexes` (after the bulk load), the writers over the
   one column list `PAGE_COLUMNS` (`_UPSERT_SET` excludes `inlinks` so an update never clobbers

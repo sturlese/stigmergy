@@ -9,7 +9,7 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 
 | Module | What it is |
 |---|---|
-| `llm.py` | `build_model()` (CLEAN_MODEL / CLEAN_REASONING_EFFORT, call-time reads; a bare name means the OpenAI Responses API with an explicit reasoning effort, a `provider:model` string is resolved by pydantic-ai) and `build_processor()` — the ONE fake/real agent dispatch; tool registration stays with the caller via the `tools` hook; optional `model_name` for a caller outside the CLEAN_MODEL convention; `model_override(model)` is the PUBLIC test seam — an explicit pydantic-ai model object (a `FunctionModel`/`TestModel`) that `build_model` answers with inside the block, so any package proves a tool-loop property against the real Agent, keyless, without reaching into this module |
+| `llm.py` | `build_model()` — the two-form convention's ONE implementation: a bare name is the OpenAI Responses API with an EXPLICIT reasoning effort, a `provider:model` string is resolved by pydantic-ai, whose provider reads its own key. The caller may NAME both the model and its own `reasoning_effort`; CLEAN_MODEL / CLEAN_REASONING_EFFORT are the fallback, read at call time. `build_processor()` — the ONE fake/real agent dispatch; tool registration stays with the caller via the `tools` hook; optional `model_name` for a caller outside the CLEAN_MODEL convention; `model_override(model)` is the PUBLIC test seam — an explicit pydantic-ai model object (a `FunctionModel`/`TestModel`) that `build_model` answers with inside the block, so any package proves a tool-loop property against the real Agent, keyless, without reaching into this module |
 | `result.py` | `fake_result(output)` — the `(.output, .usage)` envelope every offline double returns from `run()` |
 | `usage_repair.py` | `ensure_usage_extraction_repaired()` — the shim for the pinned pydantic-ai's silent all-zero token extraction on OpenAI reasoning models; idempotent, call-time, defers to the original so it retires itself on a fixed version; installed by every agent-construction site in the process |
 | `settings.py` | `resolve_backend()` — the ONE parse+validation of `$CLEAN_LLM` (`openai`/`fake`/`fake-flawed`), read at call time — plus `PROVIDER_KEY_ENV`/`provider_of`, the one provider→key table and prefix predicate (framework-free, so keyless modules can consult them; the librarian's preflight re-exports both) |
@@ -23,6 +23,11 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 
 ## Reuse — one definition per concern
 
+- `llm.build_model` for a caller that resolves a model of its OWN: `answer.synthesize` names
+  ANSWER_MODEL and that call's reasoning effort through its parameters instead of carrying a copy
+  of the bare-vs-prefixed branch, and gets the usage repair and the `model_override` seam with it.
+  A second spelling of the two-form convention is how two surfaces start disagreeing about what a
+  model string means.
 - `llm.build_processor` for any new agent-building module, anywhere — never re-type the
   fake-vs-real branch.
 - `result.fake_result` for any new fake backend — never a hand-rolled `.output`/`.usage` namespace.
@@ -82,9 +87,11 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
   (`openrouter:qwen/qwen3-vl-8b-instruct`): pdftoppm-rasterized page images through pydantic-ai
   — output box bounded by `-scale-to` (a fixed DPI is a raster bomb on a max-MediaBox page),
   both subprocesses and the model call on their own clocks, at most `MAX_VISION_PAGES` pages
-  with a spoken cut and `pages`/`truncated` returned as data beside it. The configured id is
-  returned as provenance either way, and `vision_config_error` is the one answer to "can this
-  run, and if not why" (`librarian.processing` asks it before paying for a call; a KNOWN prefix
+  with a spoken cut and `pages`/`truncated` returned as data beside it. Either form returns the
+  configured id as provenance and the pass's token `usage` (`None` when the framework reported
+  none — absent is honest where a zero reads as free), which is what lets `librarian.processing`
+  price an OCR exactly as it prices a filing pass. `vision_config_error` is the one answer to "can
+  this run, and if not why" (`librarian.processing` asks it before paying for a call; a KNOWN prefix
   with no key is unconfigured with the variable named, an unknown prefix is configured by
   naming itself).
 - `normalize.py`'s suite is `tests/kernel/test_normalize.py`, added with the split that gave it a
