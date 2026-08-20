@@ -700,3 +700,66 @@ def test_the_additive_summary_still_says_nothing_is_deleted_only_for_the_additiv
     assert summary.index("KIND_DELETE") < summary.index("Nothing is rewritten or deleted here"), (
         "the additive sentence is reached before the delete branch, so a deletion would be "
         "described as a change that deletes nothing")
+
+
+# ── the theme: three states, stamped before the first paint ────────────────────────────────────
+def test_the_theme_is_stamped_by_a_classic_script_before_the_module_graph():
+    """A chosen dark theme must not flash light on every load. A module is deferred until the
+    document is parsed, and the console's CSP (`script-src 'self'`) refuses an inline script — so
+    the early stamp is a classic script file, and it has to come BEFORE `app.js` in the head."""
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert (STATIC / "assets" / "theme.js").is_file(), "theme.js is not shipped"
+    theme_at = html.index('src="./assets/theme.js"')
+    app_at = html.index('src="./assets/app.js"')
+    assert theme_at < app_at, "theme.js loads after app.js — the stamp arrives too late to matter"
+    assert 'type="module"' not in html[html.rindex("<script", 0, theme_at):theme_at], (
+        "theme.js is loaded as a module, so it is deferred and the flash is back")
+
+
+def test_the_early_stamp_and_the_picker_agree_on_the_storage_key_and_the_state_names():
+    """`theme.js` (classic, cannot be imported) and `ui.js` (the picker) each spell the key and
+    the two stamped state names. A drift between them is silent: the picker would write a
+    preference the early stamp never reads, so the choice would only take effect after the module
+    graph loaded — the flash it exists to prevent, back for the one steward who chose."""
+    early = (STATIC / "assets" / "theme.js").read_text(encoding="utf-8")
+    ui = (STATIC / "assets" / "ui.js").read_text(encoding="utf-8")
+    assert '"stigmergy-ops-theme"' in early and '"stigmergy-ops-theme"' in ui, (
+        "the storage key is spelled differently in theme.js and ui.js")
+    for state in ('"light"', '"dark"'):
+        assert state in early and state in ui, f"{state} is not handled on both sides"
+    assert 'setAttribute("data-theme"' in early and 'setAttribute("data-theme"' in ui, (
+        "the two sides stamp different attributes")
+
+
+def test_every_colour_token_carries_both_themes():
+    """The tokens are declared once as `light-dark(light, dark)`, which is what makes a token
+    added to one theme and forgotten in the other impossible. A bare colour in `:root` is that
+    forgetting — it would render identically in both themes, invisibly, until somebody opened the
+    console in the other one. (`--accent-ink` is white in both by design, and the fallback block
+    under `@supports not` is the light palette on purpose.)"""
+    css = (STATIC / "assets" / "styles.css").read_text(encoding="utf-8")
+    root = css[css.index(":root {"):css.index("/* The three states.")]
+    allowed_single = {"--accent-ink"}
+    offenders = []
+    for line in root.splitlines():
+        name, _, value = line.strip().partition(":")
+        if not name.startswith("--") or name in allowed_single:
+            continue
+        looks_like_colour = re.search(r"#[0-9a-fA-F]{3,8}\b|\brgba?\(", value)
+        if looks_like_colour and "light-dark(" not in value and "var(--" not in value:
+            offenders.append(line.strip())
+    assert not offenders, (
+        "a colour token is declared for one theme only — say it as `light-dark(light, dark)` so "
+        "the pair cannot drift:\n  " + "\n  ".join(offenders))
+
+
+def test_the_theme_states_are_the_three_the_picker_offers():
+    """Auto stamps nothing (the OS decides through `color-scheme: light dark`); the two explicit
+    states pin the scheme, which is what lets a chosen LIGHT beat an OS in dark mode. All three
+    have to exist in the stylesheet, or a picker button would do nothing."""
+    css = (STATIC / "assets" / "styles.css").read_text(encoding="utf-8")
+    assert "color-scheme: light dark;" in css, "Auto has no rule — nothing follows the OS"
+    assert ':root[data-theme="light"] { color-scheme: light; }' in css
+    assert ':root[data-theme="dark"] { color-scheme: dark; }' in css
+    assert "@supports not (color: light-dark(" in css, (
+        "no fallback: a browser without light-dark() would render every token invalid")

@@ -37,6 +37,9 @@ for colour-vision deficiency in both modes.
   frontend never hardcodes a list that could drift
 - the Dashboard's live write path — the window's captures flowing through the model's draft and
   code's gates into landed / parked / refused / could-not-finish, with real counts
+- an appearance picker — Auto, Light or Dark — in the sidebar and on the login screen, remembered
+  in the browser and stamped before the first paint (no flash on the way in). Every colour token
+  is one `light-dark(light, dark)` declaration, so the two themes cannot drift apart
 
 ### Changed
 - the console's pages: Dashboard, Inbox, Captures, Entities, Repairs, Gardener, Index, Worker,

@@ -113,6 +113,10 @@ const ICONS = {
   sparkle: ["M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"],
   shield: ["M12 22c6-3 8-8 8-13V5l-8-3-8 3v4c0 5 2 10 8 13z", "M9 12l2 2 4-4"],
   branch: ["M6 3v12", "M18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6", "M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6", "M18 9a9 9 0 0 1-9 9"],
+  sun: ["M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8", "M12 2v2", "M12 20v2", "M4.9 4.9l1.4 1.4",
+        "M17.7 17.7l1.4 1.4", "M2 12h2", "M20 12h2", "M4.9 19.1l1.4-1.4", "M17.7 6.3l1.4-1.4"],
+  moon: ["M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"],
+  auto: ["M3 5h18v11H3z", "M8 20h8", "M12 16v4"],
 };
 
 // ── formatting — the CLI's own renderings, ported ─────────────────────────────────────────────
@@ -355,6 +359,52 @@ export function chips(items, onPick, opts = {}) {
     }, item.who ? keyDot(item.who, 7) : null, item.label,
       item.count !== undefined ? el("span", { class: "count" }, String(item.count)) : null)),
     ...(opts.trailing || []));
+}
+
+// ── the theme: Auto / Light / Dark ────────────────────────────────────────────────────────────
+// The KEY and the two state names are also spelled in `theme.js`, which stamps the attribute
+// before the first paint — a classic script cannot be imported by a module, and the flash is the
+// reason it is not one. `tests/admin/test_static_discipline.py` pins the two spellings together.
+const THEME_KEY = "stigmergy-ops-theme";
+const THEMES = [
+  { key: "auto", label: "Auto", icon: "auto", title: "follow this device's appearance setting" },
+  { key: "light", label: "Light", icon: "sun", title: "always light, whatever the device says" },
+  { key: "dark", label: "Dark", icon: "moon", title: "always dark, whatever the device says" },
+];
+
+export function currentTheme() {
+  try {
+    const stored = localStorage.getItem(THEME_KEY);
+    return stored === "light" || stored === "dark" ? stored : "auto";
+  } catch {
+    return "auto";   // storage denied — the OS decides, and the picker still shows the truth
+  }
+}
+
+export function applyTheme(theme) {
+  const root = document.documentElement;
+  if (theme === "light" || theme === "dark") root.setAttribute("data-theme", theme);
+  else root.removeAttribute("data-theme");
+  try {
+    if (theme === "auto") localStorage.removeItem(THEME_KEY);
+    else localStorage.setItem(THEME_KEY, theme);
+  } catch { /* the choice holds for this page even when it cannot be remembered */ }
+}
+
+// Three buttons rather than a cycling one: a steward can see which state is on, and reach the
+// one they want in a single click instead of guessing how many presses it takes.
+export function themePicker() {
+  const wrap = el("div", { class: "segmented themes", role: "group", "aria-label": "appearance" });
+  const draw = () => {
+    const active = currentTheme();
+    clear(wrap).append(...THEMES.map((theme) => el("button", {
+      class: active === theme.key ? "on" : "", type: "button", title: theme.title,
+      "aria-pressed": String(active === theme.key), "aria-label": theme.label,
+      onclick: () => { applyTheme(theme.key); draw(); },
+    }, icon(theme.icon, 15))));
+  };
+  draw();
+  return wrap;
 }
 
 // ── the "how to read this" explainer, remembered per page ────────────────────────────────────

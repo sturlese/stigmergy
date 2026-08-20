@@ -4,7 +4,9 @@
 import { api, clearToken, onUnauthorized, storedToken, storeToken } from "./api.js";
 import { page as pageCopy } from "./copy.js";
 import { notify, setMeta, setWindowDays, subscribe, windowDays } from "./state.js";
-import { banner, clear, el, explainer, icon, keyLegend, mountToasts, svg, toast } from "./ui.js";
+import {
+  banner, clear, el, explainer, icon, keyLegend, mountToasts, svg, themePicker, toast,
+} from "./ui.js";
 import { activityView } from "./views/activity.js";
 import { captureDetailView, capturesView } from "./views/captures.js";
 import { dashboardView } from "./views/dashboard.js";
@@ -173,6 +175,7 @@ function renderShell() {
         el("nav", { "aria-label": "sections" }, ...nav),
         el("div", { class: "nav-spacer" }),
         keyLegend(),
+        el("div", { class: "themerow" }, el("div", { class: "eyebrow" }, "appearance"), themePicker()),
         el("button", {
           class: "nav-item", type: "button",
           onclick: () => { clearToken(); window.location.reload(); },
@@ -231,7 +234,8 @@ function renderLogin(message) {
             el("input", { type: "password", autocomplete: "off", autofocus: true })),
           el("button", { class: "btn primary", type: "submit", style: { width: "100%", justifyContent: "center" } },
             "Open the console")),
-        el("div", { class: "login-key" }, keyLegend()))));
+        el("div", { class: "login-key" }, keyLegend(),
+          el("div", { class: "themerow" }, el("div", { class: "eyebrow" }, "appearance"), themePicker())))));
 }
 
 async function boot() {
