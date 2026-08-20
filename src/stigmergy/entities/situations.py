@@ -90,9 +90,19 @@ def mint_name_prefill(row: dict) -> str:
     the STRIPPED value, so the padding cannot smuggle it past.
     """
     names = subjects_of(row)
-    if len(names) != 1 or names[0].strip() == schema.UNNAMED_ENTITY_PLACEHOLDER:
+    if len(names) != 1 or not is_mintable_name(names[0]):
         return ""
     return names[0]
+
+
+def is_mintable_name(name: str) -> bool:
+    """May a mint door OFFER this unresolved name at all — as a prefill, as a per-name button, as
+    anything one click from a signed commit? `False` for exactly one value: the librarian's
+    `UNNAMED_ENTITY_PLACEHOLDER`, its own word for a park that named nothing, compared STRIPPED so
+    padding cannot smuggle it past. The one comparison `mint_name_prefill` and every surface listing
+    a park's names share; the terminal gate (`birth._clean_name`) refuses the same value by itself,
+    because a door that forgot to ask here must still be unable to mint it."""
+    return str(name or "").strip() != schema.UNNAMED_ENTITY_PLACEHOLDER
 
 
 def subject_of(row: dict) -> str:

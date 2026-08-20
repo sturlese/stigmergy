@@ -489,6 +489,33 @@ def test_counts_by_status_includes_every_status_with_zero_default(clean_queue):
     assert counts["filed"] == 0
 
 
+def test_outcomes_by_day_buckets_arrivals_by_utc_day_and_current_status(clean_queue):
+    """The time axis on `counts_by_status`: a row is counted under the day it ARRIVED and the
+    status it holds NOW — a claim moves the same arrival from `queued` to `claimed`, never adds a
+    second row. An empty window is an empty list, not a list of zeros: the caller draws the axis,
+    the store only says what happened."""
+    assert queue.outcomes_by_day(clean_queue, days=30) == []
+
+    ack_a, _ = _submit(clean_queue)
+    _submit(clean_queue)
+    queue.claim_next(clean_queue)   # claims ack_a (FIFO)
+
+    today = queue.outcomes_by_day(clean_queue, days=30)
+    assert {(r["status"], r["count"]) for r in today} == {("claimed", 1), ("queued", 1)}
+    assert len({r["day"] for r in today}) == 1, "both arrived today — one bucket"
+
+    # A row that arrived before the window is outside it, whatever its status.
+    with clean_queue.cursor() as cur:
+        cur.execute("UPDATE capture_queue SET created_at = now() - interval '40 days' WHERE id = %s",
+                    (ack_a["id"],))
+    assert queue.outcomes_by_day(clean_queue, days=30) == [
+        {"day": today[0]["day"], "status": "queued", "count": 1}]
+    # ...and back inside a wider one, under its own (older) day.
+    wider = queue.outcomes_by_day(clean_queue, days=60)
+    assert [r["status"] for r in wider] == ["claimed", "queued"], "ascending by day"
+    assert wider[0]["day"] < wider[1]["day"]
+
+
 # ── the queue survives an index rebuild ─────────────────────────────────────────────────────────
 def test_capture_queue_survives_stigmergy_index_rebuild(clean_queue):
     import pathlib
@@ -585,3 +612,24 @@ def test_searchable_latencies_ms_ignores_a_failed_webhook_run(clean_queue):
                        stats={"sha": "aaaa1111"}, error="RuntimeError")
 
     assert queue.searchable_latencies_ms(clean_queue, job_name="webhook-index-upsert") == []
+
+
+def test_outcomes_by_day_buckets_by_the_utc_day_whatever_the_session_timezone(clean_queue):
+    """The docstring says "UTC arrival day" — pinned here, because dropping `AT TIME ZONE 'UTC'`
+    changes nothing on a UTC session and everything on the deployed one. A row stamped at 23:30 UTC
+    is that UTC day in a UTC+14 session (where the local clock already reads tomorrow), and the
+    window edge is a UTC edge too."""
+    ack, _ = _submit(clean_queue)
+    with clean_queue.cursor() as cur:
+        cur.execute("UPDATE capture_queue SET created_at = (now() AT TIME ZONE 'UTC')::date"
+                    " + interval '23 hours 30 minutes' - interval '1 day' WHERE id = %s",
+                    (ack["id"],))   # yesterday 23:30 UTC
+        cur.execute("SELECT ((now() AT TIME ZONE 'UTC')::date - 1)::text")
+        yesterday_utc = cur.fetchone()[0]
+        cur.execute("SET TIME ZONE 'Pacific/Kiritimati'")   # UTC+14: 23:30 UTC reads as 13:30 tomorrow
+    try:
+        assert queue.outcomes_by_day(clean_queue, days=30) == [
+            {"day": yesterday_utc, "status": "queued", "count": 1}]
+    finally:
+        with clean_queue.cursor() as cur:
+            cur.execute("SET TIME ZONE DEFAULT")

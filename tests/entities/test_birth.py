@@ -458,3 +458,28 @@ def test_recheck_refuses_when_the_registry_moved_underneath_the_first_pass():
 def test_recheck_passes_when_nothing_relevant_moved():
     proposal = _prepare(canonical_id="globex", name="Globex", entity_type="organization")
     birth.recheck(proposal, registry=_registry(), existing_pages=())   # must not raise
+
+
+# ── the librarian's no-name placeholder is refused at the terminal gate ─────────────────────────
+def test_the_no_name_placeholder_is_refused_by_the_gate_every_door_passes_through():
+    """OLD BEHAVIOUR: only the PREFILL rule (`situations.mint_name_prefill`) knew the placeholder,
+    so a door that offered a park's names some other way — a per-name button, a typed name — could
+    hand `prepare` the librarian's own word for "nothing was named" and mint it as an identity
+    that then resolves for every future capture containing the phrase. The refusal is now at the
+    gate every door passes through, by value, padding and all."""
+    from stigmergy.capture import schema as capture_schema
+
+    with pytest.raises(EntityError, match="placeholder for a park that named nothing"):
+        _prepare(canonical_id="something-unnamed", name=capture_schema.UNNAMED_ENTITY_PLACEHOLDER,
+                 entity_type="organization")
+    with pytest.raises(EntityError, match="placeholder"):
+        _prepare(canonical_id="something-unnamed",
+                 name=f"  {capture_schema.UNNAMED_ENTITY_PLACEHOLDER}  ", entity_type="organization")
+
+
+def test_a_name_that_merely_contains_the_placeholder_words_still_mints():
+    """The benign twin: the refusal is by VALUE, not by substring — "Something Unnamed Records"
+    is an ordinary (if odd) name and the gate must not bounce it."""
+    proposal = _prepare(canonical_id="something-unnamed-records", name="Something Unnamed Records",
+                        entity_type="organization")
+    assert proposal.name == "Something Unnamed Records"

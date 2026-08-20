@@ -202,3 +202,20 @@ def test_the_runbooks_stranded_row_recovery_runs_and_is_guarded(conn):
     assert recovered["status"] == schema.STATUS_FAILED
     assert "operator" in recovered["error"]
     assert store.proposal(conn, landed)["status"] == schema.STATUS_APPLIED
+
+
+def test_counts_by_status_covers_every_status_over_the_whole_table(conn):
+    """Every declared status present with zero included, and counted over ALL rows — not a page:
+    a surface drawing a part-to-whole from a bounded page would understate history the moment the
+    page fills, which is the defect this aggregate exists to replace."""
+    assert store.counts_by_status(conn) == {s: 0 for s in schema.STATUSES}
+
+    first, second, third = _insert(conn, key="a"), _insert(conn, key="b"), _insert(conn, key="c")
+    store.mark_decided(conn, first, status=schema.STATUS_APPROVED, decided_by="marc")
+    store.mark_applied(conn, first, "abc123")
+    store.mark_decided(conn, second, status=schema.STATUS_REJECTED, decided_by="ana", notes="no")
+
+    counts = store.counts_by_status(conn)
+    assert counts == {schema.STATUS_PENDING: 1, schema.STATUS_APPROVED: 0,
+                      schema.STATUS_REJECTED: 1, schema.STATUS_APPLIED: 1, schema.STATUS_FAILED: 0}
+    assert third in {row["id"] for row in store.pending_proposals(conn)}

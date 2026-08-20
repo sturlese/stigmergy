@@ -229,3 +229,47 @@ def test_a_valid_since_is_accepted(capsys):
                               "postgresql://nobody@127.0.0.1:1/nothing"])
     assert code == 1                                   # a connection refusal, not an arg refusal
     assert "YYYY-MM-DD" not in capsys.readouterr().err
+
+
+# ── answer_shape_by_day: the report's classifier with a time axis, grouped in SQL ───────────────
+def test_shape_of_is_the_one_precedence_refused_then_cited_then_uncited():
+    assert pilot_report.shape_of({"refused": True, "citations": 3}) == pilot_report.SHAPE_REFUSED
+    assert pilot_report.shape_of({"refused": False, "citations": 2}) == pilot_report.SHAPE_CITED
+    assert pilot_report.shape_of({"refused": False, "citations": 0}) == pilot_report.SHAPE_UNCITED
+    assert pilot_report.shape_of({}) == pilot_report.SHAPE_UNCITED
+    assert pilot_report.shape_of("not a dict") == pilot_report.SHAPE_UNCITED
+
+
+def test_answer_shape_by_day_agrees_with_answer_shape_on_the_same_rows(clean_pilot_report_db):
+    """The SQL mirror of `shape_of` is pinned against the Python original on one set of rows:
+    summing the per-day buckets must reproduce `answer_shape`'s totals exactly. Errored calls and
+    successful ones with no recorded result are counted APART — `answer_shape` never sees them,
+    and the per-day read must not fold them into an answer shape either."""
+    conn = clean_pilot_report_db
+    now = datetime.now(UTC)
+    _write_ask_row(conn, identity="a", result={"refused": True, "citations": 0})
+    _write_ask_row(conn, identity="a", result={"refused": False, "citations": 2})
+    _write_ask_row(conn, identity="b", result={"refused": False, "citations": 0})
+    _write_ask_row(conn, identity="b", result=None)                     # ok, no shape recorded
+    _write_ask_row(conn, identity="b", result=None, outcome="error")    # errored
+    _write_ask_row(conn, identity="a", result={"refused": True}, ts=now - timedelta(days=3))
+    _write_ask_row(conn, identity="a", result={"refused": False, "citations": 1},
+                   ts=now - timedelta(days=40))                         # outside a 30-day window
+
+    by_day = pilot_report.answer_shape_by_day(conn, days=30)
+    assert len(by_day) == 2 and by_day[0]["day"] < by_day[1]["day"], "ascending by UTC day"
+    today = by_day[1]
+    assert today[pilot_report.SHAPE_REFUSED] == 1
+    assert today[pilot_report.SHAPE_CITED] == 1
+    assert today[pilot_report.SHAPE_UNCITED] == 1
+    assert today["unrecorded"] == 1 and today["errors"] == 1
+    assert by_day[0][pilot_report.SHAPE_REFUSED] == 1
+
+    whole = pilot_report.answer_shape(conn, since=now - timedelta(days=30))
+    summed = {shape: sum(bucket[shape] for bucket in by_day)
+              for shape in (pilot_report.SHAPE_REFUSED, pilot_report.SHAPE_CITED,
+                            pilot_report.SHAPE_UNCITED)}
+    assert summed == {pilot_report.SHAPE_REFUSED: whole["refused"],
+                      pilot_report.SHAPE_CITED: whole["answered_with_citation"],
+                      pilot_report.SHAPE_UNCITED: whole["answered_no_citation"]}
+    assert whole["total"] == sum(summed.values()), "neither read counts the unrecorded or errored"

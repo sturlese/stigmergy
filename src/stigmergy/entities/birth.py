@@ -19,6 +19,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
+from stigmergy.capture import schema as capture_schema
 from stigmergy.entities import generator
 from stigmergy.entities.errors import CollisionError, EntityError
 from stigmergy.kernel.registry import Registry
@@ -120,6 +121,15 @@ def _clean_name(name: str) -> str:
     value = " ".join(str(name or "").split())
     if not value:
         raise EntityError("--name is empty — an entity is a name before it is anything else")
+    if value == capture_schema.UNNAMED_ENTITY_PLACEHOLDER:
+        # The librarian's own word for a park that named nothing. Syntactically an ordinary name,
+        # and the doors that list a park's names refuse to OFFER it (`situations.is_mintable_name`)
+        # — but this is the terminal gate every door passes through, and an entity by this name
+        # would resolve for every future capture containing the phrase, forever.
+        raise EntityError(
+            f"--name is {value!r}, which is the librarian's placeholder for a park that named "
+            f"nothing — not an identity. Read the material and type the name it is about, or "
+            f"decline the capture")
     if len(value) > MAX_NAME_CHARS:
         raise EntityError(
             f"--name is {len(value)} characters (max {MAX_NAME_CHARS}) — it becomes a page title, "

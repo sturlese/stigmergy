@@ -9,10 +9,11 @@ else (lifespan included) flows to the inner app untouched.
 Gate order on the admin side: foreign `Host` -> 421, `/admin/api/*` without the admin bearer
 token -> generic 401, security headers on every response, static assets included.
 
-**The two Approve handlers run their service call in a worker thread** (`run_in_threadpool`), and
-they are the only ones that do. Both reach code that clones the knowledge repo, runs the eight
-gates — `git` and `gitleaks` subprocesses — and pushes: seconds of blocking work, on the event loop
-of a process that is also serving the MCP tools. The rejects stay inline because each is one
+**The two Approve handlers and `metrics` run their service call in a worker thread**
+(`run_in_threadpool`), and they are the only ones that do. The approves reach code that clones the
+knowledge repo, runs the eight gates — `git` and `gitleaks` subprocesses — and pushes: seconds of
+blocking work, on the event loop of a process that is also serving the MCP tools; `metrics` is a
+dozen aggregate queries the dashboard polls. The rejects stay inline because each is one
 statement. `AdminService`'s "no cursor across an `await`" invariant is untouched: the whole
 synchronous call happens inside the one thread, and the connection is the same autocommit one
 `slack.review` already reaches through `asyncio.to_thread`.
@@ -32,6 +33,7 @@ from stigmergy.admin import auth
 from stigmergy.admin.github import ActionsError, ActionsGateway
 from stigmergy.admin.schema import ensure_admin_schema
 from stigmergy.admin.service import (
+    DEFAULT_METRICS_DAYS,
     AdminBadRequest,
     AdminNotFound,
     AdminRefused,
@@ -164,6 +166,12 @@ class _AdminGate:
                                 b"max-age=31536000; includeSubDomains"))
                 if api:
                     headers.append((b"cache-control", b"no-store"))
+                else:
+                    # The shell and its modules: revalidate on every load (an ETag round trip),
+                    # never the heuristic freshness a header-less response gets — a deploy that
+                    # renames or splits a module would otherwise leave a browser running the old
+                    # `app.js` against new imports for hours, which renders as a blank page.
+                    headers.append((b"cache-control", b"no-cache"))
                 message = {**message, "headers": headers}
             await send(message)
 
@@ -314,8 +322,32 @@ def _build_admin_app(service: AdminService) -> Starlette:
         return service.index_substrate_check()
 
     @_json_endpoint
+    async def inbox(_request):
+        return service.inbox()
+
+    @_json_endpoint
+    async def metrics(request):
+        try:
+            days = int(request.query_params.get("days", str(DEFAULT_METRICS_DAYS)))
+        except ValueError as ex:
+            raise AdminBadRequest("'days' must be an integer") from ex
+        # A dozen aggregate queries, polled by the dashboard: off the event loop, like the two
+        # Approve handlers — the MCP tools share this process. The service holds no cursor
+        # across the call boundary, so the autocommit connection is safe to use from the thread.
+        return await run_in_threadpool(service.metrics, days=days)
+
+    @_json_endpoint
     async def entities_list(_request):
         return {"situations": service.entities_list()}
+
+    @_json_endpoint
+    async def entities_registry(_request):
+        return service.entities_registry()
+
+    @_json_endpoint
+    async def entities_resolve(request):
+        data = await _body(request)
+        return service.entities_resolve(data.get("names"))
 
     @_json_endpoint
     async def entities_show(request):
@@ -413,7 +445,11 @@ def _build_admin_app(service: AdminService) -> Starlette:
         Route(API_PREFIX + "digest/post", digest_post, methods=["POST"]),
         Route(API_PREFIX + "index", index_state, methods=["GET"]),
         Route(API_PREFIX + "index/check", index_check, methods=["POST"]),
+        Route(API_PREFIX + "inbox", inbox, methods=["GET"]),
+        Route(API_PREFIX + "metrics", metrics, methods=["GET"]),
         Route(API_PREFIX + "entities", entities_list, methods=["GET"]),
+        Route(API_PREFIX + "entities/registry", entities_registry, methods=["GET"]),
+        Route(API_PREFIX + "entities/resolve", entities_resolve, methods=["POST"]),
         Route(API_PREFIX + "entities/{id:int}", entities_show, methods=["GET"]),
         Route(API_PREFIX + "entities/{id:int}/approve", entities_approve, methods=["POST"]),
         Route(API_PREFIX + "repairs", repairs_list, methods=["GET"]),

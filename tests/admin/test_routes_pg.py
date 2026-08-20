@@ -100,6 +100,22 @@ def test_the_right_token_reaches_the_handler_with_the_security_headers(app):
     assert response.headers["strict-transport-security"] == "max-age=31536000; includeSubDomains"
 
 
+def test_the_shell_and_its_modules_revalidate_on_every_load(app):
+    """OLD BEHAVIOUR: `/admin/` and `/admin/assets/*` carried no `cache-control` at all, so a
+    browser applied heuristic freshness and kept running a deployed-over `app.js` against new
+    imports for hours — a module the new bundle had renamed came back 404 and the console rendered
+    as a blank page. `no-cache` makes every load an ETag round trip (a 304 when nothing moved);
+    the API keeps its stricter `no-store` (the benign twin, two lines down), because a response
+    there can carry captured text."""
+    for path in ("/admin/", "/admin/assets/app.js", "/admin/assets/views/entities.js",
+                 "/admin/assets/styles.css"):
+        response = _request(app, "GET", path, token=None)
+        assert response.status_code == 200, path
+        assert response.headers["cache-control"] == "no-cache", path
+        assert "etag" in response.headers or "last-modified" in response.headers, path
+    assert _request(app, "GET", "/admin/api/meta").headers["cache-control"] == "no-store"
+
+
 def test_the_root_path_redirects_into_the_shell(app):
     assert _request(app, "GET", "/admin", token=None).status_code == 307
 
