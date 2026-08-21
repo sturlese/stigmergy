@@ -118,6 +118,54 @@ def test_a_page_whose_only_reference_is_in_its_frontmatter_comes_back_byte_ident
         sweep.split_head(before)[1]
 
 
+def test_a_view_is_scrubbed_by_code_and_never_handed_to_the_writer(tmp_path, monkeypatch):
+    """**Found on the deployment.** The first real deletion handed the writer two `views/` pages
+    and two entity pages, and the model returned nothing — correctly: the brief it is given forbids
+    editing `views/` and `sources/`, and it was right to refuse.
+
+    It is right for a second reason too. A view is REGENERATED wholesale by the view sweep, so a
+    body a model wrote into one is bytes the next regeneration overwrites — and there is no prose
+    to reconcile in a generated rollup. So the machine zones stay code's, unlinked exactly as
+    ADR 039 B3 did it, and the writer is asked only about pages a person wrote."""
+    root = str(tmp_path)
+    _write(root, "wiki/notes/Doomed.md", _page("Doomed"))
+    _write(root, "views/doomed-entity.md",
+           "---\ntype: view\nrelated: []\n---\n\n# Doomed — view\n\n"
+           "- **2026-01-01** — [[Doomed]] (`wiki/notes/Doomed.md`)\n")
+    asked = []
+    real = sweep.build_sweep_writer
+    monkeypatch.setattr(sweep, "build_sweep_writer",
+                        lambda *a, **k: asked.append(1) or real(*a, **k))
+
+    ops = _written(root, ["wiki/notes/Doomed.md"])
+
+    assert deletion.scrubbed_paths(ops) == ["views/doomed-entity.md"]
+    assert deletion.written_paths(ops) == [], "a view is nobody's prose to write"
+    assert asked == [], "no model was asked about a generated file"
+    after = _after(ops, "views/doomed-entity.md")
+    assert not deletion.references(after, {"Doomed"})
+    assert "**2026-01-01** — Doomed (`wiki/notes/Doomed.md`)" in after, (
+        "unlinked, not shredded — the line that named the page survives it")
+    assert deletion.validate(root, ops) == []
+
+
+def test_an_authored_page_and_a_view_in_one_sweep_split_between_the_two_halves(tmp_path):
+    """The benign twin: a real deletion touches both kinds at once, and each takes its own road in
+    the same plan."""
+    root = str(tmp_path)
+    _write(root, "wiki/notes/Doomed.md", _page("Doomed"))
+    _write(root, "views/x.md", "---\ntype: view\nrelated: []\n---\n\n# X\n\nSee [[Doomed]].\n")
+    _write(root, "wiki/notes/Cites It.md",
+           _page("Cites It", body="# Cites It\n\nThe broker agreed, as [[Doomed]] records.\n"))
+
+    ops = _written(root, ["wiki/notes/Doomed.md"])
+
+    assert deletion.scrubbed_paths(ops) == ["views/x.md", "wiki/notes/Cites It.md"]
+    assert deletion.written_paths(ops) == ["wiki/notes/Cites It.md"]
+    for path in deletion.scrubbed_paths(ops):
+        assert not deletion.references(_after(ops, path), {"Doomed"})
+
+
 def test_a_plan_that_rewrites_no_page_asks_no_model_at_all(tmp_path, monkeypatch):
     """Nothing refers to the going page, so there is nothing to write: the plan returns as it
     came, and a writer that would have raised proves no call was made."""
