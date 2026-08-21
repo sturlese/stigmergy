@@ -26,7 +26,7 @@ Three properties buy this kind its safety, and each is asked of a different thin
     gate would later veto.
 
 Every link question is asked EXACTLY as the frozen contract linter asks it — code fences and inline
-code blanked first, alias and anchor split off, `PurePosixPath(target).stem` — and the regexes are
+code blanked first, alias and anchor split off, the last path segment minus `.md` — and the regexes are
 hand-mirrored from it rather than imported, the posture `entity_body` states for the same reason:
 this package talks to the linter through FILES. A scanner that sees more links than the linter edits
 prose nobody asked about; one that sees fewer leaves a dead link and a veto at apply time.
@@ -91,17 +91,16 @@ def _finding(code: str, message: str, locator: str = "") -> gates.Finding:
 def link_stem(target: str) -> str:
     """The page name a wikilink target resolves to, `""` when it names nothing.
 
-    `stigmergy_lint.link_targets` + its `Path(target).stem`, in one function. `PurePosixPath`
-    rather than `Path` so the answer cannot depend on which platform runs it — the linter's own
-    `Path` is a `PosixPath` everywhere this deploys.
-
-    It amputates a dotted name (`[[Booking.com]]` resolves to `Booking`), and that is the LINTER's
-    behaviour, not a bug introduced here: `index.corpus.link_targets` deliberately answers this
-    question differently because it is building an edge graph, while this one has to predict a
-    veto. Matching the wrong one would produce a plan that passes propose time and fails apply.
+    `stigmergy_lint.link_targets` + its `link_stem`, in one function: the last path segment, minus
+    a trailing `.md`, with every dot a title has kept. The linter once answered this with
+    `Path(target).stem`, which amputated a dotted name (`[[Booking.com]]` resolved to `Booking`),
+    and this mirror amputated with it on purpose — a plan that disagrees with the gate passes
+    propose time and fails apply. The linter stopped amputating (a live `[[Acme Inc. Invoice …]]`
+    was vetoed as dead), so this answers the same question the same new way.
     """
     text = str(target or "").split("|", 1)[0].split("#", 1)[0].strip()
-    return PurePosixPath(text).stem if text else ""
+    name = text.rsplit("/", 1)[-1]
+    return name[:-3] if name.lower().endswith(".md") else name
 
 
 def page_stem(path: str) -> str:

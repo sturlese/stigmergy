@@ -6,7 +6,7 @@
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/tools/stigmergy_lint.py` |
-| **Copied at commit** | `7feee011691388224f4dc0daf1644b9d90efae1c` |
+| **Copied at commit** | `34cd66856dfc246c4c29fbe22ffe83d53f206c83` |
 | **Drift guard** | none — and that is the point (see below) |
 
 ## Why this copy exists, and why it is NOT drift-guarded
