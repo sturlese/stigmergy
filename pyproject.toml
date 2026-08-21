@@ -13,6 +13,7 @@ license-files = ["LICENSE", "THIRD-PARTY-LICENSES.md"]
 dependencies = [
   "pydantic>=2.0",
   "pydantic-ai==2.13.0",      # the agents (answer synthesizer, view synthesis, gardener sweep) — pinned exactly: the agent framework's API drives tool wiring and output schemas, so a float would let a minor bump silently change behavior between CI and dev
+  "anthropic>=0.108.0,<1",    # pulled in by pydantic-ai; bounded below 1.0 because anthropic 1.0 takes an `httpx2.AsyncClient` as `http_client`, which the offline MockTransport tests (and pydantic-ai 2.13's provider wiring) do not speak yet — CI resolved 1.0.0 the day it shipped and went red on main's own green suite
   "httpx>=0.27",
   "openpyxl>=3.1",
   "xlrd>=2.0",                # legacy .xls (old BIFF); openpyxl only reads .xlsx
