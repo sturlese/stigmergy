@@ -27,15 +27,15 @@ def _clean(text: str, width: int = 0) -> str:
     return textutil.clamp(textutil.sanitize(str(text or "")).replace("\n", " "), width)
 
 
-# An IDENTITY field is not prose: `schema.SITUATION_NAME_KEY` comes off captured material and is
-# offered as the `--name` of a shell command, and `sanitize` strips control characters only. Stated
-# rather than imported because `entities` imports `librarian` and never the reverse.
+# An IDENTITY field is not prose: a proposed entity's name and id come off captured material and
+# are offered as the argument of a shell command (`stigmergy-entities approve <id>`), and
+# `sanitize` strips control characters only.
 _UNSAFE_IN_IDENTITY = set('/\\:*?"<>|[]#^') | set("'`$;&(){}!~\n\r\t")
 
 
 def _clean_identity(text: str, width: int = 0) -> str:
     """`_clean`, then shell/filename metacharacters stripped; for NAMES, never prose. Stripped
-    rather than refused: a capture must always be parkable, or a hostile name becomes a lost row."""
+    rather than refused: a capture must always be reportable, or a hostile name becomes a lost row."""
     return _clean("".join(c for c in str(text or "") if c not in _UNSAFE_IN_IDENTITY), width)
 
 
@@ -377,7 +377,7 @@ def injection_finding(category: str) -> str:
 # ── the second renderer: prose for a terminal ─────────────────────────────────────────────────
 def render_prose(report: dict) -> str:
     """The CLI's rendering of the same fact set; the summary sentence is reused verbatim.
-    `agent_rationale` renders unconditionally on the FILED path but only when present on the parked
+    `agent_rationale` renders unconditionally on the FILED path but only when present on the refused
     paths, which carry no field block."""
     lines = [report.get("summary", "")]
     status = report.get("status")

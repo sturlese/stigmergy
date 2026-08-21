@@ -1,11 +1,11 @@
 {
   "_comment": "Read by evals/run_filing.py through eval_history.corpus_provenance, so every `suite: \"filing\"` row in evals/history.ndjson says which fixture produced it. Lives at the mini repo's ROOT on purpose, exactly like evals/corpus/PROVENANCE.json: the content zones are wiki/, sources/ and views/, so nothing here is ever indexed as a page, linted as one, or visible to a capture.",
-  "frozen_at": "2026-08-12",
+  "frozen_at": "2026-08-21",
   "why": "The filing golden measures the ONE writer of the knowledge repo. Its score is only comparable across runs if every run filed into the same repo, under the same brief, judged by the same contract linter — so the whole mini repo is committed and frozen rather than assembled on demand. Same argument evals/corpus/PROVENANCE.json makes for the retrieval and QA corpus, applied to a fixture that is also an INPUT to the thing being measured rather than only a target for it.",
   "pages": 8,
   "entities": 6,
-  "stigmergy_sha": "abf6790bf7e6845d0f322645b36e41fa66f9f333",
-  "stigmergy_sha_note": "The ONE knowledge-repo commit every frozen copy in this tree matches byte for byte — the linter, both skills and the four templates. Recording it here is what lets a future reader answer 'which version of the librarian's brief scored this?', the question the series exists to answer and the one a fixture assembled at run time cannot. It is not the commit each copy was physically taken at: the librarian brief's bytes exist only at this commit, while the others are identical at this one and at its predecessor, so this is the single sha that describes the whole tree truthfully. Each FROZEN.md records the same one.",
+  "stigmergy_sha": "6bfc4a013ce7909e8f9bc571fe2d4d3809be1850",
+  "stigmergy_sha_note": "The ONE knowledge-repo commit every frozen copy in this tree matches byte for byte \u2014 the linter, both skills and the four templates \u2014 and, since ADR 041 moved all four in a single commit, also the commit each copy was physically taken at. Recording it here is what lets a future reader answer 'which version of the librarian's brief scored this?', the question the series exists to answer and the one a fixture assembled at run time cannot. Each FROZEN.md records the same one.",
   "frozen_copies": [
     ".claude/tools/stigmergy_lint.py",
     ".claude/skills/librarian/SKILL.md",
@@ -25,8 +25,8 @@
     "no machine-owned frontmatter": "No submitted_by, no acl, no content_hash on any page here. None of them was filed by the librarian; they are hand-authored, exactly as pages a steward wrote would be."
   },
   "unregistered_names": {
-    "Halcyon Grid": "F02's unresolvable organization — registering it would delete the parking case",
-    "Project Wren": "F09's unresolvable codename, same rule"
+    "Halcyon Grid": "F02's unregistered organization — registering it would delete the proposal case, which is the one the librarian answers by creating the entity page itself",
+    "Project Wren": "F09's unregistered codename, same rule, reached through the meeting flow"
   },
   "editing_policy": "Do not edit this tree to make a capture pass. Every entry already in evals/history.ndjson was measured against exactly these bytes, and a silent change re-grades all of them. A change that is genuinely warranted (the real brief moved far enough that this fixture stops representing production) retires the series and starts a new one, recorded in evals/README.md with a fresh baseline row."
 }

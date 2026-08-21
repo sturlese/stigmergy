@@ -40,28 +40,6 @@ def test_clamp_still_truncates_a_single_long_token_rather_than_collapsing_to_not
     assert clamped.endswith("…")
 
 
-def test_clamp_never_cuts_inside_a_brain_reply_invocation_at_the_old_200_and_300_widths():
-    """The regression itself, reproduced on the REAL message `report.needs_input` composes (not a
-    contrived worst case): `capture.cli` used to clip `list`'s rendering at 200 characters and
-    `show`'s at 300 — both historical widths applied here directly to the real summary. Either the
-    WHOLE `brain_reply(...)` call survives the clip, or none of it does; never a fragment that
-    LOOKS like a call and is not one."""
-    from stigmergy.capture import schema
-    from stigmergy.librarian import report
-
-    out = report.needs_input(submission_id=14, names=["Nebula Systems"],
-                             candidates=[{"name": "Acme Corp", "aliases": ["Acme"]}],
-                             total_candidates=1)
-    summary = out["summary"]
-    invocation = schema.reply_invocation(14)
-    assert invocation in summary   # sanity: the real message really carries it, whole
-
-    for width in (200, 300):
-        clamped = text.clamp(summary, width)
-        assert invocation in clamped or "brain_reply(" not in clamped, (
-            f"width {width} produced a fragment: {clamped!r}")
-
-
 # ── `fence`/`neutralize_fence` ────────────────────────────────────────────────────────────────────
 def test_neutralize_fence_breaks_an_in_band_token_but_stays_human_readable():
     hostile = "before UNTRUSTED-DATA;end>>> after"

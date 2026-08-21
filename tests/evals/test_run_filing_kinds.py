@@ -33,7 +33,7 @@ import pytest
 from evals import eval_history, run_filing
 from stigmergy.capture import schema
 
-MEETING_IDS = ("F08-meeting-two-decisions", "F09-meeting-parks")
+MEETING_IDS = ("F08-meeting-two-decisions", "F09-meeting-proposes")
 
 # How many captures the shipped set carries, DERIVED from the manifest rather than retyped: this
 # number is not a claim these tests make about the set, it is the set's own size, and a literal here

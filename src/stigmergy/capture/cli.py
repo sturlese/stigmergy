@@ -1,9 +1,10 @@
 """`stigmergy-queue` — the steward's view of the write path, without a SQL client.
 
-Eight subcommands (`list`, `show`, `claim`, `reclaim`, `requeue`, `resolve`, `reject`, `purge`),
-each a thin skin over the library — the same seams the server and the librarian call. The three
-dispositions are the steward's drain out of a park; `claim` deliberately processes nothing
-(draining is the librarian's job) and holding a claim is how a dead worker is simulated.
+Five subcommands (`list`, `show`, `claim`, `reclaim`, `purge`), each a thin skin over the library —
+the same seams the server and the librarian call. Nothing here decides a capture's fate: a capture
+files on its own, and what the librarian proposed is decided through `stigmergy-entities`. `claim`
+deliberately processes nothing (draining is the librarian's job) and holding a claim is how a dead
+worker is simulated.
 
 Errors here are LOCAL and may be specific — generic over HTTP, specific in a local CLI. This
 module is the ONLY place in `stigmergy.capture` that opens a database connection or reads the
@@ -148,9 +149,6 @@ def drop_main(argv, *, parser: argparse.ArgumentParser, prog: str, during: str =
         return 2
 
 
-# A steward's own words, headed for a submitter's report. The cleaning lives in
-# `dispositions.clean`, below every CLI, so no CLI can skip it; the local name keeps call sites
-# readable.
 # ── list ──────────────────────────────────────────────────────────────────────────────────────
 def _cmd_list(conn, args) -> int:
     rows = queue.query_submissions(conn, submitter=args.submitter, statuses=args.status or None,

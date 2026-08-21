@@ -29,8 +29,8 @@ GITLEAKS_BIN_ENV = "STIGMERGY_GITLEAKS_BIN"
 
 
 def mint(repo: str, *, entity_id: str, name: str, entity_type: str, aliases=(), role: str = "",
-         branch: str, today: str, author: tuple[str, str], submission_id: int | None = None,
-         trailer: str = "", on_output=None) -> dict:
+         branch: str, today: str, author: tuple[str, str], approved_by: str,
+         submission_id: int | None = None, trailer: str = "", on_output=None) -> dict:
     """Everything between "this identity is allowed to exist" and "it is on the remote".
 
     Shared in full by every mint path — the paths differ only in where `repo`/`author` come from
@@ -45,7 +45,7 @@ def mint(repo: str, *, entity_id: str, name: str, entity_type: str, aliases=(), 
     clone.ensure_on_branch(repo, branch, action=action)
     clone.ensure_clean(repo, action=action)
     clone.ensure_in_sync(repo, branch, action=action)
-    _refuse_drift(repo, action=action)
+    refuse_drift(repo, action=action)
 
     entities = generator.read_entity_pages(repo)
     proposal = birth.prepare(
@@ -64,14 +64,15 @@ def mint(repo: str, *, entity_id: str, name: str, entity_type: str, aliases=(), 
             f"its identity fields filled in, and this command does not carry its own copy (the "
             f"template is the knowledge repo's own source of truth for the page's shape)")
     with open(template_path, encoding="utf-8") as f:
-        page = birth.render_page(f.read(), proposal, today=today)
+        # A steward's own `create` IS the approval: the page is born confirmed, by name.
+        page = birth.render_page(f.read(), proposal, today=today, approved_by=approved_by)
 
     registry_path = generator.registry_path(repo)
     snapshot = generator.snapshot(repo)
     page_path = clone.write_page(repo, proposal.relpath, page)
     try:
         generator.regenerate(repo)
-        _refuse_secrets(repo, [proposal.relpath, generator.REGISTRY_RELPATH], action=action)
+        refuse_secrets(repo, [proposal.relpath, generator.REGISTRY_RELPATH], action=action)
     except BaseException:
         # Roll back by bytes we captured ourselves — never `git checkout` or `git clean`: the CLI
         # path is a human's clone, and a destructive git rollback is one bad predicate away from
@@ -101,7 +102,7 @@ def mint(repo: str, *, entity_id: str, name: str, entity_type: str, aliases=(), 
             "commit": landed, "steward": f"{author[0]} <{author[1]}>", "branch": branch}
 
 
-def _refuse_drift(repo: str, *, action: str) -> None:
+def refuse_drift(repo: str, *, action: str) -> None:
     """Refuse to mint into a clone whose registry and pages already disagree.
 
     `regenerate` would otherwise silently resolve somebody else's drift and publish the resolution
@@ -151,7 +152,7 @@ def _recheck_and_regenerate(repo: str, proposal: birth.Proposal, *, branch: str)
     return generator.regenerate(repo).changed
 
 
-def _refuse_secrets(repo: str, relpaths: list[str], *, action: str) -> None:
+def refuse_secrets(repo: str, relpaths: list[str], *, action: str) -> None:
     """gitleaks over the exact files this commit will carry, before it is made.
 
     What a mint commits includes `--role`/`--aliases` — free text typed with untrusted material on

@@ -9,6 +9,59 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
+## [0.7.0] - 2026-08-21
+
+**File first, govern after** ([ADR 041](./docs/decisions/041-file-first-govern-after.md)). A
+capture never waits on a person any more. A name the registry does not know used to park the
+capture on a question to its submitter and then on a steward; two of five real notes were cancelled
+by their own authors that way. Now the librarian files at once and PROPOSES the entity — a complete
+page with `approved_by: ""` and a `proposed` registry entry — and a steward approves, merges or
+declines it later, from whichever door is nearest, in one governed commit.
+
+### ⚠ BREAKING CHANGES
+- the capture statuses are `queued · claimed · filed · rejected · failed` (`resolved` survives
+  read-only on old rows). `needs_input` and `triage` are retired words the queue refuses by name;
+  rows found in them are returned to `queued` once at startup, so nothing already captured is lost
+- the `brain_reply` MCP tool is gone — nine tools, pinned by a test. `brain_submit`'s
+  acknowledgement now names the entities the capture will be filed against and says unknown ones
+  will be proposed
+- `review_queue` / `review_decide` speak two new item kinds, `identity-proposal` (item id = the
+  entity id; verdicts `approve`, `merge` with `into`, `decline`) and `alias-proposal` (item id =
+  `<entity id>:<alias>`; `approve`, `decline`); `entity-proposal` and `parked-capture` are read-only
+  legacy kinds on the rows that carry them
+- `stigmergy-queue` keeps `list · show · claim · reclaim · purge` and loses `requeue · resolve ·
+  reject`; `stigmergy-entities` is now `pending · approve · decline · merge · create · regenerate`
+  (`propose` is the librarian's job)
+- the admin console's `queue/{id}/requeue|resolve|reject` routes are gone; `entities/{id}` takes a
+  registry id; `entities/decide` and `entities/create` are new. The Captures page is read-only
+- entity pages carry `approved_by` (absent = confirmed before the field existed, `""` = proposed,
+  a name = who confirmed it) and `proposed_aliases`; the registry carries `proposed`,
+  `approved_by` and `proposed_aliases`. The knowledge repo's librarian and meeting-distiller briefs,
+  entity template and linter move with it — both repos ship together
+
+### Added
+- `librarian.identity` — the proposal writer: folds every new name against the registry with the
+  birth gate's own fold (a known name becomes a proposed spelling, never a twin), writes the
+  entity page from every field the reasoning filled, reads the ledger so a declined name is never
+  proposed twice, and tells the gates exactly what it wrote
+- the ninth gate, `identity`: every write under `wiki/entities/` is a declared proposal arriving
+  unconfirmed, or a proposed spelling proved byte for byte — nothing else
+- `entities.decide` — approve / merge / decline for an identity, approve / decline for a spelling,
+  one `apply` with preflight, drift refusal, secrets scan, one commit and rollback on a failed push;
+  `remote.decide_via_clone` for the deployed doors, `Decided-by:` trailer
+- the inbox is derived from the registry, `pages_index` and the ledger — no new table; proposed
+  entities are visible in search and `list_entities`, marked
+- the console's Entities desk: each proposal with the registry verdict on its name, merge
+  candidates, Approve / Merge into… / Decline, proposed spellings, the registry browser, and
+  **Register an entity** born confirmed with the live name check
+- the Slack card for a proposal, with the same three verbs
+- the filing report's proposals clause; the digest counts proposals decided
+
+### Removed
+- the ask-back: `brain_reply`, the `needs_input`/`triage` states, the three dispositions, the
+  parked-capture mint door, `entities.situations`, the console's queue drain, the meeting flow's
+  "reuse the parked distillation" rule (nothing is re-filed, so nothing is re-read)
+
 ## [0.6.0] - 2026-08-20
 
 The admin console grows up from a quick ops skin into a control room a steward or an admin can

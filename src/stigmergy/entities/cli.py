@@ -1,45 +1,35 @@
-"""`stigmergy-entities` — governed entity birth: list · show · approve · reject · create ·
-regenerate. Each subcommand is a thin skin over the library, in `stigmergy-queue`'s dialect
-(exit 130 on Ctrl-C, `--json` emitting the machine value first, shared renderings imported —
-`format_age`, `clean_for_terminal` (locally `_clean`) — never re-implemented).
+"""`stigmergy-entities` — a steward's door into the identity registry from their own clone:
+`pending` · `approve` · `decline` · `merge` · `create` · `regenerate`. Each subcommand is a thin
+skin over the library, in `stigmergy-queue`'s dialect (exit 130 on Ctrl-C, `--json` emitting the
+machine value first).
 
-Everything `show` prints about a capture is UNTRUSTED: every value crosses
-`capture.render.clean_for_terminal` (the same seam `stigmergy-queue show` uses — two renderers
-disagreeing about trust is how one ends up wrong), and the suggested approve command is built
-from a name only when `_suggestable` allows it, quoted even then; otherwise the name is printed
-on its own inert line and the steward types `--name` themselves. `reject` and `--requeue` ride
-`capture.dispositions`' own seams — a second triage->rejected path would be a second set of
-state guards to keep in agreement.
+The librarian PROPOSES identities as it files (`approved_by: ""` on the page); this tool is one of
+the three doors a steward decides them through (the console and `review_decide` over MCP are the
+others), and all three land the same commit through `entities.decide.apply`. A decision is
+recorded in the review ledger AFTER the push lands, attributed to the steward — the librarian
+reads that ledger to refuse re-proposing a declined identity, which is why `decline` (and its
+siblings) need the queue database and refuse to run without it: a decline nobody recorded is one
+the librarian re-proposes on the next capture.
 
-Exit codes: 0 the command did what it said; 1 it refused (a collision, a dirty clone, a
-non-situation row) or `--check` found drift; 2 the TOOL could not run (no repo, no database).
-
-Order of operations in `approve` — a correctness property: the queue row is requeued only AFTER
-the push lands, because a requeue that ran first would hand the librarian a capture whose entity
-is not yet on the remote it fetches from, and the capture would park a second time.
+Exit codes: 0 the command did what it said; 1 it refused (a collision, a dirty clone, an id that
+is not a proposal) or `--check` found drift; 2 the TOOL could not run (no repo, no database).
 """
 import argparse
 import datetime
 import json
-import shlex
 import sys
 
-from stigmergy.capture import decisions, dispositions, schema
+from stigmergy.capture import decisions, schema
 from stigmergy.capture.errors import CaptureError
-from stigmergy.capture.render import clean_for_terminal, format_age
-from stigmergy.entities import birth, clone, generator, situations
+from stigmergy.entities import birth, clone, decide, generator
 from stigmergy.entities import mint as mint_lib
 from stigmergy.entities.errors import EntityError
 from stigmergy.index import store
 from stigmergy.librarian import config as librarian_config
 from stigmergy.librarian.errors import LibrarianError
-from stigmergy.review_kinds import KIND_ENTITY_PROPOSAL
+from stigmergy.review_kinds import KIND_ALIAS_PROPOSAL, KIND_IDENTITY_PROPOSAL, alias_item_id
 
 _DUMP = {"ensure_ascii": False, "indent": 2}
-
-# `stigmergy-queue`'s cleaner under the short name this module's call sites read with — the
-# implementation is `capture.render`'s, never a second one.
-_clean = clean_for_terminal
 
 EXIT_REFUSED = 1
 EXIT_CANNOT_RUN = 2
@@ -48,8 +38,7 @@ EXIT_INTERRUPTED = 130
 
 def _repo(args) -> str:
     """The steward's clone. Same env var, default and checkout predicate as the librarian's
-    `--repo` and `stigmergy-views`' — it is the same checkout, told to one tool once, and it used
-    to be three tools disagreeing about whether a worktree is one."""
+    `--repo` and `stigmergy-views`' — it is the same checkout, told to one tool once."""
     path = librarian_config.repo_path(args.repo)
     if not librarian_config.is_repo_checkout(path):
         raise EntityError(
@@ -62,8 +51,8 @@ def _repo(args) -> str:
 def _connect(args):
     conn = store.connect(args.dsn)
     schema.ensure_capture_schema(conn)
-    # Without it, `approve` against a database no server has started on would mint, push, and then
-    # fail on the INSERT — after the irreversible half.
+    # Without it, a decision against a database no server has started on would push and then fail
+    # on the INSERT — after the irreversible half.
     decisions.ensure_decisions_schema(conn)
     return conn
 
@@ -77,255 +66,146 @@ def _aliases(values) -> list[str]:
     return out
 
 
-# ── list / show ───────────────────────────────────────────────────────────────────────────────
-def _cmd_list(conn, args) -> int:
-    rows = situations.list_pending_situations(conn, limit=args.limit)
+# ── pending ───────────────────────────────────────────────────────────────────────────────────
+def pending_in(repo: str) -> dict:
+    """What a steward has to decide, read from the clone's own pages — the registry is derived
+    from them, so the checkout is the inbox's source of truth."""
+    entities = generator.read_entity_pages(repo)
+    proposals = [{"id": e.canonical_id, "name": e.name, "entity_type": e.entity_type,
+                  "aliases": list(e.aliases), "page": e.relpath}
+                 for e in entities if e.proposed]
+    aliases = [{"entity_id": e.canonical_id, "entity_name": e.name, "alias": alias,
+                "page": e.relpath}
+               for e in entities for alias in e.proposed_aliases]
+    return {"entities": proposals, "aliases": aliases}
+
+
+def _cmd_pending(conn, args) -> int:
+    pending = pending_in(_repo(args))
     if args.json:
-        print(json.dumps(rows, **_DUMP, default=str))
+        print(json.dumps(pending, **_DUMP))
         return 0
-    if not rows:
-        print("no pending entity situations — nothing is parked on an identity decision")
+    if not pending["entities"] and not pending["aliases"]:
+        print("nothing pending — every identity and every spelling in this clone is confirmed")
         return 0
-    print(f"{len(rows)} pending entity situation(s)\n")
-    for row in rows:
-        subject = (f'"{_clean(row["subject"], MAX_SUBJECT_CHARS)}"' if row["subject"]
-                   else "(nothing recorded)")
-        asked = "asked" if row.get("asked_at") else ""
-        print(f"  #{row['id']:<5} {row['situation']:<18} {subject:<34} {asked:<6} "
-              f"parked {format_age(row.get('parked_age_ms'))}")
-    print("\n  stigmergy-entities show <id>   the material, the agent's reading and the next command")
+    if pending["entities"]:
+        print(f"{len(pending['entities'])} proposed identit"
+              f"{'y' if len(pending['entities']) == 1 else 'ies'}:\n")
+        for item in pending["entities"]:
+            listed = f" (aliases: {', '.join(item['aliases'])})" if item["aliases"] else ""
+            print(f"  {item['id']:<28} {item['entity_type']:<13} {item['name']}{listed}")
+        print("\n  stigmergy-entities approve <id>            confirm it")
+        print("  stigmergy-entities merge <id> --into <id>  it is that registered entity")
+        print("  stigmergy-entities decline <id>            it is not an entity this brain wants")
+    if pending["aliases"]:
+        print(f"\n{len(pending['aliases'])} proposed spelling"
+              f"{'' if len(pending['aliases']) == 1 else 's'}:\n")
+        for item in pending["aliases"]:
+            print(f"  {item['entity_id']:<28} {item['alias']!r:<30} for {item['entity_name']}")
+        print("\n  stigmergy-entities approve <id> --alias <spelling>   confirm it")
+        print("  stigmergy-entities decline <id> --alias <spelling>   it is not a spelling of it")
     return 0
 
 
-# An ALLOW-list, never a deny-list: a deny-list of shell metacharacters must be kept complete
-# forever, against a value that arrives from captured material. `str.isalnum()` lets accents and
-# non-Latin scripts pass; the punctuation a real entity name needs is enumerated. `'` is
-# deliberately absent: `shlex.quote` renders it `'L'"'"'Oreal'`, and a command a steward cannot
-# read is a command they retype wrong.
-_SUGGESTABLE_PUNCTUATION = frozenset(" .,&+-")
-MAX_SUBJECT_CHARS = 120
-
-# The two halves of an approve line that are the TOOL's own text, whichever branch composes it.
-_TYPE_CHOICES = f"--type <{'|'.join(birth.ENTITY_TYPES)}>"
-_APPROVE_TAIL = "--aliases \"...\" [--role \"...\"] [--requeue]"
-
-
-def _approve_template(submission_id: int) -> str:
-    """The approve line with LITERAL placeholders where a name would otherwise go — nothing
-    untrusted reaches it, so it is safe to print for any capture."""
-    return (f"    stigmergy-entities approve {submission_id} --id <canonical-id> "
-            f"--name \"<Entity Name>\" {_TYPE_CHOICES} {_APPROVE_TAIL}")
+# ── approve / decline / merge ─────────────────────────────────────────────────────────────────
+def _decide(conn, args, *, action, item_kind: str, item_id: str, verdict: str,
+            extra: dict | None = None) -> dict:
+    """Preflight with the STEWARD's own identity, land the decision, then record it — after the
+    push, like a birth: a ledger row for a decision that never landed would tell the librarian a
+    proposal was declined while the proposed page still stands."""
+    repo = _repo(args)
+    author = clone.preflight(repo, args.branch, action=args.command)
+    result = decide.apply(repo, action=action, branch=args.branch, author=author,
+                          on_output=lambda line: print(line, file=sys.stderr))
+    actor = _steward_name(args)
+    decisions.record_decision(
+        conn, item_kind=item_kind, item_id=item_id, verdict=verdict, actor=actor,
+        source=decisions.SOURCE_CLI, notes=getattr(args, "reason", "") or "",
+        extra={"commit": result["commit"], **(extra or {})})
+    return {**result, "actor": actor}
 
 
-def _cmd_show(conn, args) -> int:
-    row = situations.get_situation(conn, args.id)
-    if row is None:
-        raise EntityError(f"submission {args.id} does not exist")
-    if args.json:
-        print(json.dumps(row, **_DUMP, default=str))
-        return 0
-    report = row.get("report") or {}
-    situation, subject = row["situation"], row["subject"]
-    shown = _clean(subject, MAX_SUBJECT_CHARS)
-    if situation == schema.SITUATION_UNRESOLVED_ENTITY:
-        headline = (f'could not resolve the entity "{shown}"' if shown else
-                    "could not resolve which entity the material is about")
-    elif situation == schema.SITUATION_UNSUPPORTED_TYPE:
-        # A row parked before `schema.SITUATION_KEY` existed records no subject at all; rendering
-        # `""` would read as a bug in the tool. `open_question` is what those rows do carry, so it
-        # stands in.
-        legacy = _clean(str(report.get("open_question") or "").strip(), 300)
-        headline = (f'parked as an unsupported type ("{shown}")' if shown else
-                    "parked as a type the fast lane does not file"
-                    + (f" — the librarian asked: {legacy}" if legacy else ""))
-    else:
-        headline = f"parked in {row['status']!r}, and not as an identity question"
-    print(f"capture #{row['id']} — {headline}")
-    print(f"  submitted by: {row['submitted_by']}, {row['created_at']} "
-          f"(parked {format_age(row.get('parked_age_ms'))})")
-    # Every value below was written from material this system did not author (module docstring).
-    if report.get("agent_rationale"):
-        print(f"  agent's reading: \"{_clean(report['agent_rationale'], 300)}\"")
-    if row.get("hints"):
-        print(f"  hint on the capture: {_clean(row['hints'], 200)}")
-    if row.get("asked_at"):
-        print(f"  asked the submitter: {row['asked_at']}"
-              + (f" — they answered: \"{_clean(row['reply'], 500)}\"" if row.get("reply")
-                 else " — no answer yet"))
-    if row.get("excerpt"):
-        print(f"  material: {_clean(row['excerpt'], 500)}")
-    if row.get("withheld_reason"):
-        print(f"  material: {_clean(row['withheld_reason'], 200)}")
-    if not situation:
-        return 0
-    # The fallback cannot reach `subject_of`'s joined display string: that join runs only when
-    # `subjects_of` answered something, and this `or` fires only when it answered `[]`. What it
-    # reaches is the row's raw singular `SITUATION_NAME_KEY`, verbatim — pinned in
-    # `tests/entities/test_situations.py`, because every entry of this list is pasted into a
-    # printed `--name` a human is invited to run.
-    _print_next_commands(row["id"], situation, row.get("subjects") or [subject])
-    return 0
-
-
-def _suggestable(name: str) -> bool:
-    """Whether `name` may be pasted into a printed command at all.
-
-    Not "whether it can be quoted" — `shlex.quote` can quote anything. The question is whether a
-    human reading the line sees the same arguments the shell will parse. No WORD may start with
-    `-` (a quoted `Acme --aliases <name>` is safe to RUN and still reads as three arguments; no
-    real entity is called `-anything`). `schema.UNNAMED_ENTITY_PLACEHOLDER` is refused by VALUE:
-    it is syntactically an ordinary name the librarian falls back to when nothing was named, and
-    suggesting it ready-to-run would mint a garbage entity that then resolves for every future
-    capture mentioning it.
-    """
-    value = str(name or "").strip()
-    if not value or len(value) > MAX_SUBJECT_CHARS:
-        return False
-    if value == schema.UNNAMED_ENTITY_PLACEHOLDER:
-        return False
-    if any(word.startswith("-") for word in value.split()):
-        return False
-    return all(char.isalnum() or char in _SUGGESTABLE_PUNCTUATION for char in value)
-
-
-def _print_next_commands(submission_id: int, situation: str, subjects: list) -> None:
-    """The exact next command(s) — built only from values that are safe to print as one.
-
-    A message containing a command is a promise: the flags printed are the flags `birth.prepare`
-    accepts, including the derived `--id`, and running the line must do what it reads as doing.
-    A name that cannot carry that promise is printed on its own inert line and the command becomes
-    a template with `--name` left for the steward. `subjects` is a LIST (several, for an ordinary
-    or meeting park naming more than one unresolved entity): each name gets its own block, checked
-    against `_suggestable` INDEPENDENTLY, so a sibling unsafe name never blocks the others; only
-    the last call passes `--requeue`, since `approve` requeues the whole submission (one row, not
-    one per name).
-    """
-    unresolved = situation == schema.SITUATION_UNRESOLVED_ENTITY
-    subjects = list(subjects) or [""]
-    multi = unresolved and len(subjects) > 1
-
-    if not unresolved:
-        # `unsupported-type`: the subject is a TYPE, not a name — nothing untrusted reaches the line.
-        print("\n  to approve it as a new entity:")
-        print(_approve_template(submission_id))
-        print("  to decline it:")
-        print(f"    stigmergy-entities reject {submission_id} --reason \"...\"")
-        return
-
-    for name in subjects:
-        label = f' "{_clean(name, MAX_SUBJECT_CHARS)}"' if multi else ""
-        if not _suggestable(name):
-            print(f"\n  the name{label} on this capture cannot be put into a command safely — it "
-                  f"came from the\n  captured material and contains characters a shell would act "
-                  f"on. It is printed\n  here as plain text; read it, then type the --name you "
-                  f"decide on yourself:\n")
-            print(f"    {_clean(name, MAX_SUBJECT_CHARS)}")
-            print(f"\n  to approve{label or ' it'} as a new entity:")
-            print(_approve_template(submission_id))
-        else:
-            print(f"\n  to approve{label or ' it'} as a new entity:")
-            print(f"    stigmergy-entities approve {submission_id} "
-                  f"--id {generator.canonical_id_for(name)} --name {shlex.quote(name)} "
-                  f"{_TYPE_CHOICES} {_APPROVE_TAIL}")
-    if multi:
-        print("\n  (approve each name above separately; only the LAST call needs --requeue — "
-              "there is one submission, not one per name)")
-    print("\n  to decline the whole capture:" if multi else "  to decline it:")
-    print(f"    stigmergy-entities reject {submission_id} --reason \"...\"")
-
-
-# ── the birth path: approve / create ───────────────────────────────────────────────────────────
-def _mint(repo: str, args, *, submission_id: int | None, on_output) -> dict:
-    """A thin adapter over the shared `entities.mint.mint`: resolves the STEWARD's own identity
-    from this clone's git config (`clone.preflight`) and hands it in as `author`. Every mint
-    discipline lives in `mint()` itself, shared with the server-driven door so the two can never
-    silently drift apart.
-    """
-    branch = args.branch
-    action = "approve" if submission_id else "create"
-    author = clone.preflight(repo, branch, action=action)
-    return mint_lib.mint(
-        repo, entity_id=args.entity_id, name=args.name, entity_type=args.type,
-        aliases=_aliases(args.aliases), role=args.role or "", branch=branch, today=args.today,
-        author=author, submission_id=submission_id, on_output=on_output)
-
-
-def _print_birth(result: dict, *, verb: str) -> None:
-    print(f"{verb} — created {result['page']} ({result['entity_type']}), regenerated "
-          f"{result['registry']}")
-    print(f"  committed as {result['commit'][:12]} (steward: {result['steward']}), pushed to "
-          f"{result['branch']}")
+def _steward_name(args) -> str:
+    """Who is deciding, as the page's `approved_by` and the ledger record it: `--by`, else the
+    clone's git EMAIL — the same spelling the server door records for a steward, so one person's
+    decisions read alike whichever door they came through."""
+    if args.by:
+        return args.by
+    _name, email = clone.identity(_repo(args), action=args.command)
+    return email
 
 
 def _cmd_approve(conn, args) -> int:
-    repo = _repo(args)
-    row = situations.require_situation(conn, args.id, action="approve")
-    result = _mint(repo, args, submission_id=args.id,
-                   on_output=lambda line: print(line, file=sys.stderr))
-    # AFTER the push, like the requeue below and for the same reason: a ledger row for a mint that
-    # then failed to land would claim an identity exists that nothing can resolve. Attribution is
-    # `--by` or this clone's git identity — the same value the commit is authored with, so the two
-    # records of one approval name one person (ADR 030 D2: attributed here, enforced on MCP).
-    decisions.record_decision(
-        conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(args.id), verdict=decisions.APPROVE,
-        actor=args.by or result["steward"], source=decisions.SOURCE_CLI,
-        extra={"entity_id": result["entity_id"], "commit": result["commit"]})
-    requeued = None
-    if args.requeue:
-        # AFTER the push, never before (module docstring). Through the drain's own seam, so the
-        # state guard, the trace event and the `attempts` invariant are `stigmergy-queue requeue`'s.
-        requeued = dispositions.requeue(
-            conn, args.id, actor=args.by or result["steward"],
-            note=f"entity {result['entity_id']} approved and pushed ({result['commit'][:12]})")
-    payload = {**result, "submission_id": args.id,
-               "requeued": bool(requeued), "was": row["status"]}
-    if args.json:
-        print(json.dumps(payload, **_DUMP))
-        return 0
-    _print_birth(result, verb="approved")
-    if requeued:
-        print(f"  capture #{args.id} requeued — the librarian will re-file it anchored to "
-              f"{result['name']} on its next claim (attempts unchanged at {requeued['attempts']})")
+    approver = _steward_name(args)
+    if args.alias:
+        result = _decide(
+            conn, args, item_kind=KIND_ALIAS_PROPOSAL, item_id=alias_item_id(args.id, args.alias),
+            verdict=decisions.APPROVE,
+            action=lambda repo: decide.approve_alias(repo, entity_id=args.id, alias=args.alias,
+                                                     approved_by=approver, today=args.today))
     else:
-        print(f"  capture #{args.id} was NOT requeued — it is still parked in "
-              f"{schema.TRIAGE!r}. Re-run with --requeue, or `stigmergy-queue requeue {args.id} "
-              f"--by <who>`, to send it back to the librarian")
+        result = _decide(
+            conn, args, item_kind=KIND_IDENTITY_PROPOSAL, item_id=args.id,
+            verdict=decisions.APPROVE,
+            action=lambda repo: decide.approve_entity(repo, entity_id=args.id,
+                                                      approved_by=approver, today=args.today))
+    return _print_decision(result, args, verb="approved")
+
+
+def _cmd_decline(conn, args) -> int:
+    if args.alias:
+        result = _decide(
+            conn, args, item_kind=KIND_ALIAS_PROPOSAL, item_id=alias_item_id(args.id, args.alias),
+            verdict=decisions.REJECT,
+            action=lambda repo: decide.decline_alias(repo, entity_id=args.id, alias=args.alias,
+                                                     today=args.today))
+    else:
+        result = _decide(
+            conn, args, item_kind=KIND_IDENTITY_PROPOSAL, item_id=args.id,
+            verdict=decisions.REJECT,
+            action=lambda repo: decide.decline_entity(repo, entity_id=args.id, today=args.today))
+    return _print_decision(result, args, verb="declined")
+
+
+def _cmd_merge(conn, args) -> int:
+    approver = _steward_name(args)
+    result = _decide(
+        conn, args, item_kind=KIND_IDENTITY_PROPOSAL, item_id=args.id, verdict=decisions.MERGE,
+        extra={"into": args.into},
+        action=lambda repo: decide.merge_entity(repo, entity_id=args.id, into=args.into,
+                                                approved_by=approver, today=args.today))
+    return _print_decision(result, args, verb="merged")
+
+
+def _print_decision(result: dict, args, *, verb: str) -> int:
+    if args.json:
+        print(json.dumps(result, **_DUMP))
+        return 0
+    print(f"{verb} — {result['summary']}")
+    if result["reanchored"]:
+        print(f"  re-anchored: {', '.join(result['reanchored'])}")
+    print(f"  committed as {result['commit'][:12]} (steward: {result['steward']}), pushed to "
+          f"{result['branch']}; recorded in the review ledger as {result['actor']}")
     return 0
 
 
+# ── create: a birth with no proposal behind it ────────────────────────────────────────────────
 def _cmd_create(conn, args) -> int:
-    result = _mint(_repo(args), args, submission_id=None,
-                   on_output=lambda line: print(line, file=sys.stderr))
+    repo = _repo(args)
+    author = clone.preflight(repo, args.branch, action="create")
+    result = mint_lib.mint(
+        repo, entity_id=args.entity_id, name=args.name, entity_type=args.type,
+        aliases=_aliases(args.aliases), role=args.role or "", branch=args.branch,
+        today=args.today, author=author, approved_by=args.by or author[1],
+        on_output=lambda line: print(line, file=sys.stderr))
     if args.json:
         print(json.dumps(result, **_DUMP))
         return 0
-    _print_birth(result, verb="created")
+    print(f"created — {result['page']} ({result['entity_type']}), regenerated "
+          f"{result['registry']}")
+    print(f"  committed as {result['commit'][:12]} (steward: {result['steward']}), pushed to "
+          f"{result['branch']}")
     return 0
-
-
-def _cmd_reject(conn, args) -> int:
-    situations.require_situation(conn, args.id, action="reject")
-    actor = args.by or _steward(args)
-    result = dispositions.reject(conn, args.id, actor=actor, reason=args.reason)
-    # Both verdicts are recorded, so "who decided this identity" answers from one table whichever
-    # way it went. `require_situation` above has already established this row IS an entity
-    # situation.
-    decisions.record_decision(conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(args.id),
-                              verdict=decisions.REJECT, actor=actor,
-                              source=decisions.SOURCE_CLI, notes=args.reason)
-    if args.json:
-        print(json.dumps(result, **_DUMP))
-        return 0
-    print(f"rejected #{result['id']} — reason recorded in the submitter's report; no entity was "
-          f"created and nothing was committed")
-    return 0
-
-
-def _steward(args) -> str:
-    """Who is answering, defaulting to the clone's own git identity — the signature this tool is
-    premised on. Still overridable: attribution, not authorization."""
-    name, email = clone.identity(_repo(args))
-    return f"{name} <{email}>"
 
 
 # ── regenerate ────────────────────────────────────────────────────────────────────────────────
@@ -351,10 +231,10 @@ def _cmd_regenerate(conn, args) -> int:
         print(f"{generator.REGISTRY_RELPATH} already matches {generator.ENTITIES_RELDIR}/*.md "
               f"({outcome.page_count} entity page(s)) — nothing to write")
         return 0
-    # Written locally and NOT committed: `approve`/`create` are the one governed push path here,
-    # and a self-pushing `regenerate` would be a second writer to `main` with different safety
-    # properties. Drift is also a disagreement a human should look at before publishing the
-    # resolution.
+    # Written locally and NOT committed: the decisions and `create` are the governed push paths
+    # here, and a self-pushing `regenerate` would be a second writer to `main` with different
+    # safety properties. Drift is also a disagreement a human should look at before publishing
+    # the resolution.
     print(f"regenerated {generator.REGISTRY_RELPATH} from {outcome.page_count} entity page(s) — "
           f"written locally, NOT committed")
     for divergence in outcome.divergences:
@@ -368,8 +248,8 @@ def _cmd_regenerate(conn, args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="stigmergy-entities",
-        description="Governed entity birth: propose -> a steward approves -> the "
-                    "registry regenerates, in one commit signed by that steward.")
+        description="Govern the identities the librarian proposes: confirm, merge or decline "
+                    "them from your own clone, in one commit signed by you.")
     ap.add_argument("--dsn", default=None,
                     help=f"Postgres DSN (default: ${store.DSN_ENV} or {store.DSN_DEFAULT})")
     ap.add_argument("--repo", default=None,
@@ -379,62 +259,56 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     sub = ap.add_subparsers(dest="command", required=True)
 
-    p_list = sub.add_parser("list", help="parked rows waiting on an identity decision")
-    p_list.add_argument("--limit", type=int, default=situations.DEFAULT_LIST_LIMIT)
-    p_list.set_defaults(fn=_cmd_list, needs_db=True)
+    p_pending = sub.add_parser("pending", help="the identities and spellings waiting on a steward")
+    p_pending.set_defaults(fn=_cmd_pending, needs_db=False)
 
-    p_show = sub.add_parser("show", help="one situation, and the exact command that approves it")
-    p_show.add_argument("id", type=int)
-    p_show.set_defaults(fn=_cmd_show, needs_db=True)
-
-    p_approve = sub.add_parser(
-        "approve", help="mint the entity, regenerate the registry, commit both as YOU, push")
-    p_approve.add_argument("id", type=int, help="the parked capture this identity comes from")
-    p_approve.add_argument("--requeue", action="store_true",
-                           help="send the capture back to the librarian once the push lands, so it "
-                                "re-files anchored to the entity you just created")
-    p_approve.add_argument("--by", default=None,
-                           help="who is answering for the requeue (default: your git identity). "
-                                "Attribution, not authorization")
+    p_approve = sub.add_parser("approve", help="confirm a proposed identity (or, with --alias, a "
+                                               "proposed spelling of a registered one)")
+    p_decline = sub.add_parser("decline", help="decline a proposed identity — its page goes and "
+                                               "the pages anchored to it lose the anchor (or, "
+                                               "with --alias, drop a proposed spelling)")
+    for parser in (p_approve, p_decline):
+        parser.add_argument("id", help="the entity's registry id, as `pending` lists it")
+        parser.add_argument("--alias", default="",
+                            help="decide this proposed SPELLING of the entity instead of the "
+                                 "entity itself")
     p_approve.set_defaults(fn=_cmd_approve, needs_db=True)
+    p_decline.add_argument("--reason", default="",
+                           help="why, for the review ledger — never a secret or personal data")
+    p_decline.set_defaults(fn=_cmd_decline, needs_db=True)
+
+    p_merge = sub.add_parser("merge", help="a proposed identity IS a registered entity: its name "
+                                           "and spellings become that entity's aliases, its page "
+                                           "goes, the pages anchored to it move over")
+    p_merge.add_argument("id", help="the proposed entity's registry id")
+    p_merge.add_argument("--into", required=True, help="the registered entity's id")
+    p_merge.set_defaults(fn=_cmd_merge, needs_db=True)
 
     p_create = sub.add_parser(
-        "create", help="the same birth with no capture behind it (a steward registering an entity "
-                       "nobody has submitted about yet)")
+        "create", help="register a brand-new, already-confirmed entity nobody has proposed")
+    p_create.add_argument("--id", dest="entity_id", required=True,
+                          help="the canonical registry id. It must be the slug of --name: the "
+                               "registry is DERIVED from the pages, so an id nothing regenerates "
+                               "would vanish at the next regenerate")
+    p_create.add_argument("--name", required=True,
+                          help="the entity's name — its page title, its filename and the "
+                               "wikilink every other page resolves it by")
+    p_create.add_argument("--type", required=True, choices=birth.ENTITY_TYPES,
+                          help="the page's `entity_type` and the registry's `type`")
+    p_create.add_argument("--aliases", action="append", default=[],
+                          help="other spellings that mean this entity (comma-separated, "
+                               "repeatable). Every alias silently reassigns mentions to it, so an "
+                               "alias that collides with another entity is refused")
+    p_create.add_argument("--role", default="",
+                          help="one line on what this entity is, for the page's `role` field")
     p_create.set_defaults(fn=_cmd_create, needs_db=False)
 
-    for parser in (p_approve, p_create):
-        # `dest="entity_id"`, NOT the default `id`: `approve` already has a POSITIONAL `id` (the
-        # queue row), and argparse would resolve both to one attribute — `--id globex-corp` would
-        # silently overwrite the submission id and the queue lookup would chase "globex-corp".
-        parser.add_argument("--id", dest="entity_id", required=True,
-                            help="the canonical registry id. It must be the slug of --name: the "
-                                 "registry is DERIVED from the pages, so an id nothing regenerates "
-                                 "would vanish at the next regenerate. Typed rather than inferred "
-                                 "because approving an identity is the gesture being recorded")
-        parser.add_argument("--name", required=True,
-                            help="the entity's name — its page title, its filename and the "
-                                 "wikilink every other page resolves it by")
-        parser.add_argument("--type", required=True, choices=birth.ENTITY_TYPES,
-                            help="the page's `entity_type` and the registry's `type`")
-        parser.add_argument("--aliases", action="append", default=[],
-                            help="other spellings that mean this entity (comma-separated, "
-                                 "repeatable). Every alias silently reassigns mentions to it, so "
-                                 "an alias that collides with another entity is refused")
-        parser.add_argument("--role", default="",
-                            help="one line on what this entity is, for the page's `role` field")
+    for parser in (p_approve, p_decline, p_merge, p_create):
+        parser.add_argument("--by", default=None,
+                            help="who is deciding (default: your git identity). Attribution, not "
+                                 "authorization")
         parser.add_argument("--today", default=None,
                             help=argparse.SUPPRESS)   # injectable clock: `created`/`updated`
-
-    p_reject = sub.add_parser(
-        "reject", help="decline the identity — closes the capture as `rejected`, attributed")
-    p_reject.add_argument("id", type=int)
-    p_reject.add_argument("--reason", required=True,
-                          help="why, in the SUBMITTER's own report, verbatim — never include a "
-                               "secret or personal data here")
-    p_reject.add_argument("--by", default=None,
-                          help="who is answering for it (default: your git identity)")
-    p_reject.set_defaults(fn=_cmd_reject, needs_db=True)
 
     p_regen = sub.add_parser(
         "regenerate", help=f"rebuild {generator.REGISTRY_RELPATH} from "
@@ -449,7 +323,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _interrupted(during: str) -> int:
     print(f"stigmergy-entities: interrupted during `{during}` — if a commit had already been made it "
           f"is in your local clone and was not pushed; `git -C <repo> status` and `git log -1` say "
-          f"which. Nothing was written to the queue", file=sys.stderr)
+          f"which. Nothing was written to the review ledger", file=sys.stderr)
     return EXIT_INTERRUPTED
 
 
@@ -464,7 +338,8 @@ def main(argv=None) -> int:
         return _interrupted(args.command)
     except Exception as ex:  # noqa: BLE001 — a local operator needs the real reason
         print(f"stigmergy-entities: cannot reach the queue database ({ex}); is Postgres up "
-              f"(`make db-up`)?", file=sys.stderr)
+              f"(`make db-up`)? A decision is recorded in the review ledger, so it needs one",
+              file=sys.stderr)
         return EXIT_CANNOT_RUN
     try:
         return args.fn(conn, args)

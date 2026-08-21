@@ -1,7 +1,7 @@
-"""The steward's doorbell: a capture parking in `triage`, or an entity proposal, rings the
-steward's Slack DM. A second `asyncio` background task in the SAME `slack` process as the poller —
-never a fourth process group. It never claims, leases or mutates a queue row: every read goes
-through `stigmergy.server.review.items_for_doorbell`.
+"""The steward's doorbell: an identity or a spelling the librarian proposed rings the steward's
+Slack DM. A second `asyncio` background task in the SAME `slack` process as the poller — never a
+fourth process group. It never touches the knowledge repo or the registry: every read goes through
+`stigmergy.server.review.items_for_doorbell`.
 
 Five properties, each load-bearing:
 
@@ -10,11 +10,11 @@ Five properties, each load-bearing:
   a post that fails leaves nothing recorded, so the next pass retries it.
 - **A decided item's most recent card closes itself** — `close_decided_cards` runs at the end of
   every pass and edits that DM in place, dropping its buttons, once `review_decisions` holds a
-  verdict NEWER than the card. Only a decision that reaches the LEDGER closes anything: a parked
-  capture drained through `stigmergy-queue` or the console's Queue tab writes no ledger row, so its
-  card ages out rather than closing. A card is a live control surface; left alone it keeps offering
-  actions that can now only answer with a staleness refusal. Same send-then-mark order, and
-  `closed:<verdict>` is what stops the pass rewriting the same DM every interval.
+  verdict NEWER than the card. Every door that decides a proposal writes the ledger (the console,
+  MCP, `stigmergy-entities`), so a card closes whichever door decided it. A card is a live control
+  surface; left alone it keeps offering actions that can now only answer with a staleness
+  refusal. Same send-then-mark order, and `closed:<verdict>` is what stops the pass rewriting the
+  same DM every interval.
 - **A card that a newer one replaces is superseded first** — one `steward_notifications` row per
   (item, steward) holds ONE pair of Slack coordinates, so `_notify_item` edits the old message shut
   before the post that overwrites them. Without that, a second card orphans the first with its
@@ -22,13 +22,9 @@ Five properties, each load-bearing:
 - **An undeliverable notification is recorded, never swallowed** — no steward resolving for the
   scope, or a resolved steward with no Slack identity here, writes a `job_runs` row
   (`review.record_undeliverable`) naming the event and the reason.
-- **No material excerpt for a capture the librarian has not yet looked at** — a BREVITY rule,
-  distinct from `capture.schema.withheld_reason`'s SECURITY rule (the doorbell is terse by
-  design, not because the steward lacks access), and enforced HERE fail-closed
-  (`_summary_for_doorbell`) rather than trusted to the upstream status filter
-  `_collect_open_items` happens to apply: that filter serves `review_queue`'s own purpose, and
-  one edit to it must not hand this module a `report['summary']` the secrets/PII gate never ran
-  over.
+- **The card carries what the decision needs and nothing a gate never ran over** — the proposal's
+  name, type, spellings and the page's own What / Who paragraph, all of which the librarian
+  already committed to the knowledge repo through the gates; never a capture's raw material.
 """
 import asyncio
 import logging
@@ -91,58 +87,39 @@ _UNDELIVERABLE_PREFIX = store.UNDELIVERABLE_PREFIX
 # **It is also the CLOSED LIST of kinds this module rings for**, which is why `poll_once` skips an
 # item whose kind is absent from it rather than treating a missing noun as a formatting detail.
 # `review.items_for_doorbell` is the MANAGEMENT read over EVERY review kind, and this module is a
-# renderer: `_state_signature` and `_render_for_item` both dispatch as "parked capture, or else the
-# entity-proposal branch", so a kind nobody wrote a card for does not fail to render — it renders as
-# something else, with live Approve/Reject buttons that would call `review_decide` with the wrong
-# item kind on an id belonging to another table. `repair-proposal` is the first kind to arrive
-# without a card (ADR 039): it is reviewed in the console and over MCP, and a repair's ops and
-# rationale are not a thing a DM can honestly summarize into two buttons. Silence is the correct
-# default for a new kind, and adding a noun here is the deliberate act of giving one a card.
+# renderer: a kind nobody wrote a card for must not render as something else, with live buttons
+# that would call `review_decide` with the wrong item kind. `repair-proposal` is reviewed in the
+# console and over MCP: a repair's ops and rationale are not a thing a DM can honestly summarize
+# into two buttons. Silence is the correct default for a new kind, and adding a noun here is the
+# deliberate act of giving one a card.
 _EVENT_NAMES = {
-    review.KIND_PARKED_CAPTURE: "capture-parked notification",
-    review.KIND_ENTITY_PROPOSAL: "entity-proposal notification",
+    review.KIND_IDENTITY_PROPOSAL: "identity-proposal notification",
+    review.KIND_ALIAS_PROPOSAL: "alias-proposal notification",
+}
+
+_RENDERERS = {
+    review.KIND_IDENTITY_PROPOSAL: render.render_doorbell_identity_proposal,
+    review.KIND_ALIAS_PROPOSAL: render.render_doorbell_alias_proposal,
 }
 
 
 def _state_signature(item: dict) -> str:
     """A small, stable fingerprint of "what a steward would be told right now" — re-sent only
-    when it changes. Deliberately NOT the whole item dict (timestamps tick on their own).
+    when it changes. Deliberately NOT the whole item dict (the anchored-page count grows as
+    captures file against a proposal, and a bell that rang on every one would be noise).
 
-    **`attempts` is folded in wherever the item carries it.** A parked capture's status alone is
-    a two-value alphabet, so requeue-then-reprocess back into the SAME status — the ordinary
-    outcome requeue exists for — would fingerprint identically and the bell would never ring
-    again. `attempts` (`capture_queue`'s monotonic per-delivery fence, incremented only by a real
-    reprocessing claim) makes that a real state change; an item without the key degrades to the
-    status-only shape — inert, not wrong."""
-    kind = item["kind"]
-    attempts = item.get("attempts")
-    attempts_suffix = f"@{attempts}" if attempts is not None else ""
-    if kind == review.KIND_PARKED_CAPTURE:
-        return item.get("status", "") + attempts_suffix
-    return (item.get("situation", "") or "parked") + attempts_suffix
-
-
-def _summary_for_doorbell(item: dict) -> str:
-    """The parked-capture summary, fail-closed at the point of rendering: `store.withheld_reason`
-    asked from the item's OWN status, never trusted to `_collect_open_items`' status filter (see
-    the module docstring). Passing `None` for the report reads as "not flagged" for
-    `triage`/`needs_input` — the only statuses this item kind is expected to carry — and as
-    withheld, fail closed, for every status the doorbell was never designed to see."""
-    status = item.get("status", "")
-    withheld = store.withheld_reason(status, None)
-    return withheld or item.get("summary", "")
+    A proposal has ONE state while it is open — proposed — so a card is sent once per (item,
+    steward); a decision closes it through the ledger (`close_decided_cards`), and an identity
+    proposed again after a decline is a new page under the same id, which `_notify_item`'s
+    previous-card check then treats as the same card. That is the intended quiet: the librarian
+    refuses to re-propose a declined identity, so a second card for one id is the exception."""
+    return "proposed"
 
 
 def _render_for_item(item: dict) -> tuple[list[dict], str]:
-    """`(blocks, plain_text_fallback)` — never reads a capture's raw material or an entity
-    proposal's rationale (module docstring)."""
-    kind = item["kind"]
-    if kind == review.KIND_PARKED_CAPTURE:
-        return render.render_doorbell_parked_capture(item_id=item["id"],
-                                                      summary=_summary_for_doorbell(item))
-    return render.render_doorbell_entity_proposal(
-        item_id=item["id"], submitter=item.get("submitted_by", ""),
-        name=item.get("subject", ""))
+    """`(blocks, plain_text_fallback)` for a kind in `_RENDERERS` — `poll_once` never hands this
+    any other."""
+    return _RENDERERS[item["kind"]](item)
 
 
 async def _resolve_slack_user_id(ctx, email: str) -> tuple[str | None, str]:
@@ -245,10 +222,11 @@ async def _notify_item(ctx, item: dict, stewards_map: dict) -> int:
     kind, item_id = item["kind"], item["id"]
     item_ref = f"{kind}:{item_id}"
     event = _EVENT_NAMES.get(kind, kind)
-    # Neither item kind is anchored to a zone — no page path exists yet — so the empty scope can
-    # only ever match the universal `"*"` key, which is the scope the copy names too.
-    display_scope = "*"
-    stewards = review.resolve_stewards_for_scope(stewards_map, "")
+    # A proposal's scope is its own entity page (`wiki/entities/<Name>.md`), so a zone delegated
+    # in `ops/stewards.json` rings its own steward; an unindexed page resolves the universal key.
+    scope_path = str(item.get("page") or "")
+    display_scope = scope_path or "*"
+    stewards = review.resolve_stewards_for_scope(stewards_map, scope_path)
     if not stewards:
         # No steward EMAIL resolves at all — no per-steward key to dedup on, so the state lives
         # against the empty steward.
@@ -313,15 +291,13 @@ async def close_decided_cards(ctx) -> int:
     clickable in a steward's inbox forever, so an item decided on another door left its own inbox
     advertising actions that could only come back as a staleness refusal.
 
-    The trigger is the LEDGER, not the queue state. A `requeue` verdict returns the row to the
-    queue rather than closing it — the item leaves this inbox while its card stays in the DM — so
-    "has this been decided" is a question only `review_decisions` answers for every verdict.
+    The trigger is the LEDGER, not the registry: every door that decides a proposal writes a
+    ledger row, and the registry the doorbell reads is a snapshot that catches up later.
 
     And the question is "decided SINCE this card", not "decided at all". The ledger is append-only,
-    so a requeued item carries its old verdict for good — while the item itself comes back, because
-    coming back is what requeue is FOR. Asking only whether a decision exists would close the fresh
-    card in the same pass that posted it, and the steward would never again get an actionable card
-    for a re-parked capture: the doorbell would look alive and be inert.
+    and an id can carry an old verdict while a fresh card is legitimately live (an identity a
+    steward once merged, proposed again under a new page): asking only whether a decision exists
+    would close the fresh card in the same pass that posted it.
 
     Same send-then-mark discipline `_notify_item` keeps: `mark_notified` runs only after the edit
     lands, so a Slack outage retries on the next pass instead of leaving a live-buttoned card

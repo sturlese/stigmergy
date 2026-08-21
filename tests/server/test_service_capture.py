@@ -365,40 +365,31 @@ def test_submissions_unrestricted_identity_sees_everyone_with_mine_marked(indexe
     assert by_id[steward_ack["id"]]["mine"] is True
 
 
-def test_submissions_renders_a_resolved_row_as_done_and_waiting_on_nobody(indexed):
-    """At the read surface `brain_submissions` actually is: a steward-handled row reads as CLOSED
-    (not a rejection, not still parked) and echoes the page/commit the steward
-    recorded — the same fields a `filed` row's report carries, composed by `capture.dispositions`
-    instead of by the librarian."""
-    from stigmergy.capture import dispositions, queue, schema
+def test_submissions_still_renders_a_legacy_resolved_row(indexed):
+    """`resolved` is a status nothing writes any more — a steward closed the row by hand back
+    when captures could park — and the rows that carry it stay readable: the read surface shows
+    the status and the report the steward left, with no field claiming anybody is waited on."""
+    from stigmergy.capture import schema
 
     conn, fx = indexed
     evidence = MemoryEvidenceStore()
     svc = make_service(fx, conn, fx.STEWARD, evidence=evidence)
-    ack = svc.submit("raw", "row six's own kind of material, parked once")
-    # claim THIS row directly by id, never `queue.claim_next` — `conn` is shared (module-scoped)
-    # with every other test in this file, several of which submit and never process a capture, so
-    # the oldest 'queued' row at any moment may belong to an earlier test.
+    ack = svc.submit("raw", "row six's own kind of material, closed by hand long ago")
     with conn.cursor() as cur:
         cur.execute(
-            "UPDATE capture_queue SET status = 'claimed', claimed_at = now(), "
-            "attempts = attempts + 1 WHERE id = %s AND status = 'queued' RETURNING attempts",
-            (ack["id"],))
-        attempts = cur.fetchone()[0]
-    queue.finish(conn, ack["id"], status=schema.TRIAGE, expected_attempts=attempts,
-                error="which entity?")
-
-    dispositions.resolve(conn, ack["id"], actor="steward", note="folded into the entity page by hand",
-                         page="wiki/entities/Jordan Reyes.md", commit="abc123")
+            "UPDATE capture_queue SET status = %s, finished_at = now(), result_ref = %s, "
+            "report = %s WHERE id = %s",
+            (schema.RESOLVED, "wiki/entities/Jordan Reyes.md@abc123",
+             json.dumps({"status": schema.RESOLVED, "page_path": "wiki/entities/Jordan Reyes.md",
+                         "commit": "abc123",
+                         "summary": "resolved by hand — see wiki/entities/Jordan Reyes.md@abc123"}),
+             ack["id"]))
 
     out = svc.submissions()
     row = next(r for r in out["submissions"] if r["id"] == ack["id"])
     assert row["status"] == schema.RESOLVED
-    assert row["waiting_on"] == ""                          # nobody is waiting on anything now
-    assert row["question"] == ""                             # not a needs_input row
-    assert row["report"]["status"] == schema.RESOLVED
+    assert "waiting_on" not in row and "question" not in row and "reply" not in row
     assert row["report"]["page_path"] == "wiki/entities/Jordan Reyes.md"
-    assert row["report"]["commit"] == "abc123"
     assert "wiki/entities/Jordan Reyes.md@abc123" in row["report"]["summary"]
 
 

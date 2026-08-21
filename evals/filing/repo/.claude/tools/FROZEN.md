@@ -6,7 +6,7 @@
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/tools/stigmergy_lint.py` |
-| **Copied at commit** | `abf6790bf7e6845d0f322645b36e41fa66f9f333` |
+| **Copied at commit** | `6bfc4a013ce7909e8f9bc571fe2d4d3809be1850` |
 | **Drift guard** | none — and that is the point (see below) |
 
 ## Why this copy exists, and why it is NOT drift-guarded
@@ -30,7 +30,7 @@ never a quiet `cp`.
 The sha above is what makes that decision possible: without it, "is this fixture behind the real
 linter, and by how much?" has no answer.
 
-It names the ONE commit every frozen copy in this fixture matches, which is not always the commit
-each copy was physically taken at — these bytes are identical at its predecessor as well, so the
-row was aligned to the sha that describes the whole tree truthfully rather than re-copied. A
-record-only change: `../../PROVENANCE.json` carries the same sha and says the same thing.
+It names the ONE commit every frozen copy in this fixture matches, and here it is also the commit
+each copy was physically taken at: ADR 041's knowledge-repo change moved the linter, both agent
+briefs and the entity template in a single commit, so one `git log` entry describes the whole tree.
+`../../PROVENANCE.json` carries the same sha and says the same thing.

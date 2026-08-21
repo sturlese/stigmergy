@@ -17,20 +17,15 @@ from stigmergy.capture.schema import ensure_capture_schema, startup_ddl_lock
 
 log = logging.getLogger(__name__)
 
-# Every terminal and parked state, `failed` included. `queued`/`claimed` are deliberately absent:
-# an ordinary in-flight row produces no Slack traffic.
-REPORTABLE_STATUSES = (capture_schema.FILED, capture_schema.NEEDS_INPUT, capture_schema.TRIAGE,
-                      capture_schema.REJECTED, capture_schema.RESOLVED, capture_schema.FAILED)
+# Every terminal state, `failed` included (`resolved` only on rows from before captures stopped
+# parking). `queued`/`claimed` are deliberately absent: an ordinary in-flight row produces no
+# Slack traffic.
+REPORTABLE_STATUSES = tuple(sorted(capture_schema.TERMINAL_STATUSES))
 
 # Re-exported so the rest of `stigmergy.slack` never has to import `stigmergy.capture` itself.
 FILED = capture_schema.FILED
-NEEDS_INPUT = capture_schema.NEEDS_INPUT
 MAX_HINT_CHARS = capture_schema.MAX_HINT_CHARS
 withheld_reason = capture_schema.withheld_reason
-
-
-def is_awaiting_reply(status: str) -> bool:
-    return status == capture_schema.NEEDS_INPUT
 
 # Explicit and stable, not Postgres's auto-generated name: a migration has to find and drop the
 # constraint by a name that does not change when the column list does.
@@ -78,8 +73,8 @@ CREATE INDEX IF NOT EXISTS slack_submissions_submission_idx
 # The new key is strictly coarser, so pre-existing rows can collide on it; `ADD CONSTRAINT` would
 # then raise `UniqueViolation` up through `ensure_write_path_schema` and `stigmergy.slack.app`
 # could not boot. Colliding rows are collapsed before the ADD, and the loser is irreversibly
-# unmapped from Slack — hence the tiebreak (a `needs_input` row, then the most recent) and the
-# logged trace of every lost `submission_id`.
+# unmapped from Slack — hence the tiebreak (a row with a real submission behind it, then the most
+# recent) and the logged trace of every lost `submission_id`.
 #
 # Shared fragment: this condition is asked both by the `DO` block below and by the Python
 # pre-check, so "already migrated" cannot mean two different things to the two callers.
@@ -94,13 +89,13 @@ WHERE c.conrelid = 'slack_submissions'::regclass
 # "the row that survives a collision" means cannot drift between the two.
 #
 # `(...) IS TRUE DESC`, not bare `(...) DESC`: Postgres orders NULLS FIRST under `DESC`, so an
-# orphaned mapping row (NULL `q.status` through the LEFT JOIN) would outrank a genuine
-# `needs_input` row. `IS TRUE` ranks NULL and FALSE alike.
+# orphaned mapping row (NULL `q.status` through the LEFT JOIN — no `capture_queue` row at all)
+# would outrank a row with a real capture behind it. `IS TRUE` ranks NULL and FALSE alike.
 _COLLAPSE_PLAN_SELECT = f"""
 SELECT s.id, s.submission_id, ROW_NUMBER() OVER (
     PARTITION BY {_DEDUP_KEY_COLUMN_LIST_S}
     ORDER BY (s.submission_id IS NOT NULL) DESC,
-             (q.status = '{capture_schema.NEEDS_INPUT}') IS TRUE DESC,
+             (q.id IS NOT NULL) IS TRUE DESC,
              s.created_at DESC, s.id DESC
 ) AS rn
 FROM slack_submissions s
@@ -261,27 +256,6 @@ def release_reservation(conn, reservation_id: int) -> None:
     with conn.cursor() as cur:
         cur.execute("DELETE FROM slack_submissions WHERE id = %s AND submission_id IS NULL",
                     (reservation_id,))
-
-
-_FIND_THREAD = """
-SELECT s.submission_id, s.submitted_by, q.status, q.reply
-FROM slack_submissions s
-JOIN capture_queue q ON q.id = s.submission_id
-WHERE s.team_id = %(team_id)s AND s.channel_id = %(channel_id)s AND s.thread_ts = %(thread_ts)s
-  AND s.submission_id IS NOT NULL
-ORDER BY s.created_at DESC
-"""
-
-
-def find_thread_submissions(conn, *, team_id: str, channel_id: str, thread_ts: str) -> list[dict]:
-    """EVERY Slack-originated submission mapped to this thread, newest first; `[]` for an ordinary
-    thread. Plural is load-bearing: two different people reacting in one thread each reserve their
-    own key, and `replies` must scan all rows rather than judge the thread by its newest one."""
-    with conn.cursor() as cur:
-        cur.execute(_FIND_THREAD, {"team_id": team_id, "channel_id": channel_id,
-                                   "thread_ts": thread_ts})
-        columns = [c.name for c in cur.description]
-        return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]
 
 
 _DUE_FOR_REPORT = """

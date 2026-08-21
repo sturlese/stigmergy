@@ -110,9 +110,9 @@ def aliases_from_text(text: str | None, origin: str) -> dict[str, str]:
 
 
 def registry_from_text(text: str | None, origin: str) -> dict[str, dict]:
-    """`id -> {id, name, type, aliases}` — the full records `list_entities`/`describe_entity`
-    serve. Same parse and per-field helpers as `aliases_from_text`; a non-mapping record is
-    skipped."""
+    """`id -> {id, name, type, aliases, proposed, approved_by, proposed_aliases}` — the full
+    records `list_entities`/`describe_entity` and the review inbox serve. Same parse and
+    per-field helpers as `aliases_from_text`; a non-mapping record is skipped."""
     out: dict[str, dict] = {}
     for cid, e in _entities_from_text(text, origin).items():
         if not isinstance(e, dict):
@@ -122,6 +122,13 @@ def registry_from_text(text: str | None, origin: str) -> dict[str, dict]:
             "name": _record_name(e),
             "type": str(e.get("type", "") or ""),
             "aliases": _record_aliases(e),
+            # The identity lifecycle the generator writes: `proposed` is the librarian's
+            # unconfirmed birth, `approved_by` who confirmed it, `proposed_aliases` spellings
+            # waiting on a steward. Absent on a registry from before the keys existed: confirmed.
+            "proposed": bool(e.get("proposed", False)),
+            "approved_by": str(e.get("approved_by", "") or ""),
+            "proposed_aliases": [str(a) for a in e.get("proposed_aliases") or []
+                                 if isinstance(a, str | int | float)],
         }
     return out
 

@@ -1,12 +1,15 @@
-"""AdminService over the real queue/tables (stigmergy_test). The dispositions land through the
-SAME library seams the CLIs use, so what these prove is parity, not a parallel implementation."""
+"""AdminService over the real queue/tables (stigmergy_test), and over a real bare knowledge repo
+for the decisions: every mutation lands through the SAME library seams the CLIs and the review
+lane use, so what these prove is parity, not a parallel implementation."""
 import asyncio
 import json
 import os
+import subprocess
 
 import pytest
 
 from stigmergy.admin import schema as admin_schema
+from stigmergy.admin import service as admin_service
 from stigmergy.admin.service import (
     CRON_WORKFLOWS,
     AdminBadRequest,
@@ -15,7 +18,7 @@ from stigmergy.admin.service import (
     AdminService,
     worker_visibility_timeout_s,
 )
-from stigmergy.capture import dispositions, ops, queue
+from stigmergy.capture import ops, queue
 from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.errors import CaptureError
 from stigmergy.gardener.schema import JOB_NAME as GARDENER_JOB
@@ -28,15 +31,20 @@ from stigmergy.repair import remote as repair_remote
 from stigmergy.repair import schema as repair_schema
 from stigmergy.repair import store as repair_store
 from stigmergy.repair.errors import RepairError
+from stigmergy.review_kinds import KIND_IDENTITY_PROPOSAL
 from stigmergy.server import review as server_review
 from stigmergy.server.settings import Settings
 from tests.admin.conftest import (
-    park,
+    finish_one,
     propose_delete,
     propose_entity_body,
+    propose_identity,
     propose_repair,
+    publish_registry,
+    register_entity,
+    remote_files,
+    remote_registry,
     submit_one,
-    unresolved_entity_report,
 )
 
 
@@ -66,20 +74,11 @@ def test_queue_list_carries_the_cli_facts(conn, service):
     # A PENDING row's material is withheld by design — the secrets/PII gate has not run yet, so
     # the queue explains the empty excerpt with its own sentence (`schema.withheld_reason`).
     assert pending["excerpt"] == "" and pending["withheld_reason"]
-    park(conn, ack["id"])
-    parked = service.queue_list()["submissions"][0]
-    assert "hola desde la consola" in parked["excerpt"], "a parked row's material IS readable"
-    assert parked["waiting_on"] == "a steward" and parked["payload_purged"] is False
-
-
-def test_a_needs_input_row_carries_the_reply_invocation(conn, service):
-    ack = submit_one(conn)
-    park(conn, ack["id"], status=capture_schema.NEEDS_INPUT,
-         error="which Acme is this?\nanswer with brain_reply(...)")
-    row = service.queue_list()["submissions"][0]
-    assert row["status"] == "needs_input"
-    assert row["reply_invocation"] == capture_schema.reply_invocation(ack["id"])
-    assert row["waiting_on"] == "steward@example.com"
+    finish_one(conn, ack["id"], status=capture_schema.FILED,
+               report={"status": "filed", "summary": "filed — a page"})
+    filed = service.queue_list()["submissions"][0]
+    assert "hola desde la consola" in filed["excerpt"], "a filed row's material IS readable"
+    assert filed["payload_purged"] is False and "waiting_on" not in filed
 
 
 def test_queue_show_returns_the_whole_trace_and_404s_on_nothing(conn, service):
@@ -118,59 +117,14 @@ def test_untrusted_text_reaches_the_wire_without_control_characters(conn, servic
     """The server half: ANSI escapes die here; the literal `<script>` SURVIVES as text — HTML
     inertness is the client's job (textContent), not server-side mangling."""
     ack = submit_one(conn, material="\x1b[31mred\x1b[0m <script>alert(1)</script> body")
-    park(conn, ack["id"])   # a pending row withholds its material; a parked one shows it
+    finish_one(conn, ack["id"], status=capture_schema.FILED)   # pending withholds; filed shows
     row = service.queue_list()["submissions"][0]
     assert row["id"] == ack["id"]
     assert "\x1b" not in row["excerpt"]
     assert "<script>" in row["excerpt"]
 
 
-# ── the drain ─────────────────────────────────────────────────────────────────────────────────
-def test_requeue_leaves_attempts_alone_and_records_the_action(conn, service):
-    ack = submit_one(conn)
-    park(conn, ack["id"])
-    result = service.queue_requeue(ack["id"], actor="steward", note="try again")
-    assert result["attempts"] == 1, "requeue must never touch attempts"
-    assert queue.current_status(conn, ack["id"]) == capture_schema.QUEUED
-    recorded = _actions(conn)[0]
-    assert (recorded["actor"], recorded["action"], recorded["outcome"]) == \
-        ("steward", "queue.requeue", "ok")
-
-
-def test_resolve_without_a_pointer_warns_and_with_one_does_not(conn, service):
-    first = submit_one(conn)
-    park(conn, first["id"])
-    warned = service.queue_resolve(first["id"], actor="steward", note="handled by hand")
-    assert "no pointer to where the material went" in warned["warning"]
-    second = submit_one(conn)
-    park(conn, second["id"])
-    clean = service.queue_resolve(second["id"], actor="steward", note="filed it",
-                                  page="wiki/acme.md", commit="abc123")
-    assert clean["warning"] == ""
-
-
-def test_a_disposition_on_an_unparked_row_is_the_librarys_own_refusal(conn, service):
-    ack = submit_one(conn)   # queued, never parked
-    with pytest.raises(AdminRefused):
-        service.queue_reject(ack["id"], actor="steward", reason="nope")
-    recorded = _actions(conn)[0]
-    assert recorded["outcome"] == "error" and recorded["error_class"]
-
-
-def test_the_submitter_visible_note_is_cleaned_below_the_console(conn, service):
-    """The seam is `dispositions.clean`, below every surface — the console must inherit it, not
-    re-remember it."""
-    ack = submit_one(conn)
-    park(conn, ack["id"])
-    service.queue_reject(ack["id"], actor="steward", reason="\x1b[31mdeclined\x1b[0m for cause")
-    trace = service.queue_show(ack["id"])
-    # The reason reaches the submitter through the report/`error` sentence `rejected_report`
-    # composes — `dispositions.clean` ran below the console, so the ESC control byte is gone and
-    # what remains of the escape sequence is inert text (`[31m`), not a terminal instruction.
-    assert "for cause" in trace["error"]
-    assert "\x1b" not in trace["error"]
-
-
+# ── the two acts on the whole queue ───────────────────────────────────────────────────────────
 def test_reclaim_releases_an_expired_claim(conn, service):
     ack = submit_one(conn)
     queue.claim_next(conn, visibility_timeout_s=0)   # a lease that is expired at birth
@@ -305,17 +259,15 @@ def test_purge_dry_run_changes_nothing_and_the_real_run_purges(conn, service):
 
 def test_a_bookkeeping_failure_never_fails_the_mutation(conn, service, monkeypatch):
     ack = submit_one(conn)
-    park(conn, ack["id"])
+    queue.claim_next(conn, visibility_timeout_s=0)
     monkeypatch.setattr(admin_schema, "_INSERT", "INSERT INTO no_such_table VALUES (1)")
-    result = service.queue_requeue(ack["id"], actor="steward", note="")
-    assert result["id"] == ack["id"], "the work must land even when its bookkeeping cannot"
+    result = service.queue_reclaim(actor="steward", visibility_timeout_s=0)
+    assert result["released"] == 1, "the work must land even when its bookkeeping cannot"
     assert queue.current_status(conn, ack["id"]) == capture_schema.QUEUED
 
 
 def test_a_blank_actor_falls_back_to_the_configured_default(conn, service):
-    ack = submit_one(conn)
-    park(conn, ack["id"])
-    service.queue_requeue(ack["id"], actor="   ", note="")
+    service.queue_reclaim(actor="   ", visibility_timeout_s=0)
     assert _actions(conn)[0]["actor"] == "suite-default-actor"
 
 
@@ -528,466 +480,218 @@ def test_a_registry_the_loader_refuses_reads_as_a_refusal_not_a_500(conn, admin_
 
 
 # ── entities: read ────────────────────────────────────────────────────────────────────────────
-def test_entities_list_and_show_cover_multiple_situations_and_404_on_nothing(conn, service):
-    """The read-side coverage `test_a_safe_entity_name_gets_a_filled_command_and_an_unsafe_one_
-    stays_inert` used to pin alongside the (now-deleted, ADR 030) command template:
-    `entities_list` aggregates every pending situation and `entities_show` 404s on a nonexistent
-    id, regardless of whether the underlying name would ever have been safe to paste into a shell
-    command — that concern no longer exists on this surface at all."""
-    safe = submit_one(conn)
-    park(conn, safe["id"], report=unresolved_entity_report("Acme Corp"))
-    unsafe = submit_one(conn)
-    park(conn, unsafe["id"], report=unresolved_entity_report('Acme" --aliases "Trusted'))
-
-    listed = service.entities_list()
-    assert {row["id"] for row in listed} == {safe["id"], unsafe["id"]}
-    assert service.entities_show(safe["id"])["subject"] == "Acme Corp"
-    with pytest.raises(AdminNotFound):
-        service.entities_show(999_999)
-
-
-def test_a_multi_name_situation_reaches_the_console_as_a_per_name_list_not_only_the_joined_string(
-        conn, service):
-    """The backend half of the mint-prefill contract, unpinned until now on this surface.
-
-    A park can name SEVERAL unresolved entities (`SITUATION_NAMES_KEY`). `subject` is one display
-    string — the names joined with `", "` — and it is the only thing a single-string consumer can
-    render, but it is not a value anything may act on: minting it produces one entity called
-    "Jack, Acme Capital". `subjects` is the per-name list the console's Approve form has to read
-    to tell one unresolved name from several, so it must survive `_situation`'s sanitizing pass
-    on BOTH read paths a steward reaches (the list and the detail), not just exist in
-    `entities.situations`."""
-    row = submit_one(conn)
-    park(conn, row["id"], report={
-        capture_schema.SITUATION_KEY: capture_schema.SITUATION_UNRESOLVED_ENTITY,
-        capture_schema.SITUATION_NAMES_KEY: ["Jack", "Acme Capital"]})
-
-    shown = service.entities_show(row["id"])
-    assert shown["subjects"] == ["Jack", "Acme Capital"], (
-        "the detail read must carry every unresolved name separately — the form that mints reads "
-        "this, and nothing can recover two names from the joined string without guessing whether "
-        "a comma is a separator or part of a name")
-    assert shown["subject"] == "Jack, Acme Capital", (
-        "the joined display string stays too — it is what the read-only context renders")
-    listed = {r["id"]: r for r in service.entities_list()}[row["id"]]
-    assert listed["subjects"] == ["Jack", "Acme Capital"], (
-        "the list read must carry it as well: the console navigates list → detail, and a key "
-        "present on one path only is a key the next caller will find missing")
-
-
-# ── the shaper is a pass-through, not a second decider ────────────────────────────────────────
-# The two below hand `_situation` a row that CANNOT come out of `entities.situations`: its
-# `mint_name_prefill` disagrees with its own `subjects`. That is the point — on any real row the
-# decided field and a re-derivation agree, so every test above stays green if this shaper starts
-# computing the prefill itself, and the duplicate policy the consolidation removed is back with no
-# test able to see it. Fabricating the disagreement is the only instrument that can tell "passed
-# through" from "recomputed", and it needs the private `_situation` because the two public doors
-# both read the row out of Postgres, where the disagreement is unconstructible.
-def test_the_situation_shaper_passes_a_decided_prefill_through_even_when_it_contradicts_subjects(
-        service):
-    """The prefill arrives DECIDED and leaves only sanitized. This row says "several names" in
-    `subjects` and still carries a default no re-derivation could produce: every recomputation
-    shape — over the raw report, over the raw `subjects`, over the cleaned `subjects` — answers
-    `""` for a two-name park, so the decided string surviving is the proof the shaper never
-    recomputed. The control character proves the ONE transformation that is allowed still runs."""
-    row = {"id": 41, "status": capture_schema.TRIAGE, "situation": "unresolved-entity",
-           "subject": "Jack, Acme Capital", "subjects": ["Jack", "Acme Capital"],
-           "mint_name_prefill": "Nadia Okonk\x01wo"}
-
-    shaped = service._situation(row)
-
-    assert shaped["mint_name_prefill"] == "Nadia Okonkwo", (
-        "the console re-derived the prefill from the row it was handed instead of forwarding the "
-        "one `entities.situations.mint_name_prefill` decided — a second policy over the same "
-        "irreversible mint, which is what makes two doors offer two default names for one park")
-    assert shaped["subjects"] == ["Jack", "Acme Capital"], (
-        "the per-name listing must survive the same pass — it is what the Approve form shows when "
-        "no default is offered")
-
-
-def test_the_situation_shaper_never_fills_in_a_prefill_the_rule_declined_to_offer(service):
-    """The other direction, and the dangerous one: `mint_name_prefill == ""` is an INSTRUCTION —
-    leave the field empty — not a missing value waiting to be helpfully filled. A single-name
-    `subjects` beside an empty decision is exactly the shape an `or`-fallback
-    (`out.get("mint_name_prefill") or mint_name_prefill(row)`) would rewrite, and the test above
-    cannot see that fallback because its own prefill is truthy. A default the rule refused is a
-    name a steward submits unchanged into a signed commit."""
-    row = {"id": 42, "status": capture_schema.TRIAGE, "situation": "unresolved-entity",
-           "subject": "Solo Corp", "subjects": ["Solo Corp"], "mint_name_prefill": ""}
-
-    shaped = service._situation(row)
-
-    assert shaped["mint_name_prefill"] == "", (
-        "the console offered a default for a row whose decision was 'offer none' — an empty "
-        "prefill is the rule's answer, and treating it as an absent value puts a name into the "
-        "mint form that `entities.situations` deliberately withheld")
-    assert "mint_name_prefill" in shaped, "and it stays PRESENT: absent and empty are not the same"
-
-
-def test_entities_show_no_longer_carries_a_command_template(conn, service):
-    """OLD BEHAVIOUR (ADR 029): `entities_show` returned a `commands` key — the exact
-    `stigmergy-entities approve`/`reject` command, filled only when the name passed the shared
-    shell-safety predicate (`entities.cli.suggestable_entity_name`), otherwise the name as inert
-    text beside a template. ADR 030 deletes it, not polishes it: the Entities tab mints for real
-    through a form now, so there is no command left to print."""
-    ack = submit_one(conn)
-    park(conn, ack["id"], report=unresolved_entity_report("Acme Corp"))
-
-    view = service.entities_show(ack["id"])
-
-    assert "commands" not in view
-
-
-# ── entities: approve — mints through the governed door directly (ADR 030) ─────────────────────
+# ── the proposals: list, detail and the three decisions, through the governed door ───────────
 @pytest.fixture()
 def entity_service(conn, admin_settings, entity_mint_repo):
-    """`AdminService` pointed at a real, throwaway bare knowledge repo — for the tests below that
-    actually mint. The validation-only tests use the plain `service` fixture instead (no repo
+    """`AdminService` pointed at a real, throwaway bare knowledge repo — for the tests that land a
+    decision for real. The validation-only tests use the plain `service` fixture instead (no repo
     configured): they never reach git at all, and proving that is part of what they pin."""
     return AdminService(conn, server_settings=Settings(librarian_repo_url=entity_mint_repo),
                         admin_settings=admin_settings)
 
 
-def test_entity_approve_mints_for_real_and_records_both_ledgers(
+def test_entities_list_carries_the_proposals_and_their_registry_verdict(conn, entity_service,
+                                                                        entity_mint_repo):
+    """The list is the inbox's own read of the two proposal kinds, each identity checked against
+    the REST of the registry — a proposal always resolves to itself, which says nothing, so the
+    check leaves it out. `Acme Corporation`, a spelling `Acme Corp` already lists, comes back
+    REGISTERED: the Merge picker's strongest hint."""
+    register_entity(entity_mint_repo, conn, "Acme Corp", aliases=["Acme Corporation"])
+    propose_identity(entity_mint_repo, conn, "Acme Corporation")
+    propose_identity(entity_mint_repo, conn, "Vandelay Imports")
+    register_entity(entity_mint_repo, conn, "Initech", proposed_aliases=["Initech Ltd"])
+
+    listed = entity_service.entities_list()
+
+    by_id = {p["id"]: p for p in listed["proposals"]}
+    assert set(by_id) == {"acme-corporation", "vandelay-imports"}
+    assert by_id["acme-corporation"]["check"]["verdict"] == admin_service.VERDICT_REGISTERED
+    assert by_id["acme-corporation"]["check"]["match"]["id"] == "acme-corp"
+    assert by_id["acme-corporation"]["merge_candidates"] == [{"id": "acme-corp", "name": "Acme Corp"}]
+    assert by_id["vandelay-imports"]["check"]["verdict"] == admin_service.VERDICT_CLEAR
+    assert [(a["entity_id"], a["alias"]) for a in listed["aliases"]] == [("initech", "Initech Ltd")]
+    assert listed["registry_check"]["road"] == "snapshot"
+
+
+def test_the_inbox_reads_the_registry_file_when_the_index_holds_no_snapshot(conn, admin_settings,
+                                                                           entity_mint_repo, tmp_path):
+    """The console's inbox derives its proposals from the registry the console SERVES — the
+    snapshot where the index has one, the `--entity-registry` file where it does not (the local
+    recipe, and any stack before its first webhook). Before this test the inbox read the snapshot
+    alone while the Entities desk read either: on a stack with no snapshot the browser listed every
+    entity and the inbox listed no proposal, and the two pages disagreed about what was waiting."""
+    propose_identity(entity_mint_repo, conn, "Vandelay Imports")
+    index_store.clear_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH)
+    registry_file = tmp_path / "entity-registry.json"
+    registry_file.write_text(subprocess.run(["git", "show", "main:ops/entity-registry.json"],
+                                            cwd=entity_mint_repo, capture_output=True, text=True,
+                                            check=True).stdout, encoding="utf-8")
+    file_road = AdminService(conn, server_settings=Settings(entity_registry_path=str(registry_file)),
+                             admin_settings=admin_settings)
+
+    inbox = file_road.inbox()
+    listed = file_road.entities_list()
+
+    assert [i["name"] for i in inbox["items"] if i["kind"] == KIND_IDENTITY_PROPOSAL] == ["Vandelay Imports"]
+    assert [p["name"] for p in listed["proposals"]] == ["Vandelay Imports"]
+    assert listed["registry_check"]["road"] == "file"
+
+
+def test_entities_show_returns_the_proposal_and_404s_on_a_name_nobody_proposed(conn, entity_service,
+                                                                              entity_mint_repo):
+    propose_identity(entity_mint_repo, conn, "Globex Robotics")
+    shown = entity_service.entities_show("globex-robotics")
+    assert shown["name"] == "Globex Robotics" and shown["kind"] == "identity-proposal"
+    with pytest.raises(AdminNotFound):
+        entity_service.entities_show("ghost")
+
+
+def test_entity_decide_approve_lands_for_real_and_records_both_ledgers(
         conn, entity_service, entity_mint_repo, require_gitleaks):
-    """The end-to-end proof, admin's own: ONE commit lands on the real bare remote, the append-
-    only `review_decisions` ledger records the SAME `extra` shape `server.review`'s own mint does
-    (`entity_id` + `commit`), and `admin_actions` records the attempt under the actor's name — the
-    two ledgers ADR 030 requires of a server-driven mint, whichever door it came through.
+    """The end-to-end proof, admin's own: ONE commit lands on the real bare remote, the append-only
+    `review_decisions` ledger records the decision under the SAME kind and id the librarian reads,
+    and `admin_actions` records the attempt under the actor's name. `extra.source` names this
+    door; the App authors the commit and the `Decided-by:` trailer carries the console's free-text
+    actor — attribution, not a resolved identity (ADR 030 D2)."""
+    entity_id = propose_identity(entity_mint_repo, conn, "Globex Robotics")
 
-    The one thing `extra` must NOT share with the MCP door is `source`: the shared mint sequence
-    takes it as a parameter precisely so each door names itself (issue #41 part 2)."""
-    ack = submit_one(conn, submitted_by="steward@example.com")
-    park(conn, ack["id"], report=unresolved_entity_report("Globex Robotics"))
+    result = entity_service.entity_decide("identity-proposal", entity_id,
+                                         actor="steward@example.com", verdict="approve")
 
-    result = entity_service.entity_approve(
-        ack["id"], actor="steward@example.com", name="Globex Robotics",
-        entity_type="organization", aliases="Globex, Globex Robotics Inc",
-        role="a robotics manufacturer")
-
-    assert result["entity_id"] == "globex-robotics"
-    assert result["name"] == "Globex Robotics"
-    assert result["aliases"] == ["Globex", "Globex Robotics Inc"]
-    assert len(result["commit"]) == 40
-    assert result["requeued"] is True                        # the service's own default
-
+    assert result["recorded"] == "approve" and len(result["commit"]) == 40
+    entry = remote_registry(entity_mint_repo)[entity_id]
+    assert entry["proposed"] is False and entry["approved_by"] == "steward@example.com"
     with conn.cursor() as cur:
-        cur.execute("SELECT item_kind, item_id, verdict, actor, extra FROM review_decisions"
-                    " WHERE item_id = %s", (str(ack["id"]),))
-        kind, item_id, verdict, actor, extra = cur.fetchone()
-    assert (kind, item_id, verdict, actor) == (
-        "entity-proposal", str(ack["id"]), "approve", "steward@example.com")
-    assert extra == {"source": "admin", "entity_id": "globex-robotics",
-                     "commit": result["commit"]}
-
-    # The same door-parity proof `tests/server/test_review.py`'s own mint-for-real test makes for
-    # MCP (ADR 030 D1): the App authors the commit, and the `Approved-by:` trailer carries the
-    # console's free-text `actor` — attribution, not a resolved identity (D2) — but it still has to
-    # actually reach the commit git log answers "who approved this identity" with. Nothing before
-    # this change checked it on the console's OWN door.
+        cur.execute("SELECT item_kind, item_id, verdict, actor, extra FROM review_decisions")
+        [(kind, item_id, verdict, actor, extra)] = cur.fetchall()
+    assert (kind, item_id, verdict, actor) == ("identity-proposal", entity_id, "approve",
+                                              "steward@example.com")
+    assert extra == {"source": "admin", "commit": result["commit"]}
     author = gitcmd.run("log", "-1", "--format=%an <%ae>", result["commit"],
                         cwd=entity_mint_repo).stdout.strip()
     assert author == "stigmergy-librarian <stigmergy-librarian@users.noreply.github.com>"
     message = gitcmd.run("log", "-1", "--format=%B", result["commit"], cwd=entity_mint_repo).stdout
-    assert "Approved-by: steward@example.com" in message
-
+    assert "Decided-by: steward@example.com" in message
     recorded = _actions(conn)[0]
     assert (recorded["actor"], recorded["action"], recorded["outcome"]) == (
-        "steward@example.com", "entities.approve", "ok")
-
-    assert queue.current_status(conn, ack["id"]) == capture_schema.QUEUED
+        "steward@example.com", "entities.decide", "ok")
 
 
-def test_entity_approve_requeue_false_leaves_the_capture_parked(
-        conn, entity_service, require_gitleaks):
-    """`requeue` defaults to `True` (the console form's checkbox is pre-checked), but an operator
-    who unchecks it gets exactly the CLI's own un-requeued shape: the entity is minted, and the
-    capture stays right where it was — the same "approved but not yet re-filed" state
-    `stigmergy-entities approve` (no `--requeue`) leaves behind."""
-    ack = submit_one(conn)
-    park(conn, ack["id"], report=unresolved_entity_report("Acme Corp"))
+def test_entity_decide_merge_folds_the_proposal_and_records_where_it_went(
+        conn, entity_service, entity_mint_repo, require_gitleaks):
+    register_entity(entity_mint_repo, conn, "Acme Corp")
+    entity_id = propose_identity(entity_mint_repo, conn, "Acme Corporation", aliases=["ACME Co"])
 
-    result = entity_service.entity_approve(ack["id"], actor="steward", name="Acme Corp",
-                                           entity_type="organization", requeue=False)
+    result = entity_service.entity_decide("identity-proposal", entity_id, actor="marc",
+                                         verdict="merge", into="acme-corp")
 
-    assert result["requeued"] is False
-    assert queue.current_status(conn, ack["id"]) == capture_schema.TRIAGE
-
-
-def test_entity_approve_defaults_the_entity_id_to_the_slug(conn, entity_service, require_gitleaks):
-    """`entity_id` is deliberately not a console form field (ADR 030 D5, "one less field to
-    mistype") — the console never sends one, so the server-side default has to actually take:
-    `generator.canonical_id_for`, the same function `--id` is verified against."""
-    ack = submit_one(conn)
-    park(conn, ack["id"], report=unresolved_entity_report("Acme Corp"))
-
-    result = entity_service.entity_approve(ack["id"], actor="steward", name="Acme Corp",
-                                           entity_type="organization")
-
-    assert result["entity_id"] == "acme-corp"
+    assert result["recorded"] == "merge" and result["into"] == "acme-corp"
+    assert result["reanchored"] == ["wiki/notes/Acme Corporation kickoff.md"]
+    registry = remote_registry(entity_mint_repo)
+    assert entity_id not in registry
+    assert {"Acme Corporation", "ACME Co"} <= set(registry["acme-corp"]["aliases"])
+    with conn.cursor() as cur:
+        cur.execute("SELECT verdict, extra FROM review_decisions WHERE item_id = %s", (entity_id,))
+        verdict, extra = cur.fetchone()
+    assert verdict == "merge" and extra["into"] == "acme-corp"
 
 
-def test_entity_approve_missing_name_and_type_is_a_bad_request_before_anything_is_attempted(
-        conn, service):
-    ack = submit_one(conn)
-    park(conn, ack["id"], report=unresolved_entity_report("Acme Corp"))
+def test_entity_decide_decline_removes_the_page_and_records_the_reject_the_librarian_reads(
+        conn, entity_service, entity_mint_repo, require_gitleaks):
+    entity_id = propose_identity(entity_mint_repo, conn, "Globex Robotics")
 
-    with pytest.raises(AdminBadRequest, match="missing name and entity_type"):
-        service.entity_approve(ack["id"], actor="steward", name="", entity_type="")
+    result = entity_service.entity_decide("identity-proposal", entity_id, actor="marc",
+                                         verdict="decline", notes="a typo\x1b[31m for Globex")
 
-    assert _actions(conn) == [], "an actionable refusal on shape must record nothing"
-    assert queue.current_status(conn, ack["id"]) == capture_schema.TRIAGE
-
-
-def test_entity_approve_unknown_type_is_a_bad_request(conn, service):
-    ack = submit_one(conn)
-    park(conn, ack["id"], report=unresolved_entity_report("Acme Corp"))
-
-    with pytest.raises(AdminBadRequest, match="is not one of"):
-        service.entity_approve(ack["id"], actor="steward", name="Acme Corp", entity_type="alien")
+    assert result["recorded"] == "reject"
+    assert "wiki/entities/Globex Robotics.md" not in remote_files(entity_mint_repo)
+    assert entity_id not in remote_registry(entity_mint_repo)
+    with conn.cursor() as cur:
+        cur.execute("SELECT verdict, notes FROM review_decisions WHERE item_id = %s", (entity_id,))
+        verdict, notes = cur.fetchone()
+    assert verdict == "reject"
+    assert "\x1b" not in notes and "for Globex" in notes, "the note is cleaned below the console"
 
 
-def test_entity_approve_without_a_repo_url_is_refused_with_the_capability_sentence(conn, service):
-    """OLD BEHAVIOUR (ADR 029): the Entities tab was read-only — there was no capability to be
-    missing. Since ADR 030 the console mints for real, and a deployment with no
-    `$STIGMERGY_LIBRARIAN_REPO_URL` refuses cleanly instead of minting nowhere or crashing —
-    `entities.errors.CapabilityUnavailableError` mapped to `AdminRefused`, the SAME posture
-    `server.review` maps it to, one door over."""
-    ack = submit_one(conn, submitted_by="steward@example.com")
-    park(conn, ack["id"], report=unresolved_entity_report("Globex Robotics"))
+def test_entity_decide_on_a_proposed_spelling(conn, entity_service, entity_mint_repo,
+                                              require_gitleaks):
+    register_entity(entity_mint_repo, conn, "Initech", proposed_aliases=["Initech Ltd", "ITC"])
 
+    approved = entity_service.entity_decide("alias-proposal", "initech:Initech Ltd", actor="marc",
+                                            verdict="approve")
+    publish_registry(entity_mint_repo, conn)
+    declined = entity_service.entity_decide("alias-proposal", "initech:ITC", actor="marc",
+                                            verdict="decline")
+
+    assert approved["recorded"] == "approve" and declined["recorded"] == "reject"
+    entry = remote_registry(entity_mint_repo)["initech"]
+    assert entry["aliases"] == ["Initech Ltd"] and entry["proposed_aliases"] == []
+
+
+def test_entity_decide_bad_requests_are_refused_before_anything_is_attempted(conn, service):
+    with pytest.raises(AdminBadRequest, match="item_kind"):
+        service.entity_decide("parked-capture", "7", actor="marc", verdict="requeue")
+    with pytest.raises(AdminBadRequest, match="verdict for identity-proposal"):
+        service.entity_decide("identity-proposal", "x", actor="marc", verdict="requeue")
+    with pytest.raises(AdminBadRequest, match="merge needs `into`"):
+        service.entity_decide("identity-proposal", "x", actor="marc", verdict="merge")
+    assert _actions(conn) == [], "a bad request is refused before the action is even recorded"
+
+
+def test_entity_decide_without_a_repo_url_is_refused_with_the_capability_sentence(conn, service):
+    """`service` carries a default `Settings()` — no `librarian_repo_url` — so the door refuses
+    by name, after recording the attempt, and no ledger row is written."""
     with pytest.raises(AdminRefused, match="STIGMERGY_LIBRARIAN_REPO_URL"):
-        service.entity_approve(ack["id"], actor="steward@example.com", name="Globex Robotics",
-                               entity_type="organization")
-
+        service.entity_decide("identity-proposal", "globex-robotics", actor="marc",
+                              verdict="approve")
     recorded = _actions(conn)[0]
     assert recorded["outcome"] == "error"
-    assert recorded["error_class"] == "CapabilityUnavailableError", (
-        "admin_actions must keep the library's OWN exception class, not the AdminRefused it was "
-        "translated to for the caller")
-    assert queue.current_status(conn, ack["id"]) == capture_schema.TRIAGE
-
-
-def test_entity_approve_refuses_a_row_that_is_no_longer_parked(conn, service):
-    """`situations.require_situation`'s own write guard, reached through this door: a row that
-    was never parked as an identity question refuses before any git work is attempted (and before
-    the missing-capability check above even gets a chance to fire)."""
-    ack = submit_one(conn)   # queued, never parked
-
-    with pytest.raises(AdminRefused, match="triage"):
-        service.entity_approve(ack["id"], actor="steward", name="Acme Corp",
-                               entity_type="organization")
-
-
-def test_entity_approve_refuses_a_collision_with_the_librarys_own_sentence(
-        conn, entity_service, entity_mint_repo, require_gitleaks):
-    """Drift/collision refusals surface through the console door too, carrying the library's own
-    sentence (`entities.birth._refuse_collisions`, reached through `entities.mint.mint` ->
-    `entities.remote.mint_via_clone` — the SAME gate `tests/server/test_review.py::
-    test_review_decide_entity_proposal_approve_surfaces_drift_refusal` proves for MCP), with real
-    git: every OTHER `entity_approve` refusal this suite proves is either a shape error (before any
-    git work) or the missing-capability posture — nothing here proved the collision gate itself
-    fires on THIS door."""
-    first = submit_one(conn, submitted_by="steward@example.com")
-    park(conn, first["id"], report=unresolved_entity_report("Acme Corp"))
-    # `requeue=False`: `park()`'s own fixture helper claims the single oldest QUEUED row, and the
-    # default `requeue=True` would hand capture #1 right back to `queued` — stealing the claim the
-    # second `park()` call below needs for capture #2. Irrelevant to what this test proves either
-    # way (the collision gate, not the requeue behaviour, which has its own dedicated tests).
-    entity_service.entity_approve(first["id"], actor="steward@example.com", name="Acme Corp",
-                                  entity_type="organization", requeue=False)
-
-    second = submit_one(conn, submitted_by="steward@example.com")
-    park(conn, second["id"], report=unresolved_entity_report("Acme Corp"))
-    before = gitcmd.run("rev-parse", "main", cwd=entity_mint_repo).stdout
-
-    with pytest.raises(AdminRefused, match="already resolves to the registered entity"):
-        entity_service.entity_approve(second["id"], actor="steward@example.com", name="Acme Corp",
-                                      entity_type="organization")
-
-    after = gitcmd.run("rev-parse", "main", cwd=entity_mint_repo).stdout
-    assert before == after, "a refused collision must leave git exactly where it was"
-    recorded = _actions(conn)[0]
-    assert recorded["outcome"] == "error" and recorded["error_class"] == "CollisionError", (
-        "admin_actions must keep the library's OWN exception class, same posture as the "
-        "missing-capability case above")
+    assert recorded["error_class"] == "CapabilityUnavailableError"
     with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM review_decisions WHERE item_id = %s",
-                    (str(second["id"]),))
-        assert cur.fetchone()[0] == 0, "a refused mint must record nothing in the governance ledger"
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-# CHARACTERIZATION — this door's half of the mint sequence, pinned as it behaves TODAY.
-#
-# The console and `server.review` run the SAME five mechanical steps (`require_situation` ->
-# `mint_via_clone` -> `record_decision` -> conditional `requeue` after the push). What each door
-# proved about that sequence was different, so a property could hold on one and be merely assumed
-# on the other. These three have twins in `tests/server/test_review.py` under the same names minus
-# the door, except the self-approval one — that asymmetry is the WHOLE point of ADR 030 D2 and has
-# no twin by design.
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-def test_characterization_the_console_door_requeues_strictly_after_the_push(
-        conn, entity_service, entity_mint_repo, monkeypatch, require_gitleaks):
-    """Pins the ORDER: at the instant `dispositions.requeue` is entered, the bare remote's `main`
-    ALREADY points at the mint commit.
-
-    `test_entity_approve_mints_for_real_and_records_both_ledgers` asserts the two END STATES (a
-    commit came back, the row is `queued`), which a requeue that ran FIRST satisfies just as well —
-    the note's `entity_id` is `resolved_id`, known before the mint is attempted. The failure a
-    reordering causes is invisible until a real run: the librarian fetches a remote that does not
-    carry the entity yet and parks the capture a SECOND time.
-
-    A spy, not a double — it records what git actually says and then delegates to the real
-    `requeue`. Real git, real Postgres, real disposition; the patch exists only because ordering is
-    unobservable from the end state.
-    """
-    ack = submit_one(conn)
-    park(conn, ack["id"], report=unresolved_entity_report("Globex Robotics"))
-    real_requeue = dispositions.requeue
-    observed_heads = []
-
-    def spy(*args, **kwargs):
-        observed_heads.append(
-            gitcmd.run("rev-parse", "main", cwd=entity_mint_repo).stdout.strip())
-        return real_requeue(*args, **kwargs)
-
-    monkeypatch.setattr(dispositions, "requeue", spy)
-    head_before = gitcmd.run("rev-parse", "main", cwd=entity_mint_repo).stdout.strip()
-
-    result = entity_service.entity_approve(ack["id"], actor="steward", name="Globex Robotics",
-                                           entity_type="organization", requeue=True)
-
-    assert observed_heads == [result["commit"]], (
-        "exactly ONE requeue, and the remote it ran against already carried the pushed commit — "
-        f"observed {observed_heads}, mint pushed {result['commit']}")
-    # Non-vacuity: the two candidate values are actually DIFFERENT, so the assertion above
-    # discriminates. Without this the test would still pass on a remote that never moved.
-    assert observed_heads[0] != head_before, (
-        "the probe cannot tell before from after — the mint did not move the remote")
-
-
-def test_characterization_one_console_mint_writes_exactly_one_ledger_row_with_an_empty_note(
-        conn, entity_service, require_gitleaks):
-    """Pins the ledger WRITE COUNT and the full row shape this door produces.
-
-    Every existing ledger assertion on both doors reads with `fetchone()`, which a second,
-    duplicate `record_decision` would pass unnoticed. `notes` is the shape difference the door
-    parity claim has never actually stated: the console form has no note field, so this door
-    writes `''` while `server.review` writes the steward's cleaned note (its twin pins that). A
-    `NULL` here instead of `''` would be a new spelling in an append-only table.
-    """
-    ack = submit_one(conn, submitted_by="filer@example.com")
-    park(conn, ack["id"], report=unresolved_entity_report("Globex Robotics"))
-
-    result = entity_service.entity_approve(
-        ack["id"], actor="steward@example.com", name="Globex Robotics",
-        entity_type="organization")
-
-    with conn.cursor() as cur:
-        cur.execute("SELECT item_kind, item_id, verdict, actor, notes, extra FROM "
-                    "review_decisions WHERE item_id = %s", (str(ack["id"]),))
-        rows = cur.fetchall()
-    assert len(rows) == 1, f"one mint, one governance row — got {len(rows)}"
-    assert rows[0] == ("entity-proposal", str(ack["id"]), "approve", "steward@example.com", "",
-                       {"source": "admin", "entity_id": "globex-robotics",
-                        "commit": result["commit"]})
-
-
-def test_characterization_the_console_does_not_enforce_self_approval_adr_030_d2(
-        conn, entity_service, entity_mint_repo, require_gitleaks):
-    """Pins the DELIBERATE ASYMMETRY, so no one can remove it by accident.
-
-    ADR 030 D2: MCP and Slack resolve a real identity, check `ops/stewards.json` and enforce
-    `SELF_APPROVAL_REFUSED` (`tests/server/test_review.py::test_review_decide_entity_proposal_
-    approve_self_approval_still_refused` and its Slack twin). The console mints under the ADMIN
-    TOKEN with `actor` as ATTRIBUTION, exactly like the CLI it replaced — the ADR calls enforcing a
-    second-human rule against one shared credential "theatre" and refuses to pretend.
-
-    So the SAME person filing and approving mints for real here, and the commit still names them.
-    Until this test the property was only exercised by ACCIDENT — the mint-for-real test above
-    happens to pass `actor="steward@example.com"` for a row `submit_one` defaults to the same
-    address — coverage that would evaporate the day someone changed that fixture default, and that
-    said nothing about WHY it must hold. A refactor that "helpfully" unified the two doors'
-    authorization would overturn a decision, not remove duplication; this is what goes red.
-    """
-    ack = submit_one(conn, submitted_by="same-person@example.com")
-    park(conn, ack["id"], report=unresolved_entity_report("Globex Robotics"))
-
-    result = entity_service.entity_approve(
-        ack["id"], actor="same-person@example.com", name="Globex Robotics",
-        entity_type="organization")
-
-    assert result["entity_id"] == "globex-robotics"
-    assert len(result["commit"]) == 40
-    message = gitcmd.run("log", "-1", "--format=%B", result["commit"],
-                         cwd=entity_mint_repo).stdout
-    assert "Approved-by: same-person@example.com" in message, (
-        "attribution, not authorization — the filer's own name reaches the commit (D2)")
-    recorded = _actions(conn)[0]
-    assert (recorded["action"], recorded["outcome"]) == ("entities.approve", "ok")
-
-
-def test_entity_approve_blank_actor_falls_back_to_the_configured_default(
-        conn, entity_service, require_gitleaks):
-    ack = submit_one(conn)
-    park(conn, ack["id"], report=unresolved_entity_report("Acme Corp"))
-
-    entity_service.entity_approve(ack["id"], actor="   ", name="Acme Corp",
-                                  entity_type="organization")
-
-    assert _actions(conn)[0]["actor"] == "suite-default-actor"
-
-
-# ── queue.reject of an entity situation ALSO records review_decisions (audit fix S1) ────────────
-# The Entities tab deliberately does not grow its own Reject button — `entities/index.md`: "the
-# situation shares its id with the queue row, and the queue tab already rejects it" — so
-# `queue_reject` is the one place a console rejection of an entity-proposal situation can be
-# recorded, and it used to write `admin_actions` only: the append-only governance ledger answered
-# "who decided this identity" from ONE table for approve and a DIFFERENT one for reject, on the
-# one console door that has both. Placed here, beside `entity_approve`'s own ledger tests, rather
-# than beside the plain `queue_reject` tests above, so the PARALLEL is visible: approve writes
-# both ledgers, and reject now does too.
-def test_queue_reject_of_an_entity_situation_also_records_review_decisions(conn, service):
-    ack = submit_one(conn, submitted_by="steward@example.com")
-    park(conn, ack["id"], report=unresolved_entity_report("Acme Corp"))
-
-    service.queue_reject(ack["id"], actor="steward@example.com", reason="not a real org")
-
-    with conn.cursor() as cur:
-        cur.execute("SELECT item_kind, item_id, verdict, actor, notes FROM review_decisions"
-                    " WHERE item_id = %s", (str(ack["id"]),))
-        row = cur.fetchone()
-    assert row is not None, "an entity-situation reject through the console must reach the ledger"
-    kind, item_id, verdict, actor, notes = row
-    assert (kind, item_id, verdict, actor) == (
-        "entity-proposal", str(ack["id"]), "reject", "steward@example.com")
-    assert "not a real org" in notes
-    # BOTH ledgers, like every other governed door — `admin_actions` via `_mutate`, unchanged.
-    recorded = _actions(conn)[0]
-    assert (recorded["actor"], recorded["action"], recorded["outcome"]) == (
-        "steward@example.com", "queue.reject", "ok")
-
-
-def test_queue_reject_of_an_ordinary_parked_capture_does_not_touch_review_decisions(conn, service):
-    """The benign twin: the new ledger write is scoped to entity situations ONLY, through the SAME
-    `situations.classify` predicate the review inbox uses to tell the two kinds apart
-    (`server.review._collect_open_items`) — an ordinary parked capture (no `situation` key at all)
-    must not grow a `review_decisions` row nobody asked for."""
-    ack = submit_one(conn)
-    park(conn, ack["id"])   # no `situation` key — an ordinary parked capture, not an identity ask
-
-    service.queue_reject(ack["id"], actor="steward", reason="not useful")
-
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM review_decisions WHERE item_id = %s", (str(ack["id"]),))
+        cur.execute("SELECT count(*) FROM review_decisions")
         assert cur.fetchone()[0] == 0
-    recorded = _actions(conn)[0]
-    assert (recorded["actor"], recorded["action"], recorded["outcome"]) == (
-        "steward", "queue.reject", "ok"), "admin_actions must still record the ordinary reject"
 
 
-# ── activity ──────────────────────────────────────────────────────────────────────────────────
+def test_entity_decide_on_an_unknown_proposal_is_the_librarys_own_refusal(
+        conn, entity_service, entity_mint_repo, require_gitleaks):
+    with pytest.raises(AdminRefused, match="no entity 'ghost'"):
+        entity_service.entity_decide("identity-proposal", "ghost", actor="marc", verdict="approve")
+    assert _actions(conn)[0]["error_class"] == "EntityError"
+
+
+def test_entity_create_births_a_confirmed_entity_and_records_it_as_born(
+        conn, entity_service, entity_mint_repo, require_gitleaks):
+    result = entity_service.entity_create(actor="steward@example.com", name="Stark Industries",
+                                         entity_type="organization", aliases="Stark, SI",
+                                         role="a client")
+    assert result["entity_id"] == "stark-industries" and len(result["commit"]) == 40
+    entry = remote_registry(entity_mint_repo)["stark-industries"]
+    assert entry["proposed"] is False and entry["approved_by"] == "steward@example.com"
+    assert set(entry["aliases"]) == {"Stark", "SI"}
+    with conn.cursor() as cur:
+        cur.execute("SELECT item_kind, item_id, verdict, extra FROM review_decisions")
+        [(kind, item_id, verdict, extra)] = cur.fetchall()
+    assert (kind, item_id, verdict) == ("identity-proposal", "stark-industries", "approve")
+    assert extra["created"] is True and extra["commit"] == result["commit"]
+
+
+def test_entity_create_missing_name_and_type_is_a_bad_request_before_anything_is_attempted(
+        conn, service):
+    with pytest.raises(AdminBadRequest, match="name and entity_type"):
+        service.entity_create(actor="marc", name="", entity_type="")
+    with pytest.raises(AdminBadRequest, match="not one of"):
+        service.entity_create(actor="marc", name="X", entity_type="galaxy")
+    assert _actions(conn) == []
+
+
+def test_entity_create_refuses_a_collision_with_the_librarys_own_sentence(
+        conn, entity_service, entity_mint_repo, require_gitleaks):
+    register_entity(entity_mint_repo, conn, "Acme Corp", aliases=["Acme"])
+    with pytest.raises(AdminRefused, match="already resolves to the registered entity 'acme-corp'"):
+        entity_service.entity_create(actor="marc", name="Acme", entity_type="organization")
+    assert "acme" not in remote_registry(entity_mint_repo)
+
+
 def test_activity_reads_the_audit_trail_and_never_a_submission_payload(conn, service):
     with conn.cursor() as cur:
         cur.execute(

@@ -44,9 +44,9 @@ Not style — these are enforced, and the enforcement is where to look when one 
 | No exception list keeps an entry that has stopped being used | same file, the pruning tests |
 | The UNTRUSTED-DATA fence is built in `stigmergy.text` only | same file |
 | The frozen contract linter and the frozen meeting brief match the knowledge repo's own | `tests/librarian/test_frozen_linter.py`, `test_meeting_brief_contract.py` |
-| The diff the eight gates approved is the diff that lands | `gitcmd.commit(gated_entries=…)` + `tests/librarian/test_gitcmd_unit.py` |
+| The diff the nine gates approved is the diff that lands | `gitcmd.commit(gated_entries=…)` + `tests/librarian/test_gitcmd_unit.py` |
 | `server.acl.visible()` is the ONE place read access is decided, and the only implementation of it | `server/acl.py`, `tests/test_contract_parity.py` |
-| A parked capture's unresolved names have one writer and one reader — every other module reaches them through `entities.situations` | `tests/test_architecture.py`, with its own exception list and pruning test |
+| The librarian reaches `stigmergy.entities` from `librarian/identity.py` only, and only for the birth fold, the generator and its errors — the proposal writer is the one seam between filing and governance | `tests/test_architecture.py`, a named exception with its own pruning test |
 | The shared mint sequence carries no authorization, so its caller set is closed to the surfaces that decide their own | `tests/test_architecture.py` — set equality both ways, so a caller that stops calling it fails too |
 | The README's countable claims match the code | `tests/test_readme_claims.py` |
 | `docs/reference/` names no command, variable or count the code does not have, and `docs/README.md` lists every document that exists | `tests/test_docs_claims.py` — ADRs are exempt by design: they record a decision, not the present |

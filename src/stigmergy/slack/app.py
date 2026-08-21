@@ -14,7 +14,7 @@ from stigmergy.server.audit import AuditWriter, ensure_audit_table
 from stigmergy.server.errors import StartupError, StigmergyServerError
 from stigmergy.server.ratelimit import RateLimiter
 from stigmergy.server.service import EmptyIndexError, evidence_plane, open_scoped_resources
-from stigmergy.slack import capture, doorbell, mention, poller, render, replies, review
+from stigmergy.slack import capture, doorbell, mention, poller, render, review, show_it_here
 from stigmergy.slack.context import SlackContext, short_ref
 from stigmergy.slack.gateway import SlackApiError
 from stigmergy.slack.identity import is_configured_workspace, is_ignorable_event
@@ -160,20 +160,10 @@ def build_bolt_app(ctx: SlackContext):
                     identity_result=identity_result)
                 return
 
-            if not thread_ts:
-                return   # a fresh top-level channel message with no mention: not this bot's business
-
-            # Slack fires BOTH `message` and `app_mention` for a channel mention — skip what
-            # `on_app_mention` is already answering. Guarded on `bot_user_id` itself, never on
-            # the composed `f"<@{bot_user_id}>"`: that string is non-empty even when the id is
-            # empty, so guarding on it never short-circuits.
-            bot_user_id = context.get("bot_user_id", "")
-            if bot_user_id and f"<@{bot_user_id}>" in (event.get("text") or ""):
-                return
-
-            await replies.handle_thread_message(
-                ctx, team_id=team_id, channel_id=channel_id, thread_ts=thread_ts,
-                slack_user_id=event["user"], text=event.get("text", ""))
+            # Anything else — a threaded message, a top-level channel message with no mention —
+            # is not this bot's business: nothing a capture does ever waits on a reply in its
+            # thread, so a thread message is ordinary conversation.
+            return
         except Exception:
             _log_listener_failure("on_message")
 
@@ -234,7 +224,7 @@ def build_bolt_app(ctx: SlackContext):
             message = body.get("message") or {}
             thread_ts = message.get("thread_ts") or message.get("ts")
             is_dm = await _is_dm_channel(ctx, channel_id)
-            await replies.handle_show_it_here(
+            await show_it_here.handle_show_it_here(
                 ctx, action_value=action.get("value", ""), clicking_slack_user_id=user_id,
                 channel_id=channel_id, thread_ts=thread_ts, is_dm=is_dm,
                 event_team_id=event_team_id)
@@ -257,31 +247,19 @@ def build_bolt_app(ctx: SlackContext):
         except Exception:
             _log_listener_failure("on_review_action")
 
-    @app.view(render.REVIEW_NOTE_MODAL_CALLBACK_ID)
-    async def on_review_note_modal_submission(ack, body, view):
+    @app.view(render.MERGE_MODAL_CALLBACK_ID)
+    async def on_merge_modal_submission(ack, body, view):
         await ack()
         try:
             state_values = ((view or {}).get("state") or {}).get("values") or {}
             # WHO is submitting comes from this event's OWN authoritative `body` — never from the
             # modal's `private_metadata`, a value this package itself wrote when the modal opened.
             _, user_id, event_team_id = _interaction_actor(body)
-            await review.handle_note_modal_submission(
+            await review.handle_merge_modal_submission(
                 ctx, private_metadata=(view or {}).get("private_metadata", ""),
                 state_values=state_values, slack_user_id=user_id, event_team_id=event_team_id)
         except Exception:
-            _log_listener_failure("on_review_note_modal_submission")
-
-    @app.view(render.ENTITY_MINT_MODAL_CALLBACK_ID)
-    async def on_entity_mint_modal_submission(ack, body, view):
-        await ack()
-        try:
-            state_values = ((view or {}).get("state") or {}).get("values") or {}
-            _, user_id, event_team_id = _interaction_actor(body)
-            await review.handle_entity_mint_modal_submission(
-                ctx, private_metadata=(view or {}).get("private_metadata", ""),
-                state_values=state_values, slack_user_id=user_id, event_team_id=event_team_id)
-        except Exception:
-            _log_listener_failure("on_entity_mint_modal_submission")
+            _log_listener_failure("on_merge_modal_submission")
 
     return app
 

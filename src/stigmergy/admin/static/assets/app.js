@@ -43,10 +43,13 @@ const GROUPS = [
 ];
 const ROUTES = GROUPS.flatMap((g) => g.routes);
 
+// `id` turns the matched segment into what the view's API takes: a row id for captures and
+// repairs, the registry id AS TYPED for an entity — `Number("acme-corp")` is `NaN`, and a proposal
+// opened from the inbox once asked the API for `entities/NaN`.
 const DETAIL_ROUTES = [
-  { pattern: /^captures\/(\d+)$/, parent: "captures", render: captureDetailView },
-  { pattern: /^entities\/(\d+)$/, parent: "entities", render: entityDetailView },
-  { pattern: /^repairs\/(\d+)$/, parent: "repairs", render: repairDetailView },
+  { pattern: /^captures\/(\d+)$/, parent: "captures", render: captureDetailView, id: Number },
+  { pattern: /^entities\/([^/]+)$/, parent: "entities", render: entityDetailView, id: decodeURIComponent },
+  { pattern: /^repairs\/(\d+)$/, parent: "repairs", render: repairDetailView, id: Number },
 ];
 
 // The old tab names keep working — a bookmark must not land on the dashboard by surprise.
@@ -71,9 +74,9 @@ function currentRoute() {
   if (ALIASES[head]) raw = [ALIASES[head], ...rest].join("/");
   for (const d of DETAIL_ROUTES) {
     const match = raw.match(d.pattern);
-    if (match) return { parent: d.parent, detail: true, render: (host) => d.render(host, Number(match[1])) };
+    if (match) return { parent: d.parent, detail: true, render: (host) => d.render(host, d.id(match[1])) };
   }
-  // A page may carry a sub-path of its own (`#/inbox/entity` is the inbox, filtered); the page
+  // A page may carry a sub-path of its own (`#/inbox/identity` is the inbox, filtered); the page
   // reads it off the hash itself, so only the head picks the route.
   const route = ROUTES.find((r) => r.hash === raw.split("/")[0]);
   return route ? { parent: route.hash, render: route.render, window: route.window }

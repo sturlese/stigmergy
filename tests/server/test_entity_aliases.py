@@ -100,14 +100,16 @@ def test_load_registry_returns_full_records(tmp_path):
     })
     registry = entity_aliases.load_registry(entity_aliases.default_path(repo))
     assert registry == {"globex": {"id": "globex", "name": "Globex", "type": "organization",
-                                   "aliases": ["Globex Corp", "GX Industries"]}}
+                                   "aliases": ["Globex Corp", "GX Industries"],
+                                   "proposed": False, "approved_by": "", "proposed_aliases": []}}
 
 
 def test_load_registry_defaults_missing_fields_honestly(tmp_path):
     """A registry entry may omit `type`/`aliases` — served as empty, never a KeyError."""
     repo = _write_registry(tmp_path, {"acme": {"name": "Acme"}})
     registry = entity_aliases.load_registry(entity_aliases.default_path(repo))
-    assert registry["acme"] == {"id": "acme", "name": "Acme", "type": "", "aliases": []}
+    assert registry["acme"] == {"id": "acme", "name": "Acme", "type": "", "aliases": [],
+                                "proposed": False, "approved_by": "", "proposed_aliases": []}
 
 
 def test_load_registry_skips_a_non_mapping_record_like_load_aliases_does(tmp_path):
@@ -448,3 +450,18 @@ def test_the_shared_fold_is_the_narrow_one_not_the_collision_key(tmp_path):
     assert entity_aliases.resolve_exact(aliases, "Cofers S.L.") == "cofers-sl"
     # The name nothing registers stays unresolved — the coarse fold would have claimed it.
     assert entity_aliases.resolve_exact(aliases, "Cofers") is None
+
+
+def test_load_registry_carries_the_identity_lifecycle(tmp_path):
+    """The keys the generator writes since identities are proposed: a proposal reads as
+    `proposed`, its approver empty, and the spellings waiting on a steward beside it."""
+    repo = _write_registry(tmp_path, {
+        "ledgerly": {"name": "Ledgerly", "type": "organization", "aliases": [], "proposed": True,
+                     "approved_by": "", "proposed_aliases": ["LDG"]},
+        "acme": {"name": "Acme", "type": "organization", "aliases": [], "proposed": False,
+                 "approved_by": "ana@example.com", "proposed_aliases": []},
+    })
+    registry = entity_aliases.load_registry(entity_aliases.default_path(repo))
+    assert registry["ledgerly"]["proposed"] is True
+    assert registry["ledgerly"]["proposed_aliases"] == ["LDG"]
+    assert registry["acme"]["approved_by"] == "ana@example.com"

@@ -60,20 +60,20 @@
 
   <!-- ── the human loop ────────────────────────────────────────────────────── -->
   <rect class="agent" x="644" y="62" width="176" height="86" rx="10" filter="url(#glow)"/>
-  <text x="732" y="90" class="title">asks ONCE</text>
+  <text x="732" y="90" class="title">proposes</text>
   <text x="732" y="110" class="tagA">a name the registry</text>
   <text x="732" y="128" class="tagA">does not know</text>
   <line class="edge" x1="608" y1="105" x2="640" y2="105" marker-end="url(#arr)"/>
 
   <rect class="human" x="856" y="62" width="180" height="86" rx="10"/>
-  <text x="946" y="90" class="title">parked</text>
-  <text x="946" y="110" class="tagH">a steward owes</text>
-  <text x="946" y="128" class="tagH">an answer</text>
+  <text x="946" y="90" class="title">inbox</text>
+  <text x="946" y="110" class="tagH">a steward approves,</text>
+  <text x="946" y="128" class="tagH">merges or declines</text>
   <line class="edgeH" x1="820" y1="105" x2="852" y2="105" marker-end="url(#arrh)"/>
 
-  <!-- back into the queue: answering RE-QUEUES the capture -->
+  <!-- the decision is one governed commit; the capture itself never waited -->
   <path class="edgeH" d="M 946 62 L 946 40 L 290 40 L 290 70" marker-end="url(#arrh)"/>
-  <text x="618" y="34" class="elabH" text-anchor="middle">the answer puts the capture back in the queue — one question per capture, ever</text>
+  <text x="618" y="34" class="elabH" text-anchor="middle">the capture files at once; the proposal waits, and the decision is one governed commit</text>
 
   <!-- ── the gates ─────────────────────────────────────────────────────────── -->
   <line class="edge" x1="504" y1="148" x2="504" y2="256" marker-end="url(#arr)"/>
@@ -81,39 +81,43 @@
   <text x="492" y="219" class="elab" text-anchor="end">not a decision</text>
 
   <rect class="band" x="24" y="262" width="1012" height="120" rx="14"/>
-  <text x="530" y="292" class="title" font-size="14">8 deterministic gates over that diff — a model can be argued with, a gate cannot</text>
+  <text x="530" y="292" class="title" font-size="14">9 deterministic gates over that diff — a model can be argued with, a gate cannot</text>
 
-  <rect class="chip" x="42" y="308" width="116" height="52" rx="9"/>
-  <text x="100" y="332" class="chipT">zone</text>
-  <text x="100" y="348" class="chipN">where it writes</text>
+  <rect class="chip" x="36" y="308" width="102" height="52" rx="9"/>
+  <text x="87" y="332" class="chipT">zone</text>
+  <text x="87" y="348" class="chipN">where it writes</text>
 
-  <rect class="chip" x="166" y="308" width="116" height="52" rx="9"/>
-  <text x="224" y="332" class="chipT">binary-page</text>
-  <text x="224" y="348" class="chipN">no blob pages</text>
+  <rect class="chip" x="147" y="308" width="102" height="52" rx="9"/>
+  <text x="198" y="332" class="chipT">binary-page</text>
+  <text x="198" y="348" class="chipN">no blob pages</text>
 
-  <rect class="chip" x="290" y="308" width="116" height="52" rx="9"/>
-  <text x="348" y="332" class="chipT">body-rewrite</text>
-  <text x="348" y="348" class="chipN">no silent edits</text>
+  <rect class="chip" x="258" y="308" width="102" height="52" rx="9"/>
+  <text x="309" y="332" class="chipT">body-rewrite</text>
+  <text x="309" y="348" class="chipN">no silent edits</text>
 
-  <rect class="chip" x="414" y="308" width="116" height="52" rx="9"/>
-  <text x="472" y="332" class="chipT">secrets</text>
-  <text x="472" y="348" class="chipN">real gitleaks</text>
+  <rect class="chip" x="369" y="308" width="102" height="52" rx="9"/>
+  <text x="420" y="332" class="chipT">secrets</text>
+  <text x="420" y="348" class="chipN">real gitleaks</text>
 
-  <rect class="chip" x="538" y="308" width="116" height="52" rx="9"/>
-  <text x="596" y="332" class="chipT">pii</text>
-  <text x="596" y="348" class="chipN">flagged, kept</text>
+  <rect class="chip" x="480" y="308" width="102" height="52" rx="9"/>
+  <text x="531" y="332" class="chipT">pii</text>
+  <text x="531" y="348" class="chipN">flagged, kept</text>
 
-  <rect class="chip" x="662" y="308" width="116" height="52" rx="9"/>
-  <text x="720" y="332" class="chipT">frontmatter</text>
-  <text x="720" y="348" class="chipN">page contract</text>
+  <rect class="chip" x="591" y="308" width="102" height="52" rx="9"/>
+  <text x="642" y="332" class="chipT">frontmatter</text>
+  <text x="642" y="348" class="chipN">page contract</text>
 
-  <rect class="chip" x="786" y="308" width="116" height="52" rx="9"/>
-  <text x="844" y="332" class="chipT">contract</text>
-  <text x="844" y="348" class="chipN">the repo's linter</text>
+  <rect class="chip" x="702" y="308" width="102" height="52" rx="9"/>
+  <text x="753" y="332" class="chipT">contract</text>
+  <text x="753" y="348" class="chipN">the repo's linter</text>
 
-  <rect class="chip" x="910" y="308" width="116" height="52" rx="9"/>
-  <text x="968" y="332" class="chipT">anchoring</text>
-  <text x="968" y="348" class="chipN">points at something</text>
+  <rect class="chip" x="813" y="308" width="102" height="52" rx="9"/>
+  <text x="864" y="332" class="chipT">anchoring</text>
+  <text x="864" y="348" class="chipN">points at something</text>
+
+  <rect class="chip" x="924" y="308" width="102" height="52" rx="9"/>
+  <text x="975" y="332" class="chipT">identity</text>
+  <text x="975" y="348" class="chipN">declared proposals</text>
 
   <!-- ── outcomes ──────────────────────────────────────────────────────────── -->
   <line class="edge" x1="250" y1="382" x2="250" y2="424" marker-end="url(#arr)"/>

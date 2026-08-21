@@ -1084,7 +1084,8 @@ def test_a_block_whose_constant_members_alone_blow_the_budget_says_the_list_is_e
 
     "the top of the ranking" is not true of an empty list: a model reasoning from one deserves to
     know the difference between "this brain holds nothing close to your material" and "what it
-    holds did not fit", because the first is a reason to file and the second is a reason to park.
+    holds did not fit", because the first is a reason to propose what the material names and the
+    second a reason to judge overlap from the names alone before proposing.
     """
     registry = _registry(tmp_path, {})
     # ~100 characters each, so the 400 the vocabulary is capped at exceed the whole-block ceiling
@@ -1104,14 +1105,16 @@ def test_a_block_whose_constant_members_alone_blow_the_budget_says_the_list_is_e
     assert gathered.candidates, "nothing was gathered — this test proved nothing"
     assert payload["candidates"] == []
     assert "were left out: their excerpts alone exceed" in block
-    assert "park if you cannot" in block, (
+    assert agent_module.GATHERED_ALL_TRIMMED_NO_TOOLS in block, (
         "an all-trimmed block must tell the agent what to do with no candidates at all")
+    assert "park" not in agent_module.GATHERED_ALL_TRIMMED_NO_TOOLS, (
+        "the brief offered parking as an outcome after ADR 041 retired it")
 
 
 def test_an_ordinary_gather_renders_no_trim_sentence_at_all(tmp_path):
     """The benign twin, and the one that would be worst to get wrong: a trim sentence on a block
     that was never trimmed tells the model its context is incomplete when it is not, and a model
-    that believes it is missing candidates parks captures it should have filed."""
+    that believes it is missing candidates proposes twins of entities it should have anchored to."""
     registry = _registry(tmp_path, {})
     for index in range(3):
         _write(tmp_path, f"wiki/notes/Note {index}.md",

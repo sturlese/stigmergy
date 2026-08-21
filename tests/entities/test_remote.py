@@ -321,7 +321,7 @@ def test_a_librarian_fault_after_the_clone_is_renamed_into_this_packages_vocabul
     docstring's "This module's public seam raises only `entities.errors.EntityError`" was false for
     everything after the clone.
 
-    `gates.ensure_scanner` runs on this exact path (`mint._refuse_secrets` scans what the commit
+    `gates.ensure_scanner` runs on this exact path (`mint.refuse_secrets` scans what the commit
     will carry) and raises `LibrarianConfigError` when gitleaks is absent. The MCP server is a
     different process from the librarian worker, so a server host without the scanner is the
     ordinary deployment — and `server.review._mint_entity_proposal` catches

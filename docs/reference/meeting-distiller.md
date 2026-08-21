@@ -44,6 +44,9 @@ capture_queue row, kind="meeting" (claimed by the SAME librarian worker, same fe
        │    exactly 1 meeting page     wiki/meetings/YYYY-MM-DD-<slug>.md  (provenance only)
        │    N >= 0 decision pages      wiki/decisions/<slug>.md   (each its OWN anchor)
        │
+       ├─ identity.write_proposals: every identity the account proposes, created unconfirmed
+       │     (`approved_by: ""`) with the registry regenerated — the fast lane's own writer,
+       │     `related=` naming this set's DECISION pages by stem
        ├─ edits.apply_declared: the account's DECLARED additive edits, performed by code on pages
        │     that already exist — all-or-nothing, the fast lane's own call (ADR 038)
        ├─ _stamp_meeting: PER-PAGE server stamp (source parts get the provenance group;
@@ -63,15 +66,15 @@ filed: report.filed_meeting names every page path and every decision's anchor ou
 **Read the diagram's second box twice: the agent does not write pages.** It holds no tool at all
 and returns the decisions, their anchors and the drafted prose as DATA;
 `processing._write_meeting_pages` builds and writes every page of the set from that one structured
-object. Everything downstream — the stamp, all eight gates, the cross-check, the commit — is
-unchanged and unaware. An account declared beside separately-written pages would be two
+object. Everything downstream — the proposals, the stamp, all nine gates, the cross-check, the
+commit — is unchanged and unaware. An account declared beside separately-written pages would be two
 independent claims that could disagree; with code as the sole author, only one claim exists.
 
 ## Why filing is atomic
 
 One capture, one commit, one page **set**, or nothing. A meeting page that links a decision page
 which does not exist, or a decision page with no provenance record behind it, are both worse than
-parking the whole capture. `process_meeting_item` never commits
+refusing the whole capture. `process_meeting_item` never commits
 until every page in the set has passed every gate; a terminal veto on any single page (or on the
 set's own shape — a page outside the set, a missing meeting page, a mismatched decision count)
 refuses the capture with **no page committed at all**. This is why `_cross_check_meeting_outcome` exists
@@ -254,9 +257,9 @@ covered.
 ## The vetoes this flow can produce
 
 Beyond the ordinary flow's gates (zone, binary-page, body-rewrite, secrets, pii, frontmatter,
-contract, anchoring — all eight, run over the whole diff, per `gates.ALL_GATES`), the meeting flow's
-own `outcome`-gate findings, all from `processing._cross_check_meeting_outcome` and its helpers,
-are:
+contract, anchoring, identity — all nine, run over the whole diff, per `gates.ALL_GATES`), the
+meeting flow's own `outcome`-gate findings, all from `processing._cross_check_meeting_outcome` and
+its helpers, are:
 
 | Finding | What it catches |
 |---|---|
@@ -292,20 +295,13 @@ motivated it because preserved refused diffs on deployed stacks already carry it
 refused diff is preserved only on the terminal path, and a retry's `reset --hard` would erase the
 only evidence of an unexplained write into the worktree.
 
-Routing a refused capture: `_refuse_meeting` mirrors the ordinary flow's cause-based routing
-(`rejected` for a secret, a PII match, or steering with a traceable injection category;
-`rejected_malformed_frontmatter`/`rejected_forged_field` for a frontmatter-only veto;
-`triage` via `_uncreatable_type` for a governed type the fast lane cannot mint) and adds one
-meeting-specific park: when EVERY surviving veto is a per-decision anchoring-unresolved finding (one
-per decision page that could not anchor), the whole capture parks in `triage`, naming every
-unresolved name at once — never one page filed and another silently dropped. What is meeting-specific
-is *how many findings there are*, not how their names are read: both roads take that from
-`processing._anchor_veto_names`, so an ordinary refusal and a meeting refusal cannot answer "which
-names does this park on" differently. They did until issue #49 — the ordinary road passed the veto's
-`locator`, the first name only, so a capture refused on three unresolved entities parked naming one
-and came back refused on the second after a steward had registered it. Anything else mixed in
-(a binary-page veto, an unrelated dead link, an unexplained zone veto) is not provably the whole
-story and falls through to `failed`, exactly like the ordinary flow's own `_unanchorable` posture.
+Routing a refused capture: `_refuse_meeting` is `processing._route_refusal` — the SAME function the
+ordinary flow calls, not a mirror of it. Two destinations, split by cause: `rejected` when the fix is
+the submitter's (a secret, a PII match, steering with a traceable injection category, a
+frontmatter-only veto), `failed` when it is the librarian's (everything else, a per-decision
+anchoring veto that survived the corrective retry included). There is no meeting-specific park,
+because there is no park: a decision page about an unregistered name proposes the entity and files
+with it, and the whole set still lands or none of it does.
 
 **One correction to that routing.** The steering branch tests
 `f.repairable`, so an UNREPAIRABLE zone finding is excluded from it even when the agent declared an
@@ -317,49 +313,34 @@ operator then investigates for the wrong reason. A *repairable* zone finding —
 `type-not-creatable` — still routes to steering exactly as before, because there the diff really
 could be the agent acting on injected text.
 
-## Ask-back: several names, one question
+## Several unregistered names, and the set still files
 
-A transcript can name more than one unresolved entity in a single capture — a call naming two
-customers and an unregistered project code. `processing._triage_meeting` hands every name it
-declared to `_ask_or_park`, the ONE park router; the ORDINARY flow uses the same one for the same
-reason — a capture naming two unresolved entities is not a meeting-only shape — and both write the
-same report shape whatever the count. What DIFFERS between the flows is the prose:
-`report.needs_input`/`triage_entity` take a `meeting` flag that names the parked thing as its own
-submitter knows it, and adds the consequence only a page set has (an unplaced name costs more than
-its own decision, because a meeting page cannot link a decision that was never filed). Either way
-the SAME one-ask-per-capture budget (`capture_queue.asked_at`) is spent once, naming every
-unresolved name in one question rather than the first one found; see
-[`librarian.md`'s own "Ask-back" section](./librarian.md#ask-back-the-one-question-a-capture-gets)
-for the ordinary flow's routing table.
-`capture.schema.SITUATION_NAMES_KEY` (a JSON list, one entry or many, and the only key a park now
-writes — the singular `SITUATION_NAME_KEY` is read-only legacy) carries the names on the parked row,
-from EITHER flow;
-`entities.situations.subjects_of` is the per-name reader `stigmergy-entities show` uses to print one
-`stigmergy-entities approve` command PER unresolved name, each checked and runnable independently.
-See [`../../src/stigmergy/entities/index.md`](../../src/stigmergy/entities/index.md) and
-[`operator-runbook.md`](./operator-runbook.md#draining-parked-rows) for the steward-facing and
-operator-facing halves of this, respectively.
+A transcript can name more than one entity the registry does not know — a call naming two customers
+and an unregistered project code. It proposes them, exactly as an ordinary capture does: the account
+declares `new_entities`/`new_aliases`, `processing` hands them to `identity.write_proposals` (the
+SAME writer the fast lane uses — a meeting is not a second way of creating an identity), and each
+decision page anchors to the entity born in its own commit.
 
-### …and the re-file after that park does not re-read the transcript
+**The one meeting-specific parameter is `related`.** `write_proposals` takes the page names a new
+entity's `Connections` section should point back at, and the meeting flow passes this set's own
+DECISION pages, by STEM — `os.path.basename(path)` minus `.md`, which is what a wikilink resolves
+by — falling back to the meeting page's stem when the set filed no decision. The ordinary flow
+passes its one page's title. Both end up with a proposed entity whose page says which page it was
+proposed from, instead of a template placeholder.
 
-The park→approve→requeue loop does something expensive here: a real
-walk parked a meeting on one unregistered name, and the re-file — a fresh agent read of the same
-transcript — produced a *different, thinner* distillation, judged "faithful, and incomplete" by the
-person who had attended. The system had discarded a good distillation because of an anchoring
-failure that had nothing to do with its content, and the problem gets worse with transcript length:
-more names, more chances one is unregistered, more that a second read can drop.
+**Why this replaced a park, in one paragraph of evidence.** The old loop parked a meeting on one
+unregistered name and re-filed after a steward registered it — a fresh agent read of the same
+transcript, which produced a *different, thinner* distillation, judged "faithful, and incomplete" by
+the person who had attended. The system had discarded a good distillation over an anchoring failure
+that had nothing to do with its content, and it got worse with transcript length: more names, more
+chances one is unregistered, more that a second read can drop. Nothing is re-read now, because
+nothing is parked: the distillation that was produced is the one that lands. `capture_queue.outcome`,
+the column a park stored that account in, is legacy and nothing writes it
+([capture.md](./capture.md#the-queue)).
 
-So a park STORES the agent's structured outcome on `capture_queue.outcome`, and a re-file re-runs
-the existing pipeline — `_write_meeting_pages` plus every gate — over the stored outcome against the
-FRESH registry loaded at this item's base commit. This is not a cache with a correctness exemption:
-nothing new decides anchoring, the gates do, exactly as always, over content that no longer changes
-underneath them. If the steward's mint resolved the name, the same decisions file.
-
-Reuse is refused whenever the model genuinely has new information: the material AND the submitter's
-reply must be byte-identical to what produced the stored outcome, and a `brain_reply` is precisely
-the case where they are not. When a real re-distillation does happen, the report DIFFS the two
-outcomes — which is the only reason the original loss was ever noticed, since a fresh distillation
-reads perfectly plausibly on its own.
+The steward-facing half — confirming, merging or declining what a meeting proposed — is
+[`operator-runbook.md`](./operator-runbook.md#governing-what-the-librarian-proposed) and
+[`../../src/stigmergy/entities/index.md`](../../src/stigmergy/entities/index.md).
 
 ## Where the code lives
 
@@ -420,7 +401,8 @@ reads perfectly plausibly on its own.
 - `librarian.double.DoubleAgent.run_meeting` — the offline double's meeting-specific directives,
   planted in the transcript itself: `DOUBLE:decisions=<n>`, the four
   `DOUBLE:meeting-hallucinate*` variants (first decision, first pass only, LAST decision, the
-  meeting page's own notes), `DOUBLE:meeting-triage=a,b,c`, `DOUBLE:meeting-anchor=<name>`,
+  meeting page's own notes), `DOUBLE:meeting-propose=a,b` (the decisions anchor to entities the
+  registry lacks, and the account proposes each one), `DOUBLE:meeting-anchor=<name>`,
   `DOUBLE:meeting-company[=n]`, `DOUBLE:meeting-body-date-link`, `DOUBLE:meeting-collide` and the
   three declared-edit ones — `DOUBLE:meeting-backlink=<path>`, `DOUBLE:meeting-overlap=<path>` and
   `DOUBLE:meeting-bad-edit[=<path>]`, which put an edit in the outcome and never on a page. Every
@@ -440,10 +422,9 @@ reads perfectly plausibly on its own.
 | `tests/librarian/test_meeting_processing_pg.py` | the whole flow over real Postgres + real git, including the long-transcript oversize case |
 | `tests/librarian/test_meeting_queue_fencing_pg.py` | the meeting kind claimed through the same fenced claiming as every capture |
 | `tests/librarian/test_meeting_brief_contract.py` | the brief↔gates two-sided contract, in both directions |
-| `tests/librarian/test_meeting_outcome_reuse_unit.py` | the reuse predicate — when a stored outcome is re-filed without an agent call, and when it must not be |
 | `tests/librarian/test_gates_unit.py` | the flow-scoped `GateContext` fields, per-page anchoring, the provenance-group exemption |
-| `tests/librarian/test_report.py` | `report.filed_meeting` / `triage_entity` / `needs_input`, including their several-name prose |
-| `tests/entities/test_situations.py` | `subjects_of`'s multi-name fallback |
+| `tests/librarian/test_report.py` | `report.filed_meeting`, including the proposals clause in both the rendered block and the fact set |
+| `tests/librarian/test_identity_unit.py` | `write_proposals` itself — the writer both flows hand their declarations to |
 
 No test needs an API key: `double.DoubleAgent.run_meeting` drives every sabotage in the table above,
 offline, against `--backend double`.

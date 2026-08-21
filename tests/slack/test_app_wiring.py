@@ -357,20 +357,16 @@ def test_show_it_here_falls_back_to_ephemeral_when_conversations_info_fails(inde
     assert len(gw.ephemeral) == 1
 
 
-def test_bot_mention_guard_does_not_falsely_treat_a_literal_at_symbol_as_the_bots_own_mention(
-        indexed, clean_tables):
-    """The old `bot_mention = f"<@{context.get('bot_user_id', '')}>"` is ALWAYS truthy (a literal
-    `"<@>"` is still a non-empty string), so `if bot_mention and bot_mention in text` never
-    short-circuited on a missing `bot_user_id` — a message containing the literal text `<@>` would
-    wrongly be treated as mentioning the bot and skip ask-back handling entirely."""
+def test_a_threaded_message_is_ordinary_conversation_and_produces_no_traffic(indexed,
+                                                                              clean_tables):
+    """Nothing a capture does ever waits on a reply in its thread, so a message inside a thread —
+    even one that looks like a bare `<@>` mention — is not this bot's business: no post, no
+    ephemeral, no error."""
     conn, fixture = indexed
     gw = FakeSlackGateway()
     gw.seed_user("U_ORIGINAL", fixture.ANA)
     ctx = build_slack_context(fixture, conn, gateway=gw)
     app = build_bolt_app(ctx)
-
-    from tests.slack.test_replies import _make_needs_input_submission
-    _make_needs_input_submission(ctx, identity=fixture.ANA, channel_id="C1", thread_ts="55.1")
 
     listener = _listener(app, "on_message")
     event = {"user": "U_ORIGINAL", "channel": "C1", "channel_type": "channel", "text": "<@>",
@@ -379,8 +375,7 @@ def test_bot_mention_guard_does_not_falsely_treat_a_literal_at_symbol_as_the_bot
 
     _run(listener(event=event, context=context, ack=_noop_ack, body={"team_id": TEAM_ID, "event": event}))
 
-    from stigmergy.slack import copy
-    assert gw.posted and gw.posted[-1].text == copy.REPLY_DELIVERED
+    assert gw.posted == [] and gw.ephemeral == []
 
 
 # ── the listener-level try/except backstop ─────────────────────────────────────────────────────
@@ -489,52 +484,51 @@ def test_a_real_reaction_added_payload_carries_no_team_field_and_is_still_handle
 
 
 # ── the review surface's own two listeners ─────────────────────────────────────────────────────
-def _park_capture_row(conn, submitted_by: str) -> int:
-    from psycopg.types.json import Jsonb
+class _RecordingReviewDecide:
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
 
-    from stigmergy.capture import schema as capture_schema
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO capture_queue (kind, payload, blob_refs, submitted_by, status, report) "
-            "VALUES ('raw', '{}', '{}', %s, %s, %s) RETURNING id",
-            (submitted_by, capture_schema.TRIAGE, Jsonb({"summary": "parked for a look"})))
-        return cur.fetchone()[0]
+    def __call__(self, service, **kwargs):
+        self.calls.append({"identity": service.identity, **kwargs})
+        return self.result
 
 
-def test_on_review_action_requeues_a_parked_capture_end_to_end(indexed, clean_tables):
+def test_on_review_action_routes_a_direct_verdict_to_review_decide_with_the_slack_door(
+        indexed, clean_tables, monkeypatch):
+    from stigmergy.server import review as server_review
     conn, fixture = indexed
     gw = FakeSlackGateway()
     gw.seed_user("U_STEWARD", fixture.STEWARD)
     ctx = build_slack_context(fixture, conn, gateway=gw)
     app = build_bolt_app(ctx)
     listener = _listener(app, "on_review_action")
-    item_id = _park_capture_row(conn, fixture.STEWARD)
+    recorder = _RecordingReviewDecide({"recorded": "approve", "message": "recorded: approve on x"})
+    monkeypatch.setattr(server_review, "review_decide_safe", recorder)
 
     body = {"channel": {"id": "U_STEWARD"}, "user": {"id": "U_STEWARD"}, "team": {"id": TEAM_ID},
            "trigger_id": "T1"}
-    action = {"action_id": "review:parked-capture:requeue", "value": str(item_id)}
+    action = {"action_id": "review:identity-proposal:approve", "value": "globex-robotics"}
 
     _run(listener(ack=_noop_ack, body=body, action=action))
 
-    assert len(gw.posted) == 1
-    assert "requeue" in gw.posted[0].text
-    with conn.cursor() as cur:
-        cur.execute("SELECT verdict FROM review_decisions WHERE item_id = %s", (str(item_id),))
-        assert cur.fetchone()[0] == "requeue"
+    assert recorder.calls == [{"identity": fixture.STEWARD, "item_kind": "identity-proposal",
+                               "item_id": "globex-robotics", "verdict": "approve",
+                               "source": server_review.SOURCE_SLACK, "into": ""}]
+    assert len(gw.posted) == 1 and "recorded: approve" in gw.posted[0].text
 
 
-def test_on_review_action_opens_a_modal_for_a_note_requiring_verdict(indexed, clean_tables):
+def test_on_review_action_opens_the_merge_modal_for_a_merge(indexed, clean_tables):
     conn, fixture = indexed
     gw = FakeSlackGateway()
     gw.seed_user("U_STEWARD", fixture.STEWARD)
     ctx = build_slack_context(fixture, conn, gateway=gw)
     app = build_bolt_app(ctx)
     listener = _listener(app, "on_review_action")
-    item_id = _park_capture_row(conn, fixture.STEWARD)
 
     body = {"channel": {"id": "U_STEWARD"}, "user": {"id": "U_STEWARD"}, "team": {"id": TEAM_ID},
            "trigger_id": "T1"}
-    action = {"action_id": "review-modal:parked-capture:reject", "value": str(item_id)}
+    action = {"action_id": "review-modal:identity-proposal:merge", "value": "globex-robotics"}
 
     _run(listener(ack=_noop_ack, body=body, action=action))
 
@@ -542,36 +536,33 @@ def test_on_review_action_opens_a_modal_for_a_note_requiring_verdict(indexed, cl
     assert len(gw.opened_views) == 1
 
 
-def test_on_review_note_modal_submission_records_the_typed_note(indexed, clean_tables):
+def test_on_merge_modal_submission_forwards_the_survivor(indexed, clean_tables, monkeypatch):
     import json
 
+    from stigmergy.server import review as server_review
     from stigmergy.slack import render
     conn, fixture = indexed
     gw = FakeSlackGateway()
     gw.seed_user("U_STEWARD", fixture.STEWARD)
     ctx = build_slack_context(fixture, conn, gateway=gw)
     app = build_bolt_app(ctx)
-    listener = _listener(app, "on_review_note_modal_submission")
-    item_id = _park_capture_row(conn, fixture.STEWARD)
+    listener = _listener(app, "on_merge_modal_submission")
+    recorder = _RecordingReviewDecide({"recorded": "merge", "message": "recorded: merge on x"})
+    monkeypatch.setattr(server_review, "review_decide_safe", recorder)
 
-    metadata = json.dumps({"item_kind": "parked-capture", "item_id": str(item_id),
-                          "verdict": "reject", "field": "notes", "channel_id": "U_STEWARD"})
+    metadata = json.dumps({"item_kind": "identity-proposal", "item_id": "globex-robotics",
+                          "channel_id": "U_STEWARD"})
     view = {"private_metadata": metadata, "state": {"values": {
-        render.REVIEW_NOTE_MODAL_BLOCK_ID: {
-            render.REVIEW_NOTE_MODAL_ACTION_ID: {"value": "not useful"}}}}}
+        render.MERGE_SELECT_BLOCK_ID: {
+            render.MERGE_SELECT_ACTION_ID: {"selected_option": {"value": "acme-corp"}}}}}}
     # WHO is submitting comes from the view_submission event's OWN authoritative `body`, never
-    # from `private_metadata` — `body["user"]`/`body["team"]` are Slack's real shape for this
-    # payload.
+    # from `private_metadata`.
     body = {"view": view, "user": {"id": "U_STEWARD"}, "team": {"id": TEAM_ID}}
 
     _run(listener(ack=_noop_ack, body=body, view=view))
 
-    with conn.cursor() as cur:
-        cur.execute("SELECT verdict, notes FROM review_decisions WHERE item_id = %s",
-                   (str(item_id),))
-        verdict, notes = cur.fetchone()
-    assert verdict == "reject"
-    assert notes == "not useful"
+    assert recorder.calls[0]["into"] == "acme-corp"
+    assert recorder.calls[0]["verdict"] == "merge"
     assert len(gw.posted) == 1
 
 

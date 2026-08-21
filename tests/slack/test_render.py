@@ -290,19 +290,11 @@ def test_an_anchor_reason_is_escaped_like_every_other_agent_written_string():
     assert "&lt;https://evil.example|click&gt;" in text
 
 
-def test_needs_input_render_addresses_the_submitter_and_never_shows_the_mcp_invocation():
-    text = render.render_needs_input(situation_prose="needs_input — parked on one question",
-                                     slack_user_id="U123")[0]["text"]["text"]
-    assert text.startswith("<@U123> —")
-    assert copy.NEEDS_INPUT_INSTRUCTION in text
-    assert "brain_reply(" not in text
-
-
 def test_generic_report_bolds_the_enum_prefix_and_keeps_the_rest_of_the_sentence():
-    raw = "triage — parked, not filed. Your material seems to be about \"X\"."
-    text = render.render_generic_report("triage", raw)[0]["text"]["text"]
-    assert text.startswith("*triage* — parked, not filed.")
-    assert "triage — triage" not in text   # never a duplicated prefix
+    raw = "failed — the librarian could not finish this. Your material is fine."
+    text = render.render_generic_report("failed", raw)[0]["text"]["text"]
+    assert text.startswith("*failed* — the librarian could not finish this.")
+    assert "failed — failed" not in text   # never a duplicated prefix
 
 
 # ── the Sources block and the verdict line are the bot's OWN structure, and a prompt-injected
@@ -373,23 +365,26 @@ def _no_link_renders_as_a_real_hyperlink(text: str) -> bool:
     return "<https://attacker.example/steal|Approve now>" in text
 
 
-def test_doorbell_parked_capture_never_renders_a_link_from_the_summary():
-    """The reproduction: a `judged_type`/summary of `[Approve now](https://
-    attacker.example/steal)` used to render as TWO live attacker-controlled links (`to_mrkdwn`
-    converts the markdown link syntax AND `escape_mrkdwn`'s own `<`/`>` escaping of a bare URL
-    elsewhere would not save it) in the doorbell DM whose whole copy doctrine is "the single next
-    action". The literal markdown source is fine to appear as inert, escaped text; only a REAL
-    `<url|text>` Slack hyperlink is the defect this test exists to catch."""
-    blocks, _ = render.render_doorbell_parked_capture(item_id="1",
-                                                       summary=_HOSTILE_LINK_MARKDOWN)
-    text = _text(blocks)
-    assert not _no_link_renders_as_a_real_hyperlink(text)
-
-
-def test_doorbell_entity_proposal_never_renders_a_link_from_the_subject():
-    blocks, _ = render.render_doorbell_entity_proposal(
-        item_id="1", submitter="alice@example.com", name=_HOSTILE_LINK_MARKDOWN)
+def test_doorbell_identity_proposal_never_renders_a_link_from_any_of_its_slots():
+    """Every slot on the card was lifted from captured material or written by the agent — the
+    name, the aliases, the page's summary, the anchored paths. A `[Approve now](https://
+    attacker.example/steal)` in any of them must arrive as inert text, never a live link."""
+    blocks, _ = render.render_doorbell_identity_proposal({
+        "id": "x", "name": _HOSTILE_LINK_MARKDOWN, "entity_type": "organization",
+        "aliases": [_HOSTILE_LINK_MARKDOWN], "summary": _HOSTILE_LINK_MARKDOWN,
+        "anchored_pages": [_HOSTILE_LINK_MARKDOWN], "anchored_total": 1})
     assert not _no_link_renders_as_a_real_hyperlink(_text(blocks))
+    assert [e["text"]["text"] for b in blocks if b["type"] == "actions"
+            for e in b["elements"]] == ["Approve", "Merge into…", "Decline"]
+
+
+def test_doorbell_alias_proposal_never_renders_a_link_from_the_spelling():
+    blocks, _ = render.render_doorbell_alias_proposal({
+        "id": "acme-corp:x", "entity_id": "acme-corp", "entity_name": _HOSTILE_LINK_MARKDOWN,
+        "alias": _HOSTILE_LINK_MARKDOWN})
+    assert not _no_link_renders_as_a_real_hyperlink(_text(blocks))
+    assert [e["text"]["text"] for b in blocks if b["type"] == "actions"
+            for e in b["elements"]] == ["Approve", "Decline"]
 
 
 # A `review_decisions.actor`, which is what the closed card is built from — four doors write that
@@ -403,8 +398,9 @@ def test_doorbell_closed_card_never_renders_a_link_from_the_ledgers_actor():
     Slack's own `<url|label>` syntax renders live unless something escapes it. Without
     `escape_mrkdwn` here, a steward whose card just changed under them is shown a clickable
     "Approve" where the name of the colleague who beat them to it should be."""
-    blocks, _ = render.render_doorbell_closed(kind="entity-proposal", item_id="1", verdict="reject",
-                                              actor=_HOSTILE_LEDGER_ACTOR, source="admin")
+    blocks, _ = render.render_doorbell_closed(kind="identity-proposal", item_id="globex",
+                                              verdict="reject", actor=_HOSTILE_LEDGER_ACTOR,
+                                              source="admin")
 
     text = _text(blocks)
     assert _HOSTILE_LEDGER_ACTOR not in text
@@ -434,14 +430,12 @@ def test_no_doorbell_card_renderer_calls_to_mrkdwn():
 
 
 # ── the same asymmetry, checked across the REST of slack/ ──────────────────────────────────────
-# `render_generic_report` (the fast-lane push channel to the SUBMITTER) carries the identical
-# agent-classified text (`librarian.report.triage_type`/`triage_entity`) that made the doorbell's
-# card exploitable — just delivered to a different recipient. `render_needs_input` turned out to
-# be WORSE: it applied no escaping AT ALL, so a raw Slack-native `<url|text>` in the untrusted
-# prose (not even CommonMark) would have rendered as a live link with no conversion step needed.
+# `render_generic_report` (the fast-lane push channel to the SUBMITTER) carries agent-classified
+# text (`librarian.report`'s refusal sentences) of the same provenance that made the doorbell's
+# card exploitable — just delivered to a different recipient.
 def test_generic_report_never_renders_a_link_from_an_agent_classified_summary():
-    raw = f"triage — parked, not filed. This reads like {_HOSTILE_LINK_MARKDOWN}."
-    text = render.render_generic_report("triage", raw)[0]["text"]["text"]
+    raw = f"failed — the librarian could not finish this. This reads like {_HOSTILE_LINK_MARKDOWN}."
+    text = render.render_generic_report("failed", raw)[0]["text"]["text"]
     assert not _no_link_renders_as_a_real_hyperlink(text)
 
 
@@ -451,30 +445,6 @@ def test_generic_report_renderer_never_calls_to_mrkdwn():
              if instr.opname in ("LOAD_GLOBAL", "LOAD_METHOD", "LOAD_ATTR")}
     assert "to_mrkdwn" not in names
     assert "_render_markdown" not in names
-
-
-_HOSTILE_SLACK_NATIVE_LINK = "<https://attacker.example/steal|Click here to verify>"
-
-
-def test_needs_input_never_renders_a_raw_slack_native_link_from_the_situation_prose():
-    """`render_needs_input` used to apply NO escaping at all to `situation_prose` — worse than the
-    doorbell's `to_mrkdwn`-conversion instance, since Slack's OWN native link syntax
-    (`<url|text>`, not even CommonMark) would render live with no conversion step needed."""
-    text = render.render_needs_input(
-        situation_prose=f"needs_input — parked. Your material seems to be about "
-                        f"\"{_HOSTILE_SLACK_NATIVE_LINK}\".",
-        slack_user_id="U123")[0]["text"]["text"]
-    assert "attacker.example/steal|Click here to verify>" not in text
-    assert "&lt;https://attacker.example/steal" in text   # escaped, not interpreted
-
-
-def test_needs_input_still_addresses_the_submitter_with_a_real_mention():
-    """The fix must not corrupt the ONE piece of code-composed markup this render legitimately
-    needs: the `<@slack_user_id>` mention `copy.needs_input_body` composes AROUND the (now
-    pre-escaped) untrusted prose."""
-    text = render.render_needs_input(situation_prose="an ordinary situation",
-                                     slack_user_id="U123")[0]["text"]["text"]
-    assert text.startswith("<@U123> —")
 
 
 # ── Slack's section ceiling is measured on the ESCAPED string ──────────────────────────────────
@@ -606,189 +576,55 @@ def test_the_sources_context_block_is_clamped_too():
             assert len(element["text"]) <= render.SECTION_TEXT_MAX, len(element["text"])
 
 
-# ── the entity-mint modal's `Name` prefill: what a steward's accepted default MINTS ─────────────
-# Submitting this modal is the one Slack action that writes to the knowledge repo — one entity,
-# one signed commit through the governed door. The prefill is therefore not a convenience: it is
-# the value most stewards will submit unchanged, so whatever this function puts in `initial_value`
-# is, in practice, what gets minted.
-#
-# WHOSE DECISION IT IS. This renderer used to derive the one-vs-several answer itself from
-# `unresolved_names`, and these tests measured that derivation. It does not any more: the review
-# item carries `mint_name_prefill`, decided once in `entities.situations` (this module may not
-# import `entities` — `tests/test_architecture.py` — which is why the decided value travels in the
-# item), and `slack.review` hands it over. So every call below states the decision EXPLICITLY, and
-# what is asserted here is OBEDIENCE: the value handed in is the value rendered, and the listing
-# appears exactly when that value is empty and names remain.
-#
-# The decision's own cases — one name prefills, several do not, a blank entry does not count —
-# moved to `tests/entities/test_situations.py`, directly on the pure function; that the two ends
-# are actually wired together is proved on real Postgres in `tests/slack/test_review.py`, which
-# drives a parked row through `handle_block_action` to this payload. Nothing was dropped: what
-# changed is which layer each claim is made about.
-def _mint_view(names, prefill) -> dict:
-    """`prefill` is DELIBERATELY required. Defaulting it would leave these tests exercising the
-    renderer's own `name_prefill is None` fallback, which is the duplicate of the rule this
-    consolidation exists to remove — and would keep passing after the real caller stopped using
-    it."""
-    return render.render_entity_mint_modal(private_metadata="{}",
-                                           unresolved_names=names, name_prefill=prefill)
+# ── the filed card names what the librarian proposed ──────────────────────────────────────────
+def test_the_filed_card_names_a_proposed_entity_and_says_nothing_waits_on_the_submitter():
+    text = render.render_filed(page_path="wiki/notes/X.md", commit="abc123", anchor="Ledgerly",
+                               proposed=["Ledgerly"])[0]["text"]["text"]
+    assert "proposed *Ledgerly* as a new entity" in text
+    assert "nothing waits on you" in text
+    plain = render.render_filed(page_path="wiki/notes/X.md", commit="abc123",
+                                anchor="Acme Corp")[0]["text"]["text"]
+    assert "proposed" not in plain
 
 
-def _name_element(view: dict) -> dict:
-    return {b["block_id"]: b for b in view["blocks"]
-            if "block_id" in b}[render.ENTITY_MINT_NAME_BLOCK_ID]["element"]
+def test_a_proposed_name_is_escaped_like_every_other_agent_written_string():
+    text = render.render_filed(page_path="wiki/notes/X.md", commit="abc123", anchor="X",
+                               proposed=["<https://evil.example|click>"])[0]["text"]["text"]
+    assert "<https://evil.example|click>" not in text
+    assert "&lt;https://evil.example|click&gt;" in text
 
 
-def _sections(view: dict) -> list[str]:
-    return [b["text"]["text"] for b in view["blocks"] if b.get("type") == "section"]
+# ── the merge modal: which registered entity a proposal really is ─────────────────────────────
+def test_the_merge_modal_offers_the_candidates_and_a_typed_id():
+    view = render.render_merge_modal(private_metadata="{}", name="Acme Corporation",
+                                    candidates=[{"id": "acme-corp", "name": "Acme Corp"}])
+    assert view["callback_id"] == render.MERGE_MODAL_CALLBACK_ID
+    select = next(b for b in view["blocks"] if b.get("block_id") == render.MERGE_SELECT_BLOCK_ID)
+    assert select["element"]["options"] == [
+        {"text": {"type": "plain_text", "text": "Acme Corp (acme-corp)"}, "value": "acme-corp"}]
+    assert select["optional"] is True
+    typed = next(b for b in view["blocks"] if b.get("block_id") == render.MERGE_TYPED_BLOCK_ID)
+    assert typed["element"]["action_id"] == render.MERGE_TYPED_ACTION_ID
+    assert len(view["title"]["text"]) <= 24 and len(view["submit"]["text"]) <= 24
 
 
-def test_a_two_name_proposal_prefills_no_name_and_lists_both_above_the_field():
-    """**The C-3 regression test.** A park naming two unresolved entities used to reach this modal
-    as the JOINED display string (`situations.subject_of`'s `"Jack, Acme Capital"`), prefilled into
-    `Name` — and a steward who accepted the prefill, which is what a prefill is for, minted a real
-    entity called "Jack, Acme Capital" and pushed a real signed commit for it. It is neither of the
-    two names, no registry lookup will ever match it, and undoing it is a second commit.
-
-    The contract: with more than one unresolved name there is no single string that is the right
-    answer, so the field stays EMPTY and the names are listed above it for the steward to choose
-    from. An empty required field cannot be submitted by accident; a wrong prefilled one can.
-
-    `""` is the decision this park carries (`situations.mint_name_prefill`, proved for this exact
-    row shape in `tests/entities/test_situations.py`); what is asserted here is that the renderer
-    honours it — empty field, both names listed, and the joined compound nowhere in the payload.
-    """
-    view = _mint_view(["Jack", "Acme Capital"], "")
-
-    assert "initial_value" not in _name_element(view), (
-        "no prefill can be correct for a multi-name proposal — one submission mints ONE entity")
-    listed = "\n".join(_sections(view))
-    assert "Jack" in listed and "Acme Capital" in listed, (
-        "the steward has to be able to see WHICH names are waiting, or the empty field is a riddle")
-    # ABOVE the field, not below it: Slack renders blocks in order, and an explanation under an
-    # empty required input is read after the confusion it exists to prevent.
-    assert view["blocks"][0]["type"] == "section"
-    assert view["blocks"][1]["block_id"] == render.ENTITY_MINT_NAME_BLOCK_ID
-    assert "Jack, Acme Capital" not in json.dumps(view), (
-        "the joined display compound must not appear anywhere in this view — it is not any of the "
-        "names, and this is the payload a steward submits from")
+def test_the_merge_modal_with_no_candidates_has_only_the_typed_field():
+    view = render.render_merge_modal(private_metadata="{}", name="Globex", candidates=[])
+    block_ids = [b.get("block_id") for b in view["blocks"]]
+    assert render.MERGE_SELECT_BLOCK_ID not in block_ids
+    assert render.MERGE_TYPED_BLOCK_ID in block_ids
 
 
-def test_a_one_name_proposal_still_prefills_that_name_and_adds_no_extra_block():
-    """The benign twin, and the specificity half of the fix: the common case — one unresolved
-    name, the overwhelming majority of parks — must keep its prefill and its unchanged layout.
-    A fix that blanked every prefill would trade a rare garbled mint for a retyped name on every
-    single approval, and a steward who retypes learns to stop reading the field.
-
-    The decision handed over is "Jack"; the renderer must put it in the field VERBATIM and add
-    nothing. A renderer that re-derived instead would agree here by coincidence, which is why the
-    contradictory pair below exists."""
-    view = _mint_view(["Jack"], "Jack")
-
-    assert _name_element(view)["initial_value"] == "Jack"
-    assert _sections(view) == [], (
-        "one name needs no explanation block — the several-names copy must not fire here")
+def test_the_merge_modal_heading_escapes_the_proposals_name():
+    view = render.render_merge_modal(private_metadata="{}",
+                                    name="<https://evil.example|click>", candidates=[])
+    heading = view["blocks"][0]["text"]["text"]
+    assert "<https://evil.example|click>" not in heading
+    assert "&lt;https://evil.example|click&gt;" in heading
 
 
-def test_no_names_at_all_prefills_nothing_and_explains_nothing():
-    """The third case, which is not an error: the item was decided or disposed of between the
-    doorbell DM and this click, so `_mint_modal_inputs` finds nothing and hands over `([], "")`.
-    The modal still opens with an empty field a steward can fill by hand — `review_decide`'s own
-    validation is what enforces the field, exactly as it would for a steward who never saw a
-    card."""
-    view = _mint_view([], "")
-
-    assert "initial_value" not in _name_element(view)
-    assert _sections(view) == []
-    # Both defaults together are what an un-updated caller hits: no names, no decision. It must
-    # still open, and it must still offer nothing.
-    bare = render.render_entity_mint_modal(private_metadata="{}")
-    assert "initial_value" not in _name_element(bare)
-    assert _sections(bare) == []
-
-
-def test_a_blank_entry_among_the_names_is_not_listed_beside_the_real_one():
-    """A list carrying one real name and one blank is a ONE-name proposal — the decision handed
-    over is "Jack" (pinned at its source in `tests/entities/test_situations.py`) — and the blank
-    must not surface here either: no bullet for a name nobody wrote."""
-    view = _mint_view(["Jack", "   "], "Jack")
-
-    assert _name_element(view)["initial_value"] == "Jack"
-    assert _sections(view) == []
-
-
-def test_a_names_list_that_is_nothing_but_blanks_explains_nothing_it_cannot_show():
-    """The renderer's own remaining filtering, at the only place it still changes an outcome: with
-    no decision (`""`) and a list holding only blanks, there is nothing to enumerate, so the
-    several-names block must NOT fire. A steward would otherwise be shown "this capture names 1
-    entities:" above an empty bullet list and an empty field — a riddle with no answer in it."""
-    view = _mint_view(["   ", ""], "")
-
-    assert "initial_value" not in _name_element(view)
-    assert _sections(view) == []
-
-
-def test_the_renderer_obeys_a_prefill_that_contradicts_the_names_and_never_re_derives_one():
-    """**The proof that the decision is no longer taken here.** Both pairs below are impossible
-    for the server to produce — `mint_name_prefill` and `subjects` always agree — and that is
-    exactly what makes them the instrument: a renderer that still counted `unresolved_names` would
-    answer differently from a renderer that obeys, on inputs no legitimate caller can produce, so
-    neither answer can be reached by coincidence.
-
-    Handed a name WITH several names: prefill it, and show no listing — the caller said a default
-    is safe. Handed nothing WITH a single name: leave the field empty and list that one name — the
-    caller said no default is safe. If this test ever fails, the rule has grown a second home in
-    this module; if it can no longer be written, the renderer started deciding again."""
-    obeys_a_prefill = render.render_entity_mint_modal(
-        private_metadata="{}", name_prefill="X",
-        unresolved_names=["A", "B"])
-
-    assert _name_element(obeys_a_prefill)["initial_value"] == "X", (
-        "the renderer re-derived from the two names instead of obeying the decision it was handed")
-    assert _sections(obeys_a_prefill) == [], (
-        "a supplied prefill means the caller already decided a default is safe — the several-names "
-        "copy must not fire beside a filled field")
-
-    obeys_an_empty_decision = render.render_entity_mint_modal(
-        private_metadata="{}", name_prefill="",
-        unresolved_names=["Solo"])
-
-    assert "initial_value" not in _name_element(obeys_an_empty_decision), (
-        "the renderer prefilled the one name it was NOT told to offer — it is counting again")
-    listed = "\n".join(_sections(obeys_an_empty_decision))
-    assert "Solo" in listed, (
-        "an empty decision with names left to place IS the several-names case — the names have to "
-        "be shown, or the empty required field has no explanation next to it")
-
-
-def test_the_names_listed_in_the_modal_are_escaped_for_mrkdwn():
-    """These strings come off captured material — a submitter's note, a transcript — and this
-    change is what first puts them inside a mrkdwn `section` block. Slack's own three characters
-    (`&`, `<`, `>`) have to arrive as entities, or a name containing `<https://evil.example|click
-    me>` renders as a link the bot appears to be offering, in a modal whose whole purpose is to
-    ask a steward to trust one of these strings enough to mint it.
-
-    The escaping already exists in `render.escape_mrkdwn`; this pins that the NEW block goes
-    through it, which is the part a later edit can drop without any other test noticing."""
-    view = _mint_view(["R&D <Group>", "Acme Capital"], "")
-
-    listed = "\n".join(_sections(view))
-    assert "R&amp;D &lt;Group&gt;" in listed
-    assert "<Group>" not in listed and "R&D" not in listed
-
-
-def test_the_mint_modals_own_structure_is_unchanged_by_the_several_names_block():
-    """The heading is ADDITIVE: every field the mint needs is still there, in order, with the same
-    block ids `_mint_state_values`/`views_submission` read — a modal that gained a block and lost a
-    field would still open, and fail only at submit time."""
-    plural = _mint_view(["Jack", "Acme Capital"], "")
-    singular = _mint_view(["Jack"], "Jack")
-
-    def ids(view):
-        return [b["block_id"] for b in view["blocks"] if "block_id" in b]
-
-    assert ids(plural) == ids(singular) == [
-        render.ENTITY_MINT_NAME_BLOCK_ID, render.ENTITY_MINT_TYPE_BLOCK_ID,
-        render.ENTITY_MINT_ALIASES_BLOCK_ID, render.ENTITY_MINT_ROLE_BLOCK_ID,
-        render.ENTITY_MINT_REQUEUE_BLOCK_ID]
-    assert plural["callback_id"] == render.ENTITY_MINT_MODAL_CALLBACK_ID
+def test_the_merge_modal_bounds_its_options_to_slacks_ceiling():
+    many = [{"id": f"e{i}", "name": f"Entity {i}"} for i in range(150)]
+    view = render.render_merge_modal(private_metadata="{}", name="X", candidates=many)
+    select = next(b for b in view["blocks"] if b.get("block_id") == render.MERGE_SELECT_BLOCK_ID)
+    assert len(select["element"]["options"]) == render.MAX_MERGE_OPTIONS

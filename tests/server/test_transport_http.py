@@ -116,7 +116,7 @@ def test_identities_fixture_is_keyed_by_email(fixture):
 # `test_service_acl.py` proves ACL scoping by calling BrainService directly. Neither can catch a
 # regression in the real server's token -> identity -> per-tool wiring. These two can, and that is
 # this file's whole reason for existing (see its own docstring).
-def test_the_mounted_tool_set_over_real_http_is_exactly_the_ten_supported_tools(indexed):
+def test_the_mounted_tool_set_over_real_http_is_exactly_the_nine_supported_tools(indexed):
     """The tool list, asserted at the transport boundary rather than in-process: a tool that
     `build_mcp()` mounts but the real HTTP app does not serve — or the reverse — turns this red."""
     _, fx = indexed
@@ -134,7 +134,7 @@ def test_the_mounted_tool_set_over_real_http_is_exactly_the_ten_supported_tools(
                 names = {tool.name for tool in (await session.list_tools()).tools}
                 assert names == {
                     "search_brain", "read_page", "list_entities", "describe_entity", "ask",
-                    "brain_submit", "brain_submissions", "brain_reply",
+                    "brain_submit", "brain_submissions",
                     "review_queue", "review_decide",
                 }
 

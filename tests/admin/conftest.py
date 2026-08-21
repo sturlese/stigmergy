@@ -62,7 +62,11 @@ def clean_tables(conn):
         cur.execute(
             "TRUNCATE capture_queue, job_runs, ingest_errors, audit_log, admin_actions,"
             " gardener_findings, review_decisions, repair_proposals RESTART IDENTITY")
+    # The registry snapshot is what the inbox and the Entities desk read: a test that published
+    # one must not hand its proposals to the next.
+    index_store.clear_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH)
     yield
+    index_store.clear_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH)
 
 
 @pytest.fixture()
@@ -125,9 +129,9 @@ def submit_one(conn, *, material=None, submitted_by="steward@example.com", kind=
                         submitted_by=submitted_by)
 
 
-def park(conn, submission_id, *, status=capture_schema.TRIAGE, report=None, error=""):
-    """Claim the (only queued) row and park it — the same `finish` transition the librarian
-    uses, so the console's dispositions run against rows shaped exactly like production's."""
+def finish_one(conn, submission_id, *, status=capture_schema.FAILED, report=None, error=""):
+    """Claim the (only queued) row and finish it — the same `finish` transition the librarian
+    uses, so the console reads rows shaped exactly like production's."""
     item = queue.claim_next(conn)
     assert item is not None and item["id"] == submission_id, "fixture expects one queued row"
     queue.finish(conn, submission_id, status=status, expected_attempts=item["attempts"],
@@ -135,33 +139,7 @@ def park(conn, submission_id, *, status=capture_schema.TRIAGE, report=None, erro
     return item
 
 
-def unresolved_entity_report(name):
-    """The LEGACY park shape: one unresolved name under the retired singular `SITUATION_NAME_KEY`.
-
-    **Deliberately kept after the plural collapse, and this is the reason.** Nothing writes this
-    key any more — a park writes `SITUATION_NAMES_KEY`, a list, whatever the count — but rows
-    carrying it are never migrated, so the console has to keep rendering them forever. Every caller
-    below is therefore also this repo's coverage that the console reads a pre-collapse row
-    correctly, which no fixture built from today's builder could give it.
-
-    Use `unresolved_entity_names_report` for the shape a park writes today (both counts). That the
-    two are indistinguishable to every reader downstream is pinned once, at the ONE place the
-    fallback lives: `tests/entities/test_situations.py`."""
-    return {capture_schema.SITUATION_KEY: capture_schema.SITUATION_UNRESOLVED_ENTITY,
-            capture_schema.SITUATION_NAME_KEY: name}
-
-
-def unresolved_entity_names_report(*names):
-    """The park shape a librarian writes TODAY: `SITUATION_NAMES_KEY` and nothing else — the exact
-    row `report.triage_entity` produces for any number of unresolved names, one or many, which
-    never writes the singular key beside it, so neither does this. Deliberately a second function
-    rather than an optional argument on the one above: the two report shapes are different data —
-    one current, one legacy — and a caller has to choose which one it is exercising."""
-    return {capture_schema.SITUATION_KEY: capture_schema.SITUATION_UNRESOLVED_ENTITY,
-            capture_schema.SITUATION_NAMES_KEY: list(names)}
-
-
-# ── entity_approve's own git fixture (ADR 030) ───────────────────────────────────────────────
+# ── the governed door's own git fixture ───────────────────────────────────────────────
 # A LOCAL, minimal bare-repo builder rather than importing `tests.entities.conftest.build_repo` or
 # `tests.librarian.support.build_repo`: each test package that needs real git builds its own
 # (`tests/entities/conftest.py` and `tests/librarian/support.py` already do this independently of
@@ -198,13 +176,10 @@ def _git(*args, cwd):
 
 
 def build_bare_knowledge_repo(root: str) -> str:
-    """A fresh `git init --bare` remote, seeded with exactly what `entities.mint.mint` needs to
-    mint into an otherwise-empty knowledge repo: the entity template and an EMPTY registry —
-    drift-free by construction (no pages, no registry entries — the two already agree), so no
-    test here needs a regenerate-first step the way `tests/server/test_review.py`'s
-    `drift_free_env` does for the large, shared librarian fixture repo. `entity_approve` clones
-    this path directly (`mint_via_clone`'s `credential` is unused for a non-`https://` remote), so
-    no App credential and no network are ever involved.
+    """A fresh `git init --bare` remote, seeded with exactly what a birth or a decision needs in
+    an otherwise-empty knowledge repo: the entity template and an EMPTY registry — drift-free by
+    construction. The console clones this path directly (the door's `credential` is unused for a
+    non-`https://` remote), so no App credential and no network are ever involved.
     """
     bare = os.path.join(root, "knowledge.git")
     seed = os.path.join(root, "seed")
@@ -273,7 +248,7 @@ def require_gitleaks():
     """Skip on a laptop with no gitleaks on PATH; FAIL in CI (`$STIGMERGY_TEST_DSN` set) rather than
     let a secrets gate silently never run — the same posture `tests/entities/conftest.py` and
     `tests/server/conftest.py` each hold for their own `entity_approve`-adjacent git suites.
-    `mint.mint` always scans (`_refuse_secrets`), so every test that mints for real needs this."""
+    `mint.mint` always scans (`refuse_secrets`), so every test that mints for real needs this."""
     from tests.librarian import support
     if support.gitleaks_available():
         return
@@ -296,3 +271,90 @@ def no_real_github_app(monkeypatch):
     for name in (githubapp.APP_ID_ENV, githubapp.INSTALLATION_ID_ENV,
                 githubapp.PRIVATE_KEY_ENV, githubapp.PRIVATE_KEY_FILE_ENV):
         monkeypatch.delenv(name, raising=False)
+
+
+# ── what the librarian leaves behind: proposals, pushed to the bare remote and published ──────
+def _proposed_page(name: str, entity_type: str, aliases, proposed_aliases=()) -> str:
+    from stigmergy.entities import generator
+    listed = "[" + ", ".join(f'"{a}"' for a in aliases) + "]"
+    pending = "[" + ", ".join(f'"{a}"' for a in proposed_aliases) + "]"
+    return (f'---\ntype: entity\ntitle: "{name}"\nentity_type: {entity_type}\nrole: ""\n'
+            f'status: developing\naliases: {listed}\ncreated: 2026-08-20\nupdated: 2026-08-20\n'
+            f'tags: [entity, {entity_type}]\nentity: ["{generator.canonical_id_for(name)}"]\n'
+            f'related: []\nsources: []\napproved_by: ""\nproposed_aliases: {pending}\n---\n\n'
+            f"# {name}\n\n## What / Who\n\n{name} is a {entity_type} the librarian proposed.\n")
+
+
+def _with_clone(bare: str, work) -> None:
+    """Clone the bare remote, run `work(clone)`, regenerate the registry, commit and push."""
+    import tempfile
+
+    from stigmergy.entities import generator
+    with tempfile.TemporaryDirectory(prefix="admin-proposal-") as tmp:
+        clone = os.path.join(tmp, "clone")
+        _git("clone", "--quiet", bare, clone, cwd=tmp)
+        work(clone)
+        generator.regenerate(clone)
+        _git("add", "--all", cwd=clone)
+        _git("commit", "--quiet", "-m", "feat(note): the librarian proposed", cwd=clone)
+        _git("push", "--quiet", "origin", "main", cwd=clone)
+
+
+def publish_registry(bare: str, conn) -> None:
+    """The index's registry snapshot — what the console's reads answer from — refreshed from the
+    remote's tip, the way the push webhook refreshes it."""
+    text = subprocess.run(["git", "show", "main:ops/entity-registry.json"], cwd=bare,
+                          capture_output=True, text=True, check=True).stdout
+    index_store.ensure_ops_file_table(conn)
+    index_store.write_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH, text, "test")
+
+
+def propose_identity(bare: str, conn, name: str = "Globex Robotics", *,
+                     entity_type: str = "organization", aliases=(), proposed_aliases=()) -> str:
+    """One proposed entity page (plus a note anchored to it) on the bare remote, and the
+    snapshot published. Returns the entity id."""
+    from stigmergy.entities import generator
+    entity_id = generator.canonical_id_for(name)
+
+    def work(clone):
+        os.makedirs(os.path.join(clone, "wiki", "entities"), exist_ok=True)
+        os.makedirs(os.path.join(clone, "wiki", "notes"), exist_ok=True)
+        with open(os.path.join(clone, "wiki", "entities", f"{name}.md"), "w", encoding="utf-8") as f:
+            f.write(_proposed_page(name, entity_type, aliases, proposed_aliases))
+        with open(os.path.join(clone, "wiki", "notes", f"{name} kickoff.md"), "w",
+                  encoding="utf-8") as f:
+            f.write(f'---\ntype: note\ntitle: "{name} kickoff"\nstatus: developing\n'
+                    f'created: 2026-08-20\nupdated: 2026-08-20\ntags: [note]\n'
+                    f'entity: ["{entity_id}"]\nrelated: []\nsources: []\n---\n\n# {name} kickoff\n\nBody.\n')
+    _with_clone(bare, work)
+    publish_registry(bare, conn)
+    return entity_id
+
+
+def register_entity(bare: str, conn, name: str, *, entity_type: str = "organization",
+                    aliases=(), proposed_aliases=()) -> str:
+    """A CONFIRMED entity page on the bare remote (the merge target, or an alias proposal's
+    owner), and the snapshot published. Returns the entity id."""
+    from stigmergy.entities import generator
+    entity_id = generator.canonical_id_for(name)
+
+    def work(clone):
+        os.makedirs(os.path.join(clone, "wiki", "entities"), exist_ok=True)
+        text = _proposed_page(name, entity_type, aliases, proposed_aliases).replace(
+            'approved_by: ""', 'approved_by: "steward@example.com"')
+        with open(os.path.join(clone, "wiki", "entities", f"{name}.md"), "w", encoding="utf-8") as f:
+            f.write(text)
+    _with_clone(bare, work)
+    publish_registry(bare, conn)
+    return entity_id
+
+
+def remote_registry(bare: str) -> dict:
+    import json
+    return json.loads(subprocess.run(["git", "show", "main:ops/entity-registry.json"], cwd=bare,
+                                     capture_output=True, text=True, check=True).stdout)["entities"]
+
+
+def remote_files(bare: str) -> list[str]:
+    return subprocess.run(["git", "ls-tree", "-r", "--name-only", "main"], cwd=bare,
+                          capture_output=True, text=True, check=True).stdout.splitlines()

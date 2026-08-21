@@ -95,7 +95,7 @@ def degraded_sources_line(titles: list[str]) -> str:
 # ── the 🧠 gesture — the capture ack, and its failure ────────────────────────────────────────────
 def capture_ack(display_name: str) -> str:
     return (f"🧠 queued and attributed to {display_name}. The librarian will look at this thread — "
-            "you'll hear back right here when it's filed (or if it has a question for you first).")
+            "you'll hear back right here when it's filed.")
 
 
 # The capture attempt itself failed before it could be queued — distinct from a capture the
@@ -113,11 +113,19 @@ PRIVATE_CHANNEL_REFUSAL = ("🧠 doesn't work here — a private channel's mater
 
 # ── the push channel ────────────────────────────────────────────────────────────────────────────
 def filed(*, page_path: str, commit: str, anchor: str, source_page: str = "",
-          anchor_reason: str = "") -> str:
+          anchor_reason: str = "", proposed: list[str] = ()) -> str:
     # `source_page` names the thread's own verbatim archive filed beside the synthesis; empty for
     # captures without one, and the card is unchanged.
     source_line = (f"Your thread is also archived word-for-word at `{source_page}`.\n\n"
                    if source_page else "")
+    # `proposed` names the entities the librarian CREATED for this capture because the registry
+    # did not know them — already in the brain, unconfirmed until a steward looks. Said here so the
+    # submitter knows nothing is waiting on them, and that a steward may still rename or merge it.
+    proposed_line = (f"It proposed {', '.join(f'*{name}*' for name in proposed)} as "
+                     f"{'a new entity' if len(proposed) == 1 else 'new entities'} — created now, "
+                     f"and a steward confirms, merges or declines "
+                     f"{'it' if len(proposed) == 1 else 'them'} later; nothing waits on you.\n\n"
+                     if proposed else "")
     # Which entity a capture is about is a JUDGMENT (issue #77), so where one was explained the
     # explanation belongs beside the invitation to correct it: "tell a steward if that's wrong" is
     # only actionable for a reader who can see what the librarian thought. Empty for a capture that
@@ -125,7 +133,7 @@ def filed(*, page_path: str, commit: str, anchor: str, source_page: str = "",
     # would train its reader past the one that matters.
     reason_clause = f" ({anchor_reason})" if anchor_reason else ""
     return (f"*filed* — this became a page: `{page_path}` @ `{commit}`\n\n"
-            f"{source_line}"
+            f"{source_line}{proposed_line}"
             f"The librarian read this as being about *{anchor}*{reason_clause} — if that's wrong, "
             f"tell {STEWARD_NAME} so the page can be pointed at the right thing.\n\n"
             "Heads up: this won't show up yet if you `@brain` a question about it — that catches "
@@ -143,25 +151,6 @@ def report_fallback(status: str) -> str:
     return f"{status}: capture update"
 
 
-NEEDS_INPUT_INSTRUCTION = "Just reply in this thread with your answer."
-
-
-def needs_input_body(situation_prose: str, *, slack_user_id: str) -> str:
-    """`situation_prose` is `report['summary']` with its trailing MCP invocation clause already
-    stripped — the situation prose verbatim, only the closing instruction swapped. @-mentions the
-    submitter since the thread may have other participants."""
-    return f"<@{slack_user_id}> — {situation_prose}\n\n{NEEDS_INPUT_INSTRUCTION}"
-
-
-# ── ask-back — the delivery confirmation, and a second reply ────────────────────────────────────
-REPLY_DELIVERED = ("Got it — that's recorded as your answer, thanks. If it doesn't match anything "
-                   "on file, a steward will take it from here, and you won't be asked again about "
-                   "this one.")
-
-REPLY_ALREADY_ANSWERED = ("This one's already been answered — I only ask once per capture, so I'm "
-                          f"not using this reply. If something's changed, tell {STEWARD_NAME} "
-                          "directly.")
-
 
 # ── error states ────────────────────────────────────────────────────────────────────────────────
 def server_error(short_id: str = "") -> str:
@@ -176,32 +165,42 @@ RATE_LIMIT = ("You've hit the question limit — 10 questions a minute. Try agai
 
 
 # ── the steward doorbell ────────────────────────────────────────────────────────────────────────
-# One shape (headline, one-line reason, one concrete next action), two fillings. Every filling
-# ends with a link or a copy-pasteable command — never "check the inbox", which would relocate the
-# question the doorbell exists to answer.
-def doorbell_triage(*, item_id, summary: str) -> str:
-    return (f"🔔 A capture is parked and needs you — #{item_id}\n"
-            f"{summary}\n\n"
-            f"`stigmergy-queue show {item_id}` for the details, then requeue, resolve or reject "
-            f"it.")
+# One shape (headline, what the librarian did, the next action as buttons), two fillings. Nothing
+# here asks a steward to go and look something up first: the card carries what the decision needs.
+MAX_DOORBELL_ANCHORED = 3
 
 
-def doorbell_entity_proposal(*, item_id, submitter: str, name: str) -> str:
-    return (f"🔔 An entity needs a decision — #{item_id}\n"
-            f'Material submitted by {submitter} seems to be about "{name}", and nothing '
-            f"registered resolves to it.\n\n"
-            f"`stigmergy-entities show {item_id}` for the details and the exact command to "
-            f"approve or reject it.")
+def doorbell_identity_proposal(*, name: str, entity_type: str, summary: str, aliases: list[str],
+                               anchored_pages: list[str], anchored_total: int) -> str:
+    lines = [f"🔔 The librarian proposed a new {entity_type or 'entity'}: *{name}*"]
+    if aliases:
+        lines.append(f"also spelled {', '.join(aliases)}")
+    if summary:
+        lines.append(summary)
+    shown = list(anchored_pages)[:MAX_DOORBELL_ANCHORED]
+    if shown:
+        more = anchored_total - len(shown)
+        lines.append("filed against it: " + ", ".join(f"`{p}`" for p in shown)
+                     + (f" and {more} more" if more > 0 else ""))
+    lines.append("It is already in the brain. Confirm it, say which registered entity it really "
+                 "is, or decline it.")
+    return "\n".join(lines)
+
+
+def doorbell_alias_proposal(*, entity_name: str, alias: str) -> str:
+    return (f"🔔 A new spelling for *{entity_name}*: \"{alias}\"\n"
+            f"The librarian met it in a capture and anchored the page to {entity_name}. Confirm it "
+            f"as one of its names, or decline it.")
 
 
 # The `text=` companion of each doorbell card: the DM's notification line, which must name the
 # item without carrying any of the material the card itself is deliberately terse about.
-def doorbell_parked_capture_fallback(*, item_id) -> str:
-    return f"parked capture #{item_id} needs you"
+def doorbell_identity_proposal_fallback(*, item_id) -> str:
+    return f"proposed entity {item_id} needs a decision"
 
 
-def doorbell_entity_proposal_fallback(*, item_id) -> str:
-    return f"entity proposal #{item_id} needs a decision"
+def doorbell_alias_proposal_fallback(*, item_id) -> str:
+    return f"proposed spelling {item_id} needs a decision"
 
 
 def doorbell_closed(*, kind: str, item_id, verdict: str, actor: str, source: str) -> tuple[str, str]:
@@ -219,7 +218,7 @@ def doorbell_closed(*, kind: str, item_id, verdict: str, actor: str, source: str
     """
     door = f" via {source}" if source else ""
     return (f"✅ {verdict} — by {actor}{door}",
-            f"{kind} #{item_id} — decided elsewhere, so this card's buttons are gone. The full "
+            f"{kind} {item_id} — decided elsewhere, so this card's buttons are gone. The full "
             f"record is in the review ledger.")
 
 
@@ -232,7 +231,7 @@ def doorbell_superseded(*, kind: str, item_id) -> tuple[str, str]:
     told where the live card went reads a card that lost its buttons as the item being dropped.
     """
     return ("🔄 Superseded — a newer card for this item is further down this DM",
-            f"{kind} #{item_id} — it changed since this card was sent, so the buttons are gone. "
+            f"{kind} {item_id} — it changed since this card was sent, so the buttons are gone. "
             f"Act on the newer card.")
 
 
@@ -249,67 +248,40 @@ def doorbell_undeliverable_no_slack_identity(*, email: str, scope: str, event: s
             f"this workspace — the {event} for {item_ref} could not be delivered")
 
 
-# The CLOSE button of `render.render_note_modal`; `status: developing` is the maturity axis a
-# steward declines to move by pressing it.
-NOT_YET_LEAVE_AS_DEVELOPING = "Not yet — leave it as developing"
+# The CLOSE button of the merge modal.
+NOT_YET = "Not yet"
 
 # A button on a doorbell card rendered by an OLDER deploy, whose (kind, verdict) this build no
-# longer recognizes as needing a modal at all.
+# longer recognizes.
 STALE_REVIEW_ACTION = (
     "This button is from an older version of this card and I don't recognize it anymore — open "
-    "the item fresh (`stigmergy-queue show` or `stigmergy-entities show`) and act from there.")
+    "the inbox fresh (the console, or `stigmergy-entities pending`) and act from there.")
 
 
 # ── the review surface's own labels ─────────────────────────────────────────────────────────────
-# Exactly what `render.py` renders; an entity proposal takes approve or reject only
-# (`review._decide_entity_proposal` raises on anything else).
+# Exactly what `render.py` renders. An identity proposal takes approve, merge or decline; a
+# spelling takes approve or decline (`server.review.VERDICTS_BY_KIND` refuses anything else).
 APPROVE_LABEL = "Approve"
-REJECT_LABEL = "Reject"
-REQUEUE_LABEL = "Requeue"
-RESOLVE_LABEL = "Resolve"
-
-NOTE_MODAL_TITLE = "Your own words"
-REASON_LABEL = "Reason"
-NOTE_LABEL = "Note"
+MERGE_LABEL = "Merge into…"
+DECLINE_LABEL = "Decline"
 
 
-# ── the entity-mint modal — Approve's own metadata form, and its confirmation ───────────────────
-ENTITY_MINT_MODAL_TITLE = "Mint this entity"
-ENTITY_MINT_NAME_LABEL = "Name"
-ENTITY_MINT_TYPE_LABEL = "Entity type"
-ENTITY_MINT_TYPE_PLACEHOLDER = "Choose a type"
-ENTITY_MINT_ALIASES_LABEL = "Aliases"
-ENTITY_MINT_ALIASES_PLACEHOLDER = "comma-separated, optional"
-ENTITY_MINT_ROLE_LABEL = "Role"
-ENTITY_MINT_ROLE_PLACEHOLDER = "a short description, optional"
-ENTITY_MINT_REQUEUE_LABEL = "After minting"
-ENTITY_MINT_REQUEUE_OPTION_LABEL = "Requeue the originating capture so it re-files against this entity"
+# ── the merge modal — which registered entity the proposal really is ───────────────────────────
+MERGE_MODAL_TITLE = "Merge into"
+MERGE_SELECT_LABEL = "It is really this entity"
+MERGE_SELECT_PLACEHOLDER = "Choose a registered entity"
+MERGE_TYPED_LABEL = "Or type its registry id"
+MERGE_TYPED_PLACEHOLDER = "e.g. acme-corp — optional if you chose one above"
+MERGE_NEEDS_TARGET = ("Nothing was merged — pick a registered entity in the list, or type its "
+                      "registry id, and submit again.")
 
 
-def entity_mint_several_unresolved(*, names: list[str]) -> str:
-    """The Approve modal's header when the proposal carries MORE THAN ONE unresolved name.
-
-    The `Name` field is left EMPTY in that case and this says why. A prefill cannot be right here:
-    one submission mints ONE entity, and the only single string covering several names is the
-    joined display form (`entities.situations.subject_of`), which is not any of their real names —
-    accepting it would push a garbled entity into the knowledge repo as a real, signed commit.
-    """
-    listed = "\n".join(f"• {name}" for name in names)
-    return (f"This capture names {len(names)} entities the registry doesn't recognize:\n{listed}\n"
-            f"They are minted one at a time. Type the single name you are approving now — the "
-            f"others stay unresolved on this capture until each gets its own decision.")
+def merge_modal_heading(*, name: str) -> str:
+    return (f"*{name}* was proposed by the librarian. Merging folds it into an entity that already "
+            f"exists: its name and spellings become that entity's aliases, its page is removed, "
+            f"and every page filed against it moves over.")
 
 
 def decision_recorded(*, verdict: str, kind: str, item_id: str, actor: str) -> str:
     """The confirmation for a decision `review_decide` composed no `message` of its own for."""
-    return f"recorded: {verdict} on {kind} #{item_id} — {actor}"
-
-
-def entity_minted(*, entity_id: str, name: str, commit: str, requeued: bool) -> str:
-    """Callers pass the full sha; truncated to the short form here."""
-    requeue_line = ("The originating capture was requeued — the librarian will file it against "
-                    "this entity next." if requeued else
-                    "The originating capture stays parked, as asked — requeue it by hand when "
-                    "it's ready.")
-    return (f'*minted* — "{name}" (`{entity_id}`) is now a page, pushed at `{commit[:12]}`.\n\n'
-           f"{requeue_line}")
+    return f"recorded: {verdict} on {kind} {item_id} — {actor}"

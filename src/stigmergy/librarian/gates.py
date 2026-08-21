@@ -86,7 +86,7 @@ class GateContext:
 
     # A gate is TOLD these caller-scoped facts; it never infers one. Widening happens on the
     # CONTEXT, never on the module constant, which is what keeps an ordinary capture claiming
-    # `type: meeting` parked rather than filed.
+    # `type: meeting` refused rather than filed.
     write_prefixes: tuple = ALLOWED_WRITE_PREFIXES
     creatable_types: frozenset = field(default_factory=lambda: frozenset(page_policy.FAST_LANE_TYPES))
     # `{folder (no trailing slash): type}`, consulted BEFORE the global `page.type_for_folder`,
@@ -141,12 +141,12 @@ class GateContext:
     derived_files: frozenset = field(default_factory=frozenset)
     # The identity proposals THIS run made (`librarian.identity.write_proposals`), told by the
     # caller exactly as every other widening is: the entity pages code CREATED with `approved_by`
-    # empty, and the registered entity pages code EDITED by appending a proposed spelling. Empty
-    # by default, so a capture that proposes nothing is judged as if the zone did not exist — and
-    # `gate_identity` refuses any entity-zone write that is not in one of the two sets, which is
-    # what makes "the agent never writes an identity" a proof rather than a tool's refusal.
+    # empty. (A proposed spelling EDITS a registered entity page, and rides `expected_bytes` like
+    # every other planned rewrite.) Empty by default, so a capture that proposes nothing is judged
+    # as if the zone did not exist — and `gate_identity` refuses any entity-zone write that is
+    # neither a declared proposal nor a planned edit, which is what makes "the agent never writes
+    # an identity" a proof rather than a tool's refusal.
     proposed_entity_pages: frozenset = field(default_factory=frozenset)
-    alias_edited_pages: frozenset = field(default_factory=frozenset)
 
     @property
     def changes(self) -> list[tuple[str, str]]:
@@ -940,8 +940,8 @@ def resolve_entity_ids(anchoring: dict, registry) -> tuple[list[str], list[str]]
     about is the agent's judgment (see `kernel.normalize`: `canonical_id` folds accents, case and
     punctuation and no longer strips a legal form, because "is `Cofers Co` the same company as
     `Cofers`?" is a claim about the world). What code keeps is authority: the id the agent declares
-    must EXIST in the registry read at the base commit, or it lands in `unresolved` and the capture
-    parks. A hallucinated anchor is not a resolution. Widen this; never bolt a second resolver
+    must EXIST in the registry read at the base commit, or it lands in `unresolved` and this gate
+    refuses the page. A hallucinated anchor is not a resolution. Widen this; never bolt a second resolver
     beside it, or two answers exist to one question."""
     anchoring = anchoring if isinstance(anchoring, dict) else {}
     if str(anchoring.get("kind", "")).lower() != "entity":
@@ -1339,11 +1339,14 @@ def gate_identity(ctx: GateContext) -> list[Finding]:
 
     A CREATED entity page must be in `ctx.proposed_entity_pages` and must carry `type: entity` with
     `approved_by` present and EMPTY — the one spelling of "a steward has not confirmed this"; a
-    page that arrived approved would be an identity nobody approved. A MODIFIED entity page must be
-    in `ctx.alias_edited_pages` and byte-proven through `ctx.expected_bytes` (`gate_body_rewrite`
-    does the comparing; this gate makes sure the proof was asked for). Anything else in the zone is
-    refused, and `repairable=False`: no agent could have written it legitimately — the agent's
-    own write tool refuses the zone — so the diff is preserved rather than retried.
+    page that arrived approved would be an identity nobody approved. A MODIFIED entity page must
+    carry a proof CODE produced before the diff existed: its planned bytes in `ctx.expected_bytes`
+    (the worker's proposed spelling, a repair's merge or sweep — `gate_body_rewrite` does the
+    comparing, this gate makes sure the proof was asked for) or the per-path body-rewrite
+    permission a steward's approved `entity-body` repair tells the apply (`ctx.body_rewrite_allowed`,
+    ADR 039). Both are set by callers code controls, never from an outcome. Anything else in the
+    zone is refused, and `repairable=False`: no agent could have written it legitimately — the
+    agent's own write tool refuses the zone — so the diff is preserved rather than retried.
     """
     out = []
     for entry in ctx.entries:
@@ -1361,12 +1364,12 @@ def gate_identity(ctx: GateContext) -> list[Finding]:
             out.extend(_proposed_page_findings(ctx, path))
             continue
         if entry.status == "M":
-            if path not in ctx.alias_edited_pages or path not in ctx.expected_bytes:
+            if path not in ctx.expected_bytes and path not in ctx.body_rewrite_allowed:
                 out.append(Finding("identity", "unplanned-entity-edit",
-                                   f"modified {path}, an entity page this run did not plan a "
-                                   f"spelling for: an existing identity changes only by a "
-                                   f"steward's decision or by a proposed alias the worker appends "
-                                   f"and proves byte for byte",
+                                   f"modified {path}, an entity page nothing planned an edit for: "
+                                   f"an existing identity changes only by a steward's decision, "
+                                   f"by a proposed alias the worker appends and proves byte for "
+                                   f"byte, or by a repair a steward approved",
                                    locator=path, repairable=False))
             continue
         # A deletion or a typechange in the zone is already `gate_zone`'s veto; nothing to add.
@@ -1425,7 +1428,7 @@ def corrective_brief(findings, *, reset: bool = True) -> str:
     """What the agent is told on its one corrective retry: the vetoes, as instructions to REPAIR.
     A brief owes three things a message does not: what the gate EXAMINED, which outcomes are
     AVAILABLE, and the SMALLEST edit reaching one. The preamble deliberately does not say "write
-    the page again", since parking is a valid repair.
+    the page again", since proposing the identity, or re-anchoring, is a valid repair.
 
     `reset`: the preamble is a CLAIM about what just happened, so it must be true. `False` for a
     caller with no worktree to reset, where "nothing you wrote is still on disk" would be a lie.

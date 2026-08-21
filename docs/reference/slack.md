@@ -24,12 +24,12 @@ on the same process, each documented below.
 | `context.py` | `SlackContext` — the process-wide resources (conn, embedder, rate limiter, audit, evidence, cache, link resolver), and `build_service(email, audiences)`, the per-identity `BrainService` constructor every handler calls |
 | `mention.py` | `@brain <question>` / a DM: the placeholder, the channel/DM split, the cheap retrieval-set comparison and the DM fuller answer, the edit-retry-then-fallback-message policy, every error state |
 | `capture.py` | the 🧠 gesture: public-channel-only, the verbatim thread material (participant display names resolved through the identity cache, in parallel over the cache misses), the provenance hints, the dedup reservation, the ack, and the instant progress-reaction lifecycle (`mark_in_progress`/`finish_progress`) |
-| `replies.py` | the submitter's ask-back reply (and nobody else's), and the "Show it here" affordance |
-| `poller.py` | the push channel: `filed`/`needs_input`/`triage`/`rejected`/`resolved`/`failed`, read-only against `capture_queue` |
+| `show_it_here.py` | the "Show it here" affordance: a cited page re-read under the clicker's own identity |
+| `poller.py` | the push channel back into the thread, over `store.REPORTABLE_STATUSES` (every terminal status — `filed`/`rejected`/`failed`, plus the legacy `resolved` on old rows), read-only against `capture_queue`; a `filed` card names the entities the librarian proposed |
 | `store.py` | this package's two tables: `slack_submissions` — the 🧠 dedup reservation and the `submission_id -> (channel, thread_ts, slack_user_id)` mapping the poller reads back — and `steward_notifications`, one row per (item, steward) carrying the state the doorbell last told them about plus the card's own `channel_id`/`message_ts`, so the DM can be edited once the item is decided. Owns the two `state` prefixes (`undeliverable:` / `closed:`) and `open_notifications`, the reader that skips both |
-| `doorbell.py` | the steward doorbell — DMs a steward when a review item parks, over `stigmergy.server.review.items_for_doorbell`. One notification per (item, steward), re-sent only on a real state change (and the card it replaces superseded before the replacement is posted); an undeliverable notification recorded, never swallowed; and `close_decided_cards`, which edits a decided item's DM into a buttonless closed card at the end of every pass. What rings the bell is `parked-capture` and `entity-proposal`, the whole of `stigmergy.review_kinds.ITEM_KINDS` |
-| `review.py` | the Block Kit review surface — buttons on a doorbell DM (and a short modal for the one piece of free text some verdicts require) that call `stigmergy.server.review.review_decide_safe` |
-| `render.py` | the PURE `(answer_dict, link_resolver) -> blocks` renderer, plus every other message's blocks (including the doorbell cards and the review-note modal) |
+| `doorbell.py` | the steward doorbell — DMs a steward when the librarian proposes an identity or a spelling, over `stigmergy.server.review.items_for_doorbell`. One notification per (item, steward), re-sent only on a real state change (and the card it replaces superseded before the replacement is posted); an undeliverable notification recorded, never swallowed; and `close_decided_cards`, which edits a decided item's DM into a buttonless closed card at the end of every pass. What rings the bell is `identity-proposal` and `alias-proposal`; `repair-proposal` is deliberately silent |
+| `review.py` | the Block Kit review surface — buttons on a doorbell DM, and the merge modal for the one verdict that needs a second fact, all calling `stigmergy.server.review.review_decide_safe` |
+| `render.py` | the PURE `(answer_dict, link_resolver) -> blocks` renderer, plus every other message's blocks (including the two doorbell cards and the merge modal) |
 | `mrkdwn.py` | CommonMark -> Slack `mrkdwn` (bold, links, lists, inline/fenced code) |
 | `copy.py` | every user-facing string, in one place |
 | `gateway.py` | `SlackGateway` (the one seam every Slack Web API call crosses) and `FakeSlackGateway`, the offline double |
@@ -74,7 +74,7 @@ lost". The bot had simply not finished connecting. **Absence of a reply is not e
 until a control question proves the listener was live.**)
 
 **Four event subscriptions**, and the code registers exactly these
-(`app.build_bolt_app`): `app_mention` · `message` (DMs and the ask-back reply) · `reaction_added` (the
+(`app.build_bolt_app`): `app_mention` · `message` (DMs) · `reaction_added` (the
 🧠 gesture) · `reaction_removed` (registered so it can be acknowledged and deliberately ignored —
 see the gesture section below).
 
@@ -219,46 +219,46 @@ event redelivery — are not even errors by the time they get there, collapsed t
 
 `slack.store.due_for_report` is a READ-ONLY join of `slack_submissions` to
 `capture_queue`, never a claim, a lease or a mutation — the poller runs in the bot's own process
-(no fourth machine), polling on a plain interval. Every terminal/parked state the queue's
-real vocabulary has is handled, including `failed`: say so plainly, with the reason the server
-gives and nothing added to it, exactly as for `triage`/`rejected`/`resolved`. `filed` and
-`needs_input` get bespoke Slack renders built
-from the report's STRUCTURED fields; the other four reuse `report['summary']` verbatim, converted
-to `mrkdwn`, with the enum-first prefix bolded — never rewritten into "friendlier" prose.
+(no fourth machine), polling on a plain interval. `store.REPORTABLE_STATUSES` is every TERMINAL
+status the queue has (`capture_schema.TERMINAL_STATUSES`, derived rather than retyped, so a status
+that joins the vocabulary is reported without an edit here); `queued` and `claimed` are deliberately
+absent, since an ordinary in-flight row produces no Slack traffic. `failed` is handled like the
+rest — say so plainly, with the reason the server gives and nothing added to it. `filed` gets a
+bespoke Slack render built from the report's STRUCTURED fields, and it NAMES the entities the
+librarian proposed while filing: the page is in the brain and a steward confirms the identity, so
+the card says that rather than implying the capture is waiting on something. The other statuses
+reuse `report['summary']` verbatim, converted to `mrkdwn`, with the enum-first prefix bolded —
+never rewritten into "friendlier" prose.
 
-Ask-back: the submitter's next reply in the origin thread is passed to `BrainService.reply()`
-under THEIR identity. A reply from anyone else — even in the exact same
-thread, even while the question is still open — is ignored entirely: no `brain_reply`, no error,
-no reaction. The check happens by comparing the poster's resolved email against the row's own
-`submitted_by` (recorded at capture time, not re-derived), never by calling `acl.visible()` or any
-ACL logic — this package enforces nothing, and the real authorization still happens inside
-`BrainService.reply()` when (and only when) that comparison passes.
+**Nothing is ever asked of a submitter.** A threaded message is ordinary conversation to this bot;
+the only thing a submitter hears back is this report of what the librarian did.
 
 ## The steward doorbell and the review surface
 
 A second background task, `doorbell.run_doorbell`, runs alongside `poller.run_poller` in the SAME
-`slack` process (the standing ceiling: no fourth always-on process) and DMs a steward when work
-parks on a human — a capture in `triage` or a new entity proposal. It never claims, leases or
-mutates a queue row: every read goes through
-`stigmergy.server.review.items_for_doorbell`, the management-shaped, unscoped sibling of
-`review_queue` documented in [server.md](./server.md#the-review-tools).
+`slack` process (the standing ceiling: no fourth always-on process) and DMs a steward when the
+librarian has PROPOSED something — an identity it created unconfirmed, or a spelling it appended to
+a registered entity. Nothing is stuck while the card sits there: the capture that prompted it is
+already filed. It never claims, leases or mutates a queue row, and reads no queue row at all: every
+read goes through `stigmergy.server.review.items_for_doorbell`, the management-shaped, unscoped
+sibling of `review_queue` documented in [server.md](./server.md#the-review-tools), which derives
+both proposal kinds from the entity registry the index snapshot carries.
 What rings the bell is two of the three kinds `stigmergy.review_kinds.ITEM_KINDS` carries —
-`parked-capture` and `entity-proposal`; `repair-proposal` is deliberately silent (ADR-039's
+`identity-proposal` and `alias-proposal`; `repair-proposal` is deliberately silent (ADR-039's
 no-ring decision: repairs are bounded, non-urgent, and reviewed from the queue).
 
 Five properties, each enforced structurally rather than left to discipline:
 
 - **One notification per (item, steward), re-sent only on a real state change** — a small,
-  stable fingerprint per item (`_state_signature`, folding in `capture_queue`'s own monotonic
-  `attempts` counter so a requeue-and-reprocess back into the SAME status still rings again).
+  stable fingerprint per item (`_state_signature`). A proposal has exactly ONE open state, so its
+  card is sent once and closed by a decision; there is no re-ring.
 - **A decided item's most recent card closes itself** — `close_decided_cards` runs at the end of
   every pass and `chat.update`s that DM into a buttonless card naming the verdict, the actor and
   the door (`✅ reject — by ana@example.com via admin`). A card is a live control surface: left
   alone, its buttons keep offering actions that can now only answer with a staleness refusal. What
-  triggers it is the LEDGER, not the queue state — a `requeue` verdict puts the row back in the
-  queue, so the item leaves this inbox while its card stays in the DM. It follows that only
-  decisions that REACH the ledger close a card: a parked capture drained through `stigmergy-queue`
-  or the console's Queue tab writes no ledger row, so its card ages out instead. Same
+  triggers it is the LEDGER, not the registry — every door that decides a proposal (the console,
+  MCP, `stigmergy-entities`) writes a ledger row, and the registry snapshot this surface reads
+  catches up later, so the card closes on the decision rather than on the index. Same
   send-then-mark order as a delivery, so a Slack outage retries next pass; the card is then
   recorded at `closed:<verdict>`, which is what stops the pass rewriting the same DM every
   interval. A refusal Slack can never take back (`message_not_found`, `cant_update_message`,
@@ -276,48 +276,47 @@ Five properties, each enforced structurally rather than left to discipline:
   scope, or the resolved steward has no Slack identity in this workspace, writes a `job_runs` row
   (`review.record_undeliverable`) naming the event and the reason, deduped by (item, steward,
   reason class).
-- **No material excerpt for a capture the librarian has not yet looked at** — the doorbell is
-  terse by DESIGN (`report['summary']` and a proposed entity's short name only), never because the
-  steward lacks access; `capture_schema.withheld_reason` is asked at render time regardless of
-  which rows an upstream filter happens to select, so this guarantee does not depend on another
-  module's query staying narrow.
+- **A card shows what the librarian already filed, and no captured material** — the doorbell is
+  terse by DESIGN: a proposal's own name, type, aliases and the page's What / Who paragraph, which
+  the librarian wrote and the commit already carries. It reads no queue row and echoes no capture
+  excerpt at all.
 
-**The review cards.** Two doorbell renderers, one per item kind
-(`render.render_doorbell_parked_capture` / `render.render_doorbell_entity_proposal`), and two more
-that either of them is edited INTO, sharing one buttonless frame: `render.render_doorbell_closed`
+**The review cards.** Two doorbell renderers, one per item kind, and two more that either of them is
+edited INTO, sharing one buttonless frame: `render.render_doorbell_closed`
 (decided — the verdict, the actor and the door) and `render.render_doorbell_superseded` (replaced
 by a newer card — no verdict, because nothing was decided):
 
 | Item kind | Buttons | Notes |
 |---|---|---|
-| `parked-capture` | Requeue (direct) · Resolve (modal, note required) · Reject (modal, reason required) | `capture.dispositions`' own three verbs, not the generic approve/reject/request_changes |
-| `entity-proposal` | Approve (modal, mints on submit) · Reject (modal, reason required) | approving opens a metadata modal — name (prefilled from `mint_name_prefill`, the value `entities.situations.mint_name_prefill` decides and the review item carries: the single unresolved name, or `""` when several or none are unresolved, or when the one name is the librarian's placeholder for a park that named nothing; with an empty prefill and names left to place they are listed above the field, which stays empty, because one submission mints one entity and no single string is the right answer — the admin console's Approve form reads the same decided value, so the two doors offer a default in the same cases and name the same name; the STRING can still differ, since the console strips control characters out of what it renders and Slack does not — but neither can mint a control character either way, because `entities.birth` refuses C0/C1 in a name, an alias and a role at the one gate every door passes through), entity type (a `static_select` over the closed list, built from `review_kinds.ENTITY_TYPES` rather than hand-copied), optional aliases/role, and a pre-checked requeue checkbox — and mints through the SAME governed door an MCP `review_decide` approve does (ADR 030 D5); submitting it is one action, not a copy-pasted command |
+| `identity-proposal` | Approve (direct) · Merge into… (modal) · Decline (direct) | the three verbs an identity takes. Approve and Decline fire immediately with no note: the card already carries everything the decision needs, and friction belongs only where a second FACT is required. Merge is that one case — the survivor's id — so it opens a modal offering `merge_candidates` as a `static_select` plus a typed field for a registry id not among them. The modal gates nothing on its own: the candidates are registry names `list_entities` serves to every identity, and `review_decide`'s steward guard runs on submit |
+| `alias-proposal` | Approve (direct) · Decline (direct) | a spelling is one of that entity's names or it is not; there is no third answer and nothing to type |
 
-A click (`review.handle_block_action`) or a modal submission (`review.handle_note_modal_submission`
-for a note/reason, `review.handle_entity_mint_modal_submission` for an entity-proposal approve's own
-metadata) re-resolves the acting identity from Slack's own authoritative event body every time —
-never from a value round-tripped through `private_metadata`, which carries only WHAT the decision is
-about (item kind, id, and — for the note modal — verdict/field), never WHO is making it. Every
-decision calls the SAME `review_decide_safe` an MCP caller calls, with `source="slack"` stamped in
-the one place all three paths funnel through (`_decide_and_confirm`), so every ledger row this
-surface writes names the door it came from; this package decides no ACCESS to knowledge and no
-verdict of its own. The one thing it does gate is described next — whether a
-steward-only mint form opens — and even there it asks the review lane's own predicate rather than
-inventing a rule; `server.acl.visible()` remains the ONE place read access to a page is decided.
+`review._MODAL_VERDICTS` is the closed set of `(item_kind, verdict)` pairs that open a modal first,
+and it holds exactly one pair — `(identity-proposal, merge)`. A button from an older deploy carrying
+a pair this build no longer maps is answered with a worded staleness decline, never an opaque
+listener failure.
 
-One READ on this surface is gated, and it is the entity-mint modal. Opening it reads the
-system-wide, unscoped doorbell queue and renders the proposal's unresolved names — material lifted
-out of somebody else's capture, shown before any decision exists — so the Approve branch of
-`handle_block_action` asks `server.review.is_steward(service, "")` after resolving the clicker and
-before reading anything, the same predicate at the same universal scope the decide leg's own
-`_guard_governance_decision` uses for a proposal. A non-steward gets `NOT_YOURS_TO_DECIDE`, the
-byte-identical sentence the decide leg carries, so failing here teaches nothing the other leg would
-not have. The note modal is deliberately not gated: it shows nothing beyond the card already
-delivered, and its submission re-checks anyway.
+A click (`review.handle_block_action`) or the merge modal's submission
+(`review.handle_merge_modal_submission`) re-resolves the acting identity from Slack's own
+authoritative event body every time — never from a value round-tripped through `private_metadata`,
+which carries only WHAT the decision is about (item kind, id, where to post the confirmation), never
+WHO is making it. Stamping the submitter in when the modal was OPENED would make them a value this
+code wrote rather than a fact Slack is asserting about who just clicked Submit. A button's `value`
+is likewise always the bare item id one of this surface's own renderers put there: nothing untrusted
+ever becomes a button value here.
 
-Every confirmation this surface posts is the same plain message — there is no branch that
-differs, though a minted approve's own confirmation names the entity and the commit it produced
-(`copy.entity_minted`), the same way a `parked-capture` resolve already names its own note.
+Every decision calls the SAME `review_decide_safe` an MCP caller calls, with `source="slack"`
+stamped in the one place every path funnels through (`_decide_and_confirm`), so every ledger row
+this surface writes names the door it came from. **This package decides nothing about a proposal.**
+The merge modal collects one fact and hands it to `review_decide` as `into`; whether that entity
+exists, is confirmed, or would collide is `server.review` and `entities.decide`'s to refuse, on
+every door alike — and `server.acl.visible()` remains the ONE place read access to a page is
+decided. There is no steward-only READ here to gate: the merge candidates are registry names every
+identity can already list, so the authorization that matters is the one on submit.
+
+Every confirmation this surface posts is the same plain message, and it names what the decision
+DID — the entity and the commit it produced — since the commit is the thing a steward would
+otherwise have to go and look for.
 
 ## The offline double
 
@@ -378,13 +377,13 @@ paid for.
 
 `tests/slack/` (offline, `FakeSlackGateway`, real Postgres with the `fake` embedder/answer
 synthesizer) plus `tests/slack/test_store_pg.py` (the mapping table's own primitives, including the
-thread-keyed dedup migration and the card-pointer columns), `test_doorbell.py` (the five doorbell
-properties above, including the requeue-and-reprocess-back-into-the-same-status regression, the
-closing pass — closed exactly once, an undecided card untouched, a pointerless row skipped, a
-transient edit failure retried, a card Slack says is gone recorded `closed:unreachable` and never
-retried — and the supersede leg: a replaced card edited shut before the replacement is posted, and
-posted anyway when that edit fails) and `test_review.py` (the Block Kit
-button/modal flow against `review_decide_safe`, identity re-resolved at click and at submission).
+thread-keyed dedup migration and the card-pointer columns), `test_doorbell.py` (the doorbell
+properties above, including the closing pass — closed exactly once, an undecided card untouched, a
+pointerless row skipped, a transient edit failure retried, a card Slack says is gone recorded
+`closed:unreachable` and never retried — and the supersede leg: a replaced card edited shut before
+the replacement is posted, and posted anyway when that edit fails) and `test_review.py` (the Block
+Kit button/merge-modal flow against `review_decide_safe`, identity re-resolved at click and at
+submission).
 `tests/test_architecture.py`'s slack-boundary tests pin the import list; `tests/test_deployment_config.py`
 pins the third process group. The real-workspace walk is manual and this repository keeps no
 record of any particular run, so live behaviour is measured, never assumed from a green suite.

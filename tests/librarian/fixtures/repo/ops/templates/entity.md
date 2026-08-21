@@ -9,6 +9,7 @@ created: <YYYY-MM-DD>
 updated: <YYYY-MM-DD>
 tags: [entity]
 entity: []  # THIS PAGE'S OWN registry id, once minted (M8a) — e.g. entity: ["<own-id>"]
+approved_by: ""  # who confirmed this identity; EMPTY = proposed by the librarian, waiting on a steward
 related: []
 sources: []
 ---

@@ -2403,8 +2403,8 @@ def test_a_dotfile_named_as_a_derived_file_is_still_refused(tmp_path):
 
 # ── the identity gate: the entity zone holds only what this run proposed ─────────────────────
 # `librarian.identity.write_proposals` is the ONE writer of `wiki/entities/` inside a filing, and
-# it tells the gates what it wrote (`proposed_entity_pages`, `alias_edited_pages`,
-# `expected_bytes`). The gate's job is to refuse everything else in the zone, and to refuse a
+# it tells the gates what it wrote (`proposed_entity_pages`, and `expected_bytes` for a proposed
+# spelling appended to a registered page). The gate's job is to refuse everything else in the zone, and to refuse a
 # proposal that arrived already approved — an identity nobody approved.
 _ENTITY_PAGE = "wiki/entities/Scircle.md"
 
@@ -2461,19 +2461,37 @@ def test_a_proposed_page_that_is_not_an_entity_page_is_refused(tmp_path):
     assert [f.code for f in gates.gate_identity(ctx)] == ["not-an-entity-page"]
 
 
-def test_an_entity_page_edit_is_admitted_only_when_planned_and_byte_proven(tmp_path):
-    """A registered entity changes in a filing in exactly one way — a proposed spelling appended —
-    and that edit is planned by `identity.write_proposals` and proven by bytes. An `M` in the zone
-    that is either unplanned or unproven is refused; `gate_body_rewrite` does the byte comparing,
-    this gate makes sure the proof was asked for at all."""
+def test_an_entity_page_edit_is_admitted_only_with_a_proof_code_produced(tmp_path):
+    """A registered entity page changes in a filing in exactly one way — a proposed spelling
+    appended — and that edit is planned by `identity.write_proposals` as bytes. An `M` in the zone
+    nothing planned is refused; `gate_body_rewrite` does the byte comparing, this gate makes sure
+    the proof was asked for at all. (Before the repair loop's own road was admitted, the gate
+    demanded a separate `alias_edited_pages` label on top of the bytes — and refused every
+    steward-approved `entity-body` and merge repair, which edit this zone through their own
+    code-side permissions.)"""
     _write_entity_page(tmp_path, _PROPOSED)
     entry = gitcmd.DiffEntry("M", _ENTITY_PAGE, new_mode="100644")
     unplanned = _ctx(tmp_path, [entry])
     assert [f.code for f in gates.gate_identity(unplanned)] == ["unplanned-entity-edit"]
-    unproven = _ctx(tmp_path, [entry], alias_edited_pages=frozenset({_ENTITY_PAGE}))
-    assert [f.code for f in gates.gate_identity(unproven)] == ["unplanned-entity-edit"]
-    planned = _ctx(tmp_path, [entry], alias_edited_pages=frozenset({_ENTITY_PAGE}),
-                   expected_bytes={_ENTITY_PAGE: _PROPOSED})
+    planned = _ctx(tmp_path, [entry], expected_bytes={_ENTITY_PAGE: _PROPOSED})
+    assert gates.gate_identity(planned) == []
+
+
+def test_a_steward_approved_repair_may_edit_an_entity_page_through_its_own_permission(tmp_path):
+    """The benign twin for the repair loop (ADR 039): an approved `entity-body` repair tells the
+    apply which ONE page may have its body replaced (`body_rewrite_allowed`), and a merge or a
+    deletion sweep plans every byte it writes (`expected_bytes`). Both are set by code the steward's
+    approval drives, never from an outcome, so the identity gate admits them — and only them: the
+    permission names a path, so a second entity page in the same diff is still refused."""
+    _write_entity_page(tmp_path, _PROPOSED)
+    other = "wiki/entities/Other.md"
+    _write_entity_page(tmp_path, _PROPOSED, path=other)
+    entries = [gitcmd.DiffEntry("M", _ENTITY_PAGE, new_mode="100644"),
+               gitcmd.DiffEntry("M", other, new_mode="100644")]
+    body = _ctx(tmp_path, entries, body_rewrite_allowed=frozenset({_ENTITY_PAGE}))
+    assert [(f.code, f.locator) for f in gates.gate_identity(body)] == [("unplanned-entity-edit", other)]
+    planned = _ctx(tmp_path, entries, body_rewrite_allowed=frozenset({_ENTITY_PAGE}),
+                   expected_bytes={other: _PROPOSED})
     assert gates.gate_identity(planned) == []
 
 

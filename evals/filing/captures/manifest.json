@@ -11,9 +11,9 @@
       "hints": {}
     },
     {
-      "id": "F02-unknown-entity-parks",
+      "id": "F02-unknown-entity-proposed",
       "kind": "raw",
-      "material": "F02-unknown-entity-parks.md",
+      "material": "F02-unknown-entity-proposed.md",
       "submitted_by": "dana@stigmergy.test",
       "hints": {}
     },
@@ -66,9 +66,9 @@
       }
     },
     {
-      "id": "F09-meeting-parks",
+      "id": "F09-meeting-proposes",
       "kind": "meeting",
-      "material": "F09-meeting-parks.md",
+      "material": "F09-meeting-proposes.md",
       "submitted_by": "priya@stigmergy.test",
       "hints": {
         "title": "Wren tracking call",

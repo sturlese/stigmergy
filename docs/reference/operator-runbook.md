@@ -2,15 +2,15 @@
 
 Everything below is for the operator running the system. The live world this runbook covers:
 **three zones** in the knowledge repo (`wiki/` · `sources/` · `views/`), the librarian's
-**8 gates**, **10 MCP tools** (`search_brain`/`read_page`/`list_entities`/`describe_entity`,
-`ask`, `brain_submit`/`brain_submissions`/`brain_reply`, `review_queue`/`review_decide`),
+**9 gates**, **9 MCP tools** (`search_brain`/`read_page`/`list_entities`/`describe_entity`,
+`ask`, `brain_submit`/`brain_submissions`, `review_queue`/`review_decide`),
 **one Fly app** with three process groups (`app` · `slack` · `worker`), four GitHub Actions
 crons (`index-rebuild` · `retention-purge` · `gardener` · `repair-propose`), the optional `/admin`
 console on the `app` group, and the golden evals under `evals/` with the release gates
 (`make gates`) over them.
 
 Organized by OPERATION: Deploy · Wipe & re-seed · Capture from Drive · Index rebuild ·
-Recovery · Revocation · Release gates & drills · Troubleshooting.
+Govern · Recovery · Revocation · Release gates & drills · Troubleshooting.
 
 There is no read site: navigation happens through `read_page` and the entity tools
 ([ADR 022](../decisions/022-entity-navigation.md)).
@@ -409,10 +409,10 @@ anything in this repo. Every zone has a closed set of writers:
 
 | Zone | Written by |
 |---|---|
-| `wiki/notes,decisions,concepts/` | the librarian, filing a capture through the eight gates |
+| `wiki/notes,decisions,concepts/` | the librarian, filing a capture through the nine gates |
 | `wiki/meetings/` + `sources/meetings/` | the meeting flow, from a `stigmergy-meeting drop` |
 | `sources/slack/`, `sources/drive/` | the librarian's source attachment, from the 🧠 gesture and `stigmergy-drive drop` |
-| `wiki/entities/` (+ `ops/entity-registry.json`) | `stigmergy.entities` **only** — a steward's own commit from the CLI, or a server-driven mint from MCP, Slack or the console ([ADR 030](../decisions/030-server-side-entity-minting.md)) |
+| `wiki/entities/` (+ `ops/entity-registry.json`) | two writers, and no third: `librarian.identity` CREATES a proposed page (`approved_by: ""`) inside the capture's own commit, and `stigmergy.entities` DECIDES one — a steward's own commit from the CLI, or a server-driven decision from MCP, Slack or the console ([ADR 030](../decisions/030-server-side-entity-minting.md)) |
 | `views/` | `stigmergy.views` **only** — either `stigmergy-views regenerate` by hand, or the librarian's best-effort trigger right after a meeting files |
 
 After any bulk re-seed: rebuild the index (next section) and run `make index-check`.
@@ -447,7 +447,8 @@ bounded vision OCR pass for a scanned PDF when the worker has one configured —
 for the bare Gemini model, or a provider-prefixed `VISION_MODEL` with its provider's key; the
 prefixed form transcribes at most the first 40 pages and says in-line where it cut; OPTIONAL,
 neither configured means scanned decks refuse honestly) and the librarian files ONE synthesis page plus the verbatim
-`sources/drive/` part(s), atomically, anchored-or-asked-or-parked like every capture.
+`sources/drive/` part(s), atomically, anchored — to a registered entity, to one this capture
+proposes, or company-wide with a reason — like every capture.
 
 **The format policy**: pdf · txt/md/json · xlsx/xls/csv/tsv · docx · any native Google file. An
 office binary (pptx/ppt/doc/odt/odp/ods/rtf) is refused naming its wake condition: the `office`
@@ -509,6 +510,97 @@ probe, any time:
 ```sh
 .venv/bin/stigmergy-search "what did we decide about Q3 pricing"
 ```
+
+## Governing what the librarian proposed
+
+Nothing waits on a person before a capture is filed. When the librarian meets a name the registry
+does not know it **creates the entity page itself**, unconfirmed (`approved_by: ""`), anchors the
+capture to it and commits — and when it meets a new spelling for an entity that IS registered it
+appends that spelling to the entity's own `proposed_aliases:`. Governing those two is a decision
+about an IDENTITY, taken afterwards, with the page already in the brain and search already finding
+it. Nothing is stuck while you decide, and declining costs one commit rather than a lost capture.
+
+**Two kinds, and the verbs each takes:**
+
+| Kind | `item_id` | Verbs |
+|---|---|---|
+| `identity-proposal` — an entity page created with `approved_by` empty | the entity's registry id (`acme-corp`) | **Approve** (it is real; the page is confirmed in your name) · **Merge into…** (it is a registered entity under another spelling: its name and spellings become that entity's aliases, its page goes, every page anchored to it is re-anchored) · **Decline** (its page goes, the pages anchored to it lose the anchor) |
+| `alias-proposal` — a spelling appended to a registered entity | `<entity id>:<alias>` (`acme-corp:ACME`) | **Approve** (it moves from `proposed_aliases:` to `aliases:`) · **Decline** (it is dropped) |
+
+**Four doors, one commit discipline.** Whichever you use, the change lands as ONE commit through
+`entities.decide.apply` — the branch/cleanliness/sync preflight, a registry-drift refusal, the
+decision itself, a gitleaks scan over the files the commit will carry, then the push with a bounded
+rebase-and-retry, never a force-push — and a `review_decisions` row is written AFTER the push:
+
+| Door | Right when | Needs |
+|---|---|---|
+| `stigmergy-entities`, below | you have a clone and no deployment has to be running, or you are scripting | your own clone + push identity, gitleaks, the queue database |
+| the console's **Entities** desk (and the Inbox) | you are already in the browser | the console enabled ([admin-console.md](./admin-console.md)) |
+| Slack's doorbell card | the doorbell already DMed you | the deployed Slack app, nothing extra |
+| MCP's `review_decide` | an agent session is already open | a caller token with steward status |
+
+The three server-side doors commit as the librarian App with a **`Decided-by: <you>` trailer**
+naming the human; `stigmergy-entities` commits with your own git identity. So "who decided this
+identity" is answerable from `git log` AND from Postgres, on every door.
+
+**The ledger is the librarian's memory of a decline.** `review_decisions` is append-only, and the
+librarian reads it before proposing: an identity whose latest decision under `identity-proposal` is
+a decline is never proposed again, however many later captures mention the name. That is why every
+door records its row under exactly that kind and that entity id, and why `stigmergy-entities`
+refuses to run without the queue database — a decline nobody recorded is one the librarian
+re-proposes on the next capture. A card the doorbell already DMed closes itself on the next poll
+pass for the same reason: the LEDGER is what closes it, not the registry.
+
+### `stigmergy-entities` — deciding from your own clone
+
+It needs no server at all — it commits from YOUR OWN clone with YOUR OWN git identity, and reaches
+the database only to write the ledger row:
+
+```sh
+.venv/bin/stigmergy-entities pending                    # every identity and spelling waiting on you
+.venv/bin/stigmergy-entities approve acme-corp          # it is real — confirm it
+.venv/bin/stigmergy-entities merge acme-corp --into acme-logistics   # it IS that registered entity
+.venv/bin/stigmergy-entities decline acme-corp --reason "a product line, not an entity"
+.venv/bin/stigmergy-entities approve acme-corp --alias "ACME"        # confirm one spelling
+.venv/bin/stigmergy-entities decline acme-corp --alias "ACME"        # ...or drop it
+```
+
+`pending` reads the clone's own entity pages — the registry is derived from them, so the checkout is
+the source of truth — and prints the exact command for each row. `--by` sets who the decision is
+attributed to (default: your clone's git email); it is **attribution, not authorization**.
+
+A steward can also register an entity nobody proposed, born already confirmed:
+
+```sh
+.venv/bin/stigmergy-entities create --id acme-corp --name "Acme Corp" --type organization \
+    --aliases "Acme, ACME" --role "A logistics customer"
+```
+
+Registry/pages drift is its own command, and it commits nothing:
+
+```sh
+.venv/bin/stigmergy-entities regenerate --check         # drift check: exits non-zero, names each divergence
+.venv/bin/stigmergy-entities regenerate                 # rewrite the registry from the pages (NOT committed)
+```
+
+Every decision and `create` requires gitleaks (`brew install gitleaks`), refuses a drifted registry,
+and never force-pushes. Exit codes: `0` it did what it said, `1` it refused (a collision, a dirty
+clone, an id that is not a proposal, drift under `--check`), `2` the tool could not run (no repo, no
+database).
+
+**The other three doors decide from the server process** instead of a steward's clone — a throwaway
+clone per request, pushed with the librarian App credential (`entities.remote.decide_via_clone`),
+never the operator's own identity. On the deployed `app` group that credential needs no extra setup:
+`STIGMERGY_LIBRARIAN_REPO_URL` is a plain `fly.toml` `[env]` value, and the librarian App triple set
+as Fly secrets for the `worker` group reaches `app` too, because Fly secrets are app-wide. A server
+missing either — a local stdio MCP server, most often — refuses by naming exactly what is absent
+(`no knowledge-repo URL is configured…`, or `… needs the librarian GitHub App credential`) rather
+than degrading.
+
+**When a second door got there first**, what you are told differs by door: MCP's `review_decide` and
+the Slack card name who decided, on which road and when (read out of the ledger, and only after you
+have cleared authorization); `stigmergy-entities` and the console report that the id is no longer a
+proposal, which tells you the decision is gone without telling you whose it was.
 
 ## Recovery
 
@@ -577,78 +669,6 @@ console cannot see. It does **not** hold in the local composition, where `docker
 the librarian its own environment block and no console runs beside it.
 
 This is drill 2 of "Release gates & drills" below.
-
-### Draining parked rows
-
-`stigmergy-queue list` says, per parked row, who is being waited on and for how long: a
-`needs_input` row is the submitter's; a `triage` row is yours.
-
-```sh
-stigmergy-queue requeue <id> --by <who> [--note "…"]        # back to the librarian
-stigmergy-queue resolve <id> --by <who> --note "…" [--page <path>] [--commit <sha>]
-stigmergy-queue reject  <id> --by <who> --reason "…"
-```
-
-All three refuse a row a worker currently holds and a row already terminal, and all three require
-`--by` (attribution, recorded and never checked). The three text fields are NOT interchangeable:
-
-- **`resolve --note` and `reject --reason` become the submitter's own report, verbatim.** They
-  pass no secrets/PII gate on the way — no credentials, no personal data.
-- **`requeue --note` is for the row's own history and is never shown to the submitter.**
-- `resolve --page` / `--commit` are echoed to the submitter; leave both empty and their report has
-  no pointer.
-
-Use `resolve`, not `reject`, when you actually used the material.
-
-A `triage` row that is an **identity question** mints through `stigmergy.entities` whichever of four
-roads approves it ([ADR 030](../decisions/030-server-side-entity-minting.md)):
-
-| Road | Right when | Needs |
-|---|---|---|
-| `stigmergy-entities`, below | you have a clone and no deployment has to be running, or you are scripting | your own clone + push identity, gitleaks |
-| The admin console's Entities tab | you are already in the browser | the console enabled ([admin-console.md](./admin-console.md)) |
-| Slack's doorbell card | the doorbell already DMed you | the deployed Slack app, nothing extra |
-| MCP's `review_decide` | an agent session is already open | a caller token with steward status |
-
-Whichever road you take, the ledger row records it (`review_decisions.extra->>'source'` is one of
-`cli`/`admin`/`slack`/`mcp`), and the doorbell card already DMed for that item closes itself on the
-next poll pass. What the road that arrives too late SAYS differs, though: MCP's `review_decide` and
-the Slack card name who got there first, on which road and when; `stigmergy-entities` and the
-console report the row's new state, which tells you the decision is gone without telling you whose
-it was.
-
-The ledger is also what closes a card, so this only holds for the identity decisions above: a
-parked capture that is NOT an identity question, drained with `stigmergy-queue resolve`/`reject` or
-from the console's Queue tab, writes no `review_decisions` row at all — its doorbell card is never
-closed and simply ages out.
-
-`stigmergy-entities` needs no server at all — it commits from YOUR OWN clone with YOUR OWN git
-identity:
-
-```sh
-.venv/bin/stigmergy-entities list                       # parked rows waiting on an identity decision
-.venv/bin/stigmergy-entities show 42                    # the material, the agent's reading, the exact next command
-.venv/bin/stigmergy-entities approve 42 --id acme-corp --name "Acme Corp" --type organization \
-    --aliases "Acme, ACME" --role "A logistics customer" --requeue
-.venv/bin/stigmergy-entities reject 42 --reason "duplicate of an existing entity, different spelling"
-```
-
-`approve`/`create` require gitleaks (`brew install gitleaks`), refuse a drifted registry, and
-never force-push. Registry/pages drift itself:
-
-```sh
-.venv/bin/stigmergy-entities regenerate --check         # drift check: exits non-zero, names the divergence
-.venv/bin/stigmergy-entities regenerate                 # rewrite the registry from the pages (NOT committed)
-```
-
-**The other three roads mint from the server process instead of a steward's clone** — a throwaway
-clone per request, pushed with the librarian App credential (`entities.remote.mint_via_clone`,
-ADR 030 D3), never the operator's own identity. On the deployed `app` group that credential needs
-no extra setup: `STIGMERGY_LIBRARIAN_REPO_URL` is a plain `fly.toml` `[env]` value, and the
-librarian App triple set as Fly secrets for the `worker` group reaches `app` too, because Fly
-secrets are app-wide. A server missing either — a local stdio MCP server, most often — refuses a
-mint by naming exactly what is absent (`no knowledge-repo URL is configured for a server-driven
-mint`, or `... needs the librarian GitHub App credential`) rather than degrading.
 
 ### A repair proposal stuck in `approved`
 
@@ -859,11 +879,15 @@ halves are REAL measurements: real embedder, real model, real spend). The two in
 gate arms are also runnable alone (`make retrieval-golden`, `make qa-golden`).
 
 There is a **third instrument the gate does not arm**: `make filing-golden`, which measures the
-write path — ten golden captures through the real librarian, its gates and a real `git worktree`,
-scored per facet. It is outside the release gate because it writes and costs a real agent pass per
+write path — 14 golden captures through the real librarian, its gates and a real `git worktree`,
+scored per facet (`status`, `reason`, `type`, `folder`, `anchor`, `edits`, `proposals`, `decisions`,
+plus the two cost facets `attempts` and `bounces`). `proposals` is the one that scores an identity
+the librarian created unconfirmed — it replaced the two facets the retired ask-back loop had. It is
+outside the release gate because it writes and costs a real agent pass per
 capture, and it is the one to run when a change touches the librarian's agent, its brief or its
 gates. It needs `gitleaks` on PATH and a Claude credential; `make filing-golden BACKEND=double` is
-the keyless plumbing check. Full account: `evals/README.md`.
+the keyless plumbing check. Scores are comparable per FACET and not per run, since the denominators
+moved with the redesign. Full account: `evals/README.md`.
 
 ### Drill 1 — Postgres backup / restore of the durable schema
 
@@ -1148,7 +1172,7 @@ GROUP BY 1, 2
 ORDER BY 1, 2;
 ```
 
-`args` is the full JSON for most tools, but `brain_submit`/`brain_reply` are audited by SIZE
+`args` is the full JSON for most tools, but `brain_submit` is audited by SIZE
 and HASH only, never content. `outcome` is `ok` or `error`; `error_class` names the exception when
 it isn't `ok`. `stigmergy-pilot-report` summarizes the same tables (latency percentiles,
 answered-with-citation vs honest-refusal split); on a single-operator deployment its per-identity

@@ -32,8 +32,9 @@ section is the whole answer.
 **The vocabulary has to be agreed, not coined.** A solo wiki can let the model invent a page for
 every name it meets. With several writers that yields three pages for one customer under three
 spellings, and every link pointing at the wrong one. Here an entity is **born through a human**: the
-agent proposes, a steward approves in Slack, and only then does a governed writer mint the page and
-the registry entry. A capture naming something unknown parks and asks — once — rather than guessing.
+agent proposes, a steward approves — in Slack, the console, the CLI or over MCP — and one governed
+writer turns the proposal into a confirmed entity. A capture naming something unknown still files at
+once: the librarian proposes the entity and anchors the page to it, and nobody waits on anybody.
 
 **Not everyone may read everything.** A team wiki holds salaries, board material and a customer's
 confidential figures. Visibility is enforced at one point (`acl.visible()`), on every read surface,
@@ -48,9 +49,9 @@ Three commitments, and most of the design falls out of them:
 It reads and writes a *separate* repository — the knowledge repo — so the substrate outlives the
 software. Delete this platform and you still have your knowledge, in files, with history.
 
-**A model writes; code decides.** An agent drafts the page, but eight deterministic gates run over
+**A model writes; code decides.** An agent drafts the page, but nine deterministic gates run over
 the resulting diff — zone, binary-page, body-rewrite, secrets, PII, frontmatter, contract,
-anchoring — and the diff those gates approved is provably the diff that lands. A model can be
+anchoring, identity — and the diff those gates approved is provably the diff that lands. A model can be
 argued with. A gate cannot.
 
 **An honest refusal beats a confident guess.** Answers are verified against what the tools actually
@@ -85,34 +86,37 @@ claim can always be walked back to what actually arrived.
 
 Two narrow seams do all the work: **one writer** into git, and **one API** out of it.
 
-The dashed box on the right is the part people are usually surprised by: **there is a web console**, at `/admin`, for the operations you would otherwise do from a terminal — an inbox of everything waiting on a person, draining a parked capture, deciding an identity with each name checked against the registry before the mint, running or disabling the four crons, reading the gardener's findings and approving the repairs proposed for them, previewing the digest, watching the worker — with the write path drawn live from the same rows, in the colours of this README's own key. It rides the same process group as MCP but is an ASGI branch in *front* of the bearer middleware, so it never borrows MCP's auth: it has its own token, it is a **404 until that token's hash is configured**, and an architecture test keeps it from ever becoming a reader of pages. Full tour: [`docs/reference/admin-console.md`](./docs/reference/admin-console.md).
+The dashed box on the right is the part people are usually surprised by: **there is a web console**, at `/admin`, for the operations you would otherwise do from a terminal — an inbox of everything waiting on a steward, deciding a proposed entity with its name checked against the rest of the registry, registering one by hand, running or disabling the four crons, reading the gardener's findings and approving the repairs proposed for them, previewing the digest, watching the worker — with the write path drawn live from the same rows, in the colours of this README's own key. It rides the same process group as MCP but is an ASGI branch in *front* of the bearer middleware, so it never borrows MCP's auth: it has its own token, it is a **404 until that token's hash is configured**, and an architecture test keeps it from ever becoming a reader of pages. Full tour: [`docs/reference/admin-console.md`](./docs/reference/admin-console.md).
 
 ### The write path
 
 <p align="center">
-  <img src="docs/assets/write-path.svg" alt="the write path: material enters the capture queue, the server attributes it, the agent drafts a page in a throwaway worktree; a name the registry does not know makes it ask ONCE and park until a steward answers, which puts the capture back in the queue; the draft is a diff, and 8 deterministic gates — zone, binary-page, body-rewrite, secrets, pii, frontmatter, contract, anchoring — either bounce it back with the reason or commit exactly the diff they approved" width="100%">
+  <img src="docs/assets/write-path.svg" alt="the write path: material enters the capture queue, the server attributes it, the agent drafts a page in a throwaway worktree; a name the registry does not know becomes a PROPOSED entity the page anchors to, and the capture files anyway; a steward approves, merges or declines the proposal later, in one commit; the draft is a diff, and 9 deterministic gates — zone, binary-page, body-rewrite, secrets, pii, frontmatter, contract, anchoring, identity — either bounce it back with the reason or commit exactly the diff they approved" width="100%">
 </p>
 
 The purple box is the only place a model decides anything, and everything downstream of it is a
 gate it cannot argue with. **The loop back through orange is the point of the whole design**: when
-the agent meets a name the registry does not know, it does not invent a page — it asks once, parks,
-and waits for a person. A queue whose parked count is permanently zero would mean nobody is
-capturing anything.
+the agent meets a name the registry does not know, it does not invent a confirmed entity — it
+proposes one, files against it, and a steward decides later. An inbox whose proposal count is
+permanently zero would mean nobody is capturing anything.
 
 `brain_submit` queues a capture, archives its raw material content-addressed (MinIO locally, any
 S3-compatible store in production) and attributes it to the identity the **server** resolved — never
 to anything the client sent. The librarian then claims one item at a time and runs the agent inside
 a throwaway `git worktree`, with its operating procedure versioned as a skill in the knowledge repo.
 
-Then code decides what leaves: **eight gates** over the resulting diff — zone · binary-page ·
-body-rewrite · secrets · pii · frontmatter · contract · anchoring — and the diff the gates approved
-is provably the diff that lands (`gitcmd.commit(gated_entries=…)`).
+Then code decides what leaves: **nine gates** over the resulting diff — zone · binary-page ·
+body-rewrite · secrets · pii · frontmatter · contract · anchoring · identity — and the diff the
+gates approved is provably the diff that lands (`gitcmd.commit(gated_entries=…)`).
 
-Nothing dead-ends. A librarian that cannot resolve an entity **asks** once (`brain_reply`), then
-parks the item; a steward drains it with `stigmergy-queue requeue/resolve/reject` or from the review
-inbox; and `stigmergy.entities` is the only writer of the entity registry, however the mint is driven. A meeting re-filed after a
-park **reuses the parked distillation** instead of re-reading the transcript — a park must not cost
-knowledge.
+Nothing dead-ends and nothing waits. A librarian that meets an entity the registry does not know
+**proposes** it — a page under `wiki/entities/` with `approved_by: ""` and a `proposed` registry
+entry — and files the capture against it in the same commit; the ninth gate proves every write in the
+identity zone is a declared proposal, a name the registry already knows becomes a proposed spelling
+rather than a twin, and a name a steward has declined is never proposed twice. A
+steward later approves, merges or declines from Slack, the console, `stigmergy-entities` or
+`review_decide`, and `stigmergy.entities` is the only writer of the registry however the decision
+arrives.
 
 Two flows sit on top: the **meeting distiller** (a dropped transcript becomes a source page, a
 meeting page and one decision page per decision, each anchored) and **views** (per-entity rollups
@@ -154,9 +158,9 @@ vocabulary and a layered "everything anchored to X" view. Entity-first resolutio
 service layer, so every client gets it, not only `ask`. Full narrative:
 [`docs/reference/navigation.md`](./docs/reference/navigation.md).
 
-**Ten MCP tools**, and the list is pinned by a test: read — `search_brain`, `read_page`,
-`list_entities`, `describe_entity`, `ask`; write — `brain_submit`, `brain_submissions`,
-`brain_reply`; review — `review_queue`, `review_decide`.
+**Nine MCP tools**, and the list is pinned by a test: read — `search_brain`, `read_page`,
+`list_entities`, `describe_entity`, `ask`; write — `brain_submit`, `brain_submissions`; review —
+`review_queue`, `review_decide`.
 
 ### The layering, and why it is a test
 
@@ -205,14 +209,14 @@ build their own throwaway one and tell you what each step proved.
 
 ```bash
 make db-up
-.venv/bin/python scripts/walk_meeting_distiller.py   # a transcript becomes a page SET, and a second one PARKS
+.venv/bin/python scripts/walk_meeting_distiller.py   # a transcript becomes a page SET, and a second one PROPOSES
 .venv/bin/python scripts/walk_views.py               # the filing regenerates the entity's view, then the honest no-op
 .venv/bin/python scripts/walk_navigation.py          # links/backlinks, and the existence rule shown live on two identities
 ```
 
 Run the meeting-distiller one first: its second transcript names an entity the registry does not
-know, so it asks once and parks — the loop through orange in the write-path diagram above,
-happening for real, with the `brain_reply` a steward would answer printed at the end.
+know, so it proposes them and files anyway — the loop through orange in the write-path diagram
+above, happening for real, with the proposals a steward would decide printed at the end.
 
 ### Point it at your own knowledge repo
 
@@ -254,20 +258,20 @@ beside it in the source; the two bare modules at the top are small enough to be 
 | Module | What it is |
 |---|---|
 | `text.py` | the bottom of the stack: the hardened UNTRUSTED-DATA fence, sanitize, clamp, and the one parser for a capture's `<path>@<sha>` result ref |
-| `review_kinds.py` | the review inbox's THREE kind constants (entity-proposal, parked-capture, repair-proposal) — dependency-free, so a Block Kit renderer can name them without importing the server |
+| `review_kinds.py` | the review inbox's THREE kind constants (identity-proposal, alias-proposal, repair-proposal) and the two legacy names the ledger still holds — dependency-free, so a Block Kit renderer can name them without importing the server |
 | `kernel/` | a LIBRARY that imports nothing from this project: the model dispatch, the page contract's cap + scalar emitter, frontmatter parsing, the ACL resolver, the entity registry, and the document converters the Drive door runs — text extraction plus the vision OCR fallback |
 | `index/` | the hybrid derived index: postgres+pgvector, reciprocal rank fusion, contract ranking |
 | `server/` | the single MCP server — the ONLY API over the brain; HTTP transport with per-request bearer auth, audit log, rate limits, the capture surface, the incremental-index webhook, entity navigation and the review lane |
 | `answer/` | the answering agent + deterministic verifier: powers the `ask` tool |
-| `capture/` | the durable capture queue: submit, claim, the evidence plane, retention; the human loop's write surfaces; and the TWO operator drop CLIs — the meeting one, and the Drive door (fetch with the operator's own Google auth, original bytes to evidence, one `kind="drive"` row, no model) |
-| `librarian/` | the filing engine: the worker, the agent, the eight gates, the commit; ask-back, the deployed worker, the meeting flow |
-| `entities/` | governed entity birth: proposal → approve → registry regenerate — the ONE path-scoped writer of the knowledge repo's `ops/entity-registry.json` and `wiki/entities/` |
+| `capture/` | the durable capture queue: submit, claim, the evidence plane, retention; and the TWO operator drop CLIs — the meeting one, and the Drive door (fetch with the operator's own Google auth, original bytes to evidence, one `kind="drive"` row, no model) |
+| `librarian/` | the filing engine: the worker, the agent, the nine gates, the commit; the entity proposals it writes, the deployed worker, the meeting flow |
+| `entities/` | governed entity birth: the librarian's proposal → a steward's approve / merge / decline → registry regenerate — the ONE path-scoped writer of the knowledge repo's `ops/entity-registry.json` and `wiki/entities/` |
 | `slack/` | the Slack transport: 🧠 capture, Q&A, the steward doorbell |
 | `views/` | per-entity rollups: a deterministic skeleton + a bounded synthesis |
 | `gardener/` | corpus health on demand: ten deterministic checks + three bounded model passes (an editorial sweep over changed-plus-sampled pages, every entity page judged for a body that says nothing, and every registered entity judged against the others for a second identity of the same thing), findings persisted and reported — fixes nothing, writes nothing, vetoes nothing |
 | `repair/` | the governed repair loop: an agent PROPOSES a repair for a finding — an additive edit, a drafted body for an entity page whose own body says nothing about it, or a merge of two registry entries that are one entity (the agent picks which name survives; code computes every page that moves) — and a person proposes the fourth kind, removing a page and sweeping every reference to it out of the corpus. Code validates each at propose time and again at apply time through the same eight gates, a steward approves one at a time, and code applies exactly that as one App-authored commit |
 | `digest/` | the week's activity in one Slack post |
-| `admin/` | the ops console: `/admin` on the same app process group — the inbox, the queue drain, the identity desk with its pre-mint registry check, repair review, cron remote-control, gardener/digest/index/worker pages with their charts, activity. INERT until its token hash is configured, and never a read surface over pages — though its Activity page does show the QUESTIONS people asked, which is user content behind one shared credential |
+| `admin/` | the ops console: `/admin` on the same app process group — the inbox, the read-only queue, the entities desk where proposals are decided and an entity can be registered by hand with its name checked against the registry, repair review, cron remote-control, gardener/digest/index/worker pages with their charts, activity. INERT until its token hash is configured, and never a read surface over pages — though its Activity page does show the QUESTIONS people asked, which is user content behind one shared credential |
 
 #### Around it
 

@@ -41,26 +41,22 @@ export async function dashboardView(host) {
 // ── the hero: the inbox is the number that means work ─────────────────────────────────────────
 function hero(inbox, overview, pipelineNode) {
   const counts = inbox.counts || {};
-  const oldest = (inbox.items || []).reduce((max, i) => Math.max(max, i.parked_age_ms || 0), 0);
   const rows = [
-    ["entity-proposal", counts["entity-proposal"] || 0, "identity decisions", "inbox/entity"],
-    ["parked-capture", counts["parked-capture"] || 0, "parked captures", "inbox/parked"],
+    ["identity-proposal", counts["identity-proposal"] || 0, "proposed entities", "inbox/identity"],
+    ["alias-proposal", counts["alias-proposal"] || 0, "proposed spellings", "inbox/alias"],
     ["repair-proposal", counts["repair-proposal"] || 0, "repair proposals", "inbox/repair"],
   ];
   return el("div", { class: "hero-wrap" },
     el("div", { class: "hero-card" },
-      el("div", { class: "eyebrow" }, "waiting on a human"),
+      el("div", { class: "eyebrow" }, "waiting on a steward"),
       el("div", { class: `hero-number${inbox.count ? "" : " calm"}` }, String(inbox.count)),
-      el("div", { class: "hero-label" }, inbox.count === 1 ? "thing owes a person a decision"
-        : inbox.count ? "things owe a person a decision" : "nothing is parked on anyone right now"),
+      el("div", { class: "hero-label" }, inbox.count === 1 ? "thing owes a steward a decision"
+        : inbox.count ? "things owe a steward a decision" : "nothing is waiting on anyone right now"),
       el("div", { class: "hero-breakdown" },
         rows.map(([kind, n, label, hash]) => el("a", { href: `#/${hash}` },
-          keyDot(itemKind(kind).who), el("strong", {}, String(n)), el("span", {}, label),
-          n ? el("span", { class: "sub" }, kind === "parked-capture" && inbox.waiting_on_submitter
-            ? `${inbox.waiting_on_submitter} on their submitter` : "") : null))),
+          keyDot(itemKind(kind).who), el("strong", {}, String(n)), el("span", {}, label)))),
       el("div", { class: "hr" }),
       el("div", { class: "statline" },
-        el("span", {}, "oldest ", el("strong", {}, oldest ? fmtAge(oldest) : "—")),
         el("span", {}, "in flight ", el("strong", {}, String(overview.in_flight.length))),
         el("span", {}, "queued ", el("strong", {}, String(overview.queue.counts.queued || 0)))),
       el("div", { class: "row", style: { marginTop: "14px" } },
@@ -75,21 +71,19 @@ function pipelineCard(metrics, days) {
   // drop out of "captured"; the frontend only knows how to say each one.
   const meta = getMeta();
   const statuses = meta.statuses && meta.statuses.length ? meta.statuses : OUTCOME_ORDER;
-  const parked = new Set(meta.parked_statuses && meta.parked_statuses.length ? meta.parked_statuses : ["needs_input", "triage"]);
   const sums = { total: 0 };
   for (const s of statuses) sums[s] = 0;
   for (const row of metrics.captures_by_day) {
     for (const s of statuses) { sums[s] += row[s] || 0; sums.total += row[s] || 0; }
   }
   const landed = sums.filed || 0;
-  const human = statuses.filter((s) => parked.has(s)).reduce((a, s) => a + sums[s], 0);
   const byHand = sums.resolved || 0;
   const refused = sums.rejected || 0;
   const broke = sums.failed || 0;
   const moving = (sums.queued || 0) + (sums.claimed || 0);
   const W = 860, H = 250;
   const node = svg("svg", { viewBox: `0 0 ${W} ${H}`, class: "pipeline", role: "img",
-                            "aria-label": `pipeline: ${sums.total} captured, ${landed} landed in git, ${human} parked on a human, ${byHand} handled by hand, ${refused} refused, ${broke} failed, ${moving} in flight` });
+                            "aria-label": `pipeline: ${sums.total} captured, ${landed} landed in git, ${byHand} handled by hand, ${refused} refused, ${broke} failed, ${moving} in flight` });
   const stage = (x, y, w, h, eyebrowText, number, label, who) => {
     const g = svg("g");
     g.append(svg("rect", { x, y, width: w, height: h, rx: 12, class: "pipe-box" }));
@@ -111,11 +105,10 @@ function pipelineCard(metrics, days) {
   // number would repeat "captured" and invite a reconciliation the outcomes already give
   node.append(stage(0, 80, 150, 84, "captured", sums.total, `in the last ${days} days`, null));
   node.append(stage(200, 80, 150, 84, "the model drafts", null, "a page, proposed", "model"));
-  node.append(stage(400, 80, 150, 84, "code gates", null, "eight deterministic gates", "code"));
+  node.append(stage(400, 80, 150, 84, "code gates", null, "nine deterministic gates", "code"));
   const outs = [
-    [landed, "landed in git", "git", "filed"],
-    [human, "parked on a human", "human", "asked · waiting on a steward"],
-    [byHand, "handled by hand", "human", "a steward used the material"],
+    [landed, "landed in git", "git", "filed — proposing what it had to"],
+    [byHand, "handled by hand", "human", "legacy: closed by a steward before captures stopped parking"],
     [refused, "refused", "code", "by a gate, or declined by a steward"],
     [broke, "could not finish", "fail", "failed — deliveries exhausted"],
   ];

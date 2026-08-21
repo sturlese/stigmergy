@@ -2,35 +2,39 @@
 
 The front half of the fast lane: the durable queue a capture lands in, the exactly-once claim
 primitive that drains it, the content-addressed evidence archive, the operational spine and
-retention. Design record: [ADR 014](../decisions/014-capture-queue-and-attribution.md); the three
+retention. Design record: [ADR 014](../decisions/014-capture-queue-and-attribution.md); the two
 MCP tools that reach it are served by [server.md](./server.md), which owns identity, rate limiting
-and audit; operating it day to day is
-[operator-runbook.md → Draining parked rows](./operator-runbook.md#draining-parked-rows).
+and audit; what a steward does after a filing is
+[operator-runbook.md → Governing what the librarian proposed](./operator-runbook.md#governing-what-the-librarian-proposed).
 Code map: [`src/stigmergy/capture/index.md`](../../src/stigmergy/capture/index.md).
 
 **This package drains nothing.** Filing a capture into a page — the git commit, dedup, wikilink
-resolution, entity anchoring, template validation and the eight gates — lives in
+resolution, entity anchoring, template validation and the nine gates — lives in
 [librarian.md](./librarian.md). A submission here reaches `queued` and waits. **Nothing verifies a
 figure at write time**: the only deterministic figure check runs at ANSWER time ([answer.md](./answer.md)).
+
+**Nothing here ever waits on a person.** A capture is queued, claimed and finished; a name the
+registry does not know does not stop it — the librarian files the page and proposes the identity,
+and a steward confirms it afterwards from the review inbox. The two states a capture used to park
+in are retired (see [The queue](#the-queue)).
 
 ## Module map
 
 | Module | Does |
 |---|---|
-| `schema.py` | the DDL this package owns — `capture_queue`, `job_runs`, `ingest_errors`, all `CREATE TABLE IF NOT EXISTS` plus every additive column (`audit_log` is the fourth durable table and is created by `stigmergy.server.audit`; it is only NAMED here, because this is the one place the durable/disposable boundary is written down) — the status enum, `DURABLE_TABLES`, the hint allowlists, and the pure submission contract: size cap, kind/hint validation, server-owned-field refusal, frontmatter flagging |
-| `queue.py` | insert · claim (`FOR UPDATE SKIP LOCKED`) · release-expired · terminal transitions · the guarded `dispose` transition · the one listing query and its two semantic entry points · the per-submission trace |
-| `dispositions.py` | the steward's drain: `requeue`/`resolve`/`reject` — three semantic intents over `queue.dispose`'s ONE guarded transition, plus the sentence each puts in the submitter's report, plus `clean` (the bound-and-sanitize every `--note`/`--reason` crosses) |
-| `decisions.py` | the append-only `review_decisions` ledger — its DDL, `record_decision`, the two reads (`latest_decisions` for every item at once; `latest_decision_for` for one, off the table's own index, which is what a refusal path asks), the verdict vocabulary and `DECISION_SOURCES`. It lives here because all three minting doors have to write it, and one of them (`stigmergy-entities`) may not import `stigmergy.server`. Every write names its door (`mcp`, `slack`, `admin`, `cli`) in a required `source` argument, refused with a `ValueError` if it is not one of the four — the table is append-only, so a door's own misspelling could never be corrected. It is stamped into `extra` LAST, so the validated value wins: a caller cannot override its door by putting a `source` key in `extra`. Both reads give back `""` for the rows written before the field existed |
+| `schema.py` | the DDL this package owns — `capture_queue`, `job_runs`, `ingest_errors`, all `CREATE TABLE IF NOT EXISTS` plus every additive column (`audit_log` is the fourth durable table and is created by `stigmergy.server.audit`; it is only NAMED here, because this is the one place the durable/disposable boundary is written down) — the status enum with its retired pair and the startup migration that empties it, `DURABLE_TABLES`, the hint allowlists, `clean_note` (the bound-and-sanitize every operator-typed string crosses), and the pure submission contract: size cap, kind/hint validation, server-owned-field refusal, frontmatter flagging |
+| `queue.py` | insert · claim (`FOR UPDATE SKIP LOCKED`) · release-expired · the one terminal transition (`finish`, fenced by `attempts`) · the one listing query and its two semantic entry points · the per-submission trace |
+| `decisions.py` | the append-only `review_decisions` ledger — its DDL, `record_decision`, the three reads (`latest_decisions` for every item at once; `latest_decision_for` for one, off the table's own index, which is what a refusal path asks; `recent_decisions` as a bounded feed), the verdict vocabulary (`approve`, `reject`, `merge`, `request_changes`) and `DECISION_SOURCES`. It lives here because all four deciding doors have to write it, and one of them (`stigmergy-entities`) may not import `stigmergy.server`. Every write names its door (`mcp`, `slack`, `admin`, `cli`) in a required `source` argument, refused with a `ValueError` if it is not one of the four — the table is append-only, so a door's own misspelling could never be corrected. It is stamped into `extra` LAST, so the validated value wins: a caller cannot override its door by putting a `source` key in `extra`. Both reads give back `""` for the rows written before the field existed. **This ledger is also the librarian's decline memory**: `librarian.processing._declined_identity_ids` reads it, so an identity a steward declined is never proposed again |
 | `evidence.py` | the content-addressed store: `S3EvidenceStore` (MinIO/R2), `MemoryEvidenceStore` (the offline double), `content_key` |
 | `ops.py` | the operational spine: `job_runs` / `ingest_errors` writers and the `job_run` context manager |
 | `retention.py` | `purge` — physical deletion of `payload`/`hints`/`outcome` on old terminal rows, plus the age-independent reconciliation for a secret/PII rejection; `purge_secret_capture_immediately` — `payload`/`hints`, right now, for exactly that rejection |
 | `latency.py` | capture→filed and capture→searchable p50/p95 from the trace alone, here rather than in `stigmergy.librarian` so `stigmergy.server.pilot_report` can reach it too |
 | `render.py` | the operator dialect every CLI prints in: `depth_line`, `format_ms`, `format_age`, `clean_for_terminal`, `RECLAIM_NOW`. Below the CLIs, because `latency.py` and `stigmergy-librarian`/`stigmergy-entities` read it too; it reaches nothing but `stigmergy.text` |
-| `cli.py` | `stigmergy-queue` — the steward's view: list · show · claim · reclaim · requeue · resolve · reject · purge; `render.py`'s names are re-exported here for the CLIs that already take them from this module |
+| `cli.py` | `stigmergy-queue` — the operator's view: list · show · claim · reclaim · purge; `render.py`'s names are re-exported here for the CLIs that already take them from this module |
 | `meeting_cli.py` | `stigmergy-meeting drop` — the ONE door onto the meeting flow: validate → upload the transcript as evidence → enqueue exactly one `kind="meeting"` row, and nothing else. See [meeting-distiller.md](./meeting-distiller.md) |
 | `drive_cli.py` | `stigmergy-drive drop` — the ONE door onto the Drive flow ([ADR 028](../decisions/028-drive-door.md)): fetch one Drive file with the operator's own Google auth, upload the ORIGINAL bytes to evidence, enqueue exactly one `kind="drive"` row. It runs no model and performs no conversion — extraction is the worker's |
 | `drive_client.py` | the Drive seam the drop CLI fetches through; it talks to `gog`, never to Postgres |
-| `errors.py` | the domain exceptions (`SubmissionRejected`, `ReplyRejected`, `EvidenceError`, `QueueStateError`), all under `CaptureError` |
+| `errors.py` | the domain exceptions (`SubmissionRejected`, `EvidenceError`, `QueueStateError`), all under `CaptureError` |
 
 **Layering.** `capture` must never import `stigmergy.server` or `stigmergy.answer`; `stigmergy.server`
 imports `capture`. The outward edge is to `stigmergy.index`, with one rule: **only the three
@@ -39,35 +43,26 @@ operator CLIs may import `stigmergy.index`** — `capture.cli`, `capture.meeting
 Library code here never opens a connection and never reads the environment: every function takes
 `conn`, and an entry point supplies it. `drive_client` talks to `gog`, not to a database.
 
-## The three MCP tools
+## The two MCP tools
 
 | Tool | What it does |
 |---|---|
-| `brain_submit(kind, material, hints?)` | queue a capture. Over MCP `kind` is `raw` (a conversation excerpt, a decision, a gotcha) or `page` (markdown you drafted) — `MCP_SUBMIT_KINDS`, deliberately narrower than the queue's own `KINDS`, which also carries `meeting` and `drive`: those two are the drop CLIs' to enqueue, and restricting them here rather than leaving it to `KINDS` is what keeps `stigmergy-meeting` and `stigmergy-drive` genuinely the only doors onto their flows. `hints` optionally suggests placement — `type`, `path`, `entity`, `title`, suggestions only. Three further allowlists exist for the surfaces that carry provenance rather than placement (`SOURCE_HINT_KEYS` for Slack, `MEETING_HINT_KEYS` for the meeting drop CLI, `DRIVE_HINT_KEYS` for the Drive one). Two of the three name the small subset a downstream reader actually TRUSTS, and only those are refused at the client seam: `SOURCE_PROVENANCE_HINT_KEYS` (`source_client`, `source_permalink`) and `DRIVE_PROVENANCE_HINT_KEYS` (`drive_file_id`, `drive_url`). `MEETING_HINT_KEYS` has no such subset — a meeting row can only be created by the drop CLI in the first place. `ALLOWED_HINT_KEYS` is the union of all four lists, and anything outside it is refused by name. Returns an ack with the submission id, the archived object key and a message that promises exactly what happened: **queued and attributed**, not "saved" |
-| `brain_submissions(limit?, status?)` | what happened to what you captured: your own submissions, newest first, with state, timestamps, `result_ref`, any open `question` (plus `reply_hint`, the exact call that answers it), your `reply` once you have given one, `waiting_on`, the row's `events`, and a fenced excerpt. An unrestricted (steward) identity sees the whole queue with `mine` marking its own rows. A capture refused for a secret or PII echoes nothing — see [Withheld material](#withheld-material) |
-| `brain_reply(submission_id, answer)` | answer the librarian's one question about a `needs_input` capture. Only the **original submitter or a steward** may reply; every other case — a stranger, a nonexistent id, somebody else's row — gets one identical, generic refusal that confirms nothing. A row that is not `needs_input` refuses *specifically*, but only for a caller already authorized to read it. The answer is bounded at 2000 characters, recorded on the row, traced with the actor, and the row returns to `queued` |
+| `brain_submit(kind, material, hints?)` | queue a capture. Over MCP `kind` is `raw` (a conversation excerpt, a decision, a gotcha) or `page` (markdown you drafted) — `MCP_SUBMIT_KINDS`, deliberately narrower than the queue's own `KINDS`, which also carries `meeting` and `drive`: those two are the drop CLIs' to enqueue, and restricting them here rather than leaving it to `KINDS` is what keeps `stigmergy-meeting` and `stigmergy-drive` genuinely the only doors onto their flows. `hints` optionally suggests placement — `type`, `path`, `entity`, `title`, suggestions only. Three further allowlists exist for the surfaces that carry provenance rather than placement (`SOURCE_HINT_KEYS` for Slack, `MEETING_HINT_KEYS` for the meeting drop CLI, `DRIVE_HINT_KEYS` for the Drive one). Two of the three name the small subset a downstream reader actually TRUSTS, and only those are refused at the client seam: `SOURCE_PROVENANCE_HINT_KEYS` (`source_client`, `source_permalink`) and `DRIVE_PROVENANCE_HINT_KEYS` (`drive_file_id`, `drive_url`). `MEETING_HINT_KEYS` has no such subset — a meeting row can only be created by the drop CLI in the first place. `ALLOWED_HINT_KEYS` is the union of all four lists, and anything outside it is refused by name. Returns an ack with the submission id, the archived object key and a message that promises exactly what happened: **queued and attributed**, not "saved" — plus `entities`, the registered entities this material already names (`{id, name, proposed}` each, ACL-scoped like `list_entities`), so a submitter sees on the spot which identities the brain recognises |
+| `brain_submissions(limit?, status?)` | what happened to what you captured: your own submissions, newest first, with state, timestamps, `result_ref`, the librarian's `report` (which names the page, the anchor, and any entity or spelling it PROPOSED), the row's `events` and a fenced excerpt. An unrestricted (steward) identity sees the whole queue with `mine` marking its own rows. A capture refused for a secret or PII echoes nothing — see [Withheld material](#withheld-material) |
 
-All three ride `BrainService._call`, so they inherit per-identity rate limiting, the audit row and
+Both ride `BrainService._call`, so they inherit per-identity rate limiting, the audit row and
 the error shaping the read tools have — one seam, not a second write path.
 
-### The ask-back loop
+### Nothing is ever asked of a submitter
 
-When the librarian cannot resolve which entity a capture is about, worker **code** — not the agent
-— routes it: a first `unresolved-entity` outcome finishes `needs_input` with a code-built question,
-and everything else parks in `triage`. The question names what could not be resolved, lists the
-registry's entities with their aliases (in full below 20 of them; above that it names the count and
-asks for the exact name — never a silently truncated list), and states the call that answers it.
-
-**One ask per capture, ever.** The budget is the `asked_at` column, so it survives a reply, a
-steward's `requeue` and a lease redelivery alike; a replied capture that still cannot be resolved
-parks in `triage`.
-
-**The reply is data, not instructions.** It reaches the agent fenced and labelled as
-`UNTRUSTED-DATA` on the next pass, and it bypasses nothing: the anchoring gate still resolves names
-through the registry, and `page.stamp_server_fields` still deletes and rewrites every server-owned
-key on the page — `status`, `as_of`, `submitted_by`, `entity`, `acl`. `verification` is in that set
-too and is **stripped**, never written: nothing computes a verdict, so no page may claim one. The
-audit row for a reply carries the answer's **size and hash**, never its text.
+There is no reply tool, and no state a capture sits in waiting for one. A name nothing in the
+registry resolves is PROPOSED: the librarian creates the entity page in the same commit as the note
+(`approved_by: ""`, the proposal mark), anchors the page to it, and files. The report says so, and a
+steward confirms, merges or declines the identity afterwards from the review inbox
+([server.md → The review tools](./server.md#the-review-tools)). The mechanism is
+[librarian.md → Proposing an identity](./librarian.md#proposing-an-identity-what-a-filing-creates-unconfirmed);
+the governance doors are
+[operator-runbook.md](./operator-runbook.md#governing-what-the-librarian-proposed).
 
 ### Attribution is the server's
 
@@ -121,50 +116,50 @@ subset is listed in `hints.flagged` and echoed in the ack:
 capture_queue(id, kind, payload jsonb, blob_refs text[], submitted_by, hints jsonb,
               status, attempts, created_at, claimed_at, finished_at, result_ref, error,
               report jsonb,                                   -- the librarian's account
-              asked_at, parked_at, reply, trace jsonb,        -- the human loop
-              outcome jsonb)                                  -- the parked agent outcome
+              asked_at, parked_at, reply, trace jsonb,        -- the retired human loop
+              outcome jsonb)                                  -- the retired stored outcome
 ```
 
-`outcome` is the agent's structured account of its last pass over THIS capture, kept across a park
-so a re-file reuses it instead of re-reading the material — without it the park→resolve→re-file
-loop loses distilled content, and loses more the longer the material is.
+**The last five columns are LEGACY and are still created on a fresh database.** They were the human
+loop, back when a capture could wait on a person; nothing writes `asked_at`, `parked_at`, `reply` or
+`outcome` any more, and a reader of an old row still has to find the columns it expects. `trace`
+gains exactly one further event per row the startup migration below moves, and nothing after that.
+Retention still nulls `outcome` along with `payload`/`hints`.
 
 | Status | Means | Set by |
 |---|---|---|
-| `queued` | waiting for the librarian | submit, the expiry sweep, a reply or `requeue` |
+| `queued` | waiting for the librarian | submit, the expiry sweep, the startup migration below |
 | `claimed` | a worker holds a lease on it | `claim_next` |
 | `filed` | a page exists; `result_ref` points at it | the librarian |
-| `rejected` | a gate refused it, or a steward declined it; `error` says why | the librarian, or `stigmergy-queue reject` |
-| `resolved` | a steward handled it **outside the fast lane** — not a rejection; the report names what happened and, where there is one, the page or commit | `stigmergy-queue resolve` |
-| `needs_input` | a question is waiting on the submitter; `error` carries it, rendered as `question` | an `unresolved-entity` outcome on a capture that still has its one question |
-| `triage` | a steward has to decide where it belongs | the librarian |
+| `rejected` | a gate refused it; `error` says why and `report.reason_code` says which class | the librarian |
+| `resolved` | **LEGACY, read-only**: a steward closed the row by hand, back when a capture could park on a person. Nothing writes it; rows carrying it stay readable and purgeable | nothing |
 | `failed` | the librarian could not finish the item, or the attempts ran out; an `ingest_errors` row has the detail (stage `librarian` in the first case, `claim` in the second) | the librarian, or the expiry sweep |
 
-Terminal = `filed`, `rejected`, `resolved`, `failed`. `needs_input` and `triage` are **parked
-awaiting a human**, not terminal: retention never deletes material a person is about to be asked
-about. `resolved` is purged on the ordinary 30-day window like any other terminal row. `error` is
-the one "why is this row where it is" field, rendered by two names on the way out — `question` for
-a `needs_input` row, `error` for `failed`/`rejected`/`resolved`
+Every status but `queued` and `claimed` is terminal (`TERMINAL_STATUSES`), and `finish` may move a
+claim into `filed`, `rejected` or `failed` only (`FINISHED_STATUSES` — `resolved` is absent because
+nothing reaches it). `error` is the one "why is this row where it is" field
 ([ADR 014](../decisions/014-capture-queue-and-attribution.md)).
 
-### The human loop's four columns
+### The two retired states, and the migration that empties them
 
-All four are additive (`ALTER TABLE … ADD COLUMN IF NOT EXISTS`) and NULL on rows written before
-they existed; there is no backfill.
+`needs_input` and `triage` are `schema.RETIRED_STATUSES`. They were the two states a capture waited
+on a person in; a name the registry does not know is now proposed and filed instead. They are NAMED
+rather than deleted because two statements spell them:
 
-| Column | Means |
-|---|---|
-| `asked_at` | when this capture's **one** ask-back question was asked. Stamped on the first transition into `needs_input` and never cleared — not by the reply, not by a `requeue`, not by a lease redelivery. That is what makes "one ask per capture, ever" survive all three. |
-| `parked_at` | when the row entered its **current** park, so `list`/`show` can say how long a human has been waited on. Distinct from `created_at` (when the material arrived) and from `finished_at` (which stays NULL on a parked row, because retention counts from it). |
-| `reply` | the submitter's answer, bounded at 2000 characters (`schema.MAX_REPLY_CHARS`). Withheld from every read surface whenever the excerpt is — see [Withheld material](#withheld-material). It is the submitter's own free text, scanned by nothing, so a row whose material may not be read back must not hand back the sentence they wrote about it either. |
-| `trace` | what **humans** did to the row: `asked`, `replied`, `requeued`, `resolved`, `rejected` — each with an actor, a note and a database timestamp. `audit_log` records the call; this records the row. Bounded at 20 events, oldest dropped. |
+- `_CAPTURE_QUEUE_PARKED_MIGRATION` runs at startup, BEFORE the CHECK swap, and returns any row
+  still in either state to `queued` — clearing `error`, `claimed_at` and `parked_at` and appending
+  one `trace` event (`event: "requeued"`, `actor: "migration"`) saying the parked states retired and
+  the row is being re-filed under the rule that replaced them. Nothing a person was waiting on is
+  lost; it is simply filed. Every later start is a no-op, because no row can enter the states again.
+- the status CHECK is then swapped so the two words cannot come back.
 
-`status`'s CHECK constraint is named (`capture_queue_status_check`) and swapped when a new state has
-to join it — the one migration here that is not a plain `ADD COLUMN`. It must stay a single
-`DO $$` block (ONE statement, ONE transaction): a drop-then-add on an autocommit connection opens a
-window with no constraint, pays an `ACCESS EXCLUSIVE` validation on every process start, and races
-between concurrent starts. Its guard, built from `STATUSES`, makes it a no-op after the first run,
-and the predicate only ever widens so the previous release keeps working across it.
+`status`'s CHECK constraint is named (`capture_queue_status_check`) — the one migration here that is
+not a plain `ADD COLUMN`. It must stay a single `DO $$` block (ONE statement, ONE transaction): a
+drop-then-add on an autocommit connection opens a window with no constraint, pays an
+`ACCESS EXCLUSIVE` validation on every process start, and races between concurrent starts. Its guard
+asks BOTH halves — the constraint names every status in `STATUSES` **and** none in
+`RETIRED_STATUSES` — so it is a no-op after the first run and a constraint still admitting a retired
+word can never read as current.
 
 ### Claiming, leases and `attempts`
 
@@ -249,7 +244,7 @@ people's material enters it. The separate `R2_*` variables belong to
 [`scripts/r2_smoke.py`](../../scripts/r2_smoke.py) (`make r2-smoke`), a standalone credential
 check against the raw bucket.
 
-## `stigmergy-queue` — the steward's view
+## `stigmergy-queue` — the operator's view
 
 ```sh
 .venv/bin/stigmergy-queue list                          # depth per status + the newest submissions
@@ -258,47 +253,22 @@ check against the raw bucket.
 .venv/bin/stigmergy-queue claim --hold 60               # take one item; hold the lease, file nothing
 .venv/bin/stigmergy-queue reclaim --visibility-timeout 0    # release EVERY claimed row, right now
 .venv/bin/stigmergy-queue reclaim --visibility-timeout 1290  # ...only ones past the worker's lease
-
-# the drain: the three things a human can do with a PARKED row
-.venv/bin/stigmergy-queue requeue 7 --by steward --note "registered the entity, try again"
-.venv/bin/stigmergy-queue resolve 6 --by steward --note "folded into the person page by hand." \
-    --page "wiki/entities/Ada Lovelace.md" --commit 9f8e7d2
-.venv/bin/stigmergy-queue reject 9 --by steward --reason "duplicate of an existing customer page"
-
 .venv/bin/stigmergy-queue purge --dry-run               # retention: what would go
 .venv/bin/stigmergy-queue purge                         # retention: delete payload+hints
 ```
 
-### The drain
+### Nothing is drained by hand
 
-The three dispositions share one guarded transition (`queue.dispose`) and one set of rules,
-enforced in SQL rather than in the CLI:
+**Five subcommands, and none of them moves a row on a person's behalf.** A capture reaches a
+terminal state through the librarian or through the expiry sweep, and nowhere else: the three
+dispositions this CLI used to carry (`requeue`, `resolve`, `reject`) retired with the parked states
+they operated on. What replaced them is a decision about an IDENTITY rather than about a queue row,
+taken after the page is already filed, through `stigmergy-entities` and its three sibling doors —
+[operator-runbook.md](./operator-runbook.md#governing-what-the-librarian-proposed).
 
-- they move a row **only** out of `triage` or `needs_input` — a `claimed` row is refused by name
-  ("a worker may be mid-item") and a terminal row is refused too;
-- they **never touch `attempts`**, so the lease fence stays monotonic;
-- they record the actor and the note on the row's own `trace`, which `show` prints.
-
-`--by` is **attribution, not authorization**: the CLI records who you say you are and does not
-check it — an operator with the DSN already has the database.
-
-**A `triage` row that is an identity question** — an unresolvable entity
-(`SITUATION_UNRESOLVED_ENTITY`) or a page type the fast lane does not file
-(`SITUATION_UNSUPPORTED_TYPE`) — can still be drained with the three commands above, but minting a
-new entity from one goes through `stigmergy-entities` (`approve`/`reject`, the only writer of
-`ops/entity-registry.json` and `wiki/entities/` in this codebase): see
-[operator-runbook.md → Governed entity birth](./operator-runbook.md#draining-parked-rows)
-and [ADR 016](../decisions/016-human-loop-and-entity-governance.md). `stigmergy-entities reject`
-and its `--requeue` flag ride this same `dispositions.reject`/`.requeue` seam.
-
-> **`--note` and `--reason` reach the submitter's report verbatim.** They never touch the material
-> path, so gitleaks and the PII gate never see them. `dispositions.clean` sanitizes (control
-> characters) and bounds (500 characters) them on every disposition — not in the CLI, so
-> `stigmergy-entities reject --reason` gets the same cleaning. What they SAY is the steward's
-> responsibility, and both `--help` strings say so.
-
-`resolve` with neither `--page` nor `--commit` still works but warns: it leaves the submitter's
-report silent about where their material went.
+`show` still prints a row's `trace`, because an old row's history is still its history: what a
+steward did to it while captures could park, and the one `requeued` event the startup migration
+appended on the way out of a retired state.
 
 `--dsn` (or `$STIGMERGY_INDEX_DSN`) picks the database; `--json` makes any command machine-readable.
 Errors here are **local and specific**, unlike the posture over HTTP.
@@ -355,11 +325,11 @@ FROM capture_queue WHERE status NOT IN ('filed', 'rejected') ORDER BY created_at
 days** (`retention.DEFAULT_RETENTION_DAYS`). What survives: `id`, `submitted_by`, `status`, all
 three timestamps, `attempts` and `result_ref` — so the trace and the latency measurement stay intact
 and a purged submission is still readable as history (`brain_submissions` marks it
-`payload_purged: true` and returns no excerpt). `outcome` is on the list because it holds the full
-drafted body of every page a distillation produced; `finish` and `dispose` clear it on every
-terminal transition, so retention is the belt-and-braces layer. It is deliberately **not** part of
-the eligibility guard, which stays `payload IS NOT NULL OR hints IS NOT NULL` so the purge is
-idempotent.
+`payload_purged: true` and returns no excerpt). `outcome` is on the list because a row written
+before the parked states retired can still hold the full drafted body of every page a distillation
+produced; nothing writes that column any more, so this is now the only thing that clears it. It is
+deliberately **not** part of the eligibility guard, which stays
+`payload IS NOT NULL OR hints IS NOT NULL` so the purge is idempotent.
 
 **A second eligibility clause ignores the window entirely.** A `rejected` row whose `reason_code` is
 a secret or PII match is purged by every run **regardless of age** — `purge_secret_capture_immediately`
@@ -377,7 +347,7 @@ the purge; the purge does not do it on every run.
 
 ## Withheld material
 
-Some rows are listed with **no excerpt, no `reply` and no client hints**. `withheld_reason` carries
+Some rows are listed with **no excerpt and no client hints**. `withheld_reason` carries
 the sentence saying why, on `brain_submissions` and on `stigmergy-queue list` alike. What survives:
 id, submitter, status, all three timestamps, `attempts`, `blob_refs`, the `trace` (code-built or
 steward-authored notes, never captured material) and the refusal sentence itself.
@@ -391,18 +361,18 @@ priority order — the query decides the boolean, this function picks which sent
 | unscanned | `status` is `failed` | `WITHHELD_UNSCANNED_NOTE` — the run failed before the scan reached it, and unlike a queued capture nothing retries it; ask an operator |
 | matched | `report.reason_code` is `secret` or `pii` — or the row is `rejected` with **no** `reason_code` at all | `WITHHELD_MATERIAL_NOTE` — refused as a secrets or personal-data match; the refusal itself names what matched and where |
 
-Every other state — `needs_input`, `triage`, `filed`, `resolved`, and a `rejected` row for any other
-reason (`duplicate`, `steering`, `steward`) — shows its excerpt normally: `needs_input` and `triage`
-are the two states where a submitter must re-read what they sent to answer the question, or a
-steward must to triage it. The window is keyed on "has the gate run", never on `TERMINAL_STATUSES`.
+Every other state — `filed`, the legacy `resolved`, and a `rejected` row for any other reason
+(`duplicate`, `steering`, `malformed-frontmatter`, or the legacy `steward`) — shows its excerpt
+normally: the gate has run and said nothing about this material. The window is keyed on "has the
+gate run", never on `TERMINAL_STATUSES`.
 
 Four properties, each load-bearing:
 
 - **Suppressed, never redacted, and never truncated around the match** — gitleaks reports a rule
   and a line, not a guaranteed span, so a redaction would be a guess presented as a guarantee.
 - **Decided in the query** (`capture.queue._MATERIAL_WITHHELD`), not at each surface, so the value
-  never leaves Postgres for a withheld row. Both reads of the `reply` column — `query_submissions`
-  and `get_submission_trace` — go through that one expression. The hints are narrowed rather than
+  never leaves Postgres for a withheld row. Both read paths — `query_submissions` and
+  `get_submission_trace` — go through that one expression. The hints are narrowed rather than
   emptied: the SQL drops the `client` and `declared_frontmatter` sub-objects.
 - **Keyed on `report.reason_code`**, the structured half of a refusal (`capture.schema`), never on
   the refusal's prose. A `rejected` row carrying no `reason_code` is withheld too, fail-closed —
@@ -424,8 +394,12 @@ row keeps its payload, and therefore keeps both.
 - `capture.queue.claim_next(conn, ...)` — the claim primitive. Never write a second claim query,
   and never `SELECT ... WHERE status = 'queued'` without `FOR UPDATE SKIP LOCKED`.
 - `capture.queue.finish(conn, id, status=..., expected_attempts=..., result_ref=...)` — the one
-  terminal/parked transition, guarded by state **and** fencing token. Pass the `attempts` value the
+  terminal transition, guarded by state **and** fencing token. Pass the `attempts` value the
   claim returned; `expected_attempts` is required, not optional.
+- `capture.schema.clean_note(text)` — the ONE seam an operator-typed string crosses on its way into
+  a ledger row or a report: control characters stripped, newlines flattened, clipped word-safe.
+- `capture.decisions.record_decision` / `latest_decisions` / `latest_decision_for` /
+  `recent_decisions` — the governance ledger, below every door that decides an identity.
 - `capture.queue.query_submissions` — the ONE listing query (scope, status filter, ordering,
   paging). New surfaces attach through `list_own_submissions` / `list_all_submissions`.
 - `capture.evidence.content_key(bytes)` — the key scheme, as a pure function.
@@ -437,11 +411,15 @@ row keeps its payload, and therefore keeps both.
 
 - **Never take `submitted_by` from client input** — not from an argument, `hints` or frontmatter.
   It comes from the resolved identity or the submission does not happen.
-- **Never open a second write path.** All three MCP tools go through `BrainService._call`; a
+- **Never open a second write path.** Both MCP tools go through `BrainService._call`; a
   surface that writes to `capture_queue` directly skips rate limiting, the audit row and
   attribution at once. The three operator CLIs (`stigmergy-queue`, `stigmergy-meeting`,
-  `stigmergy-drive`) are the declared exception: they hold the DSN, so `--by` there is
+  `stigmergy-drive`) are the declared exception: they hold the DSN, so `--submitted-by` there is
   attribution, not authorization.
+- **Never add a transition that moves a row on a person's behalf.** A capture is finished by the
+  worker holding its claim or by the expiry sweep; the parked states and the three dispositions over
+  them are retired, and a governance decision is about an IDENTITY, taken after the filing, through
+  `stigmergy.entities`.
 - **Never generalize the index rebuild's `DROP`.** `store.init_schema` drops `pages_index` by
   name; the four tables in `schema.DURABLE_TABLES` and `review_decisions` share that database and
   cannot be rebuilt from git — [hybrid-index.md → Sharing the database with the durable
@@ -475,7 +453,7 @@ Connecting a client to the server in the first place is
 
 `tests/capture/` and the write-path additions under `tests/server/`
 (`test_service_capture.py`). The keyless, DB-less suites are `test_schema.py`,
-`test_dispositions.py`, `test_evidence.py` (on `MemoryEvidenceStore`), `test_latency.py` and
+`test_evidence.py` (on `MemoryEvidenceStore`), `test_latency.py` and
 `test_adversarial_cat7.py` — forged frontmatter, one of the three armed adversarial categories,
 named `test_adversarial_cat7_*` so a `-k` collection finds every case. The `_pg` and CLI suites
 need the real database: **exactly-once claiming** needs real Postgres (`FOR UPDATE SKIP LOCKED` is

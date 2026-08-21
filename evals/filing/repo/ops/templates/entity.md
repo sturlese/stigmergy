@@ -2,13 +2,14 @@
 type: entity
 title: "<Entity Name>"
 status: developing        # seed|developing|mature|evergreen
-entity_type: organization # person|organization|product|tool|repository|place
+entity_type: organization # person|organization|product|tool|repository|place|project
 role: ""
 aliases: []
 created: <YYYY-MM-DD>
 updated: <YYYY-MM-DD>
 tags: [entity]
 entity: []  # THIS PAGE'S OWN registry id, once minted (M8a) — e.g. entity: ["<own-id>"]
+approved_by: ""  # who confirmed this identity; EMPTY = proposed by the librarian, waiting on a steward
 related: []
 sources: []
 ---

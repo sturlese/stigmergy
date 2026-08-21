@@ -1,17 +1,16 @@
-// The inbox: every item parking on a human, oldest first, one list across the three kinds. The
-// same read the Slack doorbell rings from.
+// The inbox: everything waiting on a steward, one list across the three kinds — the identities
+// and spellings the librarian proposed, and the nightly repairs. The same read the Slack doorbell
+// rings from.
 
 import { api } from "../api.js";
-import { door, itemKind, repairKind, situation as situationCopy, status as statusCopy, word } from "../copy.js";
-import { banner, chips, clickable, el, emptyState, fmtAge, fmtWhen, keyDot, mono, pill, render, statusPill, wordPill } from "../ui.js";
+import { door, itemKind, repairKind, word } from "../copy.js";
+import { banner, chips, clickable, el, emptyState, fmtWhen, keyDot, mono, pill, render, wordPill } from "../ui.js";
 import { go, loading } from "./common.js";
 
 const FILTERS = [
-  { key: "all", label: "Everything", explain: "every item owing a person a decision, oldest first" },
-  { key: "entity", label: "Identity decisions", kind: "entity-proposal", who: "human" },
-  { key: "parked", label: "Parked captures", kind: "parked-capture", who: "human" },
-  { key: "submitter", label: "— of those, on their submitter", who: "human",
-    explain: "parked captures whose one question is still waiting for the submitter's answer; a steward can answer too, through the MCP tool the capture names" },
+  { key: "all", label: "Everything", explain: "every item owing a steward a decision" },
+  { key: "identity", label: "Proposed entities", kind: "identity-proposal", who: "model" },
+  { key: "alias", label: "Proposed spellings", kind: "alias-proposal", who: "model" },
   { key: "repair", label: "Repair proposals", kind: "repair-proposal", who: "model" },
 ];
 
@@ -27,12 +26,11 @@ export async function inboxView(host, filterKey) {
   if (sub && FILTERS.some((f) => f.key === sub)) state.filter = sub;
   await loading(host, async () => {
     const inbox = await api.get("inbox");
-    const items = [...inbox.items].sort((a, b) => (b.parked_age_ms || 0) - (a.parked_age_ms || 0) || (a.created_at || "").localeCompare(b.created_at || ""));
+    const items = [...inbox.items];
     const counts = {
       all: items.length,
-      entity: inbox.counts["entity-proposal"] || 0,
-      parked: inbox.counts["parked-capture"] || 0,
-      submitter: inbox.waiting_on_submitter || 0,
+      identity: inbox.counts["identity-proposal"] || 0,
+      alias: inbox.counts["alias-proposal"] || 0,
       repair: inbox.counts["repair-proposal"] || 0,
     };
     const visible = items.filter((i) => matches(i, state.filter));
@@ -45,8 +43,8 @@ export async function inboxView(host, filterKey) {
         inbox.truncated ? banner("warn", `showing the first ${inbox.limit} items — more are waiting than this list can carry`) : null,
         visible.length
           ? el("div", { class: "inbox-list" }, visible.map(inboxRow))
-          : emptyState(state.filter === "all" ? "nothing is waiting on a person" : "nothing of this kind is waiting",
-            state.filter === "all" ? "a permanent zero would mean nobody is capturing anything — check Captures" : "")));
+          : emptyState(state.filter === "all" ? "nothing is waiting on a steward" : "nothing of this kind is waiting",
+            state.filter === "all" ? "every capture files on its own; a proposal appears here only when the librarian met a name the registry did not know" : "")));
   });
 }
 
@@ -57,23 +55,23 @@ function clip(text, n) {
 
 function matches(item, filter) {
   if (filter === "all") return true;
-  if (filter === "submitter") return item.kind === "parked-capture" && item.status === "needs_input";
   const f = FILTERS.find((x) => x.key === filter);
   return f && item.kind === f.kind;
 }
 
 function inboxRow(item) {
   const kind = itemKind(item.kind);
-  const target = item.kind === "entity-proposal" ? `entities/${item.id}`
-    : item.kind === "parked-capture" ? `captures/${item.id}` : `repairs/${item.id}`;
+  const target = item.kind === "identity-proposal" ? `entities/${item.id}`
+    : item.kind === "alias-proposal" ? "entities" : `repairs/${item.id}`;
   let title, meta;
-  if (item.kind === "entity-proposal") {
-    const names = item.subjects && item.subjects.length ? item.subjects : [item.subject || "(nothing recorded)"];
-    title = el("span", {}, names.length > 1 ? `${names.length} names to place: ` : "Who or what is ", ...names.flatMap((n, i) => [i ? ", " : "", el("strong", {}, `«${n}»`)]), names.length > 1 ? "" : "?");
-    meta = [situationCopy(item.situation).label, `sent by ${item.submitted_by}`];
-  } else if (item.kind === "parked-capture") {
-    title = el("span", { title: item.summary || "" }, clip(item.summary || "(no summary recorded)", 180));
-    meta = [statusCopy(item.status).label, `sent by ${item.submitted_by}`];
+  if (item.kind === "identity-proposal") {
+    title = el("span", {}, el("strong", {}, item.name || item.id), el("span", { class: "muted" }, ` · ${item.entity_type || "entity"}`));
+    meta = [clip(item.summary || "(no summary on the page yet)", 180)];
+    if (item.anchored_pages && item.anchored_pages.length) meta.push(`filed against it: ${item.anchored_pages.length}${item.anchored_total > item.anchored_pages.length ? "+" : ""} page(s)`);
+    if (item.merge_candidates && item.merge_candidates.length) meta.push(`might be: ${item.merge_candidates.map((c) => c.name).join(", ")}`);
+  } else if (item.kind === "alias-proposal") {
+    title = el("span", {}, "«", el("strong", {}, item.alias), "» as a spelling of ", el("strong", {}, item.entity_name || item.entity_id));
+    meta = ["the librarian met it in a capture and anchored the page to the registered entity"];
   } else {
     title = el("span", { title: item.rationale || "" }, clip(item.rationale || "(no rationale recorded)", 180));
     const kinds = (item.ops_preview && item.ops_preview.kinds) || [];
@@ -84,13 +82,13 @@ function inboxRow(item) {
   return clickable(el("div", { class: "inbox-row" },
     el("div", { class: `stripe k-${kind.who}` }),
     el("div", {},
-      el("div", { class: "row" }, pill(kind.label, kind.who, { small: true }), item.kind === "parked-capture" ? statusPill(item.status, { small: true, short: true }) : null,
+      el("div", { class: "row" }, pill(kind.label, kind.who, { small: true }),
         item.decision ? wordPill(item.decision.verdict, { small: true }) : null),
       el("div", { class: "title" }, title),
       el("div", { class: "meta" }, meta.map((m) => el("span", {}, m)))),
     el("div", { class: "side" },
-      el("span", {}, item.parked_age_ms ? `waiting ${fmtAge(item.parked_age_ms)}` : (item.created_at ? `since ${fmtWhen(item.created_at)}` : "")),
-      el("span", {}, mono(`#${item.id}`, "nowrap")),
+      el("span", {}, item.created ? `since ${item.created}` : (item.created_at ? `since ${fmtWhen(item.created_at)}` : "")),
+      el("span", {}, mono(item.id, "nowrap")),
       item.decision ? el("span", { class: "row" }, keyDot("human", 6), `${word(item.decision.verdict).label} by ${item.decision.actor} via ${door(item.decision.source)}`) : null)),
   () => go(target));
 }

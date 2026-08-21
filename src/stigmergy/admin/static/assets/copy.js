@@ -26,6 +26,8 @@ export const WORD = {
   approve: { label: "approved", who: "git" }, approved: { label: "approved", who: "model" },
   reject: { label: "declined", who: "code" }, rejected: { label: "declined", who: "code" },
   request_changes: { label: "changes requested", who: "human" },
+  merge: { label: "merged", who: "git" },
+  // legacy verdicts, on ledger rows from before captures stopped parking
   requeue: { label: "requeued", who: "model" }, resolve: { label: "resolved by hand", who: "human" },
   applied: { label: "applied", who: "git" }, pending: { label: "waiting", who: "human" },
   failed: { label: "failed", who: "fail" }, failure: { label: "failed", who: "fail" },
@@ -45,7 +47,7 @@ export function word(raw) {
 
 // A decision as a past-tense verb in a sentence ("marc declined identity decision #41").
 const DECISION_VERB = {
-  approve: "approved", reject: "declined", request_changes: "asked for changes to",
+  approve: "approved", reject: "declined", merge: "merged", request_changes: "asked for changes to",
   requeue: "requeued", resolve: "resolved by hand",
 };
 
@@ -60,13 +62,9 @@ export const STATUS = {
   claimed: { label: "Being filed now", short: "filing", who: "model",
     explain: "a worker holds the lease; the agent is drafting a page" },
   filed: { label: "Landed in git", short: "filed", who: "git",
-    explain: "a page exists; the eight gates approved exactly this diff" },
-  needs_input: { label: "Waiting on its submitter", short: "asked", who: "human",
-    explain: "the librarian asked one question; only the submitter (or a steward) can answer it" },
-  triage: { label: "Waiting on a steward", short: "parked", who: "human",
-    explain: "parked for a person to place, register or decline" },
+    explain: "a page exists; the nine gates approved exactly this diff — and any entity it proposed exists too, waiting on a steward" },
   resolved: { label: "Handled by hand", short: "resolved", who: "human",
-    explain: "a steward used the material outside the fast lane and said where it went" },
+    explain: "a steward closed it by hand, back when captures could park — nothing writes this any more" },
   rejected: { label: "Declined", short: "declined", who: "code",
     explain: "a gate refused it, or a steward declined it; the reason reached the submitter" },
   failed: { label: "Could not finish", short: "failed", who: "fail",
@@ -78,28 +76,14 @@ export function status(word) {
 }
 
 // Which statuses a chart stacks, in the order that keeps red and green apart (CVD).
-export const OUTCOME_ORDER = ["filed", "resolved", "needs_input", "triage", "queued", "claimed", "rejected", "failed"];
-
-// ── the two kinds of identity situation ──────────────────────────────────────────────────────
-export const SITUATION = {
-  "unresolved-entity": { label: "A name the registry does not know",
-    explain: "the material is about something no registered entity resolves to. Register it, "
-      + "alias it onto an existing entity, or decline." },
-  "unsupported-type": { label: "A page type the fast lane does not file",
-    explain: "the agent judged this to be a page about one specific person (or another type "
-      + "the librarian never files on its own) — an identity claim a steward has to make." },
-};
-
-export function situation(word) {
-  return SITUATION[word] || { label: word, explain: "" };
-}
+export const OUTCOME_ORDER = ["filed", "resolved", "queued", "claimed", "rejected", "failed"];
 
 // ── review-queue item kinds ──────────────────────────────────────────────────────────────────
 export const ITEM_KIND = {
-  "entity-proposal": { label: "Identity decision", who: "human",
-    explain: "a parked capture named something the registry does not know — mint it, alias it in the knowledge repo, or decline it" },
-  "parked-capture": { label: "Parked capture", who: "human",
-    explain: "a capture waiting on a person: requeue it, resolve it by hand, or decline it" },
+  "identity-proposal": { label: "Proposed entity", who: "model",
+    explain: "the librarian met a name the registry did not know and created the entity page itself, unconfirmed — approve it, merge it into the entity it really is, or decline it" },
+  "alias-proposal": { label: "Proposed spelling", who: "model",
+    explain: "a name the material used for a registered entity, which the registry did not list — approve it as one of its names, or decline it" },
   "repair-proposal": { label: "Repair proposal", who: "model",
     explain: "the nightly proposer read the gardener's findings and drafted a fix; approving "
       + "applies exactly that as one commit" },
@@ -129,23 +113,23 @@ export function repairKind(word) {
   return REPAIR_KIND[word] || { label: word || "edits", explain: "" };
 }
 
-// ── the pre-mint registry check ──────────────────────────────────────────────────────────────
+// ── the registry check: the birth gate's own verdict on a name ──────────────────────────────
 export const VERDICT = {
   registered: { label: "Already registered", tone: "git",
-    explain: "this spelling now resolves to a registered entity — there is nothing to mint. "
-      + "Requeue the capture and the librarian anchors it." },
+    explain: "this spelling already resolves to a registered entity — a proposal with this verdict "
+      + "is that entity under another name: merge it." },
   collides: { label: "Would collide", tone: "fail",
-    explain: "the mint gate will refuse this name: it would be confused with an entity that "
-      + "already exists. If it is the same thing, add the spelling as an alias of that entity in "
-      + "the knowledge repo; if it is different, pick a name that cannot be confused." },
+    explain: "the birth gate refuses this name: it would be confused with an entity that already "
+      + "exists. If it is the same thing, merge (or add the spelling as an alias); if it is "
+      + "different, it needs a name that cannot be confused." },
   similar: { label: "Looks similar", tone: "human",
-    explain: "nothing blocks a mint, but these registered entities share a distinctive word — "
-      + "check they are not the same thing under another name before creating a second one." },
+    explain: "nothing blocks it, but these registered entities share a distinctive word — "
+      + "check they are not the same thing under another name before confirming a second one." },
   clear: { label: "Nothing like it registered", tone: "accent",
     explain: "no registered entity resolves to it or would be confused with it — the gate still "
-      + "checks again against the repo as it stands when you mint" },
+      + "checks again against the repo as it stands when the commit lands" },
   unchecked: { label: "Could not check", tone: "code",
-    explain: "this server has no readable registry to check against; the mint gate still runs" },
+    explain: "this server has no readable registry to check against; the birth gate still runs" },
 };
 
 export function verdict(word) {
@@ -259,43 +243,43 @@ export const PAGE = {
     ],
   },
   inbox: {
-    title: "Inbox", purpose: "everything parking on a human, oldest first",
+    title: "Inbox", purpose: "everything waiting on a steward",
     read: [
-      "Three kinds of item end up here: an identity decision (a name the registry does not know), "
-      + "a parked capture (waiting on its submitter or on a steward), and a repair proposal.",
+      "Three kinds of item end up here: an entity the librarian proposed (a name the registry did "
+      + "not know — the page already exists), a spelling it proposed for a registered entity, and a "
+      + "repair proposal.",
       "This is the same list the Slack doorbell rings from — a decision taken on any door closes "
       + "the item everywhere, and the ledger's latest verdict shows here when one exists.",
-      "Open an item to act on it; the action always says what it will do before it does it.",
+      "Nothing here waits on a submitter: every capture is filed, refused or failed on its own.",
     ],
   },
   captures: {
     title: "Captures", purpose: "what people sent, and what the librarian did with it",
     read: [
       "A capture is archived the moment it arrives, then claimed by the librarian, drafted by the "
-      + "agent, and gated by code. It ends filed (landed in git), declined, failed — or parked on a "
-      + "person.",
-      "Only a parked row takes an action: Requeue sends it back to the librarian, Resolve by hand "
-      + "closes it as handled by you, Decline closes it with a reason the submitter reads.",
+      + "agent, and gated by code. It ends filed (landed in git), declined or failed — never parked "
+      + "on a person.",
+      "A filed row says which page it became and which entities the librarian proposed while "
+      + "filing it; a refused or failed row carries the librarian's own sentence.",
       "Reclaim and Retention purge act on the whole queue and say exactly what they will touch.",
     ],
   },
   entities: {
-    title: "Entities", purpose: "identity decisions, and the vocabulary they grow",
+    title: "Entities", purpose: "the identities the librarian proposed, and the vocabulary they grow",
     read: [
-      "An entity is born through a human: the agent proposes a name, a steward approves, and only "
-      + "then are the page and the registry entry minted — one commit, Approved-by you.",
-      "Before you mint, each name is checked against the registry this server serves with the "
-      + "mint gate's own rule: already registered, would collide, looks similar, or clear.",
-      "A collision means the registry already has a name this one would be confused with. If it "
-      + "is the same thing, add this spelling as an alias of that entity in the knowledge repo and "
-      + "requeue. If it is genuinely different, mint it under a name that cannot be confused.",
+      "The librarian files first and governs after: a name the registry does not know becomes an "
+      + "entity page at once, marked unconfirmed, with the capture anchored to it. You approve it, "
+      + "merge it into the entity it really is, or decline it — one commit each, Decided-by you.",
+      "Each proposal is checked against the rest of the registry with the birth gate's own rule: "
+      + "already registered, would collide, looks similar, or clear — a strong hint for Merge.",
+      "Register an entity is for a name nobody has captured about yet; it is born confirmed.",
     ],
   },
   repairs: {
     title: "Repairs", purpose: "fixes the nightly proposer drafted from the gardener's findings",
     read: [
       "Every proposal is one approvable change. Approve applies exactly its edits through the "
-      + "librarian's eight gates as one commit; Decline records why, which stops it being proposed "
+      + "librarian's nine gates as one commit; Decline records why, which stops it being proposed "
       + "again.",
       "Read what it would change — for a drafted body the draft IS the review; for a removal, "
       + "which pages stop existing.",
@@ -362,5 +346,4 @@ export function page(key) {
   return PAGE[key] || { title: key, purpose: "", read: [] };
 }
 
-export const VERBATIM_HINT = "reaches the submitter verbatim — never a secret, never personal data";
 export const ACTOR_HINT = "attribution, not authorization — recorded on the row's history, like --by";

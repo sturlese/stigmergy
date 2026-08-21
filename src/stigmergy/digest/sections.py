@@ -17,7 +17,7 @@ from stigmergy.capture import decisions
 from stigmergy.capture import schema as capture_schema
 from stigmergy.gardener import schema as gardener_schema
 from stigmergy.gardener import store as gardener_store
-from stigmergy.review_kinds import KIND_ENTITY_PROPOSAL
+from stigmergy.review_kinds import KIND_IDENTITY_PROPOSAL, LEGACY_KIND_ENTITY_PROPOSAL
 from stigmergy.server.acl import visible
 from stigmergy.text import parse_result_ref
 
@@ -119,13 +119,18 @@ def _pages_filed(conn, *, since, until, audiences: set[str]) -> dict:
 
 _ENTITIES_BORN_SQL = (
     "SELECT count(*) FROM review_decisions "
-    "WHERE item_kind = %(item_kind)s AND verdict = %(verdict)s AND created_at >= %(since)s "
-    "AND created_at < %(until)s")
+    "WHERE item_kind = ANY(%(item_kinds)s) AND verdict = %(verdict)s "
+    "AND created_at >= %(since)s AND created_at < %(until)s")
+
+# An entity is born when a steward approves an identity proposal. The ledger also holds approvals
+# under the kind the parked-capture mint door wrote before ADR 041; a week's window straddling the
+# change would silently under-count the births it saw without them.
+_BIRTH_KINDS = [KIND_IDENTITY_PROPOSAL, LEGACY_KIND_ENTITY_PROPOSAL]
 
 
 def _entities_born_count(conn, *, since, until) -> int:
     with conn.cursor() as cur:
-        cur.execute(_ENTITIES_BORN_SQL, {"item_kind": KIND_ENTITY_PROPOSAL,
+        cur.execute(_ENTITIES_BORN_SQL, {"item_kinds": _BIRTH_KINDS,
                                          "verdict": decisions.APPROVE, "since": since,
                                          "until": until})
         return cur.fetchone()[0]

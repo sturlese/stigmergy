@@ -1,18 +1,18 @@
-"""`run_filing._drive` — the loop that turns one capture into scored phases, driven for real.
+"""`run_filing._drive` — the loop that turns one capture into a scored phase, driven for real.
 
 Every other guard on this instrument is keyless, and `_drive` is the one part that cannot be: it
-submits through the real queue, drains with `worker.process_next` against a real `git worktree` and
-the eight gates, and sends a stored reply back through `BrainService.reply`. Its ask-back branch —
-the SECOND scored phase of a parking capture — is reached by nothing else in this suite and by no
-keyless run, because the offline double parks only on an explicit `DOUBLE:` directive and the
-golden captures carry none on purpose. Left unguarded, a bug there is first seen on a paid run,
-several agent passes in.
+submits through the real queue and drains with `worker.process_next` against a real `git worktree`
+and the nine gates. The branch nothing else in this suite reaches is the PROPOSING one — the
+capture whose name the registry does not know, which now files with an entity page created beside
+it in the same commit rather than stopping on a question. The golden captures reach it only on a
+paid run, because the offline double proposes only on an explicit `DOUBLE:propose=` directive and
+they carry none on purpose. Left unguarded, a bug there is first seen several agent passes into a
+measurement.
 
 So this file owns its own directive-carrying material, exactly as the golden manifest says such a
 test should ("the keyless sensitivity tests own their own directive-carrying material"). It scores
-nothing about any backend's judgment: what it proves is that the loop composes — two phases for a
-park, one for a plain filing, and a recorded MISS rather than a vanished phase when a backend does
-not park at all.
+nothing about any backend's judgment: what it proves is that the loop composes — ONE phase per
+capture, and a `proposals` observation the scorer can read on the road that produces one.
 
 It is also the only test in the suite that exercises `support.build_repo(source=…)`, the seam that
 lets the eval seed a run from its own frozen mini knowledge repo instead of the librarian
@@ -29,28 +29,27 @@ import pytest
 
 from evals import eval_history, run_filing
 from stigmergy.capture import schema
+from stigmergy.entities.generator import canonical_id_for
 from stigmergy.kernel.frontmatter import split_frontmatter
 from stigmergy.kernel.registry import load_registry
 from stigmergy.librarian import githubapp, worker
 from stigmergy.librarian.agent import build_agent
-from stigmergy.server.service import BrainService
-from stigmergy.server.settings import Settings as ServerSettings
 from tests import testdb
 from tests.librarian import support
 
 FIXTURE_REPO = run_filing.FIXTURE / "repo"
 
-PARKING_MATERIAL = """The Halcyon Grid programme has been running for two months and the notes
+PROPOSED_NAME = "Halcyon Grid"
+
+PROPOSING_MATERIAL = f"""The {PROPOSED_NAME} programme has been running for two months and the notes
 about it are scattered across three chat threads. This capture pulls them together.
 
-DOUBLE:triage-entity=Halcyon Grid
+DOUBLE:propose={PROPOSED_NAME}
 """
 
 PLAIN_MATERIAL = """The two depots connected last month have run clean since, and the dispatch
 schedules migrated without an incident worth recording.
 """
-
-REPLY = "Halcyon Grid is our internal name for the Northwind Freight pilot — file it there."
 
 _FIXTURE_REGISTRY = load_registry(str(FIXTURE_REPO / "ops" / "entity-registry.json"))
 
@@ -65,13 +64,13 @@ def _first_registry_entity() -> str:
     return next(iter(_FIXTURE_REGISTRY.entities))
 
 
-# TWO anchors, because the double reaches them by two different roads and they are no longer the
-# same entity: an ordinary capture takes the registry's first entry, while a capture re-filed after
-# a reply takes whatever the REPLY names (`DoubleAgent._resolve_reply`). One constant for both was
-# a coincidence of the fixture, not a property of the double.
+# TWO anchors, because the double reaches them by two different roads: an ordinary capture takes the
+# registry's first entry, while a proposing one anchors to the identity it just proposed — an id the
+# fixture's registry does not carry at all until the filing's own commit publishes it. DERIVED
+# through the generator's own `canonical_id_for`, never typed: an id is `slugify(name)` and a
+# literal here would silently stop describing the double the day either rule moved.
 ANCHORED_BY_DEFAULT = {"kind": "entity", "ids": [_first_registry_entity()]}
-ANCHORED_BY_THE_REPLY = {"kind": "entity",
-                         "ids": [_FIXTURE_REGISTRY.canonical_id("Northwind Freight")]}
+ANCHORED_BY_THE_PROPOSAL = {"kind": "entity", "ids": [canonical_id_for(PROPOSED_NAME)]}
 
 
 @pytest.fixture()
@@ -114,8 +113,7 @@ def _drive(rig, tmp_path, capture: dict, entry: dict) -> list:
     conn, deps, counting, env = rig
     return run_filing._drive(conn, deps, counting, env, capture, entry, materials=tmp_path,
                              schema=schema, worker=worker, support=support,
-                             split_frontmatter=split_frontmatter, brain_service=BrainService,
-                             server_settings=ServerSettings)
+                             split_frontmatter=split_frontmatter)
 
 
 def _capture(material: str, kind: str = "raw") -> dict:
@@ -123,47 +121,60 @@ def _capture(material: str, kind: str = "raw") -> dict:
             "submitted_by": "dana@stigmergy.test", "hints": {}}
 
 
-def test_a_parking_capture_is_scored_as_two_phases_across_the_real_ask_back_loop(rig, tmp_path):
-    """Park, reply, re-file — and the reply travels through `BrainService.reply`, the answer
-    channel a human actually uses, rather than an UPDATE this test wrote itself. A loop tested
-    against a hand-written row would prove nothing about the door the reply comes through."""
-    materials = _material(tmp_path, "park.md", PARKING_MATERIAL)
+def test_a_proposing_capture_is_scored_as_ONE_phase_that_filed(rig, tmp_path):
+    """**REPLACES the two-phase ask-back test (ADR 041).** A capture naming something the registry
+    does not know used to park, wait for a reply through `BrainService.reply`, and be scored twice.
+    It files in one pass now: the entity page, the regenerated registry and the note land in a
+    single commit, and a steward confirms the identity afterwards from an inbox no measurement
+    touches.
+
+    Driven end to end rather than asserted on the scorer, because the composition is the thing that
+    can break: `_drive` submits, drains once, observes and returns exactly one phase. A second phase
+    appearing here would invent denominators nobody wrote, and a phase that filed while the
+    instrument reported nothing observable about the proposal would score `proposals` 0.00 for every
+    backend forever.
+    """
+    materials = _material(tmp_path, "propose.md", PROPOSING_MATERIAL)
     entry = {"id": "T01",
-             "expect": {"status": schema.NEEDS_INPUT, "park_question": ["Halcyon Grid"]},
-             "reply": REPLY,
-             "after_reply": {"status": schema.FILED, "type": "note", "folder": "wiki/notes",
-                             "anchor": ANCHORED_BY_THE_REPLY}}
+             "expect": {"status": schema.FILED, "type": "note", "folder": "wiki/notes",
+                        "proposals": [PROPOSED_NAME], "anchor": ANCHORED_BY_THE_PROPOSAL}}
 
-    phases = _drive(rig, materials, _capture("park.md"), entry)
+    phases = _drive(rig, materials, _capture("propose.md"), entry)
 
-    assert [p["phase"] for p in phases] == ["park", "after_reply"]
-    assert phases[0]["observed"]["status"] == schema.NEEDS_INPUT
-    assert phases[0]["observed"]["park_question"] == ["Halcyon Grid"]
-    assert phases[0]["facets"] == {"status": True, "park_question": True}
-    assert phases[1]["observed"]["status"] == schema.FILED
-    assert phases[1]["facets"] == dict.fromkeys(entry["after_reply"], True)
+    assert [p["phase"] for p in phases] == ["only"]
+    assert phases[0]["observed"]["status"] == schema.FILED
+    assert phases[0]["observed"]["proposals"] == [PROPOSED_NAME]
+    assert phases[0]["facets"] == dict.fromkeys(entry["expect"], True)
 
 
-def test_the_re_file_after_a_reply_is_counted_as_its_own_agent_pass(rig, tmp_path):
-    """`CountingAgent` is reset between the two phases, so each phase reports the passes IT spent.
-    Without the reset the second phase would inherit the first's count and the cost axis would
-    read double for every parking capture in the set."""
-    materials = _material(tmp_path, "park.md", PARKING_MATERIAL)
-    entry = {"id": "T01",
-             "expect": {"status": schema.NEEDS_INPUT, "attempts": 1},
-             "reply": REPLY,
-             "after_reply": {"status": schema.FILED, "attempts": 1, "bounces": 0}}
+def test_the_page_a_proposing_capture_filed_is_anchored_to_an_id_the_fixture_never_carried(rig,
+                                                                                           tmp_path):
+    """The claim underneath ADR 041's D1, read off the COMMIT rather than off the report: the note
+    is anchored to an entity that did not exist when the capture was claimed. `_observe` reads the
+    anchor from the filed page's server-stamped `entity:`, so this is the resolved registry id and
+    not the agent's spelling — and `gate_anchoring` resolves it against the registry the commit
+    PUBLISHES, which is what makes an entity born in this commit anchor like any older one.
 
-    phases = _drive(rig, materials, _capture("park.md"), entry)
+    Its benign twin is the plain capture below, which anchors to an id the fixture shipped with.
+    """
+    materials = _material(tmp_path, "propose.md", PROPOSING_MATERIAL)
+    proposed_id = canonical_id_for(PROPOSED_NAME)
+    assert _FIXTURE_REGISTRY.canonical_id(proposed_id) is None, (
+        f"{proposed_id!r} is in the frozen fixture's registry — this capture can no longer propose "
+        f"it, and the test above is measuring an ordinary anchoring instead")
+    entry = {"id": "T01", "expect": {"anchor": ANCHORED_BY_THE_PROPOSAL}}
 
-    assert phases[0]["observed"]["attempts"] == 1
-    assert phases[1]["observed"]["attempts"] == 1
-    assert phases[1]["observed"]["bounces"] == 0
+    phases = _drive(rig, materials, _capture("propose.md"), entry)
+
+    assert phases[0]["observed"]["anchor"] == {"kind": "entity", "ids": [proposed_id]}
 
 
-def test_a_capture_with_no_reply_in_its_expectation_yields_exactly_one_phase(rig, tmp_path):
-    """The benign twin of the two-phase case: eight of the ten golden captures are scored once,
-    and a loop that produced a second phase for them would invent denominators nobody wrote."""
+def test_a_capture_that_proposes_nothing_yields_one_phase_and_an_empty_proposals_list(rig,
+                                                                                      tmp_path):
+    """The benign twin of both tests above, and the state twelve of the fourteen golden captures are
+    in: an ordinary filing against a registered entity proposes no identity. A `proposals`
+    observation that came back non-empty here would be the instrument reading somebody else's field,
+    and every capture in the set would score the facet without anything having been recognised."""
     materials = _material(tmp_path, "plain.md", PLAIN_MATERIAL)
     entry = {"id": "T01", "expect": {"status": schema.FILED, "type": "note",
                                      "folder": "wiki/notes",
@@ -173,6 +184,23 @@ def test_a_capture_with_no_reply_in_its_expectation_yields_exactly_one_phase(rig
 
     assert [p["phase"] for p in phases] == ["only"]
     assert phases[0]["facets"] == dict.fromkeys(entry["expect"], True)
+    assert phases[0]["observed"]["proposals"] == []
+
+
+# **DELETED with the ask-back loop (ADR 041):**
+# `test_a_parking_capture_is_scored_as_two_phases_across_the_real_ask_back_loop`,
+# `test_the_re_file_after_a_reply_is_counted_as_its_own_agent_pass` and
+# `test_a_backend_that_never_parks_still_produces_the_second_phase_as_a_miss`. The first drove a
+# park, a reply through the real `BrainService.reply` and a re-file; the second proved
+# `CountingAgent` was reset between the two phases so the cost axis did not read double; the third
+# proved a backend that never parked scored the second phase as a MISS rather than losing it, which
+# would have shrunk that facet's denominator and rewarded not asking.
+#
+# None of the three has a subject. `BrainService.reply` and the `brain_reply` tool are gone, the two
+# parked statuses are `schema.RETIRED_STATUSES`, and `_drive` has no branch left to take. What
+# survives of them is the rule they enforced — a scored moment is never allowed to vanish — and it
+# is enforced one level up now, by `_check_set` refusing the retired `reply`/`after_reply` keys and
+# by `EXPECTED_DENOMINATORS` refusing a set whose phase count moved.
 
 
 def test_draining_an_empty_queue_stops_the_run_with_a_sentence_instead_of_a_TypeError(rig):
@@ -181,8 +209,8 @@ def test_draining_an_empty_queue_stops_the_run_with_a_sentence_instead_of_a_Type
     one row is claimable and it belongs to this capture.
 
     Unpacking that `None` used to raise `TypeError: cannot unpack non-sequence`, a traceback whose
-    top frame names tuple unpacking and whose cause is somewhere else entirely — a reply that never
-    reached the row, a lease still held by an earlier run, another worker on this database. The
+    top frame names tuple unpacking and whose cause is somewhere else entirely — a submit that never
+    landed, a lease still held by an earlier run, another worker on this database. The
     queue is left genuinely empty here rather than stubbing the worker: the `None` under test is
     the real one, produced by the real claim against a real Postgres.
 
@@ -194,26 +222,6 @@ def test_draining_an_empty_queue_stops_the_run_with_a_sentence_instead_of_a_Type
     message = str(ex.value)
     assert "T01" in message and "its own capture" in message
     assert "leased" in message and "claimable" in message
-
-
-def test_a_backend_that_never_parks_still_produces_the_second_phase_as_a_miss(rig, tmp_path):
-    """The denominator defence, end to end: the expectation asks for a park, the capture files
-    instead, and the `after_reply` phase is recorded as a MISS rather than skipped. A phase that
-    silently vanished would shrink its facets' denominators and quietly raise the score of a
-    backend that never asked a question."""
-    materials = _material(tmp_path, "plain.md", PLAIN_MATERIAL)
-    entry = {"id": "T01",
-             "expect": {"status": schema.NEEDS_INPUT, "park_question": ["Halcyon Grid"]},
-             "reply": REPLY,
-             "after_reply": {"status": schema.FILED, "type": "note", "folder": "wiki/notes",
-                             "anchor": ANCHORED_BY_THE_REPLY}}
-
-    phases = _drive(rig, materials, _capture("plain.md"), entry)
-
-    assert [p["phase"] for p in phases] == ["park", "after_reply"]
-    assert phases[0]["facets"] == {"status": False, "park_question": False}
-    assert phases[1]["facets"] == dict.fromkeys(entry["after_reply"], False)
-    assert "never parked" in phases[1]["observed"]["note"]
 
 
 # ── the whole runner, one capture wide ────────────────────────────────────────────────────────

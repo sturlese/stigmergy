@@ -253,32 +253,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
         return service.queue_show(request.path_params["id"])
 
     @_json_endpoint
-    async def queue_requeue(request):
-        data = await _body(request)
-        return service.queue_requeue(request.path_params["id"], actor=_str(data, "actor"),
-                                     note=_str(data, "note"))
-
-    @_json_endpoint
-    async def queue_resolve(request):
-        data = await _body(request)
-        note = _str(data, "note")
-        if not note.strip():
-            raise AdminBadRequest("'note' is required — it is the submitter's whole report of "
-                                  "what happened to their material")
-        return service.queue_resolve(request.path_params["id"], actor=_str(data, "actor"),
-                                     note=note, page=_str(data, "page"),
-                                     commit=_str(data, "commit"))
-
-    @_json_endpoint
-    async def queue_reject(request):
-        data = await _body(request)
-        reason = _str(data, "reason")
-        if not reason.strip():
-            raise AdminBadRequest("'reason' is required — it reaches the submitter verbatim")
-        return service.queue_reject(request.path_params["id"], actor=_str(data, "actor"),
-                                    reason=reason)
-
-    @_json_endpoint
     async def queue_reclaim(request):
         data = await _body(request)
         timeout = data.get("visibility_timeout_s")
@@ -338,7 +312,7 @@ def _build_admin_app(service: AdminService) -> Starlette:
 
     @_json_endpoint
     async def entities_list(_request):
-        return {"situations": service.entities_list()}
+        return service.entities_list()
 
     @_json_endpoint
     async def entities_registry(_request):
@@ -354,16 +328,22 @@ def _build_admin_app(service: AdminService) -> Starlette:
         return service.entities_show(request.path_params["id"])
 
     @_json_endpoint
-    async def entities_approve(request):
+    async def entities_decide(request):
+        # Off the event loop: a decision clones the knowledge repo and pushes — the MCP tools
+        # share this process.
         data = await _body(request)
-        requeue = data.get("requeue", True)
-        if not isinstance(requeue, bool):
-            raise AdminBadRequest("'requeue' must be a boolean")
         return await run_in_threadpool(
-            service.entity_approve,
-            request.path_params["id"], actor=_str(data, "actor"), name=_str(data, "name"),
+            service.entity_decide, _str(data, "item_kind"), _str(data, "item_id"),
+            actor=_str(data, "actor"), verdict=_str(data, "verdict"), into=_str(data, "into"),
+            notes=_str(data, "notes"))
+
+    @_json_endpoint
+    async def entities_create(request):
+        data = await _body(request)
+        return await run_in_threadpool(
+            service.entity_create, actor=_str(data, "actor"), name=_str(data, "name"),
             entity_type=_str(data, "entity_type"), entity_id=_str(data, "entity_id"),
-            aliases=_str(data, "aliases"), role=_str(data, "role"), requeue=requeue)
+            aliases=_str(data, "aliases"), role=_str(data, "role"))
 
     @_json_endpoint
     async def repairs_list(_request):
@@ -436,9 +416,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
         Route(API_PREFIX + "queue/reclaim", queue_reclaim, methods=["POST"]),
         Route(API_PREFIX + "queue/purge", queue_purge, methods=["POST"]),
         Route(API_PREFIX + "queue/{id:int}", queue_show, methods=["GET"]),
-        Route(API_PREFIX + "queue/{id:int}/requeue", queue_requeue, methods=["POST"]),
-        Route(API_PREFIX + "queue/{id:int}/resolve", queue_resolve, methods=["POST"]),
-        Route(API_PREFIX + "queue/{id:int}/reject", queue_reject, methods=["POST"]),
         Route(API_PREFIX + "gardener", gardener, methods=["GET"]),
         Route(API_PREFIX + "digest", digest, methods=["GET"]),
         Route(API_PREFIX + "digest/preview", digest_preview, methods=["POST"]),
@@ -450,8 +427,9 @@ def _build_admin_app(service: AdminService) -> Starlette:
         Route(API_PREFIX + "entities", entities_list, methods=["GET"]),
         Route(API_PREFIX + "entities/registry", entities_registry, methods=["GET"]),
         Route(API_PREFIX + "entities/resolve", entities_resolve, methods=["POST"]),
-        Route(API_PREFIX + "entities/{id:int}", entities_show, methods=["GET"]),
-        Route(API_PREFIX + "entities/{id:int}/approve", entities_approve, methods=["POST"]),
+        Route(API_PREFIX + "entities/decide", entities_decide, methods=["POST"]),
+        Route(API_PREFIX + "entities/create", entities_create, methods=["POST"]),
+        Route(API_PREFIX + "entities/{id}", entities_show, methods=["GET"]),
         Route(API_PREFIX + "repairs", repairs_list, methods=["GET"]),
         Route(API_PREFIX + "repairs/{id:int}", repairs_show, methods=["GET"]),
         Route(API_PREFIX + "repairs/{id:int}/approve", repairs_approve, methods=["POST"]),

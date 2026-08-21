@@ -555,7 +555,6 @@ def _declare_proposals(ctx: gates.GateContext, proposals: identity.Proposals) ->
     ctx.derived_files = ctx.derived_files | proposals.derived_files
     ctx.expected_bytes = {**ctx.expected_bytes, **proposals.expected_bytes}
     ctx.proposed_entity_pages = frozenset(proposals.entity_pages)
-    ctx.alias_edited_pages = frozenset(proposals.alias_pages)
     for path, entity_id in proposals.entity_pages.items():
         # What `gate_frontmatter` re-reads the page against: its own anchor and its own state.
         ctx.stamped_by_path[path] = {"status": page_policy.FILED_STATUS, "entity": [entity_id],
