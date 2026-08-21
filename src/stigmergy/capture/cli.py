@@ -1,9 +1,10 @@
 """`stigmergy-queue` — the steward's view of the write path, without a SQL client.
 
-Eight subcommands (`list`, `show`, `claim`, `reclaim`, `requeue`, `resolve`, `reject`, `purge`),
-each a thin skin over the library — the same seams the server and the librarian call. The three
-dispositions are the steward's drain out of a park; `claim` deliberately processes nothing
-(draining is the librarian's job) and holding a claim is how a dead worker is simulated.
+Five subcommands (`list`, `show`, `claim`, `reclaim`, `purge`), each a thin skin over the library —
+the same seams the server and the librarian call. Nothing here decides a capture's fate: a capture
+files on its own, and what the librarian proposed is decided through `stigmergy-entities`. `claim`
+deliberately processes nothing (draining is the librarian's job) and holding a claim is how a dead
+worker is simulated.
 
 Errors here are LOCAL and may be specific — generic over HTTP, specific in a local CLI. This
 module is the ONLY place in `stigmergy.capture` that opens a database connection or reads the
@@ -18,13 +19,12 @@ import time
 import psycopg
 
 from stigmergy import text as textutil
-from stigmergy.capture import dispositions, evidence, queue, retention, schema
+from stigmergy.capture import evidence, queue, retention, schema
 from stigmergy.capture.errors import CaptureError, SubmissionRejected
 from stigmergy.capture.render import (
     RECLAIM_NOW,
     clean_for_terminal,
     depth_line,
-    format_age,
     format_ms,
 )
 from stigmergy.index import store
@@ -149,12 +149,6 @@ def drop_main(argv, *, parser: argparse.ArgumentParser, prog: str, during: str =
         return 2
 
 
-# A steward's own words, headed for a submitter's report. The cleaning lives in
-# `dispositions.clean`, below every CLI, so no CLI can skip it; the local name keeps call sites
-# readable.
-_steward_note = dispositions.clean
-
-
 # ── list ──────────────────────────────────────────────────────────────────────────────────────
 def _cmd_list(conn, args) -> int:
     rows = queue.query_submissions(conn, submitter=args.submitter, statuses=args.status or None,
@@ -168,11 +162,8 @@ def _cmd_list(conn, args) -> int:
         return 0
     for row in rows:
         flags = f" flagged={','.join(row['flagged_hints'])}" if row["flagged_hints"] else ""
-        # Who is being waited on, and for how long — the two facts a steward triages a list on.
-        parked = (f" waiting on: {row['waiting_on']} · parked {format_age(row['parked_age_ms'])}"
-                  if row["waiting_on"] else "")
         print(f"#{row['id']} {row['status']:<11} {row['kind']:<{_KIND_WIDTH}} {row['submitted_by']}"
-              f" attempts={row['attempts']} {row['created_at']}{flags}{parked}")
+              f" attempts={row['attempts']} {row['created_at']}{flags}")
         # Three ways a row has nothing to show, each named. The withheld sentence is the queue's
         # own, not captured text — neither cleaned nor clipped.
         if row["payload_purged"]:
@@ -187,22 +178,7 @@ def _cmd_list(conn, args) -> int:
 
 
 def _print_note(row: dict, *, one_line: bool) -> None:
-    """The row's `error`/`question` line — and the one place a `needs_input` row is NOT clipped:
-    a parked question ENDS in the exact command to run, and a clip cuts `brain_reply(...)`
-    mid-call. `show` prints the question whole; `list` prints only the invocation, from
-    `schema.reply_invocation` — the function that built the sentence, so it cannot drift or be
-    cut. Every other status keeps a word-safe clipped one-liner."""
-    if row["status"] == schema.NEEDS_INPUT:
-        invocation = schema.reply_invocation(row["id"])
-        if one_line:
-            print(f"    ? waiting on {row['waiting_on']} — answer with:  {invocation}")
-            print(f"      (the full question: `stigmergy-queue show {row['id']}`)")
-        else:
-            print("  question")
-            for line in textutil.sanitize(row["error"] or "").splitlines():
-                print(f"    {line}")
-            print(f"  answer with {invocation}")
-        return
+    """The row's `error` line — why it is where it is — word-safe clipped."""
     if row["error"]:
         print(f"    ! {clean_for_terminal(row['error'], 200)}" if one_line else
               f"  note        {clean_for_terminal(row['error'], 300)}")
@@ -227,26 +203,16 @@ def _cmd_show(conn, args) -> int:
     print(f"  blob_refs   {', '.join(trace['blob_refs']) or '(none)'}")
     if trace["result_ref"]:
         print(f"  result_ref  {trace['result_ref']}")
-    if trace["waiting_on"]:
-        print(f"  parked      {format_age(trace['parked_age_ms'])} ago — waiting on: "
-              f"{trace['waiting_on']}")
     _print_note(trace, one_line=False)
-    if trace["reply"]:
-        print(f"  reply       {clean_for_terminal(trace['reply'], 500)}")
-    elif trace["withheld_reason"]:
-        # Say why the reply is suppressed: an unexplained empty line reads as "they never
-        # answered" — a false story. The sentence is the queue's own; neither cleaned nor clipped.
-        print(f"  reply       ({trace['withheld_reason']})")
+    if trace["withheld_reason"]:
+        print(f"  material    ({trace['withheld_reason']})")
     for event in trace["events"]:
-        # Sanitized but not clipped: a note cut in half misinforms the steward reading it before
-        # disposing. The `asked` note IS the question — suppressed while the row is still
-        # `needs_input`, because the block above just printed it in full.
+        # The row's own history — what was done to it while captures could still park, and the
+        # migration that returned it to the queue. Sanitized but not clipped: a note cut in half
+        # misinforms the person reading it.
         kind = str(event.get("event", ""))
         print(f"  · {clean_for_terminal(event.get('at', ''), 40)}  {clean_for_terminal(kind, 20)}"
               f"  by {clean_for_terminal(event.get('actor', ''), 80) or '—'}")
-        if kind == schema.EVENT_ASKED and trace["status"] == schema.NEEDS_INPUT:
-            print("      (the question, printed above)")
-            continue
         for line in textutil.sanitize(str(event.get("note") or "")).splitlines():
             print(f"      {line}")
     if trace["payload_purged"]:
@@ -337,54 +303,6 @@ def _cmd_reclaim(conn, args) -> int:
     return 0
 
 
-# ── the steward's drain: requeue / resolve / reject ────────────────────────────────────────────
-# Three commands over one guarded transition (`queue.dispose`); the state check is the
-# DATABASE's, so a disposition typed a second after a worker claimed the row fails loudly.
-# `--by` is ATTRIBUTION, not authorization: recorded, never checked — checking would be theatre
-# on a local CLI whose operator already has the DSN.
-def _cmd_requeue(conn, args) -> int:
-    result = dispositions.requeue(conn, args.id, actor=args.by, note=_steward_note(args.note))
-    if args.json:
-        print(json.dumps(result, **_DUMP))
-        return 0
-    print(f"requeued #{result['id']} — back in the queue for the librarian to try again "
-          f"(attempts unchanged at {result['attempts']}; it is claimable now)")
-    return 0
-
-
-def _cmd_resolve(conn, args) -> int:
-    """Close a parked row as `resolved` — a steward handled it outside the fast lane.
-
-    `resolve` with neither `--page` nor `--commit` leaves the submitter's report permanently
-    silent about where the material went, on the one state whose point is that it WAS used —
-    warned about, never prompted for: a blocking prompt in a scriptable tool hangs automation.
-    """
-    note = _steward_note(args.note)
-    result = dispositions.resolve(conn, args.id, actor=args.by, note=note,
-                                  page=args.page or "", commit=args.commit or "")
-    warning = ("" if (args.page or args.commit) else
-               f"resolved #{args.id} with no --page and no --commit — the submitter's report will "
-               f"say only what your --note said, with no pointer to where the material went")
-    if args.json:
-        print(json.dumps({**result, "warning": warning}, **_DUMP))
-        return 0
-    print(f"resolved #{result['id']} — the submitter's report now says so")
-    print(f"  page:   {args.page or '(none recorded)'}")
-    print(f"  commit: {args.commit or '(none recorded)'}")
-    if warning:
-        print(f"stigmergy-queue: {warning}", file=sys.stderr)
-    return 0
-
-
-def _cmd_reject(conn, args) -> int:
-    result = dispositions.reject(conn, args.id, actor=args.by, reason=_steward_note(args.reason))
-    if args.json:
-        print(json.dumps(result, **_DUMP))
-        return 0
-    print(f"rejected #{result['id']} (by: {args.by}) — reason recorded in the submitter's report")
-    return 0
-
-
 # ── purge ─────────────────────────────────────────────────────────────────────────────────────
 def _cmd_purge(conn, args) -> int:
     result = retention.purge(conn, older_than_days=args.older_than_days, dry_run=args.dry_run)
@@ -447,39 +365,6 @@ def build_parser() -> argparse.ArgumentParser:
     for parser in (p_claim, p_reclaim):
         parser.add_argument("--max-attempts", type=int, default=queue.DEFAULT_MAX_ATTEMPTS,
                             help="deliveries before an item is failed instead of requeued")
-
-    # ── the drain: `--by` and its help text identical on all three ───────────────────────────
-    p_requeue = sub.add_parser(
-        "requeue", help="send a parked row back to the queue for the librarian to try again")
-    p_requeue.add_argument("--note", default="",
-                           help="why, for the row's own history (not shown to the submitter)")
-    p_requeue.set_defaults(fn=_cmd_requeue)
-
-    p_resolve = sub.add_parser(
-        "resolve", help=f"close a parked row as '{schema.RESOLVED}': you handled it by hand")
-    p_resolve.add_argument("--note", required=True,
-                           help="what you did with it, in the SUBMITTER's own report, verbatim — "
-                                "never include a secret or personal data here")
-    p_resolve.add_argument("--page", default="",
-                           help="the page the material ended up in, echoed to the submitter")
-    p_resolve.add_argument("--commit", default="",
-                           help="the commit that carried it, echoed to the submitter")
-    p_resolve.set_defaults(fn=_cmd_resolve)
-
-    p_reject = sub.add_parser(
-        "reject", help=f"close a parked row as '{schema.REJECTED}', with your name on the decision")
-    p_reject.add_argument("--reason", required=True,
-                          help="why this is declined, in the SUBMITTER's own report, verbatim — "
-                               "never include a secret or personal data here")
-    p_reject.set_defaults(fn=_cmd_reject)
-
-    for parser in (p_requeue, p_resolve, p_reject):
-        parser.add_argument("id", type=int)
-        parser.add_argument("--by", required=True,
-                            help="who is answering for this decision — recorded on the row's "
-                                 "history, and named to the submitter by `resolve`/`reject`. "
-                                 "Attribution, not authorization: this tool records who you say "
-                                 "you are, it does not check it")
 
     p_purge = sub.add_parser("purge", help="retention: delete payload+hints of old terminal rows")
     p_purge.add_argument("--older-than-days", type=int, default=retention.DEFAULT_RETENTION_DAYS)

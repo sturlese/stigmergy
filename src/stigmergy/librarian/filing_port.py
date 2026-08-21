@@ -86,20 +86,18 @@ class FilingAgent(Protocol):
     wants_gathered: bool
 
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
-            corrective: str = "", reply: str = "", flow_note: str = "",
-            gathered: str = "") -> AgentRun:
+            corrective: str = "", flow_note: str = "", gathered: str = "") -> AgentRun:
         """The ordinary flow: file ONE capture as one new page.
 
-        `corrective` is the single retry's repair brief, `reply` the submitter's answer to the one
-        ask-back question, `flow_note` a fact about the flow this item rides; all empty on a
-        first, unattached pass. `gathered` is the gatherer's context ALREADY RENDERED to prompt
-        text, so backends share one context builder and one fence discipline.
+        `corrective` is the single retry's repair brief, `flow_note` a fact about the flow this
+        item rides; both empty on a first, unattached pass. `gathered` is the gatherer's context
+        ALREADY RENDERED to prompt text, so backends share one context builder and one fence
+        discipline.
         """
         ...
 
     def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
-                    source_page_path: str, corrective: str = "", reply: str = "",
-                    gathered: str = "") -> AgentRun:
+                    source_page_path: str, corrective: str = "", gathered: str = "") -> AgentRun:
         """The meeting flow: distil ONE transcript into a page SET's worth of content.
 
         Everything the agent needs is handed over, so a backend needs no filesystem exploration

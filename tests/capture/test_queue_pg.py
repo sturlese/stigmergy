@@ -224,90 +224,28 @@ def test_finish_into_a_terminal_status_stamps_finished_at_and_keeps_claimed_at(c
     assert row["claimed_at"] is not None    # terminal: claimed_at is KEPT, not nulled
 
 
-def test_finish_into_a_parked_status_leaves_finished_at_null_and_drops_claimed_at(clean_queue):
+# ── every finish is terminal now: a retired status is refused, finished_at always lands ───────
+def test_finish_refuses_a_retired_status_by_name(clean_queue):
+    """OLD BEHAVIOUR: `needs_input`/`triage` were finishing states that left `finished_at` NULL,
+    so a row waiting on a person was never purged. Nothing waits: the two are retired, and a
+    caller still naming one is refused before the row is touched."""
     ack, _ = _submit(clean_queue)
     claimed = queue.claim_next(clean_queue)
-    queue.finish(clean_queue, ack["id"], status=schema.NEEDS_INPUT,
-                expected_attempts=claimed["attempts"], error="which entity is this about?")
+    with pytest.raises(QueueStateError, match="cannot finish into 'triage'"):
+        queue.finish(clean_queue, ack["id"], status="triage",
+                     expected_attempts=claimed["attempts"])
+    assert _row(clean_queue, ack["id"])["status"] == schema.CLAIMED
+
+
+@pytest.mark.parametrize("status", sorted(schema.FINISHED_STATUSES))
+def test_every_finishing_status_stamps_finished_at_and_keeps_claimed_at(clean_queue, status):
+    ack, _ = _submit(clean_queue)
+    claimed = queue.claim_next(clean_queue)
+    queue.finish(clean_queue, ack["id"], status=status, expected_attempts=claimed["attempts"])
     row = _row(clean_queue, ack["id"])
-    assert row["status"] == "needs_input"
-    assert row["finished_at"] is None
-    assert row["claimed_at"] is None
-    assert row["error"] == "which entity is this about?"
-
-
-# ── `outcome` — stored across a park, cleared unconditionally on every terminal status ──────────
-def _outcome(conn, submission_id):
-    with conn.cursor() as cur:
-        cur.execute("SELECT outcome FROM capture_queue WHERE id = %s", (submission_id,))
-        return cur.fetchone()[0]
-
-
-def test_finish_into_a_parked_status_stores_the_outcome_it_is_given(clean_queue):
-    """The write half — `tests/librarian/test_meeting_processing_pg.py` proves this through the
-    full meeting pipeline (`test_a_park_keeps_the_distillation_it_produced`); this is the same
-    property at the primitive `queue.finish` reaches, with no agent, no gates and no git in the
-    way, matching this file's own posture (the DATABASE PRIMITIVE, not the flow around it)."""
-    ack, _ = _submit(clean_queue)
-    claimed = queue.claim_next(clean_queue)
-    stored = {"version": 1, "raw": {"decisions": [{"title": "a decision worth keeping"}]}}
-    queue.finish(clean_queue, ack["id"], status=schema.TRIAGE, expected_attempts=claimed["attempts"],
-                error="which entity is this about?", outcome=stored)
-    assert _outcome(clean_queue, ack["id"]) == stored
-
-
-def test_finish_with_no_outcome_argument_never_blanks_one_already_stored(clean_queue):
-    """`outcome=None` follows `report`'s own COALESCE convention (`finish`'s docstring): a caller
-    with nothing new to say about the outcome must not blank what a previous delivery stored — the
-    same shape `test_finish_fencing_pg.py` pins directly at the SQL level for `report`, applied
-    here to the sibling column that joined the same COALESCE formula."""
-    ack, _ = _submit(clean_queue)
-    claimed = queue.claim_next(clean_queue)
-    stored = {"version": 1, "raw": {"decisions": [{"title": "kept across a second delivery"}]}}
-    queue.finish(clean_queue, ack["id"], status=schema.TRIAGE, expected_attempts=claimed["attempts"],
-                error="which entity?", outcome=stored)
-
-    # a second delivery re-parks the SAME row with no outcome argument at all — standing in for a
-    # pass that re-hits the ordinary `needs_input` ask path, which never touches this column.
-    with clean_queue.cursor() as cur:
-        cur.execute("UPDATE capture_queue SET status = 'claimed', attempts = attempts + 1"
-                    " WHERE id = %s", (ack["id"],))
-    queue.finish(clean_queue, ack["id"], status=schema.NEEDS_INPUT,
-                expected_attempts=claimed["attempts"] + 1, error="a different, later question")
-    assert _outcome(clean_queue, ack["id"]) == stored
-
-
-@pytest.mark.parametrize("terminal_status", [schema.FILED, schema.REJECTED, schema.FAILED])
-def test_finish_into_a_terminal_status_clears_outcome_even_when_one_is_passed(clean_queue,
-                                                                              terminal_status):
-    """The half that actually matters (`finish`'s own docstring: "cleared on every terminal
-    status... which is the half that matters"): once a row is `filed`, `rejected` or `failed`, a
-    stored distillation must never survive it — the retention property that same docstring is
-    built on ("keeping the full drafted text of every page beside a closed row is exactly the
-    accumulation retention exists to prevent").
-
-    A non-`None` `outcome` is passed ALONGSIDE the terminal status here on purpose: `finish`'s own
-    docstring says the clear "takes precedence over any value passed in", and the weaker version of
-    this test (finishing terminal with `outcome=None`, which any caller finishing FILED/REJECTED/
-    FAILED does today since nothing ever passes an outcome on those paths) would pass even if that
-    CASE WHEN precedence were reversed — it would still read as NULL via plain COALESCE-of-None.
-    Passing a real value is what actually exercises the unconditional clear."""
-    ack, _ = _submit(clean_queue)
-    claimed = queue.claim_next(clean_queue)
-    stored = {"version": 1, "raw": {"decisions": [{"title": "must not survive a terminal finish"}]}}
-    queue.finish(clean_queue, ack["id"], status=schema.TRIAGE, expected_attempts=claimed["attempts"],
-                error="which entity?", outcome=stored)
-    assert _outcome(clean_queue, ack["id"]) == stored   # sanity: it really was stored first
-
-    with clean_queue.cursor() as cur:
-        cur.execute("UPDATE capture_queue SET status = 'claimed', attempts = attempts + 1"
-                    " WHERE id = %s", (ack["id"],))
-    queue.finish(clean_queue, ack["id"], status=terminal_status,
-                expected_attempts=claimed["attempts"] + 1,
-                outcome={"version": 1, "raw": {"decisions": [{"title": "a value passed anyway"}]}})
-    assert _outcome(clean_queue, ack["id"]) is None, (
-        f"a stored outcome survived a finish() into {terminal_status!r} — the terminal clear must "
-        f"win over any outcome value the caller passes, not just over a COALESCE(None, ...)")
+    assert row["status"] == status
+    assert row["finished_at"] is not None
+    assert row["claimed_at"] is not None
 
 
 def test_finish_rejects_a_status_outside_finished_statuses(clean_queue):

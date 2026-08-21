@@ -18,12 +18,11 @@ from stigmergy import text as textutil
 from stigmergy.admin import schema as admin_schema
 from stigmergy.admin.github import ActionsError
 from stigmergy.admin.settings import AdminSettings
-from stigmergy.capture import decisions, dispositions, latency, queue, retention
+from stigmergy.capture import decisions, latency, queue, retention
 from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.errors import CaptureError
 from stigmergy.digest import run as digest_run
 from stigmergy.digest.settings import DIGEST_CHANNEL_ID_ENV, SLACK_BOT_TOKEN_ENV, DigestSettings
-from stigmergy.entities import situations
 from stigmergy.entities.errors import EntityError
 from stigmergy.entities.generator import ENTITY_TYPES, canonical_id_for
 from stigmergy.gardener import store as gardener_store
@@ -40,7 +39,7 @@ from stigmergy.repair.errors import RepairError
 from stigmergy.repair.schema import ALIAS_OP_NAMES, DELETE_OP_NAMES, KIND_ENTITY_BODY
 from stigmergy.repair.schema import JOB_NAME as REPAIR_JOB
 from stigmergy.repair.schema import KINDS as REPAIR_KINDS
-from stigmergy.review_kinds import ITEM_KINDS, KIND_ENTITY_PROPOSAL, KIND_PARKED_CAPTURE
+from stigmergy.review_kinds import ITEM_KINDS, KIND_ALIAS_PROPOSAL, KIND_IDENTITY_PROPOSAL
 from stigmergy.server import pilot_report
 from stigmergy.server import review as server_review
 from stigmergy.server.errors import StartupError
@@ -187,20 +186,20 @@ class AdminService:
                        "max_attempts": WORKER_MAX_ATTEMPTS},
             # Every closed vocabulary the console renders ships from HERE, so the frontend never
             # hardcodes a second copy that could drift: `generator.ENTITY_TYPES` first, then the
-            # queue's status machine (with its parked and terminal subsets, which decide which
-            # buttons a row gets), the two situation kinds, the repair kinds, the gardener's
-            # severities and the review lane's item kinds and doors. The HUMAN wording for each
-            # word is the frontend's (it is copy), keyed on these.
+            # queue's status machine (its terminal subset, and `resolved` as the one legacy word),
+            # the repair kinds, the gardener's severities and the review lane's item kinds, the
+            # verdicts each kind takes, and the doors. The HUMAN wording for each word is the
+            # frontend's (it is copy), keyed on these.
             "entity_types": list(ENTITY_TYPES),
             "statuses": list(capture_schema.STATUSES),
-            "parked_statuses": [s for s in capture_schema.STATUSES
-                                if s in capture_schema.PARKED_STATUSES],
             "terminal_statuses": [s for s in capture_schema.STATUSES
                                   if s in capture_schema.TERMINAL_STATUSES],
-            "situations": list(capture_schema.SITUATIONS),
+            "legacy_statuses": [capture_schema.RESOLVED],
             "repair_kinds": list(REPAIR_KINDS),
             "gardener_severities": list(GARDENER_SEVERITIES),
             "item_kinds": list(ITEM_KINDS),
+            "verdicts_by_kind": {kind: sorted(set(verdicts.values()))
+                                 for kind, verdicts in server_review.VERDICTS_BY_KIND.items()},
             "decision_sources": list(server_review.DECISION_SOURCES),
             "metrics": {"default_days": DEFAULT_METRICS_DAYS, "max_days": MAX_METRICS_DAYS},
             # The purge form's consequence sentence names this number; it is the library's, not
@@ -208,41 +207,43 @@ class AdminService:
             "retention": {"default_days": retention.DEFAULT_RETENTION_DAYS},
         }
 
-    # ── inbox: everything parking on a human, one list ────────────────────────────────────────
+    # ── inbox: everything waiting on a steward, one list ──────────────────────────────────────
     def inbox(self, *, limit: int = INBOX_LIMIT) -> dict:
         """The unified work list — `server.review.items_for_doorbell`, the SAME read the Slack
         doorbell rings from, so the console and the doorbell can never disagree about what is
-        waiting on a person. Every item carries the ledger's latest decision on it, which is how
-        a steward sees that a second door got there first. `truncated` is conservative: a list
-        exactly `limit` long reports it, because the read cannot tell "exactly that many" from
-        "more than that"."""
+        waiting on a steward: the identities and spellings the librarian proposed (read off the
+        registry the index snapshot carries) and the nightly repairs. Every item carries the
+        ledger's latest decision on it, which is how a steward sees that a second door got there
+        first. `truncated` is conservative: a list exactly `limit` long reports it, because the
+        read cannot tell "exactly that many" from "more than that"."""
         limit = max(1, int(limit))
-        items = [self._inbox_item(item) for item in
-                 server_review.items_for_doorbell(self._conn, limit=limit)]
+        items = self._inbox_items(limit)
         counts = {kind: 0 for kind in ITEM_KINDS}
         for item in items:
             counts[item["kind"]] = counts.get(item["kind"], 0) + 1
-        waiting_on_submitter = sum(1 for item in items
-                                   if item["kind"] == KIND_PARKED_CAPTURE
-                                   and item.get("status") == capture_schema.NEEDS_INPUT)
         return {"count": len(items), "counts": counts,
-                "waiting_on_submitter": waiting_on_submitter,
-                "waiting_on_steward": len(items) - waiting_on_submitter,
                 "truncated": len(items) >= limit, "limit": limit, "items": items}
+
+    def _inbox_items(self, limit: int) -> list[dict]:
+        """The lane's open items, derived from the registry THIS console serves — the same copy
+        the Entities desk checks names against (`index.check.served_registry`: the snapshot, else
+        the `--entity-registry` file). The doorbell reads the snapshot alone because it has only a
+        connection; a console on a stack with no snapshot (the local recipe) would otherwise list
+        every entity in its browser and no proposal in its inbox."""
+        text, origin = index_check.served_registry(self._conn,
+                                                   self._server.entity_registry_path or None)
+        registry = server_review.registry_records(text, origin)
+        return [self._inbox_item(item) for item in
+                server_review.items_for_doorbell(self._conn, limit=limit, registry=registry)]
 
     def _inbox_item(self, item: dict) -> dict:
         """One review item, cleaned for the web — EVERY string leaf, by a walk rather than a list
         of keys: the lane's own docstring (`server.review._neutralize_leaves`) records that
         per-field calls "reliably miss a field", and a key added upstream must arrive cleaned by
-        default. The decision's timestamp is the one leaf that is not a string, converted apart."""
-        decision = item.get("decision")
-        out = _clean_leaves(item, CLEAN_DEPTH)
-        if decision:
-            out["decision"] = {**_clean_leaves(decision, CLEAN_DEPTH),
-                               "created_at": _iso(decision.get("created_at"))}
-        return out
+        default. The lane already serializes the decision's timestamp."""
+        return _clean_leaves(item, CLEAN_DEPTH)
 
-    # ── the entity registry this stack serves, and the pre-mint check over it ─────────────────
+    # ── the entity registry this stack serves, and the pre-create check over it ───────────────
     def entities_registry(self) -> dict:
         """Every registered entity (id, name, type, aliases) as the SERVER resolves them — the
         index's snapshot where this database has one, the `--entity-registry` file where it does
@@ -260,9 +261,9 @@ class AdminService:
                 "entities": entities}
 
     def entities_resolve(self, names) -> dict:
-        """The pre-mint registry check over names a steward is about to submit — the same
-        question the mint gate will ask, asked BEFORE the clone: `Registry.canonical_id` (does
-        the filing fold already resolve this spelling? then there is nothing to mint) and
+        """The pre-create registry check over names a steward is about to submit — the same
+        question the birth gate will ask, asked BEFORE the clone: `Registry.canonical_id` (does
+        the filing fold already resolve this spelling? then there is nothing to create) and
         `Registry.collision_id` (would the gate refuse it as confusable with an existing entity?),
         plus an advisory "looks similar" list for the names neither fold catches. The gate runs
         again, against the registry the commit will publish, so this is a warning that is right
@@ -310,14 +311,15 @@ class AdminService:
         entry = registry.entities.get(canonical_id) or {}
         return {"id": _clean(canonical_id), "name": _clean(entry.get("name")),
                 "type": _clean(entry.get("type")),
-                "aliases": [_clean(a) for a in entry.get("aliases") or []]}
+                "aliases": [_clean(a) for a in entry.get("aliases") or []],
+                "proposed": bool(entry.get(kernel_registry.PROPOSED_KEY)),
+                "approved_by": _clean(entry.get(kernel_registry.APPROVED_BY_KEY) or ""),
+                "proposed_aliases": [_clean(a) for a in
+                                     entry.get(kernel_registry.PROPOSED_ALIASES_KEY) or []]}
 
     def _check_name(self, name: str, registry, index) -> dict:
-        """One name's verdict. `mintable` is `entities.situations.is_mintable_name`'s answer —
-        the ONE comparison that refuses the librarian's placeholder for a park that named nothing —
-        so a surface listing a park's names can refuse to offer a mint for it without deciding the
-        rule itself."""
-        check = {"name": name, "mintable": situations.is_mintable_name(name)}
+        """One name's verdict, as the birth gate would give it."""
+        check = {"name": name}
         if registry is None:
             return {**check, "verdict": VERDICT_UNCHECKED, "match": None, "similar": []}
         resolved = registry.canonical_id(name)
@@ -486,9 +488,7 @@ class AdminService:
             for f in gardener_store.findings_for_run(self._conn, gardener["id"]):
                 severity_counts[f["severity"]] = severity_counts.get(f["severity"], 0) + 1
         return {
-            "queue": {"counts": counts,
-                      "parked": counts.get(capture_schema.NEEDS_INPUT, 0)
-                      + counts.get(capture_schema.TRIAGE, 0)},
+            "queue": {"counts": counts},
             "in_flight": self._in_flight(),
             "ingest_errors": self._ingest_errors(limit=5),
             "crons": {"latest_runs": latest, "index_built_at": self._built_at()},
@@ -497,7 +497,7 @@ class AdminService:
             "admin_actions": admin_schema.recent_actions(self._conn, limit=5),
         }
 
-    # ── queue: the steward drain ──────────────────────────────────────────────────────────────
+    # ── queue: read-only, plus the two operator acts on the whole queue ───────────────────────
     def queue_list(self, *, statuses: list[str] | None = None, submitter: str | None = None,
                    limit: int = queue.DEFAULT_LIST_LIMIT) -> dict:
         try:
@@ -508,47 +508,13 @@ class AdminService:
         except ValueError as ex:   # unknown status — the library's own sentence names the vocabulary
             raise AdminBadRequest(str(ex)) from ex
         return {"counts": queue.counts_by_status(self._conn),
-                "submissions": [self._with_reply(row) for row in rows]}
+                "submissions": [self._traced_fields(row) for row in rows]}
 
     def queue_show(self, submission_id: int) -> dict:
         trace = queue.get_submission_trace(self._conn, submission_id)
         if trace is None:
             raise AdminNotFound(f"no submission {submission_id}")
-        return self._with_reply(trace)
-
-    def queue_requeue(self, submission_id: int, *, actor: str, note: str = "") -> dict:
-        return self._mutate("queue.requeue", actor, {"id": submission_id},
-                            lambda by: dispositions.requeue(self._conn, submission_id,
-                                                            actor=by, note=note))
-
-    def queue_resolve(self, submission_id: int, *, actor: str, note: str, page: str = "",
-                      commit: str = "") -> dict:
-        result = self._mutate("queue.resolve", actor,
-                              {"id": submission_id, "page": page, "commit": commit},
-                              lambda by: dispositions.resolve(self._conn, submission_id, actor=by,
-                                                              note=note, page=page, commit=commit))
-        # `resolve` means the material WAS used — a resolve with no pointer leaves the
-        # submitter's report permanently silent about where it went.
-        warning = ("" if (page or commit) else
-                   f"resolved #{submission_id} with no page and no commit — the submitter's report "
-                   f"will say only what your note said, with no pointer to where the material went")
-        return {**result, "warning": warning}
-
-    def queue_reject(self, submission_id: int, *, actor: str, reason: str) -> dict:
-        # A rejected entity situation is a GOVERNANCE decision, so it also writes
-        # `review_decisions` — the same ledger MCP and Slack write — or "who decided this
-        # identity" would answer from different tables per verdict.
-        situation = situations.get_situation(self._conn, submission_id)
-        is_entity_proposal = bool(situation and situations.classify(situation))
-        result = self._mutate("queue.reject", actor, {"id": submission_id},
-                              lambda by: dispositions.reject(self._conn, submission_id,
-                                                             actor=by, reason=reason))
-        if is_entity_proposal:
-            server_review.record_decision(
-                self._conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(submission_id),
-                verdict="reject", actor=actor or self._admin.actor,
-                source=server_review.SOURCE_ADMIN, notes=reason)
-        return result
+        return self._traced_fields(trace)
 
     def queue_reclaim(self, *, actor: str, visibility_timeout_s: int | None = None) -> dict:
         # The WORKER's lease, never the queue CLI's shorter one: an unqualified Reclaim means
@@ -666,81 +632,134 @@ class AdminService:
                 "errors": sum(1 for f in findings if f["severity"] == "error"),
                 "warnings": sum(1 for f in findings if f["severity"] == "warn")}
 
-    # ── entity situations (read, and a real Approve — ADR 030) ────────────────────────────────
-    def entities_list(self) -> list[dict]:
+    # ── the proposals: what the librarian created unconfirmed, and the steward's three verbs ──
+    def entities_list(self) -> dict:
+        """Every identity and spelling the librarian proposed, off the same read as the inbox,
+        plus the registry the proposals will join. The proposals carry `merge_candidates` from the
+        lane; `checks` adds the registry verdict for the proposed name (already registered under
+        another spelling? colliding?), which is the Merge picker's strongest hint."""
         registry, about = self._registry_or_none()
-        # One similarity index for the whole list, not one per row: it folds every registered
-        # spelling, and the list can carry fifty rows.
         index = self._similarity_index(registry)
-        return [self._with_registry_checks(self._situation(row), registry, about, index)
-                for row in situations.list_pending_situations(
-                    self._conn, limit=situations.DEFAULT_LIST_LIMIT)]
+        items = self._inbox_items(INBOX_LIMIT)
+        proposals = [self._with_registry_check(item, registry, index)
+                     for item in items if item["kind"] == KIND_IDENTITY_PROPOSAL]
+        aliases = [item for item in items if item["kind"] == KIND_ALIAS_PROPOSAL]
+        return {"proposals": proposals, "aliases": aliases, "registry_check": dict(about)}
 
-    def entities_show(self, submission_id: int) -> dict:
-        row = situations.get_situation(self._conn, submission_id)
-        if row is None:
-            raise AdminNotFound(f"submission {submission_id} does not exist")
-        registry, about = self._registry_or_none()
-        return self._with_registry_checks(self._situation(row), registry, about,
-                                          self._similarity_index(registry))
+    def entities_show(self, entity_id: str) -> dict:
+        """One proposed identity, as the list carries it — the detail page's read."""
+        for item in self._inbox_items(INBOX_LIMIT):
+            if item["kind"] == KIND_IDENTITY_PROPOSAL and str(item["id"]) == str(entity_id):
+                registry, _about = self._registry_or_none()
+                return self._with_registry_check(item, registry, self._similarity_index(registry))
+        raise AdminNotFound(f"no proposed entity {_clean(entity_id)!r} is waiting")
 
-    def _with_registry_checks(self, view: dict, registry, about: dict, index) -> dict:
-        """`checks`: the pre-mint registry verdict for every unresolved name the row carries —
-        over the SANITIZED `subjects`, which are the strings the form shows and submits. One
-        registry per request, shared by every row of the list, and `registry_check` says which
-        copy it was. Advisory beside the form; the mint gate stays the decision."""
-        view["registry_check"] = dict(about)
-        view["checks"] = [self._check_name(name, registry, index)
-                          for name in view.get("subjects") or [] if name.strip()]
-        return view
+    def _with_registry_check(self, item: dict, registry, index) -> dict:
+        """The birth gate's verdict on the proposal's own name, against the registry WITHOUT the
+        proposal itself — a proposal always resolves to itself, which says nothing."""
+        others = None
+        if registry is not None:
+            others = kernel_registry.Registry()
+            for cid, entry in registry.entities.items():
+                if cid != item["id"]:
+                    kernel_registry.index_entity(others, cid, entry)
+        check = self._check_name(item.get("name", ""), others, self._similarity_index(others))
+        return {**item, "check": check}
 
-    def entity_approve(self, situation_id: int, *, actor: str, name: str, entity_type: str,
-                       entity_id: str = "", aliases: str = "", role: str = "",
-                       requeue: bool = True) -> dict:
-        """Mint the situation's entity through `server.review.mint_and_record_approval` (ADR 030) —
-        the same sequence the review lane runs.
+    def entity_decide(self, item_kind: str, item_id: str, *, actor: str, verdict: str,
+                      into: str = "", notes: str = "") -> dict:
+        """A steward's decision on a proposal through `server.review.decide_and_record` — the
+        same sequence the review lane runs (land the commit through the governed door, then the
+        ledger row). `review_decide`'s steward check is deliberately not reached: it is for a
+        resolved identity, and `actor` here is free text behind the operator token (ADR 029/030
+        D2). Nothing is caught inside `_do`, so `_mutate` records the library's own class name
+        before `EntityError` becomes `AdminRefused`."""
+        verdicts = server_review.VERDICTS_BY_KIND.get(item_kind)
+        if verdicts is None or item_kind not in (KIND_IDENTITY_PROPOSAL, KIND_ALIAS_PROPOSAL):
+            raise AdminBadRequest(f"item_kind must be {KIND_IDENTITY_PROPOSAL!r} or "
+                                  f"{KIND_ALIAS_PROPOSAL!r}")
+        stored = verdicts.get(str(verdict or "").strip().lower())
+        if stored is None:
+            raise AdminBadRequest(f"verdict for {item_kind} must be one of "
+                                  f"{', '.join(sorted(verdicts))}")
+        item_id = str(item_id or "").strip()
+        target = " ".join(str(into or "").split())
+        if stored == server_review.MERGE and not target:
+            raise AdminBadRequest("merge needs `into`: the registered entity this proposal really is")
+        clean_notes = capture_schema.clean_note(notes)
+        args = {"item_kind": item_kind, "item_id": item_id, "verdict": stored, "into": target}
 
-        Order is load-bearing: name/type validation, then `require_situation`, then the shared
-        sequence. Nothing is caught inside `_do`, so `_mutate` records the library's own class name
-        before `EntityError` becomes `AdminRefused`. `review_decide`'s steward check is deliberately
-        not reached: it is for a resolved identity, and `actor` here is free text."""
+        def _do(by: str) -> dict:
+            action, extra = self._decision_action(item_kind, item_id, stored, by, target)
+            result = server_review.decide_and_record(
+                self._conn, repo_url=self._server.librarian_repo_url, item_kind=item_kind,
+                item_id=item_id, verdict=stored, actor=by, source=server_review.SOURCE_ADMIN,
+                notes=clean_notes, action=action, extra=extra)
+            return {"recorded": stored, "item_kind": item_kind, "item_id": item_id,
+                    "commit": result["commit"], "summary": _clean(result["summary"]),
+                    "reanchored": list(result.get("reanchored") or []), "into": target}
+
+        try:
+            return self._mutate("entities.decide", actor, args, _do)
+        except EntityError as ex:
+            # Caught HERE, outside `_mutate`: the row already captured the ORIGINAL class name.
+            raise AdminRefused(str(ex)) from ex
+
+    @staticmethod
+    def _decision_action(item_kind: str, item_id: str, stored: str, by: str, into: str):
+        """`(action, ledger extra)` — the `entities.decide` call the door runs in its clone."""
+        from datetime import date
+
+        from stigmergy.entities import decide as entities_decide
+        from stigmergy.review_kinds import split_alias_item_id
+        today = date.today().isoformat()
+        if item_kind == KIND_ALIAS_PROPOSAL:
+            entity_id, alias = split_alias_item_id(item_id)
+            if not entity_id:
+                raise AdminBadRequest("an alias item id is `<entity id>:<alias>`")
+            if stored == server_review.APPROVE:
+                return (lambda repo: entities_decide.approve_alias(
+                    repo, entity_id=entity_id, alias=alias, approved_by=by, today=today)), {}
+            return (lambda repo: entities_decide.decline_alias(
+                repo, entity_id=entity_id, alias=alias, today=today)), {}
+        if stored == server_review.MERGE:
+            return (lambda repo: entities_decide.merge_entity(
+                repo, entity_id=item_id, into=into, approved_by=by, today=today)), {"into": into}
+        if stored == server_review.APPROVE:
+            return (lambda repo: entities_decide.approve_entity(
+                repo, entity_id=item_id, approved_by=by, today=today)), {}
+        return (lambda repo: entities_decide.decline_entity(
+            repo, entity_id=item_id, today=today)), {}
+
+    def entity_create(self, *, actor: str, name: str, entity_type: str, entity_id: str = "",
+                      aliases: str = "", role: str = "") -> dict:
+        """A steward registering an entity nobody proposed, through
+        `server.review.create_and_record`: born confirmed by its creator, recorded as an approval
+        so "entities born" counts it like any other door's."""
         clean_name = " ".join(str(name or "").split())
         clean_type = str(entity_type or "").strip().lower()
         missing = [field for field, value in (("name", clean_name), ("entity_type", clean_type))
-                  if not value]
+                   if not value]
         if missing:
             raise AdminBadRequest(
-                f"approving an entity proposal mints it (ADR 030) — missing "
-                f"{' and '.join(missing)}: pass name (the entity's page title) and entity_type "
-                f"(one of {', '.join(ENTITY_TYPES)})")
+                f"creating an entity needs {' and '.join(missing)}: pass name (the entity's page "
+                f"title) and entity_type (one of {', '.join(ENTITY_TYPES)})")
         if clean_type not in ENTITY_TYPES:
             raise AdminBadRequest(
                 f"entity_type {clean_type!r} is not one of {', '.join(ENTITY_TYPES)}")
         resolved_id = str(entity_id or "").strip() or canonical_id_for(clean_name)
         alias_list = [a.strip() for a in str(aliases or "").split(",") if a.strip()]
-        args = {"id": situation_id, "entity_id": resolved_id, "name": clean_name,
-               "entity_type": clean_type, "requeue": bool(requeue)}
+        args = {"entity_id": resolved_id, "name": clean_name, "entity_type": clean_type}
 
         def _do(by: str) -> dict:
-            # The guard stays HERE rather than inside the shared sequence: this door runs it after
-            # its own name/type validation and the review lane runs it before, so one shared
-            # answer would change what a caller wrong in both ways at once is told.
-            situations.require_situation(self._conn, situation_id, action="approve")
-            # Nothing is caught around this call: the library's own exception class must reach
-            # `_mutate`, which records it in `admin_actions` before the `except` below renames it
-            # for the caller.
-            return server_review.mint_and_record_approval(
-                self._conn, repo_url=self._server.librarian_repo_url,
-                submission_id=situation_id, entity_id=resolved_id, name=clean_name,
-                entity_type=clean_type, aliases=alias_list, role=role or "", actor=by,
-                source=server_review.SOURCE_ADMIN, requeue=requeue)
+            return server_review.create_and_record(
+                self._conn, repo_url=self._server.librarian_repo_url, entity_id=resolved_id,
+                name=clean_name, entity_type=clean_type, aliases=alias_list, role=role or "",
+                actor=by, source=server_review.SOURCE_ADMIN)
 
         try:
-            return self._mutate("entities.approve", actor, args, _do)
+            return self._mutate("entities.create", actor, args, _do)
         except EntityError as ex:
-            # Caught HERE, outside `_mutate`: `_mutate` has already recorded admin_actions with the
-            # ORIGINAL class name, so converting inside `_do` would rename what the row already
-            # captured.
             raise AdminRefused(str(ex)) from ex
 
     # ── repair proposals (read, and the second governed Approve — ADR 039) ────────────────────
@@ -1079,14 +1098,6 @@ class AdminService:
             return common
         return {**common, "link": _clean(op.get("link")), "note": _clean(op.get("note"))}
 
-    def _with_reply(self, row: dict) -> dict:
-        """A sanitized queue row plus the one field the list and the trace both owe a parked
-        submission: the exact call that answers its question (`capture.schema.reply_invocation`)."""
-        shaped = self._traced_fields(row)
-        if shaped.get("status") == capture_schema.NEEDS_INPUT:
-            shaped["reply_invocation"] = capture_schema.reply_invocation(shaped["id"])
-        return shaped
-
     def _traced_fields(self, row: dict) -> dict:
         """Sanitize every untrusted string a queue row carries, structure untouched.
 
@@ -1094,7 +1105,7 @@ class AdminService:
         when they actually ARE objects: a scalar left there by any writer this console does not own
         travels through unshaped rather than taking the whole detail view down with it."""
         out = dict(row)
-        for key in ("excerpt", "error", "reply"):
+        for key in ("excerpt", "error"):
             if key in out:
                 out[key] = _clean(out[key])
         if out.get("events"):
@@ -1107,19 +1118,6 @@ class AdminService:
         if out.get("hints") and isinstance(out["hints"], dict):
             out["hints"] = {k: (_clean(v) if isinstance(v, str) else v)
                             for k, v in out["hints"].items()}
-        return out
-
-    def _situation(self, row: dict) -> dict:
-        """Sanitize a row `entities.situations` already shaped. Every derived field arrives
-        decided — `subject`, `subjects` and `mint_name_prefill` alike — and is only cleaned here,
-        so no caller can hand this a differently-preprocessed row and get a different default
-        name than the other route. `mint_name_prefill == ""` is the instruction to leave the
-        Approve form's field empty and list `subjects`, not an absent key.
-        """
-        out = self._traced_fields(row)
-        out["subject"] = _clean(out.get("subject"))
-        out["subjects"] = [_clean(s) for s in out.get("subjects") or []]
-        out["mint_name_prefill"] = _clean(out.get("mint_name_prefill"))
         return out
 
     def _audit_aggregate(self) -> list[dict]:

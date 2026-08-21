@@ -1,5 +1,6 @@
-"""A server-driven mint: clone the knowledge repo with the librarian App's own credential, mint
-through the shared `entities.mint.mint`, push, remove the clone.
+"""The server's door into the knowledge repo: clone it with the librarian App's own credential,
+act — mint a brand-new entity through `entities.mint.mint`, or carry out a steward's decision on
+a proposal through `entities.decide.apply` — push, remove the clone.
 
 A throwaway clone per request, never a standing checkout — a standing one would couple the read
 path's startup to GitHub availability for a rare operation, and the `TemporaryDirectory` leaves
@@ -20,6 +21,7 @@ import logging
 import os
 import tempfile
 
+from stigmergy.entities import decide
 from stigmergy.entities import mint as mint_lib
 from stigmergy.entities.errors import (
     CapabilityUnavailableError,
@@ -75,9 +77,9 @@ MINT_FAULT_MESSAGE = (
 #     registered entry and says to point the capture at it. Only `CollisionRaceError`, the
 #     post-rebase re-ask, is mapped; catching its base class here would turn a governance verdict
 #     into "something moved, approve again" and send a steward round a loop that cannot succeed.
-#   · the secrets refusal (`mint._refuse_secrets`) — `_relocate` has already rewritten gitleaks'
+#   · the secrets refusal (`mint.refuse_secrets`) — `_relocate` has already rewritten gitleaks'
 #     scratch path to the repo-relative page, and the rule id is what a steward would allowlist.
-#   · the drift refusal (`mint._refuse_drift`) — names `generator.FIX_COMMAND`, which is portable
+#   · the drift refusal (`mint.refuse_drift`) — names `generator.FIX_COMMAND`, which is portable
 #     and run against the knowledge repo, not against any clone this process made.
 # All four are `EntityError`s, which is why there is no bare `except EntityError` arm below and
 # must not become one: it would swallow every refusal a steward can actually act on.
@@ -145,6 +147,33 @@ def mint_via_clone(repo_url: str, branch: str, credential, *, entity_id: str, na
     may be `None`: the honest statement of when a credential is needed, and what lets the pg
     suite drive this against a real bare remote with no key and no network.
     """
+    trailer = f"Approved-by: {_trailer_actor(approved_by)}"
+    return _in_fresh_clone(
+        repo_url, branch, credential,
+        lambda repo, author: mint_lib.mint(
+            repo, entity_id=entity_id, name=name, entity_type=entity_type, aliases=aliases,
+            role=role, branch=branch, today=today, author=author, approved_by=approved_by,
+            submission_id=submission_id, trailer=trailer, on_output=on_output))
+
+
+def decide_via_clone(repo_url: str, branch: str, credential, *, action, decided_by: str,
+                     on_output=None) -> dict:
+    """The same throwaway clone for a steward's DECISION on a proposal: `action` is
+    `lambda repo: decide.approve_entity(repo, ...)` or any of its siblings, run through
+    `decide.apply` — preflight, drift refusal, the decision, the secrets scan, one pushed commit
+    carrying a `Decided-by:` trailer naming the steward. The same error ladder as a mint: every
+    sentence a steward can read over MCP is one of the constants above."""
+    trailer = f"Decided-by: {_trailer_actor(decided_by)}"
+    return _in_fresh_clone(
+        repo_url, branch, credential,
+        lambda repo, author: decide.apply(repo, action=action, branch=branch, author=author,
+                                          trailer=trailer, on_output=on_output))
+
+
+def _in_fresh_clone(repo_url: str, branch: str, credential, work) -> dict:
+    """Clone, configure the App's identity on the clone, run `work(repo, author)`, clean up —
+    with the refusal ladder that turns this package's clone-bound sentences into steward-facing
+    ones (the constants above, and the pass-through set they document)."""
     clone_url = _authenticated_url(repo_url, credential)
     author = githubapp.identity(credential or {})
     with tempfile.TemporaryDirectory(prefix="stigmergy-entity-mint-") as tmp:
@@ -159,15 +188,12 @@ def mint_via_clone(repo_url: str, branch: str, credential, *, entity_id: str, na
             log.error("server-driven mint: could not clone the knowledge repo", exc_info=True)
             raise EntityError(CLONE_FAILED_MESSAGE) from ex
         try:
-            # Configured on the clone too, not only handed to `mint()` as `author`: the rebase in
+            # Configured on the clone too, not only handed in as `author`: the rebase in
             # `clone.commit_and_push`'s retry needs SOME committer identity, and a fresh temp
             # clone cannot assume a global `~/.gitconfig` supplies one.
             gitcmd.run("config", "user.name", author[0], cwd=repo)
             gitcmd.run("config", "user.email", author[1], cwd=repo)
-            return mint_lib.mint(
-                repo, entity_id=entity_id, name=name, entity_type=entity_type, aliases=aliases,
-                role=role, branch=branch, today=today, author=author, submission_id=submission_id,
-                trailer=f"Approved-by: {_trailer_actor(approved_by)}", on_output=on_output)
+            return work(repo, author)
         # The ladder, ordered but order-INDEPENDENT: none of these four is a subclass of another
         # (pinned by `tests/entities/test_errors.py`), so no arm shadows the one below it. What the
         # order DOES require is that all four precede any `except EntityError` — there is none, and

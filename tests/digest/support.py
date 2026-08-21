@@ -29,16 +29,18 @@ write_channels_file = gardener_support.write_channels_file
 
 # ── review_decisions: entities born — the governed-birth log ────────────────────────────────────
 def seed_entity_approval(conn, *, created_days_ago: int = 0, item_id: str = "1",
-                         verdict: str = review.APPROVE) -> int:
-    """One `review_decisions` row shaped exactly like `server.review._decide_entity_proposal`'s own
-    single INSERT — `item_kind=KIND_ENTITY_PROPOSAL`, `item_id` the capture_queue id (as text,
-    never the entity id — `stigmergy.digest.sections`'s own module docstring explains why this
-    governed-birth log is a COUNT source, never a names source)."""
+                         verdict: str = review.APPROVE,
+                         item_kind: str = review.KIND_IDENTITY_PROPOSAL) -> int:
+    """One `review_decisions` row shaped like the one `server.review.decide_and_record` writes for
+    an approved identity proposal — `item_kind=KIND_IDENTITY_PROPOSAL`, `item_id` the entity id
+    (`stigmergy.digest.sections`'s own module docstring explains why this governed-birth log is a
+    COUNT source, never a names source). `item_kind` is a parameter so the legacy kind the
+    parked-capture mint door wrote before ADR 041 can be seeded too."""
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO review_decisions (item_kind, item_id, verdict, actor, notes, extra) "
             "VALUES (%s, %s, %s, %s, '', NULL) RETURNING id",
-            (review.KIND_ENTITY_PROPOSAL, item_id, verdict, STEWARD))
+            (item_kind, item_id, verdict, STEWARD))
         decision_id = cur.fetchone()[0]
     if created_days_ago:
         with conn.cursor() as cur:

@@ -30,14 +30,15 @@ from pydantic_ai.messages import ModelResponse, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
 
-from stigmergy.capture import dispositions, schema
+from stigmergy.capture import schema
 from stigmergy.librarian import agent as agent_module
-from stigmergy.librarian import gates, pricing, processing, pydantic_backend, worker
+from stigmergy.librarian import gates, pricing, pydantic_backend, worker
 from stigmergy.librarian.errors import AgentError, LibrarianConfigError, OutcomeShapeError
 from stigmergy.librarian.pydantic_backend import (
     MeetingAccount,
     MeetingAnchoring,
     MeetingDecision,
+    NewEntity,
     PydanticFilingAgent,
 )
 from tests.librarian import support
@@ -56,9 +57,9 @@ _TRANSCRIPT = "Alice and Bob went through the Acme renewal window and settled th
 
 # The registry the fixture knowledge repo ships with holds exactly this one entity, under this id
 # — the id is what a filed page's `entity:` frontmatter carries, and it is not derivable from the
-# name (`ops/entity-registry.json` maps `acme` -> `Acme Corp`), so it is named rather than computed.
+# name (`ops/entity-registry.json` maps `acme-corp` -> `Acme Corp`), so it is named rather than computed.
 _REGISTERED = "Acme Corp"
-_REGISTERED_ID = "acme"
+_REGISTERED_ID = "acme-corp"
 # ...and this one it does not, which is what makes a complete, correct distillation park.
 _UNREGISTERED = "Ledgerly"
 
@@ -88,7 +89,7 @@ def _notes() -> str:
 
 def _account(*, anchor_to: str = _REGISTERED, link_entity: str | None = None,
              decisions: int = 1, decision: str = "file",
-             meeting_title: str = "Q3 sync") -> MeetingAccount:
+             meeting_title: str = "Q3 sync", new_entities=()) -> MeetingAccount:
     """A complete meeting account, in the schema the backend declares as its output type.
 
     `anchor_to` is what each decision DECLARES its aboutness to be, and `link_entity` what its body
@@ -111,6 +112,7 @@ def _account(*, anchor_to: str = _REGISTERED, link_entity: str | None = None,
                             anchoring=MeetingAnchoring(kind="entity", entities=[anchor_to]))
             for index in range(decisions)],
         summary=f"distilled {decisions} decision(s) from the meeting",
+        new_entities=list(new_entities),
     )
 
 
@@ -133,43 +135,6 @@ def _rig(tmp_path, model_factory, *, model: str = PRICED_MODEL, **setting_overri
                                       backend="pydantic", model=model, **setting_overrides)
     agent = PydanticFilingAgent(settings, model_factory=model_factory)
     return env, support.build_deps(env, settings, agent=agent), agent
-
-
-def _mint_entity(env, deps, name: str) -> None:
-    """A steward mints an entity: `ops/entity-registry.json` gains it AND a real anchored page
-    lands on `main`, in one pushed commit — the shape governed entity birth actually produces.
-
-    **Written into the REPO, not only into `deps.registry`.** `process_meeting_item` reloads the
-    registry from the base commit on every pass, so an in-memory mutation alone would be invisible
-    to the gate this walk turns on, and the test would then assert something production cannot do.
-    The in-memory copy is updated too, because the post-filing view hook reads `deps.registry`.
-
-    A declared duplicate of `test_meeting_processing_pg._register`: the steward-mint shape has two
-    callers in this suite now and no shared home, and `tests/librarian/support.py` is where it
-    belongs. Kept local rather than moved as part of a milestone's test pass — the note is in the
-    delivery, not in a silent copy.
-    """
-    entity_id = name.lower()
-    deps.registry.entities[entity_id] = {"name": name, "type": "organization", "aliases": []}
-    os.makedirs(os.path.join(env.repo, "wiki", "entities"), exist_ok=True)
-    page = (f'---\ntype: entity\ntitle: "{name}"\nstatus: developing\ncreated: 2026-07-01\n'
-            f"updated: 2026-07-01\ntags: [entity, organization]\nentity: [{entity_id}]\n"
-            f"related: []\nsources: []\n---\n\n# {name}\n\nAn independently anchored entity, "
-            "padded past the contract linter's thirty-line minimum the same way the fixture's own "
-            "entity page pads itself, so this page is real, lint-clean and anchored on its own "
-            "rather than a throwaway string with no bearing on the corpus it sits in. It exists "
-            "because a steward minted it between two polls, which is the whole mechanism a parked "
-            "capture's re-file depends on.\n")
-    with open(os.path.join(env.repo, "wiki", "entities", f"{name}.md"), "w",
-              encoding="utf-8") as handle:
-        handle.write(page)
-    registry_path = os.path.join(env.repo, "ops", "entity-registry.json")
-    with open(registry_path, encoding="utf-8") as handle:
-        data = json.load(handle)
-    data["entities"][entity_id] = {"name": name, "type": "organization", "aliases": []}
-    with open(registry_path, "w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2)
-    support.commit_and_push(env.repo, f"feat(entity): a steward mints {name}")
 
 
 # ── AC2: the golden path, priced ───────────────────────────────────────────────────────────────
@@ -288,12 +253,13 @@ def test_an_unpriced_configured_model_refuses_even_though_the_injected_model_is_
     assert pricing.AS_OF in str(exc_info.value)
 
 
-# ── AC4: a park must not cost knowledge, and a re-file must not cost money ─────────────────────
-def test_a_complete_distillation_parks_on_an_unresolvable_anchor_and_survives_the_park(
+# ── AC4: a name the registry does not know is proposed, never parked ─────────────────────────
+def test_a_complete_distillation_that_cannot_anchor_and_proposes_nothing_is_the_librarians_fault(
         tmp_path, clean_queue, require_gitleaks):
-    """Step one of the walk on the new backend: a distillation that is complete and correct, vetoed
-    for a reason that has nothing to do with its content. The decisions have to survive into the
-    row itself, or the re-file below has nothing to reuse."""
+    """OLD BEHAVIOUR: parked on a steward, with the distillation stored on the row for a re-file
+    after a mint. Nothing parks: the brief offers the distiller a proposal road that files, and a
+    complete account that declares an unresolvable anchor without taking it is refused on both
+    passes. The park used to be a paid call that had to report its cost; the failure still does."""
     env, deps, _ = _rig(tmp_path,
                         lambda: _test_model(_account(anchor_to=_UNREGISTERED,
                                                      link_entity=_REGISTERED, decisions=2)))
@@ -301,117 +267,40 @@ def test_a_complete_distillation_parks_on_an_unresolvable_anchor_and_survives_th
     support.submit_meeting(clean_queue, deps, _TRANSCRIPT)
     item, result = worker.process_next(clean_queue, deps)
 
-    assert result.status == schema.TRIAGE, result.report.get("summary")
-    assert _UNREGISTERED in result.report["summary"]
-    with clean_queue.cursor() as cur:
-        cur.execute("SELECT outcome FROM capture_queue WHERE id = %s", (item["id"],))
-        stored = cur.fetchone()[0]
-    assert stored is not None, "the parked distillation was thrown away"
-    assert stored["version"] == processing.OUTCOME_REUSE_VERSION
-    assert len(stored["raw"]["decisions"]) == 2
-    # the park itself was a real, paid model call — it must not report as free
+    assert result.status == schema.FAILED, result.report.get("summary")
     assert result.report["cost_usd"] > 0
 
 
-def test_the_re_file_after_a_mint_spends_no_model_call_and_reports_zero_dollars(
+def test_a_distillation_that_proposes_the_new_entity_files_the_set_with_the_entity_beside_it(
         tmp_path, clean_queue, require_gitleaks):
-    """**The park-reuse twin, with the pydantic backend present and a model that cannot be
-    reached.** The factory raises on the first call, so if the re-file asked the backend for a
-    model at all this test dies loudly rather than quietly re-distilling — the offline double could
-    not prove this, because re-running a deterministic double produces the identical distillation
-    and "the decisions survived" would be true either way.
-
-    Two figures carry the claim: `calls == 0` (nothing was asked of the model) and `cost_usd == 0.0`
-    (a re-file costs nothing, and `0.0` here is a real answer rather than a missing key).
-    """
-    calls = {"n": 0}
-
-    def _poison():
-        calls["n"] += 1
-        raise AssertionError("the re-file asked for a model — the parked distillation was not "
-                             "reused, which is knowledge lost to an anchoring failure that had "
-                             "nothing to do with its content")
-
+    """The proposal, through a real `Agent.run` on the meeting flow: the account names the new
+    entity in `new_entities`, every decision anchors to it, and the commit carries the source page,
+    the meeting page, the decisions AND the proposed entity page — with the registry regenerated so
+    `entity: ["ledgerly"]` resolves on every decision."""
+    proposed = NewEntity(name=_UNREGISTERED, entity_type="organization",
+                         role="a prospect discussed at the sync", aliases=[],
+                         summary="Ledgerly is a prospect the Q3 sync discussed.",
+                         facts=["Discussed at the Q3 sync"], connections=[])
     env, deps, _ = _rig(tmp_path,
                         lambda: _test_model(_account(anchor_to=_UNREGISTERED,
-                                                     link_entity=_REGISTERED, decisions=2)))
-    support.submit_meeting(clean_queue, deps, _TRANSCRIPT)
-    item, parked = worker.process_next(clean_queue, deps)
-    assert parked.status == schema.TRIAGE
+                                                     link_entity=_UNREGISTERED, decisions=2,
+                                                     new_entities=[proposed])))
 
-    _mint_entity(env, deps, _UNREGISTERED)
-    dispositions.requeue(clean_queue, item["id"], actor="steward@example.com", note="minted")
+    support.submit_meeting(clean_queue, deps, f"{_TRANSCRIPT} Ledgerly came up as a prospect.")
+    _, result = worker.process_next(clean_queue, deps)
 
-    refiled_deps = dataclasses.replace(
-        deps, agent=PydanticFilingAgent(deps.settings, model_factory=_poison))
-    _, refiled = worker.process_next(clean_queue, refiled_deps)
-
-    assert calls["n"] == 0
-    assert refiled.status == schema.FILED, refiled.report.get("summary")
-    assert refiled.report["distillation_reuse"]["reused"] is True
-    assert len(refiled.report["filed_meeting"]["decisions"]) == 2, (
-        "the re-file filed fewer decision pages than the parked pass produced")
-    assert refiled.report["cost_usd"] == 0.0, (
-        "a re-file that called no model reported a spend — the figure is not coming from the "
-        "passes it actually ran")
-    for row in refiled.report["filed_meeting"]["decisions"]:
-        page = support.read_filed_page(env.bare, "main", row["path"])
-        assert f'entity: ["{_UNREGISTERED.lower()}"]' in page
+    assert result.status == schema.FILED, result.report.get("summary")
+    _, sha = result.result_ref.rsplit("@", 1)
+    changed = support.changed_paths(env.bare, sha)
+    assert "wiki/entities/Ledgerly.md" in changed and "ops/entity-registry.json" in changed
+    for row in result.report["filed_meeting"]["decisions"]:
+        page = support.read_filed_page(env.bare, sha, row["path"])
+        assert 'entity: ["ledgerly"]' in page
+    assert result.report["entities_proposed"] == [
+        {"id": "ledgerly", "name": "Ledgerly", "type": "organization"}]
+    assert result.report["cost_usd"] > 0
 
 
-def test_the_poison_really_is_poison_a_re_file_that_cannot_reuse_does_reach_the_model(
-        tmp_path, clean_queue, require_gitleaks):
-    """**The specificity half of the test above, and without it that test is a tautology.**
-
-    `calls == 0` only means something if this backend WOULD have been asked for a model when reuse
-    is not available. So: the same park, requeued with nothing minted, so the stored distillation
-    still cannot be filed. The loop falls through to a genuine re-distillation, the factory is
-    reached, and it raises — which is the proof that the zero next door was measured rather than
-    structural.
-    """
-    calls = {"n": 0}
-
-    def _poison():
-        calls["n"] += 1
-        raise RuntimeError("the model was reached")
-
-    env, deps, _ = _rig(tmp_path,
-                        lambda: _test_model(_account(anchor_to=_UNREGISTERED,
-                                                     link_entity=_REGISTERED)))
-    support.submit_meeting(clean_queue, deps, _TRANSCRIPT)
-    item, parked = worker.process_next(clean_queue, deps)
-    assert parked.status == schema.TRIAGE
-
-    # requeued WITHOUT minting: the stored outcome's declared anchor is still unresolvable
-    dispositions.requeue(clean_queue, item["id"], actor="steward@example.com",
-                         note="requeued without minting anything")
-    refiled_deps = dataclasses.replace(
-        deps, agent=PydanticFilingAgent(deps.settings, model_factory=_poison))
-
-    _, refiled = worker.process_next(clean_queue, refiled_deps)
-
-    assert calls["n"] == 1, (
-        "a re-file whose stored distillation cannot be filed did NOT ask for a model — which would "
-        "make the zero in the test above structural rather than measured")
-    # ...and the worker's own safety net turned the backend's unexpected fault into a `failed` row
-    # rather than killing the drain loop, which is the behaviour that keeps one bad item from
-    # stopping the queue.
-    assert refiled.status == schema.FAILED
-
-
-# ── AC5: the one corrective retry, on the new backend ─────────────────────────────────────────
-# The account shape the BOUNDARY refuses and the SCHEMA accepts — which is a narrower set than it
-# used to be, and deliberately so.
-#
-# It was `decision="publish"`: a plain string field took it, the framework's own output validation
-# passed, and `parse_meeting_outcome` refused it downstream. `decision` is
-# `Literal[*agent.DECISIONS]` now, so that account cannot be BUILT — the framework re-asks the
-# model instead, one road earlier and for free, which is the whole point of the schema round.
-#
-# What is left to the boundary is exactly what the schema declines to restate: the BOUNDS.
-# `parse_meeting_outcome` refuses an identifier over `MAX_IDENTIFIER_LEN` and the schema says
-# nothing about length, so an over-long `meeting_title` is a complete, schema-valid account that
-# the trust boundary still refuses — which is the same road a real provider's plausible-but-
 # over-long answer arrives by, and the one these two tests are named for.
 _OVER_LONG_TITLE = "Q" * (agent_module.MAX_IDENTIFIER_LEN + 1)
 

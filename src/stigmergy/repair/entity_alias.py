@@ -117,60 +117,21 @@ _MISSING_WHY = "{path} does not exist in the repo, or is not readable as text"
 
 # ── the two entity-page rewrites ──────────────────────────────────────────────────────────────
 def _front_and_tail(text: str) -> tuple[list[str], str]:
-    """`(frontmatter lines, everything from the closing fence onward)`.
-
-    The tail is taken FROM THE FILE rather than reassembled, `deletion.scrubbed`'s rule: a page
-    whose closing `---` has no newline after it must not gain one, because a page that gained a
-    byte is a page in this merge's blast radius for a change nobody made.
-    """
-    front, rest = page_policy.split_frontmatter(text or "")
-    if len(text or "") == len(rest):
-        raise RepairError("this page has no `---` frontmatter block, so it declares no identity")
-    head = (text or "")[:len(text or "") - len(rest)]
-    return front.split("\n"), ("---" + ("\n" if head.endswith("\n") else "") + rest)
+    """`librarian.page.front_and_tail` — the shared line editors, with this kind's own refusal
+    for a page that has no block: such a page declares no identity to merge."""
+    try:
+        return page_policy.front_and_tail(text)
+    except ValueError as ex:
+        raise RepairError("this page has no `---` frontmatter block, so it declares no identity") from ex
 
 
-def _rebuilt(front_lines: list[str], tail: str) -> str:
-    return "---\n" + "\n".join(front_lines) + "\n" + tail
-
-
-def _list_values(front_lines: list[str], key: str) -> list[str]:
-    """A frontmatter LIST field's current values, `[]` for an absent or unreadable one."""
-    start, raw = page_policy.top_level_key_line(front_lines, key)
-    if start < 0:
-        return []
-    inline = raw.strip()
-    if inline:
-        return page_policy.parse_list_value(inline)
-    _start, end = page_policy.top_level_key_span(front_lines, key)
-    return page_policy.parse_list_value(
-        "\n".join(line.strip() for line in front_lines[start + 1:end] if line.strip()))
-
-
-def _with_list(front_lines: list[str], key: str, values: list[str]) -> list[str]:
-    """A frontmatter LIST field rewritten to exactly `values`, IN PLACE.
-
-    Always a flow list, always on the field's own single line: this kind rewrites two fields whose
-    shapes a steward never chose (the entity template writes `aliases: []`), and reproducing a
-    block sequence's indentation would be a second opinion about a shape `librarian.page` already
-    owns. A field the page does not declare is APPENDED at the end of the frontmatter, which is the
-    one place a new line cannot land inside somebody else's block.
-    """
-    start, _raw = page_policy.top_level_key_line(front_lines, key)
-    line = f"{key}: {page_policy.yaml_list(values)}"
-    if start < 0:
-        return [*front_lines, line]
-    _start, end = page_policy.top_level_key_span(front_lines, key)
-    return front_lines[:start] + [line] + front_lines[end:]
-
-
-def _with_scalar(front_lines: list[str], key: str, value: str) -> list[str]:
-    start, _raw = page_policy.top_level_key_line(front_lines, key)
-    line = f"{key}: {page_policy.yaml_scalar(value)}"
-    if start < 0:
-        return [*front_lines, line]
-    _start, end = page_policy.top_level_key_span(front_lines, key)
-    return front_lines[:start] + [line] + front_lines[end:]
+# The line editors are `librarian.page`'s — one writer of "replace this field's line", shared
+# with the identity decisions in `entities.decide`, so the two governed rewriters of an entity
+# page cannot disagree about block sequences, re-cased keys or where a new line may land.
+_rebuilt = page_policy.rebuild
+_list_values = page_policy.list_field_values
+_with_list = page_policy.with_list_field
+_with_scalar = page_policy.with_scalar_field
 
 
 def aliased(text: str, aliases: list[str], *, absorbed_stem: str = "") -> str:

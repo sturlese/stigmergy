@@ -7,7 +7,7 @@ reasoning, as its sibling one directory over (`../librarian/FROZEN.md`).
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/skills/meeting-distiller/SKILL.md` |
-| **Copied at commit** | `abf6790bf7e6845d0f322645b36e41fa66f9f333` |
+| **Copied at commit** | `6bfc4a013ce7909e8f9bc571fe2d4d3809be1850` |
 | **Drift guard** | none, on purpose — see `../../tools/FROZEN.md` |
 
 ## Why the filing golden needs it
@@ -26,10 +26,10 @@ change to that contract be measured — the run before it and the run after it e
 version they were judged under, so "did the new brief file better meetings?" is a question the
 series can actually answer.
 
-The sha above is the one every frozen copy in this fixture matches, not necessarily the commit
-this file was physically taken at: these bytes are identical at its predecessor too, so the row
-was aligned to the sha that describes the whole tree rather than re-copied — a record-only change,
-recorded the same way in `../../../PROVENANCE.json`.
+The sha above is the one every frozen copy in this fixture matches, and the commit this file was
+physically taken at: ADR 041 moved this brief, the librarian's, the linter and the entity template
+together, so one commit describes the whole tree — recorded the same way in
+`../../../PROVENANCE.json`.
 
 Note that this is a DIFFERENT copy, at a different freeze cadence, from
 `tests/librarian/fixtures/repo/.claude/skills/meeting-distiller/SKILL.md`. That one is a drift

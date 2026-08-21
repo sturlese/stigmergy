@@ -10,7 +10,7 @@ console `"console"` is a row no reader can ever join back to the door it came fr
 import pytest
 
 from stigmergy.capture import decisions
-from stigmergy.review_kinds import KIND_ENTITY_PROPOSAL, KIND_PARKED_CAPTURE
+from stigmergy.review_kinds import KIND_ALIAS_PROPOSAL, KIND_IDENTITY_PROPOSAL
 from tests.capture.conftest import connect_or_skip
 
 
@@ -46,7 +46,7 @@ def test_record_decision_refuses_a_source_outside_the_closed_set(clean_ledger):
     caller typed reaches here, only a literal a door's own code passed.
     """
     with pytest.raises(ValueError, match="rest-api"):
-        decisions.record_decision(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL, item_id="1",
+        decisions.record_decision(clean_ledger, item_kind=KIND_IDENTITY_PROPOSAL, item_id="1",
                                   verdict=decisions.APPROVE, actor="steward@example.com",
                                   source="rest-api")
 
@@ -60,7 +60,7 @@ def test_every_declared_source_is_accepted_and_lands_in_extra(clean_ledger, sour
     """The benign twin of the refusal above, over the WHOLE closed set rather than one member —
     a validator measured only by what it rejects has an unmeasured specificity, and this one can
     bounce a real steward's decision on any of the four doors."""
-    decisions.record_decision(clean_ledger, item_kind=KIND_PARKED_CAPTURE, item_id="7",
+    decisions.record_decision(clean_ledger, item_kind=KIND_ALIAS_PROPOSAL, item_id="7",
                               verdict=decisions.REJECT, actor="steward@example.com",
                               source=source, notes="not worth filing")
 
@@ -72,7 +72,7 @@ def test_the_source_rides_beside_the_per_kind_detail_extra_already_carried(clean
     untouched, with `source` added beside them — and so does any other key. `door` is here because
     it is what the CLI door used to write and what its historical rows still carry; it stopped once
     `source` said the same thing for every door."""
-    decisions.record_decision(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL, item_id="42",
+    decisions.record_decision(clean_ledger, item_kind=KIND_IDENTITY_PROPOSAL, item_id="42",
                               verdict=decisions.APPROVE, actor="steward@example.com",
                               source=decisions.SOURCE_CLI,
                               extra={"entity_id": "globex-robotics", "commit": "a" * 40,
@@ -91,21 +91,21 @@ def test_a_source_planted_in_extra_cannot_overwrite_the_validated_one(clean_ledg
 
     `source` is authoritative. `extra` stays the per-kind seam it was and simply cannot reach this
     one key."""
-    decisions.record_decision(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL, item_id="3",
+    decisions.record_decision(clean_ledger, item_kind=KIND_IDENTITY_PROPOSAL, item_id="3",
                               verdict=decisions.APPROVE, actor="steward@example.com",
                               source=decisions.SOURCE_MCP, extra={"source": "rest-api"})
 
     assert _extra_of(clean_ledger, "3") == {"source": "mcp"}
-    assert decisions.latest_decisions(clean_ledger)[(KIND_ENTITY_PROPOSAL, "3")]["source"] == "mcp"
+    assert decisions.latest_decisions(clean_ledger)[(KIND_IDENTITY_PROPOSAL, "3")]["source"] == "mcp"
 
 
 # ── the read side ──────────────────────────────────────────────────────────────────────────────
 def test_latest_decisions_returns_the_recorded_source(clean_ledger):
-    decisions.record_decision(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL, item_id="42",
+    decisions.record_decision(clean_ledger, item_kind=KIND_IDENTITY_PROPOSAL, item_id="42",
                               verdict=decisions.APPROVE, actor="steward@example.com",
                               source=decisions.SOURCE_SLACK)
 
-    latest = decisions.latest_decisions(clean_ledger)[(KIND_ENTITY_PROPOSAL, "42")]
+    latest = decisions.latest_decisions(clean_ledger)[(KIND_IDENTITY_PROPOSAL, "42")]
 
     assert latest["source"] == "slack"
     assert latest["verdict"] == decisions.APPROVE
@@ -119,10 +119,10 @@ def test_latest_decision_for_returns_the_newest_row_of_a_contested_item(clean_le
     database happened to return first."""
     for verdict, actor in ((decisions.REJECT, "first@example.com"),
                            (decisions.APPROVE, "second@example.com")):
-        decisions.record_decision(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL, item_id="11",
+        decisions.record_decision(clean_ledger, item_kind=KIND_IDENTITY_PROPOSAL, item_id="11",
                                   verdict=verdict, actor=actor, source=decisions.SOURCE_ADMIN)
 
-    latest = decisions.latest_decision_for(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL,
+    latest = decisions.latest_decision_for(clean_ledger, item_kind=KIND_IDENTITY_PROPOSAL,
                                            item_id="11")
 
     assert (latest["verdict"], latest["actor"]) == (decisions.APPROVE, "second@example.com")
@@ -132,13 +132,13 @@ def test_latest_decision_for_returns_the_newest_row_of_a_contested_item(clean_le
 def test_latest_decision_for_is_none_on_an_item_nobody_has_decided(clean_ledger):
     """The benign twin, and the branch the refusal path reads most: an undecided item must produce
     NO staleness suffix at all, not an empty-ish dict a caller has to interpret."""
-    decisions.record_decision(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL, item_id="11",
+    decisions.record_decision(clean_ledger, item_kind=KIND_IDENTITY_PROPOSAL, item_id="11",
                               verdict=decisions.APPROVE, actor="steward@example.com",
                               source=decisions.SOURCE_ADMIN)
 
-    assert decisions.latest_decision_for(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL,
+    assert decisions.latest_decision_for(clean_ledger, item_kind=KIND_IDENTITY_PROPOSAL,
                                          item_id="12") is None
-    assert decisions.latest_decision_for(clean_ledger, item_kind=KIND_PARKED_CAPTURE,
+    assert decisions.latest_decision_for(clean_ledger, item_kind=KIND_ALIAS_PROPOSAL,
                                          item_id="11") is None, "the KIND is part of the key"
 
 
@@ -150,9 +150,9 @@ def test_a_row_written_before_this_column_existed_reads_back_as_an_empty_source(
         cur.execute(
             "INSERT INTO review_decisions (item_kind, item_id, verdict, actor, notes, extra) "
             "VALUES (%s, %s, %s, %s, '', NULL)",
-            (KIND_ENTITY_PROPOSAL, "9", decisions.APPROVE, "steward@example.com"))
+            (KIND_IDENTITY_PROPOSAL, "9", decisions.APPROVE, "steward@example.com"))
 
-    latest = decisions.latest_decisions(clean_ledger)[(KIND_ENTITY_PROPOSAL, "9")]
+    latest = decisions.latest_decisions(clean_ledger)[(KIND_IDENTITY_PROPOSAL, "9")]
 
     assert latest["source"] == ""
 
@@ -164,16 +164,16 @@ def test_recent_decisions_returns_the_newest_rows_bounded_every_decision_not_the
     `recent_decisions` is the FEED — every row, newest first, and the limit is applied in SQL so an
     append-only table never comes back whole."""
     for verdict, actor in (("reject", "ana"), ("approve", "marc")):
-        decisions.record_decision(clean_ledger, item_kind=KIND_ENTITY_PROPOSAL, item_id="7",
+        decisions.record_decision(clean_ledger, item_kind=KIND_IDENTITY_PROPOSAL, item_id="7",
                                   verdict=verdict, actor=actor, source="admin")
-    decisions.record_decision(clean_ledger, item_kind=KIND_PARKED_CAPTURE, item_id="9",
+    decisions.record_decision(clean_ledger, item_kind=KIND_ALIAS_PROPOSAL, item_id="9",
                               verdict="requeue", actor="pau", source="mcp")
 
     rows = decisions.recent_decisions(clean_ledger, limit=10)
     assert [(r["item_kind"], r["item_id"], r["verdict"], r["actor"], r["source"]) for r in rows] == [
-        (KIND_PARKED_CAPTURE, "9", "requeue", "pau", "mcp"),
-        (KIND_ENTITY_PROPOSAL, "7", "approve", "marc", "admin"),
-        (KIND_ENTITY_PROPOSAL, "7", "reject", "ana", "admin")]
+        (KIND_ALIAS_PROPOSAL, "9", "requeue", "pau", "mcp"),
+        (KIND_IDENTITY_PROPOSAL, "7", "approve", "marc", "admin"),
+        (KIND_IDENTITY_PROPOSAL, "7", "reject", "ana", "admin")]
     assert len(decisions.latest_decisions(clean_ledger)) == 2, "the per-item read collapses"
 
     assert len(decisions.recent_decisions(clean_ledger, limit=2)) == 2

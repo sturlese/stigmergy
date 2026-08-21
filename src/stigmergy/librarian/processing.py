@@ -3,8 +3,9 @@
 Cheapest-first: material -> retry collapse -> already-filed -> secrets/PII over the MATERIAL ->
 worktree -> agent -> declared edits -> stamp -> gates -> [one corrective retry] -> commit -> push.
 The scan runs over the MATERIAL because a capture containing a secret bounces WHOLE. Terminal
-states split by CAUSE, not by gate: content `rejected`, system `failed`, unresolved `triage`. The
-one submitter question is budgeted by `asked_at`, surviving a requeue and a lease redelivery.
+states split by CAUSE, not by gate: content `rejected`, system `failed`. A name nothing resolves
+to does not stop the page: the agent proposes the entity in its account, `identity.write_proposals`
+creates it in the same commit with `approved_by` empty, and a steward confirms it afterwards.
 """
 import asyncio
 import dataclasses
@@ -17,7 +18,8 @@ import re
 import tempfile
 from dataclasses import dataclass, field
 
-from stigmergy.capture import queue, schema
+from stigmergy import review_kinds
+from stigmergy.capture import decisions, queue, schema
 from stigmergy.capture.errors import CaptureError
 
 # `MAX_BODY_LINES`/`SPLIT_CHUNK_LINES` are IMPORTED: the linter and the splitter must agree.
@@ -34,6 +36,7 @@ from stigmergy.librarian import (
     gates,
     gather,
     gitcmd,
+    identity,
     pricing,
     report,
 )
@@ -67,8 +70,6 @@ class Result:
     report: dict = field(default_factory=dict)
     findings: list = field(default_factory=list)
     diagnostics_path: str = ""
-    # Stored on `capture_queue.outcome` for a re-file; `None` means "do not blank the column".
-    outcome: dict | None = None
 
     @property
     def error(self) -> str:
@@ -141,7 +142,9 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
     """
     anchoring = getattr(ctx.outcome, "anchoring", None) or {}
     kind = str(anchoring.get("kind", "")).lower() if isinstance(anchoring, dict) else ""
-    entity, unresolved = gates.resolve_entity_ids(anchoring, deps.registry)
+    # `ctx.registry`, never `deps.registry`: the former is the registry this commit PUBLISHES,
+    # proposals included, and an entity born in this commit must stamp like any other.
+    entity, unresolved = gates.resolve_entity_ids(anchoring, ctx.registry)
     if kind == "entity" and (unresolved or not entity):
         entity = []
     stamped = {"status": page_policy.FILED_STATUS, "as_of": deps.as_of(),
@@ -149,6 +152,8 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
     for path in ctx.in_lane_new_pages():
         if path in ctx.provenance_pages:
             continue    # stamped by `_stamp_attached_sources`, under the provenance group
+        if path in ctx.proposed_entity_pages:
+            continue    # an identity page carries its OWN anchor; `_declare_proposals` told the gates
         full = os.path.join(ctx.worktree, path)
         try:
             with open(full, encoding="utf-8") as f:
@@ -193,13 +198,21 @@ def _subject(title: str) -> str:
     return " ".join(defanged[:60].split()).strip() or "capture"
 
 
-def _commit_message(item: dict, outcome, page_path: str, *, n_sources: int = 0) -> str:
+def _commit_message(item: dict, outcome, page_path: str, *, n_sources: int = 0,
+                    proposed=()) -> str:
     """One capture, one commit, one filed page — enforced by `_cross_check_outcome`. The type in
-    the subject comes from the FOLDER the page landed in: the folder is the fact."""
+    the subject comes from the FOLDER the page landed in: the folder is the fact. An identity the
+    commit CREATED unconfirmed is named in the body, so `git log` answers "where did this entity
+    come from" with the capture that proposed it."""
     page_type = page_policy.type_for_folder(page_path) or "note"
     body = f"Filed by the librarian from capture #{item['id']}."
     if n_sources:
         body += f" {n_sources} source page(s) — the captured thread, verbatim — ride in it too."
+    names = [_subject(str(e.get("name", ""))) for e in proposed if e.get("name")]
+    if names:
+        body += (f" Proposes {len(names)} new entity page(s) — {', '.join(names)} — with "
+                 f"approved_by empty, for a steward to confirm; the registry is regenerated in "
+                 f"this same commit.")
     return (f"feat({page_type}): {_subject(getattr(outcome, 'title', ''))}\n\n"
             f"{body}\n\n"
             f"Submitted-by: {item['submitted_by']}\n")
@@ -431,7 +444,7 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         run = deps.agent.run(worktree=worktree, material=material,
                              hints=(item.get("hints") or {}).get("client", {}),
                              submitted_by=item["submitted_by"], corrective=corrective,
-                             reply=item.get("reply") or "", flow_note=flow_note,
+                             flow_note=flow_note,
                              gathered=gathered)
     except AgentError as ex:
         # A pass that died mid-run still spent real money.
@@ -446,15 +459,6 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
     if outcome is None:
         raise AgentError("the agent produced no usable account of what it did")
 
-    # The diff decides: park only if the worktree is clean. Source pages are written AFTER this.
-    if outcome.decision == "triage":
-        stray = gitcmd.diff_entries(worktree)
-        if stray:
-            raise AgentError(
-                f"the agent parked the capture but left {len(stray)} change(s) in the "
-                f"worktree; nothing was filed and nothing was committed")
-        return _triage(item, deps, outcome), [], outcome
-
     # CODE writes the page on the structured path. Must stay BEFORE the `GateContext` and
     # `edits.apply_declared`, so the stamp and gates judge it as they judge the agent's.
     if structured:
@@ -468,25 +472,41 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
             return None, written_page, outcome
         # The plan's own `path` is NOT carried forward: `_file` reads `page_path` off the DIFF.
 
-    # With the attachment ON, the lane widens by exactly the attachment's own folder.
-    lane_kwargs = {}
+    # The identities the account proposes, created BEFORE the diff the gates judge is taken, so
+    # the entity pages and the regenerated registry land in the same diff as the note — and the
+    # gates resolve against the registry this commit will PUBLISH.
+    proposals = identity.write_proposals(
+        worktree, outcome=outcome, base_registry=deps.registry, material=material,
+        hints=(item.get("hints") or {}).get("client", {}),
+        declined_ids=_declined_identity_ids(conn), today=deps.as_of(),
+        related=[outcome.title] if outcome.title else ())
+    if isinstance(proposals, list):
+        return None, proposals, outcome
+
+    # With the attachment ON, the lane widens by exactly the attachment's own folder; with
+    # proposals, by exactly the identity zone and the registry file.
+    write_prefixes = gates.ALLOWED_WRITE_PREFIXES
+    creatable_types = frozenset(page_policy.FAST_LANE_TYPES)
+    extra_folder_types = {}
     if attachment is not None:
-        lane_kwargs = dict(
-            write_prefixes=gates.ALLOWED_WRITE_PREFIXES + (attachment.prefix,),
-            creatable_types=frozenset(page_policy.FAST_LANE_TYPES) | {"source"},
-            extra_folder_types={attachment.prefix.rstrip("/"): "source"})
+        write_prefixes += (attachment.prefix,)
+        creatable_types |= {"source"}
+        extra_folder_types[attachment.prefix.rstrip("/")] = "source"
     ctx = gates.GateContext(
         worktree=worktree,
         entries=gitcmd.diff_entries(worktree),
         added=gitcmd.added_lines(worktree),
-        material=material, outcome=outcome, registry=deps.registry,
+        material=material, outcome=outcome, registry=proposals.registry,
         # The linter materialized from this item's base commit — NOT `settings.linter_path`.
-        linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin, **lane_kwargs)
+        linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin,
+        write_prefixes=write_prefixes, creatable_types=creatable_types,
+        extra_folder_types=extra_folder_types)
+    _declare_proposals(ctx, proposals)
 
     if not ctx.entries:
         raise AgentError("code wrote nothing for a capture the agent decided to file"
                          if structured else
-                         "the agent wrote nothing and did not park the capture")
+                         "the agent wrote nothing for a capture it decided to file")
 
     # Code's own additive edits, from the agent's DECLARATION.
     # Applied before the diff the gates judge is taken, so the edits land in the same diff.
@@ -516,9 +536,40 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
     findings = gates.run_gates(ctx) + edit_findings + _cross_check_outcome(ctx)
     if not gates.vetoes(findings):
         return (_file(conn, item, deps, ctx, outcome, findings, worktree, edited=edited,
-                      source_pages=tuple(written_sources["paths"]) if written_sources else ()),
+                      source_pages=tuple(written_sources["paths"]) if written_sources else (),
+                      proposals=proposals),
                 [], outcome)
     return None, findings, outcome
+
+
+def _declare_proposals(ctx: gates.GateContext, proposals: identity.Proposals) -> None:
+    """Tell the gates what `identity.write_proposals` did — the lane, the byte proofs, and which
+    entity-zone entries are this run's own. Told, never inferred: a gate that worked out on its
+    own which entity page was "probably ours" would be a gate the agent could talk to."""
+    if not proposals.touched():
+        return
+    ctx.write_prefixes = ctx.write_prefixes + proposals.lane
+    ctx.creatable_types = ctx.creatable_types | {page_policy.ENTITY_PAGE_TYPE}
+    ctx.extra_folder_types = {**ctx.extra_folder_types,
+                              identity.ENTITY_ZONE_PREFIX.rstrip("/"): page_policy.ENTITY_PAGE_TYPE}
+    ctx.derived_files = ctx.derived_files | proposals.derived_files
+    ctx.expected_bytes = {**ctx.expected_bytes, **proposals.expected_bytes}
+    ctx.proposed_entity_pages = frozenset(proposals.entity_pages)
+    for path, entity_id in proposals.entity_pages.items():
+        # What `gate_frontmatter` re-reads the page against: its own anchor and its own state.
+        ctx.stamped_by_path[path] = {"status": page_policy.FILED_STATUS, "entity": [entity_id],
+                                     "approved_by": ""}
+
+
+def _declined_identity_ids(conn) -> set[str]:
+    """Every identity a steward declined, by registry id, read from the governance ledger — so the
+    librarian never proposes the same name twice. The ledger is the ONE memory of a decision
+    (`capture.decisions`), and reading it here is what keeps a declined proposal from coming back
+    on the next capture that mentions the name."""
+    latest = decisions.latest_decisions(conn)
+    return {item_id for (kind, item_id), decided in latest.items()
+            if kind == review_kinds.KIND_IDENTITY_PROPOSAL
+            and (decided or {}).get("verdict") == decisions.REJECT}
 
 
 # Nothing in the account can name a path: `page.FOLDER_BY_TYPE` decides the folder, the title the
@@ -688,12 +739,13 @@ def preserve_refused_diff(worktree: str, item: dict, findings, *, root: str) -> 
 
 def _cross_check_outcome(ctx: gates.GateContext) -> list:
     """The agent's account must AGREE with the diff — the diff decides. `page_path` must be empty
-    or a page the diff created, and a non-`triage` outcome must have created EXACTLY one page in
+    or a page the diff created, and the outcome must have created EXACTLY one page in
     the lane: `_file` takes `in_lane_new_pages()[0]` for `page_path`, `result_ref`, the commit
     subject and the dedup pointer, so a second page lands on no surface a human reads and can ride
     past `gate_anchoring`. `ctx.provenance_pages` is excluded, or attached captures are all vetoed.
     """
-    new_pages = [p for p in ctx.in_lane_new_pages() if p not in ctx.provenance_pages]
+    new_pages = [p for p in ctx.in_lane_new_pages()
+                 if p not in ctx.provenance_pages and p not in ctx.proposed_entity_pages]
     out = []
     if not new_pages:
         out.append(gates.Finding(
@@ -714,74 +766,6 @@ def _cross_check_outcome(ctx: gates.GateContext) -> list:
             f"reported {claimed} as the filed page, but the diff created no such page",
             locator=claimed))
     return out
-
-
-def _unresolved_names(parked: dict) -> list[str]:
-    """Every name an `unresolved-entity` park actually declares — from EITHER shape, normalised
-    ONCE for both.
-
-    Surrounding whitespace is not part of a name, and a blank is not a name at all
-    (`entities.birth._prepare` refuses a whitespace-only one, so a blank subject can only ever
-    cost a steward a line of attention it can never resolve). Normalising here rather than per
-    shape is the point: a padded name that rendered one way through `triage.name` and another
-    through `triage.names` would be exactly the singular/plural asymmetry the plural park exists to
-    close. `[]` when nothing was declared — the caller decides what a nameless park is called.
-
-    The singular `name` is still read here: callers can hand this a raw park dict that never
-    crossed `agent.parse_outcome`'s fold, and a shape this reader stopped understanding would
-    silently drop the name.
-    """
-    names = [name for name in (str(n).strip() for n in (parked.get("names") or [])) if name]
-    single = str(parked.get("name") or "").strip()
-    return names or ([single] if single else [])
-
-
-def _triage(item: dict, deps: Deps, outcome) -> Result:
-    """Which parked report the agent's declaration earns — and WHICH HUMAN it is parked on. An
-    `unresolved-entity` outcome on a capture that still has its question asks it; every other park
-    goes to the steward. Injection findings go into the REPORT as well as onto the `Result`.
-
-    A capture naming MORE THAN ONE unresolved entity (`triage.names`) parks with every
-    name it declared, so a second name has somewhere to go instead of being dropped or garbled into
-    the first. One name is that same shape with one entry — there is no singular road.
-    """
-    parked = outcome.triage or {}
-    rationale = getattr(outcome, "summary", "")
-    notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
-    if str(parked.get("kind", "")) == agent_module.TRIAGE_UNSUPPORTED_TYPE:
-        return Result(schema.TRIAGE, "",
-                      report.triage_type(judged_type=parked.get("judged_type") or "unknown",
-                                         agent_rationale=rationale, findings=notes),
-                      findings=notes)
-    names = _unresolved_names(parked) or [schema.UNNAMED_ENTITY_PLACEHOLDER]
-    return _ask_or_park(item, deps, names=names, agent_rationale=rationale, notes=notes)
-
-
-def _ask_or_park(item: dict, deps: Deps, *, names: list, agent_rationale: str,
-                 notes: list, meeting: bool = False) -> Result:
-    """The one-ask budget, spent or not, for EVERY name this park declared — the ONE router both
-    flows use. `asked_at` is the budget and the DATABASE holds it: stamped on the first transition
-    into `needs_input` and never cleared — not by the reply, not by a requeue, not by a lease
-    redelivery. A spent capture parks in `triage` on the steward.
-
-    `names` is always a list, one entry or many, and the report builders write one key shape for
-    both. `meeting` reaches them only to name what parked — a transcript's submitter is told his
-    MEETING is stuck, an ordinary submitter his capture, and neither is told about the other's
-    consequences.
-    """
-    if item.get("asked_at"):
-        return Result(schema.TRIAGE, "",
-                      report.triage_entity(names=names, agent_rationale=agent_rationale,
-                                           findings=notes, asked=True, meeting=meeting),
-                      findings=notes)
-    candidates = gates.registry_candidates(deps.registry)
-    shown = candidates if len(candidates) <= report.MAX_QUESTION_CANDIDATES else []
-    return Result(schema.NEEDS_INPUT, "",
-                  report.needs_input(submission_id=item["id"], names=names, candidates=shown,
-                                     total_candidates=len(candidates),
-                                     agent_rationale=agent_rationale, findings=notes,
-                                     meeting=meeting),
-                  findings=notes)
 
 
 def _commit_and_push(conn, item, deps, ctx, worktree, message, *, what: str) -> str:
@@ -815,34 +799,44 @@ def _commit_and_push(conn, item, deps, ctx, worktree, message, *, what: str) -> 
 
 
 def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
-          source_pages=()) -> Result:
+          source_pages=(), proposals=None) -> Result:
     """The gates passed: commit, push, and say what happened. `page_path` comes from the DIFF,
     never the outcome. `source_pages` arrives in PART order from the writer's own plan, and is
-    excluded when picking `page_path` because `sources/` sorts before `wiki/`.
+    excluded when picking `page_path` because `sources/` sorts before `wiki/`; the identity pages
+    this run proposed are excluded for the same reason — the note is the page this capture filed.
     """
-    page_path = [p for p in ctx.in_lane_new_pages() if p not in ctx.provenance_pages][0]
-    message = _commit_message(item, outcome, page_path, n_sources=len(source_pages))
+    page_path = [p for p in ctx.in_lane_new_pages()
+                 if p not in ctx.provenance_pages and p not in ctx.proposed_entity_pages][0]
+    proposed = proposals.entities if proposals is not None else []
+    proposed_aliases = proposals.aliases if proposals is not None else []
+    message = _commit_message(item, outcome, page_path, n_sources=len(source_pages),
+                              proposed=proposed)
     sha = _commit_and_push(conn, item, deps, ctx, worktree, message, what="this item")
 
     notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
     notes += [f.message for f in findings if f.severity == gates.SEVERITY_NOTE]
     return Result(
         schema.FILED, f"{page_path}@{sha}",
+        # `ctx.registry`, the registry this commit PUBLISHED: a proposed entity's name renders
+        # from it, where `deps.registry` (the base commit's) would print the bare id.
         report.filed(page_path=page_path, commit=sha,
-                     anchoring=outcome.anchoring or {}, registry=deps.registry,
+                     anchoring=outcome.anchoring or {}, registry=ctx.registry,
                      links=list(outcome.links_created),
                      overlaps=[dict(o) for o in outcome.overlaps],
                      pages_edited=list(edited),
                      agent_rationale=getattr(outcome, "summary", ""),
                      findings=notes,
-                     source_pages=list(source_pages)),
+                     source_pages=list(source_pages),
+                     entities_proposed=proposed, aliases_proposed=proposed_aliases),
         findings=notes)
 
 
-def _route_refusal(item, findings, outcome, *, anchoring_park, agent_attempts: int = 0,
+def _route_refusal(item, findings, outcome, *, agent_attempts: int = 0,
                    diagnostics_path: str = "") -> Result:
-    """Which terminal state a surviving veto earns — the routing BOTH flows share, with
-    `anchoring_park(veto, notes) -> Result | None` the one branch each decides for itself."""
+    """Which terminal state a surviving veto earns — the routing BOTH flows share. Two states:
+    `rejected` when the cause is the submitter's to fix, `failed` when it is the librarian's.
+    An anchor that still does not resolve after the corrective pass is the librarian's — the brief
+    told the agent it could propose the entity, and it did not."""
     veto = gates.vetoes(findings)
     notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
 
@@ -886,19 +880,6 @@ def _route_refusal(item, findings, outcome, *, anchoring_park, agent_attempts: i
         return Result(schema.REJECTED, "", builder(findings=notes),
                       diagnostics_path=diagnostics_path)
 
-    # The two parks. Each requires its veto to be the WHOLE story, so their order decides nothing.
-    uncreatable = _uncreatable_type(veto)
-    if uncreatable:
-        return Result(schema.TRIAGE, "",
-                      report.triage_type(judged_type=uncreatable,
-                                         agent_rationale=getattr(outcome, "summary", ""),
-                                         findings=notes),
-                      findings=notes, diagnostics_path=diagnostics_path)
-
-    parked = anchoring_park(veto, notes)
-    if parked is not None:
-        return parked
-
     # Anything else is the librarian failing at its job, not the submitter's problem.
     worst = veto[0] if veto else None
     return Result(schema.FAILED, "",
@@ -914,82 +895,9 @@ def _route_refusal(item, findings, outcome, *, anchoring_park, agent_attempts: i
 
 def _refuse(item, findings, outcome, *, agent_attempts: int = 0,
             diagnostics_path: str = "") -> Result:
-    """Both ordinary attempts vetoed: its park is the ONE anchor `_unanchorable` names."""
-    def anchoring_park(veto, notes) -> "Result | None":
-        unanchorable = _unanchorable(veto)
-        if not unanchorable:
-            return None
-        # A veto that survived the last pass goes to the STEWARD; only `_triage` may ask.
-        return Result(schema.TRIAGE, "",
-                      report.triage_entity(names=_anchor_veto_names([unanchorable]),
-                                           agent_rationale=getattr(outcome, "summary", ""),
-                                           findings=notes, asked=bool(item.get("asked_at"))),
-                      findings=notes, diagnostics_path=diagnostics_path)
-
-    return _route_refusal(item, findings, outcome, anchoring_park=anchoring_park,
-                          agent_attempts=agent_attempts, diagnostics_path=diagnostics_path)
-
-
-def _uncreatable_type(veto) -> str:
-    """Is "the fast lane cannot create that type" the WHOLE story, and which type? Then it parks
-    on the steward. `""` — not the whole story, or no nameable folder — stays `failed`: a park
-    must not bury a second, real fault."""
-    uncreatable = ("zone", gates.TYPE_NOT_CREATABLE)
-    kinds = {(f.gate, f.code) for f in veto}
-    if kinds != {uncreatable}:
-        return ""
-    finding = next(f for f in veto if (f.gate, f.code) == uncreatable)
-    # `_write_ordinary_page` carries the type in `values`; `gate_zone` derives it from the folder.
-    judged = (finding.values[0] if finding.values
-              else page_policy.type_for_folder(finding.locator))
-    # Ask the shared table again, so a disagreement between the two views cannot invent a park.
-    return "" if page_policy.classify_page_type(judged).creatable else judged
-
-
-def _anchor_veto_names(findings) -> list[str]:
-    """Every name an anchoring veto could not resolve, in order, without repeats — ONE reader for
-    both refusal roads.
-
-    `Finding.values` carries them all; `locator` is a DISPLAY string (the first value, clamped) and
-    is the fallback for a veto carrying no `values`, which is what keeps an older-shaped veto
-    behaving exactly as it did.
-    """
-    names = []
-    for finding in findings:
-        for value in (finding.values or (finding.locator,)):
-            if value and value not in names:
-                names.append(value)
-    return names
-
-
-def _unanchorable(veto) -> "gates.Finding | None":
-    """Is "nothing on this page anchors" the WHOLE story of this refusal, and does it name what?
-
-    Then it parks on the steward. Set-membership, not a search: a second, real fault alongside must
-    force `failed`. The one companion admitted is a `("contract", "dead_links")` finding whose
-    target names one of the values this veto could not resolve. Match over `Finding.values` with
-    `gates.normalize_identifier`, never `Finding.locator`, a DISPLAY string (first value only,
-    clamped) that misses plural anchors, NFC/NFD spellings and long names. `undeclared`/`no-reason`
-    name nothing for a steward to act on and stay system faults.
-    """
-    unresolved = ("anchoring", gates.ANCHORING_UNRESOLVED)
-    dead_link = ("contract", gates.DEAD_LINKS_CHECK)
-    anchor = next((f for f in veto if (f.gate, f.code) == unresolved), None)
-    if anchor is None or not anchor.locator:
-        return None
-    others = [f for f in veto if (f.gate, f.code) != unresolved]
-    if not others:
-        return anchor
-    if not anchor.values:
-        return None
-    wanted = {gates.normalize_identifier(v) for v in anchor.values}
-    for finding in others:
-        if (finding.gate, finding.code) != dead_link:
-            return None
-        target = gates.dead_link_target(finding)
-        if not target or gates.normalize_identifier(target) not in wanted:
-            return None
-    return anchor
+    """Both ordinary attempts vetoed."""
+    return _route_refusal(item, findings, outcome, agent_attempts=agent_attempts,
+                          diagnostics_path=diagnostics_path)
 
 
 def _frontmatter_only(veto) -> bool:
@@ -1294,187 +1202,25 @@ def _meeting_meta(item: dict) -> dict:
     return {k: client.get(k, "") for k in ("title", "meeting_date", "attendees", "source_label")}
 
 
-# A re-file after a park REUSES the prior outcome: A PARK MUST NOT COST KNOWLEDGE. A fresh model
-# read can distil fewer decisions, so a re-file re-runs the existing pipeline over the STORED
-# outcome against the FRESH registry — no new mechanism decides anchoring. Reuse is allowed only
-# when the material AND the reply are byte-identical to what produced it; on a genuine
-# re-distillation the report DIFFS the two, which is what makes a silent loss visible.
-OUTCOME_REUSE_VERSION = 1
-
-
-def _sha(text: str) -> str:
-    return hashlib.sha256((text or "").encode("utf-8")).hexdigest()
-
-
-def _outcome_to_raw(outcome) -> dict:
-    """The stored shape: plain JSON, field by field, never `dataclasses.asdict`, which would carry
-    a later-added field into a column a future pass re-parses. Keep it matched to
-    `agent.parse_meeting_outcome`'s."""
-    return {
-        "decision": outcome.decision,
-        "meeting_title": outcome.meeting_title,
-        "attendees": list(outcome.attendees),
-        "meeting_notes": outcome.meeting_notes,
-        "action_items": [dict(a) for a in outcome.action_items],
-        "decisions": [{"title": d.get("title", ""), "body": d.get("body", ""),
-                       "anchoring": dict(d.get("anchoring") or {})} for d in outcome.decisions],
-        # Carried, not dropped: a re-file that silently lost the declared cross-links would file a
-        # different set from the one that parked. A row written before this key existed simply has
-        # no `edits`, which `parse_meeting_outcome` reads as none declared, and a stale declaration
-        # is re-validated against the CURRENT graph by `edits.validate` like any other.
-        "edits": [{"path": e.get("path", ""), "kind": e.get("kind", ""),
-                   "link": e.get("link", ""), "note": e.get("note", "")}
-                  for e in (outcome.edits or ())],
-        "summary": outcome.summary,
-        "findings": [dict(f) for f in outcome.findings],
-        "triage": dict(outcome.triage or {}),
-    }
-
-
-def _decision_titles(outcome) -> tuple:
-    return tuple(d.get("title", "") for d in (outcome.decisions or ()) if d.get("title"))
-
-
-def _first_park_titles(item: dict) -> tuple:
-    """The decision titles the FIRST park of this row carried, carried forward untouched so the
-    diff instrument survives a chain of parks and a restart."""
-    stored = item.get("outcome")
-    if not isinstance(stored, dict):
-        return ()
-    first = stored.get("first_park_titles")
-    if isinstance(first, list):
-        return tuple(t for t in first if t)
-    raw = stored.get("raw")
-    if isinstance(raw, dict):     # a row written before this key existed
-        return tuple(d.get("title", "") for d in (raw.get("decisions") or [])
-                     if isinstance(d, dict) and d.get("title"))
-    return ()
-
-
-def _with_park_outcome(result: Result, outcome, *, material: str, item: dict) -> Result:
-    """Attach the outcome to a PARKED result so `queue.finish` stores it. The ONE funnel: kept when
-    the row is parked, the agent decided to FILE, and there is at least one decision. A second park
-    DOES overwrite the stored outcome, so `first_park_titles` carries the original set forward and
-    a park that drops a decision says so at the pass that caused it — deliberately not "keep the
-    bigger one", which would overrule the gates about what is fileable.
-    """
-    if result.status not in schema.PARKED_STATUSES or outcome is None:
-        return result
-    if getattr(outcome, "decision", "") != "file" or not _decision_titles(outcome):
-        return result
-    titles = _decision_titles(outcome)
-    first = _first_park_titles(item) or titles
-    stored = {
-        "version": OUTCOME_REUSE_VERSION,
-        # Both digests are the REUSE PRECONDITION: a change to either invalidates the stored
-        # distillation. See `_reusable_outcome`.
-        "material_sha256": _sha(material),
-        "reply_sha256": _sha(item.get("reply") or ""),
-        # Never overwritten once set — the whole point is that it outlives every later park.
-        "first_park_titles": list(first),
-        "raw": _outcome_to_raw(outcome),
-    }
-    dropped = [t for t in first if t not in titles]
-    if dropped:
-        log.warning(
-            "meeting item %s: this park's distillation LOST %d decision(s) that the first park "
-            "carried (%s) — the stored outcome is being replaced, and the first park's titles are "
-            "kept so a later filing can still diff them",
-            item.get("id"), len(dropped), ", ".join(dropped))
-    else:
-        log.info("meeting item %s: keeping the parked distillation (%d decision(s)) for a re-file",
-                 item.get("id"), len(titles))
-    return dataclasses.replace(result, outcome=stored,
-                               report=_with_park_loss(result.report, dropped, titles))
-
-
-def _with_park_loss(report: dict, dropped: list, kept: tuple) -> dict:
-    """The park report's account of a distillation that shrank. Appended to `summary`, the one
-    sentence that reaches `capture_queue.error` and every surface a human reads."""
-    if not dropped:
-        return report
-    notice = (
-        f"\n\n⚠ This pass re-read the transcript and produced a SMALLER distillation than the "
-        f"first park did: {len(dropped)} decision(s) are no longer present "
-        f"({', '.join(dropped)}). Nothing is lost from the transcript itself — the evidence is "
-        f"archived — but read those before accepting whatever this capture eventually files.")
-    return {**report,
-            "summary": (report.get("summary", "") + notice),
-            "distillation_loss": {"dropped": list(dropped), "kept": list(kept)}}
-
-
-def _reusable_outcome(item: dict, material: str) -> tuple:
-    """The outcome stored on this row, re-parsed through `agent.parse_meeting_outcome` and never
-    trusted as stored. A shape problem means "no reusable outcome", not a refusal."""
-    stored = item.get("outcome")
-    if not isinstance(stored, dict) or not stored:
-        return None, ""
-    if stored.get("version") != OUTCOME_REUSE_VERSION:
-        return None, f"stored under version {stored.get('version')!r}"
-    if stored.get("material_sha256") != _sha(material):
-        return None, "the archived material is not the one it was distilled from"
-    if stored.get("reply_sha256") != _sha(item.get("reply") or ""):
-        # The reply is INPUT to the distillation.
-        return None, "the submitter's reply changed since it was distilled"
-    try:
-        outcome = agent_module.parse_meeting_outcome(stored.get("raw"))
-    except (OutcomeShapeError, AgentError) as ex:
-        return None, f"the stored outcome no longer validates ({ex.__class__.__name__})"
-    if outcome.decision != "file" or not _decision_titles(outcome):
-        return None, "the stored outcome declares no decisions to file"
-    return outcome, ""
-
-
-@dataclass
-class _Reuse:
-    """What happened to a stored outcome. `prior_titles` non-empty with `reused` False means a
-    genuine re-distillation happened and the report owes the DIFF."""
-    prior_titles: tuple = ()
-    reused: bool = False
 
 
 def _run_meeting_in_worktree(conn, item, deps, material, meeting_meta, worktree, passes,
                              *, linter_path: str = "") -> Result:
-    """`_run_in_worktree`'s meeting sibling. One attempt runs in front of the loop with NO agent in
-    it — a previous park's outcome — and spends neither `passes.count` nor the retry budget."""
+    """`_run_in_worktree`'s meeting sibling: one pass, one corrective pass, then refuse."""
     settings = deps.settings
     corrective, findings, outcome, diagnostics = "", [], None, ""
-
-    prior, why_not = _reusable_outcome(item, material)
-    # The FIRST park's titles, not the stored outcome's: an intermediate re-distillation already
-    # shrank the stored set, and diffing against it would report "nothing dropped".
-    reuse = _Reuse(prior_titles=_first_park_titles(item))
-    if prior is None and why_not:
-        log.info("meeting item %s: not reusing the stored distillation — %s",
-                 item.get("id"), why_not)
-    if prior is not None:
-        log.info("meeting item %s: re-filing the parked distillation (%d decision(s)) against the "
-                 "current registry, with no agent pass", item.get("id"), len(reuse.prior_titles))
-        result, findings, outcome = _one_meeting_pass(
-            conn, item, deps, material, meeting_meta, worktree, "",
-            linter_path=linter_path, reused=prior,
-            reuse=dataclasses.replace(reuse, reused=True))
-        if result is not None:
-            return _with_park_outcome(_stamp_cost(result, passes), outcome,
-                                      material=material, item=item)
-        # Still vetoed: fall through to a real agent pass, which the report will diff.
-        log.warning("meeting item %s: the parked distillation did not pass the gates (%s); "
-                    "re-distilling, and the report will diff what changed", item.get("id"),
-                    ", ".join(sorted({f"{f.gate}/{f.code}" for f in gates.vetoes(findings)})))
-        _reset_for_retry(worktree)
 
     for attempt in range(1, MAX_AGENT_ATTEMPTS + 1):
         passes.count = attempt
         try:
             result, findings, outcome = _one_meeting_pass(
                 conn, item, deps, material, meeting_meta, worktree, corrective,
-                passes=passes, linter_path=linter_path, reuse=reuse)
+                passes=passes, linter_path=linter_path)
         except OutcomeShapeError as ex:
             result, findings, outcome = None, list(ex.findings), None
             agent_module.discard_outcome_file(worktree)
         if result is not None:
-            return _with_park_outcome(_stamp_cost(result, passes), outcome,
-                                      material=material, item=item)
+            return _stamp_cost(result, passes)
 
         blocked = gates.unrepairable(findings)
         if attempt < MAX_AGENT_ATTEMPTS:
@@ -1490,10 +1236,8 @@ def _run_meeting_in_worktree(conn, item, deps, material, meeting_meta, worktree,
                                             root=settings.refused_diff_root)
         break
 
-    return _with_park_outcome(
-        _stamp_cost(_refuse_meeting(item, findings, outcome, agent_attempts=passes.count,
-                                    diagnostics_path=diagnostics), passes),
-        outcome, material=material, item=item)
+    return _stamp_cost(_refuse_meeting(item, findings, outcome, agent_attempts=passes.count,
+                                       diagnostics_path=diagnostics), passes)
 
 
 # Code writes every page in the set; the agent drafts free text as DATA. Its two free-text fields
@@ -1758,57 +1502,55 @@ def _edits_with_resolved_links(outcome, written: dict) -> list:
 
 
 def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, corrective, *,
-                      passes: "AgentPasses | None" = None,
-                      linter_path: str = "", reused=None, reuse=None) -> tuple:
+                      passes: "AgentPasses | None" = None, linter_path: str = "") -> tuple:
     """One meeting pass: call the tool-less meeting agent, have CODE write every page of the set,
     stamp, gate. Same return contract as `_one_pass`; the agent's only write is its outcome file."""
     settings = deps.settings
     source_stem = _source_stem(meeting_meta)
     source_page_path = f"{MEETING_SOURCE_PREFIX}{source_stem}.md"
-    if reused is not None:
-        # A previous park's distillation, re-filed with NO agent call: `deps.registry` was loaded
-        # at THIS item's base commit, so the minted entity changed, not the content. Nothing is
-        # gathered here either — a re-file asks nobody anything, so a context would be built for a
-        # prompt that is never composed.
-        outcome = reused
-    else:
-        # Built HERE, never inside a backend — `_one_pass`' own reason: both flows must share one
-        # context builder and one fence discipline. Unconditional, unlike the ordinary flow's
-        # `wants_gathered` branch: no backend on this flow holds a tool, so `render_gathered`'s
-        # no-tools defaults are simply the truth here and there is no second shape to declare.
-        # Re-run on the corrective pass, because `_reset_for_retry` resets the tree.
-        gathered = agent_module.render_gathered(
-            gather.gather(worktree, deps.registry, material,
-                          top_k=settings.gather_top_k,
-                          excerpt_lines=settings.gather_excerpt_lines))
-        try:
-            run = deps.agent.run_meeting(worktree=worktree, material=material,
-                                         meeting_meta=meeting_meta, registry=deps.registry,
-                                         source_page_path=source_page_path,
-                                         corrective=corrective,
-                                         reply=item.get("reply") or "",
-                                         gathered=gathered)
-        except AgentError as ex:
-            if passes is not None:
-                passes.cost_usd += getattr(ex, "run_cost_usd", 0.0)
-            raise
-        # The `reused` branch above deliberately never reaches this line — a re-file costs $0.
+    # Built HERE, never inside a backend — `_one_pass`' own reason: both flows must share one
+    # context builder and one fence discipline. Unconditional, unlike the ordinary flow's
+    # `wants_gathered` branch: no backend on this flow holds a tool, so `render_gathered`'s
+    # no-tools defaults are simply the truth here and there is no second shape to declare.
+    # Re-run on the corrective pass, because `_reset_for_retry` resets the tree.
+    gathered = agent_module.render_gathered(
+        gather.gather(worktree, deps.registry, material,
+                      top_k=settings.gather_top_k,
+                      excerpt_lines=settings.gather_excerpt_lines))
+    try:
+        run = deps.agent.run_meeting(worktree=worktree, material=material,
+                                     meeting_meta=meeting_meta, registry=deps.registry,
+                                     source_page_path=source_page_path,
+                                     corrective=corrective, gathered=gathered)
+    except AgentError as ex:
         if passes is not None:
-            passes.cost_usd += run.cost_usd
-        outcome = run.outcome
-        agent_module.discard_outcome_file(worktree)
-        if outcome is None:
-            raise AgentError("the meeting agent produced no usable account of what it did")
-
-    if outcome.decision == "triage":
-        # No `stray` check as in `_one_pass`: this agent holds no tool, so it cannot have written.
-        return _triage_meeting(item, deps, outcome), [], outcome
+            passes.cost_usd += getattr(ex, "run_cost_usd", 0.0)
+        raise
+    if passes is not None:
+        passes.cost_usd += run.cost_usd
+    outcome = run.outcome
+    agent_module.discard_outcome_file(worktree)
+    if outcome is None:
+        raise AgentError("the meeting agent produced no usable account of what it did")
 
     written = _write_meeting_pages(worktree, outcome, meeting_meta, material,
                                    source_stem=source_stem,
                                    created=meeting_meta.get("meeting_date") or deps.as_of())
     if isinstance(written, list):
         return None, written, outcome
+
+    # The identities the account proposes — the same writer the ordinary flow uses, so a meeting
+    # whose decisions are about something new lands with that something created beside them.
+    # `related` names pages by STEM, which is what a wikilink resolves by: the decision pages
+    # this set wrote (slugified, never their titles), or the meeting page when there is none.
+    decision_stems = [os.path.basename(path)[:-len(".md")]
+                      for path in written.get("decisions_by_path", {})]
+    proposals = identity.write_proposals(
+        worktree, outcome=outcome, base_registry=deps.registry, material=material,
+        hints=meeting_meta, declined_ids=_declined_identity_ids(conn), today=deps.as_of(),
+        related=decision_stems or [written["meeting_stem"]])
+    if isinstance(proposals, list):
+        return None, proposals, outcome
 
     # `edits_allowed` keeps its `True` default: this flow HAS an edit mechanism now, the same one
     # the fast lane has — declared in the account, performed by `edits.apply_declared` below,
@@ -1817,13 +1559,14 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
         worktree=worktree,
         entries=gitcmd.diff_entries(worktree),
         added=gitcmd.added_lines(worktree),
-        material=material, outcome=outcome, registry=deps.registry,
+        material=material, outcome=outcome, registry=proposals.registry,
         linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin,
         write_prefixes=MEETING_WRITE_PREFIXES, creatable_types=MEETING_CREATABLE_TYPES,
-        extra_folder_types=MEETING_EXTRA_FOLDER_TYPES)
+        extra_folder_types=dict(MEETING_EXTRA_FOLDER_TYPES))
+    _declare_proposals(ctx, proposals)
 
     if not ctx.entries:
-        raise AgentError("the meeting flow wrote nothing and did not park the capture")
+        raise AgentError("the meeting flow wrote nothing for a transcript it decided to file")
 
     # Code's own additive edits, from the agent's DECLARATION — `_one_pass`' call, unchanged, on
     # the set's own new pages. `edits.validate` admits the three EDITABLE folders (`page.
@@ -1846,7 +1589,7 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
                 + _cross_check_meeting_outcome(ctx, outcome))
     if not gates.vetoes(findings):
         return (_file_meeting(conn, item, deps, ctx, outcome, findings, worktree,
-                              written, edited=edited, reuse=reuse),
+                              written, edited=edited, proposals=proposals),
                 [], outcome)
     return None, findings, outcome
 
@@ -1871,7 +1614,7 @@ def _cross_check_meeting_outcome(ctx: gates.GateContext, outcome) -> list:
     filename carries a date, and a date-bearing name in body prose is style rather than safety, so
     the gardener's `date-bearing-body-link` check flags it over the committed corpus instead."""
     out = []
-    new_pages = set(ctx.in_lane_new_pages())
+    new_pages = set(ctx.in_lane_new_pages()) - ctx.proposed_entity_pages
     source_pages, meeting_pages, decision_pages = (set(_source_pages(ctx)), set(_meeting_pages(ctx)),
                                                     set(_decision_pages(ctx)))
     other = new_pages - source_pages - meeting_pages - decision_pages
@@ -1933,7 +1676,9 @@ def _stamp_meeting(ctx: gates.GateContext, deps: Deps, item: dict, outcome,
         declared = decisions_by_path.get(path) or {}
         anchoring = declared.get("anchoring") or {}
         ctx.page_declared[path] = {"page_type": "decision", "anchoring": anchoring}
-        entity_ids, unresolved = gates.resolve_entity_ids(anchoring, deps.registry)
+        # `ctx.registry`, the registry this commit publishes: a decision about an entity born in
+        # this same commit resolves exactly like one about an old entity.
+        entity_ids, unresolved = gates.resolve_entity_ids(anchoring, ctx.registry)
         if str(anchoring.get("kind", "")).lower() == "entity" and (unresolved or not entity_ids):
             entity_ids = []   # same defence in depth `_stamp` takes for the ordinary flow
         acl = acl_rules.resolve(deps.acl_config, path)
@@ -1964,7 +1709,7 @@ def _meeting_commit_message(item: dict, outcome, n_decisions: int) -> str:
 
 
 def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
-                  *, edited=(), reuse=None) -> Result:
+                  *, edited=(), proposals=None) -> Result:
     """The gates passed over the whole SET: one commit, push, report. `written` carries the
     code-computed source parts and the decision-path-to-anchoring map; `edited` is what
     `edits.apply_declared` actually changed on pages that already existed — the one surface a human
@@ -2004,51 +1749,14 @@ def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
         report.filed_meeting(source_pages=source_pages, meeting_page=meeting_page,
                              decisions=decisions, commit=sha, pages_edited=list(edited),
                              agent_rationale=getattr(outcome, "summary", ""),
-                             registry=deps.registry,
-                             reuse=_reuse_note(reuse, outcome)),
+                             registry=ctx.registry,
+                             entities_proposed=proposals.entities if proposals else [],
+                             aliases_proposed=proposals.aliases if proposals else []),
         findings=notes)
-
-
-def _reuse_note(reuse, outcome) -> dict:
-    """What happened to a parked distillation; `{}` on a first pass. Compared against the FIRST
-    park on BOTH branches: the question is "did this capture lose anything"."""
-    if reuse is None or not reuse.prior_titles:
-        return {}
-    now = _decision_titles(outcome)
-    dropped = [t for t in reuse.prior_titles if t not in now]
-    added = [t for t in now if t not in reuse.prior_titles]
-    if reuse.reused and not dropped and not added:
-        return {"reused": True, "decisions": list(now)}
-    return {"reused": False, "model_ran": not reuse.reused,
-            "dropped": dropped, "added": added,
-            "kept": [t for t in now if t in reuse.prior_titles]}
-
-
-def _triage_meeting(item: dict, deps: Deps, outcome) -> Result:
-    """The meeting agent's own park, routed by `_ask_or_park` under the one-ask budget."""
-    parked = outcome.triage or {}
-    rationale = getattr(outcome, "summary", "")
-    notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
-    names = _unresolved_names(parked) or [schema.UNNAMED_ENTITY_PLACEHOLDER]
-    return _ask_or_park(item, deps, names=names, agent_rationale=rationale, notes=notes,
-                        meeting=True)
 
 
 def _refuse_meeting(item, findings, outcome, *, agent_attempts: int = 0,
                     diagnostics_path: str = "") -> Result:
-    """Both meeting passes vetoed: its park is meeting-specific because a page SET can carry one
-    unresolved anchor per decision, so the WHOLE set parks or none of it does."""
-    def anchoring_park(veto, notes) -> "Result | None":
-        # Only when EVERY veto is anchoring-unresolved does the whole capture park atomically.
-        # Anything else mixed in falls through to `failed`.
-        anchoring_vetoes = [f for f in veto
-                           if f.gate == "anchoring" and f.code == gates.ANCHORING_UNRESOLVED]
-        if not anchoring_vetoes or len(anchoring_vetoes) != len(veto):
-            return None
-        names = _anchor_veto_names(anchoring_vetoes) or [schema.UNNAMED_ENTITY_PLACEHOLDER]
-        rep = report.triage_entity(names=names, agent_rationale=getattr(outcome, "summary", ""),
-                                   findings=notes, asked=bool(item.get("asked_at")), meeting=True)
-        return Result(schema.TRIAGE, "", rep, findings=notes, diagnostics_path=diagnostics_path)
-
-    return _route_refusal(item, findings, outcome, anchoring_park=anchoring_park,
-                          agent_attempts=agent_attempts, diagnostics_path=diagnostics_path)
+    """Both meeting passes vetoed — the same two terminal states as the ordinary flow."""
+    return _route_refusal(item, findings, outcome, agent_attempts=agent_attempts,
+                          diagnostics_path=diagnostics_path)

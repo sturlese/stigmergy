@@ -108,7 +108,7 @@ def _meeting_builder_paths(tmp_path, name: str, *, decision_titles: tuple, mater
     repo = str(tmp_path / name)
     os.makedirs(repo)
     gitcmd.run("init", "--quiet", "-b", "main", repo)
-    meeting_meta = {"title": "acme q3 renewal", "meeting_date": "2026-07-29"}
+    meeting_meta = {"title": "acme-corp q3 renewal", "meeting_date": "2026-07-29"}
     # The real exported outcome type, not a stand-in: `MeetingOutcome` is what
     # `agent.parse_meeting_outcome` hands `_one_meeting_pass`, so a field this builder starts
     # reading tomorrow cannot silently be absent here.
@@ -502,7 +502,7 @@ def _worst_reachable_meeting_paths() -> list:
     builders rather than a guessed literal — `slugify`'s length cap lives in
     `stigmergy.kernel.normalize` and a hardcoded worst case here would stop being the worst case the
     day it moved."""
-    title = "a decision about the acme renewal negotiation and the pilot scope for next year " * 3
+    title = "a decision about the acme-corp renewal negotiation and the pilot scope for next year " * 3
     return [
         # `-2`: `_decision_stems`' own same-slug suffix, the longest form it produces.
         processing_module.MEETING_DECISION_PREFIX
@@ -574,7 +574,7 @@ def test_a_declared_entity_anchor_that_does_not_resolve_is_unresolved(tmp_path):
     ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", "wiki/notes/New.md", new_mode="100644")],
               outcome=SimpleNamespace(anchoring={"kind": "entity",
                                                  "entities": ["Ghost Company Inc"]}),
-              registry=_registry({"acme": "Acme Corp"}))
+              registry=_registry({"acme-corp": "Acme Corp"}))
 
     findings = gates.gate_anchoring(ctx)
 
@@ -592,9 +592,9 @@ def test_a_declared_id_name_or_alias_all_resolve(tmp_path):
     page = tmp_path / "wiki" / "notes" / "New.md"
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text("# New\n\nOrdinary content.\n", encoding="utf-8")
-    registry = _registry({"acme": "Acme Corp"}, aliases={"acme": ["Acme"]})
+    registry = _registry({"acme-corp": "Acme Corp"}, aliases={"acme-corp": ["Acme"]})
 
-    for declared in ("acme", "Acme Corp", "Acme"):
+    for declared in ("acme-corp", "Acme Corp", "Acme"):
         ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", "wiki/notes/New.md", new_mode="100644")],
                   outcome=SimpleNamespace(anchoring={"kind": "entity", "entities": [declared]}),
                   registry=registry)
@@ -610,7 +610,7 @@ def test_every_declared_value_must_resolve_not_merely_one(tmp_path):
     ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", "wiki/notes/New.md", new_mode="100644")],
               outcome=SimpleNamespace(anchoring={"kind": "entity",
                                                  "entities": ["Acme Corp", "Ghost Co"]}),
-              registry=_registry({"acme": "Acme Corp"}))
+              registry=_registry({"acme-corp": "Acme Corp"}))
 
     findings = gates.gate_anchoring(ctx)
 
@@ -662,14 +662,14 @@ def test_the_anchoring_brief_names_what_the_gate_examined_and_what_would_satisfy
     entities — never the page's own links, which this gate no longer reads at all) and the registry
     it asked, by content — `config.py` records a live asymmetry that makes "read the registry file"
     unreliable advice — which outcomes are AVAILABLE, and the smallest edit that reaches one."""
-    finding = _unresolved_finding(tmp_path, _registry({"acme": "Acme Corp", "globex": "Globex"}))
+    finding = _unresolved_finding(tmp_path, _registry({"acme-corp": "Acme Corp", "globex": "Globex"}))
 
     brief = finding.brief
     assert "Ghost Company Inc" in brief                                   # what it examined
-    assert "acme — Acme Corp" in brief and "globex — Globex" in brief     # what it asked, as ids
+    assert "acme-corp — Acme Corp" in brief and "globex — Globex" in brief     # what it asked, as ids
     assert '"kind": "entity"' in brief                                    # outcome 1
     assert '"kind": "company"' in brief                                   # outcome 2
-    assert '"kind": "unresolved-entity"' in brief                         # outcome 3, the park
+    assert '"new_entities"' in brief                                     # outcome 3, the proposal
     # The repair the measured agent never found: nothing on the page needs to change.
     assert "nothing on the page itself is checked or needs to change" in brief
     assert "Adding a wikilink, rewriting the body, or renaming the page" in brief
@@ -683,7 +683,7 @@ def test_an_empty_registry_says_re_anchoring_is_not_available_rather_than_offeri
 
     assert "NO entities at all" in finding.brief
     assert "1. ANCHOR — unavailable" in finding.brief
-    assert '"kind": "company"' in finding.brief and '"kind": "unresolved-entity"' in finding.brief
+    assert '"kind": "company"' in finding.brief and '"new_entities"' in finding.brief
 
 
 def test_the_unresolved_name_travels_in_the_locator_and_also_in_the_message(tmp_path):
@@ -691,21 +691,18 @@ def test_the_unresolved_name_travels_in_the_locator_and_also_in_the_message(tmp_
     human reads, and it NAMES the unresolved id — unlike the retired wikilink-era message, which
     echoed nothing because the value came off untrusted page content rather than the agent's own
     declared outcome."""
-    finding = _unresolved_finding(tmp_path, _registry({"acme": "Acme Corp"}))
+    finding = _unresolved_finding(tmp_path, _registry({"acme-corp": "Acme Corp"}))
 
     assert finding.locator == "Ghost Company Inc"
     assert '"Ghost Company Inc"' in finding.message
 
 
 def test_the_locator_falls_back_to_something_unnamed_when_nothing_was_declared(tmp_path):
-    """An outcome declaring `kind: "entity"` with an EMPTY `entities` list has no wikilink fallback
-    to fall back on — the old mechanism that gave it one is gone — but it must still reach the
-    steward park (`processing._unanchorable` -> `triage_entity`) rather than a system fault:
-    "nothing here anchors" is a parked outcome, not a crash. The locator must therefore stay TRUTHY
-    (`_unanchorable` requires one before it parks), which is what the `"something unnamed"`
-    fallback — the same word `processing._triage` already uses for an agent-declared park with no
-    name — guarantees."""
-    nothing = _unresolved_finding(tmp_path, _registry({"acme": "Acme Corp"}),
+    """An outcome declaring `kind: "entity"` with an EMPTY `entities` list names nothing the gate
+    could resolve, and the finding must still say so in words rather than carry an empty locator:
+    the corrective brief is built from it, and "nothing here anchors" is a fault the agent can
+    repair only if it is told which value was empty."""
+    nothing = _unresolved_finding(tmp_path, _registry({"acme-corp": "Acme Corp"}),
                                   anchoring={"kind": "entity", "entities": []})
     assert nothing.locator == "something unnamed"
     assert '"anchoring.entities" is empty' in nothing.brief
@@ -717,7 +714,7 @@ def test_a_declared_value_is_bounded_and_stripped_before_it_reaches_the_next_pro
     brief goes into the next pass's PROMPT, so a value carrying newlines could otherwise forge the
     brief's own structure."""
     hostile = "Ghost\nCorp\x07 " + "x" * 200
-    finding = _unresolved_finding(tmp_path, _registry({"acme": "Acme Corp"}),
+    finding = _unresolved_finding(tmp_path, _registry({"acme-corp": "Acme Corp"}),
                                   anchoring={"kind": "entity", "entities": [hostile]})
 
     assert "\n" not in finding.locator and "\x07" not in finding.locator
@@ -778,7 +775,7 @@ def test_a_resolving_entity_anchor_is_the_benign_twin(tmp_path):
     page.write_text("# New\n\nThis page carries no wikilinks at all.\n", encoding="utf-8")
     ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", "wiki/notes/New.md", new_mode="100644")],
               outcome=SimpleNamespace(anchoring={"kind": "entity", "entities": ["Acme Corp"]}),
-              registry=_registry({"acme": "Acme Corp"}))
+              registry=_registry({"acme-corp": "Acme Corp"}))
 
     assert gates.gate_anchoring(ctx) == []
 
@@ -801,20 +798,20 @@ def test_a_company_wide_scope_with_a_reason_is_the_other_benign_twin(tmp_path):
 def test_resolve_entity_ids_returns_canonical_ids_never_the_raw_declared_value():
     """The PAGE is stamped with the resolved canonical id, whatever the agent typed — an id, a
     display name or an alias."""
-    registry = _registry({"acme": "Acme Corp"}, aliases={"acme": ["Acme"]})
+    registry = _registry({"acme-corp": "Acme Corp"}, aliases={"acme-corp": ["Acme"]})
     assert gates.resolve_entity_ids(
-        {"kind": "entity", "entities": ["Acme Corp"]}, registry) == (["acme"], [])
+        {"kind": "entity", "entities": ["Acme Corp"]}, registry) == (["acme-corp"], [])
     assert gates.resolve_entity_ids(
-        {"kind": "entity", "entities": ["Acme"]}, registry) == (["acme"], [])
+        {"kind": "entity", "entities": ["Acme"]}, registry) == (["acme-corp"], [])
 
 
 def test_resolve_entity_ids_dedupes_resolved_ids_preserving_order():
     """Two declared spellings resolving to the same id must not stamp
-    `entity: ["acme", "acme"]`."""
-    registry = _registry({"acme": "Acme Corp"}, aliases={"acme": ["Acme"]})
+    `entity: ["acme-corp", "acme-corp"]`."""
+    registry = _registry({"acme-corp": "Acme Corp"}, aliases={"acme-corp": ["Acme"]})
     ids, unresolved = gates.resolve_entity_ids(
         {"kind": "entity", "entities": ["Acme", "Acme Corp"]}, registry)
-    assert ids == ["acme"]
+    assert ids == ["acme-corp"]
     assert unresolved == []
 
 
@@ -832,10 +829,10 @@ def test_resolve_entity_ids_drops_an_unresolved_value_from_ids_but_reports_it():
     would give the contract linter's own `entity:` validation something to trip on, a second
     unrelated `contract` veto), and reported in `unresolved` rather than silently disappearing,
     so the caller can tell "nothing resolved" apart from "company-wide"."""
-    registry = _registry({"acme": "Acme Corp"})
+    registry = _registry({"acme-corp": "Acme Corp"})
     ids, unresolved = gates.resolve_entity_ids(
         {"kind": "entity", "entities": ["Acme Corp", "Ghost Co"]}, registry)
-    assert ids == ["acme"]
+    assert ids == ["acme-corp"]
     assert unresolved == ["Ghost Co"]
     ids, unresolved = gates.resolve_entity_ids(
         {"kind": "entity", "entities": ["Ghost Co"]}, registry)
@@ -2402,3 +2399,132 @@ def test_a_dotfile_named_as_a_derived_file_is_still_refused(tmp_path):
                expected_bytes={dotfile: "* -diff\n"})
 
     assert [f.code for f in gates.gate_zone(ctx)] == ["not-a-page"]
+
+
+# ── the identity gate: the entity zone holds only what this run proposed ─────────────────────
+# `librarian.identity.write_proposals` is the ONE writer of `wiki/entities/` inside a filing, and
+# it tells the gates what it wrote (`proposed_entity_pages`, and `expected_bytes` for a proposed
+# spelling appended to a registered page). The gate's job is to refuse everything else in the zone, and to refuse a
+# proposal that arrived already approved — an identity nobody approved.
+_ENTITY_PAGE = "wiki/entities/Scircle.md"
+
+
+def _write_entity_page(tmp_path, text: str, path: str = _ENTITY_PAGE) -> None:
+    page = tmp_path / path
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(text, encoding="utf-8")
+
+
+_PROPOSED = ('---\ntype: entity\ntitle: "Scircle"\nstatus: developing\nentity_type: organization\n'
+             'aliases: []\ncreated: 2026-08-20\nupdated: 2026-08-20\ntags: [entity, organization]\n'
+             'entity: ["scircle"]\nrelated: []\nsources: []\napproved_by: ""\n---\n\n# Scircle\n')
+
+
+def test_a_proposed_entity_page_the_run_declared_passes_the_identity_gate(tmp_path):
+    """The benign twin first."""
+    _write_entity_page(tmp_path, _PROPOSED)
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", _ENTITY_PAGE, new_mode="100644")],
+               proposed_entity_pages=frozenset({_ENTITY_PAGE}))
+    assert gates.gate_identity(ctx) == []
+
+
+def test_an_entity_page_nobody_proposed_is_refused_unrepairably(tmp_path):
+    """The agent's own write tool refuses the zone; this gate is the PROOF, over the diff, that
+    nothing reached it by another road. `repairable=False`: no agent could have done this
+    legitimately, so the diff is preserved rather than retried."""
+    _write_entity_page(tmp_path, _PROPOSED)
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", _ENTITY_PAGE, new_mode="100644")])
+    findings = gates.gate_identity(ctx)
+    assert [f.code for f in findings] == ["unproposed-entity-page"]
+    assert findings[0].repairable is False and findings[0].locator == _ENTITY_PAGE
+
+
+@pytest.mark.parametrize("front_line, why", [
+    ('approved_by: "marc"', "arrived approved"),
+    ("", "carries no approved_by at all"),
+])
+def test_a_proposal_that_does_not_say_approved_by_empty_is_refused(tmp_path, front_line, why):
+    """EMPTY is the one spelling of "a steward has not confirmed this". A page that arrives
+    approved is an identity nobody approved; one without the key would read as a steward-born
+    page (absent is legacy-approved, `generator.read_entity_pages`' rule)."""
+    text = _PROPOSED.replace('approved_by: ""\n', f"{front_line}\n" if front_line else "")
+    _write_entity_page(tmp_path, text)
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", _ENTITY_PAGE, new_mode="100644")],
+               proposed_entity_pages=frozenset({_ENTITY_PAGE}))
+    assert [f.code for f in gates.gate_identity(ctx)] == ["approved-on-arrival"], why
+
+
+def test_a_proposed_page_that_is_not_an_entity_page_is_refused(tmp_path):
+    _write_entity_page(tmp_path, _PROPOSED.replace("type: entity", "type: note"))
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", _ENTITY_PAGE, new_mode="100644")],
+               proposed_entity_pages=frozenset({_ENTITY_PAGE}))
+    assert [f.code for f in gates.gate_identity(ctx)] == ["not-an-entity-page"]
+
+
+def test_an_entity_page_edit_is_admitted_only_with_a_proof_code_produced(tmp_path):
+    """A registered entity page changes in a filing in exactly one way — a proposed spelling
+    appended — and that edit is planned by `identity.write_proposals` as bytes. An `M` in the zone
+    nothing planned is refused; `gate_body_rewrite` does the byte comparing, this gate makes sure
+    the proof was asked for at all. (Before the repair loop's own road was admitted, the gate
+    demanded a separate `alias_edited_pages` label on top of the bytes — and refused every
+    steward-approved `entity-body` and merge repair, which edit this zone through their own
+    code-side permissions.)"""
+    _write_entity_page(tmp_path, _PROPOSED)
+    entry = gitcmd.DiffEntry("M", _ENTITY_PAGE, new_mode="100644")
+    unplanned = _ctx(tmp_path, [entry])
+    assert [f.code for f in gates.gate_identity(unplanned)] == ["unplanned-entity-edit"]
+    planned = _ctx(tmp_path, [entry], expected_bytes={_ENTITY_PAGE: _PROPOSED})
+    assert gates.gate_identity(planned) == []
+
+
+def test_a_steward_approved_repair_may_edit_an_entity_page_through_its_own_permission(tmp_path):
+    """The benign twin for the repair loop (ADR 039): an approved `entity-body` repair tells the
+    apply which ONE page may have its body replaced (`body_rewrite_allowed`), and a merge or a
+    deletion sweep plans every byte it writes (`expected_bytes`). Both are set by code the steward's
+    approval drives, never from an outcome, so the identity gate admits them — and only them: the
+    permission names a path, so a second entity page in the same diff is still refused."""
+    _write_entity_page(tmp_path, _PROPOSED)
+    other = "wiki/entities/Other.md"
+    _write_entity_page(tmp_path, _PROPOSED, path=other)
+    entries = [gitcmd.DiffEntry("M", _ENTITY_PAGE, new_mode="100644"),
+               gitcmd.DiffEntry("M", other, new_mode="100644")]
+    body = _ctx(tmp_path, entries, body_rewrite_allowed=frozenset({_ENTITY_PAGE}))
+    assert [(f.code, f.locator) for f in gates.gate_identity(body)] == [("unplanned-entity-edit", other)]
+    planned = _ctx(tmp_path, entries, body_rewrite_allowed=frozenset({_ENTITY_PAGE}),
+                   expected_bytes={other: _PROPOSED})
+    assert gates.gate_identity(planned) == []
+
+
+def test_the_identity_gate_ignores_every_page_outside_the_zone(tmp_path):
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", "wiki/notes/New.md", new_mode="100644"),
+                          gitcmd.DiffEntry("M", "wiki/decisions/Old.md", new_mode="100644")])
+    assert gates.gate_identity(ctx) == []
+
+
+def test_the_identity_gate_runs_with_every_other_gate():
+    assert gates.gate_identity in gates.ALL_GATES
+
+
+def test_a_proposed_page_is_judged_as_an_entity_page_whatever_the_outcome_declared(tmp_path):
+    """`_check_created_type` reads the OUTCOME's `page_type` for a created page — the note's type,
+    which is `note`. An entity page code wrote beside the note is declared by the run, not by the
+    outcome, or every proposal would be vetoed as a `type-folder-mismatch`."""
+    _write_entity_page(tmp_path, _PROPOSED)
+    lane = dict(outcome=SimpleNamespace(page_type="note"),
+                creatable_types=frozenset(page_policy.FAST_LANE_TYPES) | {"entity"},
+                extra_folder_types={"wiki/entities": "entity"})
+    declared = _ctx(tmp_path, [], proposed_entity_pages=frozenset({_ENTITY_PAGE}), **lane)
+    assert gates._check_created_type(declared, _ENTITY_PAGE) == []
+    undeclared = _ctx(tmp_path, [], **lane)
+    assert [f.code for f in gates._check_created_type(undeclared, _ENTITY_PAGE)] == [
+        "type-folder-mismatch"]
+
+
+def test_a_derived_file_is_not_a_new_page(tmp_path):
+    """The registry file rides in the lane as a DERIVED file, proven by bytes: it is never stamped
+    and never parsed as a page, which is what excluding it from `in_lane_new_pages` buys."""
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", "ops/entity-registry.json", new_mode="100644"),
+                          gitcmd.DiffEntry("A", "wiki/notes/New.md", new_mode="100644")],
+               write_prefixes=gates.ALLOWED_WRITE_PREFIXES + ("ops/entity-registry.json",),
+               derived_files=frozenset({"ops/entity-registry.json"}))
+    assert ctx.in_lane_new_pages() == ["wiki/notes/New.md"]

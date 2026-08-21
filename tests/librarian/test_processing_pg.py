@@ -89,8 +89,8 @@ def test_a_filed_page_carries_the_same_resolved_id_the_report_names(rig, clean_q
 
     page_path, sha = result.result_ref.rsplit("@", 1)
     text = support.read_filed_page(env.bare, sha, page_path)
-    assert 'entity: ["acme"]' in text
-    assert result.report["anchored_to"] == "Acme Corp (`acme`)"
+    assert 'entity: ["acme-corp"]' in text
+    assert result.report["anchored_to"] == "Acme Corp (`acme-corp`)"
 
 
 def test_a_company_wide_capture_files_with_entity_empty_on_the_page_and_the_reason_only_in_the_report(
@@ -110,30 +110,136 @@ def test_a_company_wide_capture_files_with_entity_empty_on_the_page_and_the_reas
     assert reason not in text          # the reason justifies a FILING decision, never the page's
 
 
-def test_a_capture_about_an_unregistered_entity_asks_the_submitter_with_no_page_and_no_commit(
+def test_a_capture_about_an_unregistered_entity_proposes_it_and_files_anchored_to_the_newborn(
         rig, clean_queue):
-    """A FRESH capture that has not yet spent its one question is asked, not parked —
-    `needs_input`, never `triage`. The property underneath is "nothing is filed ownerless": no
-    page, no commit, whichever human ends up asked."""
+    """OLD BEHAVIOUR: a capture about a name the registry did not know was PARKED on a question to
+    its submitter (`needs_input`), delivered to a tool result nobody polls; two of five captures on
+    staging were lost to the button beside it. Nothing parks now. The agent proposes the entity in
+    its account, code creates the page with `approved_by` EMPTY and regenerates the registry in the
+    SAME commit as the note, the note lands anchored to the newborn id, and the submitter's report
+    says both halves: filed, and a steward still confirms the name."""
     env, deps = rig
     before = support.branch_sha(env.bare)
 
-    item, result = _file(clean_queue, deps, "DOUBLE:triage-entity=Globex Corp\n" + ACME_MATERIAL)
+    item, result = _file(clean_queue, deps, "DOUBLE:propose=Globex Corp\n" + ACME_MATERIAL)
 
-    assert result.status == schema.NEEDS_INPUT
-    assert result.result_ref == ""
-    assert "Globex Corp" in result.report["open_question"]
-    # The ask in full: registry candidates WITH aliases, and the exact reply invocation — the real
-    # registry loaded off this rig's fixture (`ops/entity-registry.json`: "Acme Corp", aliased
-    # "Acme"), not a hand-rolled candidate list.
-    assert "Acme Corp (also known as: Acme)" in result.report["summary"]
-    assert result.report["reply_invocation"] == schema.reply_invocation(item["id"])
-    assert result.report["reply_invocation"] in result.report["summary"]
-    assert support.branch_sha(env.bare) == before      # no commit at all
+    assert result.status == schema.FILED, result.report.get("summary")
+    page_path, sha = result.result_ref.rsplit("@", 1)
+    assert sha != before
+    changed = support.changed_paths(env.bare, sha)
+    assert page_path in changed
+    assert "wiki/entities/Globex Corp.md" in changed and "ops/entity-registry.json" in changed
+    note = support.read_filed_page(env.bare, sha, page_path)
+    assert 'entity: ["globex-corp"]' in note
+    entity_page = support.read_filed_page(env.bare, sha, "wiki/entities/Globex Corp.md")
+    assert 'approved_by: ""' in entity_page and 'entity: ["globex-corp"]' in entity_page
+    assert "proposed by the offline double" in entity_page     # every section filled, not a stub
+    registry = json.loads(support.read_filed_page(env.bare, sha, "ops/entity-registry.json"))
+    assert registry["entities"]["globex-corp"]["proposed"] is True
+    assert registry["entities"]["acme-corp"]["proposed"] is False
+    # the submitter reads both halves
+    assert result.report["anchored_to"] == "Globex Corp (`globex-corp`)"
+    assert result.report["entities_proposed"] == [
+        {"id": "globex-corp", "name": "Globex Corp", "type": "organization"}]
+    assert "It proposes 1 new entity: Globex Corp (`globex-corp`)" in result.report["summary"]
+    assert "a steward confirms, merges or declines" in result.report["summary"]
+    assert "Proposes 1 new entity page(s) — Globex Corp" in support.commit_message_body(env.bare, sha)
 
     row = _row(clean_queue, item["id"])
-    assert row["status"] == schema.NEEDS_INPUT
-    assert row["result_ref"] == ""
+    assert row["status"] == schema.FILED
+
+
+def test_several_unregistered_names_are_proposed_together_in_one_commit(rig, clean_queue):
+    """Issue #32's shape, on the proposing road: a capture naming TWO new things creates both —
+    each its own page, each its own registry entry — in the one commit, and the report names both.
+    A person and an organization, so the type travels too."""
+    env, deps = rig
+    _, result = _file(clean_queue, deps,
+                      "DOUBLE:propose=Jack Reeve|person,Acme Capital\n" + ACME_MATERIAL)
+
+    assert result.status == schema.FILED, result.report.get("summary")
+    _, sha = result.result_ref.rsplit("@", 1)
+    changed = support.changed_paths(env.bare, sha)
+    assert "wiki/entities/Jack Reeve.md" in changed and "wiki/entities/Acme Capital.md" in changed
+    registry = json.loads(support.read_filed_page(env.bare, sha, "ops/entity-registry.json"))
+    assert registry["entities"]["jack-reeve"]["type"] == "person"
+    assert registry["entities"]["acme-capital"]["type"] == "organization"
+    assert [e["id"] for e in result.report["entities_proposed"]] == ["jack-reeve", "acme-capital"]
+    assert "It proposes 2 new entities" in result.report["summary"]
+
+
+def test_a_spelling_the_material_uses_for_a_registered_entity_is_proposed_as_its_alias(
+        rig, clean_queue):
+    """The other proposal: the material says "Acme Corporation" for the registered `Acme Corp`. The
+    note anchors to the registered entity as always, and the spelling is appended to that entity's
+    page as a PROPOSED alias — regenerated into the registry, so the next capture using it resolves
+    without asking — for a steward to confirm or decline."""
+    env, deps = rig
+    _, result = _file(clean_queue, deps,
+                      "DOUBLE:alias=Acme Corporation\nAcme Corporation renewed the contract.")
+
+    assert result.status == schema.FILED, result.report.get("summary")
+    page_path, sha = result.result_ref.rsplit("@", 1)
+    assert 'entity: ["acme-corp"]' in support.read_filed_page(env.bare, sha, page_path)
+    entity_page = support.read_filed_page(env.bare, sha, "wiki/entities/Acme Corp.md")
+    assert 'proposed_aliases: ["Acme Corporation"]' in entity_page
+    assert 'aliases: ["Acme"]' in entity_page                       # the approved list untouched
+    registry = json.loads(support.read_filed_page(env.bare, sha, "ops/entity-registry.json"))
+    assert registry["entities"]["acme-corp"]["proposed_aliases"] == ["Acme Corporation"]
+    assert result.report["aliases_proposed"] == [{"entity": "acme-corp", "alias": "Acme Corporation"}]
+    assert 'It proposes 1 new spelling: "Acme Corporation" for `acme-corp`' in result.report["summary"]
+
+
+def test_a_proposal_that_collides_with_a_registered_spelling_is_refused_and_the_retry_anchors_there(
+        rig, clean_queue):
+    """The identity gate's main refusal, through the whole retry loop: pass one proposes the
+    registered entity under a legal form, the brief names the id to anchor to instead, pass two
+    anchors there. One commit, no twin entity, the registry untouched."""
+    env, deps = rig
+    _, result = _file(clean_queue, deps, "DOUBLE:propose-collides\n" + ACME_MATERIAL)
+
+    assert result.status == schema.FILED, result.report.get("summary")
+    _, sha = result.result_ref.rsplit("@", 1)
+    changed = support.changed_paths(env.bare, sha)
+    assert not any(path.startswith("wiki/entities/") for path in changed), changed
+    assert "ops/entity-registry.json" not in changed
+    assert result.report["anchored_to"] == "Acme Corp (`acme-corp`)"
+    assert result.report["entities_proposed"] == []
+
+
+def test_a_proposed_name_the_material_never_uses_is_the_librarians_fault(rig, clean_queue):
+    """An entity the capture never mentions is an invention, refused on every pass, and nothing
+    lands — `failed`, naming the identity stage, with the submitter told their material is fine."""
+    env, deps = rig
+    before = support.branch_sha(env.bare)
+    _, result = _file(clean_queue, deps, "DOUBLE:propose-unnamed\n" + ACME_MATERIAL)
+
+    assert result.status == schema.FAILED, result.report.get("summary")
+    assert "identity" in result.report["summary"] and "not your capture" in result.report["summary"]
+    assert support.branch_sha(env.bare) == before
+
+
+def test_an_identity_a_steward_declined_is_never_proposed_again(rig, clean_queue):
+    """The ledger is the one memory of a decision, and the librarian reads it: a name a steward
+    declined as an entity is refused as a proposal from then on, or the same inbox item would come
+    back on every capture that mentions the name."""
+    from stigmergy import review_kinds
+    from stigmergy.capture import decisions
+
+    env, deps = rig
+    # A name no other test proposes: the ledger is append-only and shared across this session's
+    # tests, so a decline recorded here would refuse every later proposal of the same name.
+    decisions.record_decision(clean_queue, item_kind=review_kinds.KIND_IDENTITY_PROPOSAL,
+                              item_id="vandelay-imports", verdict=decisions.REJECT,
+                              actor="steward@example.com", source=decisions.SOURCE_ADMIN,
+                              notes="not an entity")
+    before = support.branch_sha(env.bare)
+
+    _, result = _file(clean_queue, deps, "DOUBLE:propose=Vandelay Imports\n" + ACME_MATERIAL)
+
+    assert result.status == schema.FAILED, result.report.get("summary")
+    assert "declined" in result.report["summary"]
+    assert support.branch_sha(env.bare) == before
 
 
 class _UnresolvableAnchorAgent:
@@ -141,15 +247,12 @@ class _UnresolvableAnchorAgent:
     not know, while leaving the page itself untouched — the attack `gate_anchoring`'s `unresolved`
     refusal exists to catch: the gate checks the declared `anchoring.entities` list, never the
     page's body, so this wrapper mutates exactly that and nothing else. (It used to rewrite a
-    wikilink on the page as well. That is vestigial now the gate reads no links, and actively wrong
-    to keep: it would leave a dead link on the page, and an unrelated dead link makes this test's
-    veto no longer "the whole story", routing it to `failed` instead of the `triage` park this test
-    is about.)
+    wikilink on the page as well. That is vestigial now the gate reads no links.)
 
-    The triage test above proves the COOPERATIVE half of "nothing is filed ownerless": an agent
-    that correctly recognizes it cannot anchor parks the capture. It proves nothing about what
-    happens if the agent (or a document that talked it into lying) instead CLAIMS an anchor it does
-    not have —
+    The proposing test above proves the COOPERATIVE half of "nothing is filed ownerless": an agent
+    that correctly recognizes a new name proposes the entity. It proves nothing about what happens
+    if the agent (or a document that talked it into lying) instead CLAIMS an anchor it does not
+    have —
     the double's own anchor is always real (`DoubleAgent._registry_entity` reads the actual
     registry), so that path is otherwise unreachable through anything the double can be driven to
     do. This is the real refusal: a page that could otherwise have filed ownerless is stopped by
@@ -178,26 +281,17 @@ class _UnresolvableAnchorAgent:
         return run
 
 
-def test_a_claimed_entity_anchor_that_does_not_resolve_is_parked_never_filed(rig, clean_queue):
+def test_a_claimed_entity_anchor_that_does_not_resolve_is_failed_never_filed(rig, clean_queue):
     """The second half of "nothing is filed ownerless", proven as a REAL refusal rather than a unit
     assertion about a helper (`gates.gate_anchoring` is never imported here): the gate is what
     stands between an unearned anchor claim and an ownerless page reaching `wiki/`, and it must
     refuse over two real agent attempts exactly like any other veto — never file with a
     company-wide fallback, never file the claimed-but-unresolved name as if it were real.
 
-    **The DESTINATION is `triage`, and this used to assert `failed`.** That was an implementation
-    accident: when the librarian believes the material is about an entity but cannot resolve it,
-    the submission goes to `triage` with the unresolved name recorded as its open question — which
-    is exactly what the test above proves for the agent that parks itself. Routing this path to
-    `failed` meant the same capture ended in two different places depending on whether the agent
-    SAW the failure coming, with the agent that tried harder getting the worse answer, and a
-    submitter told the librarian could not finish when in truth it had finished and the answer was
-    "nobody has registered this yet".
-
-    So the name IS in the report now, and that is the point of the change rather than a relaxation
-    of "never echo the offending value": that rule is about a secret or a planted instruction, and
-    a steward cannot register an entity nobody names. It crosses on the same `report._clean` seam
-    the cooperative park above already uses for exactly this value.
+    OLD BEHAVIOUR: the destination was `triage`, a park on a steward with the name as its open
+    question. There is no park: the brief offers the agent a third outcome that FILES — propose the
+    entity — so an anchor still unresolved after the corrective pass is the librarian's own fault,
+    and `failed` is the honest word for it. The submitter is told their material is fine.
     """
     env, base_deps = rig
     before = support.branch_sha(env.bare)
@@ -206,17 +300,13 @@ def test_a_claimed_entity_anchor_that_does_not_resolve_is_parked_never_filed(rig
 
     item, result = _file(clean_queue, deps, ACME_MATERIAL)
 
-    assert result.status == schema.TRIAGE
+    assert result.status == schema.FAILED
     assert result.result_ref == ""
-    assert "Ghost Company Inc" in result.report["open_question"]
+    assert "not your capture" in result.report["summary"]
     assert support.branch_sha(env.bare) == before        # no commit, no page, at all
-    # It must not read as a system fault: nothing here asks the submitter to do anything, and
-    # nothing tells them the librarian broke.
-    assert "could not finish" not in result.report["summary"]
-    assert json.dumps(result.report).count(schema.FAILED) == 0
 
     row = _row(clean_queue, item["id"])
-    assert row["status"] == schema.TRIAGE
+    assert row["status"] == schema.FAILED
     assert row["result_ref"] == ""
 
 
@@ -252,12 +342,10 @@ class _UnresolvableAnchorWithMatchingDeadLinkAgent(_UnresolvableAnchorAgent):
         return run
 
 
-def test_an_unresolved_anchor_with_a_dead_link_naming_the_same_entity_still_parks(
+def test_an_unresolved_anchor_with_a_dead_link_naming_the_same_entity_still_fails(
         rig, clean_queue):
-    """The ordinary instructed shape — declare the anchor, wikilink the same name — must still
-    reach the steward park, not fall through to `failed`. "Nobody has registered this entity yet"
-    is precisely what parking is for, and the wikilink-scanning mechanism going away must not have
-    quietly changed the destination."""
+    """The shape the old park admitted specially — the agent wrote `[[Ghost Company Inc]]` AND
+    declared it — is no special case: two vetoes, one `failed`, nothing committed."""
     env, base_deps = rig
     before = support.branch_sha(env.bare)
     import dataclasses
@@ -266,25 +354,16 @@ def test_an_unresolved_anchor_with_a_dead_link_naming_the_same_entity_still_park
 
     item, result = _file(clean_queue, deps, ACME_MATERIAL)
 
-    assert result.status == schema.TRIAGE
+    assert result.status == schema.FAILED
     assert result.result_ref == ""
-    assert "Ghost Company Inc" in result.report["open_question"]
     assert support.branch_sha(env.bare) == before
-    assert json.dumps(result.report).count(schema.FAILED) == 0
-
-    row = _row(clean_queue, item["id"])
-    assert row["status"] == schema.TRIAGE
+    assert _row(clean_queue, item["id"])["status"] == schema.FAILED
 
 
-def test_an_anchoring_veto_beside_a_real_fault_still_fails_rather_than_parking(rig, clean_queue):
-    """The guard on the park above: it fires only when "nothing anchors" is the WHOLE story.
-
-    A park tells the submitter their material is fine and a steward will register an entity. If the
-    librarian ALSO produced a page git treats as binary — a fault that turned four gates off at once
-    before `gate_binary_page` existed — that sentence would bury the fault under a routine outcome
-    and send the item to the wrong queue. `failed` is the honest destination whenever a second class
-    of veto survives, and the anchoring finding does not get to overrule it.
-    """
+def test_an_anchoring_veto_beside_a_real_fault_still_fails(rig, clean_queue):
+    """A page git treats as binary beside the unresolved anchor — a fault that turned four gates
+    off at once before `gate_binary_page` existed. `failed`, like the anchoring veto alone, and
+    pinned so that a future routing of anchoring vetoes cannot bury a second class of fault."""
     env, base_deps = rig
     before = support.branch_sha(env.bare)
     import dataclasses
@@ -297,21 +376,10 @@ def test_an_anchoring_veto_beside_a_real_fault_still_fails_rather_than_parking(r
     assert _row(clean_queue, item["id"])["status"] == schema.FAILED
 
 
-def test_both_roads_to_a_parked_capture_record_the_same_injection_finding(rig, clean_queue):
+def test_both_roads_from_an_unknown_name_record_the_same_injection_finding(rig, clean_queue):
     """Two paths, and they must not disagree about what happened even though their DESTINATIONS
-    differ.
-
-    A capture whose material tried to steer the librarian records a finding when it is FILED and
-    when it is REJECTED. Parked, it used to record one on the veto road (`_refuse`) and none on the
-    cooperative one (`_triage`) — so whether a steering attempt was on the record depended on
-    whether the agent saw the anchoring problem coming, which is exactly the divergence the parked
-    sentence is written to avoid.
-
-    **The status per road differs; the property does not.** The cooperative road is a FRESH
-    capture's `unresolved-entity` outcome, routed to `needs_input` (the submitter's one question)
-    rather than straight to `triage`; the veto road is an unrepairable gate veto, which goes
-    straight to `triage`, no question. Both still must carry the steering finding — a submitter
-    being asked a question is not a submitter told nothing happened.
+    differ: a capture whose material tried to steer the librarian records a finding when it FILES
+    (proposing the unknown entity) and when it FAILS (claiming an anchor the gate refuses).
 
     Asserted on the REPORT rather than on `Result.findings`, because the report is what
     `queue.finish` persists and `brain_submissions` returns: a finding recorded only on the object
@@ -321,33 +389,34 @@ def test_both_roads_to_a_parked_capture_record_the_same_injection_finding(rig, c
     _, base_deps = rig
     steered = f"{ACME_MATERIAL} {payloads.STEER_REVEAL_CREDENTIALS}"
 
-    # the cooperative road: the agent recognizes it cannot anchor and parks the capture itself —
-    # a fresh capture's first ask, so it is routed to the submitter
-    _, cooperative = _file(clean_queue, base_deps,
-                           f"DOUBLE:triage-entity=Globex Corp\n{steered}")
-    # the veto road: it claims an anchor instead, and the gate refuses the claim on both passes —
-    # an unrepairable veto, routed straight to the steward
+    _, proposed = _file(clean_queue, base_deps, f"DOUBLE:propose=Globex Corp\n{steered}")
     deps = dataclasses.replace(base_deps, agent=_UnresolvableAnchorAgent(base_deps.agent))
-    _, vetoed = _file(clean_queue, deps, steered)
+    # Different opening words: the first road FILED its note, and the double titles a page from
+    # the material's first words, so the same material again would collide with that page.
+    _, vetoed = _file(clean_queue, deps, f"A second capture, same steering attempt. {steered}")
 
-    for label, result, expected_status in (("cooperative", cooperative, schema.NEEDS_INPUT),
-                                           ("veto", vetoed, schema.TRIAGE)):
-        assert result.status == expected_status, label
+    for label, result, expected_status in (("proposed", proposed, schema.FILED),
+                                           ("veto", vetoed, schema.FAILED)):
+        assert result.status == expected_status, (label, result.report.get("summary"))
         assert any("reveal-credentials" in f for f in result.report["findings"]), label
         assert payloads.STEER_REVEAL_CREDENTIALS not in json.dumps(result.report), label
 
 
 # ── only the whitelisted types can be created ───────────────────────────────────────────────────
 @pytest.mark.parametrize("governed_type", ["entity", "meeting", "policy", "source"])
-def test_a_governed_type_lands_in_triage_never_filed(rig, clean_queue, governed_type):
+def test_a_governed_type_written_into_the_lane_is_the_librarians_fault_never_filed(
+        rig, clean_queue, governed_type):
+    """OLD BEHAVIOUR: the double declared the type cooperatively (`triage-type`) and the capture
+    parked on a steward. The agent is told the three creatable types and how to PROPOSE an entity
+    for anything else, so a page of a governed type in the lane is the librarian's own fault:
+    refused on both passes, `failed`, nothing committed."""
     env, deps = rig
     before = support.branch_sha(env.bare)
 
-    _, result = _file(clean_queue, deps, f"DOUBLE:triage-type={governed_type}\n{ACME_MATERIAL}")
+    _, result = _file(clean_queue, deps, f"DOUBLE:type={governed_type}\n{ACME_MATERIAL}")
 
-    assert result.status == schema.TRIAGE
-    assert governed_type in result.report["open_question"] or governed_type in \
-        json.dumps(result.report)
+    assert result.status == schema.FAILED, result.report.get("summary")
+    assert "not your capture" in result.report["summary"]
     assert support.branch_sha(env.bare) == before
 
 
@@ -829,17 +898,6 @@ def test_rejected_report_names_the_reason_and_the_corrective_action(rig, clean_q
     _, result = _file(clean_queue, deps, f"{ACME_MATERIAL}\nToken: {payloads.GITHUB_PAT}")
     assert result.report["summary"].startswith(schema.REJECTED)
     assert "resubmit" in result.report["summary"] or "Remove" in result.report["summary"]
-
-
-def test_needs_input_report_names_the_open_question(rig, clean_queue):
-    """A fresh capture's `unresolved-entity` outcome is routed to `needs_input` — still a parked
-    report that has to name the open question, same as the `triage` flavors
-    (`test_a_governed_type_lands_in_triage_never_filed` covers that road)."""
-    _, deps = rig
-    _, result = _file(clean_queue, deps, f"DOUBLE:triage-entity=Nebula Systems\n{ACME_MATERIAL}")
-    assert result.report["summary"].startswith(schema.NEEDS_INPUT)
-    assert result.report["open_question"]
-    assert "Nebula Systems" in result.report["open_question"]
 
 
 # ── non-ASCII titles survive, everywhere (the walk's permanent damage) ──────────────────────────

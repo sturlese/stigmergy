@@ -35,8 +35,8 @@ WHERE (payload IS NOT NULL OR hints IS NOT NULL)
   )
 """
 
-# `outcome` is purged here too — belt and braces for rows the terminal-clear paths in `finish`/
-# `dispose` missed (a crash between the status write and the clear, an older worker), since the
+# `outcome` is purged here too — belt and braces for rows the terminal-clear path in `finish`
+# missed (a crash between the status write and the clear, an older worker), since the
 # column holds the full drafted body of every page. Deliberately NOT added to `_ELIGIBLE`'s
 # guard: the guard is what makes the purge idempotent, and an already-NULL payload row must stay
 # ineligible.

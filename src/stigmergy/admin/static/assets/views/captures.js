@@ -1,18 +1,18 @@
 // Captures: what people sent and what the librarian did with it. The list is a scan, the detail
-// is the read, and the three dispositions live on the detail of a PARKED row only.
+// is the read. Nothing here acts on one row: every capture files, is refused or fails on its own,
+// and what a steward governs is the proposals it left behind (the Entities desk).
 
 import { api } from "../api.js";
 import { chartCard, fillDays, partToWhole, stackedColumns } from "../charts.js";
-import { OUTCOME_ORDER, situation as situationCopy, status as statusCopy, VERBATIM_HINT } from "../copy.js";
+import { OUTCOME_ORDER, status as statusCopy } from "../copy.js";
 import { getMeta, windowDays } from "../state.js";
 import {
-  banner, card, chips, commandBlock, confirmForm, copyButton, el, fmtAge, fmtDay, fmtMs, fmtNum,
-  fmtWhen, icon, keyDot, kv, link, mono, pill, render, statusPill, table, toast,
+  banner, chips, confirmForm, copyButton, el, fmtAge, fmtDay, fmtMs, fmtNum,
+  fmtWhen, icon, kv, link, mono, pill, render, statusPill, table, toast,
 } from "../ui.js";
 import { actorField, go, latencyLine, loading, materialPanel, mutate, reportPanel, rerender, statusSentence, timeline } from "./common.js";
 
 const GROUPS = [
-  { key: "human", label: "Waiting on a human", statuses: ["needs_input", "triage"], who: "human" },
   { key: "moving", label: "Moving", statuses: ["queued", "claimed"], who: "model" },
   { key: "done", label: "Done", statuses: ["filed", "resolved", "rejected", "failed"], who: "git" },
 ];
@@ -47,7 +47,7 @@ export async function capturesView(host) {
       el("section", { class: "card" },
         el("div", { class: "card-head" },
           el("div", { class: "card-title" }, el("h2", {}, "The queue"),
-            el("div", { class: "sub" }, `${data.submissions.length} shown${state.statuses.size || state.submitter ? " (filtered)" : ""} · newest first · open a row to read it and act`)),
+            el("div", { class: "sub" }, `${data.submissions.length} shown${state.statuses.size || state.submitter ? " (filtered)" : ""} · newest first · open a row to read what happened to it`)),
           el("div", { class: "spacer" }),
           el("button", { class: "btn small", type: "button", onclick: () => reclaimFlow() }, icon("refresh", 14), "Reclaim leases"),
           el("button", { class: "btn small", type: "button", onclick: () => purgeFlow() }, "Retention purge")),
@@ -65,13 +65,13 @@ export async function capturesView(host) {
             state.statuses.size || state.submitter ? el("button", { class: "btn small ghost", type: "button", onclick: () => { state.statuses.clear(); state.submitter = ""; capturesView(host); } }, "Clear filters") : null,
           ] }),
         table(
-          [{ text: "id", cls: "shrink" }, "state", { text: "kind", cls: "shrink" }, "sent by", { text: "arrived", cls: "shrink" }, "waiting on", { text: "material", cls: "wrap" }],
+          [{ text: "id", cls: "shrink" }, "state", { text: "kind", cls: "shrink" }, "sent by", { text: "arrived", cls: "shrink" }, "outcome", { text: "material", cls: "wrap" }],
           data.submissions.map((row) => ({
             row,
             cells: [
               mono(`#${row.id}`, "nowrap"), statusPill(row.status), row.kind, row.submitted_by,
               el("span", { title: fmtWhen(row.created_at) }, fmtAge(Date.now() - new Date(row.created_at).getTime()), " ago"),
-              row.waiting_on ? el("span", { class: "row" }, keyDot("human", 7), `${row.waiting_on} · ${fmtAge(row.parked_age_ms)}`) : el("span", { class: "muted" }, "—"),
+              outcomeCell(row),
               materialCell(row),
             ],
           })),
@@ -92,6 +92,22 @@ function arrivalsChart(metrics, days) {
   });
 }
 
+// What became of the row, in a few words: the page it became and what it proposed, or the
+// report's own headline for a refusal or a failure.
+function outcomeCell(row) {
+  const report = row.report || {};
+  if (row.status === "filed") {
+    const proposed = (report.entities_proposed || []).map((e) => e.name || e.id).filter(Boolean);
+    return el("span", { class: "row" }, mono((report.page_path || row.result_ref || "").split("@")[0].split("/").pop() || "—", "nowrap"),
+      proposed.length ? pill(`proposed ${proposed.join(", ")}`, "model", { small: true }) : null);
+  }
+  if (row.status === "rejected" || row.status === "failed" || row.status === "resolved") {
+    const text = String(report.summary || row.error || "").replace(/^\w+ — /, "");
+    return el("span", { class: "muted", title: text }, text.length > 90 ? `${text.slice(0, 89).trimEnd()}…` : text || "—");
+  }
+  return el("span", { class: "muted" }, "—");
+}
+
 function materialCell(row) {
   if (row.payload_purged) return el("em", { class: "muted" }, "payload purged");
   if (row.withheld_reason) return el("em", { class: "muted" }, row.status === "queued" || row.status === "claimed" ? "not scanned yet — shown once the librarian has looked" : "withheld — see the row");
@@ -107,10 +123,9 @@ function materialCell(row) {
 export async function captureDetailView(host, id) {
   await loading(host, async () => {
     const row = await api.get(`queue/${id}`);
-    const parked = (getMeta().parked_statuses || ["needs_input", "triage"]).includes(row.status);
-    const disabledHint = parked ? ""
-      : "only a parked row (waiting on its submitter or on a steward) takes an action — a row a worker holds, or one already finished, is refused";
-    const situationKind = row.report && row.report.situation ? situationCopy(row.report.situation) : null;
+    const report = row.report || {};
+    const proposed = report.entities_proposed || [];
+    const proposedAliases = report.aliases_proposed || [];
     render(host,
       el("div", { class: "crumbs" }, link("captures", "Captures"), icon("chevron"), el("span", {}, `#${row.id}`)),
       el("section", { class: "card" },
@@ -118,24 +133,21 @@ export async function captureDetailView(host, id) {
           el("div", { class: "card-title" },
             el("h2", {}, `Capture #${row.id}`, " ", el("span", { class: "sub" }, `${row.kind} · sent by ${row.submitted_by}`)),
             statusSentence(row)),
-          el("div", { class: "spacer" }),
-          parked ? el("div", { class: "row" },
-            el("button", { class: "btn small", type: "button", onclick: () => requeueFlow(row) }, icon("refresh", 14), "Requeue"),
-            el("button", { class: "btn small", type: "button", onclick: () => resolveFlow(row) }, icon("check", 14), "Resolve by hand"),
-            el("button", { class: "btn small danger", type: "button", onclick: () => rejectFlow(row) }, icon("x", 14), "Decline")) : null),
-        !parked ? el("div", { class: "sub" }, disabledHint) : null,
-        situationKind && row.status === "triage" ? banner("warn",
-          el("p", {}, el("strong", {}, situationKind.label), " — ", situationKind.explain),
-          el("p", {}, "This row is an identity decision: ", link(`entities/${row.id}`, "open it on the Entities desk"), " to check the name against the registry and mint it; declining it here records the same governance decision.")) : null,
+          el("div", { class: "spacer" })),
+        proposed.length || proposedAliases.length ? banner("info",
+          el("p", {}, el("strong", {}, "The librarian proposed while filing this: "),
+            ...proposed.flatMap((e, i) => [i ? ", " : "", link(`entities/${e.id}`, `${e.name || e.id} (${e.type || "entity"})`)]),
+            proposed.length && proposedAliases.length ? "; " : "",
+            ...proposedAliases.flatMap((a, i) => [i ? ", " : "", `«${a.alias}» as a spelling of ${a.entity}`])),
+          el("p", {}, "The page is filed and anchored already; a steward confirms, merges or declines the identity from the ", link("entities", "Entities desk"), ". Nothing waits on the submitter.")) : null,
         el("div", { class: "hr" }),
         kv([
           ["arrived", `${fmtWhen(row.created_at)} (${fmtAge(Date.now() - new Date(row.created_at).getTime())} ago)`],
           ["claimed", row.claimed_at ? `${fmtWhen(row.claimed_at)} · waited ${fmtMs(row.queue_wait_ms)} for a worker` : "not yet"],
-          ["finished", row.finished_at ? `${fmtWhen(row.finished_at)} · ${latencyLine(row)}` : (parked ? "parked — finished_at stays empty while a person is waited on" : "—")],
+          ["finished", row.finished_at ? `${fmtWhen(row.finished_at)} · ${latencyLine(row)}` : "—"],
           ["deliveries", `${row.attempts} of ${getMeta().worker ? getMeta().worker.max_attempts : 3} before it fails — one is burned each time a worker claims it`],
           ["evidence", row.blob_refs && row.blob_refs.length ? el("span", { class: "row" }, mono(row.blob_refs.join(", ")), copyButton(row.blob_refs[0], "")) : "(none)"],
           ["result", row.result_ref ? el("span", { class: "row" }, mono(row.result_ref), copyButton(row.result_ref, "")) : null],
-          ["waiting on", row.waiting_on ? el("span", { class: "row" }, keyDot("human", 7), `${row.waiting_on} · for ${fmtAge(row.parked_age_ms)}`) : null],
         ], { wide: true })),
       el("div", { class: "grid halves" },
         el("section", { class: "card" },
@@ -147,60 +159,14 @@ export async function captureDetailView(host, id) {
         el("section", { class: "card" },
           el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "What the librarian says"), el("div", { class: "sub" }, "its report on this capture — the same sentences the submitter reads"))),
           reportPanel(row))),
-      row.status === "needs_input" && row.error
-        ? el("section", { class: "card" },
-            el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "The one question this capture gets"), el("div", { class: "sub" }, "only the submitter (or a steward) can answer it, through the MCP tool below; the answer returns the row to the queue"))),
-            el("div", { class: "material human" }, row.error),
-            row.reply_invocation ? el("div", { style: { marginTop: "10px" } }, commandBlock(row.reply_invocation)) : null)
-        : null,
-      row.reply
-        ? el("section", { class: "card" },
-            el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "The submitter's reply"), el("div", { class: "sub" }, "fenced as data on the librarian's next pass — it can name an existing entity or say the material is new"))),
-            el("div", { class: "material human" }, row.reply))
-        : null,
       el("section", { class: "card" },
-        el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "What people did to this row"), el("div", { class: "sub" }, "the row's own trace — the librarian's acts are on the report, human acts are here"))),
+        el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "The row's own history"), el("div", { class: "sub" }, "the librarian's acts are on the report; operator acts from before captures stopped parking are here"))),
         timeline(row.events)),
     );
   });
 }
 
-// ── the drain ─────────────────────────────────────────────────────────────────────────────────
-async function requeueFlow(row) {
-  const answer = await confirmForm({
-    title: `Requeue capture #${row.id}`,
-    consequence: "sends the row back to the queue for the librarian to try again — deliveries unchanged, claimable immediately. If nothing changed since it parked (no new entity, no alias), it will park again the same way.",
-    fields: [actorField(), { name: "note", label: "Note", kind: "textarea", hint: "for the row's own history — the submitter never sees it" }],
-    confirmLabel: "Requeue",
-  });
-  if (answer && await mutate(`queue/${row.id}/requeue`, answer.values, `requeued #${row.id}`)) go("captures");
-}
-
-async function resolveFlow(row) {
-  const answer = await confirmForm({
-    title: `Resolve capture #${row.id} by hand`,
-    consequence: "closes the row as handled outside the fast lane; your note becomes the submitter's report, word for word. Use this when you actually used the material — Decline is for material you did not.",
-    fields: [
-      actorField(),
-      { name: "note", label: "What you did with it", kind: "textarea", required: true, hint: VERBATIM_HINT, warnHint: true },
-      { name: "page", label: "Page the material ended up in", hint: "echoed to the submitter — leave both empty and their report has no pointer", placeholder: "wiki/notes/…md" },
-      { name: "commit", label: "Commit that carried it", placeholder: "sha" },
-    ],
-    confirmLabel: "Resolve by hand",
-  });
-  if (answer && await mutate(`queue/${row.id}/resolve`, answer.values, `resolved #${row.id} — the submitter's report now says so`)) go("captures");
-}
-
-async function rejectFlow(row) {
-  const answer = await confirmForm({
-    title: `Decline capture #${row.id}`,
-    consequence: "closes the row as declined, with your name on the decision. An identity decision declined here is recorded in the governance ledger too.",
-    fields: [actorField(), { name: "reason", label: "Reason", kind: "textarea", required: true, hint: VERBATIM_HINT, warnHint: true }],
-    confirmLabel: "Decline", danger: true,
-  });
-  if (answer && await mutate(`queue/${row.id}/reject`, answer.values, `declined #${row.id} — the reason is in the submitter's report`)) go("captures");
-}
-
+// ── the two acts on the whole queue ──────────────────────────────────────────────────────────
 async function reclaimFlow() {
   const lease = getMeta().worker ? getMeta().worker.visibility_timeout_s : null;
   const answer = await confirmForm({

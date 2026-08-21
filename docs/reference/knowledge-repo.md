@@ -26,8 +26,8 @@ What each one needs before it will run at all:
 | `stigmergy-server` | `ops/identities.json` | stdio refuses to start; HTTP refuses every request with the generic `401`. Never an open brain, on either transport |
 | the librarian worker (either backend) | `.claude/tools/stigmergy_lint.py`, **in the commit it files against** | `LibrarianConfigError` at startup, before a single item is claimed |
 | the librarian worker, `--backend pydantic` | `.claude/skills/librarian/SKILL.md`, same commit | the same refusal — the real agent has no operating procedure without it |
-| `stigmergy-entities` / an approved entity proposal | `ops/templates/entity.md` | `TemplateMissingError` — a new entity page is that template with its identity fields filled in, and no door carries a copy of its own. The CLI names which checkout is missing it; the server door says to commit it to the knowledge repo ([ADR 030](../decisions/030-server-side-entity-minting.md)'s two-door amendment) |
-| anchoring to succeed rather than park | **at least one entity** in `ops/entity-registry.json` | nothing breaks, but every capture asks about the name it met and parks. That is the design working; it is still not a first run anybody enjoys |
+| `stigmergy-entities`, and the librarian PROPOSING an identity | `ops/templates/entity.md` | `TemplateMissingError` from the steward's door; a `no-template` veto on a capture that would have proposed one. A new entity page is that template with its identity fields filled in, and no door carries a copy of its own — which is why the librarian refuses to invent one. The CLI names which checkout is missing it; the server door says to commit it to the knowledge repo ([ADR 030](../decisions/030-server-side-entity-minting.md)'s two-door amendment) |
+| anchoring to resolve against something | **at least one entity** in `ops/entity-registry.json` | nothing breaks and nothing waits: a capture about a name nothing resolves proposes that entity and files anchored to it, so an empty registry simply means the first captures each bring a proposal for a steward to confirm |
 
 So the honest minimum is: one seed page, `ops/identities.json`, the linter, and — the moment you
 want a real agent or a real entity — the librarian skill and the entity template. The three
@@ -41,7 +41,8 @@ stigmergy-brain/
 │   ├── decisions/     # type: decision   │ may CREATE a page in
 │   ├── concepts/      # type: concept   ─┘
 │   ├── meetings/      # type: meeting — written only by the meeting flow
-│   └── entities/      # one page per registered entity; written only by `stigmergy-entities`
+│   └── entities/      # one page per entity; the librarian PROPOSES one (approved_by: "")
+│                      # and `stigmergy-entities` decides it. Nothing else writes here
 ├── sources/           # captured raw material, verbatim — never edited
 │   ├── meetings/      # the transcript behind a meeting page
 │   ├── slack/         # the thread behind a 🧠 capture
@@ -54,7 +55,7 @@ stigmergy-brain/
     ├── stewards.json
     ├── slack-channels.json
     └── templates/
-        └── entity.md         # REQUIRED to mint an entity — the shape a new entity page takes
+        └── entity.md         # REQUIRED before any entity page can be written — its shape
 ```
 
 ## The three zones
@@ -68,7 +69,7 @@ The zones differ by **who writes them**:
 
 | Zone | Written by | Contains |
 |---|---|---|
-| `wiki/` | people; the librarian, through the eight gates; the meeting flow (`wiki/meetings/`); `stigmergy-entities` (`wiki/entities/`) | what someone concluded |
+| `wiki/` | people; the librarian, through the nine gates (`wiki/entities/` too, but only ever as an unconfirmed proposal); the meeting flow (`wiki/meetings/`); `stigmergy-entities` deciding an identity (`wiki/entities/`) | what someone concluded |
 | `sources/` | the librarian worker only, from the captured material, byte for byte | what someone said or sent — written once, never edited |
 | `views/` | `stigmergy.views` only — ONE writer, three entry points: the librarian worker's periodic convergence sweep (the guarantee), the librarian right after a meeting files (best-effort), and `stigmergy-views regenerate` by hand | derived rollups, regenerated from their members |
 
@@ -90,8 +91,13 @@ The librarian agent may create exactly **three** page types, each in a fixed fol
 The page vocabulary is **seven** types (`librarian.page.PAGE_TYPES`, one table every placement
 question reads). The other four — `entity`, `source`, `meeting`, `view` — may be read, linked and
 cross-referenced by the agent but never created by it: each has exactly one writer elsewhere (a
-governed command, or a flow that owns it). A capture that would need one parks in `triage` with a
-message naming the type and why, rather than being quietly downgraded to a `note`.
+governed command, or a flow that owns it). A capture that would need one is REFUSED naming the type
+and why, rather than being quietly downgraded to a `note`.
+
+`entity` is the interesting row, because the fast lane does reach that folder — but never as the
+agent's own write. When a capture is about something the registry does not know, the agent DECLARES
+the identity in its account and worker CODE writes the page, from this repo's own
+`ops/templates/entity.md`, with `approved_by: ""` (see [The identity lifecycle](#the-identity-lifecycle-on-the-page-and-nowhere-else)).
 
 This is deliberately small. The agent's write path is allow-listed to `.md` files in these three
 folders *that do not already exist*, so "the agent overwrote a page" is not a failure mode that
@@ -107,9 +113,9 @@ restrictions apply".
 | File | Shape | What it controls | Absent |
 |---|---|---|---|
 | `identities.json` | `{identity: "*" \| [audience labels]}` | who exists and what they may see. `"*"` means unrestricted. The HTTP transport resolves a bearer token to an email and then looks that email up here, on every request | **REQUIRED** — stdio refuses to start, HTTP refuses every request with the generic `401`, and an identity absent from the file gets no access at all |
-| `entity-registry.json` | `{"entities": {id: {name, type, aliases}}}` | the entity vocabulary. Anchoring resolves against it; a name it does not carry cannot be anchored to, which is what makes the librarian *ask* instead of inventing. Written only by `stigmergy-entities` | an empty registry — the graph works unregistered, with no aliases and no entity-first resolution |
+| `entity-registry.json` | `{"entities": {id: {name, type, aliases, proposed, approved_by, proposed_aliases}}}` | the entity vocabulary, and each entity's lifecycle. Anchoring resolves against it; a name it does not carry cannot be anchored to, which is what makes the librarian PROPOSE the entity rather than invent an anchor. **Derived, never hand-written**: it is a pure function of `wiki/entities/*.md`, regenerated in the same commit as any page that changes one — by `librarian.identity` proposing, and by `stigmergy-entities` deciding or creating | an empty registry — the graph works unregistered, with no aliases and no entity-first resolution |
 | `acl.json` | `{"version": 1, "rules": [{"path": "wiki/**", "acl": [labels]}], "default": [labels]}` | which audience labels get **stamped** on a page as it is filed, by path prefix; first match wins, else `default`. A resolved empty list means no `acl:` line at all, i.e. open | no file → an open corpus (nothing is labelled) |
-| `stewards.json` | `{"<zone path prefix>" \| "*": email \| [emails]}` | who may decide a review item, and who the doorbell rings when one parks. Longest matching prefix wins; `"*"` is the universal fallback | an empty map — nobody resolves for any scope, every review decision fails closed, and the doorbell records the undeliverable notification instead of swallowing it |
+| `stewards.json` | `{"<zone path prefix>" \| "*": email \| [emails]}` | who may decide a review item, and who the doorbell rings when one appears. Longest matching prefix wins; `"*"` is the universal fallback. A proposal is scoped by its own entity page's path, so a delegated zone rings and authorizes its own steward | an empty map — nobody resolves for any scope, every review decision fails closed, and the doorbell records the undeliverable notification instead of swallowing it |
 | `slack-channels.json` | `{channel_id: [audience labels]}` | the audience scope a public-channel answer or a broadcast is computed at, so a digest cannot spill scoped material into an open channel | the **empty set** for every channel — which, per the ACL truth table, sees only pages carrying no `acl` label |
 
 `identities.json` is the one with teeth. THREE of the other four are read at the commit the work
@@ -120,10 +126,35 @@ uncommitted local edit cannot change what a page is stamped with or who may sign
 is the copy the deploy baked into the image, so a channel's scope changes only with a redeploy.
 
 `ops/` carries one more thing that is not configuration: **`ops/templates/entity.md`**, the page
-shape a newly minted entity takes. `stigmergy-entities` and a server-side approve both render a new
-entity page from it and both refuse loudly when it is missing, because the template is the knowledge
-repo's own source of truth for what one of its pages looks like — not something this platform should
-be supplying from the outside.
+shape a new entity takes. Both writers render from it — `stigmergy-entities create` for an entity a
+steward registers directly, and the librarian for one a capture proposes — and both refuse loudly
+when it is missing, because the template is the knowledge repo's own source of truth for what one of
+its pages looks like, not something this platform should be supplying from the outside. It carries
+one field the other templates do not: `approved_by: ""`.
+
+## The identity lifecycle, on the page and nowhere else
+
+An entity's page is the only place its lifecycle is recorded; the registry is a derived view of it
+and the review inbox is a derived view of the registry. Two frontmatter fields carry it, and both
+are documented field-by-field in [the page contract](./page-contract.md):
+
+| On the page | Means |
+|---|---|
+| `approved_by: ""` | **proposed.** The librarian created this page while filing a capture that was about the thing. It resolves, it anchors, it is searchable — and a steward has not confirmed the identity |
+| `approved_by: ana@example.com` | **confirmed**, by that person, through one of the four doors |
+| no `approved_by` key at all | confirmed before the field existed. Pages written under the older contract are not migrated, and read as confirmed |
+| `proposed_aliases: ["ACME"]` | spellings the librarian appended to a REGISTERED entity because a capture used them. They resolve while they wait, and a steward confirms each into `aliases:` or drops it |
+
+**The contract linter checks the lifecycle** (`lifecycle` findings): `approved_by` must be a string;
+a `proposed_aliases` entry may not already be the entity's own name or one of its `aliases` (a
+spelling the registry lists needs no proposal). It also checks the DERIVED view against the pages —
+a page that says proposed while `ops/entity-registry.json` registers it as confirmed, or a
+`proposed_aliases` list the registry does not carry, is an error naming
+`stigmergy-entities regenerate` as the fix. An inbox built from a stale registry would show a
+steward proposals that are not there, or hide ones that are.
+
+The steward-facing half of all this — the verbs, the doors, the commit discipline — is
+[operator-runbook.md → Governing what the librarian proposed](./operator-runbook.md#governing-what-the-librarian-proposed).
 
 ## `.claude/` — the agent's operating procedure
 
@@ -177,15 +208,22 @@ only a defense if nothing in the repo can add to it.
 
 ## What the platform will never do to your repository
 
-- **It never force-pushes and never rewrites history.** Every commit is additive.
+- **It never force-pushes and never rewrites history.** Every commit is additive — with two named
+  exceptions, both a steward's own decision and both recorded in the ledger: declining a proposed
+  identity deletes its page, and merging one deletes the page and re-anchors what pointed at it.
 - **It never commits content the gates did not approve.** The commit is scoped to exactly the
   approved paths *and their approved bytes*, so neither an unrelated file that happened to be dirty
   in the worktree nor an in-place rewrite of an approved page can ride along.
-- **It never writes outside the three zones and `ops/`** — and `ops/` only through
-  `stigmergy.entities`: a steward's own commit from the CLI (authored as the steward), or a
-  server-driven mint from MCP, Slack or the console (authored as the librarian App, with the
-  approver named in an `Approved-by:` trailer instead) —
-  [ADR 030](../decisions/030-server-side-entity-minting.md).
+- **It never writes outside the three zones and `ops/`.** `ops/entity-registry.json` is regenerated
+  from the entity pages, in the same commit that changed one, and only by the two writers that may
+  change one: the librarian proposing (authored as the librarian App, `Submitted-by:` the capture's
+  submitter) and `stigmergy.entities` deciding or creating — a steward's own commit from the CLI
+  (authored as the steward), or a server-driven decision from MCP, Slack or the console (authored as
+  the librarian App, with the human named in a `Decided-by:` — or, for a `create`, an `Approved-by:`
+  — trailer) — [ADR 030](../decisions/030-server-side-entity-minting.md).
+- **It never confirms an identity by itself.** The librarian can create an entity page, and only
+  with `approved_by: ""`; the field is filled in by a person, through a door that authenticated
+  them, or not at all.
 - **One writer at a time.** The librarian claims a single queue item, works in a throwaway
   `git worktree`, and fetches before every claim. A concurrent human push is detected and the item
   is retried, never overwritten.

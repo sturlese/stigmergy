@@ -48,10 +48,9 @@ from stigmergy.librarian.pydantic_backend import (
     MeetingAccount,
     MeetingAnchoring,
     MeetingDecision,
-    MeetingTriage,
+    NewEntity,
     OrdinaryAnchoring,
     OrdinaryPage,
-    OrdinaryTriage,
     PydanticFilingAgent,
 )
 from tests.librarian import support
@@ -165,19 +164,6 @@ def test_a_filing_that_omits_a_half_it_obliges_is_refused_with_the_field_named(f
     assert "is required and came back empty" in message
 
 
-def test_the_page_body_refusal_offers_the_park_as_the_other_way_out():
-    """The one conditional message with a second repair in it, and it is the one that matters most:
-    a model that genuinely should not file this capture has an answer that is not "invent a body".
-    Without it the cheapest way to satisfy the validator is to fabricate page text, which is the
-    failure this whole flow exists to prevent."""
-    with pytest.raises(ValidationError) as exc_info:
-        FilingAccount(**_filing(page=OrdinaryPage(title="T", page_type="note", body="")))
-
-    message = _message(exc_info)
-    assert "triage" in message
-    assert "no frontmatter block" in message or "frontmatter" in message
-
-
 def test_a_filing_is_told_to_name_a_TYPE_and_never_a_folder():
     """ADR 033 D3's confinement claim, said to the model at the one moment it is listening: there
     is no field in this account that can name a location, and the refusal for a missing type says
@@ -189,158 +175,6 @@ def test_a_filing_is_told_to_name_a_TYPE_and_never_a_folder():
     assert "never a folder or a path" in message
     for creatable in ("note", "decision", "concept"):
         assert creatable in message
-
-
-@pytest.mark.parametrize("kind, required", sorted(agent_module.TRIAGE_REQUIRED_FIELD.items()))
-def test_a_park_that_omits_the_field_its_kind_obliges_is_refused(kind, required):
-    """Parametrized off `agent.TRIAGE_REQUIRED_FIELD` itself — the table the boundary reads — so a
-    third park kind is covered the day it is added rather than the day somebody remembers this
-    file."""
-    with pytest.raises(ValidationError) as exc_info:
-        FilingAccount(decision="triage", triage=OrdinaryTriage(kind=kind))
-
-    assert f"`triage.{required}`" in _message(exc_info)
-
-
-def test_a_park_with_no_usable_kind_is_refused_and_told_the_vocabulary():
-    with pytest.raises(ValidationError) as exc_info:
-        FilingAccount(decision="triage", triage=OrdinaryTriage(kind="something-else"))
-
-    message = _message(exc_info)
-    assert "`triage.kind`" in message
-    for known in agent_module.TRIAGE_KINDS:
-        assert known in message
-
-
-# ── the ordinary flow's PLURAL park (issue #32) ───────────────────────────────────────────────
-# `OrdinaryTriage.names` and the validator branch that honours it are dormant on the shipped
-# ordinary backend: ADR 034 left `structured_ordinary` False, so today's runs validate through
-# `agent.parse_outcome` and never construct a `FilingAccount`. Untested, that branch would be
-# unreachable code that reads as coverage — and the day the flag flips, the first thing anyone
-# would learn about it is a paid run. Same reason LEG 4's three framework cases are kept for the
-# meeting flow: the schema is tested as a contract, not as whichever road happens to be wired.
-def test_a_parked_ordinary_capture_may_name_SEVERAL_unresolved_entities():
-    """The ordinary flow's half of the plural shape: a capture naming two unresolved entities
-    declares `triage.names`. Before issue #32 this account was REFUSED for a missing `triage.name`
-    — the model's only repair instruction was to put two names in a one-name field, which is how
-    "Jack Acme Capital" got written."""
-    account = FilingAccount(
-        decision="triage",
-        triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
-                              names=["Jack", "Acme Capital"]))
-
-    assert account.triage.names == ["Jack", "Acme Capital"]
-    # INVERTED by the plural collapse. This used to assert `account.triage.name == ""` — "the
-    # singular slot stays empty; it is not a fallback". There is no singular slot: `OrdinaryTriage`
-    # carries `names` only, so the absence is now structural rather than conventional.
-    assert not hasattr(account.triage, "name")
-
-
-def test_a_plural_park_of_BLANK_names_is_still_refused_and_names_the_PLURAL_field():
-    """Specificity twin for the acceptance above — the branch must not become a hole. A `names`
-    list that carries no actual name satisfies nothing. INVERTED: the repair instruction is now
-    `triage.names`, and it has to be, because the account has no `triage.name` for a model to put
-    anything in — a repair instruction naming a field the schema does not have is a loop the model
-    cannot leave. (The empty-list case is covered by
-    `test_a_park_that_omits_the_field_its_kind_obliges_is_refused` above, off the same table.)"""
-    with pytest.raises(ValidationError) as exc_info:
-        FilingAccount(decision="triage",
-                      triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
-                                            names=["   ", ""]))
-
-    assert "`triage.names`" in _message(exc_info)
-
-
-# ── the benign twin the removal of `OrdinaryTriage.name` invites ───────────────────────────────
-# Deleting a field from a pydantic model is silent by default: `OrdinaryTriage(name="Jack")` does
-# not raise, it DROPS the argument. So the removal has two halves worth pinning, and only together
-# do they say what happened — a park that names its entity in the surviving field validates, and a
-# park that names it in the retired one does NOT quietly pass as if it had.
-def test_a_one_name_park_validates_through_the_surviving_PLURAL_field():
-    account = FilingAccount(
-        decision="triage",
-        triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY, names=["Jack"]))
-
-    assert account.triage.names == ["Jack"]
-
-
-def test_a_park_naming_its_entity_in_the_LEGACY_SINGULAR_field_is_folded_into_the_list():
-    """INVERTED (issue #53). This asserted the opposite — that a `name`-shaped park was REFUSED,
-    with a note recording that `agent.parse_outcome` was deliberately more tolerant and that the
-    two enforcement points differed on exactly this spelling.
-
-    That asymmetry was a trap waiting for the day `structured_ordinary` flips. Pydantic DROPS an
-    unknown keyword rather than raising, so a `name`-shaped account validated into an EMPTY
-    `names`, was refused for "no `triage.names`", and burned the single `OUTPUT_RETRIES` re-asking
-    for a field the brief that model was following never mentioned — on the expensive road, for a
-    field-name mismatch carrying no meaning.
-
-    The producer here is a model, not a program, and `name` is the spelling the world is full of.
-    The tolerance is INBOUND ONLY: nothing is added to the schema (see the assertion below), so
-    `names` stays the single field anything downstream reads.
-    """
-    account = FilingAccount(
-        decision="triage",
-        triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY, name="Jack"))
-
-    assert account.triage.names == ["Jack"]
-    assert not hasattr(account.triage, "name"), (
-        "the tolerance grew a second DECLARED field — that is how two spellings of one fact start "
-        "disagreeing, and the JSON schema would now advertise two places to put a name")
-
-
-def test_a_park_sending_BOTH_spellings_keeps_the_plural_one():
-    """The plural is never the casualty of the tolerance. `name` is what a model reaches for when
-    it has ONE thing to say, so a populated `names` beside it means the model already found the
-    field it was looking for — and quietly replacing two names with one would be issue #32 back,
-    reached through the repair path this time."""
-    account = FilingAccount(
-        decision="triage",
-        triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
-                              name="Jack", names=["Jack Reeve", "Acme Capital"]))
-
-    assert account.triage.names == ["Jack Reeve", "Acme Capital"]
-
-
-def test_a_BLANK_legacy_name_is_still_the_ordinary_missing_field_refusal():
-    """Specificity: the tolerance accepts a NAME, not the presence of a key. `name: ""` declares
-    nothing, and folding it in would manufacture a one-element list of nothing — a park that looks
-    answered and gives a steward an empty thing to register."""
-    with pytest.raises(ValidationError) as exc_info:
-        FilingAccount(decision="triage",
-                      triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY, name="  "))
-
-    assert "`triage.names`" in _message(exc_info)
-
-
-def test_the_two_enforcement_points_now_agree_on_the_legacy_spelling():
-    """The point of the change, stated as an equality between the two roads.
-
-    `agent.parse_outcome` (the file channel, shipped) and `FilingAccount` (the structured road, off
-    until ADR 034's flag flips) are duplication BY DESIGN, and they used to differ on exactly this.
-    Two separate "accepts `name`" assertions would both stay green if one road started stripping,
-    de-duplicating or ordering differently; comparing them to each other is what keeps one answer.
-    """
-    raw = {"decision": "triage", "summary": "s",
-           "triage": {"kind": agent_module.TRIAGE_UNRESOLVED_ENTITY, "name": "Jack"}}
-
-    file_channel = agent_module.parse_outcome(raw)
-    structured = FilingAccount(**raw)
-
-    assert file_channel.triage["names"] == structured.triage.names == ["Jack"]
-
-
-def test_the_plural_shape_buys_the_OTHER_park_kind_nothing():
-    """Second specificity twin: `names` answers the `unresolved-entity` question and no other. An
-    `unsupported-type` park still owes `triage.judged_type`, and a model that pads it with names
-    is told so rather than let through — the risk any early-return branch in a completeness
-    validator carries."""
-    with pytest.raises(ValidationError) as exc_info:
-        FilingAccount(decision="triage",
-                      triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNSUPPORTED_TYPE,
-                                            names=["Jack", "Acme Capital"]))
-
-    assert "`triage.judged_type`" in _message(exc_info)
 
 
 # ── LEG 2b: the MEETING twins, on a flow where the mechanism had not fired yet ─────────────────
@@ -377,32 +211,6 @@ def test_every_decision_in_a_meeting_filing_must_carry_its_own_title():
     assert "decision number 2" in message
 
 
-def test_a_parked_meeting_must_carry_the_PLURAL_names_field():
-    """**Both schemas now require the same plural shape, and this is where that convergence is
-    stated.** A meeting park has always been plural — `parse_meeting_outcome` REQUIRES `names`
-    outright, with no singular fallback. Since the plural collapse the ordinary schema asks for the
-    same thing: `OrdinaryTriage` carries `names` only, and `FilingAccount` refuses an
-    `unresolved-entity` park whose list holds no actual name (see
-    `test_a_park_that_omits_the_field_its_kind_obliges_is_refused` and the two twins beside it).
-
-    What is deliberately NOT symmetric is the BOUNDARY: `agent.parse_outcome` still accepts an
-    inbound `triage.name` and folds it into a one-element list, because the ordinary brief offers
-    both spellings to the model. Tolerating a spelling on the way in is not carrying a second
-    field."""
-    with pytest.raises(ValidationError) as exc_info:
-        MeetingAccount(decision="triage",
-                       triage=MeetingTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY))
-
-    assert "`triage.names`" in _message(exc_info)
-
-
-def test_a_parked_meeting_naming_its_unresolved_entities_validates():
-    """The park's benign twin: whitespace-only names are absent, real ones are not."""
-    MeetingAccount(decision="triage",
-                   triage=MeetingTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
-                                        names=["Halcyon Grid"]))
-
-
 # ── LEG 3: the BENIGN twins — every complete account still validates ───────────────────────────
 def test_a_complete_filing_account_validates():
     """**The half that decides whether this schema is safe to ship.** A validator that also
@@ -412,18 +220,6 @@ def test_a_complete_filing_account_validates():
 
     assert account.decision == "file"
     assert account.page.body == _page_body()
-
-
-def test_a_complete_ordinary_PARK_validates_and_carries_no_page():
-    """`OrdinaryPage`'s own fields stay optional on purpose, and this is why: a `triage` account
-    legitimately carries no page at all. Requiring them field-by-field would refuse the correct
-    outcome for a capture this brain cannot place — which is the park the whole governed-entity
-    design depends on."""
-    account = FilingAccount(decision="triage",
-                            triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
-                                                  names=["Halcyon Grid"]))
-
-    assert account.page.title == "" and account.page.body == ""
 
 
 def test_a_complete_meeting_account_validates():
@@ -440,22 +236,6 @@ def test_a_complete_account_parses_through_the_BOUNDARY_unchanged():
     assert outcome.title == "Acme Corp Renewal Window"      # mirrored up from `page`
     assert outcome.page_type == "note"
     assert outcome.page.body == _page_body()
-
-
-def test_a_PLURAL_park_parses_through_the_BOUNDARY_unchanged_too():
-    """The same agreement, on the shape issue #32 added: what the schema accepts, `parse_outcome`
-    accepts, and both names survive into `outcome.triage["names"]` — which is the field
-    `processing._triage` routes on. Two enforcement points that disagreed here would send a model
-    round a repair loop for an account the other half had already blessed."""
-    account = FilingAccount(
-        decision="triage",
-        triage=OrdinaryTriage(kind=agent_module.TRIAGE_UNRESOLVED_ENTITY,
-                              names=["Jack", "Acme Capital"]))
-
-    outcome = agent_module.parse_outcome(account.model_dump())
-
-    assert outcome.decision == "triage"
-    assert outcome.triage["names"] == ["Jack", "Acme Capital"]
 
 
 # ── LEG 4: through the FRAMEWORK — the two roads an incomplete account can now take ────────────
@@ -712,60 +492,6 @@ def test_the_blanket_arm_wraps_by_class_name_and_logs_one_bounded_line(tmp_path,
         "the log line is effectively unbounded — MAX_FAULT_LOG_LEN is meant to cap it")
 
 
-# ── the promoted table: one mapping, two readers ───────────────────────────────────────────────
-def test_the_triage_required_field_table_is_shared_rather_than_restated():
-    """`agent._TRIAGE_REQUIRED_FIELD` became `TRIAGE_REQUIRED_FIELD` because it acquired a second
-    reader: the schema's completeness validator demands the same field of the same kind that
-    `parse_outcome` does.
-
-    Two enforcement points reading ONE table is the design; two tables would be a drift nobody
-    would see until a park was refused by one and accepted by the other. Asserted at the source,
-    because the mapping's second reader is a validator whose output is a string.
-    """
-    import inspect
-
-    assert set(agent_module.TRIAGE_REQUIRED_FIELD) == set(agent_module.TRIAGE_KINDS), (
-        "a park kind has no required field, or the table names one that is not a kind")
-
-    schema_source = inspect.getsource(pydantic_backend)
-    assert "agent_module.TRIAGE_REQUIRED_FIELD[kind]" in schema_source, (
-        "the schema no longer reads the shared table — a restated mapping is a second answer to "
-        "one question")
-    assert not hasattr(agent_module, "_TRIAGE_REQUIRED_FIELD"), (
-        "the private name survived beside the public one — two names for one table is how half "
-        "the readers keep reading the old one")
-
-
-@pytest.mark.parametrize("kind, required", sorted(agent_module.TRIAGE_REQUIRED_FIELD.items()))
-def test_both_readers_refuse_the_same_incomplete_park(kind, required):
-    """**The agreement itself, exercised rather than inferred from a shared import.** The same
-    park, missing the same field, is refused by the schema AND by the boundary — which is what
-    "declared duplication" has to mean to be worth the second enforcement point.
-    """
-    with pytest.raises(ValidationError):
-        FilingAccount(decision="triage", triage=OrdinaryTriage(kind=kind))
-
-    with pytest.raises(OutcomeShapeError) as boundary:
-        agent_module.parse_outcome({"decision": "triage", "triage": {"kind": kind}})
-
-    assert any(f"`triage.{required}`" in f.message for f in boundary.value.findings), (
-        f"the boundary does not name triage.{required} for a {kind!r} park, so the two "
-        f"enforcement points disagree about what the same table means")
-
-
-def test_a_complete_park_satisfies_BOTH_readers(tmp_path):
-    """The benign twin of the agreement: a park that names its field is accepted by both, so
-    neither enforcement point is refusing work the other would let through."""
-    values = {agent_module.TRIAGE_UNRESOLVED_ENTITY: {"names": ["Halcyon Grid"]},
-              agent_module.TRIAGE_UNSUPPORTED_TYPE: {"judged_type": "dataset"}}
-
-    for kind, extra in values.items():
-        account = FilingAccount(decision="triage", triage=OrdinaryTriage(kind=kind, **extra))
-        outcome = agent_module.parse_outcome(account.model_dump())
-        assert outcome.decision == "triage"
-        assert outcome.triage["kind"] == kind
-
-
 def test_the_settings_default_backend_is_still_the_offline_double():
     """A guard rail for this whole file: it constructs a `PydanticFilingAgent` several times, and
     the suite stays keyless only because nothing here is the shipped default. If the default ever
@@ -790,7 +516,7 @@ def test_a_provider_that_stringifies_nested_structures_is_decoded_at_the_boundar
         "attendees": '["Ana", "Marc"]',
         "decisions": ('[{"title": "Expand to Madrid", "body": "September.", '
                       '"anchoring": "{\\"kind\\": \\"company\\", \\"reason\\": \\"org\\"}"}]'),
-        "triage": "{}",
+        "new_entities": "[]",
     })
     assert account.attendees == ["Ana", "Marc"]
     assert [d.title for d in account.decisions] == ["Expand to Madrid"]
@@ -809,12 +535,42 @@ def test_prose_that_merely_looks_like_json_stays_prose():
     assert account.decisions[0].body == '["still prose: the field is a str"]'
 
 
-def test_the_singular_name_fold_still_runs_after_a_stringified_triage_is_decoded():
-    """Composition with the existing inbound tolerance: the parent decodes the stringified
-    `triage`, THEN the nested model folds the singular `name` — parent validation precedes
-    child validation, so the two repairs cannot race."""
-    account = pydantic_backend.FilingAccount.model_validate({
-        "decision": "triage",
-        "triage": '{"kind": "unresolved-entity", "name": "Quillon Labs"}',
-    })
-    assert account.triage.names == ["Quillon Labs"]
+# ── proposals: the schema asks for the three fields without which there is no page ───────────
+# Mirrored from `agent._parse_new_entities` (the file channel's rule) through
+# `pydantic_backend._complete_proposals`, so both channels refuse the same half-proposal one road
+# earlier than the worker would — the same declared duplication the two readers have always had.
+@pytest.mark.parametrize("missing", ["name", "entity_type", "summary"])
+def test_a_proposed_entity_missing_a_page_making_field_is_refused_and_the_field_is_named(missing):
+    fields = {"name": "Scircle", "entity_type": "organization", "summary": "a perfume startup"}
+    fields[missing] = "  "
+    with pytest.raises(ValidationError) as exc_info:
+        FilingAccount(**_filing(new_entities=[NewEntity(**fields)]))
+    assert f"`new_entities[0].{missing}`" in _message(exc_info)
+    with pytest.raises(ValidationError) as exc_info:
+        MeetingAccount(**_meeting(new_entities=[NewEntity(**fields)]))
+    assert f"`new_entities[0].{missing}`" in _message(exc_info)
+
+
+def test_a_complete_proposal_validates_on_both_accounts_and_parses_through_the_boundary():
+    """The benign twin, and the agreement between the two readers stated as a round trip: what the
+    schema accepts, `parse_outcome` accepts, and the proposal lands where `librarian.identity`
+    reads it."""
+    proposed = NewEntity(name="Scircle", entity_type="organization", role="a perfume startup",
+                         aliases=["S-Circle"], summary="Scircle sells personalised perfume.",
+                         facts=["Seed round in 2026"], connections=["[[Scircle analysis]] — why"])
+    account = FilingAccount(**_filing(new_entities=[proposed]))
+    outcome = agent_module.parse_outcome(account.model_dump())
+    assert outcome.new_entities[0]["name"] == "Scircle"
+    assert outcome.new_entities[0]["aliases"] == ("S-Circle",)
+    assert MeetingAccount(**_meeting(new_entities=[proposed])).new_entities[0].name == "Scircle"
+
+
+def test_both_readers_refuse_the_same_incomplete_proposal():
+    """The agreement itself, exercised rather than inferred from a shared import."""
+    with pytest.raises(ValidationError):
+        FilingAccount(**_filing(new_entities=[NewEntity(name="Scircle", entity_type="organization")]))
+    with pytest.raises(OutcomeShapeError) as boundary:
+        agent_module.parse_outcome({"decision": "file", "title": "T",
+                                    "new_entities": [{"name": "Scircle",
+                                                      "entity_type": "organization"}]})
+    assert any("new_entities[0].summary" in f.message for f in boundary.value.findings)

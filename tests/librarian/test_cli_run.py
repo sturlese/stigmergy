@@ -98,7 +98,7 @@ def test_run_drains_the_queue_and_stops_cleanly_on_sigint(run_rig):
     assert "stopped after" in out
     # the item really reached a terminal state — the loop is the same `process_next` `once` uses
     statuses = {r["status"] for r in queue.list_all_submissions(conn)}
-    assert statuses & {schema.FILED, schema.REJECTED, schema.TRIAGE, schema.FAILED}
+    assert statuses & {schema.FILED, schema.REJECTED, schema.FAILED}
 
 
 def test_run_prints_the_same_preamble_once_prints_plus_its_loop_settings(run_rig):

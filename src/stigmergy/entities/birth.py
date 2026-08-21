@@ -1,10 +1,12 @@
-"""Resolve before mint: what must be true before a new entity may exist, and the page it becomes.
+"""Resolve before birth: what must be true before a new entity may exist, and the page it becomes.
 
 Pure functions of a proposal and a registry — a refusal costs no git, no network, no cleanup.
-The steward authors the identity metadata (`entity_type`, `aliases`, `role`); the agent's outcome
-is name-only — agent-drafted aliases would invite rubber-stamping. Collision is asked of the
-REGISTRY through `normalize` ("would these two ever be confused?"), never of bytes, over all
-three identity inputs: the id (registry key), the name (title, filename, wikilink target) and
+Two authors reach this gate with the same inputs: a steward typing at `stigmergy-entities
+create`, and the librarian proposing an entity it read out of a capture (the page lands with
+`approved_by` empty and a steward confirms it from the inbox). Same validation, same collision
+rule, because a proposal that could skip a check would be a second registry. Collision is asked
+of the REGISTRY through `normalize` ("would these two ever be confused?"), never of bytes, over
+all three identity inputs: the id (registry key), the name (title, filename, wikilink target) and
 every alias (a spelling that silently reassigns mentions).
 
 The gate is only as strong as what it inspects reaching the registry unchanged: the registry is
@@ -19,7 +21,6 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from stigmergy.capture import schema as capture_schema
 from stigmergy.entities import generator
 from stigmergy.entities.errors import CollisionError, EntityError
 from stigmergy.kernel.registry import Registry
@@ -121,15 +122,6 @@ def _clean_name(name: str) -> str:
     value = " ".join(str(name or "").split())
     if not value:
         raise EntityError("--name is empty — an entity is a name before it is anything else")
-    if value == capture_schema.UNNAMED_ENTITY_PLACEHOLDER:
-        # The librarian's own word for a park that named nothing. Syntactically an ordinary name,
-        # and the doors that list a park's names refuse to OFFER it (`situations.is_mintable_name`)
-        # — but this is the terminal gate every door passes through, and an entity by this name
-        # would resolve for every future capture containing the phrase, forever.
-        raise EntityError(
-            f"--name is {value!r}, which is the librarian's placeholder for a park that named "
-            f"nothing — not an identity. Read the material and type the name it is about, or "
-            f"decline the capture")
     if len(value) > MAX_NAME_CHARS:
         raise EntityError(
             f"--name is {len(value)} characters (max {MAX_NAME_CHARS}) — it becomes a page title, "
@@ -181,6 +173,12 @@ def prepare(*, canonical_id: str, name: str, entity_type: str, aliases=(), role:
                        registry=registry, existing_pages=existing_pages)
     return Proposal(canonical_id=derived_id, name=name, entity_type=entity_type,
                     aliases=cleaned_aliases, role=_clean_role(role))
+
+
+def clean_aliases(aliases, *, name: str) -> tuple[str, ...]:
+    """`_clean_aliases`, for the one caller outside `prepare`: the librarian proposing a spelling
+    for an entity that already exists holds it to the same rules a birth does."""
+    return _clean_aliases(aliases, name=name)
 
 
 def _clean_aliases(aliases, *, name: str) -> tuple[str, ...]:
@@ -269,8 +267,8 @@ def _refuse_collisions(*, canonical_id: str, name: str, aliases, registry: Regis
         raise CollisionError(
             f"{value!r} (given as {label}) already resolves to the registered entity {hit!r} "
             f"(name: {entry.get('name')}, type: {entry.get('type')}, aliases: {listed}). If this "
-            f"is the same thing, point the capture at the existing entity instead of minting a "
-            f"second one — requeue it, or answer its ask-back naming {entry.get('name')!r}. If it "
+            f"is the same thing, anchor the material to that entity instead of creating a second "
+            f"one — a spelling the material uses for it can become one of its aliases. If it "
             f"genuinely is a different one, pick an id, name or alias that does not collide and "
             f"try again")
 
@@ -305,17 +303,89 @@ def recheck(proposal: Proposal, *, registry: Registry, existing_pages=()) -> Non
 
 
 # ── the page ──────────────────────────────────────────────────────────────────────────────────
-def render_page(template: str, proposal: Proposal, *, today: str) -> str:
+# What a page's body may carry when its author knows something about the entity — the librarian
+# does, having just read a capture about it; a steward at `create` may not, and leaves the
+# template's stubs. Each field is bounded and control-stripped like every other authored value:
+# the body is markdown, not YAML, so the one character class that matters is the invisible one.
+MAX_SUMMARY_CHARS = 1500
+MAX_FACTS = 20
+MAX_FACT_CHARS = 300
+MAX_CONNECTIONS = 20
+MAX_CONNECTION_CHARS = 300
+
+# The template's own section headings the body fields fill — looked up by heading text, so the
+# template stays the source of truth for the page's SHAPE and this module only supplies content.
+SUMMARY_SECTION = "What / Who"
+FACTS_SECTION = "Facts"
+CONNECTIONS_SECTION = "Connections"
+
+
+@dataclass(frozen=True)
+class EntityBody:
+    """The prose half of an entity page: one paragraph saying what the thing is, the facts the
+    material established, and the pages it connects to (`[[Page]] — why`). Constructed only by
+    `prepare_body`, which bounds every field."""
+    summary: str = ""
+    facts: tuple[str, ...] = ()
+    connections: tuple[str, ...] = ()
+
+
+def prepare_body(*, summary: str = "", facts=(), connections=()) -> EntityBody:
+    """Bound and clean the body fields. Lines are collapsed to one line each (a fact is a bullet;
+    a bullet with a newline in it is two bullets, one of them unmarked), clipped at their ceilings
+    and refused on control characters — the same posture as the identity fields, for the same
+    reason: a steward approves what they can SEE."""
+    clean_summary = " ".join(str(summary or "").split())[:MAX_SUMMARY_CHARS]
+    _refuse_control_characters(clean_summary, subject="the entity summary",
+                               consequence="the paragraph is written into the page a steward "
+                                           "reads before approving the identity")
+    return EntityBody(summary=clean_summary,
+                      facts=_clean_lines(facts, MAX_FACTS, MAX_FACT_CHARS, subject="a fact"),
+                      connections=_clean_lines(connections, MAX_CONNECTIONS, MAX_CONNECTION_CHARS,
+                                               subject="a connection"))
+
+
+def _clean_lines(values, max_items: int, max_chars: int, *, subject: str) -> tuple[str, ...]:
+    out = []
+    for value in values or ():
+        line = " ".join(str(value or "").split())[:max_chars]
+        if not line:
+            continue
+        _refuse_control_characters(line, subject=subject,
+                                   consequence="the line is written into the page a steward reads "
+                                               "before approving the identity")
+        if line not in out:
+            out.append(line)
+    if len(out) > max_items:
+        raise EntityError(
+            f"{len(out)} {subject} lines were given (max {max_items}) — an entity page opens with "
+            f"what the material established, not with everything it said; the rest belongs on the "
+            f"note that cites it")
+    return tuple(out)
+
+
+def render_page(template: str, proposal: Proposal, *, today: str, approved_by: str = "",
+                body: "EntityBody | None" = None, related=()) -> str:
     """Materialize `ops/templates/entity.md` for this proposal.
 
-    The template is read from the repo, never reproduced here — an edit to it reaches minted
-    pages without a platform release. Only the frontmatter is rewritten, line by line (a YAML
-    round-trip would reformat a block humans diff); the BODY stays as the template wrote it, a
-    stub the steward fills in. Every human-authored value goes through `_yaml_str`, none through
-    an f-string (module docstring).
+    The template is read from the repo, never reproduced here — an edit to it reaches new pages
+    without a platform release. The frontmatter is rewritten line by line (a YAML round-trip would
+    reformat a block humans diff). The BODY keeps the template's sections: a section the caller
+    supplies content for has its stub replaced, one it does not keeps the stub for a person to fill
+    in. Every authored value goes through `_yaml_str`, none through an f-string (module docstring).
+
+    `approved_by` is the lifecycle: EMPTY is a proposal the librarian made and a steward has not
+    confirmed; a name is the person who did (a steward's own `create` IS the approval). `related`
+    names pages this entity links to — for a librarian-born entity, the note that brought it, so
+    the newborn page is never an orphan.
     """
-    front, body = _split(template)
+    front, page_body = _split(template)
     today = _clean_today(today)
+    approver = " ".join(str(approved_by or "").split())
+    _refuse_control_characters(approver, subject="approved_by",
+                               consequence="it is the one field that says who confirmed this "
+                                           "identity, read by every person who opens the page")
+    related_links = [f"[[{_clean_link_name(name)}]]" for name in related or ()]
     fields = {
         "type": PAGE_TYPE,
         "title": _yaml_str(proposal.name),
@@ -331,12 +401,59 @@ def render_page(template: str, proposal: Proposal, *, today: str) -> str:
         # scope, so leaving it would assert the wrong anchor on the one page type whose job is to
         # BE an entity.
         "entity": f"[{_yaml_str(proposal.canonical_id)}]",
-        "related": "[]",
+        "related": "[" + ", ".join(_yaml_str(link) for link in related_links) + "]",
         "sources": "[]",
+        generator.APPROVED_BY_KEY: _yaml_str(approver),
     }
     rendered = _rewrite_frontmatter(front, fields)
-    body = body.replace("<Entity Name>", proposal.name)
-    return f"---\n{rendered}\n---\n{body}"
+    page_body = page_body.replace("<Entity Name>", proposal.name)
+    if body is not None:
+        page_body = _fill_sections(page_body, {
+            SUMMARY_SECTION: [body.summary] if body.summary else [],
+            FACTS_SECTION: [f"- {fact}" for fact in body.facts],
+            CONNECTIONS_SECTION: [f"- {connection}" for connection in body.connections],
+        })
+    return f"---\n{rendered}\n---\n{page_body}"
+
+
+def _clean_link_name(name) -> str:
+    """A page name for `related:`, held to the name rules: it becomes a wikilink target."""
+    value = " ".join(str(name or "").strip().strip("[]").split())
+    _refuse_forbidden(value, _FORBIDDEN_IN_NAME, subject=f"the related page {value!r}",
+                      consequence="which cannot appear in a wikilink target")
+    _refuse_control_characters(value, subject=f"the related page {value!r}",
+                               consequence="a wikilink target has to be typeable")
+    return value
+
+
+def _fill_sections(page_body: str, sections: dict[str, list[str]]) -> str:
+    """Replace each `## Heading` section's stub with the supplied lines, IN PLACE; a heading the
+    template lacks is appended. Sections given no lines keep the template's stub, so a person can
+    still see what the page is waiting for. Line-based, like the frontmatter rewrite: the
+    template's order and its comments survive."""
+    lines = page_body.split("\n")
+    out, written = [], set()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        heading = line[3:].strip() if line.startswith("## ") else None
+        if heading is None or heading not in sections or not sections[heading]:
+            out.append(line)
+            index += 1
+            continue
+        end = index + 1
+        while end < len(lines) and not lines[end].startswith("## "):
+            end += 1
+        out.extend([line, "", *sections[heading], ""])
+        written.add(heading)
+        index = end
+    for heading, content in sections.items():
+        if content and heading not in written:
+            out.extend(["", f"## {heading}", "", *content, ""])
+    text = "\n".join(out)
+    while "\n\n\n" in text:
+        text = text.replace("\n\n\n", "\n\n")
+    return text.rstrip("\n") + "\n"
 
 
 def _yaml_str(value) -> str:

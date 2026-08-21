@@ -81,16 +81,22 @@ python evals/run_qa.py --embedder openai --llm openai --model gpt-5.6-terra \
 
 ## Golden filing — the write path
 
-[`filing/`](filing/) — **14 golden captures, 16 scored phases**, driven by
+[`filing/`](filing/) — **14 golden captures, 14 scored phases**, driven by
 [`run_filing.py`](run_filing.py) through the REAL filing path:
-`worker.process_next` over real Postgres, a real bare remote, a real `git worktree`, the eight
+`worker.process_next` over real Postgres, a real bare remote, a real `git worktree`, the nine
 deterministic gates and the knowledge repo's own contract linter. Nothing is stubbed and nothing is
 a second implementation — it is the write path.
+
+**One capture, one phase.** Two captures used to be scored twice — a park and a re-file after a
+stored reply — and ADR 041 removed the park with the states it waited in. A name the registry does
+not know is now PROPOSED: the librarian creates the entity page itself with `approved_by:` empty and
+anchors the capture to it in the same commit, and a steward confirms it afterwards from an inbox
+this instrument never reaches.
 
 `filing/repo/` uses invented organizations that share no name with the corpus's set or the test
 suite's, so the three fixtures can never be confused.
 
-### The nine facets, and why there is no single number
+### The eight facets, and why there is no single number
 
 Each expectation names the facets it is scored on, and **each facet keeps its own denominator**: a
 backend that starts filing everything as a note must not be able to hide that behind a rising
@@ -99,15 +105,14 @@ and refused on drift before a model call is spent.
 
 | Facet | What it asks | Denominator |
 |---|---|---|
-| `status` | the terminal state each capture reached (`filed`/`needs_input`/`rejected`) | 16 |
+| `status` | the terminal state each capture reached (`filed`/`rejected`/`failed`) | 14 |
 | `reason` | a refusal's own `reason_code` | 1 |
 | `type` | the `type:` of the page that ACTUALLY landed, read back out of git | 13 |
 | `folder` | where it landed | 13 |
-| `anchor` | the page's server-stamped `entity:` — resolved registry ids, or company-wide | 11 |
+| `anchor` | the page's server-stamped `entity:` — resolved registry ids, or company-wide | 10 |
 | `edits` | which OTHER pages the commit changed, from the agent's declaration | 1 |
-| `park_question` | for a park: the unresolved name the question actually captured | 2 |
+| `proposals` | for an unregistered name: the identity the filing proposed for it | 2 |
 | `decisions` | for a meeting: one decision page per decision, each with its OWN anchor | 2 |
-| `reuse` | a park did not cost the capture a decision | 1 |
 
 **`edits` is scored by CONTAINMENT.** Every path the expectation names must have been edited; an
 edit beyond them does not fail the facet. A declared edit is confined by `edits.validate` to
@@ -118,9 +123,11 @@ is vacuously true for every backend while still filling the denominator, so "owe
 by naming no `edits` key at all.
 
 **`attempts`, `bounces` and cost carry no bar and gate nothing.** A backend reaching the same page
-in two passes is more expensive, not worse. Their denominator is 8, not 12: the two parking captures
-name no attempts/bounces expectation, because what a park costs depends on how it parked.
-`agent_passes` in the report is a different number over all twelve phases.
+in two passes is more expensive, not worse. Their denominator is 12, not 14: the two proposing
+captures name no attempts/bounces expectation, because each of the three honesty checks in
+`librarian.identity` answers with a finding the corrective pass can act on, so a proposal may
+legitimately spend a second pass an ordinary filing does not. `agent_passes` in the report is a
+different number, over all fourteen phases.
 
 Scoring is deterministic — **no LLM judge**. The two title matchers are the only loose ones and
 match on normalized *words*, never literally. They do no stemming, with exactly one exception:
@@ -141,19 +148,28 @@ whatever held across runs. What must never happen is an entry asserting neither 
 page is left and measures nothing) or a title-less entry written before a titled one (it is the
 weakest matcher, so greedy order lets it eat the titled entry's page). `_check_set` refuses both.
 
-### One expectation deliberately weaker than it looks
+### Two expectations deliberately weaker than they look
 
-`reuse` scores whether a meeting re-filed after a park **kept the decisions it had distilled** — not
-whether it re-filed them without calling the model. Whether a park leaves a reusable distillation is
-decided by *how* it parked, and an agent following the meeting brief parks with `decision: "triage"`,
-storing nothing; scoring the reuse itself would mark it down for following the brief. `reuse_at_risk`
-is reported beside the score so "kept what it had distilled" is readable apart from "there was never
-anything to lose".
+**`proposals` asserts names, not ids, and the two proposing captures assert no anchor at all.** A
+proposed entity's registry id is `slugify` of the name the AGENT chose, so `Halcyon Grid` and
+`Halcyon Grid pilot` are the same judgment and two different ids. Pinning the id would score the
+spelling; the loose matcher scores which unregistered thing was given an identity, which is the
+judgment. `proposed_aliases` rides beside the observation unscored, because the interesting near
+miss is a filing that read the name as a registered entity's *spelling* and proposed an alias
+instead — a red `proposals` cell is much faster to diagnose with that in front of you.
+
+**`F09`'s decision pages are paired on title alone.** Both of its anchors used to be assertable
+because a stored reply named a registered entity; nothing names one now, so each decision anchors
+either to the proposed identity or company-wide and asserting either would pin the yardstick to a
+single sample. The count and the one-to-one pairing still carry the granularity check that facet
+exists for.
 
 ### The bars
 
 Each quality facet carries a bar in [`bars.py`](bars.py)'s `FILING_BARS`, fixed from a recorded
-baseline: **a bar is the baseline's own score, with a fractional value floored a point** (8/9 =
+baseline — except `proposals`, which is a facet ADR 041 created and no run has ever scored, so its
+bar is `None`: REPORT, DO NOT JUDGE. **A bar is the baseline's own score, with a fractional value
+floored a point** (8/9 =
 0.888… must satisfy its own bar, and a two-decimal 0.89 would refuse the very run that set it). The
 0.88 pair on `type`/`folder` therefore tolerates exactly one disagreement — a defensible reading
 kept as a recorded disagreement rather than flipped into the expectation, which would over-fit the
@@ -192,7 +208,8 @@ own `startup_checks`, so a missing `gitleaks` or credential is one loud line rat
 
 Read the double's table with its limits in mind: `librarian/double.py` has no NLP. It files one
 well-formed page per capture, always a `note`, always anchored to the first registry entity, and
-parks only on an explicit `DOUBLE:` directive, which the golden captures contain none of. So it
+proposes an identity only on an explicit `DOUBLE:propose=` directive, which the golden captures
+contain none of. So it
 scores 1.00 on the facets code decides and well below it on every facet judgment decides — the
 plumbing reporting itself healthy.
 
@@ -236,6 +253,14 @@ A frozen brief re-frozen is a new measurement, not a regression — nothing is r
 is back-filled, so read the first row under new bytes as a fresh baseline candidate. The re-freezes
 so far, newest first:
 
+- **`6bfc4a0` (2026-08-21, ADR 041)** — all four frozen files in one commit, which is what makes
+  this the cleanest re-freeze the fixture has had: the librarian brief and the meeting-distiller
+  brief stop telling the agent to park a capture on the person who wrote it and tell it to PROPOSE
+  the identity instead, the contract linter learns the `approved_by:` / `proposed_aliases:`
+  lifecycle those proposals land in, and `ops/templates/entity.md` grows the `approved_by` field a
+  proposal is marked with. Every score above this row was measured under a brief that could answer
+  a capture with a question; nothing under it can. Read the first row after it as a fresh baseline
+  candidate, and note that `proposals` has no bar at all yet.
 - **`abf6790` (2026-08-18, issue #77)** — the librarian brief, because entity resolution stopped
   being a suffix table in Python and became the agent's judgment fenced by code, and the fixture
   gained the three entities that judgment needs (`Cofers`, `Cofers Legal`, `Meridian Nexus`) plus

@@ -21,7 +21,7 @@ from unittest.mock import create_autospec
 
 import pytest
 
-from stigmergy.capture.errors import CaptureError, EvidenceError, ReplyRejected, SubmissionRejected
+from stigmergy.capture.errors import CaptureError, EvidenceError, SubmissionRejected
 from stigmergy.entities.errors import EntityError
 from stigmergy.index.errors import StigmergyIndexError
 from stigmergy.server.errors import CapabilityUnavailableError, RateLimitError, RegistryError
@@ -56,24 +56,25 @@ def fake_service():
     return service
 
 
-def test_the_mounted_tool_list_is_exactly_the_ten_supported_tools(fake_service):
-    """**The tool list, pinned.** Ten tools are supported, and this is the assertion that makes
-    that a fact rather than a claim: an eleventh appearing (a surface added without a decision) or
-    a tenth vanishing (a surface removed without one) both turn this red by name.
+def test_the_mounted_tool_list_is_exactly_the_nine_supported_tools(fake_service):
+    """**The tool list, pinned.** Nine tools are supported, and this is the assertion that makes
+    that a fact rather than a claim: a tenth appearing (a surface added without a decision) or a
+    ninth vanishing (a surface removed without one) both turn this red by name.
 
-    `review_queue`/`review_decide` are part of the set: the inbox where work parks on a human is
-    a first-class surface, not an add-on."""
+    `brain_reply` is GONE with the parks: nothing a submitter captures ever waits on them.
+    `review_queue`/`review_decide` are part of the set: the inbox of what the librarian proposed
+    is a first-class surface, not an add-on."""
     mcp = build_mcp(fake_service)
     names = {t.name for t in asyncio.run(mcp.list_tools())}
     assert names == {
         # read
         "search_brain", "read_page", "list_entities", "describe_entity", "ask",
         # write
-        "brain_submit", "brain_submissions", "brain_reply",
+        "brain_submit", "brain_submissions",
         # review
         "review_queue", "review_decide",
     }
-    assert len(names) == 10
+    assert len(names) == 9
 
 
 def test_search_brain_forwards_arguments_and_returns_the_service_payload(fake_service):
@@ -330,54 +331,6 @@ def test_brain_submissions_maps_an_unanticipated_exception_to_class_name_only(fa
     assert out == {"error": "brain_submissions failed (RuntimeError)"}
 
 
-# ── brain_reply closure — mirrors brain_submit's own tests above ───────────────────────────────
-def test_brain_reply_forwards_arguments_and_returns_the_service_payload(fake_service):
-    fake_service.reply.return_value = {"id": 7, "status": "queued", "attempts": 1,
-                                       "on_behalf_of": "", "message": "recorded"}
-    mcp = build_mcp(fake_service)
-
-    out = _call(mcp, "brain_reply", submission_id=7, answer="Acme Corp")
-
-    assert out == fake_service.reply.return_value
-    fake_service.reply.assert_called_once_with(7, "Acme Corp")
-
-
-@pytest.mark.parametrize("exc", [
-    ReplyRejected("no submission is waiting on a reply from you at that id"),
-    ReplyRejected("capture 7 isn't waiting on a reply — its status is 'filed'"),
-])
-def test_brain_reply_maps_capture_errors_to_a_clean_json_error_echoed_verbatim(fake_service, exc):
-    """Safe to echo verbatim: `ReplyRejected`'s own docstring is the argument — the identity
-    refusal is a fixed sentence naming nothing, and the state refusal is only ever raised for a
-    caller already authorized to read the row it describes."""
-    fake_service.reply.side_effect = exc
-    mcp = build_mcp(fake_service)
-
-    out = _call(mcp, "brain_reply", submission_id=7, answer="Acme Corp")
-
-    assert out == {"error": str(exc)}
-
-
-def test_brain_reply_maps_a_rate_limit_refusal_to_a_clean_json_error(fake_service):
-    fake_service.reply.side_effect = RateLimitError(
-        "rate limited: 30 requests/min exceeded — wait a moment and retry")
-    mcp = build_mcp(fake_service)
-
-    out = _call(mcp, "brain_reply", submission_id=7, answer="Acme Corp")
-
-    assert out == {"error": "rate limited: 30 requests/min exceeded — wait a moment and retry"}
-
-
-def test_brain_reply_maps_an_unanticipated_exception_to_class_name_only(fake_service):
-    fake_service.reply.side_effect = RuntimeError("connection to 10.0.0.5 refused, key AKIA123")
-    mcp = build_mcp(fake_service)
-
-    out = _call(mcp, "brain_reply", submission_id=7, answer="Acme Corp")
-
-    assert out == {"error": "brain_reply failed (RuntimeError)"}
-    assert "10.0.0.5" not in json.dumps(out) and "AKIA123" not in json.dumps(out)
-
-
 # ── adversarial: `submitted_by` in the arguments is explicitly refused (proven at the service
 # level, `tests/server/test_service_capture.py`), but what does FastMCP do with an arbitrary
 # UNNAMED extra argument the tool signature never declared at all? ─────────────────────────────
@@ -453,50 +406,41 @@ def test_review_queue_maps_an_unanticipated_exception_to_class_name_only(fake_se
     assert "AKIA123" not in json.dumps(out)
 
 
-def test_review_decide_forwards_the_new_adr_030_arguments_and_returns_the_service_payload(
-        fake_service):
-    """The closure's own wiring for the six new optional params (ADR 030): every one reaches
-    `BrainService.review_decide` by name, none dropped and none renamed on the way through.
-
-    `source="mcp"` rides with them and is the closure's OWN, never a tool argument (issue #41
-    part 2): the door names itself, so no MCP caller can attribute its decision to Slack, the
+def test_review_decide_forwards_into_and_names_its_own_door(fake_service):
+    """The closure's own wiring: `into` (a merge's survivor) reaches `BrainService.review_decide`
+    by name, and `source="mcp"` rides with it as the closure's OWN, never a tool argument (issue
+    #41 part 2): the door names itself, so no MCP caller can attribute its decision to Slack, the
     console or a steward's shell."""
     fake_service.review_decide.return_value = {
-        "recorded": "approve", "item_kind": "entity-proposal", "item_id": "42",
-        "actor": "steward@example.com", "minted": True, "entity_id": "globex-robotics",
-        "name": "Globex Robotics", "commit": "a" * 40, "requeued": True}
+        "recorded": "merge", "item_kind": "identity-proposal", "item_id": "globex-robotics",
+        "actor": "steward@example.com", "commit": "a" * 40, "into": "globex", "reanchored": [],
+        "message": "recorded: merge on identity-proposal globex-robotics by steward@example.com."}
     mcp = build_mcp(fake_service)
 
-    out = _call(mcp, "review_decide", item_kind="entity-proposal", item_id="42",
-               verdict="approve", notes="", name="Globex Robotics",
-               entity_id="globex-robotics", entity_type="organization", aliases=["Globex"],
-               role="a robotics manufacturer", requeue=True)
+    out = _call(mcp, "review_decide", item_kind="identity-proposal", item_id="globex-robotics",
+               verdict="merge", notes="", into="globex")
 
     assert out == fake_service.review_decide.return_value
     fake_service.review_decide.assert_called_once_with(
-        "entity-proposal", "42", "approve", notes="", source="mcp", name="Globex Robotics",
-        entity_id="globex-robotics", entity_type="organization", aliases=["Globex"],
-        role="a robotics manufacturer", requeue=True)
+        "identity-proposal", "globex-robotics", "merge", notes="", source="mcp", into="globex")
 
 
-def test_review_decide_old_shape_call_still_forwards_with_the_new_arguments_defaulted(
-        fake_service):
-    """The transition shape: a caller that has not adopted the new metadata fields still calls
-    cleanly — `BrainService.review_decide` (and, underneath it, `review._decide_entity_proposal`)
-    is what turns the missing metadata into an actionable refusal for an entity-proposal approve,
-    never this closure silently dropping an argument."""
+def test_review_decide_without_into_still_forwards_with_it_defaulted(fake_service):
+    """A decision that needs no survivor — approve, decline, a repair's reject — calls cleanly
+    with `into` empty; `review.review_decide` is what refuses a merge missing it, never this
+    closure silently inventing one."""
     fake_service.review_decide.return_value = {
-        "recorded": "reject", "item_kind": "parked-capture", "item_id": "7",
-        "actor": "steward@example.com", "result": {}, "message": "recorded: reject on ... by ..."}
+        "recorded": "reject", "item_kind": "alias-proposal", "item_id": "globex:GX",
+        "actor": "steward@example.com", "commit": "b" * 40, "message": "recorded: reject ..."}
     mcp = build_mcp(fake_service)
 
-    out = _call(mcp, "review_decide", item_kind="parked-capture", item_id="7", verdict="reject",
-               notes="not useful")
+    out = _call(mcp, "review_decide", item_kind="alias-proposal", item_id="globex:GX",
+               verdict="decline", notes="not a spelling we use")
 
     assert out == fake_service.review_decide.return_value
     fake_service.review_decide.assert_called_once_with(
-        "parked-capture", "7", "reject", notes="not useful", source="mcp", name="", entity_id="",
-        entity_type="", aliases=None, role="", requeue=False)
+        "alias-proposal", "globex:GX", "decline", notes="not a spelling we use", source="mcp",
+        into="")
 
 
 def test_review_decide_maps_a_capability_unavailable_refusal_to_a_clean_json_error(fake_service):
@@ -508,8 +452,8 @@ def test_review_decide_maps_a_capability_unavailable_refusal_to_a_clean_json_err
         "minting against an https:// knowledge repo needs the librarian GitHub App credential")
     mcp = build_mcp(fake_service)
 
-    out = _call(mcp, "review_decide", item_kind="entity-proposal", item_id="42",
-               verdict="approve", name="Globex Robotics", entity_type="organization")
+    out = _call(mcp, "review_decide", item_kind="identity-proposal", item_id="globex-robotics",
+               verdict="approve")
 
     assert out == {"error": "minting against an https:// knowledge repo needs the librarian "
                             "GitHub App credential"}
@@ -519,7 +463,7 @@ def test_review_decide_maps_an_unanticipated_exception_to_class_name_only(fake_s
     fake_service.review_decide.side_effect = RuntimeError("git push failed AKIA123")
     mcp = build_mcp(fake_service)
 
-    out = _call(mcp, "review_decide", item_kind="entity-proposal", item_id="42", verdict="approve")
+    out = _call(mcp, "review_decide", item_kind="identity-proposal", item_id="42", verdict="approve")
 
     assert out == {"error": "review_decide failed (RuntimeError)"}
     assert "AKIA123" not in json.dumps(out)
@@ -553,8 +497,8 @@ def test_review_decide_collapses_a_raw_entities_error_to_its_class_name_never_it
         "the librarian GitHub App is misconfigured: no key at /srv/secrets/librarian.pem")
     mcp = build_mcp(fake_service)
 
-    out = _call(mcp, "review_decide", item_kind="entity-proposal", item_id="42",
-               verdict="approve", name="Globex Robotics", entity_type="organization")
+    out = _call(mcp, "review_decide", item_kind="identity-proposal", item_id="globex-robotics",
+               verdict="approve")
 
     assert out == {"error": "review_decide failed (EntityError)"}
     assert "/srv/secrets/librarian.pem" not in json.dumps(out)
@@ -579,8 +523,8 @@ def test_review_decide_maps_a_git_level_collision_inside_the_mint_correctly_alre
         "a collision the registry already knows about")
     mcp = build_mcp(fake_service)
 
-    out = _call(mcp, "review_decide", item_kind="entity-proposal", item_id="42",
-               verdict="approve", name="Globex Robotics", entity_type="organization")
+    out = _call(mcp, "review_decide", item_kind="identity-proposal", item_id="globex-robotics",
+               verdict="approve")
 
     assert out == {"error": "a collision the registry already knows about"}
 

@@ -12,7 +12,7 @@ need a real key and real model judgment, so all three run BY HAND and append to 
 series; CI stays keyless and never runs them.
 
 Two read, one WRITES. That is the line worth holding when adding a fourth: the filing golden drives
-the ONE writer of the knowledge repo through a real `git worktree` and the eight gates, which makes
+the ONE writer of the knowledge repo through a real `git worktree` and the nine gates, which makes
 it the most expensive of the three and the only one whose fixture is also an *input* to what it
 measures.
 
@@ -24,8 +24,8 @@ measures.
 | retrieval golden set | `retrieval_golden.json` — page-id expectations, part of them carrying `filters.entity` |
 | `make qa-golden` → honesty · groundedness · refutation · retry rate · seconds/question | `run_qa.py` (needs `make db-up` and TWO credentials that need not be the same one: the embedder's — `OPENAI_API_KEY`, or `EMBED_API_KEY` when `$EMBED_BASE_URL` points at another host — and the answer model's, since `--model` IS `ANSWER_MODEL` in both its forms: a bare name is OpenAI, a provider-prefixed candidate authenticates with its own provider's key) |
 | QA golden set | `qa_golden.json`; ACL-probe identities in `qa_identities.json` |
-| `make filing-golden` → nine quality facets, each with its own denominator | `run_filing.py` (needs `make db-up`, `gitleaks` on PATH, and the filing model's provider key. `BACKEND=double` is the keyless plumbing self-check; `--kinds` measures a subset of the capture kinds) |
-| filing golden (14 captures, 16 scored phases) | `filing/captures/manifest.json` (what is submitted) + `filing/expected/expectations.json` (the yardstick), kept apart on purpose |
+| `make filing-golden` → eight quality facets, each with its own denominator | `run_filing.py` (needs `make db-up`, `gitleaks` on PATH, and the filing model's provider key. `BACKEND=double` is the keyless plumbing self-check; `--kinds` measures a subset of the capture kinds) |
+| filing golden (14 captures, 14 scored phases) | `filing/captures/manifest.json` (what is submitted) + `filing/expected/expectations.json` (the yardstick), kept apart on purpose |
 | `make gates` → one verdict, one exit code | `run_gates.py`; the armed thresholds live in `bars.py`. It arms the two READ instruments only |
 | the frozen reference corpus | `corpus/` — committed pages + `PROVENANCE.json` + its own `ops/entity-registry.json`. For `run_qa.py`, `--repo` is also what gives `Settings` an alias map; without it entity-first resolution is inert for the whole measurement. Guarded keylessly by `tests/evals/test_golden_corpus_fixture.py` |
 | the frozen mini knowledge repo | `filing/repo/` — its own `ops/` and `PROVENANCE.json`, plus byte-for-byte frozen copies of the knowledge repo's contract linter and both agent briefs (each with a `FROZEN.md`). Frozen, not drift-guarded — see the gotcha below |
@@ -59,10 +59,11 @@ below the module's pure-scoring banner is a function of data: `score_phase`/`agg
 import nothing heavier than the standard library, so a keyless test scores canned outcomes through
 exactly the code a real run uses.
 
-A parking capture yields TWO scored phases — the park, and the re-file after its stored reply
-travels back through the real `BrainService.reply`. A backend that never parks does not lose the
-second phase; it scores it as a miss, because a vanishing phase would shrink its facets'
-denominators and quietly reward not asking.
+ONE capture is ONE scored phase. Two of them used to be two — a park, then a re-file after a stored
+reply travelled back through `BrainService.reply` — and ADR 041 retired the park, the reply and the
+tool. A name the registry does not know is proposed as an entity in the same commit as the page, and
+the `proposals` facet scores the proposed NAME rather than its id: the id is `slugify` of a name the
+agent chose, so asserting it would score the spelling instead of the judgment.
 
 `--kinds` measures a SUBSET and everything downstream is recomputed from it: `_check_set` derives
 the per-facet denominators instead of holding them against `EXPECTED_DENOMINATORS` (which pins the

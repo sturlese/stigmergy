@@ -5,10 +5,15 @@ sensitivity and never its specificity. Behaviour comes from directives in the ma
 
     DOUBLE:type=<t>          file as this page type instead of `note`
     DOUBLE:company           anchor with company-wide scope instead of an entity
-    DOUBLE:triage-entity=<a[,b,…]> park: the material is about entities the registry lacks. Comma-
-                             separated, like `meeting-triage`: ONE name emits the singular
-                             `triage.name`, several emit the plural `triage.names` (see `run`)
-    DOUBLE:triage-type=<t>   park: the material is really a governed type
+    DOUBLE:propose=<Name>[|<type>] the material is about an entity the registry lacks: PROPOSE it
+                             (every field filled) and anchor the page to it. Comma-separated
+                             names propose several
+    DOUBLE:propose-collides  propose the registry's own first entity under a legal-form spelling
+                             — refused by the identity gate; on the corrective retry, anchor to
+                             the registered entity instead
+    DOUBLE:propose-unnamed   propose a name the material never mentions, on EVERY attempt
+    DOUBLE:alias=<spelling>  anchor to the registry's first entity and propose `<spelling>` as a
+                             new alias of it
     DOUBLE:hallucinate       write a figure the material does not support, on EVERY attempt
     DOUBLE:hallucinate-once  write it on the first attempt, fix it on the corrective retry
     DOUBLE:escape            write outside `wiki/`
@@ -27,11 +32,12 @@ sensitivity and never its specificity. Behaviour comes from directives in the ma
     DOUBLE:long-summary      a summary past the prose ceiling — the benign twin: TRUNCATED and
                              filed, never refused
 
-`DOUBLE:triage-entity` is the one directive a REPLY can override; no reply may set a field, name a
-path or change a page type. The declaring directives write NOTHING to the other page —
-`edits.apply` does. Well-behaved writes go through `_write`/`agent.confined_write` and raise on
-denial; the misbehaviours take `_write_unconfined`, so each bypass is visible at its call site.
-The material's own text is copied into the page body, which is how a seeded secret reaches diff.
+The declaring directives write NOTHING to the other page — `edits.apply` does — and the
+proposing directives write NOTHING to `wiki/entities/`: the account declares, `librarian.identity`
+creates, which is the whole production path the offline suite exists to exercise. Well-behaved
+writes go through `_write`/`agent.confined_write` and raise on denial; the misbehaviours take
+`_write_unconfined`, so each bypass is visible at its call site. The material's own text is copied
+into the page body, which is how a seeded secret reaches diff.
 """
 import json
 import os
@@ -98,43 +104,11 @@ class DoubleAgent:
         self.settings = settings
 
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
-            corrective: str = "", reply: str = "", flow_note: str = "",
-            gathered: str = "") -> AgentRun:
+            corrective: str = "", flow_note: str = "", gathered: str = "") -> AgentRun:
         # `flow_note`/`gathered` are accepted and unused: the signature answers the PORT.
         directives = _directives(material)
         findings = _findings(material)
         run = AgentRun(turns=1, tool_calls=3)
-        answered = ""       # the registry's own name for what a reply named, when it named one
-
-        # ── the two parking paths: nothing is written at all ──────────────────────────────
-        if "triage-entity" in directives:
-            # The reply is consulted here and nowhere else, through the REAL registry: a double
-            # that accepted any reply would prove nothing about the gate at the end of the loop.
-            answered = self._resolve_reply(worktree, reply)
-            if not answered:
-                # Comma-separated, like `meeting-triage`: the ordinary lane parks any number of
-                # names. A reply that resolved nothing is still what the park names — one answer
-                # naming one thing.
-                declared = [n.strip() for n in directives["triage-entity"].split(",") if n.strip()]
-                names = ([reply.strip()[:200]] if reply.strip()
-                         else declared or ["an unregistered thing"])
-                # ONE name keeps the SINGULAR `triage.name`: that is the inbound tolerance
-                # `agent.parse_outcome` folds into a list, and this is what exercises it on every
-                # keyless run.
-                return self._park(worktree, run, {
-                    "decision": "triage",
-                    "triage": {"kind": "unresolved-entity", "judged_type": "",
-                               **({"name": names[0]} if len(names) == 1 else {"names": names})},
-                    "findings": [{"category": c} for c in findings],
-                    "summary": "the material is about something the registry does not know"})
-            # Resolved: file, anchored to the REGISTRY's spelling, never the submitter's.
-        if "triage-type" in directives:
-            return self._park(worktree, run, {
-                "decision": "triage",
-                "triage": {"kind": "unsupported-type", "name": "",
-                           "judged_type": directives["triage-type"] or "entity"},
-                "findings": [{"category": c} for c in findings],
-                "summary": "the material is a governed page type"})
 
         # ── the filing path ──────────────────────────────────────────────────────────────
         page_type = directives.get("type") or "note"
@@ -144,7 +118,32 @@ class DoubleAgent:
         title = self._title(material)
         page_path = f"{folder}/{title}.md"
 
-        anchor_entity = answered or self._registry_entity(worktree)
+        # ── the proposing paths: the account DECLARES, `librarian.identity` creates ─────────
+        new_entities, new_aliases = [], []
+        anchor_entity = self._registry_entity(worktree)
+        if "propose" in directives:
+            names = [n.strip() for n in directives["propose"].split(",") if n.strip()]
+            for spec in names:
+                name, _, entity_type = spec.partition("|")
+                new_entities.append(self._proposed_entity(name.strip(), entity_type.strip(),
+                                                          note_title=title))
+            if new_entities:
+                anchor_entity = new_entities[0]["name"]
+        if "propose-collides" in directives:
+            # The registered entity under a legal form the collision fold catches. On the retry the
+            # brief says to anchor to the registered id, which is what a real agent would do.
+            registered = self._registry_entity(worktree)
+            if not corrective:
+                new_entities.append(self._proposed_entity(f"{registered} S.L.", "organization",
+                                                          note_title=title))
+                anchor_entity = f"{registered} S.L."
+            else:
+                anchor_entity = registered
+        if "propose-unnamed" in directives:
+            new_entities.append(self._proposed_entity("Nobody Mentioned This", "organization",
+                                                      note_title=title))
+        if directives.get("alias"):
+            new_aliases.append({"entity": anchor_entity, "alias": directives["alias"]})
         company = "company" in directives
         anchoring = ({"kind": "company", "entities": [],
                       "reason": "a practice that applies across the whole company, "
@@ -197,6 +196,8 @@ class DoubleAgent:
             "overlaps": overlaps,
             "edits": declared_edits,
             "findings": [{"category": c} for c in findings],
+            "new_entities": new_entities,
+            "new_aliases": new_aliases,
             "summary": f"filed the capture as a {page_type}",
         }
         if "long-summary" in directives:
@@ -208,7 +209,23 @@ class DoubleAgent:
             outcome["decision"] = "publish"
         if "no-outcome" in directives:
             return run
-        return self._park(worktree, run, outcome)
+        return self._account(worktree, run, outcome)
+
+    @staticmethod
+    def _proposed_entity(name: str, entity_type: str, *, note_title: str) -> dict:
+        """A complete proposal, every field filled, the way the brief asks a real agent to write
+        one. Digit-free like `_FILLER`: a numeral in a fact reads as an asserted figure."""
+        return {
+            "name": name,
+            "entity_type": entity_type or "organization",
+            "role": "the thing the captured note is about, proposed by the offline double",
+            "aliases": [f"{name} (double alias)"],
+            "summary": (f"{name} is an entity the captured material names and the registry did "
+                        f"not know; the offline double proposes it with every field filled."),
+            "facts": [f"Named in the capture filed as {note_title}",
+                      "Proposed by the librarian, awaiting a steward's confirmation"],
+            "connections": [f"[[{note_title}]] — the note that introduced it"],
+        }
 
     # ── the meeting flow's own directives — CONTENT only, never a page write ─────────────────
     # No declared-vs-written mismatch directives: the agent's one legal write here is its outcome
@@ -220,7 +237,8 @@ class DoubleAgent:
     #   DOUBLE:meeting-hallucinate-last   the figure in the LAST decision, so a check that reads
     #                                     only the first page is distinguishable
     #   DOUBLE:meeting-hallucinate-meeting-page  the figure in `meeting_notes` instead
-    #   DOUBLE:meeting-triage=a,b,c       park: several unresolved entity names in one ask
+    #   DOUBLE:meeting-propose=a,b        the decisions anchor to entities the registry lacks:
+    #                                     PROPOSE them, one per decision, cycling
     #   DOUBLE:meeting-anchor=<name>      declare this entity on every decision — a complete
     #                                     outcome the registry cannot resolve, so it is vetoed
     #   DOUBLE:meeting-company[=n]        the nth decision (1-indexed) anchors company-wide, so a
@@ -238,35 +256,20 @@ class DoubleAgent:
     # A planted secret needs no directive: the transcript reaches the SOURCE page verbatim, so the
     # pre-agent scan catches it before any agent runs.
     def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
-                    source_page_path: str, corrective: str = "", reply: str = "",
-                    gathered: str = "") -> AgentRun:
+                    source_page_path: str, corrective: str = "", gathered: str = "") -> AgentRun:
         # `gathered` is accepted and unused: the signature answers the PORT, and what the worker
         # gathered is a real model's input, not a scripted double's.
         directives = _directives(material)
         findings = _findings(material)
         run = AgentRun(turns=1, tool_calls=1)   # one Write call: its own outcome file
 
-        entities_for_decisions = None    # None -> cycle the registry; set -> a resolved reply
-        if "meeting-triage" in directives:
-            names = [n.strip() for n in directives["meeting-triage"].split(",") if n.strip()] \
-                or ["an unregistered thing"]
-            # POSITIONAL: one comma-separated slot per unresolved name, in the ask's order. A
-            # non-resolving reply parks again naming only what is STILL unresolved.
-            reply_slots = [p.strip() for p in reply.split(",")] if reply.strip() else []
-            resolved, still_unresolved = [], []
-            for index, name in enumerate(names):
-                slot = reply_slots[index] if index < len(reply_slots) else ""
-                found = self._resolve_reply(worktree, slot) if slot else ""
-                (resolved if found else still_unresolved).append(found or name)
-            if still_unresolved:
-                return self._park_meeting(worktree, run, {
-                    "decision": "triage",
-                    "triage": {"kind": "unresolved-entity", "names": still_unresolved},
-                    "findings": [{"category": c} for c in findings],
-                    "summary": "the meeting names entities the registry does not recognize"})
-            entities_for_decisions = resolved
-
         title = meeting_meta.get("title") or self._title(material)
+
+        entities_for_decisions = None    # None -> cycle the registry; set -> proposed names
+        new_entities = []
+        if "meeting-propose" in directives:
+            entities_for_decisions = [n.strip() for n in directives["meeting-propose"].split(",")
+                                      if n.strip()] or ["An Unregistered Thing"]
 
         if entities_for_decisions is None:
             registry_entities = self._registry_entities(worktree)
@@ -297,6 +300,11 @@ class DoubleAgent:
         # link the linter refuses for an unrelated reason.
         date = meeting_meta.get("meeting_date") or "2026-07-29"
         meeting_stem = self._slug(f"{date}-{title}")
+        if "meeting-propose" in directives:
+            # The proposed page links the MEETING page by stem — the one page in this set whose
+            # name the double can know before code slugifies the decisions' titles.
+            new_entities = [self._proposed_entity(name, "organization", note_title=meeting_stem)
+                            for name in entities_for_decisions]
 
         decisions = []
         n = len(entities_for_decisions)
@@ -356,12 +364,13 @@ class DoubleAgent:
             "decisions": decisions,
             "edits": declared_edits,
             "findings": [{"category": c} for c in findings],
+            "new_entities": new_entities,
             "summary": f"distilled {len(decisions)} decision(s) from the meeting",
         }
-        return self._park_meeting(worktree, run, outcome)
+        return self._account_meeting(worktree, run, outcome)
 
-    def _park_meeting(self, worktree, run, outcome):
-        """`_park`'s meeting sibling — writes ONLY the outcome file, the agent's one legal write."""
+    def _account_meeting(self, worktree, run, outcome):
+        """`_account`'s meeting sibling — writes ONLY the outcome file, the agent's one legal write."""
         self._write(worktree, OUTCOME_FILENAME, json.dumps(outcome, indent=2) + "\n")
         run.outcome = self._priced_parse(run, parse_meeting_outcome, outcome)
         return run
@@ -407,7 +416,7 @@ class DoubleAgent:
         return "\n".join(lines)
 
     # ── helpers ──────────────────────────────────────────────────────────────────────────
-    def _park(self, worktree, run, outcome):
+    def _account(self, worktree, run, outcome):
         """Write the outcome file AND hand back the parsed object, through the same `parse_outcome`
         a real backend uses, so the double cannot produce a shape it would have refused."""
         self._write(worktree, OUTCOME_FILENAME, json.dumps(outcome, indent=2) + "\n")
@@ -466,24 +475,6 @@ class DoubleAgent:
         for entity in cls._load_registry(worktree).entities.values():
             return entity["name"]
         return "Stigmergy"
-
-    @classmethod
-    def _resolve_reply(cls, worktree: str, reply: str) -> str:
-        """The registry's own name for whatever a reply names, or `""`. Longest candidate first, or
-        a shorter alias that is a prefix anchors the capture to the wrong entity while looking like
-        a success. A reply cannot introduce a name, set a field, or make a stranger resolve."""
-        text = (reply or "").strip().lower()
-        if not text:
-            return ""
-        registry = cls._load_registry(worktree)
-        spellings = []
-        for cid, entity in registry.entities.items():
-            spellings += [cid, entity["name"], *entity.get("aliases", [])]
-        for spelling in sorted({str(s) for s in spellings if s}, key=len, reverse=True):
-            if spelling.lower() in text:
-                canonical = registry.canonical_id(spelling)
-                return registry.title(canonical) or "" if canonical else ""
-        return ""
 
     def _write_page(self, worktree, page_path, *, title, page_type, material, anchor,
                     hallucinate, canonical, forge):

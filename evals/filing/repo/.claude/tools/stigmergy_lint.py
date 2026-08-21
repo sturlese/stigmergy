@@ -70,7 +70,7 @@ REQUIRED_FIELDS = ["type", "title", "created", "updated", "tags", "status"]
 # views/ page's type is checked like any other, not warned-and-passed.
 MACHINE_REQUIRED_FIELDS = ["type", "title", "tags"]
 RECOMMENDED_FIELDS = ["related", "sources"]
-LIST_FIELDS = ("tags", "related", "sources", "aliases", "acl")
+LIST_FIELDS = ("tags", "related", "sources", "aliases", "acl", "proposed_aliases")
 
 # Per-type required extras beyond the universal set. Templates in
 # ops/templates/ are the source of truth for structure; this mirrors their
@@ -248,11 +248,42 @@ def _entity_pages(root, pages, texts, frontmatter, add):
         aliases = fm.get("aliases")
         if not isinstance(aliases, list):
             aliases = [aliases] if aliases else []
+        alias_set = {str(a).strip() for a in aliases if str(a).strip()}
+
+        # The identity lifecycle (File First, Govern After): `approved_by` EMPTY is a proposal the
+        # librarian made and a steward has not confirmed; a name is who confirmed it; ABSENT is a
+        # page from before the field existed, which counts as confirmed. `proposed_aliases` are
+        # spellings the librarian appended, waiting on the same steward — never already aliases.
+        approved_by = fm.get("approved_by")
+        if approved_by is not None and not isinstance(approved_by, str):
+            add("error", "lifecycle", p,
+                f"approved_by must be a string (who confirmed this identity, or \"\" while it "
+                f"is only proposed), got: {approved_by!r}")
+            approved_by = str(approved_by)
+        proposed = approved_by is not None and not approved_by.strip()
+        proposed_aliases = fm.get("proposed_aliases")
+        if not isinstance(proposed_aliases, list):
+            proposed_aliases = [proposed_aliases] if proposed_aliases else []
+        proposed_set = set()
+        for spelling in proposed_aliases:
+            spelling = str(spelling).strip()
+            if not spelling:
+                continue
+            if spelling.lower() == title.lower() or spelling.lower() in {a.lower() for a in alias_set}:
+                add("error", "lifecycle", p,
+                    f"proposed alias {spelling!r} is already this entity's name or one of its "
+                    f"aliases — a spelling the registry lists needs no proposal; remove it from "
+                    f"proposed_aliases")
+                continue
+            proposed_set.add(spelling)
+
         out[canonical_id] = {
             "path": p, "name": title,
             "type": str(fm.get("entity_type") or DEFAULT_ENTITY_TYPE).strip()
                     or DEFAULT_ENTITY_TYPE,
-            "aliases": sorted({str(a).strip() for a in aliases if str(a).strip()}),
+            "aliases": sorted(alias_set),
+            "proposed": proposed,
+            "proposed_aliases": sorted(proposed_set),
         }
     return out
 
@@ -317,6 +348,19 @@ def check_registry(root, pages, texts, frontmatter, add):
             add("error", "registry", mine["path"],
                 f"{mine['name']!r} declares aliases {_fmt(mine['aliases'])} but "
                 f"{REGISTRY_RELPATH} has {_fmt(listed)} — run `{REGISTRY_FIX}` to fix it")
+        # The lifecycle is part of the derived view too: an inbox built from the registry must
+        # show exactly the proposals the pages carry, or a steward confirms what is not there.
+        if mine["proposed"] != bool(theirs.get("proposed")):
+            page_says = "proposed (approved_by is empty)" if mine["proposed"] else "confirmed"
+            add("error", "registry", mine["path"],
+                f"{mine['name']!r} is {page_says} on its page but {REGISTRY_RELPATH} registers "
+                f"it as {'proposed' if theirs.get('proposed') else 'confirmed'} — "
+                f"run `{REGISTRY_FIX}` to fix it")
+        pending = sorted({str(a) for a in (theirs.get("proposed_aliases") or [])})
+        if mine["proposed_aliases"] != pending:
+            add("error", "registry", mine["path"],
+                f"{mine['name']!r} declares proposed_aliases {_fmt(mine['proposed_aliases'])} "
+                f"but {REGISTRY_RELPATH} has {_fmt(pending)} — run `{REGISTRY_FIX}` to fix it")
 
 
 # --- entity: aboutness, validated against the registry (M8a spec §4.1/§4.4) -------------------

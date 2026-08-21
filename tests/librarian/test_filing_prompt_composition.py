@@ -152,22 +152,6 @@ def test_the_meeting_prompt_is_unchanged_when_the_worker_gathered_nothing():
     assert "What this brain already holds" not in without
 
 
-def test_the_reply_still_sits_below_the_material_on_the_ordinary_path():
-    """The one ordering rule in this prompt that is a security property rather than a readability
-    one: the submitter's reply is the newest attacker-reachable text in the system, and placing it
-    beside the corrective brief — the one genuinely instruction-shaped thing here, written by code
-    — would let it borrow that authority. It is a property of the ITEM, so it holds on every
-    shape."""
-    prompt = agent_module.build_prompt(
-        material="A renewal note.", hints={}, submitted_by="a@b.test",
-        gathered_block="\nGATHERED CONTEXT BLOCK", corrective="Repair this.",
-        reply="It is about Acme Corp.",
-        outcome_channel=pydantic_backend.ORDINARY_AGENTIC_OUTCOME_CHANNEL)
-
-    assert prompt.index("The captured material follows") < prompt.index("submitter's reply")
-    assert prompt.index("submitter's reply") < prompt.index("Repair this.")
-
-
 def test_the_outcome_channel_names_the_tool_the_account_is_written_with():
     """The channel sentence is the one line of the per-item prompt that varies per backend, and it
     has to be positively true of the run it goes into.

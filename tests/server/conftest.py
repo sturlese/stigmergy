@@ -48,7 +48,7 @@ class Fixture:
                     "as_of": "2026-03", "verification": "verified"},
                    "Monthly KPI digest for Initech — ARR reached 512000 usd. quarterly revenue.")
         write_page(self.repo, "wiki/finance/acme-payroll.md",
-                   {"type": "report", "title": "Acme payroll summary", "entity": "acme",
+                   {"type": "report", "title": "Acme payroll summary", "entity": "acme-corp",
                     "as_of": "2026-01", "verification": "verified", "acl": "['finance']"},
                    "Payroll summary for Acme — total compensation 750000 usd in 2026. quarterly revenue.")
         # a superseded (open) page, for the read_page banner and the demotion surface
@@ -95,8 +95,8 @@ class Fixture:
         # layer had to build for itself. `acl: ['finance']` mirrors the ACME_PAGE scoping above
         # deliberately, so the SAME two identities (ANA/ENG) exercise both a real page and a
         # derived one with the fixture's existing dichotomy.
-        write_page(self.repo, "views/acme.md",
-                   {"type": "view", "title": "Acme — view", "entity": "['acme']",
+        write_page(self.repo, "views/acme-corp.md",
+                   {"type": "view", "title": "Acme — view", "entity": "['acme-corp']",
                     "tags": "[view]", "tier": 3, "verification": "verified",
                     "acl": "['finance']"},
                    "## Timeline\n\nView rollup for Acme. quarterly revenue synthesis.")
@@ -107,7 +107,7 @@ class Fixture:
             }))
 
     ACME_PAGE = "wiki/finance/acme-payroll.md"
-    VIEW_PAGE = "views/acme.md"
+    VIEW_PAGE = "views/acme-corp.md"
     OPEN_PAGE = "wiki/notes/initech-kpi.md"
     SUPERSEDED_PAGE = "wiki/notes/old-kpi.md"
     EMPTY_ACL_PAGE = "wiki/notes/globex-widget-empty-acl.md"
@@ -404,20 +404,28 @@ def env(tmp_path, require_gitleaks):
 
 
 def make_review_service(env, conn, identity_name=ALICE, *, audiences=None, evidence=None,
-                        knowledge_repo=None, stewards_path="", librarian_repo_url=None):
+                        knowledge_repo=None, stewards_path="", librarian_repo_url=None,
+                        entity_registry_path=None):
     """`knowledge_repo=""` with a `stewards_path` builds the DEPLOYED shape: the app/slack groups
     hold no checkout and resolve stewards from the map the deploy baked into the image.
 
     `librarian_repo_url` defaults to `env.bare` — the same local `git init --bare` remote `env.repo`
-    is a clone of — so a test that approves an entity proposal mints for real, through
-    `entities.remote.mint_via_clone`, against a real bare remote with no GitHub and no App
-    credential (`env.bare` is not `https://`, so `mint_via_clone` needs none). Pass `""` explicitly
-    for a test that wants the ADR 030 D3 refusal (no repo URL configured) instead."""
+    is a clone of — so a test that decides a proposal lands it for real, through
+    `entities.remote.decide_via_clone`, against a real bare remote with no GitHub and no App
+    credential (`env.bare` is not `https://`, so the door needs none). Pass `""` explicitly for a
+    test that wants the capability refusal (no repo URL configured) instead."""
     from stigmergy.capture.evidence import MemoryEvidenceStore
+    from stigmergy.server import entity_aliases
     from stigmergy.server.settings import Settings
     settings = Settings(identity=identity_name, stewards_path=stewards_path,
                         knowledge_repo=env.repo if knowledge_repo is None else knowledge_repo,
                         librarian_repo_url=env.bare if librarian_repo_url is None
-                        else librarian_repo_url)
+                        else librarian_repo_url,
+                        # The registry the inbox is derived from: the checkout's own file, as a
+                        # local `--repo` server reads it (the deployed one reads the index's
+                        # snapshot; `test_registry_freshness_pg.py` covers that road).
+                        entity_registry_path=(entity_aliases.default_path(env.repo)
+                                              if entity_registry_path is None
+                                              else entity_registry_path))
     return BrainService(settings, conn, build_embedder("fake"), audiences, identity=identity_name,
                         evidence=evidence if evidence is not None else MemoryEvidenceStore())

@@ -6,7 +6,7 @@ drafted BODY for an entity page whose own body says nothing about it, and a MERG
 entries that turn out to be the same entity — while `stigmergy-repair delete` is where a
 person proposes removing a page and everything that points at it. The review lane and the admin
 console are where one is approved; and only then does code perform exactly the approved ops,
-through the librarian's own validator, its eight gates and its governed commit.
+through the librarian's own validator, its nine gates and its governed commit.
 Design record: [ADR 039](../decisions/039-governed-repair-loop.md) — it holds the decisions this
 document only shows the results of.
 The findings themselves are covered in [`gardener-digest.md`](./gardener-digest.md), the review lane
@@ -89,7 +89,7 @@ that CHANGES and must be in one of the fast lane's three folders (`wiki/notes/`,
 including an entity page. Editing `wiki/entities/`, `sources/` or `views/` is refused.
 
 Nothing in that kind rewrites a sentence, deletes anything, moves anything, or creates or removes a
-page. That is the safety argument rather than a coincidence: the eight gates were written to judge
+page. That is the safety argument rather than a coincidence: the nine gates were written to judge
 these shapes, and `gate_body_rewrite` is what proves a diff is additive rather than promising it. A
 fourth ADDITIVE op is a new question nobody has asked the gates —
 `tests/test_architecture.py` pins that vocabulary equal to `page.EDIT_KINDS`.
@@ -346,8 +346,8 @@ become the system prompt.
 
 ## Deciding one
 
-A pending proposal appears in the review inbox as `repair-proposal`, alongside `entity-proposal` and
-`parked-capture`, and in the console's Repairs tab. It carries its rationale, the pages it would
+A pending proposal appears in the review inbox as `repair-proposal`, alongside `identity-proposal` and
+`alias-proposal`, and in the console's Repairs tab. It carries its rationale, the pages it would
 touch, and a count of its ops with their kinds — never the ops themselves, because a list is a scan;
 the ops, a body draft in full, and a deletion's two lists are one click or one
 `stigmergy-repair show` away. For a deletion the op kinds are what tell a steward, from the scan

@@ -1,14 +1,15 @@
-"""The push channel: filed / needs_input / triage / rejected / resolved / failed — every terminal
-and parked state gets the same treatment, `failed` included.
+"""The push channel: filed / rejected / failed (and `resolved`, on rows from before captures
+stopped parking) — every terminal state gets the same treatment, `failed` included, and nothing
+is ever asked of the submitter.
 """
 import asyncio
 
 import pytest
 
-from stigmergy.capture import dispositions, queue
+from stigmergy.capture import queue
 from stigmergy.capture import schema as capture_schema
 from stigmergy.librarian import report
-from stigmergy.slack import copy, poller
+from stigmergy.slack import poller
 from stigmergy.slack.gateway import FakeSlackGateway
 from stigmergy.slack.store import attach_submission, reserve
 from tests.slack.conftest import TEAM_ID, build_context
@@ -86,54 +87,7 @@ def test_filed_with_a_source_page_names_the_verbatim_thread_copy_on_the_card(ind
     assert "acme-renewal-thread-p2" not in text        # one door into the chain, not the list
 
 
-def test_needs_input_addresses_the_submitter_and_swaps_the_mcp_invocation(indexed, clean_tables):
-    conn, fixture = indexed
-    gw = FakeSlackGateway()
-    ctx = build_context(fixture, conn, gateway=gw)
-    submission_id = _new_submission(ctx, identity=fixture.STEWARD, channel_id="C1", thread_ts="2.1")
-    rep = report.needs_input(submission_id=submission_id, names=["Acme"],
-                             candidates=[{"name": "Acme Corp", "aliases": ["Acme"]}])
-    _claim_and_finish(conn, submission_id, status=capture_schema.NEEDS_INPUT, report_dict=rep)
-
-    reported = _run(poller.poll_once(ctx))
-
-    assert reported == 1
-    text = gw.posted[0].blocks[0]["text"]["text"]
-    assert text.startswith("<@U1> —")
-    assert copy.NEEDS_INPUT_INSTRUCTION in text
-    assert "brain_reply(" not in text
-    assert "Acme Corp" in text   # the situation prose is reused, not rewritten
-
-
-def test_a_several_name_ask_shows_the_submitter_no_mcp_invocation_either(indexed, clean_tables):
-    """The user-visible symptom, on the road that had it. OLD BEHAVIOUR: `report.needs_input`
-    appended the SUBSTITUTED reply line to the summary for n > 1 and stored the BARE one in
-    `reply_invocation`, so `_needs_input_prose`'s exact-match strip never fired — and the Slack
-    card carried a raw `brain_reply(submission_id=..., answer=...)` call to a person whose only
-    interface is Slack.
-
-    Its one-name twin above passed throughout, which is exactly why this went unnoticed: the two
-    strings coincide for a single name.
-    """
-    conn, fixture = indexed
-    gw = FakeSlackGateway()
-    ctx = build_context(fixture, conn, gateway=gw)
-    submission_id = _new_submission(ctx, identity=fixture.STEWARD, channel_id="C1", thread_ts="2.2")
-    rep = report.needs_input(submission_id=submission_id, names=["Acme", "Globex"],
-                             candidates=[{"name": "Acme Corp", "aliases": ["Acme"]}])
-    _claim_and_finish(conn, submission_id, status=capture_schema.NEEDS_INPUT, report_dict=rep)
-
-    assert _run(poller.poll_once(ctx)) == 1
-
-    text = gw.posted[0].blocks[0]["text"]["text"]
-    assert "brain_reply(" not in text, "the submitter is being shown a tool they cannot invoke"
-    assert "Reply with:" not in text, "the MCP clause survived, only its command was stripped"
-    assert copy.NEEDS_INPUT_INSTRUCTION in text      # the Slack-native ask replaced it
-    assert "Acme" in text and "Globex" in text       # both names still reach the person
-
-
 @pytest.mark.parametrize("status,rep_builder", [
-    (capture_schema.TRIAGE, lambda: report.triage_entity(names=["Acme"])),
     (capture_schema.REJECTED, lambda: report.rejected_duplicate(page_path="x.md", as_of="2026-01")),
     (capture_schema.FAILED, lambda: report.failed_system(attempts=1, stage="gate",
                                                          reason="zone refused")),
@@ -155,17 +109,21 @@ def test_generic_reports_are_bold_prefixed_and_reuse_the_sentence_verbatim(
     assert f"{status} — {status}" not in text
 
 
-def test_resolved_report_reuses_the_stewards_own_sentence(indexed, clean_tables):
-    """`resolved` is reachable only through `capture.dispositions.resolve` (a steward's
-    disposition on a PARKED row, via `queue.dispose` — never through the lease-fenced
-    `queue.finish`), so the row is parked into `triage` first, exactly as a real one would be."""
+def test_a_legacy_resolved_row_still_reports_the_stewards_own_sentence(indexed, clean_tables):
+    """`resolved` is a status nothing writes any more — a steward closed the row by hand back when
+    captures could park — and a row carrying it still reports once, with the sentence the steward
+    left. Written directly, the way such a row exists in a deployment."""
     conn, fixture = indexed
     gw = FakeSlackGateway()
     ctx = build_context(fixture, conn, gateway=gw)
     submission_id = _new_submission(ctx, identity=fixture.STEWARD, channel_id="C1", thread_ts="4.1")
-    _claim_and_finish(conn, submission_id, status=capture_schema.TRIAGE,
-                      report_dict=report.triage_entity(names=["Acme"]))
-    dispositions.resolve(conn, submission_id, actor="steward", note="handled by hand")
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE capture_queue SET status = %s, finished_at = now(), report = %s WHERE id = %s",
+            (capture_schema.RESOLVED,
+             __import__("json").dumps({"status": capture_schema.RESOLVED,
+                                       "summary": "resolved — handled by hand"}),
+             submission_id))
 
     reported = _run(poller.poll_once(ctx))
 
@@ -175,13 +133,35 @@ def test_resolved_report_reuses_the_stewards_own_sentence(indexed, clean_tables)
     assert "handled by hand" in text
 
 
+def test_the_filed_card_names_the_entity_the_librarian_proposed(indexed, clean_tables):
+    """The report's `entities_proposed` (what `report.filed` records when the librarian created an
+    identity for this capture) reaches the submitter's thread, with the promise that nothing waits
+    on them."""
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    ctx = build_context(fixture, conn, gateway=gw)
+    submission_id = _new_submission(ctx, identity=fixture.STEWARD, channel_id="C1", thread_ts="5.1")
+    rep = report.filed(page_path="wiki/notes/Ledgerly kickoff.md", commit="abc1234",
+                       anchoring={"kind": "entity", "entities": ["Ledgerly"], "reason": ""},
+                       links=[], overlaps=[], findings=[],
+                       entities_proposed=[{"id": "ledgerly", "name": "Ledgerly",
+                                           "type": "organization"}])
+    _claim_and_finish(conn, submission_id, status=capture_schema.FILED, report_dict=rep,
+                      result_ref="wiki/notes/Ledgerly kickoff.md@abc1234")
+
+    assert _run(poller.poll_once(ctx)) == 1
+    text = gw.posted[0].blocks[0]["text"]["text"]
+    assert "proposed *Ledgerly* as a new entity" in text
+    assert "nothing waits on you" in text
+
+
 def test_a_status_is_reported_exactly_once_even_across_multiple_polls(indexed, clean_tables):
     conn, fixture = indexed
     gw = FakeSlackGateway()
     ctx = build_context(fixture, conn, gateway=gw)
     submission_id = _new_submission(ctx, identity=fixture.STEWARD, channel_id="C1", thread_ts="5.1")
-    rep = report.triage_entity(names=["Acme"])
-    _claim_and_finish(conn, submission_id, status=capture_schema.TRIAGE, report_dict=rep)
+    rep = report.failed_system(attempts=1, stage="gate", reason="zone refused")
+    _claim_and_finish(conn, submission_id, status=capture_schema.FAILED, report_dict=rep)
 
     first = _run(poller.poll_once(ctx))
     second = _run(poller.poll_once(ctx))
@@ -192,7 +172,7 @@ def test_a_status_is_reported_exactly_once_even_across_multiple_polls(indexed, c
 
 
 def test_a_submission_with_no_slack_origin_produces_no_slack_traffic(indexed, clean_tables):
-    """The card names the parked status without echoing the material behind it."""
+    """A capture with no Slack origin reaches a terminal state and no thread hears about it."""
     conn, fixture = indexed
     gw = FakeSlackGateway()
     ctx = build_context(fixture, conn, gateway=gw)
@@ -200,8 +180,8 @@ def test_a_submission_with_no_slack_origin_produces_no_slack_traffic(indexed, cl
     ack = service.submit("raw", "an MCP-originated capture")   # no slack_submissions row at all
     claimed = queue.claim_next(conn)
     assert claimed["id"] == ack["id"]
-    rep = report.triage_entity(names=["Someone"])
-    queue.finish(conn, ack["id"], status=capture_schema.TRIAGE, expected_attempts=claimed["attempts"],
+    rep = report.failed_system(attempts=1, stage="gate", reason="zone refused")
+    queue.finish(conn, ack["id"], status=capture_schema.FAILED, expected_attempts=claimed["attempts"],
                 error=rep["summary"], report=rep)
 
     reported = _run(poller.poll_once(ctx))

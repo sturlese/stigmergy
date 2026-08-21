@@ -100,7 +100,7 @@ _PENDING_ALLOWED = (REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",)
 # A deliberate re-freeze updates these three numbers IN THE SAME COMMIT as the bytes, which is the
 # review moment this pin exists to force — and, per `evals/README.md`, retires the series with it.
 #
-# The librarian brief's pin has moved FOUR times, deliberately, and every move was the same kind
+# The librarian brief's pin has moved FIVE times, deliberately, and every move was the same kind
 # of event: not an edit to a yardstick but a NEW yardstick, which retires the series with it per
 # `evals/README.md`.
 #
@@ -123,18 +123,24 @@ _PENDING_ALLOWED = (REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",)
 #      12 after the rewrite. The same edit added a `**A wikilink stays on one line.**` sub-bullet
 #      ahead of the existing "claim that a page exists" one. Knowledge-repo commit
 #      `03aab8799f9778087ab78cc23fbbf9a809d52d5b`.
+#   5. ADR 041 — file first, govern after. The brief stops answering a name the registry does not
+#      know with a question to the submitter and answers it with a PROPOSAL: the agent declares the
+#      identity it read out of the material and `librarian.identity` creates the page, with
+#      `approved_by:` empty, in the same commit as the capture. Knowledge-repo commit
+#      `6bfc4a013ce7909e8f9bc571fe2d4d3809be1850`.
 #
-# The other two numbers did NOT move with it, and that is the fact worth reading off this block: one
-# freeze, one commit does not mean one freeze, every copy edited. The linter and the meeting brief
-# are byte-identical at that commit and at its predecessor, which is exactly what
-# `PROVENANCE.json`'s `stigmergy_sha_note` already claims about the tree.
+# All THREE numbers moved together at that last commit, which is the first time that has happened
+# and the reason `PROVENANCE.json`'s `stigmergy_sha_note` no longer needs its "not the commit each
+# copy was taken at" caveat: the meeting brief lost the meeting park and the linter learned the
+# `approved_by:` / `proposed_aliases:` lifecycle a proposal lands in. Before it, one freeze meant one
+# commit and not one freeze, every copy edited — read the four moves above with that in mind.
 FROZEN_SHA256 = {
     ".claude/tools/stigmergy_lint.py":
-        "5c914e43a33e05a276142b26cd6ebc3ff84479b43703c783b9959e6a28948f28",
+        "3c3b52a951136754a91e44f1d888cb9510589c61e203fe089271f85e2e3061cd",
     ".claude/skills/librarian/SKILL.md":
-        "35d048782469087c1d38f29a87b762e6c9dc0f7fe67c9bc2637b1603ccccf200",
+        "d81691fa364d2daeeba36af9994a3243ee18cc83b4356442cc0559fd3ea2aabe",
     ".claude/skills/meeting-distiller/SKILL.md":
-        "baa2ee765f7d64bd9ffe4a3af2cbcebc4496191fd5614656615aba9b655da7f5",
+        "310230563c616b10e79331c758ec8795e7232d8ecdb69406a9f9a6de643c6253",
 }
 
 # Vocabulary that belongs to the MEASUREMENT and never to a page inside the fixture repo. The
@@ -169,8 +175,12 @@ def registry():
 
 
 def _expect_blocks(entry: dict) -> list:
-    """Every scored moment an entry declares: the first pass, and the re-file after a reply."""
-    return [entry["expect"]] + ([entry["after_reply"]] if "after_reply" in entry else [])
+    """Every scored moment an entry declares — exactly one since ADR 041 retired the park.
+
+    Kept as a list rather than inlined: every loop below walks it, and the day a capture legitimately
+    scores twice again they should all follow without being found one at a time.
+    """
+    return [entry["expect"]]
 
 
 # ── the two halves of the golden set ───────────────────────────────────────────────────────────
@@ -222,17 +232,34 @@ def test_the_consistency_check_refuses_a_key_the_scorer_would_silently_ignore(ex
     assert "achor" in str(ex.value) and mutated["expectations"][0]["id"] in str(ex.value)
 
 
-@pytest.mark.parametrize("drop", ["reply", "after_reply"])
-def test_the_consistency_check_refuses_half_an_ask_back_case(drop, expectations, manifest):
-    """Both directions: a `reply` with nothing to score after it, and an `after_reply` phase the
-    runner will never reach because no reply is ever sent. Either way the ask-back loop is not
-    measured and the table does not say so."""
+@pytest.mark.parametrize("key", run_filing.RETIRED_ENTRY_KEYS)
+def test_the_consistency_check_refuses_the_retired_ask_back_keys(key, expectations, manifest):
+    """**INVERTED by ADR 041.** This refusal used to demand that `reply` and `after_reply` travel
+    TOGETHER — half an ask-back case was measured on its first phase alone and the table said
+    nothing. Nothing waits on a person any more: `BrainService.reply` is gone, `_drive` scores one
+    phase per capture, and an entry carrying either key would have that half read by nobody. So the
+    refusal keeps its job — a silently unmeasured phase — and reverses its condition.
+
+    Parametrized over the runner's own tuple rather than two literals, so a third retired key
+    acquires this test in the same commit that names it.
+    """
     mutated = json.loads(json.dumps(expectations))
-    parking = next(e for e in mutated["expectations"] if "reply" in e)
-    parking.pop(drop)
+    entry = mutated["expectations"][0]
+    entry[key] = "anything at all"
+
     with pytest.raises(SystemExit) as ex:
         run_filing._check_set(manifest, mutated)
-    assert parking["id"] in str(ex.value)
+
+    assert entry["id"] in str(ex.value) and key in str(ex.value)
+
+
+def test_the_shipped_set_carries_neither_retired_key(entries):
+    """The benign twin of the refusal above, asserted over the shipped set rather than a mutation:
+    the yardstick itself has to be in the state the refusal demands, or `_check_set` would fail
+    every run against it and no test above would say why."""
+    carriers = {entry["id"]: sorted(set(entry) & set(run_filing.RETIRED_ENTRY_KEYS))
+                for entry in entries if set(entry) & set(run_filing.RETIRED_ENTRY_KEYS)}
+    assert not carriers, carriers
 
 
 # ── the fifth refusal: what a DECISION entry has to assert, and in what order ──────────────────
@@ -242,8 +269,11 @@ def test_the_consistency_check_refuses_half_an_ask_back_case(drop, expectations,
 #
 # **Both refusals are PRE-EMPTIVE today, and that is recorded rather than glossed.** The title-less
 # capability is live in `_decisions_match`, but no shipped expectation uses it — every decision
-# entry in the set names a `title` (F09's `after_reply[0]` is `{"title": "summary"}`: a title with
-# no anchor, which is the older "scores the title alone" shape and a different thing). So the
+# entry in the set names a `title`. Since ADR 041 removed F09's stored reply, BOTH of its decision
+# entries are titles with NO anchor: the reply is what used to name a registered entity, and a
+# proposed identity's id is slugified from a name the agent chose, so there is no anchor left to
+# assert. That is the older "scores the title alone" shape and a different thing from omitting
+# `title` altogether. So the
 # shipped set is a benign twin in the sense that matters — it PASSES the refusal — and not in the
 # sense of exercising the shape. `test_whether_the_shipped_set_uses_the_title_less_shape_at_all`
 # below is what keeps that distinction honest, and it will say so the day it changes.
@@ -263,20 +293,20 @@ def test_the_consistency_check_refuses_a_decision_asserting_neither_title_nor_an
     as measured and measures nothing. Exactly the defect `edits: []` has, recorded in
     `_edits_match`, arrived at from the other side.
 
-    Staged on F09's `after_reply[0]`, which ships a title and no anchor: stripping its title is the
+    Staged on F09's first decision, which ships a title and no anchor: stripping its title is the
     edit somebody would really make (a title that turned out to be the distiller's prose), and it
-    lands on the one entry in the set for which that leaves nothing behind.
+    leaves the entry asserting nothing at all.
     """
-    mutated, decisions = _mutated_decisions(expectations, "F09-meeting-parks", "after_reply")
+    mutated, decisions = _mutated_decisions(expectations, "F09-meeting-proposes", "expect")
     assert "anchor" not in decisions[0], (
-        "F09's first after_reply decision now carries an anchor — dropping its title no longer "
-        "produces the assert-nothing shape, so this mutation must move to an entry that has none")
+        "F09's first decision now carries an anchor — dropping its title no longer produces the "
+        "assert-nothing shape, so this mutation must move to an entry that has none")
     decisions[0].pop("title")
 
     with pytest.raises(SystemExit) as ex:
         run_filing._check_set(manifest, mutated)
 
-    assert "F09-meeting-parks" in str(ex.value)
+    assert "F09-meeting-proposes" in str(ex.value)
     assert "neither a `title` nor an `anchor`" in str(ex.value)
 
 
@@ -293,7 +323,7 @@ def test_the_consistency_check_refuses_a_title_less_decision_written_before_a_ti
     name the repair ("write the titled entries first"), because nothing about a red decisions cell
     would point at line order.
     """
-    mutated, decisions = _mutated_decisions(expectations, "F09-meeting-parks", "after_reply")
+    mutated, decisions = _mutated_decisions(expectations, "F09-meeting-proposes", "expect")
     decisions[0].pop("title")
     decisions[0]["anchor"] = {"kind": "company", "ids": []}
     assert "title" in decisions[1], "the mutation needs a TITLED entry after the title-less one"
@@ -301,7 +331,7 @@ def test_the_consistency_check_refuses_a_title_less_decision_written_before_a_ti
     with pytest.raises(SystemExit) as ex:
         run_filing._check_set(manifest, mutated)
 
-    assert "F09-meeting-parks" in str(ex.value)
+    assert "F09-meeting-proposes" in str(ex.value)
     assert "Write the titled entries first" in str(ex.value)
 
 
@@ -309,7 +339,7 @@ def test_the_same_two_entries_in_the_SAFE_order_are_accepted(expectations, manif
     """The ordering refusal's own benign twin, and the one that decides whether it is safe to have:
     a guard that refused the title-less shape outright would make the whole capability unusable.
     Same mutation, anchor-only entry written LAST — accepted."""
-    mutated, decisions = _mutated_decisions(expectations, "F09-meeting-parks", "after_reply")
+    mutated, decisions = _mutated_decisions(expectations, "F09-meeting-proposes", "expect")
     decisions[0].pop("title")
     decisions[0]["anchor"] = {"kind": "company", "ids": []}
     decisions.reverse()
@@ -329,11 +359,9 @@ def test_whether_the_shipped_set_uses_the_title_less_shape_at_all(entries):
     reports it: at that point the refusals acquire a live instance, and the mutation-driven tests
     above should be re-pointed at it rather than constructing the shape by hand.
     """
-    titleless = [f"{e['id']}.{name}"
+    titleless = [e["id"]
                  for e in entries
-                 for name, block in (("expect", e.get("expect")),
-                                     ("after_reply", e.get("after_reply")))
-                 if block
+                 for block in _expect_blocks(e)
                  for d in block.get("decisions") or []
                  if "title" not in d]
 
@@ -425,7 +453,15 @@ def test_the_facet_names_the_bars_file_carries_are_the_scorers_own(entries):
 
 
 def test_every_expected_status_is_a_terminal_status_the_queue_can_actually_reach(entries):
-    reachable = {schema.FILED, schema.NEEDS_INPUT, schema.TRIAGE, schema.REJECTED, schema.FAILED}
+    """**NARROWED by ADR 041.** The reachable set used to include `needs_input` and `triage`, the two
+    states a capture waited on a person in; they are `schema.RETIRED_STATUSES` now and the queue's
+    own CHECK constraint refuses them by name. `resolved` is deliberately absent too: it survives
+    read-only on rows a steward closed by hand and nothing reaches it. So the set a claim can be
+    FINISHED into is exactly what an expectation may name, and it is read from the queue rather than
+    retyped here.
+    """
+    reachable = set(schema.FINISHED_STATUSES)
+    assert not reachable & set(schema.RETIRED_STATUSES)
     for entry in entries:
         for block in _expect_blocks(entry):
             if "status" in block:
@@ -522,46 +558,70 @@ def test_every_expected_edit_path_is_a_page_that_already_exists_in_the_fixture_r
                 assert (REPO / path).is_file(), f"{entry['id']} expects an edit to {path}"
 
 
-# ── the ask-back loop the two parking captures measure ─────────────────────────────────────────
+# ── the proposal the two unregistered names measure ────────────────────────────────────────────
 
-def test_every_parking_expectation_carries_a_reply_and_an_after_reply_block(entries):
-    """The park is only half the case. Without a reply and an `after_reply` block the runner
-    scores one phase and the ask-back loop — the thing these two captures exist for — is never
-    exercised at all."""
+def test_every_proposing_expectation_files_and_names_what_it_must_propose(entries):
+    """**INVERTED by ADR 041.** This used to assert the ask-back loop's two halves: a `needs_input`
+    expectation carried a `park_question`, a `reply` and an `after_reply` block, and without all
+    three the loop those two captures existed for was never exercised.
+
+    Nothing parks. What the same two captures measure now is the other side of the same event — an
+    unregistered name gets an IDENTITY instead of a question — so the pairing that has to hold is
+    `proposals` with a terminal `filed`. A `proposals` expectation on a capture that was allowed to
+    end anywhere else would be scoring a proposal nobody could read, because the entity page and
+    the capture's own page land in ONE commit or neither does.
+    """
+    proposing = [e for e in entries if "proposals" in e["expect"]]
+    assert len(proposing) == 2, "the set measures the proposal path with exactly two captures"
+    for entry in proposing:
+        assert entry["expect"]["status"] == schema.FILED, entry["id"]
+        assert entry["expect"]["proposals"], entry["id"]
+
+
+def test_a_proposing_capture_asserts_no_anchor_it_would_have_to_invent(entries):
+    """The silence in those two expectations, pinned as a decision rather than left as an omission.
+
+    A proposed entity's registry id is `slugify` of the name the AGENT chose, so `Halcyon Grid` and
+    `Halcyon Grid pilot` are one judgment and two ids. `proposals` scores that judgment through the
+    loose matcher; an `anchor` beside it would score one defensible spelling of it a second time,
+    and would go red on a run that proposed the right thing under a name the yardstick's author had
+    not predicted. If a future editor adds the anchor back, this is what asks them to write down
+    which recorded runs made the id predictable.
+    """
     for entry in entries:
-        parks = entry["expect"].get("status") == schema.NEEDS_INPUT
-        assert parks == ("park_question" in entry["expect"]), entry["id"]
-        assert parks == ("reply" in entry), entry["id"]
-        assert parks == ("after_reply" in entry), entry["id"]
-        if parks:
-            assert entry["reply"].strip(), entry["id"]
-            assert entry["after_reply"].get("status") == schema.FILED, entry["id"]
+        if "proposals" in entry["expect"]:
+            assert "anchor" not in entry["expect"], (
+                f"{entry['id']} asserts an anchor whose id is derived from a name the agent chose")
 
 
-def test_every_parked_name_is_absent_from_the_registry_and_present_in_its_own_material(
+def test_every_proposed_name_is_absent_from_the_registry_and_present_in_its_own_material(
         manifest, entries, registry):
-    """Register either of these and the capture stops parking — it files, quietly, and two
-    `status` cells plus both `park_question` cells move without anyone touching the backend."""
+    """Register either of these and the capture stops proposing — it files against the registered
+    entity, quietly, and both `proposals` cells move without anyone touching the backend.
+
+    Present in its own material is the other half, and it is not a nicety: `librarian.identity`
+    refuses a proposed name the material never names, so a yardstick asking for one would demand a
+    filing the gates forbid.
+    """
     materials = {c["id"]: (CAPTURES / c["material"]).read_text(encoding="utf-8")
                  for c in manifest["captures"]}
-    parked = [(e["id"], name) for e in entries for name in e["expect"].get("park_question") or []]
-    assert len(parked) == 2, "the set measures the ask-back loop with exactly two captures"
-    for capture_id, name in parked:
+    proposed = [(e["id"], name) for e in entries for name in e["expect"].get("proposals") or []]
+    assert len(proposed) == 2, "the set measures the proposal path with exactly two captures"
+    for capture_id, name in proposed:
         assert registry.canonical_id(name) is None, f"{name!r} is registered — {capture_id} " \
-                                                    f"can no longer park on it"
+                                                    f"can no longer propose it"
         assert name.lower() in materials[capture_id].lower(), capture_id
 
 
-def test_a_reply_that_resolves_an_anchor_names_an_entity_the_registry_knows(entries, registry):
-    """The reply is the input the re-file is scored on. One naming a company the registry cannot
-    resolve would park a second time, and the `after_reply` anchor could never be reached."""
-    for entry in entries:
-        anchor = entry.get("after_reply", {}).get("anchor") or {}
-        for entity_id in anchor.get("ids") or []:
-            title = registry.title(entity_id)
-            assert title and title.lower() in entry["reply"].lower(), (
-                f"{entry['id']}'s reply never names {title!r}, the entity its after_reply "
-                f"expects the capture to anchor to")
+def test_the_two_proposing_captures_reach_the_two_flows_that_can_propose(manifest, entries):
+    """One fast-lane capture and one meeting, which is the property ADR 041 is about: the same input
+    used to behave differently per door — a name typed into a capture parked, the same name in a
+    transcript parked the whole page SET. Two captures on one flow would leave the other door
+    unmeasured and the instrument would agree that the doors behave alike without having looked.
+    """
+    kinds = {c["id"]: c["kind"] for c in manifest["captures"]}
+    proposing = sorted(kinds[e["id"]] for e in entries if "proposals" in e["expect"])
+    assert proposing == ["meeting", "raw"]
 
 
 def test_no_expected_decision_title_can_swallow_a_later_ones_page(entries):
@@ -614,8 +674,9 @@ def test_the_fixture_repo_holds_the_pages_provenance_claims():
 
 def test_the_registry_and_the_acl_sit_where_the_librarian_reads_them(registry):
     """Both are read by relative path out of the commit being filed against. In the wrong place
-    the registry is EMPTY, which does not fail — every capture parks on an unknown entity and the
-    anchor facet reports a backend that cannot anchor."""
+    the registry is EMPTY, which does not fail — every capture PROPOSES a new identity for a name
+    that was registered all along, the anchor facet reports a backend that cannot anchor, and
+    `proposals` scores 1.00 for a run in which nothing was recognised at all."""
     assert (REPO / librarian_config.REGISTRY_RELPATH).is_file()
     assert (REPO / librarian_config.ACL_RELPATH).is_file()
     assert len(registry.entities) == FIXTURE_ENTITIES

@@ -17,7 +17,7 @@ import uuid
 
 # From `stigmergy.review_kinds`, deliberately not the server module: a pure Block Kit renderer
 # must not drag `stigmergy.server.review`'s whole import graph in for a few string literals.
-from stigmergy.review_kinds import ENTITY_TYPES, KIND_ENTITY_PROPOSAL, KIND_PARKED_CAPTURE
+from stigmergy.review_kinds import KIND_ALIAS_PROPOSAL, KIND_IDENTITY_PROPOSAL
 from stigmergy.slack import copy
 from stigmergy.slack.mrkdwn import escape_mrkdwn, to_mrkdwn
 
@@ -105,7 +105,7 @@ def _render_markdown(raw: str) -> str:
 
 def _show_it_here_button(path: str, asker_slack_user_id: str, mint_token) -> dict:
     """Slack has no per-viewer buttons, so "must not act for another channel member" is enforced
-    SERVER-SIDE at click time (`replies.handle_show_it_here`). The value is an OPAQUE token
+    SERVER-SIDE at click time (`show_it_here.handle_show_it_here`). The value is an OPAQUE token
     (`mint_token`, injected like `link_resolver`): anything in a button value is retrievable by
     any workspace member via `conversations.history`, so an email in cleartext would be a
     disclosure. `block_id` carries a random suffix because Slack rejects a whole payload when two
@@ -210,26 +210,19 @@ def render_private_channel_refusal() -> list[dict]:
 
 
 def render_filed(*, page_path: str, commit: str, anchor: str, source_page: str = "",
-                 anchor_reason: str = "") -> list[dict]:
+                 anchor_reason: str = "", proposed: list[str] = ()) -> list[dict]:
     """`anchor_reason` is the AGENT's sentence about a judged anchor, derived from captured
     material, so it is escaped exactly like `anchor` — unescaped, a `<https://evil.example|text>`
-    inside it renders as a REAL live link in the card."""
+    inside it renders as a REAL live link in the card. `proposed` names the entities the librarian
+    created for this capture: names lifted from the material, escaped the same way."""
     return [_section(copy.filed(page_path=page_path, commit=commit,
                                anchor=escape_mrkdwn(anchor), source_page=source_page,
-                               anchor_reason=escape_mrkdwn(anchor_reason)))]
-
-
-def render_needs_input(*, situation_prose: str, slack_user_id: str) -> list[dict]:
-    """`situation_prose` embeds the AGENT's own reading of captured material: unescaped, a raw
-    `<https://evil.example|text>` in the judged name renders as a REAL live link. Escaped BEFORE
-    composition — `copy.needs_input_body` composes a real `<@slack_user_id>` mention around this
-    text, which escaping the whole result afterward would corrupt."""
-    return [_section(copy.needs_input_body(escape_mrkdwn(situation_prose),
-                                           slack_user_id=slack_user_id))]
+                               anchor_reason=escape_mrkdwn(anchor_reason),
+                               proposed=[escape_mrkdwn(str(name)) for name in proposed or ()]))]
 
 
 def render_generic_report(status: str, raw_summary: str) -> list[dict]:
-    """`triage`/`rejected`/`resolved`/`failed`: the status prefix bolded, the rest of
+    """`rejected`/`resolved`/`failed`: the status prefix bolded, the rest of
     `report['summary']` reused verbatim (it already starts with the literal `"{status} — "`
     prefix). **`escape_mrkdwn` alone, never `_render_markdown`** — the summary carries
     agent-classified text, and `to_mrkdwn` would turn attacker-chosen `[text](url)` in it into a
@@ -237,14 +230,6 @@ def render_generic_report(status: str, raw_summary: str) -> list[dict]:
     prefix = f"{status} — "
     body = raw_summary[len(prefix):] if raw_summary.startswith(prefix) else raw_summary
     return [_section(f"*{status}* — {escape_mrkdwn(body)}")]
-
-
-def render_reply_delivered() -> list[dict]:
-    return [_section(copy.REPLY_DELIVERED)]
-
-
-def render_reply_already_answered() -> list[dict]:
-    return [_section(copy.REPLY_ALREADY_ANSWERED)]
 
 
 def render_show_it_here_success(*, page_title: str, excerpt: str) -> list[dict]:
@@ -259,13 +244,17 @@ def render_show_it_here_refusal(path: str) -> list[dict]:
 # ── the steward doorbell, and the review surface's Block Kit cards ───────────────────────────────
 # Action-id convention (`stigmergy.slack.review` matches these exact prefixes):
 # `review:<kind>:<verdict>` fires `review_decide` immediately; `review-modal:<kind>:<verdict>`
-# opens a modal collecting the one piece of free text that verdict requires first. `value` is
-# always the bare item id — our own generated identifier, never text a caller typed.
+# opens a modal first — today only a merge, which needs to know the survivor. `value` is always
+# the bare item id — our own generated identifier, never text a caller typed.
 DIRECT_ACTION_PREFIX = "review:"
 MODAL_ACTION_PREFIX = "review-modal:"
-REVIEW_NOTE_MODAL_CALLBACK_ID = "review_note_modal"
-REVIEW_NOTE_MODAL_BLOCK_ID = "note"
-REVIEW_NOTE_MODAL_ACTION_ID = "note_text"
+MERGE_MODAL_CALLBACK_ID = "review_merge_modal"
+MERGE_SELECT_BLOCK_ID = "merge_into"
+MERGE_SELECT_ACTION_ID = "merge_into_select"
+MERGE_TYPED_BLOCK_ID = "merge_into_typed"
+MERGE_TYPED_ACTION_ID = "merge_into_text"
+# Slack's own ceiling on a static_select's options; the registry can be larger than that.
+MAX_MERGE_OPTIONS = 100
 
 
 def _direct_action_id(kind: str, verdict_token: str) -> str:
@@ -288,37 +277,47 @@ def _button(text: str, action_id: str, value: str, *, style: str | None = None) 
     return button
 
 
-def render_doorbell_parked_capture(*, item_id: str, summary: str) -> tuple[list[dict], str]:
-    """`escape_mrkdwn` alone, never `_render_markdown`: `summary` derives from captured material,
-    and `to_mrkdwn` would turn a `judged_type` of `[Approve now](https://attacker.example/steal)`
-    into live attacker-controlled links in a steward's DM. No card here may call `to_mrkdwn`."""
-    text = copy.doorbell_triage(item_id=item_id, summary=summary)
-    blocks = [_section(escape_mrkdwn(text)),
+def render_doorbell_identity_proposal(item: dict) -> tuple[list[dict], str]:
+    """The card for an identity the librarian created unconfirmed. Every slot on it — the name,
+    the aliases, the page's own summary, the anchored paths — was lifted from captured material
+    or written by the agent, so each is escaped; `escape_mrkdwn` alone, never `_render_markdown`:
+    `to_mrkdwn` would turn `[Approve now](https://attacker.example/steal)` in a summary into a
+    live attacker-controlled link in a steward's DM. No card here may call `to_mrkdwn`."""
+    item_id = str(item["id"])
+    text = copy.doorbell_identity_proposal(
+        name=escape_mrkdwn(str(item.get("name", ""))),
+        entity_type=escape_mrkdwn(str(item.get("entity_type", ""))),
+        summary=escape_mrkdwn(str(item.get("summary", ""))),
+        aliases=[escape_mrkdwn(str(a)) for a in item.get("aliases") or ()],
+        anchored_pages=[escape_mrkdwn(str(p)) for p in item.get("anchored_pages") or ()],
+        anchored_total=int(item.get("anchored_total") or 0))
+    blocks = [_section(text),
              _actions([
-                 _button(copy.REQUEUE_LABEL, _direct_action_id(KIND_PARKED_CAPTURE, "requeue"),
-                        item_id),
-                 _button(copy.RESOLVE_LABEL, _modal_action_id(KIND_PARKED_CAPTURE, "resolve"),
-                        item_id),
-                 _button(copy.REJECT_LABEL, _modal_action_id(KIND_PARKED_CAPTURE, "reject"),
-                        item_id, style="danger"),
-             ], block_id=f"review:{KIND_PARKED_CAPTURE}:{item_id}")]
-    return blocks, copy.doorbell_parked_capture_fallback(item_id=item_id)
-
-
-def render_doorbell_entity_proposal(*, item_id: str, submitter: str, name: str) -> tuple[list[dict], str]:
-    """`name` is the proposed entity's short name — lifted by the agent from PRIVATE captured
-    material and published nowhere, so it is escaped like any other untrusted slot. Approve mints
-    on submit, so it opens the mint-metadata modal (`render_entity_mint_modal`); Reject has
-    nothing to mint, so its modal collects only a reason."""
-    text = copy.doorbell_entity_proposal(item_id=item_id, submitter=submitter, name=name)
-    blocks = [_section(escape_mrkdwn(text)),
-             _actions([
-                 _button(copy.APPROVE_LABEL, _modal_action_id(KIND_ENTITY_PROPOSAL, "approve"),
+                 _button(copy.APPROVE_LABEL, _direct_action_id(KIND_IDENTITY_PROPOSAL, "approve"),
                         item_id, style="primary"),
-                 _button(copy.REJECT_LABEL, _modal_action_id(KIND_ENTITY_PROPOSAL, "reject"),
+                 _button(copy.MERGE_LABEL, _modal_action_id(KIND_IDENTITY_PROPOSAL, "merge"),
+                        item_id),
+                 _button(copy.DECLINE_LABEL, _direct_action_id(KIND_IDENTITY_PROPOSAL, "decline"),
                         item_id, style="danger"),
-             ], block_id=f"review:{KIND_ENTITY_PROPOSAL}:{item_id}")]
-    return blocks, copy.doorbell_entity_proposal_fallback(item_id=item_id)
+             ], block_id=f"review:{KIND_IDENTITY_PROPOSAL}:{item_id}")]
+    return blocks, copy.doorbell_identity_proposal_fallback(item_id=item_id)
+
+
+def render_doorbell_alias_proposal(item: dict) -> tuple[list[dict], str]:
+    """The card for a spelling the librarian appended to a registered entity — the spelling is
+    the material's own, escaped like every other untrusted slot."""
+    item_id = str(item["id"])
+    text = copy.doorbell_alias_proposal(
+        entity_name=escape_mrkdwn(str(item.get("entity_name", ""))),
+        alias=escape_mrkdwn(str(item.get("alias", ""))))
+    blocks = [_section(text),
+             _actions([
+                 _button(copy.APPROVE_LABEL, _direct_action_id(KIND_ALIAS_PROPOSAL, "approve"),
+                        item_id, style="primary"),
+                 _button(copy.DECLINE_LABEL, _direct_action_id(KIND_ALIAS_PROPOSAL, "decline"),
+                        item_id, style="danger"),
+             ], block_id=f"review:{KIND_ALIAS_PROPOSAL}:{item_id}")]
+    return blocks, copy.doorbell_alias_proposal_fallback(item_id=item_id)
 
 
 def _doorbell_card(headline: str, item_line: str) -> tuple[list[dict], str]:
@@ -349,141 +348,38 @@ def render_doorbell_superseded(*, kind: str, item_id: str) -> tuple[list[dict], 
     return _doorbell_card(*copy.doorbell_superseded(kind=kind, item_id=item_id))
 
 
-def render_note_modal(*, private_metadata: str, title: str, label: str,
-                      placeholder: str = "") -> dict:
-    """One modal shape for every free-text collection this surface needs (a note, or a reason) —
-    what is being recorded is a judgment, so the control is a composed sentence, never a checkbox.
-    `private_metadata` carries which (item_kind, item_id, verdict) the submission is for — Slack's
-    own round-trip mechanism, no server-side store needed."""
-    blocks = [{
-        "type": "input",
-        "block_id": REVIEW_NOTE_MODAL_BLOCK_ID,
-        "label": {"type": "plain_text", "text": label},
-        "element": {
-            "type": "plain_text_input", "action_id": REVIEW_NOTE_MODAL_ACTION_ID,
-            "multiline": True,
-            **({"placeholder": {"type": "plain_text", "text": placeholder}} if placeholder else {}),
-        },
-    }]
+def render_merge_modal(*, private_metadata: str, name: str,
+                       candidates: list[dict]) -> dict:
+    """The one modal this surface has: which registered entity a proposal really is. A select
+    over `candidates` — the registered entities sharing a word with the proposal, first — and a
+    typed registry id for anything else; `review_decide` refuses an `into` that is not a confirmed
+    entity, so nothing here has to. `private_metadata` carries WHAT the decision is about (the
+    item and where to post the confirmation), never WHO."""
+    options = [{"text": {"type": "plain_text",
+                         "text": f"{str(c.get('name') or c.get('id'))[:60]} ({str(c.get('id'))[:50]})"[:75]},
+                "value": str(c.get("id"))}
+               for c in (candidates or [])[:MAX_MERGE_OPTIONS] if c.get("id")]
+    blocks = [_section(escape_mrkdwn(copy.merge_modal_heading(name=name)))]
+    if options:
+        blocks.append({
+            "type": "input", "block_id": MERGE_SELECT_BLOCK_ID, "optional": True,
+            "label": {"type": "plain_text", "text": copy.MERGE_SELECT_LABEL},
+            "element": {"type": "static_select", "action_id": MERGE_SELECT_ACTION_ID,
+                        "placeholder": {"type": "plain_text", "text": copy.MERGE_SELECT_PLACEHOLDER},
+                        "options": options},
+        })
+    blocks.append({
+        "type": "input", "block_id": MERGE_TYPED_BLOCK_ID, "optional": True,
+        "label": {"type": "plain_text", "text": copy.MERGE_TYPED_LABEL},
+        "element": {"type": "plain_text_input", "action_id": MERGE_TYPED_ACTION_ID,
+                    "placeholder": {"type": "plain_text", "text": copy.MERGE_TYPED_PLACEHOLDER}},
+    })
     return {
         "type": "modal",
-        "callback_id": REVIEW_NOTE_MODAL_CALLBACK_ID,
+        "callback_id": MERGE_MODAL_CALLBACK_ID,
         "private_metadata": private_metadata,
-        "title": {"type": "plain_text", "text": title[:24] or copy.NOTE_MODAL_TITLE},
-        "submit": {"type": "plain_text", "text": "Submit"},
-        "close": {"type": "plain_text", "text": copy.NOT_YET_LEAVE_AS_DEVELOPING[:24]},
+        "title": {"type": "plain_text", "text": copy.MERGE_MODAL_TITLE[:24]},
+        "submit": {"type": "plain_text", "text": copy.MERGE_LABEL.rstrip("…")[:24]},
+        "close": {"type": "plain_text", "text": copy.NOT_YET[:24]},
         "blocks": blocks,
-    }
-
-
-# ── the entity-proposal mint modal ───────────────────────────────────────────────────────────────
-# A second, distinct modal shape: the identity metadata a mint needs — a name, a closed-vocabulary
-# type, two optional fields and a checkbox — so it cannot reuse `_MODAL_FIELD`'s
-# `(field, label, placeholder)` shape. `stigmergy.slack.review` opens it for exactly one
-# (kind, verdict) pair: `(entity-proposal, approve)`.
-ENTITY_MINT_MODAL_CALLBACK_ID = "entity_mint_modal"
-ENTITY_MINT_NAME_BLOCK_ID = "entity_name"
-ENTITY_MINT_NAME_ACTION_ID = "entity_name_text"
-ENTITY_MINT_TYPE_BLOCK_ID = "entity_type"
-ENTITY_MINT_TYPE_ACTION_ID = "entity_type_select"
-ENTITY_MINT_ALIASES_BLOCK_ID = "entity_aliases"
-ENTITY_MINT_ALIASES_ACTION_ID = "entity_aliases_text"
-ENTITY_MINT_ROLE_BLOCK_ID = "entity_role"
-ENTITY_MINT_ROLE_ACTION_ID = "entity_role_text"
-ENTITY_MINT_REQUEUE_BLOCK_ID = "entity_requeue"
-ENTITY_MINT_REQUEUE_ACTION_ID = "entity_requeue_checkboxes"
-# The checkboxes element's own single option value — never rendered, only round-tripped through
-# `state_values["selected_options"]`, the same way a button's `value` never surfaces to a human.
-ENTITY_MINT_REQUEUE_OPTION_VALUE = "requeue"
-
-
-def _entity_type_options() -> list[dict]:
-    """One option per `review_kinds.ENTITY_TYPES` entry, label and value both the bare string —
-    the same spelling `entities.mint` enforces; the architecture drift test keeps the restatement
-    honest."""
-    return [{"text": {"type": "plain_text", "text": t}, "value": t} for t in ENTITY_TYPES]
-
-
-def _requeue_option() -> dict:
-    return {"text": {"type": "plain_text", "text": copy.ENTITY_MINT_REQUEUE_OPTION_LABEL},
-           "value": ENTITY_MINT_REQUEUE_OPTION_VALUE}
-
-
-def render_entity_mint_modal(*, private_metadata: str, unresolved_names: list[str] = (),
-                             name_prefill: str = "") -> dict:
-    """The entity-proposal Approve modal. Obeys `name_prefill` rather than counting: an empty
-    prefill with `unresolved_names` non-empty IS the several-names case, so the names are listed
-    and the field left empty. The decision lives in `entities.situations.mint_name_prefill`,
-    which this module may not import — the value travels in the item dict. `entity_id` is
-    deliberately not a field: only `birth.prepare` can run a real collision check."""
-    names = [str(n) for n in (unresolved_names or []) if str(n).strip()]
-    proposed_name = str(name_prefill or "")
-    name_element = {"type": "plain_text_input", "action_id": ENTITY_MINT_NAME_ACTION_ID,
-                    **({"initial_value": proposed_name} if proposed_name else {})}
-    # No second count: an empty prefill with names still to place IS the several-names case —
-    # that is what the one decision means by `""`.
-    heading = ([_section(escape_mrkdwn(copy.entity_mint_several_unresolved(names=names)))]
-               if not proposed_name and names else [])
-    return {
-        "type": "modal",
-        "callback_id": ENTITY_MINT_MODAL_CALLBACK_ID,
-        "private_metadata": private_metadata,
-        "title": {"type": "plain_text", "text": copy.ENTITY_MINT_MODAL_TITLE[:24]},
-        "submit": {"type": "plain_text", "text": copy.APPROVE_LABEL[:24]},
-        "close": {"type": "plain_text", "text": copy.NOT_YET_LEAVE_AS_DEVELOPING[:24]},
-        "blocks": [
-            *heading,
-            {
-                "type": "input",
-                "block_id": ENTITY_MINT_NAME_BLOCK_ID,
-                "label": {"type": "plain_text", "text": copy.ENTITY_MINT_NAME_LABEL},
-                "element": name_element,
-            },
-            {
-                "type": "input",
-                "block_id": ENTITY_MINT_TYPE_BLOCK_ID,
-                "label": {"type": "plain_text", "text": copy.ENTITY_MINT_TYPE_LABEL},
-                "element": {
-                    "type": "static_select",
-                    "action_id": ENTITY_MINT_TYPE_ACTION_ID,
-                    "placeholder": {"type": "plain_text", "text": copy.ENTITY_MINT_TYPE_PLACEHOLDER},
-                    "options": _entity_type_options(),
-                },
-            },
-            {
-                "type": "input",
-                "block_id": ENTITY_MINT_ALIASES_BLOCK_ID,
-                "optional": True,
-                "label": {"type": "plain_text", "text": copy.ENTITY_MINT_ALIASES_LABEL},
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": ENTITY_MINT_ALIASES_ACTION_ID,
-                    "placeholder": {"type": "plain_text",
-                                    "text": copy.ENTITY_MINT_ALIASES_PLACEHOLDER},
-                },
-            },
-            {
-                "type": "input",
-                "block_id": ENTITY_MINT_ROLE_BLOCK_ID,
-                "optional": True,
-                "label": {"type": "plain_text", "text": copy.ENTITY_MINT_ROLE_LABEL},
-                "element": {
-                    "type": "plain_text_input",
-                    "action_id": ENTITY_MINT_ROLE_ACTION_ID,
-                    "placeholder": {"type": "plain_text", "text": copy.ENTITY_MINT_ROLE_PLACEHOLDER},
-                },
-            },
-            {
-                "type": "input",
-                "block_id": ENTITY_MINT_REQUEUE_BLOCK_ID,
-                "optional": True,
-                "label": {"type": "plain_text", "text": copy.ENTITY_MINT_REQUEUE_LABEL},
-                "element": {
-                    "type": "checkboxes",
-                    "action_id": ENTITY_MINT_REQUEUE_ACTION_ID,
-                    "options": [_requeue_option()],
-                    "initial_options": [_requeue_option()],
-                },
-            },
-        ],
     }

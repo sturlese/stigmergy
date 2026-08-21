@@ -144,13 +144,13 @@ def test_the_entity_filter_returns_the_view_for_a_scoped_identity(indexed):
     only the free-text query `test_view_is_readable_and_searchable...` above already covers."""
     conn, fx = indexed
     ana = make_service(fx, conn, fx.ANA)                             # scoped to ["finance"]
-    out = ana.search("view", filters={"entity": "acme"})
+    out = ana.search("view", filters={"entity": "acme-corp"})
     assert any(h["path"] == fx.VIEW_PAGE for h in out["hits"])
-    assert all("acme" in h["entity"] for h in out["hits"])
+    assert all("acme-corp" in h["entity"] for h in out["hits"])
 
     # the SAME filter, for an identity that cannot read the view: absent, not merely unranked.
     eng = make_service(fx, conn, fx.ENG)                             # scoped to ["eng"] only
-    eng_out = eng.search("view", filters={"entity": "acme"})
+    eng_out = eng.search("view", filters={"entity": "acme-corp"})
     assert not any(h["path"] == fx.VIEW_PAGE for h in eng_out["hits"])
 
 

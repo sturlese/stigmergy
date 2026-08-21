@@ -13,16 +13,23 @@ import json
 import pytest
 
 from stigmergy.capture import schema
-from stigmergy.capture.errors import ReplyRejected, SubmissionRejected
+from stigmergy.capture.errors import SubmissionRejected
 
 
 # ── the vocabulary itself: these constants are the contract other modules (the queue DDL, the
 # librarian) build against, so a drift here is exactly what this test is for ─────────────────────
 def test_the_status_vocabulary_is_written_in_full():
-    # `resolved` — a steward's disposition outside the fast lane — sits between `rejected` and
-    # `needs_input`, matching `schema.py`'s own declaration order.
-    assert schema.STATUSES == ("queued", "claimed", "filed", "rejected", "resolved",
-                               "needs_input", "triage", "failed")
+    # `resolved` is LEGACY — a steward's disposition from when captures could park — kept so the
+    # rows that carry it stay readable; `schema.py`'s own declaration order.
+    assert schema.STATUSES == ("queued", "claimed", "filed", "rejected", "resolved", "failed")
+
+
+def test_the_parked_pair_is_retired_by_name_and_out_of_the_vocabulary():
+    """OLD BEHAVIOUR: `needs_input` and `triage` were two of the eight statuses, the two a human
+    was waited on in. They are named as RETIRED — the startup migration returns a row still in one
+    of them to the queue, and the CHECK guard refuses a constraint that still admits either."""
+    assert schema.RETIRED_STATUSES == ("needs_input", "triage")
+    assert not set(schema.RETIRED_STATUSES) & set(schema.STATUSES)
 
 
 def test_terminal_statuses_are_exactly_the_four_finished_states():
@@ -31,19 +38,13 @@ def test_terminal_statuses_are_exactly_the_four_finished_states():
     assert {"filed", "rejected", "resolved", "failed"} == schema.TERMINAL_STATUSES
 
 
-def test_finished_statuses_add_the_parked_pair_but_never_resolved():
+def test_finished_statuses_are_the_three_terminal_states_a_claim_ends_in_never_resolved():
     """`FINISHED_STATUSES` is what `queue.finish()` — the LEASE-FENCED transition — may finish a
-    claim into. `resolved` is deliberately absent from it even though it is terminal: it is a
-    steward's disposition on a row nobody holds a lease on, so it must not be reachable through a
-    transition that requires an `expected_attempts` fence the steward path does not hold
-    (`schema.py`'s own `FINISHED_STATUSES` docstring). It has its own guarded transition instead
-    (`queue.dispose`)."""
-    assert schema.TERMINAL_STATUSES - {"resolved"} | {"needs_input", "triage"} \
-        == schema.FINISHED_STATUSES
+    claim into: every one terminal. `resolved` is absent because nothing reaches it any more — it
+    was a steward's disposition on a parked row, and nothing parks."""
+    assert {"filed", "rejected", "failed"} == schema.FINISHED_STATUSES
+    assert schema.FINISHED_STATUSES <= schema.TERMINAL_STATUSES
     assert "resolved" not in schema.FINISHED_STATUSES
-    # the parked pair are NOT terminal — retention must never purge material a human is waiting on
-    assert "needs_input" not in schema.TERMINAL_STATUSES
-    assert "triage" not in schema.TERMINAL_STATUSES
 
 
 def test_durable_tables_names_exactly_the_four_the_index_rebuild_must_not_take():
@@ -471,60 +472,6 @@ def test_prepare_submission_stores_the_material_verbatim_even_with_forged_frontm
     assert submission.hints["flagged"] == ["submitted_by"]
 
 
-# ── prepare_reply: the ask-back answer's own validation ─────────────────────────────────────────
-# `BrainService.reply` calls this before touching a row (`_reply`'s docstring: "Identity first,
-# state second"), so a bug here is a bug in the FIRST gate an attacker-reachable write goes
-# through.
-def test_prepare_reply_rejects_empty_answer():
-    with pytest.raises(ReplyRejected, match="empty"):
-        schema.prepare_reply("")
-
-
-def test_prepare_reply_rejects_whitespace_only_answer():
-    with pytest.raises(ReplyRejected, match="empty"):
-        schema.prepare_reply("   \n\t  ")
-
-
-def test_prepare_reply_rejects_a_non_string_answer():
-    with pytest.raises(ReplyRejected):
-        schema.prepare_reply(None)   # type: ignore[arg-type]
-
-
-def test_prepare_reply_rejects_an_answer_over_the_character_cap():
-    huge = "x" * (schema.MAX_REPLY_CHARS + 1)
-    with pytest.raises(ReplyRejected, match="too long"):
-        schema.prepare_reply(huge)
-
-
-def test_prepare_reply_accepts_an_answer_at_exactly_the_character_cap():
-    exact = "x" * schema.MAX_REPLY_CHARS
-    assert schema.prepare_reply(exact) == exact
-
-
-def test_prepare_reply_returns_the_answer_verbatim_for_an_ordinary_reply():
-    """The benign twin: the ordinary case — naming a registered entity — passes through
-    completely unchanged, nothing stripped or rewritten."""
-    assert schema.prepare_reply("Acme Corp") == "Acme Corp"
-
-
-def test_prepare_reply_message_never_echoes_another_identity_or_a_path():
-    """Safe to echo verbatim over HTTP: the refusal names only a static limit and the
-    caller's own length, matching `prepare_submission`'s refusals in voice and in safety."""
-    huge = "x" * (schema.MAX_REPLY_CHARS + 1)
-    with pytest.raises(ReplyRejected) as exc_info:
-        schema.prepare_reply(huge)
-    message = str(exc_info.value)
-    assert str(schema.MAX_REPLY_CHARS) in message
-    assert str(len(huge)) in message
-
-
-# ── reply_invocation: the ONE spelling of the command every surface states — a message
-# containing a command is an executable promise ──────────────────────────────────────────────────
-def test_reply_invocation_is_exactly_the_callable_string():
-    assert schema.reply_invocation(42) == 'brain_reply(submission_id=42, answer="<your answer>")'
-    assert schema.REPLY_TOOL in schema.reply_invocation(42)
-
-
 def test_a_lone_surrogate_is_a_clean_refusal_not_an_encoding_crash():
     """OLD BEHAVIOUR: `UnicodeEncodeError` — a `ValueError`, not a `CaptureError`.
 
@@ -551,7 +498,7 @@ def test_ordinary_unicode_material_is_still_accepted():
 
 
 # ── withheld_reason: the report column is JSONB, so a scalar is a shape it can hold ──────────────
-@pytest.mark.parametrize("status", [schema.TRIAGE, schema.FILED])
+@pytest.mark.parametrize("status", [schema.RESOLVED, schema.FILED])
 def test_withheld_reason_treats_a_scalar_report_as_carrying_no_reason_code(status):
     """OLD BEHAVIOUR: `AttributeError: 'str' object has no attribute 'get'` out of
     `_reason_flagged` — `(report or {}).get(...)` assumes the falsy case is the only non-dict one.
@@ -585,3 +532,13 @@ def test_withheld_reason_still_reads_a_real_reason_code_out_of_a_dict_report():
     ) == schema.WITHHELD_MATERIAL_NOTE
     assert schema.withheld_reason(
         schema.REJECTED, {schema.REASON_CODE_KEY: schema.REASON_STEWARD}) == ""
+
+
+# ── clean_note: the one seam an operator-typed sentence crosses into a ledger row or a report ──
+def test_clean_note_strips_control_characters_flattens_newlines_and_clips_word_safe():
+    cleaned = schema.clean_note("ok\x1b[31m red\nline")
+    assert "\x1b" not in cleaned and "\n" not in cleaned
+    assert cleaned.startswith("ok") and cleaned.endswith("red line")
+    assert schema.clean_note(None) == ""
+    assert len(schema.clean_note("word " * 200)) <= schema.MAX_NOTE_CHARS
+    assert schema.clean_note("  a sentence  ", 40) == "a sentence"

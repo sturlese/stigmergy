@@ -1,33 +1,34 @@
-"""The review lane — the ONE inbox where work parks on a human, and the append-only record of what
-they decided.
+"""The review lane — the ONE inbox of what the librarian proposed and a steward has to decide,
+and the append-only record of what they decided.
 
-`reject` and every `parked-capture` verdict are Postgres only, categorically. Approving an
-`entity-proposal` or a `repair-proposal` are the two paths that touch git: exactly ONE commit
-through a governed door, authored as the librarian App with an `Approved-by: <caller>` trailer.
+Three item kinds. An `identity-proposal` is an entity page the librarian created with
+`approved_by` empty (Approve · Merge into… · Decline); an `alias-proposal` is a spelling it
+appended to a registered entity's `proposed_aliases:` (Approve · Decline); a `repair-proposal` is
+the nightly repair proposer's concrete edit (Approve · Reject). Nothing here waits on a submitter
+— the capture that proposed an identity is already filed — and the inbox is DERIVED: the two
+proposal kinds are read off the entity registry this server already serves, the page index says
+what anchors to them, and the ledger says what has been decided. No table of its own.
 
-Authorization runs FIRST — an `entity-proposal` needs a STEWARD, a `parked-capture` the steward OR
-the asked submitter, a `repair-proposal` a steward for EVERY page it would edit — and a refusal
-never becomes more specific once a caller has failed it.
+Authorization runs FIRST — every kind needs a STEWARD, a repair a steward for EVERY page it would
+edit — and a refusal never becomes more specific once a caller has failed it.
 
-The two git-touching verdicts share a shape and not an implementation: each has ONE ordering
-function that both of its doors run (`mint_and_record_approval`, `apply_repair_and_record`), so
-"the ledger row is written, and written after the push" is a property of the code rather than of
-each surface remembering.
+Every git-touching verdict has ONE ordering function that every door runs (`decide_and_record`,
+`create_and_record`, `apply_repair_and_record`), so "the ledger row is written, and written after
+the push" is a property of the code rather than of each surface remembering. The librarian reads
+that ledger: an identity whose latest decision is a decline is never proposed again.
 """
 import logging
 import os
 from datetime import UTC, date, datetime
 
-from stigmergy.capture import decisions, dispositions
+from stigmergy.capture import decisions
 from stigmergy.capture import ops as capture_ops
-from stigmergy.capture import queue as capture_queue
 from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.errors import CaptureError
+from stigmergy.entities import decide as entities_decide
 from stigmergy.entities import remote as entities_remote
-from stigmergy.entities import situations
 from stigmergy.entities.errors import CapabilityUnavailableError as EntityCapabilityUnavailableError
 from stigmergy.entities.errors import EntityError
-from stigmergy.entities.generator import ENTITY_TYPES, canonical_id_for
 from stigmergy.librarian import base_inputs, gates, gitcmd
 from stigmergy.librarian.errors import LibrarianError
 from stigmergy.repair import remote as repair_remote
@@ -36,10 +37,14 @@ from stigmergy.repair import store as repair_store
 from stigmergy.repair.errors import RepairError
 from stigmergy.review_kinds import (
     ITEM_KINDS,
-    KIND_ENTITY_PROPOSAL,
-    KIND_PARKED_CAPTURE,
+    KIND_ALIAS_PROPOSAL,
+    KIND_IDENTITY_PROPOSAL,
     KIND_REPAIR_PROPOSAL,
+    alias_item_id,
+    split_alias_item_id,
 )
+from stigmergy.server import entity_aliases, ops_files
+from stigmergy.server.acl import visible
 from stigmergy.server.errors import CapabilityUnavailableError
 
 log = logging.getLogger(__name__)
@@ -48,7 +53,7 @@ log = logging.getLogger(__name__)
 def _check_len(name: str, value: str) -> None:
     """Lazy: `service.py` imports THIS module at module scope, so the reverse edge must not be
     taken at import time. Without the bound an unbounded `notes` string reaches
-    `dispositions.clean` or a gitleaks scan."""
+    the ledger or a gitleaks scan."""
     from stigmergy.server.service import check_arg_length
     check_arg_length(name, value or "")
 
@@ -70,12 +75,20 @@ SOURCE_MCP, SOURCE_SLACK = decisions.SOURCE_MCP, decisions.SOURCE_SLACK
 SOURCE_ADMIN, SOURCE_CLI = decisions.SOURCE_ADMIN, decisions.SOURCE_CLI
 
 
-# `review_decide`'s verdict vocabulary — uniform EXCEPT `parked-capture`, which keeps
-# `capture.dispositions`' own three verbs.
-# Re-exported from the ledger that records them (`capture.decisions`), not defined here: this
-# module is one of three writers, and the vocabulary belongs with the table.
+# `review_decide`'s verdict vocabulary, re-exported from the ledger that records it
+# (`capture.decisions`), not defined here: this module is one of three writers, and the
+# vocabulary belongs with the table. `decline` is the word every surface shows for `REJECT`.
 APPROVE, REJECT, REQUEST_CHANGES = decisions.APPROVE, decisions.REJECT, decisions.REQUEST_CHANGES
+MERGE = decisions.MERGE
 GENERIC_VERDICTS = decisions.GENERIC_VERDICTS
+DECLINE = "decline"
+# What each kind accepts, the stored spelling on the right: a surface's button label and the
+# ledger row can never disagree because the map is the only translation there is.
+VERDICTS_BY_KIND = {
+    KIND_IDENTITY_PROPOSAL: {APPROVE: APPROVE, MERGE: MERGE, DECLINE: REJECT, REJECT: REJECT},
+    KIND_ALIAS_PROPOSAL: {APPROVE: APPROVE, DECLINE: REJECT, REJECT: REJECT},
+    KIND_REPAIR_PROPOSAL: {APPROVE: APPROVE, REJECT: REJECT, DECLINE: REJECT},
+}
 
 class ReviewError(CaptureError):
     """A clean, caller-facing refusal, echoed verbatim over the wire — never git/DB internals."""
@@ -85,12 +98,6 @@ class ReviewError(CaptureError):
 # exist", "somebody else's item" and "not a steward" must be indistinguishable from the outside.
 # The specific refusals still surface, but only AFTER this predicate has cleared.
 NOT_YOURS_TO_DECIDE = "there is nothing for you to decide at that id"
-
-# Governance requires a SECOND human: the proposer may never approve, even when they are also the
-# resolved steward.
-SELF_APPROVAL_REFUSED = (
-    "you filed this — approving it needs a second, different steward. Ask another steward to "
-    "review it; you may still record reject or request_changes on your own submission yourself")
 
 
 def _stewards_snapshot(service) -> dict | None:
@@ -140,35 +147,25 @@ def is_steward(service, scope_path: str) -> bool:
         stewards, scope_path)
 
 
-def _guard_governance_decision(service, *, found: bool, submitted_by: str, scope_path: str,
-                               verdict: str) -> None:
-    """The `entity-proposal` gate: steward required, self-approval refused. `found=False` and "not
-    a steward" collapse onto the SAME `NOT_YOURS_TO_DECIDE` sentence."""
+def _guard_steward_decision(service, *, found: bool, scope_path: str) -> None:
+    """The proposal gate: a steward for the entity page's own zone, or the universal one.
+    `found=False` and "not a steward" collapse onto the SAME `NOT_YOURS_TO_DECIDE` sentence.
+
+    There is no self-approval rule here, and its absence is a decision: the proposal's author is
+    the LIBRARIAN, not the person whose capture prompted it, so the steward confirming it is
+    already the second party — and a one-steward deployment (the common shape) could otherwise
+    never confirm anything its steward had submitted about."""
     if not found or not is_steward(service, scope_path):
         raise ReviewError(NOT_YOURS_TO_DECIDE)
-    if verdict == APPROVE and submitted_by and service.identity == submitted_by:
-        raise ReviewError(SELF_APPROVAL_REFUSED)
-
-
-def _guard_parked_capture_decision(service, *, found: bool, submitted_by: str) -> None:
-    """`parked-capture`'s looser rule: the row's own submitter, OR a steward. No self-approval
-    refusal — this kind has no `approve`."""
-    if not found:
-        raise ReviewError(NOT_YOURS_TO_DECIDE)
-    if service.identity and service.identity == submitted_by:
-        return
-    if is_steward(service, ""):   # a parked capture has no page path yet: universal scope only
-        return
-    raise ReviewError(NOT_YOURS_TO_DECIDE)
 
 
 def _guard_repair_decision(service, *, found: bool, target_paths) -> None:
     """`repair-proposal`'s rule: a steward at the scope of EVERY page the proposal would edit.
 
     **This is the first verdict in this lane that can be asked a per-PATH question, and it must
-    be.** The other two kinds are anchored to no page — an entity proposal has no page yet, a
-    parked capture never got one — so `is_steward(service, "")` is the only scope they could
-    resolve, and it can only match the universal `"*"` key. A repair names the exact pages it would
+    be.** The two proposal kinds resolve to the proposed entity's OWN page once the index has
+    seen it (`_scope_path_of`), and until then to `""`, which can only match the universal `"*"`
+    key. A repair names the exact pages it would
     edit, and `ops/stewards.json` exists to DELEGATE zones: the universal question would let the
     general steward apply an edit inside a folder whose own steward never saw it, which is the
     delegation being silently undone by the one verdict that writes to those folders.
@@ -224,31 +221,6 @@ def _neutralize_leaves(value, depth: int = 0):
     return _neutralize_report(value, depth)
 
 
-def _query_all_open_submissions(conn, *, submitted_by: str | None, limit: int) -> list[dict]:
-    """Page through `query_submissions` in `MAX_LIST_LIMIT` steps: it silently clamps a larger
-    request, and a doorbell seeing only the newest page drops the OLDEST parked items."""
-    page_size = capture_queue.MAX_LIST_LIMIT
-    rows: list[dict] = []
-    offset = 0
-    while len(rows) < limit:
-        want = min(page_size, limit - len(rows))
-        page = capture_queue.query_submissions(
-            conn, submitter=submitted_by,
-            statuses=[capture_schema.TRIAGE, capture_schema.NEEDS_INPUT], limit=want,
-            offset=offset)
-        rows.extend(page)
-        if len(page) < want:
-            break   # exhausted — fewer open rows exist than `limit` allows for
-        offset += len(page)
-    if len(rows) >= limit:
-        # no silent caps: a caller sizing `limit` generously still learns when reality outgrew it
-        log.warning(
-            "review: open-submission paging hit its own limit (%d) for submitted_by=%r — more "
-            "open triage/needs_input rows may exist and were not included this pass", limit,
-            submitted_by)
-    return rows
-
-
 def _iso(value) -> str | None:
     """`capture.queue._iso`'s rule, spelled here rather than imported: it is private to that module
     and this is a two-line predicate, not a shared decision."""
@@ -292,82 +264,191 @@ def _repair_proposal_items(conn, *, limit: int) -> list[dict]:
     } for row in repair_store.pending_proposals(conn, limit=limit)]
 
 
-def _collect_open_items(conn, *, submitted_by: str | None, limit: int) -> list[dict]:
-    """The shared base under both wrappers: everything parking on a human, latest decision
-    attached. `submitted_by=None` is the MANAGEMENT read, never exposed to an MCP caller directly.
-    The first two kinds are disjoint by construction — `situations.classify` runs FIRST, and only a
-    non-entity-situation row reaches the `parked-capture` branch.
+# ── the inbox: derived from the registry, the index and the ledger ─────────────────────────────
+# How many registered entities a proposal's Merge picker is offered by name-token overlap. A
+# bound, not a search: the full registry is one `list_entities` away.
+MAX_MERGE_CANDIDATES = 8
+# How many anchored pages an item lists before the count stands in for the rest.
+MAX_ANCHORED_PAGES = 20
+_SUMMARY_HEADING = "## What / Who"
+MAX_SUMMARY_CHARS = 600
 
-    **`repair-proposal` is in the MANAGEMENT read only**, and the asymmetry is the honest reading of
-    the ownership scope rather than an omission: a repair proposal has no submitter — a nightly job
-    derived it from the gardener's findings, nobody asked for it — so there is no "own" for an
-    ownership-scoped caller to be shown. Including it anyway would show every scoped caller every
-    proposal, and a proposal names the PAGE PATHS it would edit: `acl.visible()` decides who may
-    see that a page exists, and this list does not ask it. Fail closed; the steward guard on the
-    decide leg is a separate question and answers it separately.
+
+def _registry_for(conn) -> dict[str, dict]:
+    """The registry a CONNECTION-only caller (the doorbell) reads: the index's snapshot, or
+    nothing — a process with no snapshot and no service has no registry to build an inbox from."""
+    return registry_records(ops_files.text_or_none(conn, entity_aliases.ENTITY_REGISTRY_RELPATH),
+                            "the index's snapshot")
+
+
+def registry_records(text: str | None, origin: str) -> dict[str, dict]:
+    """The registry TEXT a caller serves, as the records the inbox is derived from — `{}` when
+    there is none or it cannot be read (logged: an unreadable registry must not look like an
+    empty inbox without a trace). The console passes the copy its Entities desk answers from
+    (`index.check.served_registry`: the snapshot, else the `--entity-registry` file) so the
+    inbox and the desk can never list different proposals on a stack that has no snapshot."""
+    if text is None:
+        return {}
+    try:
+        return entity_aliases.registry_from_text(text, origin)
+    except ValueError:
+        log.error("the registry (%s) could not be read — the inbox shows no proposals", origin,
+                  exc_info=True)
+        return {}
+
+
+def _entity_page_row(conn, entity_id: str):
+    """`(path, title, acl, body, as_of, updated)` of the entity's OWN page, or `None` when the
+    index has not seen it yet (a proposal is indexed on the next rebuild or webhook)."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT path, title, acl, body, as_of, updated FROM pages_index"
+                    " WHERE type = 'entity' AND %s = ANY(entity) ORDER BY path LIMIT 1",
+                    (entity_id,))
+        return cur.fetchone()
+
+
+def _anchored_pages(conn, entity_id: str, *, exclude: str, audiences) -> tuple[list[str], int]:
+    """The pages anchored to `entity_id` this caller may see — the capture(s) that proposed it,
+    and everything filed against it since. `visible()` is asked of every row: the inbox is a
+    steward's surface, but a page's existence is still `acl.visible()`'s to decide."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT path, acl FROM pages_index WHERE %s = ANY(entity) AND path <> %s"
+                    " ORDER BY path", (entity_id, exclude or ""))
+        paths = [path for path, acl in cur.fetchall() if visible(acl, audiences)]
+    return paths[:MAX_ANCHORED_PAGES], len(paths)
+
+
+def _summary_of(body: str) -> str:
+    """The page's What / Who paragraph — what the librarian said the thing IS — or its first
+    paragraph when the page has no such section."""
+    text = str(body or "")
+    start = text.find(_SUMMARY_HEADING)
+    section = text[start + len(_SUMMARY_HEADING):] if start >= 0 else text
+    for paragraph in section.split("\n\n"):
+        cleaned = " ".join(paragraph.split())
+        if cleaned and not cleaned.startswith("#"):
+            return cleaned[:MAX_SUMMARY_CHARS]
+    return ""
+
+
+def _merge_candidates(record: dict, registry: dict[str, dict]) -> list[dict]:
+    """Registered (confirmed) entities sharing a whole word with the proposal's name or
+    aliases — the likeliest `into` targets, first in the Merge picker."""
+    words = {w for spelling in (record.get("name", ""), *record.get("aliases", ()))
+             for w in _words(spelling)}
+    out = []
+    for cid, other in sorted(registry.items()):
+        if cid == record["id"] or other.get("proposed"):
+            continue
+        theirs = {w for spelling in (other.get("name", ""), *other.get("aliases", ()))
+                  for w in _words(spelling)}
+        if words & theirs:
+            out.append({"id": cid, "name": other.get("name", "")})
+        if len(out) >= MAX_MERGE_CANDIDATES:
+            break
+    return out
+
+
+def _words(spelling: str) -> set[str]:
+    return {w for w in "".join(ch.lower() if ch.isalnum() else " " for ch in str(spelling)).split()
+            if len(w) >= 3}
+
+
+def _identity_item(conn, record: dict, registry: dict, *, audiences, scoped: bool) -> dict | None:
+    page = _entity_page_row(conn, record["id"])
+    if page is not None and not visible(page[2], audiences):
+        return None
+    if page is None and scoped:
+        # Not indexed yet: nothing says who may see it, so a scoped caller does not.
+        return None
+    path = page[0] if page else ""
+    anchored, total = _anchored_pages(conn, record["id"], exclude=path, audiences=audiences)
+    return {
+        "kind": KIND_IDENTITY_PROPOSAL, "id": record["id"],
+        "name": record.get("name", ""), "entity_type": record.get("type", ""),
+        "aliases": list(record.get("aliases") or []),
+        "proposed_aliases": list(record.get("proposed_aliases") or []),
+        "summary": _summary_of(page[3]) if page else "",
+        "page": path or None,
+        "anchored_pages": anchored, "anchored_total": total,
+        "created": (page[4] or page[5]) if page else "",
+        "merge_candidates": _merge_candidates(record, registry),
+    }
+
+
+def _alias_item(conn, record: dict, alias: str, *, audiences, scoped: bool) -> dict | None:
+    page = _entity_page_row(conn, record["id"])
+    if page is not None and not visible(page[2], audiences):
+        return None
+    if page is None and scoped:
+        return None
+    return {
+        "kind": KIND_ALIAS_PROPOSAL, "id": alias_item_id(record["id"], alias),
+        "entity_id": record["id"], "entity_name": record.get("name", ""), "alias": alias,
+        "page": page[0] if page else None,
+    }
+
+
+def _collect_open_items(conn, registry: dict[str, dict], *, audiences, scoped: bool,
+                        limit: int) -> list[dict]:
+    """The shared base under both wrappers: every proposal waiting on a steward, latest decision
+    attached. `scoped=False` is the MANAGEMENT read — an unrestricted identity, or the doorbell.
+
+    **`repair-proposal` is in the MANAGEMENT read only**, and the asymmetry is the honest reading
+    of the ownership scope rather than an omission: a repair proposal names the PAGE PATHS it
+    would edit, `acl.visible()` decides who may see that a page exists, and this list does not
+    ask it for repairs. The two proposal kinds DO ask it, per entity page, which is why a scoped
+    caller can be shown them.
     """
     items: list[dict] = []
-    if submitted_by is None:
-        # `limit` bounds THIS read as well as the submissions one below. It was outside the bound
-        # once, which made the caller's ceiling advisory over exactly the kind a cron can produce
-        # a thousand of overnight.
+    if not scoped:
+        # `limit` bounds THIS read as well as the proposals below: a cron can produce a thousand
+        # repairs overnight, and the caller's ceiling must not be advisory over exactly that kind.
         items += _repair_proposal_items(conn, limit=limit)
-
-    rows = _query_all_open_submissions(conn, submitted_by=submitted_by, limit=limit)
-    for row in rows:
-        situation = situations.classify(row)
-        if situation:
-            items.append({
-                "kind": KIND_ENTITY_PROPOSAL, "id": str(row["id"]),
-                "submitted_by": row["submitted_by"], "situation": situation,
-                "subject": situations.subject_of(row),
-                # BOTH, for the reason `situations.subjects_of` states: `subject` is ONE display
-                # string that joins several names with ", ", so a consumer acting on a name —
-                # prefilling a mint form, running one command per name — must read `subjects` or
-                # it will act on a joined compound that is not any of them.
-                "subjects": situations.subjects_of(row),
-                # The name a mint form may default to, decided ONCE (`situations`) rather than
-                # re-derived from `subjects` by each door: both doors write the same irreversible
-                # commit, so the two must never disagree about when a default is safe. `""` means
-                # "no single string can be right here" — the surface lists `subjects` instead.
-                "mint_name_prefill": situations.mint_name_prefill(row),
-                "parked_age_ms": row.get("parked_age_ms"), "created_at": row.get("created_at"),
-                # the doorbell's change token: a requeue re-parking into the SAME situation is
-                # still a state change, not silence
-                "attempts": row.get("attempts"),
-            })
-        else:
-            report = row.get("report") or {}
-            items.append({
-                "kind": KIND_PARKED_CAPTURE, "id": str(row["id"]),
-                "submitted_by": row["submitted_by"], "status": row["status"],
-                "summary": report.get("summary", ""),
-                "parked_age_ms": row.get("parked_age_ms"), "created_at": row.get("created_at"),
-                "attempts": row.get("attempts"),
-            })
+    for cid in sorted(registry):
+        record = registry[cid]
+        if record.get("proposed"):
+            item = _identity_item(conn, record, registry, audiences=audiences, scoped=scoped)
+            if item is not None:
+                items.append(item)
+        for alias in record.get("proposed_aliases") or ():
+            item = _alias_item(conn, record, alias, audiences=audiences, scoped=scoped)
+            if item is not None:
+                items.append(item)
+    if len(items) > limit:
+        # no silent caps: a caller sizing `limit` generously still learns when reality outgrew it
+        log.warning("review: %d open items, %d shown — raise the limit to see the rest",
+                    len(items), limit)
+        items = items[:limit]
 
     items = [_neutralize_leaves(item) for item in items]
     latest_by_item = decisions.latest_decisions(conn)
     for item in items:
-        item["decision"] = latest_by_item.get((item["kind"], item["id"]))
+        item["decision"] = _serializable(latest_by_item.get((item["kind"], item["id"])))
     return items
 
 
+def _serializable(decision: dict | None) -> dict | None:
+    """A ledger row as JSON can carry it: `created_at` is a `datetime` off the driver."""
+    if decision is None:
+        return None
+    return {**decision, "created_at": _iso(decision.get("created_at"))}
+
+
 def review_queue(service, *, limit: int = 50) -> dict:
-    """The unified inbox over everything parking on a human. An unrestricted identity sees every
-    item; a scoped one sees only items IT submitted, the ownership scope
-    `BrainService.submissions` applies to the fast lane."""
+    """The unified inbox over everything waiting on a steward. An unrestricted identity sees every
+    item; a scoped one sees the proposals whose entity page it may see, and no repairs."""
     identity = service.identity
     unrestricted = service.unrestricted
-    # A SCOPED caller with no identity would pass `submitted_by=None` — the MANAGEMENT scope —
-    # while being labelled `scope: "own"`. Fail closed where the widening decision is made.
+    # A SCOPED caller with no identity would be shown the MANAGEMENT read while being labelled
+    # `scope: "own"`. Fail closed where the widening decision is made.
     if not unrestricted and not identity:
         raise ValueError("a scoped review queue needs a resolved identity — refusing to widen to "
                          "every identity's items")
-    items = _collect_open_items(service.conn, submitted_by=None if unrestricted else identity,
-                                limit=limit)
+    items = _collect_open_items(service.conn, service._registry_records(),
+                                audiences=service.audiences, scoped=not unrestricted, limit=limit)
     return {"identity": identity, "scope": "all" if unrestricted else "own",
-           "count": len(items), "items": items}
+            "count": len(items), "items": items}
 
 
 # The doorbell's own read — never an MCP tool: a caller-facing surface goes through
@@ -375,9 +456,13 @@ def review_queue(service, *, limit: int = 50) -> dict:
 DOORBELL_ITEM_LIMIT = 500
 
 
-def items_for_doorbell(conn, *, limit: int = DOORBELL_ITEM_LIMIT) -> list[dict]:
-    """Every open review item, system-wide and unscoped; `slack.doorbell` resolves the steward."""
-    return _collect_open_items(conn, submitted_by=None, limit=limit)
+def items_for_doorbell(conn, *, limit: int = DOORBELL_ITEM_LIMIT,
+                       registry: dict[str, dict] | None = None) -> list[dict]:
+    """Every open review item, system-wide and unscoped; `slack.doorbell` resolves the steward.
+    `registry` is the records a caller serves from (`registry_records`); the doorbell, which has
+    only a connection, leaves it out and reads the index's snapshot."""
+    records = _registry_for(conn) if registry is None else registry
+    return _collect_open_items(conn, records, audiences=None, scoped=False, limit=limit)
 
 
 # ── the doorbell's steward resolution ───────────────────────────────────────────────────────────
@@ -441,27 +526,16 @@ def record_undeliverable(conn, *, event: str, item_ref: str, reason: str) -> Non
 
 
 # ── review_decide() ────────────────────────────────────────────────────────────────────────────
-def _row_for_item(service, item_id: str) -> tuple[int | None, dict | None]:
-    """`(submission_id, row)` for a review-queue item id — `(None, None)` for a malformed one, the
-    same "not found" a nonexistent id gets. Shared by both decide paths so neither can start
-    reading the row on its own terms; what each does with a found row is its own rule."""
-    submission_id = _parse_id(item_id)
-    row = capture_queue.get_submission_trace(service.conn, submission_id) \
-        if submission_id is not None else None
-    return submission_id, row
-
-
-def _recorded_message(kind: str, verdict: str, submission_id, actor: str, note: str = "") -> str:
+def _recorded_message(kind: str, verdict: str, item_id: str, actor: str, *, summary: str = "") -> str:
     """The confirmation sentence, composed ONCE so every surface and every item kind relays the
-    same one. `note` is passed only where the verdict's own rule requires one."""
-    line = f"recorded: {verdict} on {kind} #{submission_id} by {actor}."
-    if note:
-        line += (f" Note: \"{note}\"\nNothing else happens automatically — this was not filed "
-                f"as a page.")
+    same one. `summary` is what the decision DID, when it did something to the knowledge repo."""
+    line = f"recorded: {verdict} on {kind} {item_id} by {actor}."
+    if summary:
+        line += f" {summary}"
     return line
 
 
-def _already_decided_suffix(conn, item_kind: str, submission_id) -> str:
+def _already_decided_suffix(conn, item_kind: str, item_id: str) -> str:
     """`" — already decided: …"` for an item the ledger already holds a verdict on, `""` otherwise.
 
     **Only ever composed AFTER an authorization guard has passed.** `review_decisions` is not a
@@ -476,7 +550,7 @@ def _already_decided_suffix(conn, item_kind: str, submission_id) -> str:
     is to work out which of two decisions came first. `source` is `""` on every row written before
     the column existed (the ledger is never migrated), and those rows still have to render.
     """
-    decision = decisions.latest_decision_for(conn, item_kind=item_kind, item_id=str(submission_id))
+    decision = decisions.latest_decision_for(conn, item_kind=item_kind, item_id=str(item_id))
     if not decision:
         return ""
     when = decision["created_at"]
@@ -509,143 +583,112 @@ def _refuse_secret_note(notes: str) -> None:
             "the credential and try again")
 
 
-def _decide_parked_capture(service, item_id: str, verdict: str, notes: str, actor: str, *,
-                           source: str) -> dict:
-    """Deliberately NOT the generic verdict vocabulary: `verdict` here IS one of
-    `capture.dispositions.DISPOSITIONS`, stored verbatim, so a button label can never disagree
-    with the recorded verdict. Authorization runs before anything else, so a nonexistent id is
-    refused by the SAME sentence an unauthorized one is.
+def _proposal_or_none(service, entity_id: str) -> dict | None:
+    record = service._registry_records().get(str(entity_id or "").strip())
+    return record if record and record.get("proposed") else None
 
-    A `CaptureError` out of the disposition is this kind's staleness refusal — translated into
-    `ReviewError` and enriched with the decision that beat it, both of which may only happen after
-    `_guard_parked_capture_decision` has cleared the caller."""
-    submission_id, row = _row_for_item(service, item_id)
-    # An entity situation is NOT a parked capture, enforced HERE: without this the caller's
-    # `item_kind` picks the authorization rule, and an entity proposal's own submitter could route
-    # it into this kind's looser guard. NOT FOUND, not a distinct refusal, which would leak.
-    if row is not None and situations.classify(row):
-        row = None
-    _guard_parked_capture_decision(service, found=row is not None,
-                                   submitted_by=(row or {}).get("submitted_by", ""))
 
-    if verdict not in dispositions.DISPOSITIONS:
+def _scope_path_of(service, entity_id: str) -> str:
+    page = _entity_page_row(service.conn, entity_id)
+    return page[0] if page else ""
+
+
+def _decide_identity(service, item_id: str, verdict: str, notes: str, actor: str, *,
+                     source: str, into: str) -> dict:
+    """Authorized before anything else runs: steward required. `verdict` is read through
+    `VERDICTS_BY_KIND`, so `decline` and `reject` are one stored word. `merge` needs `into`, a
+    registered and confirmed entity, refused BEFORE the clone for the two things the registry
+    this server already holds can answer; `entities.decide` re-asks both against the knowledge
+    repo as it actually is."""
+    record = _proposal_or_none(service, item_id)
+    _guard_steward_decision(service, found=record is not None,
+                            scope_path=_scope_path_of(service, item_id))
+    stored = VERDICTS_BY_KIND[KIND_IDENTITY_PROPOSAL].get(verdict)
+    if stored is None:
         raise ReviewError(
-            f"a parked-capture decision must be one of {dispositions.DISPOSITIONS} "
-            f"(review_decide does not reuse the generic approve/reject/request_changes "
-            f"vocabulary for this item kind — see capture.dispositions)")
+            f"an identity proposal takes {APPROVE!r}, {MERGE!r} (with `into`) or {DECLINE!r} — "
+            f"the librarian proposed an identity; you confirm it, say which registered entity it "
+            f"really is, or decline it")
     _refuse_secret_note(notes)
-    if verdict in (dispositions.RESOLVE, dispositions.REJECT) and not notes:
-        raise ReviewError("resolve requires a note — what did you do with the material?"
-                          if verdict == dispositions.RESOLVE else "reject requires a reason")
-    try:
-        # The disposition's own SQL state guard, which is the ONLY place a lost race is caught for
-        # this kind — there is no pre-flight read here, unlike the entity path's
-        # `require_situation`. Its `QueueStateError` used to leave this function untranslated,
-        # which broke this module's own rule that an exception type from below never escapes as
-        # itself, and told a steward nothing about WHO had already decided the row.
-        if verdict == dispositions.REQUEUE:
-            result = dispositions.requeue(service.conn, submission_id, actor=actor, note=notes)
-        elif verdict == dispositions.RESOLVE:
-            result = dispositions.resolve(service.conn, submission_id, actor=actor, note=notes)
-        else:
-            result = dispositions.reject(service.conn, submission_id, actor=actor, reason=notes)
-    except CaptureError as ex:
-        raise ReviewError(
-            f"{ex}{_already_decided_suffix(service.conn, KIND_PARKED_CAPTURE, submission_id)}"
-        ) from ex
-    # `str(submission_id)`, never the raw `item_id`: `_parse_id` accepts " 204 "/"007", and a
-    # raw-spelling ledger row could never join back to the item it decided.
-    record_decision(service.conn, item_kind=KIND_PARKED_CAPTURE, item_id=str(submission_id),
-                    verdict=verdict, actor=actor, source=source, notes=notes)
-    message = _recorded_message(KIND_PARKED_CAPTURE, verdict, submission_id, actor,
-                                note=notes if verdict == dispositions.RESOLVE else "")
-    return {"recorded": verdict, "item_kind": KIND_PARKED_CAPTURE, "item_id": str(submission_id),
-           "actor": actor, "result": result, "message": message}
+    entity_id = record["id"]
+    today = date.today().isoformat()
+    if stored == MERGE:
+        target = str(into or "").strip()
+        if not target:
+            raise ReviewError("merge needs `into`: the registered entity this proposal really is")
+        survivor = service._registry_records().get(target)
+        if survivor is None or survivor.get("proposed"):
+            raise ReviewError(
+                f"`into` must be a registered, confirmed entity — {target!r} is "
+                f"{'itself a proposal' if survivor else 'not in the registry'} (list_entities "
+                f"shows the ids)")
+        action = lambda repo: entities_decide.merge_entity(  # noqa: E731
+            repo, entity_id=entity_id, into=target, approved_by=actor, today=today)
+        extra = {"into": target}
+    elif stored == APPROVE:
+        action = lambda repo: entities_decide.approve_entity(  # noqa: E731
+            repo, entity_id=entity_id, approved_by=actor, today=today)
+        extra = {}
+    else:
+        action = lambda repo: entities_decide.decline_entity(  # noqa: E731
+            repo, entity_id=entity_id, today=today)
+        extra = {}
+    result = _translate(service, KIND_IDENTITY_PROPOSAL, entity_id,
+                        lambda: decide_and_record(
+                            service.conn, repo_url=service.settings.librarian_repo_url,
+                            item_kind=KIND_IDENTITY_PROPOSAL, item_id=entity_id, verdict=stored,
+                            actor=actor, source=source, notes=notes, action=action, extra=extra))
+    return {"recorded": stored, "item_kind": KIND_IDENTITY_PROPOSAL, "item_id": entity_id,
+            "actor": actor, "commit": result["commit"], "into": target if stored == MERGE else "",
+            "reanchored": result["reanchored"],
+            "message": _recorded_message(KIND_IDENTITY_PROPOSAL, stored, entity_id, actor,
+                                         summary=result["summary"])}
 
 
-def _decide_entity_proposal(service, item_id: str, verdict: str, notes: str, actor: str, *,
-                            source: str, name: str = "", entity_id: str = "",
-                            entity_type: str = "", aliases=None, role: str = "",
-                            requeue: bool = False) -> dict:
-    """Authorized before anything else runs: steward required, self-approval refused. `approve`
-    mints. `name`/`entity_type` are validated only AFTER authorization, so a refused caller learns
-    nothing about what a mint would need. `entity_id` prefills to `name`'s slug, and
-    `entities.mint.mint` refuses one that is not actually that slug."""
-    submission_id, row = _row_for_item(service, item_id)
-    _guard_governance_decision(service, found=row is not None,
-                               submitted_by=(row or {}).get("submitted_by", ""),
-                               scope_path="", verdict=verdict)
-
-    if verdict not in GENERIC_VERDICTS or verdict == REQUEST_CHANGES:
-        raise ReviewError(
-            f"an entity proposal takes {APPROVE!r} or {REJECT!r} only — there is nothing to "
-            f"'request changes' to: either the name resolves to an identity worth minting or it "
-            f"does not")
+def _decide_alias(service, item_id: str, verdict: str, notes: str, actor: str, *,
+                  source: str) -> dict:
+    entity_id, alias = split_alias_item_id(item_id)
+    record = service._registry_records().get(entity_id) if entity_id else None
+    found = bool(record) and alias in (record.get("proposed_aliases") or ())
+    _guard_steward_decision(service, found=found,
+                            scope_path=_scope_path_of(service, entity_id) if entity_id else "")
+    stored = VERDICTS_BY_KIND[KIND_ALIAS_PROPOSAL].get(verdict)
+    if stored is None:
+        raise ReviewError(f"an alias proposal takes {APPROVE!r} or {DECLINE!r} — the spelling is "
+                          f"one of that entity's names or it is not")
     _refuse_secret_note(notes)
-    # Mapped HERE, like every other `EntityError` this module lets through: an exception type
-    # from `stigmergy.entities` must never reach a caller, because `stigmergy.slack` is barred
-    # from importing it and could only catch it generically — as an unanticipated fault whose
-    # text may not be shown. `ReviewError` is a `CaptureError`, so both surfaces already echo it.
-    # The translation is also where the "a second door got here first" clause is appended, because
-    # this is the first point in this path at which the caller is known to be authorized.
+    today = date.today().isoformat()
+    if stored == APPROVE:
+        action = lambda repo: entities_decide.approve_alias(  # noqa: E731
+            repo, entity_id=entity_id, alias=alias, approved_by=actor, today=today)
+    else:
+        action = lambda repo: entities_decide.decline_alias(  # noqa: E731
+            repo, entity_id=entity_id, alias=alias, today=today)
+    canonical = alias_item_id(entity_id, alias)
+    result = _translate(service, KIND_ALIAS_PROPOSAL, canonical,
+                        lambda: decide_and_record(
+                            service.conn, repo_url=service.settings.librarian_repo_url,
+                            item_kind=KIND_ALIAS_PROPOSAL, item_id=canonical, verdict=stored,
+                            actor=actor, source=source, notes=notes, action=action, extra={}))
+    return {"recorded": stored, "item_kind": KIND_ALIAS_PROPOSAL, "item_id": canonical,
+            "actor": actor, "commit": result["commit"],
+            "message": _recorded_message(KIND_ALIAS_PROPOSAL, stored, canonical, actor,
+                                         summary=result["summary"])}
+
+
+def _translate(service, item_kind: str, item_id: str, run):
+    """This package's vocabulary, applied where an `entities` exception is met: a type from below
+    never reaches a caller, because `stigmergy.slack` is barred from importing it and could only
+    catch it generically — as an unanticipated fault whose text may not be shown. A refusal that
+    names a proposal nothing can find any more is where the "a second door got here first" clause
+    is appended, and only here, strictly after the caller has been authorized."""
     try:
-        situations.require_situation(service.conn, submission_id, action=verdict)
+        return run()
+    except EntityCapabilityUnavailableError as ex:
+        raise CapabilityUnavailableError(str(ex)) from ex
     except EntityError as ex:
         raise ReviewError(
-            f"{ex}{_already_decided_suffix(service.conn, KIND_ENTITY_PROPOSAL, submission_id)}"
-        ) from ex
-    if verdict == REJECT:
-        if not notes:
-            raise ReviewError("reject requires a reason")
-        dispositions.reject(service.conn, submission_id, actor=actor, reason=notes)
-        message = _recorded_message(KIND_ENTITY_PROPOSAL, verdict, submission_id, actor)
-        record_decision(service.conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(submission_id),
-                        verdict=verdict, actor=actor, source=source, notes=notes)
-        return {"recorded": verdict, "item_kind": KIND_ENTITY_PROPOSAL,
-               "item_id": str(submission_id),
-               "actor": actor, "message": message}
-
-    clean_name = " ".join(str(name or "").split())
-    clean_type = str(entity_type or "").strip().lower()
-    missing = [field for field, value in (("name", clean_name), ("entity_type", clean_type))
-              if not value]
-    if missing:
-        raise ReviewError(
-            f"approving an entity proposal mints it (ADR 030) — missing {' and '.join(missing)}: "
-            f"pass name (the entity's page title) and entity_type (one of "
-            f"{', '.join(ENTITY_TYPES)}) with the decision. entity_id defaults to name's slug; "
-            f"aliases and role are optional; requeue re-files the originating capture after the "
-            f"push lands")
-    if clean_type not in ENTITY_TYPES:
-        raise ReviewError(f"entity_type {clean_type!r} is not one of {', '.join(ENTITY_TYPES)}")
-    _check_len("name", clean_name)
-    _check_len("role", role or "")
-    alias_list = _alias_list(aliases)
-    for alias in alias_list:
-        _check_len("alias", alias)
-    resolved_id = str(entity_id or "").strip() or canonical_id_for(clean_name)
-
-    minted = _mint_entity_proposal(
-        service, submission_id=submission_id, entity_id=resolved_id, name=clean_name,
-        entity_type=clean_type, aliases=alias_list, role=role or "", notes=notes,
-        approved_by=actor, source=source, requeue=requeue)
-
-    return {"recorded": verdict, "item_kind": KIND_ENTITY_PROPOSAL,
-               "item_id": str(submission_id),
-           "actor": actor, "minted": True, "entity_id": minted["entity_id"],
-           "name": minted["name"], "commit": minted["commit"],
-           "requeued": minted["requeued"]}
-
-
-def _alias_list(aliases) -> list[str]:
-    """`aliases` as a JSON list or one comma-separated string, mirroring `entities.cli`."""
-    if not aliases:
-        return []
-    values = aliases if isinstance(aliases, (list, tuple)) else [aliases]
-    out = []
-    for value in values:
-        out += [part.strip() for part in str(value).split(",") if part.strip()]
-    return out
+            f"{ex}{_already_decided_suffix(service.conn, item_kind, item_id)}") from ex
 
 
 # The knowledge repo's default branch; every server-driven write through this module — a mint and
@@ -801,106 +844,56 @@ def _decide_repair(service, item_id: str, verdict: str, notes: str, actor: str, 
             "item_id": str(proposal["id"]), "actor": actor, **result}
 
 
-def mint_and_record_approval(conn, *, repo_url: str, submission_id: int, entity_id: str,
-                             name: str, entity_type: str, aliases: list[str], role: str,
-                             actor: str, source: str, notes: str = "",
-                             requeue: bool = False) -> dict:
-    """The mint sequence itself, in the ONE order that is correct — mint through the governed
-    door, write the governance ledger row, then (only if asked) requeue the capture.
+def decide_and_record(conn, *, repo_url: str, item_kind: str, item_id: str, verdict: str,
+                      actor: str, source: str, notes: str = "", action, extra: dict) -> dict:
+    """ONE steward decision on a proposal, in the one order that is correct — land it through the
+    governed door, then write the governance ledger row.
 
-    Both SERVER-SIDE doors that mint run THIS: MCP/Slack through `_mint_entity_proposal` below,
-    the admin console through `admin.service.entity_approve`. Two copies of an ordering rule are
-    two places for it to be reordered, and the reordering is invisible from either door's end
-    state. There IS a third door, and it is the copy: `stigmergy-entities approve` mints from the
-    steward's own clone and runs its own spelling of the same order, because `stigmergy.entities`
-    cannot import `stigmergy.server`.
+    Both server-side doors that decide run THIS: MCP/Slack through `review_decide`, the admin
+    console through `admin.service`. There IS a third door, and it is the copy: `stigmergy-entities
+    approve|merge|decline` decides from the steward's own clone and runs its own spelling of the
+    same order, because `stigmergy.entities` cannot import `stigmergy.server`.
 
-    All three doors write the ledger row (the writer is `capture.decisions`), so `review_decisions`
-    answers "who approved this identity" for every door.
-
-    It deliberately covers three steps and no more. The pending-situation guard
-    (`situations.require_situation`) stays at each call site because the two doors run it at
-    different points in their own argument validation, and one shared answer would silently change
-    the other door's refusal for a caller who is wrong in both ways at once.
-
-    `stigmergy.entities` exceptions leave here UNTRANSLATED, on purpose: each door maps them
-    itself and maps them differently. `_mint_entity_proposal` turns them into this package's
-    vocabulary; the console lets the library's own class reach `admin.service._mutate`, which
-    records that class name in `admin_actions` before turning it into an `AdminRefused`. A
-    translation here would rename what the console's bookkeeping captures precisely.
-
-    `source` is a parameter for the same reason authorization is not one: this sequence is shared
-    by doors that are not each other, and each has to name itself. It is passed straight to
-    `record_decision`, which refuses any spelling outside `DECISION_SOURCES`.
-
-    `notes` is the doors' other asymmetry, and a parameter for that reason: the review lane
-    carries the steward's cleaned note into the ledger row, the console has no note field and
-    writes `''`. It goes VERBATIM into an append-only table that cannot be migrated afterwards,
-    and nothing here scans it — a caller passing a NON-EMPTY note must already have run
-    `_refuse_secret_note` (or an equivalent secrets scan) upstream. `review_decide` does, far
-    before the mint; the console passes `''` and so has nothing to scan.
-
-    `mint_via_clone` is reached as a MODULE ATTRIBUTE so it stays monkeypatchable.
+    The ledger row is written LAST, after the push: a row claiming a decline whose commit never
+    landed would make the librarian refuse an identity whose proposed page still stands. It
+    takes NO authorization argument, on purpose: authorization is per-surface (a resolved steward
+    here, the operator token in the console), so the CALLER SET is closed and pinned in
+    `tests/test_architecture.py`. `decide_via_clone` is reached as a MODULE ATTRIBUTE so it stays
+    monkeypatchable. `notes` goes VERBATIM into an append-only table, so a caller supplying a
+    non-empty one must already have run `_refuse_secret_note`.
     """
-    mint_result = entities_remote.mint_via_clone(
-        repo_url, _KNOWLEDGE_BRANCH, os.environ,
-        entity_id=entity_id, name=name, entity_type=entity_type, aliases=aliases, role=role,
-        today=date.today().isoformat(), submission_id=submission_id, approved_by=actor)
-    record_decision(conn, item_kind=KIND_ENTITY_PROPOSAL, item_id=str(submission_id),
-                    verdict=APPROVE, actor=actor, source=source, notes=notes,
-                    extra={"entity_id": mint_result["entity_id"], "commit": mint_result["commit"]})
-    requeued = None
-    if requeue:
-        # AFTER the push, never before — the CLI's own correctness property (`entities.cli`'s
-        # module docstring), restated by every door that mints: a requeue that ran first would
-        # hand the librarian a capture whose entity is not yet on the remote it fetches from, and
-        # the capture would park a second time. The note text is the operator-facing trace of why
-        # a capture came back; every door emits the same sentence.
-        requeued = dispositions.requeue(
-            conn, submission_id, actor=actor,
-            note=f"entity {mint_result['entity_id']} approved and pushed "
-                 f"({mint_result['commit'][:12]})")
-    return {**mint_result, "requeued": bool(requeued)}
+    result = entities_remote.decide_via_clone(repo_url, _KNOWLEDGE_BRANCH, os.environ,
+                                              action=action, decided_by=actor)
+    record_decision(conn, item_kind=item_kind, item_id=item_id, verdict=verdict, actor=actor,
+                    source=source, notes=notes, extra={"commit": result["commit"], **extra})
+    return result
 
 
-def _mint_entity_proposal(service, *, submission_id: int, entity_id: str, name: str,
-                          entity_type: str, aliases: list[str], role: str, notes: str,
-                          approved_by: str, source: str, requeue: bool) -> dict:
-    """This door's half of `mint_and_record_approval`: the shared sequence with THIS package's
-    translation wrapped around it, under the rule this whole module holds — an `entities`
-    exception type is translated where this package meets it, never allowed to leave
-    (`_decide_entity_proposal`'s pre-mint guard does the same for its own).
-
-    The `try` covers the WHOLE shared sequence, not just the mint. Inert today (`CaptureError` and
-    `EntityError` are disjoint), but any `entities` call added to `mint_and_record_approval` starts
-    being translated into `ReviewError` here.
-    """
-    try:
-        return mint_and_record_approval(
-            service.conn, repo_url=service.settings.librarian_repo_url,
-            submission_id=submission_id, entity_id=entity_id, name=name, entity_type=entity_type,
-            aliases=aliases, role=role, actor=approved_by, source=source, notes=notes,
-            requeue=requeue)
-    except EntityCapabilityUnavailableError as ex:
-        raise CapabilityUnavailableError(str(ex)) from ex
-    except EntityError as ex:
-        raise ReviewError(str(ex)) from ex
+def create_and_record(conn, *, repo_url: str, entity_id: str, name: str, entity_type: str,
+                      aliases: list[str], role: str, actor: str, source: str) -> dict:
+    """A steward registering an entity nobody proposed — the console's `create` door. The birth
+    is confirmed by its creator (`approved_by` = the steward) and recorded in the ledger as an
+    approval of that identity, so "entities born" counts every door the same way."""
+    result = entities_remote.mint_via_clone(
+        repo_url, _KNOWLEDGE_BRANCH, os.environ, entity_id=entity_id, name=name,
+        entity_type=entity_type, aliases=aliases, role=role, today=date.today().isoformat(),
+        approved_by=actor)
+    record_decision(conn, item_kind=KIND_IDENTITY_PROPOSAL, item_id=result["entity_id"],
+                    verdict=APPROVE, actor=actor, source=source,
+                    extra={"commit": result["commit"], "created": True})
+    return result
 
 
 def review_decide(service, *, item_kind: str, item_id: str, verdict: str, source: str,
-                  notes: str = "", name: str = "", entity_id: str = "", entity_type: str = "",
-                  aliases=None, role: str = "", requeue: bool = False) -> dict:
+                  notes: str = "", into: str = "") -> dict:
     """Record a verdict, attributed to the caller's RESOLVED identity — never an argument.
 
-    `reject` and every `parked-capture` verdict are Postgres only. Approving an `entity-proposal`
-    or a `repair-proposal` are the two paths that touch git, one App-authored commit each through a
-    governed door: the entity verdict alone needs `name` and `entity_type`, and `requeue` re-files
-    the originating capture AFTER the push lands; the repair verdict needs nothing but the id,
-    because the proposal already IS the change.
-
-    `entity-proposal` requires a STEWARD and refuses self-approval; `parked-capture` accepts the
-    row's own submitter OR a steward; `repair-proposal` requires a steward for EVERY page it would
-    edit. "Not authorized" and "does not exist" are the SAME sentence.
+    Every verdict but a repair's `reject` touches git: one App-authored commit through a governed
+    door, carrying a `Decided-by: <caller>` trailer. An `identity-proposal` takes `approve`,
+    `merge` (with `into`, the registered entity it really is) or `decline`; an `alias-proposal`
+    `approve` or `decline`; a `repair-proposal` `approve` or `reject`. Every kind requires a
+    STEWARD — for a repair, at the scope of EVERY page it would edit. "Not authorized" and "does
+    not exist" are the SAME sentence.
 
     `source` names the DOOR, not the caller — the caller is `service.identity`. It is required and
     undefaulted all the way down: this function serves two transports (an MCP client and a Slack
@@ -913,27 +906,25 @@ def review_decide(service, *, item_kind: str, item_id: str, verdict: str, source
     if item_kind not in ITEM_KINDS:
         raise ReviewError(f"unknown item kind {item_kind!r} (one of {', '.join(ITEM_KINDS)})")
     _check_len("notes", notes or "")
-    clean_notes = dispositions.clean(notes)
+    _check_len("into", into or "")
+    clean_notes = capture_schema.clean_note(notes)
 
-    if item_kind == KIND_PARKED_CAPTURE:
-        return _decide_parked_capture(service, item_id, verdict, clean_notes, identity,
-                                      source=source)
     if item_kind == KIND_REPAIR_PROPOSAL:
-        return _decide_repair(service, item_id, verdict, clean_notes, identity, source=source)
-    return _decide_entity_proposal(service, item_id, verdict, clean_notes, identity, source=source,
-                                   name=name, entity_id=entity_id, entity_type=entity_type,
-                                   aliases=aliases, role=role, requeue=requeue)
+        return _decide_repair(service, item_id, VERDICTS_BY_KIND[item_kind].get(verdict, verdict),
+                              clean_notes, identity, source=source)
+    if item_kind == KIND_ALIAS_PROPOSAL:
+        return _decide_alias(service, item_id, verdict, clean_notes, identity, source=source)
+    return _decide_identity(service, item_id, verdict, clean_notes, identity, source=source,
+                            into=into)
 
 
 def review_decide_safe(service, *, item_kind: str, item_id: str, verdict: str, source: str,
-                       notes: str = "", name: str = "", entity_id: str = "", entity_type: str = "",
-                       aliases=None, role: str = "", requeue: bool = False) -> dict:
+                       notes: str = "", into: str = "") -> dict:
     """`BrainService.review_decide` with a CLEAN refusal returned as `{"error": str}` rather than
     raised — for `stigmergy.slack`, barred from importing the exception types. An UNANTICIPATED
     exception still propagates, and its `str(ex)` must never be shown."""
     try:
         return service.review_decide(item_kind, item_id, verdict, source=source, notes=notes,
-                                     name=name, entity_id=entity_id, entity_type=entity_type,
-                                     aliases=aliases, role=role, requeue=requeue)
+                                     into=into)
     except (CaptureError, CapabilityUnavailableError) as ex:
         return {"error": str(ex)}

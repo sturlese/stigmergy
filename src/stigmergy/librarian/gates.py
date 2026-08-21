@@ -20,7 +20,6 @@ from dataclasses import dataclass, field
 import yaml
 
 from stigmergy import text as textutil
-from stigmergy.capture import schema as capture_schema
 from stigmergy.librarian import gitcmd
 from stigmergy.librarian import page as page_policy
 from stigmergy.librarian.errors import LibrarianConfigError
@@ -29,6 +28,14 @@ log = logging.getLogger(__name__)
 
 # Whitelist, not a blocklist: a zone added tomorrow is out of bounds by default.
 ALLOWED_WRITE_PREFIXES = tuple(f"{folder}/" for folder in page_policy.FOLDER_BY_TYPE.values())
+
+# The identity zone and the file derived from it — this module's own spelling of the knowledge
+# repo's layout, the posture `repair.deletion` and `repair.entity_alias` take for the same two
+# strings: a gate talks to the checkout through paths, never through `entities.generator`'s API,
+# which this package may not import. `librarian.identity` (the one module that may) passes the
+# same two in as the run's widened lane, and `test_architecture` pins the spellings together.
+ENTITY_ZONE_PREFIX = "wiki/entities/"
+REGISTRY_RELPATH = "ops/entity-registry.json"
 
 SEVERITY_VETO = "veto"
 SEVERITY_NOTE = "note"
@@ -79,7 +86,7 @@ class GateContext:
 
     # A gate is TOLD these caller-scoped facts; it never infers one. Widening happens on the
     # CONTEXT, never on the module constant, which is what keeps an ordinary capture claiming
-    # `type: meeting` parked rather than filed.
+    # `type: meeting` refused rather than filed.
     write_prefixes: tuple = ALLOWED_WRITE_PREFIXES
     creatable_types: frozenset = field(default_factory=lambda: frozenset(page_policy.FAST_LANE_TYPES))
     # `{folder (no trailing slash): type}`, consulted BEFORE the global `page.type_for_folder`,
@@ -132,6 +139,14 @@ class GateContext:
     # `ops/entity-registry.json`, which `stigmergy-entities regenerate` rebuilds from the entity
     # pages the same commit rewrites.
     derived_files: frozenset = field(default_factory=frozenset)
+    # The identity proposals THIS run made (`librarian.identity.write_proposals`), told by the
+    # caller exactly as every other widening is: the entity pages code CREATED with `approved_by`
+    # empty. (A proposed spelling EDITS a registered entity page, and rides `expected_bytes` like
+    # every other planned rewrite.) Empty by default, so a capture that proposes nothing is judged
+    # as if the zone did not exist — and `gate_identity` refuses any entity-zone write that is
+    # neither a declared proposal nor a planned edit, which is what makes "the agent never writes
+    # an identity" a proof rather than a tool's refusal.
+    proposed_entity_pages: frozenset = field(default_factory=frozenset)
 
     @property
     def changes(self) -> list[tuple[str, str]]:
@@ -151,8 +166,9 @@ class GateContext:
 
     def in_lane_new_pages(self) -> list[str]:
         """Pages this capture CREATED in the lane — the only ones whose whole content is its
-        own doing."""
-        return [e.path for e in self.in_lane() if e.status == "A"]
+        own doing. A derived file is not a page: it is proven by bytes, never stamped or parsed."""
+        return [e.path for e in self.in_lane()
+                if e.status == "A" and e.path not in self.derived_files]
 
     def in_lane_modified_pages(self) -> list[str]:
         return [e.path for e in self.in_lane() if e.status == "M"]
@@ -300,8 +316,12 @@ def _check_created_type(ctx: GateContext, path: str) -> list[Finding]:
                         f"{path}: the fast lane cannot create a {implied!r} page: {reason}",
                         locator=path)]
 
-    declared = str((ctx.page_declared.get(path) or {}).get("page_type", "")
-                   or getattr(ctx.outcome, "page_type", "") or "").lower()
+    if path in ctx.proposed_entity_pages:
+        # Code declared this page by writing it; the outcome's own `page_type` is the NOTE's.
+        declared = page_policy.ENTITY_PAGE_TYPE
+    else:
+        declared = str((ctx.page_declared.get(path) or {}).get("page_type", "")
+                       or getattr(ctx.outcome, "page_type", "") or "").lower()
     if not declared:
         return [Finding("zone", "undeclared-type",
                         f"created {path} without declaring a page type: every filed page states "
@@ -920,8 +940,8 @@ def resolve_entity_ids(anchoring: dict, registry) -> tuple[list[str], list[str]]
     about is the agent's judgment (see `kernel.normalize`: `canonical_id` folds accents, case and
     punctuation and no longer strips a legal form, because "is `Cofers Co` the same company as
     `Cofers`?" is a claim about the world). What code keeps is authority: the id the agent declares
-    must EXIST in the registry read at the base commit, or it lands in `unresolved` and the capture
-    parks. A hallucinated anchor is not a resolution. Widen this; never bolt a second resolver
+    must EXIST in the registry read at the base commit, or it lands in `unresolved` and this gate
+    refuses the page. A hallucinated anchor is not a resolution. Widen this; never bolt a second resolver
     beside it, or two answers exist to one question."""
     anchoring = anchoring if isinstance(anchoring, dict) else {}
     if str(anchoring.get("kind", "")).lower() != "entity":
@@ -1083,16 +1103,18 @@ def _registry_id_names(registry) -> list[tuple[str, str]]:
     return sorted(out)
 
 
+UNNAMED_LOCATOR = "something unnamed"
+
+
 def _unresolved_name(declared: list[str], unresolved: list[str]) -> str:
-    """WHICH name could not be resolved — the one a parked report tells a steward to register.
-    Never `""`: `processing._unanchorable` needs a truthy locator so "nothing here anchors"
-    reaches the steward park rather than a system fault. The placeholder is one shared spelling
-    for "nothing was named", so `entities.cli._suggestable` can refuse it as a `--name`."""
+    """WHICH declared value could not be resolved — what the finding's message and the corrective
+    brief name back to the agent. Never `""`: an account that declared `kind: "entity"` with no
+    entity at all still gets a finding that names its fault, not an empty locator."""
     for name in [*unresolved, *declared]:
         cleaned = _one_line(name, MAX_BRIEF_NAME_LEN)
         if cleaned:
             return cleaned
-    return capture_schema.UNNAMED_ENTITY_PLACEHOLDER
+    return UNNAMED_LOCATOR
 
 
 def anchoring_brief(ctx: GateContext, declared: list[str]) -> str:
@@ -1145,10 +1167,13 @@ def anchoring_brief(ctx: GateContext, declared: list[str]) -> str:
         '  2. COMPANY-WIDE — if the material genuinely belongs to no single entity, change only '
         'the outcome: "anchoring": {"kind": "company", "reason": "<one sentence saying why it '
         'belongs to no entity>"}. The reason is required; an empty string is not one.',
-        '  3. PARK — if the material really is about a specific entity nobody has registered yet, '
-        'do NOT file it: "decision": "triage", "triage": {"kind": "unresolved-entity", "name": '
-        '"<the name>"}, and write no page. Nothing is committed and a steward registers the '
-        'entity. This is a correct outcome, not a failure.',
+        '  3. PROPOSE — if the material really is about a specific entity nobody has registered '
+        'yet, propose it in this same account and anchor to it: add an entry to "new_entities" '
+        'with its "name" (spelled as the material spells it), "entity_type", "role", "aliases", '
+        '"summary", "facts" and "connections", and declare "anchoring": {"kind": "entity", '
+        '"entities": ["<that name>"]}. Code creates the entity page beside yours, unconfirmed, '
+        'and a steward confirms it afterwards — the page lands now. A name the material never '
+        'uses, or one that already resolves to a registered entity, is refused.',
         "Adding a wikilink, rewriting the body, or renaming the page does not change this gate's "
         "answer: it reads the declared \"entities\" list against the registry named above, and "
         "only that registry.",
@@ -1307,8 +1332,74 @@ def _as_text(value) -> str:
 # Every gate runs every time: there is one corrective retry, and a gate hiding a second problem
 # would waste it. `gate_binary_page`'s position IS load-bearing — it establishes that pages are
 # text at all, the precondition the text-reading gates assume and one NUL byte turns off.
+
+# ── identity: the entity zone holds only what this run proposed ───────────────────────────────
+def gate_identity(ctx: GateContext) -> list[Finding]:
+    """Every write under the identity zone is one `librarian.identity` made, and says so itself.
+
+    A CREATED entity page must be in `ctx.proposed_entity_pages` and must carry `type: entity` with
+    `approved_by` present and EMPTY — the one spelling of "a steward has not confirmed this"; a
+    page that arrived approved would be an identity nobody approved. A MODIFIED entity page must
+    carry a proof CODE produced before the diff existed: its planned bytes in `ctx.expected_bytes`
+    (the worker's proposed spelling, a repair's merge or sweep — `gate_body_rewrite` does the
+    comparing, this gate makes sure the proof was asked for) or the per-path body-rewrite
+    permission a steward's approved `entity-body` repair tells the apply (`ctx.body_rewrite_allowed`,
+    ADR 039). Both are set by callers code controls, never from an outcome. Anything else in the
+    zone is refused, and `repairable=False`: no agent could have written it legitimately — the
+    agent's own write tool refuses the zone — so the diff is preserved rather than retried.
+    """
+    out = []
+    for entry in ctx.entries:
+        path = entry.path
+        if not path.startswith(ENTITY_ZONE_PREFIX):
+            continue
+        if entry.status == "A":
+            if path not in ctx.proposed_entity_pages:
+                out.append(Finding("identity", "unproposed-entity-page",
+                                   f"created {path}, an entity page this run did not propose: an "
+                                   f"identity is created by the worker from a declared proposal, "
+                                   f"never written directly",
+                                   locator=path, repairable=False))
+                continue
+            out.extend(_proposed_page_findings(ctx, path))
+            continue
+        if entry.status == "M":
+            if path not in ctx.expected_bytes and path not in ctx.body_rewrite_allowed:
+                out.append(Finding("identity", "unplanned-entity-edit",
+                                   f"modified {path}, an entity page nothing planned an edit for: "
+                                   f"an existing identity changes only by a steward's decision, "
+                                   f"by a proposed alias the worker appends and proves byte for "
+                                   f"byte, or by a repair a steward approved",
+                                   locator=path, repairable=False))
+            continue
+        # A deletion or a typechange in the zone is already `gate_zone`'s veto; nothing to add.
+    return out
+
+
+def _proposed_page_findings(ctx: GateContext, path: str) -> list[Finding]:
+    try:
+        with open(os.path.join(ctx.worktree, path), encoding="utf-8") as f:
+            front, _ = page_policy.split_frontmatter(f.read())
+        parsed = yaml.safe_load(front) if front.strip() else {}
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return []            # `gate_binary_page`/`gate_frontmatter` already vetoed it
+    parsed = parsed if isinstance(parsed, dict) else {}
+    out = []
+    if str(parsed.get("type", "")).strip().lower() != page_policy.ENTITY_PAGE_TYPE:
+        out.append(Finding("identity", "not-an-entity-page",
+                           f"{path} was proposed as an entity but declares "
+                           f"type {parsed.get('type')!r}",
+                           locator=path, repairable=False))
+    if "approved_by" not in parsed or str(parsed.get("approved_by") or "").strip():
+        out.append(Finding("identity", "approved-on-arrival",
+                           f"{path} does not say `approved_by: \"\"`: a proposed identity arrives "
+                           f"unconfirmed, and only a steward's decision fills that field",
+                           locator=path, repairable=False))
+    return out
+
+
 ALL_GATES = (gate_zone, gate_binary_page, gate_body_rewrite, gate_secrets, gate_pii,
-             gate_frontmatter, gate_contract, gate_anchoring)
+             gate_frontmatter, gate_contract, gate_anchoring, gate_identity)
 
 
 def run_gates(ctx: GateContext, gates=ALL_GATES) -> list[Finding]:
@@ -1337,7 +1428,7 @@ def corrective_brief(findings, *, reset: bool = True) -> str:
     """What the agent is told on its one corrective retry: the vetoes, as instructions to REPAIR.
     A brief owes three things a message does not: what the gate EXAMINED, which outcomes are
     AVAILABLE, and the SMALLEST edit reaching one. The preamble deliberately does not say "write
-    the page again", since parking is a valid repair.
+    the page again", since proposing the identity, or re-anchoring, is a valid repair.
 
     `reset`: the preamble is a CLAIM about what just happened, so it must be true. `False` for a
     caller with no worktree to reset, where "nothing you wrote is still on disk" would be a lie.

@@ -1,16 +1,24 @@
 ---
 type: entity
 title: "<Entity Name>"
-status: developing        # seed|developing|mature|canonical (canonical requires `owner`)
+status: developing        # seed|developing|mature|evergreen
 entity_type: organization # person|organization|product|tool|repository|place|project
 role: ""
 aliases: []
 created: <YYYY-MM-DD>
 updated: <YYYY-MM-DD>
 tags: [entity]
+entity: []  # THIS PAGE'S OWN registry id, once minted (M8a) — e.g. entity: ["<own-id>"]
+approved_by: ""  # who confirmed this identity; EMPTY = proposed by the librarian, waiting on a steward
 related: []
 sources: []
 ---
+
+<!-- Placeholders here are PLAIN TEXT, unlike the agent-facing templates which
+     write `[[<Page>]]` to teach the librarian where a wikilink goes. This one is COPIED
+     VERBATIM into a committed page by `stigmergy-entities create`, so a placeholder that looks
+     like a wikilink IS a dead link the moment the page lands — the contract linter said so on
+     the first cold-start mint at P2. Different consumer, different rule. -->
 
 # <Entity Name>
 
@@ -20,8 +28,8 @@ sources: []
 
 ## Facts
 
-- <fact> (Source: [[<Page>]])
+- <fact, and the page it came from once one exists>
 
 ## Connections
 
-- [[<Related Page>]] — <relationship>
+- <related page> — <relationship>

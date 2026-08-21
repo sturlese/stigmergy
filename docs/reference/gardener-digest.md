@@ -18,7 +18,7 @@ stigmergy-gardener                                  stigmergy-digest
   │    the repo checkout                             │    reused, never re-derived)
   ├─ model editorial sweep    (sweep.py)             └─ corpus deltas          (capture_queue
   │    changed-since-watermark pages +                    pages filed, review_decisions
-  │    a rotating sample of unchanged ones,               entity-proposal approvals)
+  │    a rotating sample of unchanged ones,               identity approvals)
   │    PydanticAI, no checkout, no tools
   ├─ model empty-body pass    (sweep.py)
   │    EVERY entity page in the checkout,
@@ -350,9 +350,11 @@ overrides it; 7 days on a genuine first run), two sections, in this order:
    show: no gardener run has EVER completed, or the latest one predates this window (both name what
    to run next, never silence).
 2. **Corpus deltas** — pages filed in-window (count + titles) and entity approvals in-window
-   (a count of `review_decisions` entity-proposal approvals — the approval event, which is what
-   this system can actually timestamp; the mint commit itself carries no ledger row of its own, so
-   the section counts approvals, not mints. All three approving doors write that row, the
+   (a count of `review_decisions` approvals under `identity-proposal`, plus the legacy
+   `entity-proposal` kind so a window straddling ADR 041 does not silently under-count — the
+   approval event, which is what
+   this system can actually timestamp; the commit itself carries no ledger row of its own, so
+   the section counts approvals, not writes. All four deciding doors write that row, the
    `stigmergy-entities` CLI included, so the count is complete (issue #51) — it was not before, and
    under-reported by exactly the CLI's share with nothing saying so. The rendered line says "approved" rather
    than "born" for exactly that reason: an approved-never-minted proposal would otherwise count as

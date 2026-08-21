@@ -211,11 +211,11 @@ def _code_text() -> str:
     see it would let the brief keep asking for a reason after the report stopped showing one, which
     is precisely how an automatic decision becomes an invisible one.
 
-    `pydantic_backend` joined them for issue #53. The brief documents an inbound spelling
-    (`triage.name`, folded into `names`) that BOTH outcome boundaries have to honour — the file
-    channel through `agent.parse_outcome` and the structured road through `OrdinaryTriage`. A
-    contract that could only see one of them would go green on the day the other stopped agreeing,
-    which is the whole shape of what #53 was filed about.
+    `pydantic_backend` joined them for issue #53, when the brief documented an inbound spelling
+    BOTH outcome boundaries had to honour — the file channel through `agent.parse_outcome` and
+    the structured road through the pydantic models. That spelling retired with the parks, but
+    the reason stands: a contract that could only see one boundary would go green on the day the
+    other stopped agreeing.
     """
     import inspect
     return "".join(inspect.getsource(module)
@@ -265,9 +265,19 @@ RULE_TABLE = [
     #    the difference between an ownerless page and a declared company-wide one.
     ("2. **COMPANY-WIDE, with a written reason** — when the material genuinely is about the "
      "company as", "declared company-wide scope with no written reason"),
-    # 3. PARK: a correct outcome, not a failure — and the one road that spends the submitter's
-    #    single question (`_ask_or_park`, pinned again below for the budget itself).
-    ("**This is a correct outcome, not a failure**", "TRIAGE_UNRESOLVED_ENTITY"),
+    # 3. PROPOSE: the outcome that replaced the park. The brief tells the agent an unknown name is
+    #    proposed and FILED; the marker is the ordinary flow's call into the one module that
+    #    creates the proposed pages before the diff is judged. A brief promising that a proposal
+    #    lands in the same commit is only true because this call precedes the gates.
+    ("3. **PROPOSE the entity** — when the material really is about a specific thing that is "
+     "**not in the", "identity.write_proposals("),
+    #    ...and it is a correct outcome the SUBMITTER is told about: `proposals_clause` is the
+    #    sentence in the filed report that says the entity was created unconfirmed. A brief that
+    #    called proposing correct while the report hid it would make governance invisible again.
+    ("**Proposing is a correct", "proposals_clause"),
+    #    A declined identity stays declined: the brief promises a re-proposal is refused, and
+    #    `_declined_identity_ids` is the ledger read that makes the refusal real.
+    ("**A name a steward has already declined is not proposed again.**", "_declined_identity_ids"),
     # The server-owned field list the agent must never write, and the function that writes them.
     ("`owner`, `submitted_by`, `verification`, `acl`, `status`, `as_of`, `content_hash`, `id`, "
      "`entity`.", "stamp_server_fields"),
@@ -288,69 +298,35 @@ RULE_TABLE = [
     # Edits are DECLARED and performed by code — the split ADR 015 §3 made and this flow kept.
     ("You never write to them. You declare the edit and the worker performs it.", "apply_declared"),
     # ...and an entity page is not editable, whatever it was anchored to.
-    ("So do not declare an edit on the", "outside-lane"),
-    # The one-ask budget: the brief promises at most one question ever, and `_ask_or_park` is the
-    # single place that decides whether this park spends it. The marker is the DEFINITION, not the
-    # bare name — a bare-name marker is satisfied by any mention, including a comment or a call
-    # that no longer decides anything. (It used to be stated as "`_ask_or_park` is a prefix of
-    # `_ask_or_park_multi`"; the plural sibling was deleted by the one-shape collapse, and the
-    # reason for pinning the definition survives it unchanged.)
-    ("**The submitter is asked at most once, ever.**", "def _ask_or_park("),
-    # The two park kinds and the field each one's report cannot be written without — now TWO rows,
-    # because issue #32 rewrote the sentence that used to state both on one line. The
-    # `unresolved-entity` half grew `names` beside `name` and the `unsupported-type` half moved onto
-    # the next line of the real file; a phrase cannot cross that break (see this table's header), so
-    # re-aiming the surviving row at only the first line would have DROPPED the second kind from the
-    # contract while the row went green. Each half keeps its own live marker: the fixed set of kinds
-    # this flow accepts, and the map that says which field each kind's report cannot be written
-    # without (`TRIAGE_REQUIRED_FIELD[triage["kind"]]`, the lookup `parse_outcome` performs).
-    # RE-POINTED by issue #53, which made `names` the primary spelling and rewrapped this sentence:
-    # both halves now sit on ONE line where they used to sit on two. They stay TWO rows anyway, for
-    # the reason above — a single row aimed at the joint phrase would go green while saying nothing
-    # about whichever kind fell outside its substring.
-    ('`kind` is `"unresolved-entity"` (with `names`, a list even for one) or `"unsupported-type"` '
-     "(with", "TRIAGE_KINDS"),
-    ("`judged_type`) — both the kind and its field are required, because",
-     "TRIAGE_REQUIRED_FIELD"),
-    # ── issue #32: EVERY unresolved name, and never joined into one ───────────────────────────
-    # The rule the brief change exists for, pinned on both of the places the brief now states it.
+    ("declare an edit on the entity page you anchored to, nor on one you are proposing.", "outside-lane"),
+    # ── the ONE decision, and the shape of a proposal ─────────────────────────────────────────
+    # The park rows that stood here (`TRIAGE_UNRESOLVED_ENTITY`, `def _ask_or_park(`, the two
+    # park kinds, `_unresolved_names`, the legacy `name` fold) are GONE with the parks: the brief
+    # no longer states those rules and the code no longer has the markers. Each was replaced by
+    # the row pinning what took its place, not deleted into silence.
     #
-    # 1. The plural park itself. `_unresolved_names` is the ONE reader of a park's declaration, and
-    #    it returns every name the account declared from EITHER shape — which is precisely "name
-    #    every one of them in `names`" on the code side. A brief that kept promising the plural
-    #    field while that reader went back to `parked.get("name")` is issue #32 reopening.
-    ("`names` is a LIST, always — one entry when one thing is unregistered, and when the material "
-     "leaves", "_unresolved_names"),
-    # ── issue #53: the legacy singular spelling, tolerated on BOTH outcome boundaries ──────────
-    # The brief now promises that `"name": "Acme Corp"` is still read as a one-entry list. Pinned
-    # to the LINE THAT PERFORMS the fold, never to the validator's name: a marker satisfied by a
-    # method merely existing is the failure mode this table has already hit twice, and a validator
-    # that had stopped folding would still be a validator. `agent.parse_outcome`'s own half of the
-    # same tolerance is covered by the `_unresolved_names` row above, which reads either shape.
-    ("accepted and read as a one-entry list, so an older account is never refused over the "
-     "spelling —", 'return {**data, "names": [single]}'),
-    # 2. The `## Never` bullet, which is the same rule stated as a prohibition ("park only SOME, or
-    #    join several into one"). Its marker is the ORDINARY flow's own call into the park router,
-    #    as a FULL CALL LINE rather than a bare function name.
-    #
-    #    **Re-pointed by the one-shape collapse, and the re-point is the row's own subject.** The
-    #    marker used to be `_ask_or_park_multi(item, deps, names=names, ...)` — the plural sibling
-    #    the ordinary flow had to reach to name a second entity. There is no sibling now: one
-    #    router serves both counts and both flows, so what this row pins is `_triage` handing it
-    #    the NAMES LIST, which is "one ask names every one of them" on the code side. Parking on
-    #    only some of them would mean not passing the list.
-    #
-    #    Why the full call line and not `def _ask_or_park(`: the definition already has its own row
-    #    above (the one-ask budget), and a marker satisfied by the function merely EXISTING would
-    #    have been green throughout issue #32 — the plural machinery existed the whole time; what
-    #    was missing was the ordinary flow routing into it. Verified against the concatenated
-    #    source before use: this string occurs exactly once, it is not a substring of the
-    #    definition line (`def _ask_or_park(item: dict, ...` — `item:` not `item,`), and it does
-    #    not match `_triage_meeting`'s call, which wraps after `notes=notes,` and so ends in a
-    #    comma where this one ends in a paren.
-    ("- Park only SOME of a capture's unresolved names, or join several into one — one ask names "
-     "every",
-     "_ask_or_park(item, deps, names=names, agent_rationale=rationale, notes=notes)"),
+    # `file` is the only decision. A brief that still offered a second value would be promising
+    # an outcome the boundary refuses by shape — the exact drift that lost captures to "resolve by
+    # hand" — and the marker is the closed tuple the boundary validates against.
+    ('- **`decision`** — `"file"`, always.', 'DECISIONS = ("file",)'),
+    # A proposal is a complete identity, and three of its fields cannot be empty. The marker is
+    # the shape code the boundary adds when one is missing — the refusal, not the field list,
+    # because a list can exist while nothing reads it.
+    ("Three of them are required — `name`, `entity_type`, `summary` — and an account missing one "
+     "is", "missing-field"),
+    # The second thing an account can propose: a spelling for a REGISTERED entity. Pinned to the
+    # field tuple the boundary parses, which is the only place that shape is defined.
+    ("- **`new_aliases`** — spellings the material uses for REGISTERED entities that the registry "
+     "does not", "NEW_ALIAS_FIELDS"),
+    # The bound the brief states in words ("more than ten new things is several captures") and the
+    # boundary enforces as a refusal rather than a silent truncation.
+    ("things is several captures, and code refuses the account rather than registering a list.",
+     "MAX_NEW_ENTITIES"),
+    # The `## Never` bullet — every unregistered name, one entry each — pinned to the parser that
+    # reads the list: a brief promising every name while the parser read one would be the old
+    # issue #32 under a new field name.
+    ("- Propose only SOME of a capture's unregistered names, or fold several into one entity — "
+     "one entry", "_parse_new_entities"),
 
     # ── what the worker HANDS the agent: four fields, four producers ──────────────────────────
     # The brief promises a context the agent no longer has a tool to go and get. Each promise is

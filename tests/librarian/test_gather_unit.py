@@ -112,15 +112,15 @@ def test_an_entity_the_material_names_arrives_with_its_page(tmp_path):
     resolved id — the fact, rather than a filename convention that would be a fourth place knowing
     where entity pages live.
     """
-    registry = _registry(tmp_path, {"acme": {"name": "Acme Corp", "aliases": ["Acme"]}})
+    registry = _registry(tmp_path, {"acme-corp": {"name": "Acme Corp", "aliases": ["Acme"]}})
     _write(tmp_path, "wiki/entities/Acme Corp.md",
-           _page("Acme Corp", page_type="entity", entity="acme",
+           _page("Acme Corp", page_type="entity", entity="acme-corp",
                  body="The haulage customer."))
 
     result = _gather(tmp_path, registry, "A renewal call with Acme Corp went well.")
 
     assert [(e.entity_id, e.name, e.page_path) for e in result.entities] == [
-        ("acme", "Acme Corp", "wiki/entities/Acme Corp.md")]
+        ("acme-corp", "Acme Corp", "wiki/entities/Acme Corp.md")]
     assert result.entities[0].aliases == ("Acme",)
 
 
@@ -129,12 +129,12 @@ def test_a_registered_entity_with_no_page_yet_is_surfaced_with_an_empty_path(tmp
     steward flow, and its page is written separately. The agent must be able to tell "registered,
     no page yet" from "this entity does not exist" — the first is an anchor it may declare, the
     second is a park. One empty string is the whole difference, so it is pinned."""
-    registry = _registry(tmp_path, {"acme": {"name": "Acme Corp", "aliases": []}})
+    registry = _registry(tmp_path, {"acme-corp": {"name": "Acme Corp", "aliases": []}})
     _write(tmp_path, "wiki/notes/Unrelated.md", _page("Unrelated", body="Nothing to do with it."))
 
     result = _gather(tmp_path, registry, "Acme Corp signed.")
 
-    assert [e.entity_id for e in result.entities] == ["acme"]
+    assert [e.entity_id for e in result.entities] == ["acme-corp"]
     assert result.entities[0].page_path == ""
 
 
@@ -150,7 +150,7 @@ def test_an_unknown_entity_yields_no_entities_at_all_and_the_flow_parks_on_that(
     "Halcyon Grid" shares no token with anything registered. The near-miss cases below are the other
     half of the same rule; between them they say where the line is.
     """
-    registry = _registry(tmp_path, {"acme": {"name": "Acme Corp", "aliases": ["Acme"]}})
+    registry = _registry(tmp_path, {"acme-corp": {"name": "Acme Corp", "aliases": ["Acme"]}})
     _write(tmp_path, "wiki/notes/Existing.md", _page("Existing", body="Acme Corp material."))
 
     result = _gather(tmp_path, registry, "Halcyon Grid asked about weekend cover.")
@@ -163,12 +163,12 @@ def test_an_alias_the_material_uses_resolves_to_the_canonical_entity(tmp_path):
     one here. A capture that says "Acme" must reach the agent as the entity registered under
     `Acme Corp`, with the canonical name attached — otherwise the agent anchors to a spelling the
     gate will then refuse."""
-    registry = _registry(tmp_path, {"acme": {"name": "Acme Corp", "aliases": ["Acme", "ACME Ltd"]}})
+    registry = _registry(tmp_path, {"acme-corp": {"name": "Acme Corp", "aliases": ["Acme", "ACME Ltd"]}})
     _write(tmp_path, "wiki/notes/N.md", _page("N", body="filler"))
 
     result = _gather(tmp_path, registry, "Spoke to Acme about the renewal.")
 
-    assert [(e.entity_id, e.name) for e in result.entities] == [("acme", "Acme Corp")]
+    assert [(e.entity_id, e.name) for e in result.entities] == [("acme-corp", "Acme Corp")]
 
 
 def test_a_name_that_only_appears_inside_a_longer_word_is_not_a_mention(tmp_path):
@@ -205,7 +205,7 @@ def test_an_entity_page_with_no_entity_frontmatter_is_still_found_by_its_title(t
     a real state in a repo that predates the stamp. Resolved through the REGISTRY (the title is
     handed to `canonical_id`), never through a `wiki/entities/<Name>.md` filename rule, which would
     be a fourth place that knows where entity pages live."""
-    registry = _registry(tmp_path, {"acme": {"name": "Acme Corp", "aliases": []}})
+    registry = _registry(tmp_path, {"acme-corp": {"name": "Acme Corp", "aliases": []}})
     _write(tmp_path, "wiki/entities/Acme Corp.md",
            _page("Acme Corp", page_type="entity", body="An older page, never stamped."))
 
@@ -220,14 +220,14 @@ def test_entities_come_back_ordered_by_id_and_never_repeated(tmp_path):
     entries for one entity."""
     registry = _registry(tmp_path, {
         "zeta": {"name": "Zeta Works", "aliases": []},
-        "acme": {"name": "Acme Corp", "aliases": ["Acme"]},
+        "acme-corp": {"name": "Acme Corp", "aliases": ["Acme"]},
     })
     _write(tmp_path, "wiki/notes/N.md", _page("N", body="filler"))
 
     result = _gather(tmp_path, registry,
                      "Zeta Works and Acme Corp met; Acme brought the numbers.")
 
-    assert [e.entity_id for e in result.entities] == ["acme", "zeta"]
+    assert [e.entity_id for e in result.entities] == ["acme-corp", "zeta"]
 
 
 # ── the NEAR miss: the direction whole-token containment cannot reach (issue #77) ──────────────
@@ -354,7 +354,7 @@ def test_a_named_entity_is_never_displaced_by_a_near_miss_when_the_list_is_cut(t
 def test_an_uncut_entity_list_reports_its_own_length_as_the_total(tmp_path):
     """`link_names_total`'s rule, applied to the entity block: "there is more" and "there is
     nothing" have to stay different claims, and on an ordinary capture they are the same number."""
-    registry = _registry(tmp_path, {"acme": {"name": "Acme Corp", "aliases": []}})
+    registry = _registry(tmp_path, {"acme-corp": {"name": "Acme Corp", "aliases": []}})
     _write(tmp_path, "wiki/notes/N.md", _page("N", body="filler"))
 
     result = _gather(tmp_path, registry, "Acme Corp renewed.")
@@ -429,12 +429,12 @@ def test_the_whole_gather_is_reproducible_when_the_filesystem_order_is_not(tmp_p
     equality IS the claim, and asserting it that way means a field added later is covered the day
     it is added.
     """
-    registry = _registry(tmp_path, {"acme": {"name": "Acme Corp", "aliases": []}})
+    registry = _registry(tmp_path, {"acme-corp": {"name": "Acme Corp", "aliases": []}})
     for name in ("Alpha", "Bravo", "Charlie"):
         _write(tmp_path, f"wiki/notes/{name}.md",
                _page(name, body="Acme Corp renewal window notes.", related=("Acme Corp",)))
     _write(tmp_path, "wiki/entities/Acme Corp.md",
-           _page("Acme Corp", page_type="entity", entity="acme", body="The customer."))
+           _page("Acme Corp", page_type="entity", entity="acme-corp", body="The customer."))
 
     first = _gather(tmp_path, registry, "Acme Corp renewal window")
     for index, name in enumerate(("Charlie", "Alpha", "Bravo")):
@@ -450,9 +450,9 @@ def test_the_entity_pages_own_page_is_not_also_offered_as_a_candidate(tmp_path):
     it again as a page to "overlap with" would invite the one edit the brief forbids outright — a
     declared edit on an entity page — and would spend an excerpt slot re-showing something the
     agent already has."""
-    registry = _registry(tmp_path, {"acme": {"name": "Acme Corp", "aliases": []}})
+    registry = _registry(tmp_path, {"acme-corp": {"name": "Acme Corp", "aliases": []}})
     _write(tmp_path, "wiki/entities/Acme Corp.md",
-           _page("Acme Corp", page_type="entity", entity="acme",
+           _page("Acme Corp", page_type="entity", entity="acme-corp",
                  body="Acme Corp renewal window and haulage."))
 
     result = _gather(tmp_path, registry, "Acme Corp renewal window")
@@ -711,13 +711,13 @@ def test_the_structural_payload_carries_only_what_the_server_owns(tmp_path):
     entity reached the list, and a model must be able to tell "the material spells this" from "the
     material spells part of this" without that distinction travelling as captured text.
     """
-    registry = _registry(tmp_path, {"acme": {"name": "Acme Corp", "aliases": ["Acme"]}})
+    registry = _registry(tmp_path, {"acme-corp": {"name": "Acme Corp", "aliases": ["Acme"]}})
     _write(tmp_path, "wiki/entities/Acme Corp.md",
-           _page("Acme Corp", page_type="entity", entity="acme"))
+           _page("Acme Corp", page_type="entity", entity="acme-corp"))
 
     payload = gather.structural_payload(_gather(tmp_path, registry, "Acme Corp renewed."))
 
-    assert payload == {"entities": [{"id": "acme", "name": "Acme Corp", "aliases": ["Acme"],
+    assert payload == {"entities": [{"id": "acme-corp", "name": "Acme Corp", "aliases": ["Acme"],
                                      "page": "wiki/entities/Acme Corp.md",
                                      "match": gather.MATCH_NAMED}],
                        "entities_total": 1}
@@ -727,7 +727,7 @@ def test_an_entity_with_no_page_renders_as_null_rather_than_as_an_empty_string(t
     """`""` and `null` are not the same claim to a model reading JSON: an empty string looks like a
     path that failed to render, where `null` says there is no page. The distinction is what the
     agent uses to decide between linking and asking."""
-    registry = _registry(tmp_path, {"acme": {"name": "Acme Corp", "aliases": []}})
+    registry = _registry(tmp_path, {"acme-corp": {"name": "Acme Corp", "aliases": []}})
 
     payload = gather.structural_payload(_gather(tmp_path, registry, "Acme Corp renewed."))
 
@@ -759,9 +759,9 @@ def test_the_whole_content_half_is_fenced_when_it_is_rendered_into_a_prompt(tmp_
     Both halves are checked, not only the fenced one: the entity ids have to be OUTSIDE the fence,
     or the agent is being told its own registry is untrusted data.
     """
-    registry = _registry(tmp_path, {"acme": {"name": "Acme Corp", "aliases": []}})
+    registry = _registry(tmp_path, {"acme-corp": {"name": "Acme Corp", "aliases": []}})
     _write(tmp_path, "wiki/entities/Acme Corp.md",
-           _page("Acme Corp", page_type="entity", entity="acme"))
+           _page("Acme Corp", page_type="entity", entity="acme-corp"))
     _write(tmp_path, "wiki/notes/Renewal.md",
            _page("Renewal", body="The renewal window is open for Acme Corp."))
     gathered = _gather(tmp_path, registry, "Acme Corp renewal window")
@@ -771,7 +771,7 @@ def test_the_whole_content_half_is_fenced_when_it_is_rendered_into_a_prompt(tmp_
     unfenced, _, rest = block.partition(opened)
     fenced = rest.split(closed, 1)[0]
 
-    assert '"acme"' in unfenced, "the server-owned entity ids were pushed inside the fence"
+    assert '"acme-corp"' in unfenced, "the server-owned entity ids were pushed inside the fence"
     assert "wiki/notes/Renewal.md" in fenced
     assert "The renewal window is open for Acme Corp." in fenced
 
@@ -988,14 +988,14 @@ def test_the_unicode_line_separators_cannot_split_the_unfenced_structural_block(
     going through `structural_payload`.
     """
     hostile_name = "Acme Corp"
-    registry = _registry(tmp_path, {"acme": {"name": hostile_name, "aliases": ["A C"]}})
+    registry = _registry(tmp_path, {"acme-corp": {"name": hostile_name, "aliases": ["A C"]}})
     _write(tmp_path, f"wiki/entities/{hostile_name}.md",
-           _page(hostile_name, page_type="entity", entity="acme"))
+           _page(hostile_name, page_type="entity", entity="acme-corp"))
 
     block = agent_module.render_gathered(_gather(tmp_path, registry, f"{hostile_name} renewed"))
     structural = block.split(_fence_delimiters()[0], 1)[0]
 
-    assert '"acme"' in structural, "the entity did not resolve — this test proved nothing"
+    assert '"acme-corp"' in structural, "the entity did not resolve — this test proved nothing"
     assert " " not in structural and " " not in structural, (
         "a Unicode line separator survived into the unfenced structural block, where it splits "
         "the one line a model reads it as")
@@ -1006,9 +1006,9 @@ def test_a_filename_with_two_consecutive_spaces_survives_unchanged(tmp_path):
     `" ".join(value.split())` would have neutralized the separators too — and would silently
     rewrite a filename that legitimately carries two spaces into one that names no file, which the
     agent would then be told it may link to."""
-    registry = _registry(tmp_path, {"acme": {"name": "Acme  Corp", "aliases": []}})
+    registry = _registry(tmp_path, {"acme-corp": {"name": "Acme  Corp", "aliases": []}})
     _write(tmp_path, "wiki/entities/Acme  Corp.md",
-           _page("Acme  Corp", page_type="entity", entity="acme"))
+           _page("Acme  Corp", page_type="entity", entity="acme-corp"))
 
     payload = gather.structural_payload(_gather(tmp_path, registry, "Acme  Corp renewed"))
 
@@ -1084,7 +1084,8 @@ def test_a_block_whose_constant_members_alone_blow_the_budget_says_the_list_is_e
 
     "the top of the ranking" is not true of an empty list: a model reasoning from one deserves to
     know the difference between "this brain holds nothing close to your material" and "what it
-    holds did not fit", because the first is a reason to file and the second is a reason to park.
+    holds did not fit", because the first is a reason to propose what the material names and the
+    second a reason to judge overlap from the names alone before proposing.
     """
     registry = _registry(tmp_path, {})
     # ~100 characters each, so the 400 the vocabulary is capped at exceed the whole-block ceiling
@@ -1104,14 +1105,16 @@ def test_a_block_whose_constant_members_alone_blow_the_budget_says_the_list_is_e
     assert gathered.candidates, "nothing was gathered — this test proved nothing"
     assert payload["candidates"] == []
     assert "were left out: their excerpts alone exceed" in block
-    assert "park if you cannot" in block, (
+    assert agent_module.GATHERED_ALL_TRIMMED_NO_TOOLS in block, (
         "an all-trimmed block must tell the agent what to do with no candidates at all")
+    assert "park" not in agent_module.GATHERED_ALL_TRIMMED_NO_TOOLS, (
+        "the brief offered parking as an outcome after ADR 041 retired it")
 
 
 def test_an_ordinary_gather_renders_no_trim_sentence_at_all(tmp_path):
     """The benign twin, and the one that would be worst to get wrong: a trim sentence on a block
     that was never trimmed tells the model its context is incomplete when it is not, and a model
-    that believes it is missing candidates parks captures it should have filed."""
+    that believes it is missing candidates proposes twins of entities it should have anchored to."""
     registry = _registry(tmp_path, {})
     for index in range(3):
         _write(tmp_path, f"wiki/notes/Note {index}.md",

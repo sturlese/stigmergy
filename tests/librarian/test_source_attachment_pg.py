@@ -31,7 +31,6 @@ what the Slack door does after that seam.
 """
 import dataclasses
 import hashlib
-import json
 import os
 
 from stigmergy.capture import queue, schema
@@ -173,18 +172,18 @@ class _UnresolvableAnchorAgent:
         return run
 
 
-def test_an_unearned_anchor_claim_still_parks_with_the_attachment_on(rig, clean_queue):
+def test_an_unearned_anchor_claim_still_fails_with_the_attachment_on(rig, clean_queue):
+    """Nothing committed — no source page, no synthesis, no partial set: a refusal with the
+    attachment on is a refusal of the whole set."""
     env, base_deps = rig
     before = support.branch_sha(env.bare)
     deps = dataclasses.replace(base_deps, agent=_UnresolvableAnchorAgent(base_deps.agent))
 
     item, result = _file(clean_queue, deps, THREAD_MATERIAL, hints=SLACK_HINTS)
 
-    assert result.status == schema.TRIAGE
+    assert result.status == schema.FAILED, result.report.get("summary")
     assert result.result_ref == ""
-    assert "Ghost Company Inc" in result.report["open_question"]
-    assert support.branch_sha(env.bare) == before        # nothing committed — no source page,
-    assert json.dumps(result.report).count(schema.FAILED) == 0     # no synthesis, no partial set
+    assert support.branch_sha(env.bare) == before
 
 
 def test_a_company_wide_slack_capture_files_with_the_citation_and_empty_entity(rig, clean_queue):
@@ -199,16 +198,19 @@ def test_a_company_wide_slack_capture_files_with_the_citation_and_empty_entity(r
     assert "-thread]]" in syn                       # cited, whatever the derived title slug
 
 
-# ── a parked capture writes nothing — the attachment must not leak a page before triage ─────────
-def test_a_parked_slack_capture_leaves_no_source_page_behind(rig, clean_queue):
+# ── a thread about a new name lands whole: the thread, the note AND the proposed entity ─────────
+def test_a_slack_capture_about_a_new_name_files_the_thread_the_note_and_the_proposed_entity(
+        rig, clean_queue):
+    """OLD BEHAVIOUR: parked with no source page written. The set lands in one commit now — the
+    verbatim thread, the synthesis anchored to the newborn entity, the entity page for a steward."""
     env, deps = rig
-    before = support.branch_sha(env.bare)
     item, result = _file(clean_queue, deps,
-                         f"DOUBLE:triage-entity=Umbrella Corp\n{THREAD_MATERIAL}",
+                         f"DOUBLE:propose=Umbrella Corp\n{THREAD_MATERIAL}",
                          hints=SLACK_HINTS)
-    assert result.status == schema.NEEDS_INPUT
-    assert support.branch_sha(env.bare) == before
-    assert SOURCE_PATH not in support.all_ever_committed_paths(env.bare)
+    assert result.status == schema.FILED, result.report.get("summary")
+    _, sha = result.result_ref.rsplit("@", 1)
+    changed = support.changed_paths(env.bare, sha)
+    assert SOURCE_PATH in changed and "wiki/entities/Umbrella Corp.md" in changed
 
 
 # ── the corrective retry composes with the attachment: one set, filed once ──────────────────────
@@ -254,7 +256,7 @@ def test_a_long_thread_splits_into_slack_parts_through_the_shared_writer():
     it copies the material verbatim into the synthesis body, so any material long enough to split
     the source page also trips the linter's 150-line cap on the synthesis — a limit of the double,
     not of the flow; the e2e above proves the single-part set through the same code path.)"""
-    filler = "\n".join(f"message line about the acme renewal, entry {chr(97 + n % 26)}"
+    filler = "\n".join(f"message line about the acme-corp renewal, entry {chr(97 + n % 26)}"
                        for n in range(200))
     parts = processing._build_source_parts(
         SOURCE_STEM, "Acme renewal pricing — thread", f"Acme renewal pricing\n{filler}\n",

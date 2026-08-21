@@ -30,7 +30,7 @@ EXPECTATIONS = ROOT / "evals" / "filing" / "expected" / "expectations.json"
 EVALS_README = ROOT / "evals" / "README.md"
 EVALS_INDEX = ROOT / "evals" / "index.md"
 
-# The per-facet denominators of the golden set as it stands: 10 captures, 12 scored phases.
+# The per-facet denominators of the golden set as it stands: 14 captures, 14 scored phases.
 # Pinned rather than derived, so ADDING A CAPTURE fails this test — which is the intent. A new
 # capture that names a facet changes that facet's denominator, and scores recorded before and
 # after are then comparable per facet but not per run (`evals/README.md`'s growth protocol). That
@@ -52,12 +52,23 @@ EVALS_INDEX = ROOT / "evals" / "index.md"
 #
 # MOVED for issue #77, and counted by hand off the expectations file again rather than copied from
 # the runner: F11-F14 are four ordinary single-phase filings, each naming status/type/folder/anchor
-# plus the two cost axes, so exactly those six facets gain four apiece and the meeting, park, edits
-# and reason denominators do not move at all. Scores recorded before and after remain comparable
-# per FACET and are not comparable per run.
-DENOMINATORS = {"status": 16, "reason": 1, "type": 13, "folder": 13, "anchor": 11, "edits": 1,
-                "park_question": 2, "decisions": 2, "reuse": 1, "attempts": 12, "bounces": 12}
-CAPTURES, PHASES = 14, 16
+# plus the two cost axes, so exactly those six facets gain four apiece and the meeting, edits and
+# reason denominators do not move at all. Scores recorded before and after remain comparable per
+# FACET and are not comparable per run.
+#
+# MOVED again for ADR 041, counted by hand a third time. Four numbers changed and each is a fact
+# about the redesign, not an edit made to let something pass:
+#
+#   * `status` 16 -> 14 — the two ask-back captures stopped being two phases each. There is no
+#     park, no reply and no re-file, so a capture is one scored moment.
+#   * `anchor` 11 -> 10 — F02's surviving phase asserts no anchor. Its page anchors to an entity
+#     PROPOSED in the same commit, whose id is `slugify` of a name the agent chose, so the id would
+#     score the spelling. `proposals` scores the judgment instead, and loosely.
+#   * `park_question` and `reuse` are GONE with the states they measured, and `proposals` inherits
+#     the former's denominator of 2 from the same two captures.
+DENOMINATORS = {"status": 14, "reason": 1, "type": 13, "folder": 13, "anchor": 10, "edits": 1,
+                "proposals": 2, "decisions": 2, "attempts": 12, "bounces": 12}
+CAPTURES, PHASES = 14, 14
 
 
 @pytest.fixture(scope="module")
@@ -78,39 +89,32 @@ def _perfect(expect: dict) -> dict:
                 if facet in expect}
     if "edits" in expect:
         observed["edits"] = list(reversed(expect["edits"]))
-    if "park_question" in expect:
-        observed["park_question"] = list(expect["park_question"])
+    if "proposals" in expect:
+        # Padded on purpose, the way a real proposal legitimately differs from the expectation:
+        # the agent proposes `the Halcyon Grid programme` and the yardstick names `Halcyon Grid`.
+        # A scorer that quietly became literal fails right here rather than on a paid run.
+        observed["proposals"] = [f"the {name} programme" for name in expect["proposals"]]
     if "decisions" in expect:
         observed["decisions"] = [
             {"path": f"wiki/decisions/{decision['title']} agreed on the call.md",
              "anchor": decision.get("anchor", {"kind": "company", "ids": []})}
             for decision in reversed(expect["decisions"])]
-    if "reuse" in expect:
-        observed["reuse"] = {"preserved": expect["reuse"]["decisions_preserved"],
-                             "reused": False, "redistilled": True, "dropped": []}
     return observed
 
 
 def _phases(entries: list) -> list:
     """Every scored phase of the golden set, observed perfectly — built through the runner's own
-    `_phase`, the same composer `_drive` uses on a real run."""
-    out = []
-    for entry in entries:
-        parks = "reply" in entry
-        out.append(run_filing._phase(entry["id"], "park" if parks else "only",
-                                     entry["expect"], _perfect(entry["expect"])))
-        if parks:
-            out.append(run_filing._phase(entry["id"], "after_reply", entry["after_reply"],
-                                         _perfect(entry["after_reply"])))
-    return out
+    `_phase`, the same composer `_drive` uses on a real run. One per entry: a capture never waits
+    on a person, so it is never scored twice (ADR 041)."""
+    return [run_filing._phase(entry["id"], "only", entry["expect"], _perfect(entry["expect"]))
+            for entry in entries]
 
 
 def _block_naming(entries: list, facet: str) -> tuple:
     """The first expectation block in the golden set that names `facet`, with its capture id."""
     for entry in entries:
-        for block in [entry["expect"]] + ([entry["after_reply"]] if "after_reply" in entry else []):
-            if facet in block:
-                return entry["id"], block
+        if facet in entry["expect"]:
+            return entry["id"], entry["expect"]
     raise AssertionError(f"no expectation in the golden set names {facet!r}")
 
 
@@ -147,9 +151,9 @@ def test_the_score_of_a_facet_does_not_depend_on_the_order_of_its_lists(entries)
 
 def test_a_capture_is_scored_on_exactly_the_facets_its_expectation_names(entries):
     for entry in entries:
-        for block in [entry["expect"]] + ([entry["after_reply"]] if "after_reply" in entry else []):
-            scored = run_filing.score_phase(block, _perfect(block))
-            assert set(scored) == set(block) & set(run_filing.FACETS), entry["id"]
+        block = entry["expect"]
+        scored = run_filing.score_phase(block, _perfect(block))
+        assert set(scored) == set(block) & set(run_filing.FACETS), entry["id"]
 
 
 def test_a_facet_an_expectation_is_silent_about_is_absent_rather_than_false(entries):
@@ -218,7 +222,9 @@ def test_one_facet_collapsing_leaves_every_other_facet_untouched(entries):
 # ── AC7: sensitivity, and the benign twin that keeps it honest ─────────────────────────────────
 
 MUTATIONS = {
-    "status": lambda o: dict(o, status=schema.TRIAGE),
+    # `triage` until ADR 041 retired it. A capture reaches one of three terminal states now, so the
+    # mutation that proves this facet discriminates has to be one of the OTHER two.
+    "status": lambda o: dict(o, status=schema.REJECTED),
     "reason": lambda o: dict(o, reason=schema.REASON_SECRET),
     "type": lambda o: dict(o, type="concept"),
     "folder": lambda o: dict(o, folder="wiki/concepts"),
@@ -229,12 +235,12 @@ MUTATIONS = {
     # one is forgiven by design now (containment — `_edits_match`), so the mutation that proves
     # this facet still discriminates has to remove the one edit the material actually owed.
     "edits": lambda o: dict(o, edits=["wiki/decisions/Warehouse Slotting Policy.md"]),
-    "park_question": lambda o: dict(o, park_question=["Northwind Freight"]),
+    # The proposal a backend makes when it did not recognise the unregistered name for what it is:
+    # a plausible identity, taken from the corpus's own registry, rather than nonsense.
+    "proposals": lambda o: dict(o, proposals=["Northwind Freight"]),
     "decisions": lambda o: dict(o, decisions=[*o["decisions"],
                                               {"path": "wiki/decisions/A third decision.md",
                                                "anchor": {"kind": "company", "ids": []}}]),
-    "reuse": lambda o: dict(o, reuse={"preserved": False, "reused": False, "redistilled": True,
-                                      "dropped": ["a decision that went missing"]}),
     "attempts": lambda o: dict(o, attempts=o["attempts"] + 1),
     "bounces": lambda o: dict(o, bounces=o["bounces"] + 1),
 }
@@ -329,18 +335,14 @@ def test_the_same_page_edited_twice_still_satisfies_the_expectation_once():
                                   {"edits": ["a.md", "a.md"]})["edits"] is True
 
 
-def test_a_backend_that_never_parked_scores_the_after_reply_phase_as_a_miss(entries):
-    """`_drive` records the second phase of a park as a MISS rather than skipping it. A vanishing
-    phase would shrink its facets' denominators and quietly raise the score of a backend that
-    never asked — the failure mode that turns 'refuses to ask' into 'files everything well'."""
-    parking = [e for e in entries if "after_reply" in e]
-    assert parking, "the golden set has stopped measuring the ask-back loop"
-    for entry in parking:
-        block = entry["after_reply"]
-        scored = run_filing.score_phase(block, {"status": "",
-                                                "note": "never parked, so no reply was possible"})
-        assert set(scored) == set(block) & set(run_filing.FACETS), entry["id"]
-        assert not any(scored.values()), entry["id"]
+# **DELETED with the phase it guarded (ADR 041):**
+# `test_a_backend_that_never_parked_scores_the_after_reply_phase_as_a_miss`. `_drive` used to record
+# the second phase of a park as a MISS rather than skipping it, because a vanishing phase would
+# shrink its facets' denominators and quietly raise the score of a backend that never asked. There
+# is no second phase to vanish: one capture is one phase, and the denominator it fills is pinned in
+# `DENOMINATORS` and refused on drift by `_check_set`. The rule the test carried — a phase that
+# cannot be measured is a MISS and never an absence — now lives one level up, in
+# `_check_set`'s refusal of the retired `reply`/`after_reply` keys.
 
 
 # ── the anchor, which is four different answers and not two ───────────────────────────────────
@@ -462,28 +464,43 @@ def test_the_number_fold_is_reachable_through_the_matcher_that_uses_it():
         "review", "wiki/decisions/A shared checklist of what the reviews cover.md") is True
 
 
-def test_a_park_question_is_matched_against_the_whole_question_the_report_asked():
-    """The report renders one sentence naming every unresolved name; scoring the list shape would
-    measure `report.py`'s wording instead of whether the right thing was unresolved."""
+def test_a_proposal_is_matched_on_the_name_however_the_agent_qualified_it():
+    """The whole reason this facet scores NAMES and the expectation asserts no anchor beside it: an
+    identity proposed as `the Halcyon Grid pilot` is the same judgment as one proposed as `Halcyon
+    Grid`, and their registry ids — `slugify(name)` — are two different strings. Scoring the id
+    would mark a correct proposal down for the qualifier the agent read off the material."""
     assert run_filing.score_phase(
-        {"park_question": ["Halcyon Grid"]},
-        {"park_question": ["the Halcyon Grid pilot"]})["park_question"] is True
+        {"proposals": ["Halcyon Grid"]},
+        {"proposals": ["the Halcyon Grid pilot"]})["proposals"] is True
 
 
 @pytest.mark.parametrize("observed", [[], ["Northwind Freight"], ["Halcyon"]])
-def test_a_park_that_asked_about_the_wrong_thing_or_nothing_is_a_miss(observed):
-    assert run_filing.score_phase({"park_question": ["Halcyon Grid"]},
-                                  {"park_question": observed})["park_question"] is False
+def test_a_filing_that_proposed_the_wrong_identity_or_none_at_all_is_a_miss(observed):
+    """The three ways this facet has to be able to say no, and the first is the one the redesign
+    exists to catch: `[]` is a filing that anchored the capture somewhere and gave the unregistered
+    name no identity at all — the shortcut that used to be a park and is now a silent mis-anchor."""
+    assert run_filing.score_phase({"proposals": ["Halcyon Grid"]},
+                                  {"proposals": observed})["proposals"] is False
 
 
-def test_a_park_expectation_naming_every_unresolved_name_needs_all_of_them_asked():
-    """A meeting parks the WHOLE capture in ONE ask naming every unresolved name — a partial page
-    set is worse than an honest park, so a question that dropped one of two names is a miss."""
-    expect = {"park_question": ["Project Wren", "Halcyon Grid"]}
-    assert run_filing.score_phase(expect, {"park_question": ["Project Wren"]})["park_question"] \
-        is False
+def test_an_expectation_naming_two_identities_needs_BOTH_proposed():
+    """A capture naming two unregistered things files ONE commit that proposes both or neither —
+    a page anchored to one of them and silent about the other is a half-filed identity zone."""
+    expect = {"proposals": ["Project Wren", "Halcyon Grid"]}
+    assert run_filing.score_phase(expect, {"proposals": ["Project Wren"]})["proposals"] is False
     assert run_filing.score_phase(
-        expect, {"park_question": ["Project Wren", "Halcyon Grid"]})["park_question"] is True
+        expect, {"proposals": ["Project Wren", "Halcyon Grid"]})["proposals"] is True
+
+
+def test_a_second_proposal_beside_the_expected_one_does_not_fail_the_facet():
+    """Generous in one direction, like `edits` and for the same kind of reason: an extra proposal is
+    already fenced by `librarian.identity`'s three honesty checks (named in the material, no
+    collision with a registered spelling, not a name a steward declined), so a filing that gave two
+    unregistered names identities still recognised the one the expectation asks about. The
+    yardstick's imagination is not the thing being measured."""
+    assert run_filing.score_phase(
+        {"proposals": ["Halcyon Grid"]},
+        {"proposals": ["Halcyon Grid", "Halcyon Grid Scheduling"]})["proposals"] is True
 
 
 # ── a meeting's decision pages: count, anchors, and one-to-one ────────────────────────────────
@@ -536,8 +553,9 @@ def test_the_order_the_decision_pages_were_written_in_does_not_matter():
 
 
 def test_a_decision_expectation_that_names_no_anchor_scores_the_title_alone():
-    """The re-file after a park is scored on whether the decisions came back at all; pinning
-    their anchors there would score the steward's mint a second time."""
+    """The shape F09 ships since ADR 041: its decisions anchor either to an identity PROPOSED in the
+    same commit — whose id is slugified from a name the agent chose — or company-wide, so pinning
+    an anchor there would pin the yardstick to one sample of the agent's own vocabulary."""
     loose = [{"title": "Wren tracked formally"}, {"title": "summary joins the shared"}]
     observed = [_page("Wren tracked formally in the registry", {"kind": "company", "ids": []}),
                 _page("Wren summary joins the shared digest",
@@ -548,10 +566,15 @@ def test_a_decision_expectation_that_names_no_anchor_scores_the_title_alone():
 
 # ── an entry that omits `title` entirely: paired on its ANCHOR alone ───────────────────────────
 # The third shape of one lesson. F08's review decision flipped on grammatical number (closed by
-# `_same_word`); F09's after_reply put the word "summary" on the OTHER decision's title than the
+# `_same_word`); F09's re-filed phase put the word "summary" on the OTHER decision's title than the
 # yardstick assumed — and a SEVEN-RUN re-score settled which dimension to keep: summary-title was
 # 7/7 stable, summary-anchor 6/7 UNstable. So the entry that keeps a title keeps it, and the one
 # whose title was the model's prose drops to its anchor.
+#
+# The CAPABILITY is what is tested below; no shipped expectation uses it. F09 was its natural home
+# and stopped being one under ADR 041: with the stored reply gone, neither of its decisions has an
+# anchor a yardstick can name, so both assert titles alone. See
+# `test_whether_the_shipped_set_uses_the_title_less_shape_at_all` in the fixture suite.
 #
 # An omitted `title` is NOT an empty one, and the two must not be confusable: `title_matches("")`
 # is False by design, so an entry that NAMED a title and got it wrong still misses. That asymmetry
@@ -641,29 +664,13 @@ def test_a_title_less_entry_written_FIRST_starves_its_titled_sibling_and_fails_a
         "greedy pairing became order-independent, that refusal can retire with this test")
 
 
-# ── reuse: what a park cost the capture, not whether the model ran ────────────────────────────
-
-def test_the_reuse_facet_scores_whether_a_decision_was_LOST_and_not_whether_a_pass_was_saved():
-    """The deliberate weakening, pinned so it cannot be silently re-tightened. Whether a park
-    leaves a reusable distillation is decided by HOW it parked, and an agent following the meeting
-    brief parks with `decision: "triage"`, storing nothing — so scoring `reused` would mark a
-    brief-following backend down for following the brief. Losing a decision is the failure on both
-    roads, so that is the scored half; `reused`/`redistilled` ride along unscored."""
-    expect = {"reuse": {"decisions_preserved": True}}
-    redistilled = {"reuse": {"preserved": True, "reused": False, "redistilled": True,
-                             "dropped": []}}
-    reused = {"reuse": {"preserved": True, "reused": True, "redistilled": False, "dropped": []}}
-    assert run_filing.score_phase(expect, redistilled)["reuse"] is True
-    assert run_filing.score_phase(expect, reused)["reuse"] is True
-    assert run_filing.score_phase(expect, {"reuse": {"preserved": False, "reused": True,
-                                                     "dropped": ["one that vanished"]}})["reuse"] \
-        is False
-
-
-def test_a_re_file_that_reported_no_reuse_block_at_all_is_a_miss_when_preservation_was_expected():
-    """A phase with nothing observable about the distillation cannot be credited with having
-    preserved it — the missing observation is the failure, not the absence of one."""
-    assert run_filing.score_phase({"reuse": {"decisions_preserved": True}}, {})["reuse"] is False
+# **DELETED with the `reuse` facet (ADR 041):**
+# `test_the_reuse_facet_scores_whether_a_decision_was_LOST_and_not_whether_a_pass_was_saved` and
+# `test_a_re_file_that_reported_no_reuse_block_at_all_is_a_miss_when_preservation_was_expected`.
+# The facet asked whether a meeting re-filed after a park had LOST a decision on the way back; a
+# meeting is never re-filed, so nothing makes the round trip and there is nothing to lose. The
+# granularity question that facet shared with `decisions` — did the right number of decision pages
+# land, each anchoring on its own — is unchanged and is still measured there.
 
 
 # ── the bars: None means REPORT, DO NOT JUDGE ─────────────────────────────────────────────────
@@ -697,6 +704,27 @@ def test_the_two_cost_facets_carry_no_bar_even_once_the_quality_bars_are_calibra
     for facet in run_filing.COST_FACETS:
         assert report["facets"][facet]["bar"] is None
         assert report["facets"][facet]["pass"] is None
+
+
+def test_the_facet_ADR_041_created_ships_with_no_bar_and_the_table_says_so(entries):
+    """`proposals` is the one shipped facet whose bar is `None`, and that is a claim about the
+    series rather than an oversight: no recorded run has ever scored it, and `evals/README.md`'s own
+    rule is that a bar is a recorded baseline's own score — never a number invented to be met.
+
+    Pinned in both directions. The verdict is `None` (REPORT, DO NOT JUDGE) and the rendered row
+    says why, while every other quality facet still carries a real number — so a future editor who
+    fills this in from the first run under the re-frozen brief has to come here and delete the
+    exception rather than quietly widen it, and one who guesses a bar breaks this test.
+    """
+    assert bars.FILING_BARS["proposals"] is None
+    assert [name for name in run_filing.QUALITY_FACETS
+            if bars.FILING_BARS[name] is None] == ["proposals"]
+
+    report = run_filing.aggregate(_phases(entries), backend="double", model="m", wall_s=1.0)
+    assert report["facets"]["proposals"]["score"] == 1.0
+    assert report["facets"]["proposals"]["pass"] is None
+    rendered = run_filing.render(report)
+    assert "proposals  1.00  [2/2]  (no bar — baseline not yet fixed)" in rendered
 
 
 def test_a_calibrated_bar_judges_in_both_directions(entries, monkeypatch):
@@ -766,8 +794,9 @@ def test_the_calibrated_table_prints_PASS_at_the_baseline_and_FAIL_below_it():
     assert "(PASS vs 0.88 bar)" in at_the_baseline and "FAIL" not in at_the_baseline
     assert "(FAIL vs 0.88 bar)" in below_it and "PASS" not in below_it
 
-    one_miss = [run_filing._phase(f"S{i}", "only", {"status": "filed"},
-                                 {"status": "filed" if i else "triage"}) for i in range(12)]
+    one_miss = [run_filing._phase(f"S{i}", "only", {"status": schema.FILED},
+                                 {"status": schema.FILED if i else schema.REJECTED})
+                for i in range(12)]
     assert bars.FILING_BARS["status"] == 1.00
     assert "(FAIL vs 1.00 bar)" in run_filing.render(
         run_filing.aggregate(one_miss, backend="sdk", model="m", wall_s=1.0))
@@ -848,14 +877,19 @@ def test_a_single_agent_pass_anywhere_is_enough_to_keep_the_row():
 
 
 def test_the_row_records_what_the_phases_actually_ended_as(entries):
-    """`statuses` is what makes a row whose facets look ordinary but whose phases all ended
-    `triage` readable six months later, without still having the report. Sorted, so two reports of
-    the same run diff to nothing."""
-    phases = [run_filing._phase("A", "only", {}, _observed(status=schema.TRIAGE)),
+    """`statuses` is what makes a row whose facets look ordinary but whose phases mostly ended
+    `rejected` readable six months later, without still having the report. Sorted, so two reports of
+    the same run diff to nothing.
+
+    It used to be spelled with `triage`, the state a steward drained by hand; ADR 041 retired it, and
+    the counter is unchanged because it counts whatever string a phase ended on rather than a
+    vocabulary of its own.
+    """
+    phases = [run_filing._phase("A", "only", {}, _observed(status=schema.REJECTED)),
               run_filing._phase("B", "only", {}, _observed(status=schema.FILED)),
               run_filing._phase("C", "only", {}, _observed(status=schema.FILED))]
     counts = run_filing._status_counts(phases)
-    assert counts == {schema.FILED: 2, schema.TRIAGE: 1}
+    assert counts == {schema.FILED: 2, schema.REJECTED: 1}
     assert list(counts) == sorted(counts)
 
 
@@ -992,15 +1026,16 @@ def test_the_facet_table_in_the_evals_readme_documents_the_set_that_exists(entri
     next capture reads that table and not this file, so a stale one is worse than none: it states
     a contract the instrument no longer keeps, in the document that says how the set may grow."""
     body = EVALS_README.read_text(encoding="utf-8")
-    table = body.split("### The nine facets", 1)[1].split("\n**", 1)[0]
+    table = body.split("### The eight facets", 1)[1].split("\n**", 1)[0]
     documented = {name: int(of) for name, of in
                   re.findall(r"^\| `(\w+)` \|.*\| (\d+) \|$", table, re.MULTILINE)}
     assert documented == {facet: DENOMINATORS[facet] for facet in run_filing.QUALITY_FACETS}
 
 
 def test_both_eval_docs_state_the_size_of_the_set_they_describe(entries):
-    """10 captures and 12 scored phases are countable claims in two documents. They move together
-    with `DENOMINATORS` or not at all."""
+    """The capture and phase counts are countable claims in two documents. They move together with
+    `DENOMINATORS` or not at all — and they moved for ADR 041, which made every capture a single
+    scored phase, so the two numbers are equal for the first time."""
     report = run_filing.aggregate(_phases(entries), backend="double", model="m", wall_s=1.0)
     assert report["counts"] == {"captures": CAPTURES, "phases": PHASES}
     assert f"{CAPTURES} golden captures, {PHASES} scored phases" in \

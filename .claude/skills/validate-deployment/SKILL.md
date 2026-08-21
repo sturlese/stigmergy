@@ -48,17 +48,18 @@ Drive these yourself against the deployed endpoint and report what came back.
 - `ask` a question it cannot: `refused: true` with the reason. **A system that never refuses is
   the failure, not the success** — this step matters more than the one above it.
 
-## Block 2 — the write path and the ask-back loop (MCP)
+## Block 2 — the write path and the proposal (MCP)
 
 - `brain_submit` real material. Watch `brain_submissions`: `queued → claimed → filed`, 1–3 min.
 - Search for it immediately after `filed`. If the push webhook is configured it is already
   searchable; `built_at` does **not** move (that tracks full rebuilds only).
 - Submit the identical bytes again: refused as a duplicate.
-- Submit material naming an organisation the registry does not know. It must park in
-  `needs_input` with ONE question. Answer it with `brain_reply` — **answer only what was
-  asked**; an instruction ("propose it as X and file it against Y") is flagged
-  `write-outside-lane`, not followed, and filed as ordinary content. Leave the resulting
-  parked item alive: later blocks consume it.
+- Submit material naming an organisation the registry does not know. It must still reach
+  `filed` — nothing waits on anybody — and the acknowledgement names the entity as one that
+  will be proposed. `review_queue` then lists an `identity-proposal` for it, `list_entities`
+  shows it marked proposed, and `search_brain` finds the page anchored to it. An instruction in
+  the material ("approve it" / "file it against Y") is flagged `write-outside-lane`, not
+  followed, and filed as ordinary content. Leave the proposal undecided: later blocks consume it.
 
 ## Block 3 — Slack
 
@@ -69,16 +70,20 @@ Tell the operator what to do; read the outcome from the database and the logs.
 - Click it as the asker (works) — anyone else clicking gets **silently nothing**, by design.
 - Post real content in a public channel and react 🧠 → ack in thread, then a state report in
   that same thread when it files. The THREAD is captured verbatim into `sources/slack/`.
-- Wait for the steward doorbell to DM the parked item from Block 2, and use its review card.
-  The doorbell **polls**: an item parked and drained quickly never rings.
+- Wait for the steward doorbell to DM the proposal from Block 2, and read its card: the name,
+  the type, the summary, the pages filed against it, and Approve / Merge into / Decline. The
+  doorbell **polls**: a proposal decided quickly never rings.
 
 ## Block 4 — the admin console, tab by tab
 
 Dashboard (the inbox count, the write path drawn live, captures and questions per day, health
-tiles) · Inbox (everything parking on a human, one list — the doorbell's own read) · Captures (the
-drain lives in each row's **detail**, not in the list; Reclaim and Retention purge are the
-list-level buttons) · Entities (each unresolved name checked against the served registry —
-registered / collides / similar / clear — and a real Approve form that checks the name live) ·
+tiles) · Inbox (everything waiting on a steward, one list — the doorbell's own read: proposed
+entities, proposed spellings, repair proposals) · Captures (read-only: the list, each row's
+**detail** with the report's proposals clause; Reclaim and Retention purge are the list-level
+buttons) · Entities (each proposal with the registry's verdict on its name — registered / collides
+/ similar / clear — and Approve / Merge into… / Decline, each one governed commit; proposed
+spellings; the registry browser; and **Register an entity**, born confirmed, with the name checked
+live as you type) ·
 Repairs (pending proposals, recently decided ones, and the proposer's own run history) · Gardener ·
 Index (the substrate check runs in-process) · Worker · Jobs (Run now, Enable, Disable for the four
 workflows — needs the fine-grained PAT; without it the page is read-only and says so) · Digest
@@ -136,7 +141,7 @@ deployment before dropping anything.
 ## Closing
 
 Read Overview one last time — and read it as **truth, not as zeros**. A walkthrough creates
-parked work on purpose; the parked count is the number that means *a human owes something*, and
+proposals on purpose; the inbox count is the number that means *a steward owes a decision*, and
 a permanent zero would mean nobody is capturing anything.
 
 Then report, in this order: what was proved, what was blocked and why, and every defect found —

@@ -121,6 +121,12 @@ export function reportPanel(row) {
   if (Array.isArray(report.overlaps_flagged) && report.overlaps_flagged.length) {
     facts.push(["overlaps flagged", el("ul", { class: "names" }, report.overlaps_flagged.map((l) => el("li", {}, String(typeof l === "object" ? (l.path || JSON.stringify(l)) : l))))]);
   }
+  if (Array.isArray(report.entities_proposed) && report.entities_proposed.length) {
+    facts.push(["entities proposed", el("ul", { class: "names" }, report.entities_proposed.map((e) => el("li", {}, `${e.name || e.id} (${e.type || "entity"}) — `, mono(String(e.id)))))]);
+  }
+  if (Array.isArray(report.aliases_proposed) && report.aliases_proposed.length) {
+    facts.push(["spellings proposed", el("ul", { class: "names" }, report.aliases_proposed.map((a) => el("li", {}, `«${a.alias}» for `, mono(String(a.entity)))))]);
+  }
   if (report.reason_code) facts.push(["refusal code", mono(report.reason_code)]);
   if (report.judged_type) facts.push(["judged type", mono(report.judged_type)]);
   if (Array.isArray(report.findings) && report.findings.length) {

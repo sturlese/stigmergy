@@ -3,8 +3,8 @@
 Claims are exactly-once (`FOR UPDATE SKIP LOCKED` inside one UPDATE-of-SELECT); `attempts` —
 incremented on claim only, so it counts deliveries, never failures — is the fencing token, and
 `finish()` updates nothing unless the row is still `claimed` on that same delivery, so a stalled
-worker cannot overwrite a redelivered item. The transitions out of a park (`record_reply`,
-`dispose`) are guarded on the row's STATE instead: the caller holds no delivery to fence with.
+worker cannot overwrite a redelivered item. Every state a claim finishes into is terminal: a row
+no longer waits on a person, so no transition here is made by anyone holding no delivery.
 
 Write order: validate → evidence blob → queue row, so a refusal writes neither and a row never
 points at material the worker cannot read.
@@ -31,10 +31,9 @@ MAX_LIST_LIMIT = 200
 DEFAULT_LIST_LIMIT = 20
 EXCERPT_CHARS = 500
 
-# What a claim hands the worker; `asked_at` and `reply` feed the librarian's routing.
+# What a claim hands the worker.
 _ITEM_COLUMNS = ("id", "kind", "payload", "blob_refs", "submitted_by", "hints", "status",
-                 "attempts", "created_at", "claimed_at", "finished_at", "result_ref", "error",
-                 "asked_at", "reply", "outcome")
+                 "attempts", "created_at", "claimed_at", "finished_at", "result_ref", "error")
 
 _INSERT = """
 INSERT INTO capture_queue (kind, payload, blob_refs, submitted_by, hints, status)
@@ -100,35 +99,14 @@ WHERE id = ANY(%s) AND status = '{schema.CLAIMED}'
 RETURNING id
 """
 
-# ── the row's human history, appended in ONE place ────────────────────────────────────────────
-# Built in SQL so `at` is the DATABASE's clock, sortable against `created_at`/`claimed_at`, and
-# bounded in the same statement that appends. The OLDEST event is dropped when full: refusing the
-# newest would make the trace lie about the very action being taken.
-_TRACE_EVENT = """
-jsonb_build_array(jsonb_build_object(
-    'at', to_jsonb(now()), 'event', %(event)s::text,
-    'actor', %(actor)s::text, 'note', %(note)s::text))
-"""
-_TRACE_APPEND = f"""
-    (CASE WHEN jsonb_array_length(COALESCE(trace, '[]'::jsonb)) >= {schema.MAX_TRACE_EVENTS}
-          THEN COALESCE(trace, '[]'::jsonb) #- '{{0}}'
-          ELSE COALESCE(trace, '[]'::jsonb) END) || {_TRACE_EVENT}
-"""
-
-# The terminal/parked transition, fenced in the WHERE clause: still `claimed`, still this delivery.
+# The terminal transition, fenced in the WHERE clause: still `claimed`, still this delivery.
 _FINISH = f"""
 UPDATE capture_queue
 SET status = %(status)s,
     result_ref = %(result_ref)s,
     error = %(error)s,
     report = COALESCE(%(report)s::jsonb, report),
-    outcome = CASE WHEN %(clear_outcome)s THEN NULL
-                   ELSE COALESCE(%(outcome)s::jsonb, outcome) END,
-    finished_at = CASE WHEN %(terminal)s THEN now() ELSE NULL END,
-    claimed_at = CASE WHEN %(terminal)s THEN claimed_at ELSE NULL END,
-    parked_at = CASE WHEN %(parking)s THEN now() ELSE parked_at END,
-    asked_at = CASE WHEN %(asking)s THEN COALESCE(asked_at, now()) ELSE asked_at END,
-    trace = CASE WHEN %(asking)s THEN {_TRACE_APPEND} ELSE trace END
+    finished_at = now()
 WHERE id = %(id)s AND status = '{schema.CLAIMED}' AND attempts = %(attempts)s
 RETURNING id
 """
@@ -140,8 +118,7 @@ _FINISH_DIAGNOSE = "SELECT status, attempts FROM capture_queue WHERE id = %s"
 # value never crosses the wire. Two clauses: a secret/PII `reason_code`, and a `rejected` row with
 # NO code at all — fail-closed, because under-withholding hands a steward somebody else's live
 # credential. `hints` loses `client`/`declared_frontmatter` and keeps `flagged` (field names only);
-# `reply` is withheld too (a capture can be asked, answered, and only then refused); `trace` stays,
-# its notes being code-built or steward-authored.
+# `trace` stays, its notes being code-built or steward-authored.
 _WITHHELD_REASON_LITERALS = schema.sql_literals(schema.WITHHELD_REASONS)
 _REASON_CODE_SQL = f"report ->> '{schema.REASON_CODE_KEY}'"
 # `schema._reason_flagged` is the Python mirror of exactly this expression — change both.
@@ -159,41 +136,23 @@ _MATERIAL_WITHHELD = (
     f"({_REASON_FLAGGED_SQL} OR status IN ({_GATE_NOT_YET_RUN_LITERALS}, '{schema.FAILED}'))"
 )
 
-# The parked pair as SQL literals, used by the age expression below and by the disposition guard
-# further down: "is this row parked" must be one set, or a disposition could act on a state the
-# age column does not consider parked.
-_PARKED_LITERALS = schema.sql_literals(schema.PARKED_STATUSES)
-
-# How long a human has been waited on, computed IN POSTGRES (same clock-skew reason as
-# `claimed_age_ms`); NULL on a row that is not parked at all.
-_PARKED_AGE_MS = f"""
-CASE WHEN status IN ({_PARKED_LITERALS})
-     THEN extract(epoch from (now() - COALESCE(parked_at, created_at))) * 1000 END
-"""
-
 # ── what the listing and the single-row trace both select ─────────────────────────────────────
 # The two read paths (`_LIST_SELECT` and `get_submission_trace`) answer the same questions about a
 # row, and a column or an expression added to one and not the other is how `stigmergy-queue list`
 # and `show` start describing the same submission differently. Written once here and interpolated
 # into both; the column list carries the listing's own wrap, which the trace query flattens.
 _SHARED_COLUMNS = """id, kind, submitted_by, status, attempts, created_at, claimed_at, finished_at,
-       result_ref, error, report, blob_refs, asked_at, trace"""
+       result_ref, error, report, blob_refs, trace"""
 _SHARED_COLUMNS_ONE_LINE = " ".join(_SHARED_COLUMNS.split())
 
-# `reply` obeys `_MATERIAL_WITHHELD` on BOTH paths: a withheld reply that leaked through whichever
-# surface forgot the CASE would be the whole point of the rule, missed.
-_WITHHELD_REPLY = f"CASE WHEN {_MATERIAL_WITHHELD} THEN NULL ELSE reply END AS reply"
-_PARKED_AGE = f"{_PARKED_AGE_MS} AS parked_age_ms"
 _PAYLOAD_PURGED = "(payload IS NULL) AS payload_purged"
 
 _LIST_SELECT = f"""
 SELECT {_SHARED_COLUMNS},
-       {_PARKED_AGE},
        {_PAYLOAD_PURGED},
        {_MATERIAL_WITHHELD} AS material_withheld,
        CASE WHEN {_MATERIAL_WITHHELD} THEN NULL
             ELSE left(payload ->> 'text', %(excerpt)s) END AS excerpt,
-       {_WITHHELD_REPLY},
        payload ->> 'sha256' AS content_sha256,
        (payload ->> 'bytes')::bigint AS bytes,
        CASE WHEN {_MATERIAL_WITHHELD} THEN hints - ARRAY['client', 'declared_frontmatter']
@@ -212,11 +171,10 @@ def _iso(value) -> str | None:
 
 def _item(row) -> dict:
     item = dict(zip(_ITEM_COLUMNS, row, strict=True))
-    for field in ("created_at", "claimed_at", "finished_at", "asked_at"):
+    for field in ("created_at", "claimed_at", "finished_at"):
         item[field] = _iso(item[field])
     item["blob_refs"] = list(item["blob_refs"] or [])
     item["hints"] = item["hints"] or {}
-    item["reply"] = item["reply"] or ""
     return item
 
 
@@ -299,36 +257,25 @@ def release_expired(conn, *, visibility_timeout_s: int,
 
 
 def finish(conn, submission_id: int, *, status: str, expected_attempts: int,
-           result_ref: str = "", error: str = "", report: dict | None = None,
-           outcome: dict | None = None) -> dict:
+           result_ref: str = "", error: str = "", report: dict | None = None) -> dict:
     """Move a row THIS caller is holding out of flight — the only transition helper.
 
     `expected_attempts` is the `attempts` value `claim_next` returned for this delivery, and is
     REQUIRED: an optional fence is a fence nobody passes. The write applies only while the row is
     still `claimed` on that same value; otherwise `QueueStateError` names which reason.
 
-    The terminal three stamp `finished_at` (what retention counts from); the parked pair leave it
-    NULL, so a row waiting for a human is not purged out from under its question. `report` and
-    `outcome` are additive on a park (`COALESCE`), so `release_expired` never blanks what a
-    previous delivery wrote; `outcome` is CLEARED on every terminal status. `asked_at` is stamped
-    on the FIRST `needs_input` and never again, which is the one-ask budget.
+    Every finishing state is terminal and stamps `finished_at`, which is what retention counts
+    from. `report` is `COALESCE`d so a `None` never blanks what a previous delivery wrote.
     """
     if status not in schema.FINISHED_STATUSES:
         raise QueueStateError(
             f"cannot finish into {status!r} (allowed: {', '.join(sorted(schema.FINISHED_STATUSES))})")
-    terminal = status in schema.TERMINAL_STATUSES
-    asking = status == schema.NEEDS_INPUT
     with conn.cursor() as cur:
         # `is None`, not falsy: an EMPTY dict is a report; only `None` means "do not blank it".
         cur.execute(_FINISH, {
             "status": status, "result_ref": result_ref, "error": error,
             "report": None if report is None else Jsonb(report),
-            "outcome": None if outcome is None else Jsonb(outcome),
-            "clear_outcome": terminal,
-            "terminal": terminal, "parking": status in schema.PARKED_STATUSES, "asking": asking,
             "id": submission_id, "attempts": int(expected_attempts),
-            "event": schema.EVENT_ASKED, "actor": schema.ACTOR_LIBRARIAN,
-            "note": (error or "")[:schema.MAX_TRACE_NOTE_CHARS] if asking else "",
         })
         if cur.fetchone() is not None:
             return {"id": submission_id, "status": status, "result_ref": result_ref,
@@ -368,119 +315,6 @@ def _lost_lease_reason(submission_id: int, status: str, expected_attempts: int, 
             f"it cannot be moved to {status!r}")
 
 
-# ── the human loop's two transitions: neither is a lease, and neither fakes one ───────────────
-# These move a row NOBODY holds, so the guard is the STATE in the WHERE clause and a disposition
-# racing a live claim fails loudly. `attempts` appears in neither statement: bumping it would burn
-# a delivery no worker got, resetting it would hand a stale worker back a fence it had lost.
-_DISPOSE = f"""
-UPDATE capture_queue
-SET status = %(status)s,
-    result_ref = CASE WHEN %(result_ref)s::text = '' THEN result_ref ELSE %(result_ref)s END,
-    error = %(error)s,
-    report = COALESCE(%(report)s::jsonb, report),
-    claimed_at = NULL,
-    parked_at = CASE WHEN %(terminal)s THEN parked_at ELSE NULL END,
-    finished_at = CASE WHEN %(terminal)s THEN now() ELSE NULL END,
-    -- A REQUEUE deliberately leaves `outcome` alone — that is the whole mechanism (the steward
-    -- minted the entity, the distillation is still good, and the next pass re-files it).
-    -- A terminal disposition (`resolved`/`rejected`) clears it, matching `finish`: once the row is
-    -- closed nothing can ever reuse it, and the full drafted text of every page is not something
-    -- to keep beside a closed row.
-    outcome = CASE WHEN %(terminal)s THEN NULL ELSE outcome END,
-    trace = {_TRACE_APPEND}
-WHERE id = %(id)s AND status IN ({_PARKED_LITERALS})
-RETURNING id, status, attempts
-"""
-
-_RECORD_REPLY = f"""
-UPDATE capture_queue
-SET status = '{schema.QUEUED}',
-    reply = %(reply)s,
-    error = '',
-    claimed_at = NULL,
-    parked_at = NULL,
-    trace = {_TRACE_APPEND}
-WHERE id = %(id)s AND status = '{schema.NEEDS_INPUT}'
-RETURNING id, attempts
-"""
-
-_DISPOSE_DIAGNOSE = "SELECT status FROM capture_queue WHERE id = %s"
-
-
-def dispose(conn, submission_id: int, *, status: str, actor: str, event: str, action: str = "",
-            note: str = "", error: str = "", result_ref: str = "",
-            report: dict | None = None) -> dict:
-    """THE state-guarded transition out of a park — the one base every disposition rides. Callers
-    go through `capture.dispositions`, which owns the wording; this function owns only that the
-    move is legal, decided in SQL so a caller cannot decide it differently."""
-    if status not in (schema.QUEUED, schema.RESOLVED, schema.REJECTED):
-        raise QueueStateError(
-            f"cannot dispose into {status!r} (a disposition returns a parked row to "
-            f"{schema.QUEUED!r} or closes it as {schema.RESOLVED!r} or {schema.REJECTED!r})")
-    if not actor:
-        # Attribution, not authorization: an unattributed disposition records no actor.
-        raise QueueStateError("a disposition needs an actor — `--by <who>` is who is answering for it")
-    terminal = status in schema.TERMINAL_STATUSES
-    with conn.cursor() as cur:
-        cur.execute(_DISPOSE, {
-            "status": status, "error": error, "result_ref": result_ref,
-            "report": None if report is None else Jsonb(report), "terminal": terminal,
-            "id": submission_id, "event": event, "actor": actor,
-            "note": (note or "")[:schema.MAX_TRACE_NOTE_CHARS],
-        })
-        row = cur.fetchone()
-        if row is not None:
-            return {"id": row[0], "status": row[1], "attempts": row[2]}
-        cur.execute(_DISPOSE_DIAGNOSE, (submission_id,))
-        current = cur.fetchone()
-    raise QueueStateError(_not_parked_reason(submission_id, action or event, current))
-
-
-def record_reply(conn, submission_id: int, *, answer: str, actor: str, note: str = "") -> dict:
-    """Record a submitter's answer to this row's one question and return it to the queue.
-
-    State-guarded on `needs_input` alone, so it is true under a race and not merely in the caller's
-    earlier read. `actor` is the RESOLVED identity that replied. Does not touch `attempts` and
-    leaves the row claimable, so the next pass is an ordinary delivery.
-    """
-    with conn.cursor() as cur:
-        cur.execute(_RECORD_REPLY, {
-            "id": submission_id, "reply": answer, "event": schema.EVENT_REPLIED,
-            "actor": actor, "note": (note or "")[:schema.MAX_TRACE_NOTE_CHARS],
-        })
-        row = cur.fetchone()
-        if row is not None:
-            return {"id": row[0], "status": schema.QUEUED, "attempts": row[1]}
-        cur.execute(_DISPOSE_DIAGNOSE, (submission_id,))
-        current = cur.fetchone()
-    raise QueueStateError(_not_parked_reason(submission_id, schema.REPLY_TOOL, current))
-
-
-def current_status(conn, submission_id: int) -> str | None:
-    """This row's status, or None — how the reply path tells an AUTHORIZED caller why it
-    bounced."""
-    with conn.cursor() as cur:
-        cur.execute(_DISPOSE_DIAGNOSE, (submission_id,))
-        row = cur.fetchone()
-    return row[0] if row else None
-
-
-def _not_parked_reason(submission_id: int, action: str, current) -> str:
-    """Why a disposition or a reply did not apply — id and state only. The three cases stay
-    distinct: they have three different operator next actions."""
-    parked = " or ".join(repr(s) for s in sorted(schema.PARKED_STATUSES))
-    if current is None:
-        return f"submission {submission_id} does not exist — there is nothing for `{action}` to act on"
-    status = current[0]
-    if status == schema.CLAIMED:
-        return (f"submission {submission_id} is currently claimed — a worker may be mid-item, and "
-                f"`{action}` must never race a live claim. Wait for it to finish, or check "
-                f"`stigmergy-queue show {submission_id}` for its state")
-    return (f"submission {submission_id} is {status!r} — `{action}` acts only on a PARKED row "
-            f"({parked}), never on one a worker holds or a terminal state has already closed")
-
-
-# ── read path: one shared base, two semantic entry points ─────────────────────────────────────
 def query_submissions(conn, *, submitter: str | None = None, statuses: list[str] | None = None,
                       limit: int = DEFAULT_LIST_LIMIT, offset: int = 0,
                       excerpt_chars: int = EXCERPT_CHARS) -> list[dict]:
@@ -522,13 +356,11 @@ def list_all_submissions(conn, **kwargs) -> list[dict]:
 def get_submission_trace(conn, submission_id: int, *, submitter: str | None = None) -> dict | None:
     """The per-submission trace and the latencies computable from its columns alone. `submitter`,
     when given, scopes the lookup: somebody else's row returns None, the same shape as a
-    nonexistent id. `reply` obeys the same `_MATERIAL_WITHHELD` expression `_LIST_SELECT` uses."""
+    nonexistent id."""
     with conn.cursor() as cur:
         cur.execute(
             f"SELECT {_SHARED_COLUMNS_ONE_LINE},"
-            f" {_WITHHELD_REPLY},"
             f" {_MATERIAL_WITHHELD} AS material_withheld,"
-            f" {_PARKED_AGE},"
             f" {_PAYLOAD_PURGED}"
             " FROM capture_queue"
             " WHERE id = %s AND (%s::text IS NULL OR submitted_by = %s)",
@@ -542,29 +374,13 @@ def get_submission_trace(conn, submission_id: int, *, submitter: str | None = No
     trace["queue_wait_ms"] = _millis(created, claimed)
     trace["total_latency_ms"] = _millis(created, finished)
     trace["created_at"], trace["claimed_at"] = _iso(created), _iso(claimed)
-    trace["finished_at"], trace["asked_at"] = _iso(finished), _iso(trace["asked_at"])
+    trace["finished_at"] = _iso(finished)
     trace["blob_refs"] = list(trace["blob_refs"] or [])
     trace["report"] = trace["report"] or {}     # same "nothing yet" shape as _shape_listed
-    trace["reply"] = trace["reply"] or ""
     trace.pop("material_withheld")   # superseded by schema.withheld_reason below (same underlying fact)
     trace["withheld_reason"] = schema.withheld_reason(trace["status"], trace["report"])
     trace["events"] = list(trace.pop("trace") or [])
-    trace["parked_age_ms"] = _float_or_none(trace["parked_age_ms"])
-    trace["waiting_on"] = waiting_on(trace["status"], trace["submitted_by"])
     return trace
-
-
-# Who a parked row is waiting on — written once, because two states parked on two different people
-# is exactly the distinction a second implementation would blur.
-WAITING_ON_STEWARD = "a steward"
-
-
-def waiting_on(status: str, submitted_by: str) -> str:
-    """`needs_input` waits on the SUBMITTER; `triage` waits on a steward; everything else waits
-    on nobody and says so with an empty string."""
-    if status == schema.NEEDS_INPUT:
-        return submitted_by or WAITING_ON_STEWARD
-    return WAITING_ON_STEWARD if status == schema.TRIAGE else ""
 
 
 def _float_or_none(value):
@@ -645,6 +461,14 @@ def counts_by_status(conn) -> dict[str, int]:
     return {status: counted.get(status, 0) for status in schema.STATUSES}
 
 
+def current_status(conn, submission_id: int) -> str | None:
+    """This row's status, or None for an id nothing was ever queued under."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT status FROM capture_queue WHERE id = %s", (submission_id,))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
 def outcomes_by_day(conn, *, days: int) -> list[dict]:
     """`counts_by_status` over time: captures that ARRIVED in the last `days` days, bucketed by
     their UTC arrival day and their CURRENT status — `[{"day": "YYYY-MM-DD", "status", "count"}]`,
@@ -688,12 +512,7 @@ def _shape_listed(row: dict) -> dict:
         "blob_refs": list(row["blob_refs"] or []),
         "payload_purged": bool(row["payload_purged"]),
         "withheld_reason": schema.withheld_reason(row["status"], row["report"]),
-        # a `triage` row carrying `asked_at` was asked and answered, unlike one never asked
-        "asked_at": _iso(row["asked_at"]),
-        "reply": row["reply"] or "",
         "events": list(row["trace"] or []),
-        "parked_age_ms": _float_or_none(row["parked_age_ms"]),
-        "waiting_on": waiting_on(row["status"], row["submitted_by"]),
         "excerpt": row["excerpt"] or "",
         "content_sha256": row["content_sha256"] or "",
         "bytes": row["bytes"],

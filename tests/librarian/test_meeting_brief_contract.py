@@ -235,22 +235,16 @@ RULE_TABLE = [
     # precisely what "computed by the worker from the archived material" names.
     ("computed by the worker from the archived material and this run's own facts.",
      'digest = hashlib.sha256((ctx.material or "").encode("utf-8")).hexdigest()'),
-    # **Re-pointed by the one-shape collapse.** The marker was the bare name `_ask_or_park_multi`,
-    # the plural park router. That router is gone: one `_ask_or_park` serves both flows and any
-    # number of names, so a bare-name marker would now be satisfied by the ORDINARY flow's own call
-    # and this row would go green with `_triage_meeting` no longer parking a meeting at all — the
-    # "satisfied by the thing merely existing" failure mode this file has already been bitten by.
-    #
-    # Re-pointed at `_triage_meeting`'s whole call, both lines of it, because all three claims of
-    # the brief phrase are in it and nowhere else: `names=names` is ATOMIC/whole capture (every
-    # unresolved name in one park), the single `_ask_or_park` call is ONE ASK (the shared budget),
-    # and `meeting=True` is what makes it a MEETING park rather than a capture — the literal a
-    # refactor drops without anything else noticing, since nothing else reads that sentence.
-    # Verified against the concatenated source before use: this string occurs exactly once, and it
-    # is not matched by the ordinary flow's call, which ends after `notes=notes)`.
-    ("## Parking a meeting — atomic, whole capture, one ask",
-     "_ask_or_park(item, deps, names=names, agent_rationale=rationale, notes=notes,\n"
-     "                        meeting=True)"),
+    # **The park row that stood here is gone with the parks.** A meeting no longer parks on an
+    # unregistered name: the brief's third anchoring outcome PROPOSES the entity, and the marker is
+    # the meeting flow's own call into `identity.write_proposals` — the one line that makes it a
+    # MEETING proposal rather than a capture's (`related=` names the decision pages, or the meeting
+    # page when there are none, so the newborn entity page links back to what proposed it). A bare
+    # `write_proposals` marker would be satisfied by the ordinary flow's call; this keyword line
+    # occurs in the meeting pass only.
+    ("3. **PROPOSE the entity it is about** — the decision is about a specific thing that is "
+     "**not in",
+     'related=decision_stems or [written["meeting_stem"]])'),
     # REMOVED: ("there is no edit mechanism in this flow.",
     #           "no additive edits to pages that already exist").
     # BOTH SIDES INVALID. The marker was a COMMENT in `processing.py`, so this entry never proved a

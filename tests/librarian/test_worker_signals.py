@@ -109,7 +109,7 @@ def test_sigint_once_finishes_the_item_in_flight_then_stops(tmp_path, clean_queu
     # exactly one item was claimed and carried to a real terminal state; the second was never
     # even claimed, because `stopping` breaks the loop BEFORE it calls `process_next` again.
     assert schema.QUEUED in rows
-    assert rows & {schema.FILED, schema.REJECTED, schema.TRIAGE, schema.FAILED}
+    assert rows & {schema.FILED, schema.REJECTED, schema.FAILED}
 
 
 def test_sigterm_is_acknowledged_immediately_without_waiting_for_the_item(
@@ -201,7 +201,7 @@ def test_a_hard_kill_mid_item_leaves_the_row_recoverable_and_the_worktree_reaped
     # ... and a restarted worker (this test process, standing in for one) files it EXACTLY once:
     # not lost, and not filed twice.
     _, result = worker.process_next(clean_queue, deps)
-    assert result.status in (schema.FILED, schema.REJECTED, schema.TRIAGE, schema.FAILED)
+    assert result.status in (schema.FILED, schema.REJECTED, schema.FAILED)
     row_final = queue.get_submission_trace(clean_queue, item["id"])
     assert row_final["attempts"] == 2               # the crash burned delivery 1; this is 2
 

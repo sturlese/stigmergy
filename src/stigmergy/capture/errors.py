@@ -22,17 +22,6 @@ class SubmissionRejected(CaptureError):
     client that could set `submitted_by` could forge authorship."""
 
 
-class ReplyRejected(CaptureError):
-    """A reply to a `needs_input` row was refused — nothing recorded, the row did not move.
-
-    Two refusal kinds ride one class, differing in WORDING: an IDENTITY failure gets one fixed
-    generic sentence, byte-identical whether the id does not exist, belongs to somebody else, or
-    is not parked — otherwise the response is an existence oracle. A STATE failure, raised only
-    for a caller already authorized to see the row, may name the actual status: it costs no leak
-    and the generic sentence would falsely read as "you are not allowed".
-    """
-
-
 class EvidenceError(CaptureError):
     """The evidence store could not be reached or written. Deliberately value-free
     (`evidence store unavailable (<ExceptionClass>)`): boto3's exceptions embed the bucket,

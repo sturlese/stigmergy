@@ -28,10 +28,10 @@ def test_server_exposes_the_read_tools_and_ask_over_stdio(indexed):
         async with mcp_session(fx, fx.STEWARD) as session:
             names = {t.name for t in (await session.list_tools()).tools}
             assert names == {"search_brain", "read_page", "list_entities", "describe_entity",
-                             "ask", "brain_submit", "brain_submissions", "brain_reply",
+                             "ask", "brain_submit", "brain_submissions",
                              "review_queue", "review_decide"}
-            # exactly ten tools and no more. The in-process mirror of this same closed set is
-            # `test_mcp_adapter.py::test_the_mounted_tool_list_is_exactly_the_ten_supported_tools`
+            # exactly nine tools and no more. The in-process mirror of this same closed set is
+            # `test_mcp_adapter.py::test_the_mounted_tool_list_is_exactly_the_nine_supported_tools`
             # — that one proves `build_mcp()`'s own output; this one proves the REAL entry point
             # mounts the same set over the wire.
     _run(go())
@@ -164,69 +164,6 @@ def test_brain_submit_and_brain_submissions_round_trip_over_stdio(indexed):
     listed2 = _run(go2())
     row2 = next(r for r in listed2["submissions"] if r["id"] == ack["id"])
     assert row2["excerpt"].startswith("<<<UNTRUSTED-DATA\n")   # fenced, once the librarian looked
-
-
-# ── brain_reply over the REAL stdio protocol ───────────────────────────────────────────────────
-def _needs_input_row(conn, *, submitted_by):
-    """Submit, then move THIS SPECIFIC row into `needs_input` — never `queue.claim_next` here:
-    this module's `indexed` connection is shared (module-scoped) with every OTHER stdio test that
-    submits a real capture and never processes it, so the oldest 'queued' row at any given moment
-    may well belong to an earlier test rather than to this one."""
-    from stigmergy.capture import queue, schema
-    from stigmergy.capture.evidence import MemoryEvidenceStore
-    schema.ensure_capture_schema(conn)
-    ack = queue.submit(conn, MemoryEvidenceStore(), kind="raw",
-                       material=f"stdio reply harness capture {time.monotonic_ns()}",
-                       hints=None, submitted_by=submitted_by)
-    with conn.cursor() as cur:
-        cur.execute(
-            "UPDATE capture_queue SET status = 'claimed', claimed_at = now(), "
-            "attempts = attempts + 1 WHERE id = %s AND status = 'queued' RETURNING attempts",
-            (ack["id"],))
-        attempts = cur.fetchone()[0]
-    queue.finish(conn, ack["id"], status=schema.NEEDS_INPUT,
-                expected_attempts=attempts, error="which entity is this about?")
-    return ack["id"]
-
-
-def test_brain_reply_round_trip_over_stdio_returns_the_row_to_queued(indexed):
-    conn, fx = indexed
-    row_id = _needs_input_row(conn, submitted_by=fx.STEWARD)
-
-    async def go():
-        async with mcp_session(fx, fx.STEWARD) as session:
-            return await call_json(session, "brain_reply", submission_id=row_id,
-                                   answer="Acme Corp")
-    out = _run(go())
-
-    assert out["status"] == "queued"
-    with conn.cursor() as cur:
-        cur.execute("SELECT status, reply FROM capture_queue WHERE id = %s", (row_id,))
-        status, reply = cur.fetchone()
-    assert status == "queued"
-    assert reply == "Acme Corp"
-
-
-def test_brain_reply_from_a_different_identity_is_refused_with_no_existence_leak_over_stdio(
-        indexed):
-    """Over the real protocol: a scoped identity that is neither the submitter nor a steward gets
-    the generic refusal — the SAME sentence a nonexistent id gets — never a hint that this
-    particular row exists."""
-    conn, fx = indexed
-    row_id = _needs_input_row(conn, submitted_by=fx.STEWARD)
-
-    async def go():
-        async with mcp_session(fx, fx.ENG) as session:
-            real = await call_json(session, "brain_reply", submission_id=row_id, answer="Acme Corp")
-            fake = await call_json(session, "brain_reply", submission_id=999_999_999,
-                                   answer="Acme Corp")
-        return real, fake
-    real, fake = _run(go())
-
-    assert real == fake == {"error": "no submission is waiting on a reply from you at that id"}
-    with conn.cursor() as cur:
-        cur.execute("SELECT status FROM capture_queue WHERE id = %s", (row_id,))
-        assert cur.fetchone()[0] == "needs_input"   # untouched by the refused attempt
 
 
 def test_brain_submit_a_forged_submitted_by_is_refused_over_stdio(indexed):

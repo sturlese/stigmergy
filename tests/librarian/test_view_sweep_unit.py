@@ -209,13 +209,13 @@ def test_run_view_sweep_works_on_a_fresh_worktree_and_leaves_the_checkout_alone(
     else.
     """
     env, deps = rig
-    _anchor_a_page(env, "acme")
+    _anchor_a_page(env, "acme-corp")
 
     result = worker.run_view_sweep(FakeConn(), deps)
 
     assert result.stats["written"] == 1
-    assert "views/acme.md" in _remote_files(env)
-    assert not os.path.exists(os.path.join(env.repo, "views", "acme.md"))
+    assert "views/acme-corp.md" in _remote_files(env)
+    assert not os.path.exists(os.path.join(env.repo, "views", "acme-corp.md"))
     # And no worktree survived the pass: `ephemeral_worktree` reaps its own on the way out.
     assert gitcmd.reap(env.repo, deps.settings.worktree_root) == 0
 
@@ -260,9 +260,9 @@ def test_run_view_sweep_reads_the_registry_at_its_own_base_not_at_startup(rig, m
     view into a removal. A startup pre-flight copy would miss it until the next restart — the same
     reason `processing.process_item` re-reads the registry per item."""
     env, deps = rig
-    _anchor_a_page(env, "acme")
+    _anchor_a_page(env, "acme-corp")
     worker.run_view_sweep(FakeConn(), deps)
-    assert "views/acme.md" in _remote_files(env)
+    assert "views/acme-corp.md" in _remote_files(env)
 
     # The sweep pushed the view from its OWN worktree, so this checkout is behind the remote now —
     # which is itself the proof that the write did not happen here.
@@ -274,7 +274,7 @@ def test_run_view_sweep_reads_the_registry_at_its_own_base_not_at_startup(rig, m
     result = worker.run_view_sweep(FakeConn(), deps)
 
     assert result.stats["removed"] == 1
-    assert "views/acme.md" not in _remote_files(env)
+    assert "views/acme-corp.md" not in _remote_files(env)
 
 
 # ── the settings' own domain ───────────────────────────────────────────────────────────────────
@@ -315,9 +315,9 @@ def test_a_registry_absent_at_the_base_refuses_the_pass_and_deletes_nothing(rig)
     dropped `ops/`) and a pass whose answer to every orphaned view is to DELETE it, ceiling per
     interval, for as long as the worker runs."""
     env, deps = rig
-    _anchor_a_page(env, "acme")
+    _anchor_a_page(env, "acme-corp")
     worker.run_view_sweep(FakeConn(), deps)
-    assert "views/acme.md" in _remote_files(env)
+    assert "views/acme-corp.md" in _remote_files(env)
 
     gitcmd.run("pull", "--quiet", "--rebase", "origin", "main", cwd=env.repo)
     gitcmd.run("rm", "--quiet", os.path.join("ops", "entity-registry.json"), cwd=env.repo)
@@ -328,7 +328,7 @@ def test_a_registry_absent_at_the_base_refuses_the_pass_and_deletes_nothing(rig)
 
     (reason,) = result.skip_reasons
     assert reason.startswith("refusing to converge views/")
-    assert "views/acme.md" in _remote_files(env), "the refusal exists so this file survives"
+    assert "views/acme-corp.md" in _remote_files(env), "the refusal exists so this file survives"
     # The refusal is not only a log line: `job_runs` is the one operator surface an unattended
     # pass has, and the row names the exception the FILING path raises for the same fault.
     assert any("job_runs" in sql and LibrarianConfigError.__name__ in tuple(params)
@@ -403,7 +403,7 @@ def _anchor_a_page(env, entity_id: str) -> None:
         text = f.read()
     with open(entity_md, "w") as f:
         f.write(text.replace("type: entity\n", f"type: entity\nentity: [{entity_id}]\n", 1))
-    support.commit_and_push(env.repo, "feat: a page anchored to acme")
+    support.commit_and_push(env.repo, "feat: a page anchored to acme-corp")
 
 
 def _remote_files(env) -> list[str]:

@@ -331,6 +331,22 @@ def test_entities_born_counts_approved_entity_proposal_decisions_in_window(conn)
     assert deltas["entities_born_count"] == 2
 
 
+def test_entities_born_counts_an_approval_the_parked_capture_door_wrote_before_adr_041(conn):
+    """The ledger keeps the approvals the retired mint door recorded under `entity-proposal`; a
+    digest window straddling the change must count them as the births they were. (Before this
+    test the count named one kind only, and a week's digest would have dropped every birth from
+    before the deploy.)"""
+    from stigmergy.review_kinds import LEGACY_KIND_ENTITY_PROPOSAL, LEGACY_KIND_PARKED_CAPTURE
+    support.seed_entity_approval(conn, created_days_ago=1)
+    support.seed_entity_approval(conn, created_days_ago=2, item_kind=LEGACY_KIND_ENTITY_PROPOSAL)
+    # a parked capture's disposition was never a birth, whatever its verdict said.
+    support.seed_entity_approval(conn, created_days_ago=1, item_kind=LEGACY_KIND_PARKED_CAPTURE)
+
+    deltas = sections.gather_corpus_deltas(conn, since=SINCE_7D, until=UNTIL_NOW, audiences=set())
+
+    assert deltas["entities_born_count"] == 2
+
+
 def test_entities_born_zero_when_nothing_approved(conn):
     deltas = sections.gather_corpus_deltas(conn, since=SINCE_7D, until=UNTIL_NOW, audiences=set())
     assert deltas["entities_born_count"] == 0

@@ -215,6 +215,13 @@ def write_page(repo: str, relpath: str, text: str) -> str:
     return path
 
 
+def restore_tracked(repo: str, sha: str) -> None:
+    """Put every TRACKED file back to `sha`'s version — the rollback for a decision that edits and
+    deletes tracked pages in place and then refuses. Touches nothing untracked, because
+    `ensure_clean` has already established there is nothing untracked to touch."""
+    gitcmd.run("checkout", sha, "--", ".", cwd=repo)
+
+
 def discard_untracked(path: str) -> None:
     """Remove a page this command just wrote, after a later step refused.
 

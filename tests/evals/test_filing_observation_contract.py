@@ -2,18 +2,21 @@
 
 `test_filing_scorer.py` proves the scorer discriminates; every `observed` dict there is written by
 hand. That is exactly the shape of a yardstick that lies: rename `pages_edited` in `report.py`, or
-park through a builder that writes `unresolved_names` where the instrument reads `unresolved_name`,
-and the scorer tests stay green while the facet reports 0.00 for every backend forever — a number
-that reads as a failing model and is actually a broken instrument. It would be discovered after
-paying for a real run, and nothing in the table would say so. That second example is not
-hypothetical: the plural collapse retired the singular ask key, and the two park cases below are
-the ones that had to move.
+write the proposed identities under a key the instrument does not read, and the scorer tests stay
+green while the facet reports 0.00 for every backend forever — a number that reads as a failing
+model and is actually a broken instrument. It would be discovered after paying for a real run, and
+nothing in the table would say so.
 
-So nothing is canned here. Reports come from `librarian.report`'s own builders, the reuse block
-from `processing._reuse_note`, the pages out of a REAL `git` commit through the same
-`support.read_filed_page` a real run uses, and the expectations are the golden set's own — read
-from `evals/filing/expected/expectations.json` rather than restated. Keyless and Postgres-free:
-report building, `git` and frontmatter parsing need neither.
+That is not hypothetical, and this file is where it was caught twice. The plural collapse retired
+`report.needs_input`'s singular ask key and the two park cases here had to move; ADR 041 then
+retired `needs_input` itself, and `proposals` reads `entities_proposed` off the SAME reports that
+carry `page_path` and `pages_edited` — a rename there is exactly as invisible and exactly as
+expensive, so the cases that moved were replaced rather than dropped.
+
+So nothing is canned here. Reports come from `librarian.report`'s own builders, the pages out of a
+REAL `git` commit through the same `support.read_filed_page` a real run uses, and the expectations
+are the golden set's own — read from `evals/filing/expected/expectations.json` rather than
+restated. Keyless and Postgres-free: report building, `git` and frontmatter parsing need neither.
 """
 import json
 from pathlib import Path
@@ -217,7 +220,7 @@ def test_a_page_absent_from_the_commit_can_never_score_as_a_company_wide_filing(
                                   observed)["anchor"] is False
 
 
-# ── the refusals and the park, which commit nothing to read back ──────────────────────────────
+# ── the refusal that commits nothing to read back, and the identities a filing creates ────────
 
 def test_the_duplicate_refusal_carries_the_reason_code_F04_is_scored_on(filed, expectations):
     """The one facet that must NOT move between backends: it is decided before any agent runs. A
@@ -234,74 +237,79 @@ def test_the_duplicate_refusal_carries_the_reason_code_F04_is_scored_on(filed, e
            dict.fromkeys(entry["expect"], True)
 
 
-def test_a_park_on_one_name_is_observed_through_the_reports_plural_key(filed, expectations):
-    """INVERTED by the plural collapse. `report.needs_input` used to write the singular
-    `unresolved_name` for a one-name park and this test was named for that; it now writes
-    `unresolved_names`, a one-element list, whatever the count. The instrument's job is unchanged
-    and is why this test exists: a park it observed nothing from scores every `park_question` cell
-    a miss while the backend did exactly the right thing, and that reads as a failing model rather
-    than a broken yardstick.
+def test_the_identity_a_filing_proposed_is_observed_off_the_reports_own_key(filed, expectations):
+    """**REPLACES the two park cases.** `report.needs_input` used to carry the names a capture had
+    stopped on; ADR 041 removed the function with the state, and the same judgment now arrives as
+    `entities_proposed` on an ORDINARY `report.filed` — the identities the filing created
+    unconfirmed, in the commit that landed the page.
 
-    Built from the REAL builder, never a canned dict — which is what makes this the test that
-    catches the rename."""
-    env, _ = filed
-    entry = expectations["F02-unknown-entity-parks"]
-    rep = report_module.needs_input(
-        submission_id=17, names=["Halcyon Grid"],
-        candidates=[{"id": "northwind-freight", "name": "Northwind Freight", "aliases": []}],
-        total_candidates=3)
+    That move is the reason this test exists rather than a scorer-level one. `entities_proposed` is
+    one key on a report the instrument already reads for four other facets, so a rename there is
+    silent: `proposals` would score 0.00 for every backend forever while the table read as a model
+    that never recognises anything, which is precisely the shape of the failure this file is for.
 
-    assert "unresolved_name" not in rep      # the shape the instrument is being read against
-    observed = _observe(_result(schema.NEEDS_INPUT, "", rep), 1, env)
+    Built from the REAL builder and scored against the golden set's own expectation, end to end.
+    """
+    env, sha = filed
+    entry = expectations["F02-unknown-entity-proposed"]
+    rep = report_module.filed(
+        page_path=NOTE, commit=sha, anchoring={"kind": "entity", "entities": ["Halcyon Grid"]},
+        links=[], overlaps=[], findings=[],
+        entities_proposed=[{"id": "halcyon-grid", "name": "Halcyon Grid", "type": "organization"}])
 
-    assert observed["park_question"] == ["Halcyon Grid"]
-    assert run_filing.score_phase(entry["expect"], observed) == \
-           dict.fromkeys(entry["expect"], True)
+    observed = _observe(_result(schema.FILED, f"{NOTE}@{sha}", rep), 1, env)
 
-
-def test_a_park_on_several_names_is_observed_through_the_reports_plural_key(filed):
-    """One ask for all of them — a partial page set is worse than an honest park — so the
-    instrument has to see every name the question covered."""
-    env, _ = filed
-    rep = report_module.needs_input(submission_id=18,
-                                    names=["Project Wren", "Halcyon Grid"],
-                                    candidates=[], total_candidates=0)
-    observed = _observe(_result(schema.NEEDS_INPUT, "", rep), 1, env)
-    assert observed["park_question"] == ["Project Wren", "Halcyon Grid"]
-    assert run_filing.score_phase({"park_question": ["Project Wren", "Halcyon Grid"]},
-                                  observed)["park_question"] is True
+    assert observed["proposals"] == ["Halcyon Grid"]
+    assert run_filing.score_phase(entry["expect"], observed)["proposals"] is True
 
 
-# ── the instrument's LEGACY read, which no builder can produce any more ────────────────────────
-# `_observe` still reads `unresolved_name` first and falls back to `unresolved_names`. Nothing
-# writes the singular key now, so the two tests above exercise only the fallback — the primary
-# branch became unreachable from any builder on the same day, and an unreachable branch that reads
-# as coverage is what this file's own docstring is about.
-#
-# The report here is therefore a LITERAL, deliberately not round-tripped through a builder: what it
-# stands for is a report written by the OLD code and read back by today's instrument — a run
-# scored from a stored result, or a queue row parked before the collapse. A round-trip version
-# would silently stop testing the thing it names the moment the builder changed, which is exactly
-# what just happened to the case above.
-def test_a_legacy_park_report_carrying_the_retired_singular_key_is_still_observed(filed):
-    env, _ = filed
-    legacy = {"status": schema.NEEDS_INPUT, "unresolved_name": "Halcyon Grid"}
+def test_a_filing_that_proposed_nothing_observes_an_empty_list_rather_than_a_missing_key(filed):
+    """The benign twin, and the state twelve of the fourteen captures are in: an ordinary filing
+    proposes no identity, and the key has to be there and empty. `score_phase` reads it with a
+    `or []` fallback either way, so what this really pins is that the ordinary road did not grow a
+    proposal nobody declared — a `proposals` facet that scored non-empty for every capture would
+    read as a backend inventing identities."""
+    env, sha = filed
+    rep = report_module.filed(page_path=NOTE, commit=sha,
+                              anchoring={"kind": "entity", "entities": ["Northwind Freight"]},
+                              links=[], overlaps=[], findings=[])
 
-    observed = _observe(_result(schema.NEEDS_INPUT, "", legacy), 1, env)
+    observed = _observe(_result(schema.FILED, f"{NOTE}@{sha}", rep), 1, env)
 
-    assert observed["park_question"] == ["Halcyon Grid"]
+    assert observed["proposals"] == []
+    assert run_filing.score_phase({"proposals": ["Halcyon Grid"]},
+                                  observed)["proposals"] is False
+
+
+def test_a_proposed_SPELLING_is_observed_beside_the_score_and_never_inside_it(filed):
+    """The near miss a red `proposals` cell needs in front of it, and the one thing that must not be
+    folded into the facet: a filing that read the name as a REGISTERED entity's spelling proposed an
+    alias instead of an identity. That is a different — and often correct — outcome, so it is
+    reported and never scored. Folding it in would let a backend that recognised nothing new score
+    the facet by proposing spellings."""
+    env, sha = filed
+    rep = report_module.filed(
+        page_path=NOTE, commit=sha, anchoring={"kind": "entity", "entities": ["Northwind Freight"]},
+        links=[], overlaps=[], findings=[],
+        aliases_proposed=[{"entity": "northwind-freight", "alias": "Northwind"}])
+
+    observed = _observe(_result(schema.FILED, f"{NOTE}@{sha}", rep), 1, env)
+
+    assert observed["proposed_aliases"] == ["northwind-freight: Northwind"]
+    assert observed["proposals"] == []
+    assert run_filing.score_phase({"proposals": ["Northwind"]}, observed)["proposals"] is False
 
 
 # ── the meeting: a page SET, each decision anchoring on its own ────────────────────────────────
 
-def _meeting_report(sha, *, reuse=None):
+def _meeting_report(sha, *, entities_proposed=()):
     return report_module.filed_meeting(
         source_pages=[SOURCE], meeting_page=MEETING, commit=sha,
         decisions=[{"path": ENTITY_DECISION,
                     "anchoring": {"kind": "entity", "entities": ["Northwind Freight"]}},
                    {"path": COMPANY_DECISION,
                     "anchoring": {"kind": "company", "reason": "applies everywhere"}}],
-        reuse=reuse)
+        entities_proposed=list(entities_proposed))
 
 
 def test_a_filed_meeting_meets_F08s_expectation_with_each_decisions_own_anchor(filed,
@@ -323,112 +331,39 @@ def test_a_filed_meeting_meets_F08s_expectation_with_each_decisions_own_anchor(f
            dict.fromkeys(entry["expect"], True)
 
 
-def test_a_meeting_that_lost_a_decision_on_the_way_back_is_observed_as_not_preserved(filed):
-    """The reuse block is built by `processing._reuse_note` — the production function — and read
-    by the instrument. `preserved` is the scored half, and it is false exactly when a decision the
-    parked pass had distilled is not in what filed.
-    """
-    from stigmergy.librarian.agent import MeetingOutcome
-    from stigmergy.librarian.processing import _Reuse, _reuse_note
+def test_a_meeting_proposes_through_the_same_key_the_fast_lane_does(filed, expectations):
+    """The meeting half of the proposal observation, and the point ADR 041 argues: the same input
+    must not behave differently per door. `filed_meeting` is a different builder from `filed` and it
+    carries `entities_proposed` under the same name, so one read serves both flows — which is what
+    lets F09 be scored on the facet F02 is scored on rather than on a meeting-shaped variant of it.
 
-    env, sha = filed
-    parked = ("Northwind second wave goes depot by depot", "Shared review checklist scope")
-    refiled = MeetingOutcome(decisions=({"title": parked[0]},))
-    reuse = _reuse_note(_Reuse(prior_titles=parked, reused=False), refiled)
-    assert reuse["dropped"] == [parked[1]], "the production diff itself stopped reporting a loss"
-
-    observed = _observe(_result(schema.FILED, f"{MEETING}@{sha}", _meeting_report(sha, reuse=reuse)),
-                        1, env)
-
-    assert observed["reuse"]["preserved"] is False
-    assert observed["reuse"]["dropped"] == [parked[1]]
-    assert run_filing.score_phase({"reuse": {"decisions_preserved": True}},
-                                  observed)["reuse"] is False
-
-
-def test_a_meeting_that_re_filed_its_parked_distillation_intact_is_observed_as_preserved(filed,
-                                                                                        expectations):
-    """The benign twin: the same machinery on the road where nothing was lost has to say so, or
-    the facet is a permanent accusation rather than a measurement. `reused` is recorded beside it
-    and deliberately not scored — an agent that parks the way the meeting brief asks stores no
-    distillation at all, and marking that down would penalise following the brief."""
-    from stigmergy.librarian.agent import MeetingOutcome
-    from stigmergy.librarian.processing import _Reuse, _reuse_note
-
-    env, sha = filed
-    parked = ("Northwind second wave goes depot by depot", "Shared review checklist scope")
-    reuse = _reuse_note(_Reuse(prior_titles=parked, reused=True),
-                        MeetingOutcome(decisions=({"title": parked[0]}, {"title": parked[1]})))
-
-    observed = _observe(_result(schema.FILED, f"{MEETING}@{sha}", _meeting_report(sha, reuse=reuse)),
-                        0, env)
-
-    assert observed["reuse"] == {"preserved": True, "reused": True, "redistilled": False,
-                                 "dropped": []}
-    assert run_filing.score_phase(expectations["F09-meeting-parks"]["after_reply"],
-                                  observed)["reuse"] is True
-
-
-def test_a_re_file_that_carried_no_stored_distillation_is_credited_with_preserving_one(filed):
-    """Recorded here because it is the instrument's weakest cell, and a weakness that is written
-    down is not a trap.
-
-    An agent that parks the way the meeting brief asks (`decision: "triage"`) stores nothing, so
-    the re-file carries no `distillation_reuse` block, and `preserved` is True by construction —
-    there was nothing recorded that could be shown to have been lost. On that road it is the
-    `decisions` facet, not this one, that catches a decision going missing: F09's `after_reply`
-    names both decisions it must come back with.
+    Only the `proposals` cell of F09's expectation is asserted, and that is a property of THIS
+    fixture rather than a hedge: the commit above holds F08's page set, whose decision titles are
+    the ones `test_a_filed_meeting_meets_F08s_expectation_with_each_decisions_own_anchor` scores in
+    full. Scoring F09's `decisions` here would be asserting that F08's pages are F09's.
     """
     env, sha = filed
-    observed = _observe(_result(schema.FILED, f"{MEETING}@{sha}", _meeting_report(sha)), 1, env)
-    assert observed["reuse"] == {"preserved": True, "reused": False, "redistilled": True,
-                                 "dropped": []}
-    assert run_filing.score_phase({"reuse": {"decisions_preserved": True}},
-                                  observed)["reuse"] is True
+    entry = expectations["F09-meeting-proposes"]
+    rep = _meeting_report(sha, entities_proposed=[{"id": "project-wren", "name": "Project Wren",
+                                                   "type": "project"}])
+
+    observed = _observe(_result(schema.FILED, f"{MEETING}@{sha}", rep), 1, env)
+
+    assert observed["proposals"] == ["Project Wren"]
+    assert run_filing.score_phase(entry["expect"], observed)["proposals"] is True
 
 
-def test_the_row_says_whether_there_was_anything_to_preserve_in_the_first_place(filed):
-    """`reuse: 1.00` means EITHER "the capture kept what it had distilled" OR "there was never
-    anything to lose", and those are different claims about a backend. `reuse_at_risk` is what
-    tells the two apart for whoever reads the row six months from now — True exactly on the road
-    where a stored distillation reached the re-file, False on the brief-following triage road
-    where nothing was stored.
-
-    It rides BESIDE the reuse block rather than inside it, deliberately: that block is the
-    observation contract between `processing._reuse_note` and this instrument, pinned key for key
-    two tests up, and this flag is the instrument's own reading rather than a field the production
-    report grew.
-    """
-    from stigmergy.librarian.agent import MeetingOutcome
-    from stigmergy.librarian.processing import _Reuse, _reuse_note
-
-    env, sha = filed
-    parked = ("Northwind second wave goes depot by depot", "Shared review checklist scope")
-    stored = _reuse_note(_Reuse(prior_titles=parked, reused=True),
-                         MeetingOutcome(decisions=({"title": parked[0]}, {"title": parked[1]})))
-
-    at_risk = _observe(_result(schema.FILED, f"{MEETING}@{sha}",
-                               _meeting_report(sha, reuse=stored)), 0, env)
-    nothing_stored = _observe(_result(schema.FILED, f"{MEETING}@{sha}", _meeting_report(sha)),
-                              1, env)
-
-    assert at_risk["reuse_at_risk"] is True
-    assert nothing_stored["reuse_at_risk"] is False
-    # Both roads score the facet the same, which is exactly why the flag has to exist.
-    assert at_risk["reuse"]["preserved"] == nothing_stored["reuse"]["preserved"] is True
-    assert "reuse_at_risk" not in at_risk["reuse"], (
-        "the reuse block is a contract with `processing._reuse_note` — the instrument's own "
-        "reading belongs beside it, not inside it")
-
-
-def test_the_at_risk_flag_is_absent_from_a_phase_that_filed_no_meeting(filed):
-    """A fast-lane filing has no distillation to preserve and no block to read; the flag must not
-    appear there claiming False about a question that was never asked."""
-    env, sha = filed
-    rep = report_module.filed(page_path=NOTE, commit=sha, anchoring={"kind": "company"},
-                              links=[], overlaps=[], findings=[])
-    observed = _observe(_result(schema.FILED, f"{NOTE}@{sha}", rep), 1, env)
-    assert "reuse_at_risk" not in observed and "reuse" not in observed
+# **DELETED with the `reuse` facet (ADR 041):**
+# `test_a_meeting_that_lost_a_decision_on_the_way_back_is_observed_as_not_preserved`,
+# `test_a_meeting_that_re_filed_its_parked_distillation_intact_is_observed_as_preserved`,
+# `test_a_re_file_that_carried_no_stored_distillation_is_credited_with_preserving_one`,
+# `test_the_row_says_whether_there_was_anything_to_preserve_in_the_first_place` and
+# `test_the_at_risk_flag_is_absent_from_a_phase_that_filed_no_meeting`. All five pinned the
+# observation contract between `processing._reuse_note` and `run_filing._observe_reuse`, key for
+# key, and asked whether a meeting re-filed after a park had lost a decision on the way back.
+# Neither function exists: a meeting is never re-filed, so nothing makes the round trip and there is
+# no distillation stored between two passes to preserve. The property they protected — a decision
+# that went missing must be visible — belongs to `decisions`, which counts the pages that landed.
 
 
 # ── the cost axes, counted at the seam rather than read from a report ──────────────────────────
@@ -437,7 +372,8 @@ def test_the_at_risk_flag_is_absent_from_a_phase_that_filed_no_meeting(filed):
 def test_bounces_are_the_agent_passes_beyond_the_first(filed, attempts, bounces):
     """`report.filed` does not carry the agent's attempt count — that is why `CountingAgent` wraps
     the injected `Deps.agent` instead, and why no production code changed to build this eval. A
-    corrective retry is the second and last pass an item may spend; a reuse spends none."""
+    corrective retry is the second and last pass an item may spend; a refusal decided before the
+    agent ran spends none."""
     env, sha = filed
     rep = report_module.filed(page_path=NOTE, commit=sha, anchoring={"kind": "company"},
                               links=[], overlaps=[], findings=[])

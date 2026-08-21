@@ -1,10 +1,9 @@
 """`stigmergy.capture.retention` against real Postgres: `purge` nulls `payload`/`hints` on terminal
 rows older than the retention window, while `id`, `submitted_by`, `status`, the three timestamps,
 `attempts` and `result_ref` survive. Asserted by a test, never by inspection."""
-import pytest
 from psycopg.types.json import Jsonb
 
-from stigmergy.capture import dispositions, queue, retention, schema
+from stigmergy.capture import queue, retention, schema
 from stigmergy.capture.evidence import MemoryEvidenceStore
 from tests.capture.conftest import unique_material
 
@@ -114,22 +113,25 @@ def test_purge_leaves_a_recent_terminal_row_untouched(clean_queue):
     assert row["hints"] is not None
 
 
+def _legacy_resolved(conn, submission_id: int, *, finished_days_ago: int) -> None:
+    """A row a steward closed by hand back when captures could park — written the way such a row
+    exists in a deployment today: directly, since nothing reaches `resolved` any more."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE capture_queue SET status = %s, result_ref = %s, finished_at = now() - "
+            "make_interval(days => %s), claimed_at = NULL WHERE id = %s",
+            (schema.RESOLVED, "wiki/entities/Jordan Reyes.md@abc123", finished_days_ago,
+             submission_id))
+
+
 def test_purge_treats_resolved_as_terminal_on_the_ordinary_window(clean_queue):
-    """`resolved` belongs to `TERMINAL_STATUSES` and is purged on the SAME window as
-    `filed`/`rejected`/`failed` — no separate, longer grace period for a steward-handled row
-    (module docstring: "the intended answer, not a shortcut" — a steward's disposition reaches
-    `resolved` through `queue.dispose`, never through `queue.finish`, but retention's own
-    `_ELIGIBLE` predicate reads `schema.TERMINAL_STATUSES` and does not care which path got there)."""
+    """`resolved` is LEGACY and still belongs to `TERMINAL_STATUSES`: purged on the SAME window as
+    `filed`/`rejected`/`failed`, no separate grace period for a row a steward once handled by
+    hand — retention's `_ELIGIBLE` predicate reads the terminal set and nothing else."""
     ack = queue.submit(clean_queue, MemoryEvidenceStore(), kind="raw", material=unique_material(),
                        hints={"title": "row six"}, submitted_by=ALICE)
-    claimed = queue.claim_next(clean_queue)
-    queue.finish(clean_queue, ack["id"], status=schema.TRIAGE, expected_attempts=claimed["attempts"],
-                error="which entity?")
-    dispositions.resolve(clean_queue, ack["id"], actor="steward", note="folded by hand",
-                         page="wiki/entities/Jordan Reyes.md", commit="abc123")
-    with clean_queue.cursor() as cur:
-        cur.execute("UPDATE capture_queue SET finished_at = now() - make_interval(days => 45)"
-                    " WHERE id = %s", (ack["id"],))
+    queue.claim_next(clean_queue)
+    _legacy_resolved(clean_queue, ack["id"], finished_days_ago=45)
 
     result = retention.purge(clean_queue, older_than_days=30)
 
@@ -146,39 +148,14 @@ def test_purge_treats_resolved_as_terminal_on_the_ordinary_window(clean_queue):
 def test_purge_leaves_a_recent_resolved_row_untouched(clean_queue):
     ack = queue.submit(clean_queue, MemoryEvidenceStore(), kind="raw", material=unique_material(),
                        hints=None, submitted_by=ALICE)
-    claimed = queue.claim_next(clean_queue)
-    queue.finish(clean_queue, ack["id"], status=schema.TRIAGE, expected_attempts=claimed["attempts"],
-                error="which entity?")
-    dispositions.resolve(clean_queue, ack["id"], actor="steward", note="folded by hand today")
+    queue.claim_next(clean_queue)
+    _legacy_resolved(clean_queue, ack["id"], finished_days_ago=0)
 
     result = retention.purge(clean_queue, older_than_days=30)
 
     assert ack["id"] not in result["ids"]
     row = _row(clean_queue, ack["id"])
     assert row["payload"] is not None
-
-
-@pytest.mark.parametrize("status", [schema.NEEDS_INPUT, schema.TRIAGE])
-def test_purge_never_touches_a_parked_row_no_matter_how_old(clean_queue, status):
-    """`needs_input`/`triage` are NOT terminal — a human has not answered yet, and retention must
-    never delete the material they are about to be asked about, however old the row is."""
-    ack = queue.submit(clean_queue, MemoryEvidenceStore(), kind="raw", material=unique_material(),
-                       hints=None, submitted_by=ALICE)
-    claimed = queue.claim_next(clean_queue)
-    queue.finish(clean_queue, ack["id"], status=status, expected_attempts=claimed["attempts"],
-                error="which entity?")
-    # parked rows never stamp finished_at (queue.finish's own contract) — force a very old
-    # created_at directly, since "how old" for a parked row can only be measured from created_at.
-    with clean_queue.cursor() as cur:
-        cur.execute("UPDATE capture_queue SET created_at = now() - make_interval(days => 400)"
-                    " WHERE id = %s", (ack["id"],))
-
-    result = retention.purge(clean_queue, older_than_days=30)
-
-    assert ack["id"] not in result["ids"]
-    row = _row(clean_queue, ack["id"])
-    assert row["payload"] is not None
-    assert row["hints"] is not None
 
 
 def test_purge_is_idempotent_a_second_run_purges_nothing_more(clean_queue):

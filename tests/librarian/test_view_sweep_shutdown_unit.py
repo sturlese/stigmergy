@@ -148,7 +148,7 @@ def test_the_worker_never_interrupts_a_running_pass_and_still_reports_what_it_di
         w.stopping = True
         w.releasing = True
         result = views_regenerate.RunResult(checked=1, population=1)
-        result.outcomes = [views_regenerate.RegenOutcome(entity_id="acme", entity_name="Acme",
+        result.outcomes = [views_regenerate.RegenOutcome(entity_id="acme-corp", entity_name="Acme",
                                                          action="written")]
         finished["ok"] = True
         return result

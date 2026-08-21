@@ -220,7 +220,7 @@ def test_review_decide_over_the_limit_notes_returns_the_checks_own_sentence(monk
     svc = poisoned_service(audit=FakeAudit())
     mcp = build_mcp(svc)
 
-    out = _call_mcp(mcp, "review_decide", item_kind="parked-capture", item_id="1",
+    out = _call_mcp(mcp, "review_decide", item_kind="identity-proposal", item_id="acme",
                     verdict="requeue", notes="x" * (MAX_ARG_CHARS + 1))
     assert out == {"error": f"notes too long (max {MAX_ARG_CHARS} characters)"}
     assert svc.audit.rows[-1]["error_class"] == "ValueError"
@@ -236,7 +236,7 @@ def test_review_decide_at_the_limit_notes_reaches_the_row_read():
     svc = poisoned_service(audit=FakeAudit())
     mcp = build_mcp(svc)
 
-    out = _call_mcp(mcp, "review_decide", item_kind="parked-capture", item_id="1",
+    out = _call_mcp(mcp, "review_decide", item_kind="identity-proposal", item_id="acme",
                     verdict="requeue", notes="x" * MAX_ARG_CHARS)
     assert out == {"error": "review_decide failed (AssertionError)"}   # reached the DB read
     assert svc.audit.rows[-1]["error_class"] == "AssertionError"
@@ -250,15 +250,15 @@ def test_a_pydantic_shaped_value_error_is_still_reduced_to_a_class_name(monkeypa
 
     def _unmarked(*_a, **_kw):
         raise ValueError("SECRET-MARKER field path leaked from somewhere internal")
-    # The first read `_decide_parked_capture` makes, reached as a module attribute by
-    # `review._row_for_item` — patched here rather than raised from a double, so the ValueError
-    # arrives from exactly where a real one would.
-    monkeypatch.setattr("stigmergy.capture.queue.get_submission_trace", _unmarked)
+    # The first read `_decide_identity` makes (the registry lookup behind the authorization
+    # guard), reached as a module attribute — patched here rather than raised from a double, so
+    # the ValueError arrives from exactly where a real one would.
+    monkeypatch.setattr("stigmergy.server.review._proposal_or_none", _unmarked)
 
     svc = poisoned_service(audit=FakeAudit())
     mcp = build_mcp(svc)
 
-    out = _call_mcp(mcp, "review_decide", item_kind="parked-capture", item_id="1",
+    out = _call_mcp(mcp, "review_decide", item_kind="identity-proposal", item_id="acme",
                     verdict="requeue", notes="a short note")
     assert out == {"error": "review_decide failed (ValueError)"}
     assert "SECRET-MARKER" not in out["error"]

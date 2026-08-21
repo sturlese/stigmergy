@@ -289,7 +289,7 @@ def test_a_class_missing_run_meeting_is_not_a_filing_agent():
         wants_gathered = False
 
         def run(self, *, worktree, material, hints, submitted_by,
-                corrective="", reply="", flow_note="", gathered=""):
+                corrective="", flow_note="", gathered=""):
             return AgentRun()
 
     assert not isinstance(OrdinaryOnly(), FilingAgent)
@@ -301,11 +301,11 @@ def test_a_class_answering_both_calls_but_declaring_no_shape_is_not_one_either()
     is a shape it never claimed. The port refuses it at `isinstance` instead."""
     class Undeclared:
         def run(self, *, worktree, material, hints, submitted_by,
-                corrective="", reply="", flow_note="", gathered=""):
+                corrective="", flow_note="", gathered=""):
             return AgentRun()
 
         def run_meeting(self, *, worktree, material, meeting_meta, registry,
-                        source_page_path, corrective="", reply=""):
+                        source_page_path, corrective=""):
             return AgentRun()
 
     assert not isinstance(Undeclared(), FilingAgent)
@@ -321,11 +321,11 @@ def test_a_class_answering_both_calls_is_a_filing_agent_however_it_was_written()
         wants_gathered = False
 
         def run(self, *, worktree, material, hints, submitted_by,
-                corrective="", reply="", flow_note="", gathered=""):
+                corrective="", flow_note="", gathered=""):
             return AgentRun()
 
         def run_meeting(self, *, worktree, material, meeting_meta, registry,
-                        source_page_path, corrective="", reply="", gathered=""):
+                        source_page_path, corrective="", gathered=""):
             return AgentRun()
 
     assert isinstance(HandWritten(), FilingAgent)
@@ -359,7 +359,7 @@ def test_every_argument_of_every_backend_call_is_keyword_only(backend, method):
 
 @pytest.mark.parametrize("method", PORT_METHODS)
 def test_the_optional_arguments_default_the_same_way_everywhere(backend, method):
-    """The defaults are the contract too: `processing.py` omits `corrective`/`reply`/`flow_note` on
+    """The defaults are the contract too: `processing.py` omits `corrective`/`flow_note` on
     a first, unattached pass, so a backend defaulting one of them to `None` would meet a `None`
     where every other backend meets `""` — and the difference surfaces as a prompt containing the
     word "None"."""
@@ -388,12 +388,12 @@ def test_the_signature_check_catches_a_positional_worktree_that_isinstance_waves
         wants_gathered = False
 
         def run(self, worktree: str, *, material: str, hints: dict, submitted_by: str,
-                corrective: str = "", reply: str = "", flow_note: str = "",
+                corrective: str = "", flow_note: str = "",
                 gathered: str = "") -> AgentRun:
             return AgentRun()
 
         def run_meeting(self, worktree: str, *, material: str, meeting_meta: dict, registry,
-                        source_page_path: str, corrective: str = "", reply: str = "",
+                        source_page_path: str, corrective: str = "",
                         gathered: str = "") -> AgentRun:
             return AgentRun()
 
@@ -423,12 +423,12 @@ def test_the_signature_check_catches_a_renamed_argument_too():
         wants_gathered = False
 
         def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
-                corrective: str = "", reply: str = "", flow_note: str = "",
+                corrective: str = "", flow_note: str = "",
                 gathered: str = "") -> AgentRun:
             return AgentRun()
 
         def run_meeting(self, *, worktree: str, material: str, meta: dict, registry,
-                        source_page_path: str, corrective: str = "", reply: str = "",
+                        source_page_path: str, corrective: str = "",
                         gathered: str = "") -> AgentRun:
             return AgentRun()
 
@@ -458,12 +458,11 @@ def test_the_signature_check_catches_a_backend_that_never_learned_about_the_gath
         wants_gathered = False
 
         def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
-                corrective: str = "", reply: str = "", flow_note: str = "") -> AgentRun:
+                corrective: str = "", flow_note: str = "") -> AgentRun:
             return AgentRun()
 
         def run_meeting(self, *, worktree: str, material: str, meeting_meta: dict, registry,
-                        source_page_path: str, corrective: str = "",
-                        reply: str = "") -> AgentRun:
+                        source_page_path: str, corrective: str = "") -> AgentRun:
             return AgentRun()
 
     assert isinstance(PreGatherer(), FilingAgent)

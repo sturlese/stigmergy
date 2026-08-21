@@ -1,12 +1,13 @@
 # The page contract: `entity:`, the anchor field
 
-The narrative doc for `entity:` — the field that carries a page's *aboutness*. It sits beside
-[`brain-page-contract.md`](brain-page-contract.md),
+The narrative doc for `entity:` — the field that carries a page's *aboutness* — and, at the end, for
+the two fields that carry an **entity page's own lifecycle** (`approved_by:`, `proposed_aliases:`).
+It sits beside [`brain-page-contract.md`](brain-page-contract.md),
 which documents the wider `sources/` frontmatter dialect (`entity: initech # resolved from
 the folder path`); this file is the one place the FAST-LANE anchor rule itself is written down.
 Design records: [ADR 008](../decisions/008-entity-registry.md) (the
-registry itself), [ADR 016](../decisions/016-human-loop-and-entity-governance.md) (the human-loop
-routing an unresolved anchor takes).
+registry itself), [ADR 016](../decisions/016-human-loop-and-entity-governance.md) (the routing an
+unresolved anchor used to take).
 
 ## The ruling: aboutness, never mention
 
@@ -59,10 +60,12 @@ would anchor to it, and the `entity` filter would match half the corpus.
   is the single vocabulary table, and a type carries a `folder` only when the fast lane may mint
   one: `note` (`wiki/notes`), `decision` (`wiki/decisions`) and `concept` (`wiki/concepts`). The
   other four — `entity`, `source`, `meeting`, `view` — may be read, linked and cross-referenced,
-  but a capture that wants one lands in `triage` with the reason in the submitter's own language,
+  but a capture that wants one is refused with the reason in the submitter's own language,
   rather than being quietly downgraded to `note`: a per-type exemption is exactly how ambient
   ownerless content accumulates. Seven rows, one per WRITER — see
-  [`librarian.md`](./librarian.md#three-types-the-fast-lane-may-create-seven-it-knows).
+  [`librarian.md`](./librarian.md#three-types-the-fast-lane-may-create-seven-it-knows). An `entity`
+  page is the one a capture's own commit can still contain, and never as a DRAFT: the agent declares
+  the identity, code writes the page unconfirmed, and the lifecycle fields below say so.
 - **An absent `entity` key at all** is a pre-contract page — filed, or extracted, before this
   field existed. Detectable (a linter pass can simply ask whether the key exists), and a one-time
   backfill cleared them from the knowledge repo. That is a claim about the CONTENT repo, which lives
@@ -129,6 +132,58 @@ A **company-wide** anchoring outcome still needs a written reason — but the re
 **Steward edits**: `entity` is **not** in the trust-field group
 (`capture.schema.ATTRIBUTION_FIELDS`) — a steward hand-editing an existing page's own aboutness
 is legitimate governance, not a forged trust claim.
+
+## `approved_by:` and `proposed_aliases:` — an entity page's lifecycle
+
+These two live on `type: entity` pages **only**. They exist because an identity can now be created
+by the librarian while it files a capture, which means a page can be in the corpus — resolving,
+anchoring, searchable — before any person has agreed it should be. The page is where that fact is
+recorded; `ops/entity-registry.json` is a derived view of it, and the review inbox a derived view of
+the registry. `entities.generator.APPROVED_BY_KEY` / `PROPOSED_ALIASES_KEY` are the one spelling of
+each name.
+
+### `approved_by:` — who confirmed this identity
+
+A **scalar string**, with three readings and no fourth:
+
+| Value | Reading | Written by |
+|---|---|---|
+| `approved_by: ""` | **PROPOSED.** The librarian created this page from a capture that was about the thing, and no steward has confirmed the identity. The empty string IS the mark — silence would be indistinguishable from an old page | `librarian.identity.write_proposals`, and only ever this value |
+| `approved_by: ana@example.com` | **CONFIRMED**, by that person | a steward's decision: `entities.decide.approve_entity`, or `entities.mint.mint` for a `create` |
+| the key is **absent** | confirmed before the field existed. Pages written under the older contract are never migrated, and read as confirmed | nothing — it is what an old page already says |
+
+Absent-means-confirmed is deliberate and is the only reading that is safe: a repository whose entity
+pages predate the field must not wake up one morning with every identity in the review inbox.
+
+The value is a **name, not a permission**: nothing downstream authorizes on it. What it answers is
+"who stands behind this identity", the same question `git log`'s author line and the commit's
+`Decided-by:` trailer answer — three records of one fact, because a database and a repository can
+be separated.
+
+Two vetoes hold the empty-string spelling. `gates.gate_identity` refuses a created entity page whose
+`approved_by` is absent or non-empty (`approved-on-arrival`) — an identity that arrived confirmed is
+an identity nobody confirmed — and the knowledge repo's own contract linter raises a `lifecycle`
+error for a non-string value.
+
+### `proposed_aliases:` — spellings waiting on a steward
+
+A **list of strings**, on a REGISTERED entity's page: the spellings the librarian appended because a
+capture used them for this entity, each waiting on Approve (it moves into `aliases:`) or Decline (it
+is dropped). They resolve while they wait, exactly as `aliases:` does — that is the point, since the
+capture that proposed one is already anchored — and the registry carries them under the same name.
+
+The list is empty or absent on an entity nothing has proposed a spelling for. A spelling that is
+already the entity's own title or one of its `aliases:` is a **linter error**, not a duplicate to
+tolerate: a spelling the registry already resolves needs no proposal, and leaving it there would put
+a decision in the inbox that changes nothing whichever way it goes.
+
+### Both are checked against the derived view
+
+The contract linter compares each page's lifecycle to `ops/entity-registry.json` and errors when
+they disagree — a page proposed while the registry registers it confirmed, or a `proposed_aliases`
+list the registry does not carry — naming `stigmergy-entities regenerate` as the fix. The reason is
+not tidiness: the review inbox is built from the REGISTRY, so a drifted registry shows a steward
+proposals that do not exist and hides ones that do.
 
 ## How it is read
 

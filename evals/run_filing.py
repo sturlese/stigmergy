@@ -2,20 +2,23 @@
 """Golden filing runner — on-demand, keyed instrument (not wired into CI).
 
 Drives `evals/filing/`'s golden captures through the REAL filing path — `worker.process_next` over
-real Postgres, a real bare remote, a real `git worktree`, the eight gates and the knowledge repo's
+real Postgres, a real bare remote, a real `git worktree`, the nine gates and the knowledge repo's
 own contract linter — against the frozen mini repo at `evals/filing/repo/`, and scores each outcome
 per facet, each facet with its own denominator:
 
-  - status        the terminal queue status (`filed` / `needs_input` / `triage` / `rejected`)
-  - reason        a refusal's own `reason_code`, for the states that carry one
-  - type          the `type:` of the page that landed, read back out of git
-  - folder        where it landed
-  - anchor        the page's server-stamped `entity:` — resolved registry ids; `[]` is the
-                  company-wide answer, distinguished from a wrong entity
-  - edits         which OTHER pages the commit changed, scored by containment (`_edits_match`)
-  - park_question for a park: the unresolved name the question captured
-  - decisions     for a meeting: one decision page per decision, each with its OWN anchor
-  - reuse         for a meeting re-filed after a park: did it LOSE a decision on the way back
+  - status     the terminal queue status (`filed` / `rejected` / `failed`)
+  - reason     a refusal's own `reason_code`, for the states that carry one
+  - type       the `type:` of the page that landed, read back out of git
+  - folder     where it landed
+  - anchor     the page's server-stamped `entity:` — resolved registry ids; `[]` is the
+               company-wide answer, distinguished from a wrong entity
+  - edits      which OTHER pages the commit changed, scored by containment (`_edits_match`)
+  - proposals  for a name the registry does not know: the identity the filing PROPOSED for it
+  - decisions  for a meeting: one decision page per decision, each with its OWN anchor
+
+Every capture is ONE scored phase (ADR 041). Nothing parks, nothing is asked, nothing is re-filed:
+a name the registry does not know is proposed as an entity in the same commit as the page, and a
+steward confirms it afterwards from the inbox — which the instrument never reaches.
 
 ATTEMPTS, BOUNCES and COST are cost axes: reported, no bar, never folded into a quality facet.
 Scoring is deterministic — no judge — except the two title matchers, which are word-subset.
@@ -31,8 +34,9 @@ Scoring is deterministic — no judge — except the two title matchers, which a
 `EXPECTED_DENOMINATORS`, and the history row records `kinds`.
 
 Both backends need the local Postgres (`make db-up`) and `gitleaks` on PATH. `--backend double` has
-no NLP — it files one `note` per capture anchored to the first registry entity — so it scores 1.00
-on the facets code decides and low on every facet judgment decides.
+no NLP — it files one `note` per capture anchored to the first registry entity, and proposes an
+identity only when a `DOUBLE:propose=` directive says to — so it scores 1.00 on the facets code
+decides and low on every facet judgment decides.
 """
 import argparse
 import collections
@@ -61,7 +65,7 @@ FIXTURE = ROOT / "evals" / "filing"
 # Every facet this instrument knows, in the order the table prints them: quality first, then the
 # two cost counters, which carry no bar.
 QUALITY_FACETS = ("status", "reason", "type", "folder", "anchor", "edits",
-                  "park_question", "decisions", "reuse")
+                  "proposals", "decisions")
 COST_FACETS = ("attempts", "bounces")
 FACETS = QUALITY_FACETS + COST_FACETS
 
@@ -69,12 +73,16 @@ FACETS = QUALITY_FACETS + COST_FACETS
 # that quietly loses one is a score that ROSE because a capture stopped being counted. Adding a
 # capture fails `_check_set` first, on purpose — update this in the same commit.
 #
-# MOVED for issue #77, which added F11-F14: four entity-resolution captures (a qualifier the legal
-# suffix table never covered, the abbreviation direction, the false friend, and the legal-form
-# spelling code used to fold). Scores before and after are comparable per FACET and not per run —
-# see evals/README.md's growth protocol, and say so in the history row's own commit.
-EXPECTED_DENOMINATORS = {"status": 16, "reason": 1, "type": 13, "folder": 13, "anchor": 11,
-                         "edits": 1, "park_question": 2, "decisions": 2, "reuse": 1,
+# MOVED for ADR 041, which retired the park. Four numbers changed and each one is a fact about the
+# redesign rather than an edit to a yardstick: `status` fell 16 -> 14 because the two ask-back
+# captures stopped being two phases each; `anchor` fell 11 -> 10 because F02 no longer asserts an
+# id it would have to invent (the id of a PROPOSED entity is slugified from the name the agent
+# chose, so `proposals` scores that judgment tolerantly instead); `park_question` and `reuse` are
+# gone with the states they measured, and `proposals` takes the former's denominator of 2.
+# Scores before and after are comparable per FACET and not per run — see evals/README.md's growth
+# protocol, and say so in the history row's own commit.
+EXPECTED_DENOMINATORS = {"status": 14, "reason": 1, "type": 13, "folder": 13, "anchor": 10,
+                         "edits": 1, "proposals": 2, "decisions": 2,
                          "attempts": 12, "bounces": 12}
 
 # Words carried by nearly every title in this domain; matching on them would let any two titles
@@ -180,11 +188,20 @@ def _decisions_match(expected: list, observed: list) -> bool:
     return True
 
 
-def _park_question_matches(expected: list, observed: list) -> bool:
-    """Every name the expectation says should have been asked about was asked about.
+def _proposals_match(expected: list, observed: list) -> bool:
+    """Every identity the expectation says should have been proposed was proposed.
 
-    Matched loosely against the whole joined question — demanding a list shape would score
-    `report.py`'s wording rather than what was left unresolved.
+    Matched loosely against the joined names, the same predicate the retired `park_question` facet
+    used and for the same reason: what is being scored is WHICH unregistered thing the filing gave
+    an identity to, not the spelling the agent chose for it. A proposal named `Halcyon Grid pilot`
+    is the same judgment as one named `Halcyon Grid`, and the id — `slugify(name)` — differs
+    between them, which is exactly why this facet is here and the `anchor` facet is not asserted on
+    a proposing capture.
+
+    Generous about extras on purpose: a filing that proposed the name AND a second identity beside
+    it still recognised the one the expectation names, and the extra is already fenced by
+    `identity`'s three honesty checks (named in the material, no registered collision, not a name a
+    steward declined).
     """
     joined = " ".join(str(name) for name in (observed or []))
     return bool(expected) and all(title_matches(name, joined) for name in expected)
@@ -209,16 +226,10 @@ def score_phase(expect: dict, observed: dict) -> dict:
         out["anchor"] = _anchor_matches(expect["anchor"], observed.get("anchor") or {})
     if "edits" in expect:
         out["edits"] = _edits_match(expect["edits"], observed.get("edits") or [])
-    if "park_question" in expect:
-        out["park_question"] = _park_question_matches(expect["park_question"],
-                                                      observed.get("park_question") or [])
+    if "proposals" in expect:
+        out["proposals"] = _proposals_match(expect["proposals"], observed.get("proposals") or [])
     if "decisions" in expect:
         out["decisions"] = _decisions_match(expect["decisions"], observed.get("decisions") or [])
-    if "reuse" in expect:
-        # Only "did the capture keep what it had distilled" is scored; whether the re-file spent a
-        # model pass is reported, never scored (`_observe_reuse`).
-        want = bool(expect["reuse"].get("decisions_preserved", True))
-        out["reuse"] = bool((observed.get("reuse") or {}).get("preserved")) == want
     if "attempts" in expect:
         out["attempts"] = observed.get("attempts") == expect["attempts"]
     if "bounces" in expect:
@@ -230,9 +241,9 @@ def aggregate(phases: list, *, backend: str, model: str, wall_s: float,
               kinds: list | None = None) -> dict:
     """Per-facet hits and denominators over every scored phase, plus the cost axes.
 
-    `phases` is `[{id, phase, expect, observed, facets}, ...]` — one entry per scored moment, so a
-    parking capture contributes two. `kinds` rides into the report and the history row: a per-facet
-    score is only comparable against one over the same set.
+    `phases` is `[{id, phase, expect, observed, facets}, ...]` — one entry per scored moment, and
+    since ADR 041 that is exactly one per capture. `kinds` rides into the report and the history
+    row: a per-facet score is only comparable against one over the same set.
     """
     facets: dict = {}
     for entry in phases:
@@ -315,7 +326,7 @@ def _history_metrics(report: dict, phases: list, provenance: dict) -> dict:
             "counts": {name: {"hits": row["hits"], "of": row["of"]}
                        for name, row in report["facets"].items()},
             # What the phases ENDED as: a row whose facets look ordinary but whose statuses say
-            # `triage: 9` is a run to distrust, and the report may be long gone.
+            # `failed: 9` is a run to distrust, and the report may be long gone.
             "statuses": _status_counts(phases),
             "total_cost_usd": report["total_cost_usd"],
             "agent_passes": report["agent_passes"],
@@ -342,38 +353,11 @@ def _anchor_from_page(frontmatter: dict) -> dict:
     return {"kind": ("entity" if ids else "company"), "ids": sorted(ids)}
 
 
-def _observe_reuse(report: dict, attempts: int) -> dict:
-    """What a meeting's re-file after a park did to the distillation the park had made.
-
-    Three observables, only `preserved` is SCORED — no decision the parked pass distilled went
-    missing. `reused` (re-filed verbatim, no model call) and `redistilled` are reported only:
-    whether a park stores a reusable distillation depends on HOW it parked, so scoring them would
-    mark a brief-following backend down for following the brief.
-    """
-    reuse = report.get("distillation_reuse") or {}
-    if not reuse:
-        # Nothing was stored, so nothing was at risk and nothing was lost.
-        return {"preserved": True, "reused": False, "redistilled": attempts > 0, "dropped": []}
-    dropped = list(reuse.get("dropped") or [])
-    return {"preserved": not dropped, "reused": bool(reuse.get("reused")),
-            "redistilled": attempts > 0, "dropped": dropped}
-
-
-def _reuse_at_risk(report: dict) -> bool:
-    """Was a stored distillation actually present to preserve?
-
-    `preserved` is True by construction when nothing was stored, so a `reuse` score of 1.00 is
-    ambiguous without this flag. Reported, never scored. Kept BESIDE the `reuse` block: that block
-    is the observation contract with `processing._reuse_note`, pinned key for key by
-    `tests/evals/test_filing_observation_contract.py`.
-    """
-    return bool(report.get("distillation_reuse"))
-
-
 class CountingAgent:
     """Wraps the agent under measurement and counts the passes ONE capture spends.
 
-    A re-file that reused a parked distillation is the one that arrives with `calls == 0`.
+    One capture is one phase now, so the count a phase reports is the whole cost of that capture:
+    the drafting pass, plus the corrective retry if a gate or an identity honesty check bounced it.
 
     This stands where `processing` expects a `filing_port.FilingAgent`, so it must forward EVERY
     declared member of that port, not only its methods: `structured_ordinary` and `wants_gathered`
@@ -482,9 +466,15 @@ def _subset(manifest: dict, expectations: dict, kinds: list) -> tuple:
                                               if entry["id"] in ids]})
 
 
+# The two keys an ask-back expectation used to carry. Named rather than forgotten: an entry that
+# grows one again would be scored on its `expect` block alone and its second half would vanish
+# without a word, which is the failure `_check_set`'s third refusal exists to make loud.
+RETIRED_ENTRY_KEYS = ("reply", "after_reply")
+
+
 def _expect_blocks(entry: dict) -> list:
-    """Every scored moment one entry declares: the first pass, and the re-file after a reply."""
-    return [entry["expect"]] + ([entry["after_reply"]] if "after_reply" in entry else [])
+    """Every scored moment one entry declares — exactly one since ADR 041 retired the park."""
+    return [entry["expect"]]
 
 
 def _denominators(expectations: dict) -> dict:
@@ -504,7 +494,7 @@ def _check_set(manifest: dict, expectations: dict, *, whole_set: bool = True) ->
        half and an omission in the other cancel out under `set()`);
     2. every expectation key is a facet the scorer knows — `score_phase` ignores what it does not
        recognize, so `achor:` would silently leave the anchor denominator;
-    3. `reply` and `after_reply` travel together;
+    3. no entry carries the retired ask-back keys (`RETIRED_ENTRY_KEYS`);
     4. the denominators are the pinned ones;
     5. a decision entry asserts a `title` or an `anchor`, and title-less entries come LAST.
 
@@ -528,11 +518,13 @@ def _check_set(manifest: dict, expectations: dict, *, whole_set: bool = True) ->
         sys.exit("expected/expectations.json names keys the scorer does not score, so those "
                  f"captures would silently leave their facets' denominators: {named}")
 
-    half = [entry["id"] for entry in expectations["expectations"]
-            if ("reply" in entry) != ("after_reply" in entry)]
-    if half:
-        sys.exit(f"these expectations carry a `reply` without an `after_reply` block or the other "
-                 f"way round — an ask-back case is only measured when both are present: {half}")
+    parked = [entry["id"] for entry in expectations["expectations"]
+              if any(key in entry for key in RETIRED_ENTRY_KEYS)]
+    if parked:
+        sys.exit(f"these expectations carry {list(RETIRED_ENTRY_KEYS)}, which nothing scores any "
+                 f"more: a capture never waits on a person (ADR 041), so there is no reply to send "
+                 f"and no second phase to score. The block would be read by nobody and the capture "
+                 f"would quietly be measured on its `expect` half alone: {parked}")
 
     # An entry asserting neither title nor anchor matches whatever page is left; an anchor-only
     # entry written before a titled sibling takes that sibling's page and scores a correct page set
@@ -588,8 +580,6 @@ def _run(args, manifest: dict, expectations: dict, *, kinds: list | None = None)
     from stigmergy.librarian import githubapp, worker
     from stigmergy.librarian.agent import build_agent
     from stigmergy.librarian.errors import LibrarianConfigError
-    from stigmergy.server.service import BrainService
-    from stigmergy.server.settings import Settings as ServerSettings
     from tests import testdb
     from tests.librarian import support
 
@@ -646,8 +636,7 @@ def _run(args, manifest: dict, expectations: dict, *, kinds: list | None = None)
                       file=sys.stderr)
                 phases += _drive(conn, deps, counting, env, capture, entry,
                                  materials=materials, schema=schema, worker=worker,
-                                 support=support, split_frontmatter=split_frontmatter,
-                                 brain_service=BrainService, server_settings=ServerSettings)
+                                 support=support, split_frontmatter=split_frontmatter)
                 print("", file=sys.stderr)
 
     report = aggregate(phases, backend=args.backend, model=model,
@@ -702,13 +691,16 @@ def _withheld_reason(phases: list, *, failed_status: str) -> str:
 
 
 def _drive(conn, deps, counting, env, capture: dict, entry: dict, *, materials: Path,
-           schema, worker, support, split_frontmatter, brain_service, server_settings) -> list:
-    """One golden capture, submitted and drained through the real path. Returns its scored phases.
+           schema, worker, support, split_frontmatter) -> list:
+    """One golden capture, submitted and drained through the real path. Returns its scored phase.
 
-    A parking capture yields TWO phases; the reply travels back through the real `BrainService.reply`
-    channel, never a hand-written UPDATE. Each capture is submitted and drained on its own so that
-    exactly one row is claimable at any moment and `process_next` cannot pick up a different one —
-    which is also what lets a duplicate-refusal capture depend on an earlier one having filed.
+    ONE phase, always — a capture never waits on a person (ADR 041), so there is no reply to send
+    and nothing to re-file. The list return is kept because `aggregate` reads a flat list of phases
+    and a caller that has to remember whether this returns one or many is how a phase gets dropped.
+
+    Each capture is still submitted and drained on its own, so exactly one row is claimable at any
+    moment and `process_next` cannot pick up a different one — which is what lets a
+    duplicate-refusal capture depend on an earlier one having filed.
     """
     material = (materials / capture["material"]).read_text(encoding="utf-8")
     counting.reset()
@@ -722,35 +714,12 @@ def _drive(conn, deps, counting, env, capture: dict, entry: dict, *, materials: 
     else:
         item = support.submit(conn, deps, material, submitted_by=capture["submitted_by"],
                               hints=capture.get("hints") or None)
+    del item                            # submitted; the row is found again by draining the queue
     result = _drain_one(conn, deps, worker, capture_id=capture["id"], what="its own capture")
     observed = _observe(result, counting.calls, env=env, support=support,
                         split_frontmatter=split_frontmatter)
-    out = [_phase(capture["id"], "only" if "reply" not in entry else "park",
-                  entry["expect"], observed)]
     print(f"{result.status:12s}", end="", flush=True, file=sys.stderr)
-
-    if "reply" not in entry:
-        return out
-
-    if result.status != schema.NEEDS_INPUT:
-        # Nothing to reply to. Recorded as a MISS rather than skipped: a vanished phase would
-        # shrink its facets' denominators and raise the score of a backend that never asked.
-        out.append(_phase(capture["id"], "after_reply", entry["after_reply"],
-                          {"status": "", "note": "never parked, so no reply was possible"}))
-        return out
-
-    settings = server_settings(identity=capture["submitted_by"], identities_path="x")
-    service = brain_service(settings, conn, embedder=None, audiences=set(),
-                            identity=capture["submitted_by"])
-    service.reply(item["id"], entry["reply"])
-    counting.reset()
-    refiled = _drain_one(conn, deps, worker, capture_id=capture["id"],
-                         what="the capture it had just replied to")
-    print(f" -> {refiled.status}", end="", flush=True, file=sys.stderr)
-    out.append(_phase(capture["id"], "after_reply", entry["after_reply"],
-                      _observe(refiled, counting.calls, env=env, support=support,
-                               split_frontmatter=split_frontmatter)))
-    return out
+    return [_phase(capture["id"], "only", entry["expect"], observed)]
 
 
 def _drain_one(conn, deps, worker, *, capture_id: str, what: str):
@@ -758,7 +727,8 @@ def _drain_one(conn, deps, worker, *, capture_id: str, what: str):
 
     `None` is legitimate for a polling service and a contradiction here — exactly one row is
     claimable at this moment. Unpacking it blindly gives a tuple-unpacking traceback whose real
-    cause (a lost reply, a stale lease, another worker on this database) is nowhere in it.
+    cause (a submit that never landed, a stale lease, another worker on this database) is nowhere
+    in it.
     """
     claimed = worker.process_next(conn, deps)
     if claimed is None:
@@ -788,13 +758,20 @@ def _observe(result, attempts: int, *, env, support, split_frontmatter) -> dict:
         "reason": report.get("reason_code", ""),
         "attempts": attempts,
         # A corrective retry is the last pass an item may spend, so bounces is passes minus one —
-        # except on a reuse, which spends none at all.
+        # except on a refusal decided before the agent ran, which spends none at all.
         "bounces": max(0, attempts - 1),
         "cost_usd": float(report.get("cost_usd", 0.0) or 0.0),
         "edits": list(report.get("pages_edited") or []),
-        "park_question": [name for name in
-                          ([report.get("unresolved_name")] if report.get("unresolved_name")
-                           else list(report.get("unresolved_names") or [])) if name],
+        # The identities this filing CREATED unconfirmed, by the NAME the account chose — the id
+        # is `slugify(name)` and would score the spelling, which `_proposals_match` exists not to.
+        "proposals": [str(e.get("name", "")) for e in (report.get("entities_proposed") or [])
+                      if isinstance(e, dict) and e.get("name")],
+        # Reported, never scored. A filing that recognised the name as a registered entity's
+        # SPELLING proposed an alias instead of an identity, and that is the near miss a reader of
+        # a red `proposals` cell needs in front of them.
+        "proposed_aliases": [f"{a.get('entity', '')}: {a.get('alias', '')}"
+                             for a in (report.get("aliases_proposed") or [])
+                             if isinstance(a, dict) and a.get("alias")],
         # Diagnostics for a miss, chosen so two reports from the same backend diff to nothing but
         # `wall_s` and `cost_usd`. Do not add the report's summary sentence: it embeds the commit
         # sha, which differs on every run.
@@ -802,7 +779,7 @@ def _observe(result, attempts: int, *, env, support, split_frontmatter) -> dict:
         "anchored_to": report.get("anchored_to", ""),
     }
     if "@" not in (result.result_ref or ""):
-        return observed                 # a park or a refusal: nothing was committed to read back
+        return observed                 # a refusal: nothing was committed to read back
     sha = result.result_ref.rsplit("@", 1)[1]
 
     meeting = report.get("filed_meeting")
@@ -815,8 +792,6 @@ def _observe(result, attempts: int, *, env, support, split_frontmatter) -> dict:
              "anchor": _page_anchor(env, sha, d.get("path", ""), support, split_frontmatter)}
             for d in meeting.get("decisions") or []]
         observed["source_pages"] = list(meeting.get("source_pages") or [])
-        observed["reuse"] = _observe_reuse(report, attempts)
-        observed["reuse_at_risk"] = _reuse_at_risk(report)
         return observed
 
     page_path = report.get("page_path", "")

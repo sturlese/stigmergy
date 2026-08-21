@@ -460,26 +460,75 @@ def test_recheck_passes_when_nothing_relevant_moved():
     birth.recheck(proposal, registry=_registry(), existing_pages=())   # must not raise
 
 
-# ── the librarian's no-name placeholder is refused at the terminal gate ─────────────────────────
-def test_the_no_name_placeholder_is_refused_by_the_gate_every_door_passes_through():
-    """OLD BEHAVIOUR: only the PREFILL rule (`situations.mint_name_prefill`) knew the placeholder,
-    so a door that offered a park's names some other way — a per-name button, a typed name — could
-    hand `prepare` the librarian's own word for "nothing was named" and mint it as an identity
-    that then resolves for every future capture containing the phrase. The refusal is now at the
-    gate every door passes through, by value, padding and all."""
-    from stigmergy.capture import schema as capture_schema
-
-    with pytest.raises(EntityError, match="placeholder for a park that named nothing"):
-        _prepare(canonical_id="something-unnamed", name=capture_schema.UNNAMED_ENTITY_PLACEHOLDER,
-                 entity_type="organization")
-    with pytest.raises(EntityError, match="placeholder"):
-        _prepare(canonical_id="something-unnamed",
-                 name=f"  {capture_schema.UNNAMED_ENTITY_PLACEHOLDER}  ", entity_type="organization")
+# ── the lifecycle on the page: a proposal is `approved_by: ""`, an approval names a person ───────
+def test_a_page_rendered_with_no_approver_is_a_proposal_the_generator_reads_as_such():
+    """The librarian's page: `approved_by` PRESENT and EMPTY. Read back through the generator's own
+    vocabulary rather than a string check, so the writer and the reader are pinned to each other."""
+    proposal = _prepare(canonical_id="globex", name="Globex", entity_type="organization")
+    page = birth.render_page(TEMPLATE, proposal, today="2026-07-27")
+    front = yaml.safe_load(page.split("---")[1])
+    assert front[generator.APPROVED_BY_KEY] == ""
+    assert f'{generator.APPROVED_BY_KEY}: ""' in page
 
 
-def test_a_name_that_merely_contains_the_placeholder_words_still_mints():
-    """The benign twin: the refusal is by VALUE, not by substring — "Something Unnamed Records"
-    is an ordinary (if odd) name and the gate must not bounce it."""
-    proposal = _prepare(canonical_id="something-unnamed-records", name="Something Unnamed Records",
-                        entity_type="organization")
-    assert proposal.name == "Something Unnamed Records"
+def test_a_page_rendered_with_an_approver_is_approved_by_that_person():
+    """A steward's own `create` IS the approval, and the field says who."""
+    proposal = _prepare(canonical_id="globex", name="Globex", entity_type="organization")
+    page = birth.render_page(TEMPLATE, proposal, today="2026-07-27", approved_by="Test Steward")
+    assert yaml.safe_load(page.split("---")[1])[generator.APPROVED_BY_KEY] == "Test Steward"
+
+
+def test_the_approver_is_written_through_the_yaml_escaper_and_refused_on_control_characters():
+    proposal = _prepare(canonical_id="globex", name="Globex", entity_type="organization")
+    page = birth.render_page(TEMPLATE, proposal, today="2026-07-27", approved_by='Ann "A" Lee')
+    assert yaml.safe_load(page.split("---")[1])[generator.APPROVED_BY_KEY] == 'Ann "A" Lee'
+    with pytest.raises(EntityError, match=r"U\+001B"):
+        birth.render_page(TEMPLATE, proposal, today="2026-07-27", approved_by="Ann\x1bLee")
+
+
+# ── the body: the librarian fills every section it can; a steward's stub keeps the template ─────
+def test_render_page_fills_the_template_sections_from_a_prepared_body():
+    proposal = _prepare(canonical_id="globex", name="Globex", entity_type="organization")
+    body = birth.prepare_body(
+        summary="Globex is a fictional conglomerate that the brain tracks as a client.",
+        facts=["Signed a reporting pilot in August 2026", "Headquartered in Springfield"],
+        connections=["[[Globex Reporting Pilot]] — the note that introduced it"])
+    page = birth.render_page(TEMPLATE, proposal, today="2026-07-27", body=body,
+                             related=["Globex Reporting Pilot"])
+    front, _, rest = page.partition("\n---\n")
+    assert "<One clear paragraph" not in page       # the stub was replaced, not kept beside
+    assert "Globex is a fictional conglomerate" in rest
+    assert "- Signed a reporting pilot in August 2026" in rest
+    assert "- Headquartered in Springfield" in rest
+    assert "## Facts" in rest and "## Connections" in rest   # headings the TEMPLATE lacked were added
+    assert "- [[Globex Reporting Pilot]] — the note that introduced it" in rest
+    assert yaml.safe_load(front.split("---")[1])["related"] == ["[[Globex Reporting Pilot]]"]
+    assert "\n\n\n" not in page
+
+
+def test_a_section_given_no_content_keeps_the_templates_stub():
+    """The benign twin of the fill: a steward at `create` knows nothing yet, and the stub is the
+    page's honest statement that a person still has to write that section."""
+    proposal = _prepare(canonical_id="globex", name="Globex", entity_type="organization")
+    page = birth.render_page(TEMPLATE, proposal, today="2026-07-27",
+                             body=birth.prepare_body(summary="", facts=(), connections=()))
+    assert "<One clear paragraph" in page
+    assert page == birth.render_page(TEMPLATE, proposal, today="2026-07-27")
+
+
+def test_prepare_body_bounds_and_cleans_every_field():
+    body = birth.prepare_body(summary="  two\n  lines  ", facts=["a", "a", " ", "b"],
+                              connections=[])
+    assert body.summary == "two lines"
+    assert body.facts == ("a", "b")                  # de-duplicated, blanks dropped, collapsed
+    assert len(birth.prepare_body(summary="x" * 5000).summary) == birth.MAX_SUMMARY_CHARS
+    with pytest.raises(EntityError, match="max"):
+        birth.prepare_body(facts=[f"fact {i}" for i in range(birth.MAX_FACTS + 1)])
+    with pytest.raises(EntityError, match=r"U\+0007"):
+        birth.prepare_body(facts=["a\x07fact"])
+
+
+def test_a_related_page_name_is_held_to_the_name_rules():
+    proposal = _prepare(canonical_id="globex", name="Globex", entity_type="organization")
+    with pytest.raises(EntityError, match="wikilink"):
+        birth.render_page(TEMPLATE, proposal, today="2026-07-27", related=["a|b"])

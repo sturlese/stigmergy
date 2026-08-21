@@ -371,23 +371,18 @@ def test_a_model_that_stays_shape_refused_lands_terminal_after_exactly_two_passe
 
     _, result = _file(clean_queue, deps)
 
-    assert result.status in (schema.FAILED, schema.TRIAGE), result.report.get("summary")
+    assert result.status == schema.FAILED, result.report.get("summary")
     assert len(script.prompts) == 2, f"{len(script.prompts)} agent pass(es), expected exactly 2"
     assert result.report["cost_usd"] > 0
     _nothing_landed(env, before)
 
 
-def test_an_account_that_parks_while_leaving_a_page_behind_is_refused(
+def test_an_account_that_still_parks_is_a_shape_fault_on_every_pass(
         tmp_path, clean_queue, require_gitleaks):
-    """**"It is SUPPOSED to have written nothing" is not a check, and this is the check.**
-
-    A `triage` outcome with a diff behind it is an agent that wrote and then said it did not — so
-    the worktree decides, as it does everywhere else in this flow. The refusal counts the changes it
-    found, which is what tells an operator this was a stray write rather than an empty park.
-
-    Reachable only on THIS road: a structured backend has no write tool at all, so the case exists
-    for a backend that holds one — which is both shipped ordinary backends since ADR 034.
-    """
+    """OLD BEHAVIOUR: `decision: "triage"` parked the capture (and an account that parked while
+    leaving a page behind was refused for the stray write). There is no park: `triage` is not a
+    decision the boundary knows, the account is refused by SHAPE on both passes, and the page the
+    model wrote is reset with the worktree — nothing lands."""
     script = Script([_write_page_step(),
                      _write_account_step({"decision": "triage",
                                           "triage": {"kind": "unresolved-entity",
@@ -399,8 +394,8 @@ def test_an_account_that_parks_while_leaving_a_page_behind_is_refused(
     _, result = _file(clean_queue, deps)
 
     assert result.status == schema.FAILED, result.report.get("summary")
-    assert "parked" in result.report["summary"] and "change(s)" in result.report["summary"], (
-        result.report["summary"])
+    assert "decision" in result.report["summary"], result.report["summary"]
+    assert result.report["agent_attempts"] == 2
     _nothing_landed(env, before)
 
 
@@ -443,24 +438,33 @@ def test_a_run_that_writes_TWO_pages_is_refused_by_the_cross_check(
     _nothing_landed(env, before)
 
 
-def test_a_park_that_really_wrote_nothing_is_parked_rather_than_refused(
+def test_an_iterating_run_that_proposes_the_unknown_entity_files_it_beside_the_note(
         tmp_path, clean_queue, require_gitleaks):
-    """The stray-write check's benign twin, and it is the case an operator meets constantly: a
-    capture about something the registry does not know is PARKED on a human, not failed. A check
-    that could only ever refuse would turn every honest park into a system fault."""
+    """The case an operator meets constantly, on the road that ships: a capture about something the
+    registry does not know. The model writes its note linking the new name, declares the entity in
+    `new_entities`, and code creates the page beside the note — one commit, the note anchored to the
+    newborn id, the registry regenerated, a steward to confirm it afterwards."""
     script = Script([_SEARCH_STEP,
-                     _write_account_step({"decision": "triage",
-                                          "triage": {"kind": "unresolved-entity",
-                                                     "name": "Halcyon Grid"},
-                                          "summary": "the registry does not know this"})])
+                     _write_page_step(_page_text(anchor="Halcyon Grid")),
+                     _write_account_step(_account(
+                         anchoring={"kind": "entity", "entities": ["Halcyon Grid"], "reason": ""},
+                         links_created=["Halcyon Grid"],
+                         new_entities=[{"name": "Halcyon Grid", "entity_type": "organization",
+                                        "role": "a design partner on the pilot", "aliases": [],
+                                        "summary": "Halcyon Grid is a design partner the sync "
+                                                   "introduced.",
+                                        "facts": ["Joined the pilot"],
+                                        "connections": [f"[[{TITLE}]] — the note"]}]))])
     env, deps = _rig(tmp_path, script)
-    before = support.all_commit_shas(env.bare)
 
-    _, result = _file(clean_queue, deps)
+    _, result = _file(clean_queue, deps, f"{MATERIAL} Halcyon Grid joined the pilot.")
 
-    assert result.status in schema.PARKED_STATUSES, result.report.get("summary")
-    assert "Halcyon Grid" in json.dumps(result.report)
-    _nothing_landed(env, before)
+    assert result.status == schema.FILED, result.report.get("summary")
+    _, sha = result.result_ref.rsplit("@", 1)
+    changed = support.changed_paths(env.bare, sha)
+    assert "wiki/entities/Halcyon Grid.md" in changed and "ops/entity-registry.json" in changed
+    assert 'entity: ["halcyon-grid"]' in support.read_filed_page(env.bare, sha, PAGE_PATH)
+    assert result.report["entities_proposed"][0]["id"] == "halcyon-grid"
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════

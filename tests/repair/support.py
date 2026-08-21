@@ -307,7 +307,7 @@ def seed_deletion_corpus(env) -> dict[str, str]:
 
 
 # ── the `entity-alias` kind's fixtures: two identities that are one entity ────────────────────
-# The fixture repo's `ops/entity-registry.json` registers `Acme Corp` under the id `acme`, which is
+# The fixture repo's `ops/entity-registry.json` registers `Acme Corp` under the id `acme-corp`, which is
 # NOT `slugify("Acme Corp")` — so that repo is permanently in registry drift as far as the frozen
 # contract linter's `check_registry` is concerned. Every other kind gets away with it because
 # `gate_contract` filters the linter's findings to the pages a diff TOUCHED and none of them touch

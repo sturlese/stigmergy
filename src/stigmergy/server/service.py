@@ -11,11 +11,12 @@ from stigmergy import text as textutil
 from stigmergy.capture import evidence as evidence_plane
 from stigmergy.capture import queue
 from stigmergy.capture import schema as capture_schema
-from stigmergy.capture.errors import CaptureError, ReplyRejected
+from stigmergy.capture.errors import CaptureError
 from stigmergy.capture.schema import ensure_capture_schema
 from stigmergy.index import rank, search, store
 from stigmergy.index.backends.embedder import embedder_for_model
 from stigmergy.index.errors import EmptyIndexError
+from stigmergy.kernel.normalize import resolution_key
 from stigmergy.server import entity_aliases, identity, review
 from stigmergy.server.acl import visible
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
@@ -58,10 +59,10 @@ _SNAPSHOT_ORIGIN = f"snapshot in the index ({entity_aliases.ENTITY_REGISTRY_RELP
 MAX_AUDIT_HINT_KEYS = 32
 MAX_AUDIT_DEPTH = 20
 
-# The ONE sentence every identity failure of `brain_reply` answers with — nonexistent id, somebody
-# else's row, somebody else's row not waiting on an answer. The security property IS that the three
-# are byte-identical: the first sentence that drifts turns this tool into an existence oracle.
-NO_REPLY_WAITING = "no submission is waiting on a reply from you at that id"
+# How many registry matches `brain_submit` echoes beside its acknowledgement, and the shortest
+# spelling it will look for: a two-letter alias matches prose by accident.
+MAX_SUBMIT_MATCHES = 12
+MIN_MATCH_CHARS = 3
 
 
 def check_arg_length(name: str, value: str) -> None:
@@ -121,12 +122,17 @@ fence = textutil.fence
 
 
 def _neutralize_entity_record(record: dict) -> dict:
-    """A registry record with every steward-authored string neutralized; `id` is a KEY."""
+    """A registry record with every steward-authored string neutralized; `id` is a KEY. The
+    lifecycle rides along: a caller reading `proposed: true` knows a steward has not confirmed
+    the identity yet — it resolves and anchors all the same."""
     return {
         "id": record["id"],
         "name": neutralize_fence(record.get("name", "")),
         "type": neutralize_fence(record.get("type", "")),
         "aliases": [neutralize_fence(a) for a in record.get("aliases") or []],
+        "proposed": bool(record.get("proposed", False)),
+        "approved_by": neutralize_fence(record.get("approved_by", "") or ""),
+        "proposed_aliases": [neutralize_fence(a) for a in record.get("proposed_aliases") or []],
     }
 
 
@@ -492,7 +498,9 @@ class BrainService:
 
         return {
             "entity": {"id": record["id"], "name": record["name"], "type": record["type"],
-                      "aliases": record["aliases"], "page": page_ref},
+                      "aliases": record["aliases"], "proposed": record["proposed"],
+                      "approved_by": record["approved_by"],
+                      "proposed_aliases": record["proposed_aliases"], "page": page_ref},
             "view": view_ref,
             "timeline": timeline_items, "timeline_note": timeline_note,
         }
@@ -563,43 +571,32 @@ class BrainService:
             raise CaptureError("no resolved identity — a capture cannot be submitted unattributed")
         ack = queue.submit(self.conn, self.evidence, kind=kind, material=material, hints=hints,
                            submitted_by=self.identity)
-        return {**ack, "message": _ack_message(ack)}
+        # Echoed at once, before the librarian runs: which registered entities this material
+        # names, so the submitter sees on the spot that the brain recognises them — and, when it
+        # names none, that the librarian will PROPOSE what it finds. Scoped like `list_entities`:
+        # a match is an existence claim about an entity.
+        entities = self._registry_matches(material)
+        return {**ack, "entities": entities, "message": _ack_message(ack, entities)}
 
-    def reply(self, submission_id: int, answer: str) -> dict:
-        """Answer the librarian's one question about a `needs_input` capture. The audit row records
-        the answer's SIZE and HASH, never its text — a reply can carry the same credential a
-        capture can."""
-        text = answer if isinstance(answer, str) else ""
-        digest, size = capture_schema.material_digest(text)
-        return self._call(
-            capture_schema.REPLY_TOOL,
-            {"submission_id": submission_id, "answer_chars": len(text),
-             "answer_bytes": size, "answer_sha256": digest if size else ""},
-            lambda: self._reply(submission_id, answer))
-
-    def _reply(self, submission_id: int, answer: str) -> dict:
-        """Identity first, state second. Every identity failure returns the ONE `NO_REPLY_WAITING`
-        sentence; a state failure may be specific, because an authorized caller can already read
-        the row. A steward may reply on a submitter's behalf, attributed to who actually replied."""
-        capture_schema.prepare_reply(answer)
-        if not self.identity:
-            raise ReplyRejected(NO_REPLY_WAITING)
-        # Read UNSCOPED, then decide: the only way to tell the identity cases apart internally
-        # while telling nobody outside, and a scoped read would break reply-on-behalf.
-        row = queue.get_submission_trace(self.conn, submission_id)
-        if row is None or not (self.unrestricted or row["submitted_by"] == self.identity):
-            raise ReplyRejected(NO_REPLY_WAITING)
-        if row["status"] != capture_schema.NEEDS_INPUT:
-            raise ReplyRejected(
-                f"capture {submission_id} isn't waiting on a reply — its status is "
-                f"{row['status']!r}. There's nothing to answer; check brain_submissions for what "
-                f"happened to it.")
-        on_behalf = row["submitted_by"] != self.identity
-        result = queue.record_reply(
-            self.conn, submission_id, answer=answer, actor=self.identity,
-            note=(f"replied on behalf of {row['submitted_by']}" if on_behalf else "replied"))
-        return {**result, "on_behalf_of": row["submitted_by"] if on_behalf else "",
-                "message": _reply_message(submission_id)}
+    def _registry_matches(self, material: str) -> list[dict]:
+        """The registered entities whose name or an alias the material spells, word-bounded and
+        accent/case-folded — the same folding `resolve_entity` uses. A hint, never a resolution:
+        the librarian judges, this only tells the submitter what the registry already knows."""
+        haystack = f" {resolution_key(material)} "
+        scoped = set(self.scoped_entities())
+        out = []
+        for cid, record in self._registry_records().items():
+            if cid not in scoped:
+                continue
+            for spelling in (record.get("name", ""), *record.get("aliases", ())):
+                needle = resolution_key(spelling)
+                if len(needle) >= MIN_MATCH_CHARS and f" {needle} " in haystack:
+                    out.append({"id": cid, "name": neutralize_fence(record.get("name", "")),
+                                "proposed": bool(record.get("proposed", False))})
+                    break
+            if len(out) >= MAX_SUBMIT_MATCHES:
+                break
+        return out
 
     def submissions(self, limit: int = DEFAULT_SUBMISSION_LIMIT, status: str | None = None) -> dict:
         """The caller's own submissions — or the whole queue for an unrestricted identity. The
@@ -627,7 +624,6 @@ class BrainService:
         withheld material is decided in `capture.queue`'s query, so this method receives empty
         fields plus the server's own `withheld_reason` — unfenced, being the server's own text."""
         excerpt, note = row["excerpt"], row["error"]
-        needs_input = row["status"] == capture_schema.NEEDS_INPUT
         return {
             "id": row["id"],
             "kind": row["kind"],
@@ -639,17 +635,8 @@ class BrainService:
             "claimed_at": row["claimed_at"],
             "finished_at": row["finished_at"],
             "result_ref": row["result_ref"],
-            "question": neutralize_fence(note) if needs_input else "",
-            # The invocation as a structured fact beside the sentence (an LLM paraphrase will not
-            # preserve it), built from `capture.schema` so the two cannot promise different calls.
-            "reply_hint": ({"tool": capture_schema.REPLY_TOOL, "submission_id": row["id"],
-                            "invocation": capture_schema.reply_invocation(row["id"])}
-                           if needs_input else None),
-            # already suppressed at the query on a row whose material may not be read back
-            "reply": neutralize_fence(row["reply"]),
-            "waiting_on": row["waiting_on"],
             "events": _neutralize_report(row["events"]),
-            "error": "" if needs_input else neutralize_fence(note),
+            "error": neutralize_fence(note),
             "blob_refs": row["blob_refs"],
             "content_sha256": row["content_sha256"],
             "bytes": row["bytes"],
@@ -665,14 +652,13 @@ class BrainService:
     # The mechanics live in `server.review`: it needs librarian primitives this module may not
     # import.
     def review_queue(self, limit: int = 50) -> dict:
-        """The unified inbox over entity proposals and parked captures —
-        ACL/ownership-scoped to the caller, same posture as `submissions()`."""
+        """The unified inbox over the librarian's proposals — identities, spellings — and the
+        nightly repairs, ACL-scoped to the caller (`server.review.review_queue`)."""
         return self._call("review_queue", {"limit": limit},
                           lambda: review.review_queue(self, limit=limit))
 
     def review_decide(self, item_kind: str, item_id: str, verdict: str, notes: str = "", *,
-                      source: str, name: str = "", entity_id: str = "", entity_type: str = "",
-                      aliases=None, role: str = "", requeue: bool = False) -> dict:
+                      source: str, into: str = "") -> dict:
         """Record a verdict on one review-queue item, attributed to THIS service's resolved
         identity; `review.review_decide` carries the contract. The audit row keeps lengths and
         closed-vocabulary fields only, never the free text.
@@ -685,14 +671,10 @@ class BrainService:
         return self._call(
             "review_decide",
             {"item_kind": item_kind, "item_id": item_id, "verdict": verdict, "source": source,
-             "notes_chars": len(notes or ""), "name_chars": len(name or ""),
-             "entity_id": entity_id or "", "entity_type": entity_type or "",
-             "aliases_present": bool(aliases), "role_chars": len(role or ""),
-             "requeue": bool(requeue)},
+             "notes_chars": len(notes or ""), "into": into or ""},
             lambda: review.review_decide(
                 self, item_kind=item_kind, item_id=item_id, verdict=verdict, source=source,
-                notes=notes, name=name, entity_id=entity_id, entity_type=entity_type,
-                aliases=aliases, role=role, requeue=requeue))
+                notes=notes, into=into))
 
     # ── scoped read helpers (reused by the answer layer) ──────────────────────
     def scoped_entities(self) -> list[str]:
@@ -726,18 +708,19 @@ def _audit_hint_keys(hints) -> list[str]:
     return keys[:MAX_AUDIT_HINT_KEYS] + [f"...[{len(keys) - MAX_AUDIT_HINT_KEYS} more keys]"]
 
 
-def _reply_message(submission_id: int) -> str:
-    """Restates the one-ask budget: an answer guarantees another try, never a filing."""
-    return (f"recorded — capture #{submission_id} is back in the queue to be looked at again. This "
-            f"was the only question this capture gets: if it still can't be matched to a registered "
-            f"entity, a steward takes it from there and you won't be asked a second time.")
-
-
-def _ack_message(ack: dict) -> str:
-    """Promises exactly what happened — queued and attributed — and nothing more."""
+def _ack_message(ack: dict, entities: list[dict] = ()) -> str:
+    """Promises exactly what happened — queued and attributed — and says what the registry
+    already recognises in the material, so the submitter knows what to expect: an anchor to a
+    named entity, or a proposal the librarian will make."""
     line = (f"queued as submission #{ack['id']} and attributed to {ack['submitted_by']}. "
             "The librarian files it; nothing is in the brain until it does — "
             "check with brain_submissions.")
+    if entities:
+        names = ", ".join(e["name"] for e in entities)
+        line += f" The registry already knows {names}; the librarian will anchor to what fits."
+    else:
+        line += (" The registry recognises no entity in this material; if it is about one, the "
+                 "librarian will propose it and a steward confirms it afterwards.")
     if ack.get("flagged_hints"):
         line += (f" Note: the material declares {', '.join(ack['flagged_hints'])} in its "
                  "frontmatter; recorded as a hint and ignored — those fields are the server's.")

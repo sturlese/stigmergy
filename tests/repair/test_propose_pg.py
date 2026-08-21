@@ -105,7 +105,7 @@ def test_only_the_three_proposable_checks_reach_the_model(conn, settings):
     excluded by name, and this is where that stays true."""
     run_id = support.seed_gardener_run(conn)
     support.seed_finding(conn, run_id, check="aging-seed", subjects=[support.NOTE_A])
-    support.seed_finding(conn, run_id, check="stale-view", subjects=["views/acme.md"])
+    support.seed_finding(conn, run_id, check="stale-view", subjects=["views/acme-corp.md"])
 
     result = _propose(conn, settings)
 

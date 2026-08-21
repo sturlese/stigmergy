@@ -2,6 +2,8 @@
 type: entity
 title: "Acme Corp"
 status: developing
+entity_type: organization
+aliases: ["Acme"]
 created: 2026-01-01
 updated: 2026-01-01
 tags: [entity, organization]
@@ -29,7 +31,8 @@ checks real instead of stubbing either one out.
 
 ## Facts
 
-- Registered in the fixture entity registry under the id `acme`.
+- Registered in the fixture entity registry under the id `acme-corp` — the slug of
+  this page's title, which is the id `stigmergy-entities regenerate` derives.
 - Carries no numeric claims of its own, so a capture that links to it cannot pick up a
   figure from this page by accident.
 - The body is padded past the contract linter's thirty-line minimum on purpose, the same

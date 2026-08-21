@@ -5,7 +5,7 @@ const WINDOW_KEY = "stigmergy-ops-window-days";
 
 let META = {
   actor_default: "admin-console", github: { configured: false }, workflows: [], entity_types: [],
-  statuses: [], parked_statuses: [], terminal_statuses: [], situations: [], repair_kinds: [],
+  statuses: [], terminal_statuses: [], legacy_statuses: [], repair_kinds: [],
   gardener_severities: [], item_kinds: [], decision_sources: [],
   metrics: { default_days: 30, max_days: 365 },
 };

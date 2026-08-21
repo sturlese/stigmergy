@@ -144,7 +144,7 @@ qa-golden: venv ## Golden QA with the REAL embedder + model (needs the env file)
 	  --repo $(or $(QA_REPO),evals/corpus) $(QA_ARGS)
 
 # The third instrument, and the only one that WRITES: it drives the golden captures through the
-# real filing path — real Postgres, a real bare remote, a real worktree, the eight gates, the
+# real filing path — real Postgres, a real bare remote, a real worktree, the nine gates, the
 # knowledge repo's own contract linter — into the frozen mini repo at `evals/filing/repo/`.
 #
 # Two things it needs that the other two do not. `gitleaks` on PATH, because the secrets gate
