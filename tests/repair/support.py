@@ -9,6 +9,7 @@ nothing about the secrets veto, and both are exactly the properties this package
 A plain module rather than a `conftest.py`, the same reasoning `tests/librarian/support.py` gives
 for itself: fixtures are per-package pytest wiring, this is plain code any file can import.
 """
+import asyncio
 import json
 import os
 
@@ -18,7 +19,7 @@ from stigmergy.gardener import checks as gardener_checks
 from stigmergy.gardener import schema as gardener_schema
 from stigmergy.gardener import store as gardener_store
 from stigmergy.gardener import sweep as gardener_sweep
-from stigmergy.repair import proposer
+from stigmergy.repair import deletion, proposer, sweep
 from stigmergy.repair.schema import ensure_repair_schema
 from tests import testdb
 from tests.librarian import support as librarian_support
@@ -282,6 +283,15 @@ def write_source(env, title: str, *, content_hash: str, extracted_at: str = "202
     if push:
         librarian_support.commit_and_push(env.repo, f"test: add {title}")
     return relpath
+
+
+def deletion_plan(repo: str, targets, *, skill_text: str = FIXTURE_SKILL) -> list[dict]:
+    """A WRITTEN sweep for `targets`: `deletion.plan`'s code half, then `sweep.write` through the
+    offline double (ADR 043 D1). Every surface that stores or applies a deletion goes through
+    this, so no fixture can seed a plan whose bodies were never written — which is exactly the
+    plan `deletion.validate` refuses."""
+    return asyncio.run(sweep.write(repo, deletion.plan(repo, list(targets)),
+                                    skill_text=skill_text))
 
 
 def seed_deletion_corpus(env) -> dict[str, str]:

@@ -71,13 +71,24 @@ referred to one of them (B3's unit of approval stands). What changes is who writ
   a set of pages refers to something must see the set, the lesson the duplicate-identity pass
   learned about pairs.
 - **Code proves the bounds**, and they are the bounds a steward would check by eye:
-  1. the set of pages the model returned IS the set of pages that name a going stem — none outside
-     it, none missing;
+  1. the set of pages the model returned IS the set of pages that refer to a going page — none
+     outside it, none missing, none twice;
   2. each returned page's frontmatter is byte-identical to code's own scrub of it;
-  3. afterwards, no page in the corpus names a going stem — `_names_a_going_page` over the clone,
-     plus the unfiltered whole-tree dead-link scan B5 introduced, both unchanged;
-  4. the diff that lands is the diff that was written: `expected_bytes` to `gate_body_rewrite`,
+  3. each body keeps its `# Title` line, opens no `---`, is never emptied, grows by at most a
+     sentence or two, and loses at most a handful of lines that referred to nothing being removed.
+     That last one is not decoration: the growth bound is one-sided, and on its own it admits a
+     body handed back as its title line alone — not empty, title kept, no growth, no reference
+     surviving, and a page's whole content gone;
+  4. afterwards, nothing in the corpus refers to a going page — over the clone, plus the
+     unfiltered whole-tree dead-link scan B5 introduced, both unchanged;
+  5. the diff that lands is the diff that was written: `expected_bytes` to `gate_body_rewrite`,
      byte-equality, B5's proof unchanged.
+
+  The reference question gains one shape the frozen linter does not count — a markdown link at a
+  going page's path, which is how `views/spacex.md` named the removed note a third time. It is
+  scoped to targets that name a page in THIS corpus (no URL scheme, ending in `.md`): a bound that
+  REFUSES must not fire on something the writer has no business touching, or deleting
+  `Roadmap.md` would demand the destruction of every `notion.so/…/Roadmap` anybody had written.
 - **One retry, then a refusal.** A draft outside those bounds is retried once with the findings,
   as every other model road is; a second miss refuses the whole deletion, naming the page the
   model could not reconcile. No proposal is stored and nothing lands. **There is no deterministic
@@ -85,9 +96,14 @@ referred to one of them (B3's unit of approval stands). What changes is who writ
   same page are two implementations that can disagree about it, and a floor that the model
   "usually" clears becomes the road the failures travel.
 
-B6's "no partial sweep" keeps its meaning and loses its mechanism: there is no longer a reference
-"the sweep cannot rewrite", because a writer can rewrite anything; what remains is all-or-nothing.
-`_scrubbed_body`, `_blanked_code`, `_unremovable_reference` and its refusal go.
+B6's "no partial sweep" keeps its meaning and loses most of its mechanism: a reference in a BODY
+is never "one the sweep cannot rewrite" any more, because a writer reconciles anything.
+`_scrubbed_body`, `_blanked_code` and `_unremovable_reference` go. Two refusals stay, both at plan
+time and both naming the page so a person can act on it: a reference in a frontmatter field this
+kind does not rewrite, and a referring page whose frontmatter block code cannot read at all (CRLF,
+a BOM, an unterminated `---`). The second is new and it earns its place: such a page would
+otherwise be handed to the writer whole, and every outcome is wrong — the frontmatter comes back
+as prose, or is dropped, or the deletion fails twice blaming a model for a page shape.
 
 ### D2 — the hand that typed the deletion has already approved it
 
@@ -101,9 +117,12 @@ before any model is asked), runs the review lane's own steward guard over the FU
 doomed and referencing alike, `all(...)` not `any(...)`, `_guard_repair_decision`'s rule
 verbatim — writes the sweep (D1), proves the bounds, runs the nine gates, commits App-authored
 with the deciding human in the trailer, and pushes without rebase (the lost-race amendment
-stands). It returns the commit and the per-page diff, or a refusal that names its reason.
+stands). It returns the commit and the per-page diff, or a refusal that names its reason. One call names
+at most ten pages — not a technical bound (the plan's byte ceiling is that) but a statement of what
+one call MEANS: pages a person judged, never a corpus sweep typed in one line.
 
-The proposal row is born `applied` or `failed`, never `pending`: the ledger, the console's history
+The proposal row is born `approved` in the caller's name and is `applied` or `failed` when the
+call returns, never `pending`: the ledger, the console's history
 and the metrics keep their source of truth without a second table, and `review_decide` stops
 seeing a person's deletion at all. B2's reason for keeping creation CLI-only — "a button is a
 surface with its own authorization question" — is answered rather than overruled: the question was
@@ -148,14 +167,23 @@ The writer's brief lives in the knowledge repo beside the proposer's
 (`.claude/skills/`), read at run time from the checkout; a missing brief is a named refusal,
 never a default prompt in code (039's D4, unchanged).
 
-### D5 — the diff is the reading
+### D5 — the diff is the reading, on the road where nobody could read it earlier
 
-Nothing human reads the rewritten prose before it is pushed. That is the trade, and it is stated
+The one road that still rests in the inbox — B2's code-derived duplicate `sources/` deletions —
+shows the steward every planned body IN FULL, exactly as `entity-body` shows its draft: there a
+person decides before the push, and hiding the only thing worth reading would be that kind's own
+mistake made twice.
+
+On the act road, nothing human reads the rewritten prose before it is pushed. That is the trade, and it is stated
 here rather than softened: the fidelity of a rewritten paragraph has no proof code can run, and
 the only reading a pending row ever bought was the steward's. What replaces it: the tool returns
 the per-page diff, so the agent in the conversation reads it back to the person who asked; the
 gates prove structure; the gardener's editorial sweep reads every changed page on its next run;
-and the page's last good bytes are one commit back. The undo is git, by an operator with a
+and the page's last good bytes are one commit back. Those diffs are page CONTENT, so they obey
+what every other surface that echoes a page obeys — `acl.visible()` decides who may read one
+(being a steward of a folder is not being in a page's audience, and a withheld diff is NAMED
+rather than dropped) and each is fenced as UNTRUSTED-DATA, since a diff carries both the page's
+own bytes and fresh model output. The undo is git, by an operator with a
 checkout, with the knowledge repo's authorship-baseline cost when the sweep touched `views/` or
 `sources/` — a governed revert is not in this ADR.
 

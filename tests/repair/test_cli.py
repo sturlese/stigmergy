@@ -1,4 +1,4 @@
-"""`stigmergy-repair`: the three commands, and the one thing it deliberately cannot do.
+"""`stigmergy-repair`: the three commands, and the two things it deliberately cannot do.
 
 The preview is the part worth pinning hardest. A steward reads it to decide whether to authorize a
 change, so it has to render what the APPLIER will perform — and it renders from the stored ops
@@ -10,7 +10,6 @@ import pytest
 
 from stigmergy.librarian import page as page_policy
 from stigmergy.repair import cli, deletion, schema, store
-from stigmergy.repair import settings as settings_module
 from stigmergy.repair.errors import RepairError
 from tests.repair import support
 
@@ -44,11 +43,18 @@ def test_the_cli_offers_no_way_to_apply_a_proposal():
             parser.parse_args([forbidden])
 
 
+def test_the_cli_offers_no_way_to_delete_a_page_either():
+    """Since ADR 043 a person's deletion is an act at an authenticated door — `brain_delete`, the
+    console — where the steward guard runs and the sweep lands in the same pass. A `delete` verb
+    here could only put it in the inbox for a second click by the same person, which is the
+    redundancy that ADR removed."""
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["delete", "wiki/notes/X.md", "--why", "w"])
+
+
 def test_the_commands_it_does_offer_all_parse():
-    """The benign twin: a parser that rejected everything would pass the test above. `delete` is
-    the one verb that CREATES a proposal from a terminal, and it is the same authority level as
-    `propose` — it inserts a pending row and applies nothing."""
-    for argv in (["propose"], ["list"], ["show", "1"], ["delete", "wiki/notes/X.md", "--why", "w"]):
+    """The benign twin: a parser that rejected everything would pass the two tests above."""
+    for argv in (["propose"], ["list"], ["show", "1"]):
         assert cli.build_parser().parse_args(argv).fn is not None
 
 
@@ -84,7 +90,6 @@ def test_a_backlink_previews_as_the_link_alone_and_no_callout():
 
 
 def test_show_reports_an_unknown_id_rather_than_printing_an_empty_proposal(conn, monkeypatch):
-    from stigmergy.repair.errors import RepairError
     with pytest.raises(RepairError, match="does not exist"):
         _run(conn, ["show", "424242"], monkeypatch)
 
@@ -133,7 +138,6 @@ def test_list_json_separates_what_waits_from_what_was_decided(conn, capsys, monk
 def test_propose_refuses_a_repo_that_is_not_a_git_checkout(conn, tmp_path, monkeypatch):
     """A proposal is validated against the pages that are actually COMMITTED. A bare directory of
     markdown would answer every question against a corpus the apply will never see."""
-    from stigmergy.repair.errors import RepairError
     monkeypatch.setenv("STIGMERGY_REPO", str(tmp_path / "not-a-checkout"))
     with pytest.raises(RepairError, match="not a git checkout"):
         _run(conn, ["propose"], monkeypatch)
@@ -228,103 +232,7 @@ def test_the_list_prints_a_body_proposal_on_one_aligned_line(conn, capsys, monke
     assert "1 op(s) on wiki/entities/Meridian Partners.md" in out
 
 
-# ── the third kind, and the ONE verb that creates a proposal from a terminal ───────────────────
-DELETE_ARGS = ["--why", "the memo was superseded and nothing needs it any more"]
-
-
-def _delete(conn, repo, paths, monkeypatch, extra=DELETE_ARGS):
-    return _run(conn, ["--repo", repo, "delete", *paths, *extra], monkeypatch)
-
-
-def test_delete_stores_one_pending_proposal_carrying_the_whole_sweep(conn, repo_env, capsys,
-                                                                     monkeypatch):
-    """The CLI is the only door that CREATES a deletion, and it stores the whole blast radius:
-    `target_paths` has to carry every page the sweep touches, or the review lane's per-path steward
-    guard would authorize a rewrite of pages nobody's steward saw."""
-    pages = support.seed_deletion_corpus(repo_env)
-
-    assert _delete(conn, repo_env.repo, [pages["doomed"]], monkeypatch) == 0
-    capsys.readouterr()
-
-    (row,) = store.pending_proposals(conn)
-    assert row["kind"] == schema.KIND_DELETE
-    assert row["target_paths"] == sorted([pages["doomed"], pages["keeps_a_link"],
-                                          pages["in_prose"], pages["only_related"]])
-    assert deletion.deleted_paths(row["ops"]) == [pages["doomed"]]
-    assert row["rationale"] == "the memo was superseded and nothing needs it any more"
-
-
-def test_the_row_a_human_typed_records_that_no_model_proposed_it(conn, repo_env, capsys,
-                                                                 monkeypatch):
-    """An empty `model_id` is a statement, not a gap: `delete` is the only kind no model can
-    propose, and the column is where that stays true after the terminal session is gone."""
-    pages = support.seed_deletion_corpus(repo_env)
-    _delete(conn, repo_env.repo, [pages["doomed"]], monkeypatch)
-    capsys.readouterr()
-
-    assert store.pending_proposals(conn)[0]["model_id"] == ""
-
-
-def test_delete_prints_the_plan_before_anybody_decides_it(conn, repo_env, capsys, monkeypatch):
-    """A person typing this has to be able to read what they just proposed — the pages that go and
-    the pages that get rewritten — without going and looking it up somewhere else."""
-    pages = support.seed_deletion_corpus(repo_env)
-
-    _delete(conn, repo_env.repo, [pages["doomed"]], monkeypatch)
-
-    out = capsys.readouterr().out
-    assert pages["doomed"] in out
-    assert pages["in_prose"] in out
-    assert "3" in out, "the number of pages that would be rewritten"
-    assert "nothing has changed" in out, "a proposal is not an apply, and the output says so"
-
-
-def test_delete_needs_a_reason_and_stores_nothing_without_one(conn, repo_env, monkeypatch):
-    pages = support.seed_deletion_corpus(repo_env)
-
-    with pytest.raises(RepairError, match="reason"):
-        _delete(conn, repo_env.repo, [pages["doomed"]], monkeypatch, extra=["--why", "   "])
-
-    assert store.pending_proposals(conn) == []
-
-
-def test_delete_refuses_an_entity_page_and_stores_nothing(conn, repo_env, monkeypatch):
-    """The refusal a person is most likely to meet, and the one that has to explain itself: an
-    identity is retired through governance, not deleted."""
-    support.seed_deletion_corpus(repo_env)
-
-    with pytest.raises(RepairError, match="identity"):
-        _delete(conn, repo_env.repo, ["wiki/entities/Acme Corp.md"], monkeypatch)
-
-    assert store.pending_proposals(conn) == []
-
-
-def test_delete_refuses_a_plan_over_its_ceiling_and_stores_nothing(conn, repo_env, monkeypatch):
-    """One approval is one decision a person can actually have read. The bound is on the STORED
-    PLAN's bytes, because that is what a sweep costs a steward and a database row alike."""
-    pages = support.seed_deletion_corpus(repo_env)
-    monkeypatch.setenv(settings_module.MAX_PLAN_BYTES_ENV, "10")
-
-    with pytest.raises(RepairError, match="ceiling"):
-        _delete(conn, repo_env.repo, [pages["doomed"]], monkeypatch)
-
-    assert store.pending_proposals(conn) == []
-
-
-def test_delete_refuses_when_the_same_deletion_is_already_waiting(conn, repo_env, capsys,
-                                                                  monkeypatch):
-    """The UNIQUE index would refuse the second insert as a database error. A person typing a
-    command gets a sentence instead, and it says where the first one is."""
-    pages = support.seed_deletion_corpus(repo_env)
-    _delete(conn, repo_env.repo, [pages["doomed"]], monkeypatch)
-    capsys.readouterr()
-
-    with pytest.raises(RepairError, match="already waiting"):
-        _delete(conn, repo_env.repo, [pages["doomed"]], monkeypatch)
-
-    assert len(store.pending_proposals(conn)) == 1
-
-
+# ── the third kind's preview: what a deletion already in the table would do ───────────────────
 DELETE_OPS = [{"op": deletion.OP_DELETE, "path": "wiki/notes/Doomed.md"},
               {"op": deletion.OP_SCRUB, "path": "wiki/notes/Cites It.md",
                "expected_before_hash": "abc", "planned_after": "---\ntype: note\n---\n\n# X\n"}]
@@ -338,7 +246,7 @@ def test_a_delete_previews_as_the_pages_that_go_and_the_pages_that_change():
     assert lines[0] == "--- wiki/notes/Doomed.md"
     assert "removed" in lines[1]
     assert lines[2] == "--- wiki/notes/Cites It.md"
-    assert "link" in lines[3]
+    assert "no longer refers" in lines[3]
 
 
 def test_a_delete_preview_never_renders_the_additive_shape_or_the_planned_bytes():

@@ -14,6 +14,11 @@ from stigmergy.server.errors import RateLimitError
 DEFAULT_OVERALL_PER_MIN = 30
 DEFAULT_ASK_PER_MIN = 10
 DEFAULT_PROPOSE_PER_MIN = 5
+# `brain_delete` is the most expensive call this server serves — a clone, a model call, gitleaks, a
+# whole-repo lint and a push, each pinning a worker thread for its duration — and it is the one
+# that WRITES. Stricter than `ask` because a person deleting pages does it a handful of times in a
+# sitting, and a caller spending this bucket is a caller holding threads nobody else can use.
+DEFAULT_DELETE_PER_MIN = 3
 
 
 class _Bucket:
@@ -46,16 +51,19 @@ class RateLimiter:
 
     def __init__(self, overall_per_min: int = DEFAULT_OVERALL_PER_MIN,
                  ask_per_min: int = DEFAULT_ASK_PER_MIN,
-                 propose_per_min: int = DEFAULT_PROPOSE_PER_MIN, clock=time.monotonic):
+                 propose_per_min: int = DEFAULT_PROPOSE_PER_MIN,
+                 delete_per_min: int = DEFAULT_DELETE_PER_MIN, clock=time.monotonic):
         self.overall_per_min = overall_per_min
         self.ask_per_min = ask_per_min
         self.propose_per_min = propose_per_min
+        self.delete_per_min = delete_per_min
         self._clock = clock
         self._overall: dict[str, _Bucket] = {}
         # One extra, stricter bucket per named expensive tool, on top of the shared overall one —
         # the next such tool is one line here, never a second copy of the branch in `check`.
         self._extra: dict[str, tuple[int, dict[str, _Bucket]]] = {
             "ask": (self.ask_per_min, {}),
+            "brain_delete": (self.delete_per_min, {}),
         }
 
     def check(self, identity: str, tool: str) -> None:

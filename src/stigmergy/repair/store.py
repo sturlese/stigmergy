@@ -35,17 +35,25 @@ def _row(r) -> dict:
 _INSERT_PROPOSAL = """
 INSERT INTO repair_proposals
     (run_id, finding_ids, kind, target_paths, ops, rationale, content_key, model_id,
-     finding_subjects)
+     finding_subjects, status, decided_by, decided_at)
 VALUES (%(run_id)s, %(finding_ids)s, %(kind)s, %(target_paths)s, %(ops)s, %(rationale)s,
-        %(content_key)s, %(model_id)s, %(finding_subjects)s)
+        %(content_key)s, %(model_id)s, %(finding_subjects)s, %(status)s, %(decided_by)s,
+        CASE WHEN %(decided_by)s = '' THEN NULL ELSE now() END)
 RETURNING id
 """
 
 
 def insert_proposal(conn, *, run_id: int, finding_ids, target_paths, ops, rationale: str,
                     content_key: str, kind: str = KIND_EDITS, model_id: str = "",
-                    finding_subjects=()) -> int:
-    """One pending proposal. Returns its id.
+                    finding_subjects=(), status: str = STATUS_PENDING,
+                    decided_by: str = "") -> int:
+    """One proposal. Returns its id.
+
+    `status`/`decided_by` are how the ACT road records a deletion a person made at an
+    authenticated door (ADR 043 D2): the row is born `approved` in their name and is applied in
+    the same call, so it is never listed as pending and no second person is asked a question the
+    first already answered. Every other road takes the defaults and waits in the inbox — which is
+    the whole distinction: a proposal a MODEL initiated overnight has nobody behind it yet.
 
     `target_paths` is stored SEPARATELY from `ops` even though it is derivable from them, and that
     redundancy is the point: `remote.apply_via_clone` cross-checks the diff it produced against
@@ -66,6 +74,7 @@ def insert_proposal(conn, *, run_id: int, finding_ids, target_paths, ops, ration
             "rationale": rationale or "", "content_key": content_key, "model_id": model_id or "",
             "finding_subjects": Jsonb([[str(p) for p in group]
                                        for group in (finding_subjects or ()) if group]),
+            "status": status, "decided_by": decided_by or "",
         })
         return cur.fetchone()[0]
 

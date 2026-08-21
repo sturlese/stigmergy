@@ -48,6 +48,7 @@ from stigmergy.review_kinds import (
 from stigmergy.server import entity_aliases, ops_files
 from stigmergy.server.acl import visible
 from stigmergy.server.errors import CapabilityUnavailableError
+from stigmergy.text import fence, one_line
 
 log = logging.getLogger(__name__)
 
@@ -783,6 +784,186 @@ def apply_repair_and_record(conn, *, repo_url: str, proposal: dict, actor: str, 
                     extra={key: result[key] for key in repair_remote.LEDGER_RESULT_KEYS
                            if key in result})
     return {"applied": True, "commit": result["commit"], "paths": result["paths"]}
+
+
+# What a deletion may be, at the door. `MAX_DELETED_PAGES` is not a technical bound — the plan's
+# byte ceiling is — it is what one person's `brain_delete` call may mean: a page they judged
+# stale, or a handful, never a corpus sweep typed in one line.
+MAX_DELETED_PAGES = 10
+DELETE_REASON_CHARS = 400
+
+DELETE_NEEDS_A_REASON = (
+    "a deletion needs a reason: what makes these pages stale. It is what `git log` carries "
+    "afterwards and the only thing a later reader will have — nothing was deleted")
+
+DELETE_NEEDS_A_PAGE = "a deletion names at least one page — nothing was deleted"
+
+DELETE_TOO_MANY = (
+    "a deletion at this door names at most {ceiling} page(s), and this one names {n}. One call is "
+    "one judgment a person made about pages they read; a larger sweep is a series of them — "
+    "nothing was deleted")
+
+
+def delete_pages(service, *, paths, why: str, source: str) -> dict:
+    """A person's own deletion, decided and applied in ONE call (ADR 043 D2).
+
+    D1 of ADR 039 reads, for this kind: **a HUMAN decides — at the command when they gave it, in
+    the inbox when a model did.** The judgment is in this call — these pages, this reason, this
+    identity — so there is nobody left to ask, and what the second click used to supply was an
+    AUTHENTICATION the CLI could not perform. It is performed here instead, in the act.
+
+    The order, and why each step is where it is:
+
+    1. **Authorization on the doomed pages FIRST, before any clone.** An unauthorized caller must
+       not be able to spend a network leg, and the sentence they get is the lane's own
+       `NOT_YOURS_TO_DECIDE` — the same one an unknown id gets, so nothing here is an existence
+       oracle either.
+    2. **One clone, held open for the whole pass.** The plan, the written sweep and the apply all
+       run against THIS tree, which is why there is no propose-to-apply gap to prove anything
+       across (D3): `apply_declared`'s base hashes and its walk for a latecomer are a formality
+       that costs one walk.
+    3. **Authorization again, on the FULL touched set**, once the clone says which pages refer to
+       the doomed ones — `_guard_repair_decision`'s rule verbatim, `all(...)` not `any(...)`.
+       `ops/stewards.json` exists to delegate zones, and the pages a sweep rewrites are somebody
+       else's.
+    4. **The row is born `approved` in the caller's name**, then applied through the same
+       `remote.apply_approved` every other door runs — so `applied`/`failed`, the ledger row and
+       the console's history are the ones they already are. It is never listed as pending.
+    5. **The ledger row LAST, after the push**, exactly as `apply_repair_and_record` writes its
+       own: a row claiming a deletion whose commit never landed is worse than a missing row.
+
+    Returns the commit, the pages, and the per-page DIFF — which is the whole of D5: nobody read
+    the written prose before it landed, so the diff is the reading, and it goes back to the person
+    who asked in the same breath.
+    """
+    if not service.identity:
+        raise ReviewError("no resolved identity — a deletion cannot be attributed unattributed")
+    return delete_and_record(
+        service.conn, repo_url=service.settings.librarian_repo_url, paths=paths, why=why,
+        actor=service.identity, source=source,
+        # The diffs are page bytes, so who may READ one is `acl.visible()`'s question and not the
+        # steward map's — asked here, through the caller's own audiences, because `service` is
+        # where an identity's audiences live and `delete_and_record` takes no service.
+        can_read=service.may_read_page,
+        # The lane's own per-path guard, run TWICE — on what the caller named, before anything is
+        # cloned, and on the full touched set once the clone says what it is. `is_steward`'s
+        # question, asked of paths rather than of an entity's scope, is the whole of what this
+        # door's authorization is: `_guard_repair_decision` is the one implementation and it is
+        # reached from here, never re-spelled inside the sequence.
+        authorize=lambda names: _guard_repair_decision(service, found=True, target_paths=names))
+
+
+def delete_and_record(conn, *, repo_url: str, paths, why: str, actor: str, source: str,
+                      authorize=None, can_read=None) -> dict:
+    """The sequence itself, shared by the two doors a person deletes from — the MCP lane through
+    `delete_pages` and the console through `admin.service.pages_delete`.
+
+    It takes NO authorization of its own, and `authorize` is the seam rather than the exception:
+    authorization is per-surface (ADR 030 D2), so the MCP door hands in the steward guard and the
+    console hands in nothing, because its operator token IS its authorization — exactly the
+    asymmetry `apply_repair_and_record` and `entity_approve` already have. The CALLER SET is
+    closed and pinned in `tests/test_architecture.py`.
+
+    `can_read` is the same seam for the OTHER question, and the two are genuinely different: a
+    steward of a folder is not automatically in the audience of every page in it, and the diffs
+    this returns are page bytes. The MCP door hands in `acl.visible()` through the caller's own
+    audiences; the console hands in nothing, because it is not a read surface over pages and its
+    token already stands for the whole deployment.
+    """
+    if not repo_url:
+        raise ReviewError(REPAIR_REPO_UNCONFIGURED)
+    targets = sorted({str(p).strip() for p in (paths or ()) if str(p).strip()})
+    if not targets:
+        raise ReviewError(DELETE_NEEDS_A_PAGE)
+    if len(targets) > MAX_DELETED_PAGES:
+        raise ReviewError(DELETE_TOO_MANY.format(ceiling=MAX_DELETED_PAGES, n=len(targets)))
+    _check_len("why", why or "")
+    _refuse_secret_note(why or "")
+    reason = one_line(capture_schema.clean_note(why), DELETE_REASON_CHARS)
+    if not reason:
+        raise ReviewError(DELETE_NEEDS_A_REASON)
+    # Asked of the pages the caller NAMED, before anything is cloned. The full set is asked again
+    # below; this half is what keeps an unauthorized call cheap.
+    if authorize is not None:
+        authorize(targets)
+
+    # Imported HERE, not at module scope, and for the reason `ask` imports the answer layer
+    # inside its tool: `repair.sweep` loads a model stack, and this module is imported by every
+    # process that serves an MCP call. A deletion is the one call that wants one — so the weight
+    # is paid by the caller who asked for it, and `review.py`'s import graph stays what
+    # `test_review_transitive_kernel_reach_is_a_named_declared_exception` pins. The edge itself is
+    # still declared and pruned in `tests/test_architecture.py`, which reads function-level
+    # imports too (ADR 043 D4).
+    from stigmergy.repair import brief as repair_brief
+    from stigmergy.repair import deletion as repair_deletion
+    from stigmergy.repair import sweep as repair_sweep
+    from stigmergy.repair.settings import RepairSettings
+
+    settings = RepairSettings.from_env()
+    try:
+        with repair_remote.cloned(repo_url, _KNOWLEDGE_BRANCH, os.environ) as ready:
+            ops = repair_deletion.plan(ready.path, targets)
+            oversize = repair_deletion.oversize_reason(ops, settings.max_plan_bytes)
+            if oversize:
+                raise ReviewError(oversize)
+            # The blast radius is known now and nobody has been asked about it yet. Asked of the
+            # touched set DIRECTLY rather than of `schema.target_paths`, which drops an op whose
+            # planned bytes still equal the bytes it was computed from — true of every page whose
+            # only reference is in its BODY until the writer has run, and those are exactly the
+            # pages somebody else stewards.
+            if authorize is not None:
+                authorize(sorted({*repair_deletion.deleted_paths(ops),
+                                  *repair_deletion.scrubbed_paths(ops)}))
+            spend: list = []
+            ops = repair_sweep.write_sync(ready.path, ops,
+                                          skill_text=repair_brief.read_skill(ready.path),
+                                          model_name=settings.model, spend=spend)
+            diffs = repair_deletion.unified_diffs(ready.path, ops)
+            proposal_id = repair_store.insert_proposal(
+                conn=conn, run_id=0, finding_ids=[], kind=repair_schema.KIND_DELETE,
+                target_paths=repair_schema.target_paths(ops), ops=ops, rationale=reason,
+                content_key=repair_schema.content_key(ops, kind=repair_schema.KIND_DELETE),
+                # A model wrote the pages that stay, never which pages go — and this column is
+                # where that stays true after the session is gone.
+                model_id=settings.model if repair_deletion.scrubbed_paths(ops) else "",
+                finding_subjects=[list(targets)],
+                status=repair_schema.STATUS_APPROVED, decided_by=actor)
+            proposal = repair_store.proposal(conn, proposal_id)
+            result = repair_remote.apply_approved(
+                conn, repo_url, _KNOWLEDGE_BRANCH, os.environ, proposal=proposal,
+                approved_by=actor, prepared=ready)
+    except RepairError as ex:
+        # Every sentence `repair.remote`, `repair.deletion` and `repair.sweep` raise is written for
+        # a steward (their own module docstrings), so `str(ex)` crosses verbatim — and a row that
+        # reached the apply is already recorded as `failed`.
+        raise ReviewError(str(ex)) from ex
+    # The reading (D5), and it is page CONTENT going back over the wire, so it obeys the two rules
+    # every other surface that echoes a page obeys: `visible()` decides who may read one — the ONE
+    # place read access is decided, and being a STEWARD of a folder is a different question from
+    # being in a page's audience — and every diff is FENCED, because it carries both the page's own
+    # bytes and fresh model output, and neither is an instruction to whoever reads this response.
+    readable = {path: fence(text) for path, text in diffs.items()
+                if can_read is None or can_read(path)}
+    # A page whose diff is withheld is NAMED rather than dropped: it changed, the commit says so,
+    # and a reader who cannot see why must not be left thinking nothing happened to it. Fails
+    # closed on a page this server's index does not carry, which is the same reading `read_page`
+    # gives — existence itself is scoped.
+    withheld = sorted(set(diffs) - set(readable))
+    record_decision(conn, item_kind=KIND_REPAIR_PROPOSAL, item_id=str(proposal["id"]),
+                    verdict=APPROVE, actor=actor, source=source, notes=reason,
+                    extra={key: result[key] for key in repair_remote.LEDGER_RESULT_KEYS
+                           if key in result})
+    return {
+        "deleted": result.get("deleted", []), "rewritten": readable,
+        "withheld": withheld, "commit": result["commit"], "proposal_id": proposal["id"],
+        "model_calls": len(spend),
+        "message": (
+            f"deleted {len(result.get('deleted', []))} page(s) and rewrote {len(diffs)} that "
+            f"referred to them, as commit {result['commit'][:12]}. Nobody read the rewritten prose "
+            f"before it landed — the diffs above are that reading, and `git revert` in the "
+            f"knowledge repo is the undo."
+            + (f" {len(withheld)} diff(s) are withheld: those pages are outside what you may read "
+               f"here, or this server's index does not carry them." if withheld else ""))}
 
 
 def reject_repair_and_record(conn, *, proposal: dict, actor: str, source: str,

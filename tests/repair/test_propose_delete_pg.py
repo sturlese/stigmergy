@@ -127,9 +127,10 @@ def test_two_different_documents_are_not_duplicates(conn, repo_env, settings):
 
 
 def test_the_derived_proposal_records_that_no_model_was_asked(conn, repo_env, settings):
-    """`model_id` is where "a model proposed this" stays true after the run. An empty one is the
-    durable statement that this proposal is code's — and `delete` is the only kind for which that
-    can be said."""
+    """`model_id` is where "a model wrote something here" stays true after the run. Nothing refers
+    to either copy, so no page had to be written and the column is empty — which is also the
+    durable statement that no model chose this deletion, the one thing that is true of this kind
+    whatever the column says (ADR 043 D1)."""
     support.write_source(repo_env, "First Filing", content_hash=HASH_A,
                          extracted_at="2026-01-01T00:00:00Z", push=False)
     support.write_source(repo_env, "Second Filing", content_hash=HASH_A,
@@ -143,6 +144,57 @@ def test_the_derived_proposal_records_that_no_model_was_asked(conn, repo_env, se
     assert row["model_id"] == ""
     assert row["finding_ids"] == []
     assert row["finding_subjects"] == [["sources/Second Filing.md"]]
+
+
+def test_the_pages_that_cite_the_doomed_copy_are_WRITTEN_into_the_stored_plan(conn, repo_env,
+                                                                              settings):
+    """The nightly road takes the same split as the act road (ADR 043 D1): code drops the
+    frontmatter entry, and the sweep writer reconciles the BODY — so the plan a steward is asked to
+    approve already carries the bytes that will land, and `model_id` names who wrote them.
+
+    Red before ADR 043: this road stored a body with `[[Cited Copy]]` unlinked to `Cited Copy` and
+    the sentence around it untouched."""
+    support.write_source(repo_env, "Cited Copy", content_hash=HASH_A, push=False)
+    support.write_source(repo_env, "Uncited Copy", content_hash=HASH_A, push=False)
+    support.write_note(repo_env, "Reads The Document", related=["Cited Copy"], push=False,
+                       body="# Reads The Document\n\n## What it says\n\nThe filing is recorded "
+                            "in [[Uncited Copy]], which the team read.\n\n"
+                            + "\n".join(f"- padding line {n}." for n in range(1, 26)) + "\n")
+    support.librarian_support.commit_and_push(repo_env.repo, "test: a page citing the doomed copy")
+    _seed_run(conn)
+
+    result = _propose(conn, settings)
+
+    assert result.proposed == 1
+    (row,) = store.pending_proposals(conn)
+    assert deletion.deleted_paths(row["ops"]) == ["sources/Uncited Copy.md"]
+    written = deletion.expected_bytes(row["ops"])["wiki/notes/Reads The Document.md"]
+    assert not deletion.references(written, {"Uncited Copy"})
+    assert "which the team read" in written, "the sentence survives the page it cited"
+    assert row["model_id"] == settings.model, "a model wrote the page that stays, and says so"
+    assert any(call["road"] == schema.KIND_DELETE for call in result.model_calls)
+
+
+def test_a_duplicate_whose_pages_the_writer_cannot_reconcile_is_recorded_rather_than_stored(
+        conn, repo_env, settings, monkeypatch):
+    """No deterministic fallback on this road either. `CLEAN_LLM=fake-flawed` hands the body back
+    still naming the doomed copy, twice; the deletion is not stored at all, the reason names the
+    page, and the additive road beside it keeps running."""
+    monkeypatch.setenv("CLEAN_LLM", "fake-flawed")
+    support.write_source(repo_env, "Cited Copy", content_hash=HASH_A, push=False)
+    support.write_source(repo_env, "Uncited Copy", content_hash=HASH_A, push=False)
+    support.write_note(repo_env, "Reads The Document", related=["Cited Copy"], push=False,
+                       body="# Reads The Document\n\n## What it says\n\nSee [[Uncited Copy]].\n\n"
+                            + "\n".join(f"- padding line {n}." for n in range(1, 26)) + "\n")
+    support.librarian_support.commit_and_push(repo_env.repo, "test: a page citing the doomed copy")
+    _seed_run(conn)
+
+    result = _propose(conn, settings)
+
+    assert [r for r in store.pending_proposals(conn)
+            if r["kind"] == schema.KIND_DELETE] == []
+    assert any("Reads The Document" in reason for reason in result.skip_reasons), (
+        result.skip_reasons)
 
 
 def test_a_duplicate_a_steward_has_already_decided_is_not_proposed_again(conn, repo_env, settings):

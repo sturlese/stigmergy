@@ -55,7 +55,9 @@ export async function repairsView(host) {
       el("section", { class: "card" },
         el("div", { class: "card-head" },
           el("div", { class: "card-title" }, el("h2", {}, `${data.pending.length} proposal(s) waiting on a steward`),
-            el("div", { class: "sub" }, "each one is approved or declined on its own — an approve applies exactly its edits as one commit through the librarian's own gates"))),
+            el("div", { class: "sub" }, "each one is approved or declined on its own — an approve applies exactly its edits as one commit through the librarian's own gates")),
+          el("div", { class: "spacer" }),
+          el("button", { class: "btn small", type: "button", onclick: () => deleteFlow() }, icon("x", 14), "Remove pages")),
         data.pending_truncated ? banner("warn", `showing the oldest ${data.pending_limit} pending proposals — more are waiting than this page carries`) : null,
         chips([{ key: "", label: "all kinds", count: data.pending.length, on: !state.kind },
           ...Object.entries(kinds).map(([k, n]) => ({ key: k, label: repairKind(k).label, count: n, on: state.kind === k, who: "model" }))],
@@ -114,8 +116,14 @@ function deletionPlan(ops) {
   return el("div", {},
     el("div", { class: "sub" }, `${removed.length} page(s) STOP EXISTING`),
     list(removed, "diff-del"),
-    el("div", { class: "sub", style: { marginTop: "12px" } }, `${scrubbed.length} page(s) rewritten so they no longer link to them`),
-    scrubbed.length ? list(scrubbed, "mono") : el("div", { class: "sub" }, "— nothing else refers to them"));
+    el("div", { class: "sub", style: { marginTop: "12px" } }, `${scrubbed.length} page(s) rewritten so they no longer refer to them — a model wrote these bodies, and this is the only place anybody reads them before they land`),
+    scrubbed.length
+      // Whole and unrendered, exactly as `bodyDraft` shows a drafted entity body: what lands in
+      // the repo is these bytes, so these bytes are what a steward should be judging.
+      ? el("div", { class: "stack" }, ...(ops || []).filter((o) => o.op !== OP_DELETE_PAGE).map((o) => el("div", {},
+          el("div", { class: "quote-label" }, mono(o.path)),
+          el("pre", { class: "pre" }, o.planned_after || "(no planned bytes — this proposal cannot be applied)"))))
+      : el("div", { class: "sub" }, "— nothing else refers to them"));
 }
 
 function mergePlan(ops) {
@@ -132,7 +140,7 @@ function changeSummary(kind) {
     return "this replaces the page's body BELOW its own title line. Its frontmatter is preserved byte for byte apart from the updated date (and the role, when the page has none), and the title line itself does not change. Read the draft: it is what the page will say.";
   }
   if (kind === KIND_DELETE) {
-    return "the pages in the first list STOP EXISTING, and the pages in the second are rewritten to take out every link to them — the sentences that cited them survive, unlinked, and nothing else in those pages changes. Undoing it means a revert in the knowledge repo.";
+    return "the pages in the first list STOP EXISTING, and the pages below them are rewritten so they no longer refer to them: their related/sources entries are dropped by code, and their bodies are written by a MODEL — a sentence that cited a removed page still reads, and a callout that only existed because of one is gone. Those bodies are shown in full because approving this is the only reading they get before they land. Undoing it means a revert in the knowledge repo.";
   }
   if (kind === KIND_ALIAS) {
     return "two registry entries were one entity. The survivor's page gains the absorbed spellings as aliases, the absorbed page is marked superseded (it is never deleted), every page anchored to it moves to the survivor, and the registry is regenerated.";
@@ -195,6 +203,51 @@ function decidedBanner(row) {
     return banner("plain", el("span", {}, "applied — commit ", mono(String(row.applied_commit || "").slice(0, 12)), ". Undoing it means a revert in the knowledge repo."));
   }
   return banner("plain", "approved and being applied — if this row stays here, read the runbook's section on a repair proposal stuck in approved.");
+}
+
+// The one action on this page that is not a verdict on somebody else's proposal: a PERSON removing
+// pages (ADR 043). It waits on nobody — the judgment is the operator's and it lands in this call —
+// so the confirm has to carry the whole consequence, and the result has to carry the diff, because
+// nobody read the rewritten prose before it landed.
+async function deleteFlow() {
+  const answer = await confirmForm({
+    title: "Remove pages from the brain",
+    consequence: "removes these pages and rewrites every page that refers to them — their related/sources entries by code, their bodies by a model — as ONE commit, right now. There is no proposal and no second click: this console's token is the authorization. If it lands, only a revert in the knowledge repo undoes it.",
+    note: banner("warn", "nobody reads the rewritten prose before it lands. The diffs come back here — read them, and revert in the knowledge repo if a page came out wrong."),
+    fields: [
+      actorField(),
+      { name: "paths", label: "Pages", kind: "textarea", required: true,
+        hint: "one repo-relative path per line, e.g. wiki/notes/Old Memo.md — never an entity page" },
+      { name: "why", label: "Why", kind: "textarea", required: true,
+        hint: "what makes them stale: the commit carries it, and it is all a later reader will have" },
+    ],
+    confirmLabel: "Remove", danger: true,
+  });
+  if (!answer) return;
+  const paths = String(answer.values.paths || "").split("\n").map((p) => p.trim()).filter(Boolean);
+  const body = { actor: answer.values.actor, why: answer.values.why, paths };
+  const result = await mutate("pages/delete", body,
+    (r) => `removed ${(r.deleted || []).length} page(s) — commit ${String(r.commit || "").slice(0, 12) || "?"}`);
+  if (!result) return;
+  await showDiffs(result);
+  go("repairs");
+}
+
+// The reading, moved after the push (ADR 043 D5). A `confirmForm` with no fields is the plainest
+// dialog this console has, and the diffs go in it UNRENDERED — what landed in the repo is these
+// bytes, so these bytes are what the person who pressed Remove should be looking at.
+function showDiffs(result) {
+  const rewritten = Object.entries(result.rewritten || {});
+  return confirmForm({
+    title: `Removed ${(result.deleted || []).length} page(s) — commit ${String(result.commit || "").slice(0, 12)}`,
+    consequence: "this has already landed in the knowledge repo. Read what the model wrote into the pages that referred to the removed ones; a revert there is the undo.",
+    note: rewritten.length
+      ? el("div", { class: "stack" }, ...rewritten.map(([path, diff]) => el("div", {},
+          el("div", { class: "quote-label" }, mono(path)),
+          el("pre", { class: "pre" }, diff))))
+      : banner("plain", "nothing referred to the removed page(s), so no page was rewritten."),
+    fields: [], confirmLabel: "Done", cancelLabel: "Close", wide: true,
+  });
 }
 
 async function repairApproveFlow(row) {

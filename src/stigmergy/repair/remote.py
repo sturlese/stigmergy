@@ -12,8 +12,11 @@ is needed.
 the other two cannot see what it sees:
 
   1. The kind's own validator re-runs against THIS clone — `edits.apply_declared` for the additive
-     kinds, `entity_body.apply_declared` for a body draft. The propose-time validation ran against
-     a checkout that may be hours old; a page deleted since then must refuse here.
+     kinds, `entity_body.apply_declared` for a body draft, `deletion.apply_declared` for a written
+     sweep (its bounds, then a base hash per page and a walk for a latecomer). The propose-time
+     validation ran against a checkout that may be hours old; a page deleted since then must
+     refuse here. The act road (ADR 043 D2) computes its ops in this very clone, so for it the
+     re-run is a formality that costs one walk.
   2. `run_gates(ALL_GATES)` judges the resulting DIFF, exactly as it judges the librarian's own.
      What the ops are supposed to produce is an additive edit, or — for `entity-body`, and only on
      the ONE page this apply names in `body_rewrite_allowed` — a replaced body below that page's
@@ -35,6 +38,7 @@ Every sentence raised from here is publishable — a steward reads it through th
 none names this host's clone. Repo-relative paths and gate codes are allowed and are the whole
 actionable content of a veto.
 """
+import contextlib
 import logging
 import os
 import tempfile
@@ -80,25 +84,22 @@ CLONE_FAILED_MESSAGE = (
     "whoever runs this deployment to look")
 
 
-def apply_via_clone(repo_url: str, branch: str, credential, *, proposal: dict, approved_by: str,
-                    on_output=None) -> dict:
-    """Clone, apply, gate, cross-check, commit, push. Returns `{"commit": sha, "paths": [...]}`.
+@dataclass(frozen=True)
+class PreparedClone:
+    """A throwaway clone of the knowledge repo, configured to commit as the App — what `cloned`
+    yields and what an apply performs in. The act road (ADR 043 D2) holds one of these BEFORE it
+    has a proposal at all: it plans and writes the sweep against this very tree, then applies in
+    it, so there is no propose-to-apply gap to prove anything across."""
 
-    `credential` is the env-shaped mapping `librarian.githubapp` reads — required ONLY when
-    `repo_url` is `https://`. A local path or `git://` URL authenticates nothing, so `credential`
-    may be `None`: the honest statement of when a credential is needed, and what lets this be
-    proven against a real bare remote with no key and no network.
+    path: str
+    author: tuple
 
-    Raises `RepairError` for everything: a refusal a steward can act on names the gate and its
-    codes, a fault names neither and is in the log.
-    """
-    ops = list(proposal.get("ops") or ())
-    if not ops:
-        raise ProposalStateError("this proposal carries no ops, so there is nothing to apply")
-    # Asked BEFORE the clone: an approval with nobody's name on it cannot produce a commit, so
-    # cloning first would spend a network leg to arrive at the same refusal.
-    approver = _trailer_actor(approved_by)
 
+@contextlib.contextmanager
+def cloned(repo_url: str, branch: str, credential):
+    """Clone the knowledge repo with the librarian App's credential into a temp directory, for the
+    length of the block — `entities.remote`'s posture, and the same `TemporaryDirectory`
+    guarantee. Every refusal raised here is publishable; the detail is in the log."""
     try:
         clone_url = githubapp.authenticated_clone_url(repo_url, credential)
     except LibrarianError as ex:
@@ -112,19 +113,46 @@ def apply_via_clone(repo_url: str, branch: str, credential, *, proposal: dict, a
         try:
             gitcmd.run("clone", "--quiet", "--branch", branch, clone_url, clone,
                        timeout=REPAIR_GIT_TIMEOUT_S)
-        except LibrarianError as ex:
-            # `_scrub` keeps the CREDENTIAL out of `str(ex)`, but scrubbed is not publishable:
-            # what remains is git's stderr naming this host's temp directory.
-            log.error("repair apply: could not clone the knowledge repo", exc_info=True)
-            raise RepairError(CLONE_FAILED_MESSAGE) from ex
-        try:
             # Configured on the clone itself, not only handed to `commit`: `gitcmd.push`'s
             # rebase-and-retry runs `git rebase`, and a fresh temp clone cannot assume a global
             # `~/.gitconfig` supplies a committer.
             gitcmd.run("config", "user.name", author[0], cwd=clone)
             gitcmd.run("config", "user.email", author[1], cwd=clone)
-            return _apply_in_clone(clone, branch, credential, proposal=proposal, ops=ops,
-                                   author=author, approver=approver, on_output=on_output)
+        except LibrarianError as ex:
+            # `_scrub` keeps the CREDENTIAL out of `str(ex)`, but scrubbed is not publishable:
+            # what remains is git's stderr naming this host's temp directory.
+            log.error("repair apply: could not clone the knowledge repo", exc_info=True)
+            raise RepairError(CLONE_FAILED_MESSAGE) from ex
+        yield PreparedClone(path=clone, author=author)
+
+
+def apply_via_clone(repo_url: str, branch: str, credential, *, proposal: dict, approved_by: str,
+                    on_output=None, prepared: PreparedClone | None = None) -> dict:
+    """Clone, apply, gate, cross-check, commit, push. Returns `{"commit": sha, "paths": [...]}`.
+
+    `credential` is the env-shaped mapping `librarian.githubapp` reads — required ONLY when
+    `repo_url` is `https://`. A local path or `git://` URL authenticates nothing, so `credential`
+    may be `None`: the honest statement of when a credential is needed, and what lets this be
+    proven against a real bare remote with no key and no network.
+
+    `prepared` is a clone the caller already holds — the act road's, in which the proposal's own
+    ops were just computed — and it is applied in rather than cloned again. Everything after the
+    clone is the same sequence either way.
+
+    Raises `RepairError` for everything: a refusal a steward can act on names the gate and its
+    codes, a fault names neither and is in the log.
+    """
+    ops = list(proposal.get("ops") or ())
+    if not ops:
+        raise ProposalStateError("this proposal carries no ops, so there is nothing to apply")
+    # Asked BEFORE the clone: an approval with nobody's name on it cannot produce a commit, so
+    # cloning first would spend a network leg to arrive at the same refusal.
+    approver = _trailer_actor(approved_by)
+
+    def _in(ready: PreparedClone) -> dict:
+        try:
+            return _apply_in_clone(ready.path, branch, credential, proposal=proposal, ops=ops,
+                                   author=ready.author, approver=approver, on_output=on_output)
         except RepairError:
             raise
         except LibrarianError as ex:
@@ -134,6 +162,11 @@ def apply_via_clone(repo_url: str, branch: str, credential, *, proposal: dict, a
             # the next one.
             log.error("repair apply: a librarian fault after the clone", exc_info=True)
             raise RepairError(APPLY_FAULT_MESSAGE) from ex
+
+    if prepared is not None:
+        return _in(prepared)
+    with cloned(repo_url, branch, credential) as ready:
+        return _in(ready)
 
 
 def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops: list,
@@ -219,10 +252,11 @@ def _apply_in_clone(clone: str, branch: str, credential, *, proposal: dict, ops:
     # nothing else is racing for this proposal, because the row moved out of `pending` before the
     # clone was made.
     #
-    # The NON-ADDITIVE kinds never rebase. Their apply is a proof against a base — recompute,
-    # byte-compare, then perform — and a rebase replays the approved diff onto a tip the gates
-    # never judged: a delete can leave a dead link a fresh plan would have scrubbed, a merge can
-    # leave a page anchored to the retired identity forever. A lost race there fails CLEAN (the
+    # The NON-ADDITIVE kinds never rebase. Their apply is a proof against a base — a base hash per
+    # page and the corpus walked for a latecomer, or a recomputation, then perform — and a rebase
+    # replays the approved diff onto a tip the gates never judged: a delete can leave a dead link a
+    # fresh plan would have caught, a merge can leave a page anchored to the retired identity
+    # forever. A lost race there fails CLEAN (the
     # row lands `failed`, nothing is pushed) and the next propose recomputes from state — the
     # same shape the view sweep takes at a mid-batch rebase, for the same reason. Since the view
     # sweep pushes up to its ceiling every interval, losing this race is realistic, and a failed
@@ -498,7 +532,7 @@ def _trailer_actor(approved_by: str) -> str:
 
 
 def apply_approved(conn, repo_url: str, branch: str, credential, *, proposal: dict,
-                   approved_by: str, on_output=None) -> dict:
+                   approved_by: str, on_output=None, prepared: PreparedClone | None = None) -> dict:
     """`apply_via_clone` plus the two status writes that must never be forgotten around it.
 
     THE door every surface applies through, so "a failed apply is recorded as failed" is a
@@ -514,7 +548,7 @@ def apply_approved(conn, repo_url: str, branch: str, credential, *, proposal: di
     """
     try:
         result = apply_via_clone(repo_url, branch, credential, proposal=proposal,
-                                 approved_by=approved_by, on_output=on_output)
+                                 approved_by=approved_by, on_output=on_output, prepared=prepared)
     except RepairError as ex:
         # `str(ex)` is safe to persist and to publish: every sentence raised above is written for
         # a steward and names no path of this host's (module docstring).

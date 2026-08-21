@@ -81,6 +81,7 @@ cannot need a token to render).
 | GET | `/admin/api/repairs/{id:int}` | `repair_show()` | yes |
 | POST | `/admin/api/repairs/{id:int}/approve` | `repair_approve()` — applies the proposal's ops as ONE commit through `server.review.apply_repair_and_record` | yes |
 | POST | `/admin/api/repairs/{id:int}/reject` | `repair_reject()` — non-blank `reason` required | yes |
+| POST | `/admin/api/pages/delete` | `pages_delete()` — a PERSON removes pages: `paths` (non-empty) + `why`, applied in the same call through `server.review.delete_and_record`, the same sequence MCP's `brain_delete` runs. The console passes NO steward guard: its token is the authorization (ADR 029/030 D2), which makes this its most consequential button | yes |
 | GET | `/admin/api/activity` | `activity()` | yes |
 | GET | `/admin/api/worker` | `worker_status()` | yes |
 | GET | `/admin/api/crons` | `crons_state()` | yes |

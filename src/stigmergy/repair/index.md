@@ -12,10 +12,14 @@ additive shapes the nine gates already know how to judge. `entity-body` is the o
 REPLACES text: one drafted body for one entity page whose body does not say what the corpus knows
 about the entity — still the template it was minted with, or written and empty of anything specific
 — judged by `gate_body_rewrite`'s permitted-rewrite branch instead of its additive proof (ADR 039's
-first amendment). `delete` is the one kind that REMOVES anything, and the one the covenant's first clause
-reads differently for: **no model may propose it in any spelling.** A person types it at
-`stigmergy-repair delete`, or code derives it for exact-duplicate `sources/` pages, where the
-decision is a lookup rather than a judgment (ADR 039's second amendment). `entity-alias` is the one
+first amendment). `delete` is the one kind that REMOVES anything, and the one the covenant reads differently for
+twice. **No model may propose it in any spelling**: a person acts at `brain_delete` (MCP, or the
+console), or code derives it for exact-duplicate `sources/` pages, where the decision is a lookup
+rather than a judgment (ADR 039's second amendment). And **a person's own deletion is decided by
+the call that asked for it** — the steward guard runs in the act, the row is born `approved` and
+applied in the same pass, and the diff goes back to them, because the reading of a written sweep
+moves after the push (ADR 043). Its pages are WRITTEN: `deletion` owns the frontmatter and the
+bounds, `sweep` owns the bodies. `entity-alias` is the one
 kind that answers a finding about a PAIR: two registry entries that are the same entity, where the
 model picks which name SURVIVES and says why, and code computes everything that follows — the
 spellings that move, the pages that re-anchor, the supersession, the regenerated registry (ADR
@@ -30,11 +34,13 @@ repo, read at run time from the checkout; a missing skill is a named refusal, ne
 
 | Module | What it is |
 |---|---|
-| `cli.py` | `stigmergy-repair propose \| list \| show <id> \| delete <path>... --why` — the only module that opens a connection or imports `stigmergy.index.store`. **No `apply`**: a terminal knows who is typing, not what they may approve. `delete` is the one verb that CREATES a proposal here, at `propose`'s authority level, because a deletion is the one repair no model may propose. Owns `preview`, the git-free rendering of what a proposal would change |
+| `cli.py` | `stigmergy-repair propose \| list \| show <id>` — the only module that opens a connection or imports `stigmergy.index.store`. **No `apply` and no `delete`**: a terminal knows who is typing, not what they may approve, so neither can be authorized from one — a person's deletion is an act at an authenticated door (`brain_delete`, ADR 043). Owns `preview`, the git-free rendering of what a proposal would change |
 | `proposer.py` | The agent seam, ALL THREE model roads (`EDIT_PROPOSABLE_CHECKS`, `BODY_PROPOSABLE_CHECKS` and `ALIAS_PROPOSABLE_CHECKS` decide which one a finding rides; the deterministic duplicate-sources road asks no model at all): `ProposerContext` and its two READ tools; `ProposalBatch`/`ProposalSpec`/`EditOp` + `validate_batch` for the additive road; `EntityBodyDraft` + `anchored_pages`/`draft_entity_body`/`validate_draft` for the body road; `EntityMergeChoice` + `build_entity_alias_prompt`/`choose_survivor`/`validate_merge_choice` for the merge road; one retry each (every `agent.run` records its spend against its limits into `ProposeResult.model_calls`, persisted in `job_runs.stats` — the budgets' feedback loop, issue #81) — but never for a PARK, which both the body road (an empty `body_markdown`, `BODY_DECLINED_REASON`) and the merge road (an empty survivor, `MERGE_DECLINED_REASON`) treat as the answer their brief asked for rather than as an error to push the model off; `read_skill`, `propose_from_findings`, and the three offline doubles. The only module here that loads a model stack |
 | `entity_body.py` | The `entity-body` writer and its validator — `validate`, `apply_declared`, `rewritten`, and the bounds a draft lives inside. Pure of the model stack, because the APPLY runs it inside the MCP server process |
 | `entity_alias.py` | The `entity-alias` kind, whole: `plan` (the merge, a pure function of a worktree's bytes), the three page writers (`aliased`, `retired`, `reanchored`), `validate`/`apply_declared` (recompute, byte-compare, write the pages, regenerate, byte-compare the registry), the readers every other surface goes through (`survivor_path`, `absorbed_path`, `reanchored_paths`, `expected_bytes`, `derived_files`, `lane_for`), and `claimable_aliases` — the one place the contract linter's alias rule is enforced at PLAN time. The ONE module here that imports `stigmergy.entities`, and only its generator: the registry has exactly one writer |
-| `deletion.py` | The `delete` kind, whole — `plan` (the sweep, a pure function of a worktree's bytes), `scrubbed` (one page's planned bytes), `validate`/`apply_declared` (recompute, byte-compare, perform), the readers every other surface goes through (`deleted_paths`, `scrubbed_paths`, `expected_bytes`, `lane_for`), and `duplicate_source_groups` (the one automatic road, which asks no model) — AND the package's shared bytes-level primitives, which the two other non-additive kinds reach through it rather than re-derive: `page_refusal` (the ONE confinement predicate), `read_text`, `sha256`, `page_stem`, `corpus_pages`, `plan_bytes`, `oversize_reason`, `PROVENANCE_ZONE_PREFIXES`. Its link scanner is hand-mirrored from the frozen contract linter and must stay that way |
+| `sweep.py` | The `delete` kind's WRITER (ADR 043 D1): `SweepDraft`/`PageBody`, the fourth frame over the same skill (`build_sweep_system_prompt`), `build_sweep_writer`, the prompt (`build_sweep_prompt` — the same index/marker/fence shape every road here uses), `validate_draft` (the set bound, then the per-body bounds — title kept, no `---`, never emptied, `MAX_BODY_GROWTH_BYTES` above and `MAX_UNREFERENCING_LINES_DROPPED` below, the second because the first is one-sided and admits a body cut down to its title — then `deletion.validate` over the composed bytes), `split_head`/`compose`, `write`/`write_sync`, and `FakeSweepWriter`. The SECOND module here that loads a model stack, and the one the server enters — `remote.py` is handed a finished plan |
+| `brief.py` | The proposer's brief as a FILE: `SKILL_RELPATH`, `read_skill` (symlink-refused, size-capped before the bytes), `with_skill`, and the two prompt constants every road shares (`DETAILS_MARKER`, `PAGE_LINE`). Loads no model stack and no store, so the server's road to `sweep` does not drag the proposer's orchestration in |
+| `deletion.py` | The `delete` kind's CODE half — `plan` (the sweep, a pure function of a worktree's bytes), `scrubbed` (one page's planned bytes), `validate`/`apply_declared` (recompute, byte-compare, perform), the readers every other surface goes through (`deleted_paths`, `scrubbed_paths`, `expected_bytes`, `lane_for`), and `duplicate_source_groups` (the one automatic road, which asks no model) — AND the package's shared bytes-level primitives, which the two other non-additive kinds reach through it rather than re-derive: `page_refusal` (the ONE confinement predicate), `read_text`, `sha256`, `page_stem`, `corpus_pages`, `plan_bytes`, `oversize_reason`, `PROVENANCE_ZONE_PREFIXES`. Its link scanner is hand-mirrored from the frozen contract linter and must stay that way |
 | `remote.py` | `apply_via_clone` (clone → the kind's applier → the per-kind cross-check → `run_gates` → gated commit → push; the two non-additive kinds push with `rebase=False`, so a lost race fails clean instead of replaying the approved diff onto a base the gates never judged) and `apply_approved`, the door that also records the outcome. Owns `commit_message`, `LEDGER_RESULT_KEYS`, the delete kind's whole-tree dead-link check, and `_lane_and_permission` — the four caller-scoped facts the gates are told |
 | `store.py` | `repair_proposals` persistence: `insert_proposal`, `pending_proposals`, `recent_decided`, `counts_by_status` (the whole-table histogram a surface may draw a part-to-whole from), `proposal`, `mark_decided`, `mark_applied`, `mark_failed`, `known_content_keys`. Pure — decides nothing, authorizes nothing |
 | `schema.py` | The DDL behind `startup_ddl_lock`, `JOB_NAME`, the kind/status/op-name vocabularies, and the op record: `declared_edits`, `target_paths`, `content_key` |
@@ -58,8 +64,10 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
 - `librarian.edits.validate` / `apply_declared` — the SAME validator both ends run for the `edits`
   kind; `entity_body` and `deletion` each own their kind's twin. Propose time proves a proposal is
   storable; apply time proves it still applies to the clone. Neither trusts the other: they are
-  asking about two different trees. `deletion.apply_declared` goes one step further and RECOMPUTES
-  its plan, because a sweep's content depends on every other page in the corpus.
+  asking about two different trees. `deletion.validate` is the pair for a written sweep — the same
+  two bounds at both ends — and `apply_declared` adds what a recomputation used to cover: a base
+  hash per rewritten page, and a walk for a page the plan never named that now refers to a going
+  one (ADR 043 D3).
 - `librarian.page` — the frontmatter LINE machinery (`top_level_key_line`, `top_level_key_span`,
   `frontmatter_lines`, `strip_key_lines`, `yaml_scalar`, `yaml_list`, `parse_list_value`,
   `with_related_link`) that `entity_body` rewrites `updated:`/`role:` through, `deletion` removes
@@ -100,9 +108,13 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   two entity pages survives — and `entity_alias.plan` derives every byte that follows from the
   corpus. A road where the model named the pages to re-anchor would be #72's deletion lesson
   re-learned on a kind whose error is a page's whole history moved onto the wrong company.
-- Never let a MODEL reach the `delete` kind. `validate_batch` refuses an op naming a deletion in any
-  spelling, by name, and the deterministic duplicate road is CODE — not a model call whose answer
-  happens to be checked. Judging that a page is stale is a person's decision.
+- Never let a MODEL decide WHICH pages a deletion removes. `validate_batch` refuses an op naming a
+  deletion in any spelling, by name, and the duplicate road picks its copy by lookup. Judging that a
+  page is stale is a person's decision. What a model DOES write is the pages that STAY (`sweep`) —
+  the two are not the same question and the split is ADR 043's whole subject.
+- Never give the sweep writer a fallback. A body it could not reconcile refuses the deletion; the
+  old bracket scrubber is gone and must not come back as a floor, or the failures travel that road
+  and nobody sees them.
 - Never widen `GateContext.body_rewrite_allowed`, `deletions_allowed`, `expected_bytes`,
   `derived_files` or `provenance_pages` past what the proposal names, and never set one from
   anywhere but `remote.py`
@@ -110,9 +122,10 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   keyword any module passes to a `GateContext`). A permission wide enough for a second page is a
   permission for a page nobody approved.
 - Never let `deletion`'s link scanner drift from the frozen contract linter's. It is hand-mirrored
-  on purpose (this package talks to that linter through FILES): a scanner that sees MORE links
-  edits prose nobody asked about, and one that sees FEWER leaves a dead link and a veto at apply
-  time. `index.corpus.link_targets` answers a deliberately DIFFERENT question — the index's edge
+  on purpose (this package talks to that linter through FILES): one that sees FEWER links leaves a
+  dead link and a veto at apply time. It deliberately sees ONE shape more — a markdown link at a
+  going page's path — because a writer reconciles prose and a path in prose is a reference whether
+  or not the linter counts it; that surplus is named here rather than discovered as drift. `index.corpus.link_targets` answers a deliberately DIFFERENT question — the index's edge
   graph — and is the wrong one to copy.
 - Never apply without the cross-check: `run_gates` would happily pass a well-formed additive diff
   that is not the one a steward approved, and only the stored `target_paths` can say so. Its SHAPE
@@ -152,8 +165,13 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   the same page in one run. The other checks are absent by NAME, not by oversight: none of them is
   answered by a link, a callout or a body. `delete` answers no check at all — it has no finding behind it, which is why its rows
   carry an empty `finding_ids` and say what their question WAS in `finding_subjects` instead.
-- **An empty `model_id` on a `delete` row is a statement, not a gap**: no model proposed it, and
-  that kind is the only one for which that can be true.
+- **A `delete` row's `model_id` says whether anything was WRITTEN**: the model that wrote the
+  bodies of the pages that stay, or empty when nothing referred to the removed ones. It never means
+  a model chose the deletion — that kind is the only one for which no model ever does.
+- **A `delete` row a person made is born `approved` and applied in the same call** (`store.
+  insert_proposal`'s `status`/`decided_by`, ADR 043 D2), so it is never listed as pending and the
+  console's history, the metrics and the ledger keep one source of truth. Every other road takes
+  the defaults and waits in the inbox.
 - `job_runs` job `repair-propose`, `stats`: `findings_seen`, `proposed`, `skipped_known`,
   `skipped_invalid`, `skip_reasons`.
 - Bounds: `settings.max_ops_per_proposal` (6) is how much ONE approval may be;
@@ -179,7 +197,12 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   settings on purpose: the real ceiling is the knowledge repo's contract linter, so an operator
   raising them could only produce proposals the gates then refuse. The delete road adds
   `settings.max_plan_bytes` (100000) — a SIZE rather than an op count, because that kind's
-  ops carry whole pages so the apply can recompute and byte-compare them; the merge road SHARES
+  ops carry whole pages; `sweep.MAX_BODY_GROWTH_BYTES` (512), how much a reconciled body may GROW
+  before it is a body the writer wrote INTO, and `MAX_UNREFERENCING_LINES_DROPPED` (3), how many
+  lines that referred to nothing may vanish before it is a page cut down rather than reconciled —
+  a callout's second line and a list item's continuation are the seam a real reconciliation closes;
+  and `review.MAX_DELETED_PAGES` (10), which is not a technical bound but a statement of what ONE
+  `brain_delete` call means; the merge road SHARES
   that setting, since both store whole pages for the identical reason and one ceiling governs how
   much stored content one approval may carry. The merge road holds `MERGE_CHOICE_LIMITS` (the body
   road's figure, and a constant for the same reason: one pair per call, no batch to derive from).

@@ -209,7 +209,7 @@ and the sentence, folded into an `and N other search(es)` count instead. What do
 
 ## Serving it
 
-`ask` is one of the nine tools `stigmergy-server` mounts, over BOTH transports — stdio (one process =
+`ask` is one of the ten tools `stigmergy-server` mounts, over BOTH transports — stdio (one process =
 one identity) and streamable HTTP (identity per bearer token) — and `stigmergy.slack` runs the same
 `AnswerService` behind its own per-identity `BrainService`. There is no per-call identity parameter
 a client could spoof on any of the three. Config and the response shape are in

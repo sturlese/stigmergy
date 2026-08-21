@@ -1,15 +1,13 @@
-"""The `delete` kind's plan computation, as a pure function of a worktree.
+"""The `delete` kind's CODE half, as a pure function of a worktree: which pages go, which pages
+refer to them, each referring page's frontmatter scrubbed, and every bound the written half has to
+satisfy (ADR 043 D1). The bodies are the writer's — `test_sweep.py` — and arrive here only as
+bytes `validate` judges.
 
-No Postgres, no git, no model — a sweep plan is a deterministic reading of the bytes on disk, and
-that is exactly what makes deletion governable: the same walk runs at propose time against the
-operator's checkout and again at apply time against a fresh clone, and the apply refuses unless the
-two agree byte for byte.
-
-The property this file exists to hold is the one the frozen contract linter judges: **after the
-sweep, nothing in the corpus links to a page that is gone.** So every question here is asked the
-way `stigmergy_lint.py` asks it — `Path(target).stem` for a link target, code fences and inline
-code stripped first — and the tests say so, because a scanner that drifts from the linter produces
-a plan that passes propose time and vetoes at apply time.
+No Postgres, no git, no model. The property this file exists to hold is the one the frozen
+contract linter judges: **after the sweep, nothing in the corpus refers to a page that is gone.**
+So every link question is asked the way `stigmergy_lint.py` asks it — `Path(target).stem` for a
+link target, code fences and inline code stripped first — and the tests say so, because a scanner
+that drifts from the linter produces a plan that passes propose time and vetoes at apply time.
 """
 import hashlib
 import json
@@ -70,7 +68,8 @@ def test_the_plan_deletes_the_named_page_and_scrubs_every_page_that_names_it(tmp
 
 def test_the_scrub_op_carries_the_bytes_it_was_computed_from_and_the_bytes_it_would_write(tmp_path):
     """`expected_before_hash` is what makes "the corpus moved under this proposal" a fact rather
-    than a guess; `planned_after` is what the apply byte-compares its own recomputation against."""
+    than a guess; `planned_after` is code's half — the frontmatter scrubbed, the body VERBATIM,
+    because the body is the writer's and this is the page it is handed."""
     root = str(tmp_path)
     _write(root, "wiki/notes/Doomed.md", _page("Doomed"))
     before = _page("Cites It", related=["[[Doomed]]"], body="# Cites It\n\nSee [[Doomed]].\n")
@@ -81,7 +80,8 @@ def test_the_scrub_op_carries_the_bytes_it_was_computed_from_and_the_bytes_it_wo
     op = _scrub_op(ops, "wiki/notes/Cites It.md")
     assert op["expected_before_hash"] == _sha(before)
     assert op["planned_after"] != before
-    assert "[[Doomed]]" not in op["planned_after"]
+    assert "[[Doomed]]" not in op["planned_after"].split("---", 2)[1], "the frontmatter is scrubbed"
+    assert "See [[Doomed]]." in op["planned_after"], "the body is the writer's, handed verbatim"
 
 
 # ── the frontmatter half: `related:`, `sources:`, and the supersession pointers ────────────────
@@ -175,39 +175,36 @@ def test_a_supersession_pointer_at_a_surviving_page_is_left_alone(tmp_path):
     assert 'supersedes: "Other"' in after
 
 
-# ── the body half: a wikilink becomes its own text ────────────────────────────────────────────
-def test_a_body_wikilink_becomes_its_own_text_and_an_aliased_one_becomes_the_alias(tmp_path):
-    """The sentence survives the page it pointed at. Unlinking rather than deleting the sentence is
-    the whole difference between a sweep and a shredder."""
+# ── the body half is the writer's: code counts a reference and rewrites nothing ──────────────
+def test_a_body_that_refers_to_the_deleted_page_puts_the_page_in_the_plan_verbatim(tmp_path):
+    """Before ADR 043 this is where `[[Doomed]]` became `Doomed`. Code no longer touches a body: it
+    notices the reference, hands the page to the writer with its body exactly as it was, and holds
+    the writer's answer to `validate`'s bounds (`test_sweep.py`)."""
     root = str(tmp_path)
     _write(root, "wiki/notes/Doomed.md", _page("Doomed"))
-    _write(root, "wiki/notes/Cites It.md",
-           _page("Cites It",
-                 body="# Cites It\n\nWe agreed with [[Doomed]] and with [[Doomed|the broker]], "
-                      "and embedded ![[Doomed]] too.\n"))
+    body = ("# Cites It\n\nWe agreed with [[Doomed]] and with [[Doomed|the broker]], "
+            "and embedded ![[Doomed]] too.\n")
+    _write(root, "wiki/notes/Cites It.md", _page("Cites It", body=body))
 
-    after = _after(deletion.plan(root, ["wiki/notes/Doomed.md"]), "wiki/notes/Cites It.md")
+    ops = deletion.plan(root, ["wiki/notes/Doomed.md"])
 
-    assert "We agreed with Doomed and with the broker, and embedded Doomed too." in after
-    assert "[[" not in after
+    assert deletion.scrubbed_paths(ops) == ["wiki/notes/Cites It.md"]
+    assert _after(ops, "wiki/notes/Cites It.md").endswith(body)
 
 
-def test_a_wikilink_inside_code_is_not_a_link_and_survives_untouched(tmp_path):
+def test_a_wikilink_inside_code_is_not_a_link(tmp_path):
     """The frozen linter blanks fenced blocks and inline code before it looks for links, so a
-    `[[Doomed]]` in a code sample is not a dead link and rewriting it would be editing somebody's
-    example. Matching the linter here is not politeness — a scanner that sees MORE links than the
-    linter edits prose for no reason, and one that sees FEWER leaves a veto at apply time."""
+    `[[Doomed]]` in a code sample is not a reference. Matching the linter here is not politeness —
+    a scanner that sees MORE links than the linter hands the writer pages for no reason, and one
+    that sees FEWER leaves a veto at apply time."""
     root = str(tmp_path)
     _write(root, "wiki/notes/Doomed.md", _page("Doomed"))
     body = ("# Cites It\n\nThe syntax is `[[Doomed]]`, as in:\n\n"
             "```\nrelated: [[Doomed]]\n```\n\nand really [[Doomed]].\n")
     _write(root, "wiki/notes/Cites It.md", _page("Cites It", body=body))
 
-    after = _after(deletion.plan(root, ["wiki/notes/Doomed.md"]), "wiki/notes/Cites It.md")
-
-    assert "The syntax is `[[Doomed]]`" in after
-    assert "```\nrelated: [[Doomed]]\n```" in after
-    assert "and really Doomed." in after
+    assert deletion.references(body, {"Doomed"})
+    assert not deletion.references(body.replace("and really [[Doomed]].", ""), {"Doomed"})
 
 
 def test_a_page_whose_only_mention_is_inside_code_is_not_scrubbed_at_all(tmp_path):
@@ -238,7 +235,7 @@ def test_every_spelling_the_linter_resolves_to_the_deleted_page_is_scrubbed(tmp_
     ops = deletion.plan(root, ["wiki/notes/Doomed.md"])
 
     assert deletion.scrubbed_paths(ops) == ["wiki/notes/Cites It.md"]
-    assert "[[" not in _after(ops, "wiki/notes/Cites It.md")
+    assert deletion.references(_after(ops, "wiki/notes/Cites It.md"), {"Doomed"})
 
 
 def test_a_link_to_a_different_page_with_a_similar_name_is_left_alone(tmp_path):
@@ -269,7 +266,7 @@ def test_a_page_naming_two_deleted_pages_is_scrubbed_once_for_both(tmp_path):
     assert deletion.deleted_paths(ops) == ["wiki/notes/One.md", "wiki/notes/Two.md"]
     assert deletion.scrubbed_paths(ops) == ["wiki/notes/Cites Both.md"]
     after = _after(ops, "wiki/notes/Cites Both.md")
-    assert "See One and Two." in after
+    assert "See [[One]] and [[Two]]." in after, "the body is the writer's, handed verbatim"
     assert "related:" not in after
 
 
@@ -287,8 +284,9 @@ def test_a_deleted_page_naming_another_deleted_page_is_never_scrubbed(tmp_path):
 
 
 def test_the_plan_is_ordered_and_reproducible(tmp_path):
-    """The apply's proof is `recomputed == stored`, so the order is part of the contract: two runs
-    over the same bytes have to produce the same list, not the same set."""
+    """The stored plan is what a steward's attention and the content key are measured on, so the
+    order is part of the contract: two runs over the same bytes produce the same list, not the
+    same set."""
     root = str(tmp_path)
     _write(root, "wiki/notes/One.md", _page("One"))
     _write(root, "wiki/notes/Two.md", _page("Two"))
@@ -348,11 +346,12 @@ def test_a_symlinked_target_is_refused(tmp_path):
         deletion.plan(root, ["wiki/notes/Link.md"])
 
 
-def test_a_reference_the_sweep_cannot_remove_refuses_the_whole_plan(tmp_path):
-    """The self-check that keeps this kind honest: the sweep knows how to rewrite four frontmatter
-    fields and the body. A wikilink anywhere ELSE would survive the sweep as a dead link, and the
-    contract linter would veto the apply a steward already approved — so the plan refuses to exist
-    rather than becoming a question whose answer cannot be carried out."""
+def test_a_reference_in_a_frontmatter_field_this_kind_does_not_rewrite_refuses_the_plan(tmp_path):
+    """The self-check that keeps this kind honest: frontmatter is code's half and code knows four
+    fields; the writer never sees it. A wikilink in any OTHER field would survive the sweep as a
+    dead link, and the contract linter would veto the apply — so the plan refuses to exist rather
+    than becoming a question whose answer cannot be carried out. (A reference in a BODY is never
+    unremovable any more: a writer reconciles anything.)"""
     root = str(tmp_path)
     _write(root, "wiki/notes/Doomed.md", _page("Doomed"))
     _write(root, "wiki/notes/Odd.md", _page("Odd", extra=['aliases: ["[[Doomed]]"]']))
@@ -450,6 +449,27 @@ def test_the_same_page_twice_in_one_plan_is_refused(tmp_path):
     assert [f.code for f in findings] == ["duplicate-path"]
 
 
+def test_a_planned_page_whose_frontmatter_is_not_codes_own_scrub_is_refused(tmp_path):
+    """ADR 043 D1's second bound: the writer owns the body and nothing else. A stored plan whose
+    frontmatter differs from code's scrub of the page as it stands — a line added, an entry kept —
+    is refused by name at both ends."""
+    root, ops = _corpus(tmp_path)
+    op = _scrub_op(ops, "wiki/notes/Cites It.md")
+    op["planned_after"] = op["planned_after"].replace("status: developing", "status: canonical")
+
+    assert [f.code for f in deletion.validate(root, ops)] == [deletion.FRONTMATTER_REWRITTEN_CODE]
+
+
+def test_a_planned_page_that_still_refers_to_the_deleted_page_is_refused(tmp_path):
+    """The third bound, and the one the writer's retry is about: a body handed back still naming a
+    going page is the dead link this kind exists to prevent, whichever shape it takes."""
+    root, ops = _corpus(tmp_path)
+    op = _scrub_op(ops, "wiki/notes/Cites It.md")
+    op["planned_after"] += "\nRead [the memo](wiki/notes/Doomed.md).\n"
+
+    assert [f.code for f in deletion.validate(root, ops)] == [deletion.REFERENCE_SURVIVES_CODE]
+
+
 def test_a_scrub_carrying_no_planned_bytes_is_refused(tmp_path):
     """`planned_after` is the whole of what the apply byte-compares its recomputation against, so
     an op without it is an approval nothing could prove."""
@@ -460,8 +480,10 @@ def test_a_scrub_carrying_no_planned_bytes_is_refused(tmp_path):
 
 
 def test_the_apply_refuses_a_plan_the_corpus_has_moved_under(tmp_path):
-    """The recomputation, at the level it is written: the stored plan is still WELL-FORMED — every
-    path exists, every op is known — and it is no longer the sweep this corpus needs."""
+    """The latecomer: the stored plan is still WELL-FORMED — every path exists, every op is known —
+    and a page the plan never rewrote now refers to the going page. ADR 039 B4 caught this by
+    recomputing the whole plan; a written plan cannot be recomputed, so the apply walks the corpus
+    for exactly this (ADR 043 D3)."""
     root, ops = _corpus(tmp_path)
     _write(root, "wiki/notes/A Latecomer.md", _page("A Latecomer", related=["[[Doomed]]"]))
 
@@ -469,7 +491,23 @@ def test_the_apply_refuses_a_plan_the_corpus_has_moved_under(tmp_path):
 
     assert touched == []
     assert [f.code for f in findings] == [deletion.PLAN_DRIFT_CODE]
+    assert "A Latecomer" in findings[0].message
     assert os.path.exists(os.path.join(root, "wiki/notes/Doomed.md")), "nothing was performed"
+
+
+def test_the_apply_refuses_a_plan_whose_page_changed_since_it_was_written(tmp_path):
+    """The other half of B4's question, answered by the base hash every scrub op carries: the
+    page the plan would rewrite is not the page the writer read, so the bytes it would land are a
+    rewrite of a page nobody read."""
+    root, ops = _corpus(tmp_path)
+    with open(os.path.join(root, "wiki/notes/Cites It.md"), "a", encoding="utf-8") as f:
+        f.write("\nA sentence added after the plan was made.\n")
+
+    touched, findings = deletion.apply_declared(root, ops)
+
+    assert touched == []
+    assert [f.code for f in findings] == [deletion.PLAN_DRIFT_CODE]
+    assert "wiki/notes/Cites It.md" in findings[0].message
 
 
 def test_the_apply_performs_the_plan_when_the_corpus_has_not_moved(tmp_path):
@@ -541,6 +579,38 @@ def test_a_page_that_mentions_nothing_going_is_left_out_of_the_plan_byte_for_byt
     ops = deletion.plan(root, ["wiki/notes/Doomed.md"])
 
     assert deletion.scrubbed_paths(ops) == []
+
+
+@pytest.mark.parametrize("spelling, stem", [
+    ("[the memo](wiki/notes/Doomed.md)", "Doomed"),
+    ("[the memo](../notes/Doomed.md)", "Doomed"),
+    ("[the memo](/wiki/notes/Doomed.md#what-it-says)", "Doomed"),
+    # The three shapes a name with a SPACE arrives in. The bare-space one is not well-formed
+    # markdown and a reader sees a reference anyway — red before the scanner stopped stopping at
+    # whitespace, and invisible downstream too, since the contract linter counts no markdown link
+    # at all.
+    ("[the memo](wiki/notes/Doomed Memo.md)", "Doomed Memo"),
+    ("[the memo](wiki/notes/Doomed%20Memo.md)", "Doomed Memo"),
+    ("[the memo](<wiki/notes/Doomed Memo.md>)", "Doomed Memo"),
+    ('[the memo](wiki/notes/Doomed Memo.md "the memo")', "Doomed Memo"),
+])
+def test_every_markdown_link_shape_at_a_going_page_counts_as_a_reference(spelling, stem):
+    """The one shape this scanner sees that the frozen linter does not, and the reason it does:
+    the view that named the removed SpaceX note listed it three times, once as a markdown link, and
+    nothing anywhere would have caught it. Matching a little MORE than markdown does is the safe
+    direction — a false positive only hands a page to the writer, which reconciles what it finds."""
+    assert deletion.references(f"# X\n\nRead {spelling} first.\n", {stem})
+
+
+@pytest.mark.parametrize("spelling", [
+    "[another](wiki/notes/Doomed Too.md)", "[another](wiki/notes/Other.md)", "(Doomed)",
+    "the Doomed memo", "`[the memo](wiki/notes/Doomed.md)`",
+])
+def test_a_markdown_link_at_something_else_is_not_a_reference(spelling):
+    """The benign twin: a scanner that answered True for everything would pass the rows above and
+    hand the writer the whole corpus. A bare NAME is not a reference either — this kind reconciles
+    links, and rewriting every sentence that happens to say a page's name is a different change."""
+    assert not deletion.references(f"# X\n\nRead {spelling} first.\n", {"Doomed"})
 
 
 def test_link_stem_keeps_a_dotted_title_whole_and_strips_only_a_path_and_an_md():

@@ -158,9 +158,9 @@ vocabulary and a layered "everything anchored to X" view. Entity-first resolutio
 service layer, so every client gets it, not only `ask`. Full narrative:
 [`docs/reference/navigation.md`](./docs/reference/navigation.md).
 
-**Nine MCP tools**, and the list is pinned by a test: read — `search_brain`, `read_page`,
-`list_entities`, `describe_entity`, `ask`; write — `brain_submit`, `brain_submissions`; review —
-`review_queue`, `review_decide`.
+**Ten MCP tools**, and the list is pinned by a test: read — `search_brain`, `read_page`,
+`list_entities`, `describe_entity`, `ask`; write — `brain_submit`, `brain_submissions`,
+`brain_delete`; review — `review_queue`, `review_decide`.
 
 ### The layering, and why it is a test
 
@@ -269,7 +269,7 @@ beside it in the source; the two bare modules at the top are small enough to be 
 | `slack/` | the Slack transport: 🧠 capture, Q&A, the steward doorbell |
 | `views/` | per-entity rollups: a deterministic skeleton + a bounded synthesis |
 | `gardener/` | corpus health on demand: ten deterministic checks + three bounded model passes (an editorial sweep over changed-plus-sampled pages, every entity page judged for a body that says nothing, and every registered entity judged against the others for a second identity of the same thing), findings persisted and reported — fixes nothing, writes nothing, vetoes nothing |
-| `repair/` | the governed repair loop: an agent PROPOSES a repair for a finding — an additive edit, a drafted body for an entity page whose own body says nothing about it, or a merge of two registry entries that are one entity (the agent picks which name survives; code computes every page that moves) — and a person proposes the fourth kind, removing a page and sweeping every reference to it out of the corpus. Code validates each at propose time and again at apply time through the same eight gates, a steward approves one at a time, and code applies exactly that as one App-authored commit |
+| `repair/` | the governed repair loop: an agent PROPOSES a repair for a finding — an additive edit, a drafted body for an entity page whose own body says nothing about it, or a merge of two registry entries that are one entity (the agent picks which name survives; code computes every page that moves) — and a person REMOVES pages at `brain_delete` — decided and applied in the same call, since the judgment was theirs, with the pages that referred to them rewritten by a model and the diff handed back. Code validates each at propose time and again at apply time through the same nine gates, a steward approves the model-initiated ones at a time, and code applies exactly that as one App-authored commit |
 | `digest/` | the week's activity in one Slack post |
 | `admin/` | the ops console: `/admin` on the same app process group — the inbox, the read-only queue, the entities desk where proposals are decided and an entity can be registered by saying what it is (the name checked against the registry as you type), repair review, cron remote-control, gardener/digest/index/worker pages with their charts, activity. INERT until its token hash is configured, and never a read surface over pages — though its Activity page does show the QUESTIONS people asked, which is user content behind one shared credential |
 

@@ -56,25 +56,27 @@ def fake_service():
     return service
 
 
-def test_the_mounted_tool_list_is_exactly_the_nine_supported_tools(fake_service):
-    """**The tool list, pinned.** Nine tools are supported, and this is the assertion that makes
-    that a fact rather than a claim: a tenth appearing (a surface added without a decision) or a
-    ninth vanishing (a surface removed without one) both turn this red by name.
+def test_the_mounted_tool_list_is_exactly_the_ten_supported_tools(fake_service):
+    """**The tool list, pinned.** Ten tools are supported, and this is the assertion that makes
+    that a fact rather than a claim: an eleventh appearing (a surface added without a decision) or
+    a tenth vanishing (a surface removed without one) both turn this red by name.
 
     `brain_reply` is GONE with the parks: nothing a submitter captures ever waits on them.
     `review_queue`/`review_decide` are part of the set: the inbox of what the librarian proposed
-    is a first-class surface, not an add-on."""
+    is a first-class surface, not an add-on. `brain_delete` joined it with ADR 043 — a person's own
+    deletion is an ACT at an authenticated door, not a proposal waiting for their own second
+    click — which is also why it is the one write tool with no `review_*` counterpart."""
     mcp = build_mcp(fake_service)
     names = {t.name for t in asyncio.run(mcp.list_tools())}
     assert names == {
         # read
         "search_brain", "read_page", "list_entities", "describe_entity", "ask",
         # write
-        "brain_submit", "brain_submissions",
+        "brain_submit", "brain_submissions", "brain_delete",
         # review
         "review_queue", "review_decide",
     }
-    assert len(names) == 9
+    assert len(names) == 10
 
 
 def test_search_brain_forwards_arguments_and_returns_the_service_payload(fake_service):

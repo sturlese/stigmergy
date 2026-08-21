@@ -159,6 +159,30 @@ def test_the_knowledge_repo_carries_the_skill_where_the_code_looks_for_it():
     # time — so a rationale telling a steward the absorbed NAME will now resolve to the survivor
     # would be describing an outcome code has already refused.
     "**It does not gain the absorbed entity's own",
+    # ── the sweep road (ADR 043 D1): the writer's own clauses. Each is a bound code enforces and
+    # refuses the whole DELETION over, so a brief that never said it would cost a person their
+    # deletion to discover ────────────────────────────────────────────────────────────────────
+    #
+    # The role, and the half of it that is not the model's: the decision to remove is a person's,
+    # already made, and a writer that argued with it would be answering a question nobody asked.
+    "That decision is theirs",
+    # The shape bound, in the brief's own words — a body that grew or was rearranged is refused.
+    "Reconcile, never rewrite",
+    # The two moves that ARE the road, and the case ADR 043 was written from: a callout that only
+    # existed because of the removed page.
+    "keeps its words", "existed ONLY because of the removed page goes",
+    # The set bound: every page listed, and no other.
+    "and no other",
+    # The reference bound, which is what the one retry is about.
+    "Nothing may still point at a removed page",
+    # And the tombstone rule — the one thing a well-meaning writer adds that nothing can remove
+    # afterwards.
+    "Never add material",
+    # The two bounds an adversarial read of the code found, each said to the writer before it can
+    # cost somebody their deletion: the shrink bound (the growth bound is one-sided, and alone it
+    # admits a page cut down to its title) and the external-link rule (a bound that REFUSES must
+    # not fire on a link the writer has no business touching).
+    "Never cut a page down", "An external link is not a reference",
 ])
 def test_the_skill_still_covers_every_clause_the_frame_assumes(phrase):
     """A contract TABLE rather than one "the file is long enough" check, because each row is a
