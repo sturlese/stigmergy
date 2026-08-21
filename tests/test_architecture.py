@@ -165,7 +165,7 @@ _REVIEW_DECLARED_TRANSITIVE_KERNEL_MODULES = frozenset({
     # pinned above).
     "stigmergy.kernel.converters",
     # `kernel.registry.save_registry` writes through `fsutil.write_text_atomic` (and
-    # `entities.mint._restore` rolls back through the same helper), so an interrupted write cannot
+    # `entities.decide` rolls back through `clone.restore_tracked`), so an interrupted write cannot
     # leave a truncated `ops/entity-registry.json`.
     "stigmergy.kernel.fsutil",
     "stigmergy.kernel.normalize",
@@ -851,7 +851,8 @@ def test_server_review_never_imports_the_async_librarian_loop(path):
 # reached only from the governed verdicts that are allowed to.
 _REVIEW_ALLOWED_ENTITIES_SYMBOLS = (
     "stigmergy.entities.decide",     # the five decisions, handed to the door as `action`
-    "stigmergy.entities.remote",     # the door itself: decide_via_clone / mint_via_clone
+    "stigmergy.entities.remote",     # the door itself: decide_via_clone
+    "stigmergy.entities.generator.canonical_id_for",   # the id a registration will bear, for its ack
     "stigmergy.entities.errors.EntityError",
     "stigmergy.entities.errors.CapabilityUnavailableError",
 )
@@ -1121,7 +1122,7 @@ def test_review_kinds_entity_types_matches_the_generators_closed_list():
     """`stigmergy.review_kinds.ENTITY_TYPES` is a RESTATEMENT of `entities.generator.ENTITY_TYPES`
     (never an import — `review_kinds` may depend on nothing, see the test above), so a Slack
     `static_select` built from the restatement can silently drift from the types
-    `entities.mint` will actually accept. This is the drift guard `review_kinds.py`'s own docstring
+    `entities.birth` will actually accept. This is the drift guard `review_kinds.py`'s own docstring
     promises: if this ever fails, the fix is editing `review_kinds.ENTITY_TYPES` to match, never
     loosening this assertion."""
     from stigmergy import review_kinds
@@ -1129,7 +1130,7 @@ def test_review_kinds_entity_types_matches_the_generators_closed_list():
     assert review_kinds.ENTITY_TYPES == generator.ENTITY_TYPES, (
         f"stigmergy.review_kinds.ENTITY_TYPES {review_kinds.ENTITY_TYPES!r} no longer matches "
         f"stigmergy.entities.generator.ENTITY_TYPES {generator.ENTITY_TYPES!r} — the Slack "
-        f"entity-mint modal's static_select would offer a type entities.mint does not accept, or "
+        f"entity-mint modal's static_select would offer a type entities.birth does not accept, or "
         f"withhold one it does")
 
 
@@ -1373,14 +1374,13 @@ def test_no_call_to_resolve_slack_identity_passes_the_configured_team_id_as_the_
 # `stigmergy.kernel` (the registry reader/writer, normalization, the frontmatter parser) and, of
 # `stigmergy.librarian`'s modules — `gitcmd` (the one git dialect, reused by `clone.py`), `errors`
 # (the exception types `gitcmd`/`gates` raise, needed wherever those are caught), `config` (the
-# `gitleaks_bin` default `mint.py`'s secrets scan reuses rather than re-hardcoding — the same
+# `gitleaks_bin` default `guard.py`'s secrets scan reuses rather than re-hardcoding — the same
 # reason `cli.py` already needed it for `--repo`'s own default), `gates` (the secrets scan itself,
-# ADR 030 D4 moved out of `cli.py`-only territory into the shared `entities.mint.mint` both the
-# CLI and a server-driven mint call) and `githubapp` (the App-credential machinery
-# `entities.remote.mint_via_clone` uses to clone/push as the librarian App — ADR 030 D3, the SAME
-# precedent `gitcmd`'s own presence here already sets: a door open to the whole library-module
-# bucket even though today only ONE module walks through it). `cli.py`, the front door,
-# additionally reaches `stigmergy.index` (the ONE connection seam, exactly the exception
+# shared by every governed write through `entities.guard`) and `githubapp` (the App-credential
+# machinery `entities.remote.decide_via_clone` uses to clone/push as the librarian App — ADR 030
+# D3, the SAME precedent `gitcmd`'s own presence here already sets: a door open to the whole
+# library-module bucket even though today only ONE module walks through it). `cli.py`, the front
+# door, additionally reaches `stigmergy.index` (the ONE connection seam, exactly the exception
 # `capture.cli` already has).
 ENTITIES = pathlib.Path(__file__).resolve().parents[1] / "src" / "stigmergy" / "entities"
 ENTITIES_SOURCES = sorted(p for p in ENTITIES.rglob("*.py") if p.name != "__init__.py")
@@ -2541,7 +2541,7 @@ _REPAIR_ALLOWED_PREFIXES = (
     # thing every anchoring decision resolves against, which is the property ADR 016 and the
     # knowledge repo's own linter both rest on. Narrow on purpose: the generator's READER and
     # WRITER (`read_entity_pages`, `registry_of`, `regenerate`, `FIX_COMMAND`) and the error type
-    # they raise — never `entities.mint`, `entities.birth`, `entities.remote` or `entities.cli`,
+    # they raise — never `entities.guard`, `entities.birth`, `entities.remote` or `entities.cli`,
     # which are the mint DOOR and have their own authorization question. The same shape
     # `server/review.py` already has for `entities.generator.canonical_id_for`.
     "stigmergy.entities.generator",
@@ -2764,7 +2764,7 @@ def test_the_index_and_the_server_spell_the_entity_registry_path_the_same_way():
 # entity nobody proposed) lands under the admin token with the actor as ATTRIBUTION rather than
 # authorization (ADR 030 D2). The console never reaches `entities.remote` itself: the sequence
 # (land the commit through the governed door -> `review_decisions` row) is
-# `server.review.decide_and_record` / `create_and_record`, ONE function each that every door
+# `server.review.decide_and_record` / `commission_registration`, ONE function each that every door
 # calls, so `stigmergy.entities.remote` is absent from the set below. `stigmergy.entities.decide`
 # IS in it: the console builds the `action` the door runs (approve / merge / decline, alias
 # approve / decline), exactly as the review lane does one package over.
@@ -2810,7 +2810,7 @@ _ADMIN_ALLOWED_IMPORT_PREFIXES = (
     "stigmergy.server.errors",
     "stigmergy.server.review",        # ensure_review_schema (compose-time DDL) + record_decision (the
                                      # ONE review_decisions ledger writer — entity_approve's own
-                                     # reject decision lands through it) + mint_and_record_approval
+                                     # reject decision lands through it) + decide_and_record
                                      # (the ONE mint sequence both minting doors run, ADR 030)
     "stigmergy.server.pilot_report",  # the measurement table, reused whole
     "stigmergy.server.webhook",       # JOB_NAME — the webhook's own job spelling, never re-typed
@@ -2885,7 +2885,7 @@ def test_every_declared_admin_import_prefix_is_actually_imported():
     which this tuple was missing.
 
     The gap was not hypothetical. ADR 030's mint moved into ONE function
-    (`server.review.mint_and_record_approval`, called by both minting doors), `admin/service.py`
+    (`server.review.decide_and_record`, called by both deciding doors), `admin/service.py`
     stopped importing `stigmergy.entities.remote` — and the grant for the governed mint door sat
     here, live, over a package this console no longer touches, until a human noticed it by hand.
     Nothing under `tests/` could have: `test_admin_actually_uses_its_declared_librarian_exception`
@@ -2971,13 +2971,13 @@ def test_only_the_http_transport_composes_the_admin_branch():
 # There is one copy now, which is why this file's admin section no longer grants
 # `stigmergy.entities.remote`: the guard against a second copy is that a second CALL SITE of the
 # governed door has to appear somewhere, and this is what sees it.
-_GOVERNED_MINT_DOOR = "mint_via_clone"
+_GOVERNED_MINT_DOOR = "decide_via_clone"
 
 
 def _names_the_governed_mint_door(path: pathlib.Path) -> bool:
     """True when the module CALLS or imports the door by name. Comments and docstrings are opaque
-    to `ast.parse`, which matters here: three modules describe the door in prose (`admin/
-    service.py`, `entities/mint.py`, `entities/errors.py`) and none of them reaches it."""
+    to `ast.parse`, which matters here: modules describe the door in prose (`admin/service.py`,
+    `entities/errors.py`) and none of them reaches it."""
     tree = ast.parse(path.read_text(encoding="utf-8"))
     return any(
         (isinstance(node, ast.Attribute) and node.attr == _GOVERNED_MINT_DOOR)
@@ -2987,24 +2987,26 @@ def _names_the_governed_mint_door(path: pathlib.Path) -> bool:
         for node in ast.walk(tree))
 
 
-def test_the_governed_mint_door_has_exactly_one_call_site():
-    """`entities.remote.mint_via_clone` is reached from `server/review.py` and nowhere else.
+def test_the_governed_door_has_exactly_one_call_site():
+    """`entities.remote.decide_via_clone` is reached from `server/review.py` and nowhere else.
 
     This is the structural claim that makes a cross-door PARITY test unnecessary: parity is for a
-    contract implemented twice (`tests/test_contract_parity.py`'s own subject), and the ledger row,
-    the note and the ordering are written by one function now — a parity assertion would compare
-    the shared function against itself and read as coverage for a drift that cannot happen while
-    this test holds. If a second door ever mints on its own again, the two doors' end states will
-    still agree and THIS is what goes red.
+    contract implemented twice (`tests/test_contract_parity.py`'s own subject), and the ledger row
+    and the ordering are written by one function now — a parity assertion would compare the
+    shared function against itself and read as coverage for a drift that cannot happen while this
+    test holds. If a second door ever decides on its own again, the two doors' end states will
+    still agree and THIS is what goes red. (There is no server-side MINT door any more — ADR 042:
+    an entity is born through the librarian, from a capture, and a steward's registration is such
+    a capture.)
 
     Equality against a one-element list, not a `<= 1` count: renaming the door would otherwise
     empty the scan and leave a permanently-green test behind."""
     callers = sorted(_rel(p) for p in ALL_STIGMERGY_SOURCES
                      if _names_the_governed_mint_door(p))
     assert callers == ["server/review.py"], (
-        f"the governed mint door is called from {callers}, not from server/review.py alone — "
-        "either a second copy of the mint sequence is back (put it in "
-        "`server.review.mint_and_record_approval`, which both doors call), or the door was "
+        f"the governed door is called from {callers}, not from server/review.py alone — "
+        "either a second copy of the decision sequence is back (put it in "
+        "`server.review.decide_and_record`, which both doors call), or the door was "
         "renamed and this scan has gone blind")
 
 
@@ -3012,9 +3014,10 @@ def test_the_governed_mint_door_has_exactly_one_call_site():
 # The test above sees a SECOND COPY of the mint. It cannot see a second CALLER of the one copy,
 # and that is the other half of the same guarantee.
 #
-# `decide_and_record` and `create_and_record` are PUBLIC and take NO authorization argument of
-# any kind — each clones with the librarian App's credential, commits, pushes and writes the
-# governance ledger, on behalf of whoever calls it. That is correct (ADR 030 D2: authorization is
+# `decide_and_record` and `commission_registration` are PUBLIC and take NO authorization argument
+# of any kind — the first clones with the librarian App's credential, commits, pushes and writes
+# the governance ledger, the second queues a capture that births an entity CONFIRMED by whoever it
+# names, on behalf of whoever calls it. That is correct (ADR 030 D2: authorization is
 # per-surface, because the console decides under one shared admin token) and it is exactly why
 # the CALLER SET has to be closed: every entry below is a surface that has ALREADY decided
 # authorization for itself — the review lane by resolving a steward (`_guard_steward_decision`),
@@ -3026,10 +3029,10 @@ def test_the_governed_mint_door_has_exactly_one_call_site():
 # `server/review.py` would otherwise mean importing `stigmergy.entities.remote` — which
 # `stigmergy.slack` is mechanically barred from and `stigmergy.admin` could only do through a
 # declared entry in `_ADMIN_ALLOWED_IMPORT_PREFIXES`, which has none.
-_MINT_SEQUENCES = ("decide_and_record", "create_and_record")
+_MINT_SEQUENCES = ("decide_and_record", "commission_registration")
 
 # `server/review.py` DEFINES both and calls the first from its decide paths; `admin/service.py`
-# calls them as `server_review.decide_and_record` / `create_and_record`. Slack is deliberately
+# calls them as `server_review.decide_and_record` / `commission_registration`. Slack is deliberately
 # absent and must stay absent: it reaches the review lane through `review_decide_safe`, which
 # walks the steward guard first.
 _MINT_SEQUENCE_CALLERS = ("admin/service.py", "server/review.py")
@@ -3055,7 +3058,7 @@ def _mint_sequence_callers(sources) -> list[pathlib.Path]:
 
 
 def test_the_shared_mint_sequence_is_entered_from_exactly_the_two_authorizing_surfaces():
-    """`server.review.decide_and_record` / `create_and_record` are reached from `server/review.py`
+    """`server.review.decide_and_record` / `commission_registration` are reached from `server/review.py`
     and `admin/service.py`, and from nowhere else — see the section comment above for why the set
     is closed and for the absent `stigmergy.entities.remote` allowlist entry this stands in for.
 

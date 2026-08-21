@@ -1,8 +1,8 @@
-"""`entities.remote.mint_via_clone` — the server-driven mint's own seam (ADR 030 D3), unit-level:
+"""`entities.remote.decide_via_clone` — the server-driven decision's own seam (ADR 030 D3), unit-level:
 credential resolution (`_authenticated_url`) and the clone/cleanup orchestration, both driven
 without a real GitHub App and without a real network call — `githubapp.installation_token`'s own
 `opener=` seam is what makes the real thing keyless (`tests/librarian/test_githubapp.py`); this
-suite instead monkeypatches `installation_token` itself, because `mint_via_clone` does not thread
+suite instead monkeypatches `installation_token` itself, because `decide_via_clone` does not thread
 an `opener` through (there is exactly one caller, and it is not a place that needs one).
 
 The end-to-end mint (a real bare remote, a real push, the registry regenerated) is proven in
@@ -16,8 +16,7 @@ import os
 
 import pytest
 
-from stigmergy.entities import cli as entities_cli
-from stigmergy.entities import generator, remote
+from stigmergy.entities import remote
 from stigmergy.entities.errors import CapabilityUnavailableError, EntityError
 from stigmergy.librarian import gitcmd
 from stigmergy.librarian.errors import LibrarianConfigError
@@ -134,8 +133,8 @@ def test_embeds_a_minted_token_into_the_url_in_the_shape_gitcmd_scrubs(monkeypat
     assert "ghs_stubtoken123" not in gitcmd._scrub(url)
 
 
-# ── mint_via_clone: the clone/cleanup orchestration, mint() itself stubbed out ──────────────────
-def test_mint_via_clone_cleans_up_the_temp_clone_even_when_mint_raises(tmp_path, monkeypatch):
+# ── decide_via_clone: the clone/cleanup orchestration, the decision itself stubbed out ─────────
+def test_decide_via_clone_cleans_up_the_temp_clone_even_when_the_decision_raises(tmp_path, monkeypatch):
     from tests.librarian import support
     env = support.build_repo(str(tmp_path / "git"))
     captured = {}
@@ -144,29 +143,28 @@ def test_mint_via_clone_cleans_up_the_temp_clone_even_when_mint_raises(tmp_path,
         captured["repo"] = repo
         captured["author"] = kwargs["author"]
         assert os.path.isdir(repo)
-        # the App's identity is configured on the clone BEFORE mint() is called (needed for the
+        # the App's identity is configured on the clone BEFORE the decision runs (needed for the
         # bounded rebase-and-retry's own `git rebase`, which a fresh temp clone otherwise has no
         # committer identity for at all).
         name = gitcmd.run("config", "user.name", cwd=repo).stdout.strip()
         email = gitcmd.run("config", "user.email", cwd=repo).stdout.strip()
         assert (name, email) == kwargs["author"]
-        raise EntityError("boom from mint()")
+        raise EntityError("boom from the decision")
 
-    monkeypatch.setattr(remote.mint_lib, "mint", boom)
+    monkeypatch.setattr(remote.decide, "apply", boom)
 
-    with pytest.raises(EntityError, match="boom from mint"):
-        remote.mint_via_clone(env.bare, "main", None, entity_id="acme-two", name="Acme Two",
-                              entity_type="organization", today="2026-01-01",
-                              approved_by="steward@example.com")
+    with pytest.raises(EntityError, match="boom from the decision"):
+        remote.decide_via_clone(env.bare, "main", None, action=lambda repo: None,
+                                decided_by="steward@example.com")
 
     assert captured["author"] == (
         "stigmergy-librarian", "stigmergy-librarian@users.noreply.github.com")
     assert not os.path.exists(captured["repo"]), (
-        "the TemporaryDirectory must be gone even though mint() raised")
+        "the TemporaryDirectory must be gone even though the decision raised")
 
 
-def test_mint_via_clone_needs_no_credential_against_a_local_bare_remote(tmp_path, monkeypatch):
-    """The property the pg suite (`tests/server/test_review.py`) relies on for every mint it
+def test_decide_via_clone_needs_no_credential_against_a_local_bare_remote(tmp_path, monkeypatch):
+    """The property the pg suite (`tests/server/test_review.py`) relies on for every decision it
     proves for real: `credential=None` against a local path never even asks `githubapp` whether
     it is configured."""
     from tests.librarian import support
@@ -175,144 +173,46 @@ def test_mint_via_clone_needs_no_credential_against_a_local_bare_remote(tmp_path
     def fail_if_called(*a, **k):
         raise AssertionError("githubapp.configured must not be consulted for a non-https remote")
     monkeypatch.setattr(remote.githubapp, "configured", fail_if_called)
-    monkeypatch.setattr(remote.mint_lib, "mint", lambda repo, **kwargs: {"stub": True})
+    monkeypatch.setattr(remote.decide, "apply", lambda repo, **kwargs: {"stub": True})
 
-    result = remote.mint_via_clone(env.bare, "main", None, entity_id="acme-two", name="Acme Two",
-                                   entity_type="organization", today="2026-01-01",
-                                   approved_by="steward@example.com")
+    result = remote.decide_via_clone(env.bare, "main", None, action=lambda repo: None,
+                                     decided_by="steward@example.com")
 
     assert result == {"stub": True}
 
 
 # ── AUDIT M3: the governance trailer cannot be forged ──────────────────────────────────────────
-# ADR 030 D1 makes `Approved-by:` half of how `git log` answers "who approved this identity", and
-# the knowledge repo's authorship check reads it. MCP and Slack pass a resolved identity, but the
+# ADR 030 D1 makes the trailer half of how `git log` answers "who decided this identity", and the
+# knowledge repo's authorship check reads it. MCP and Slack pass a resolved identity, but the
 # CONSOLE passes a free-text actor by design (D2 — attribution), so a newline there would inject
-# arbitrary lines into the commit message: a second, forged `Approved-by:` among them. `name` was
-# already collapsed one field over; the trailer had no equivalent until it became a record.
-def test_a_newline_in_the_approver_cannot_forge_a_second_trailer(tmp_path, monkeypatch):
+# arbitrary lines into the commit message: a second, forged trailer among them.
+def test_a_newline_in_the_decider_cannot_forge_a_second_trailer(tmp_path, monkeypatch):
     from tests.librarian import support
     env = support.build_repo(str(tmp_path / "git"))
     seen = {}
-    monkeypatch.setattr(remote.mint_lib, "mint",
+    monkeypatch.setattr(remote.decide, "apply",
                         lambda repo, **kw: seen.update(kw) or {"stub": True})
-    remote.mint_via_clone(
-        env.bare, "main", {}, entity_id="acme", name="Acme", entity_type="organization",
-        today="2026-08-05", approved_by="steward@example.com\nApproved-by: mallory@evil.example")
+    remote.decide_via_clone(
+        env.bare, "main", {}, action=lambda repo: None,
+        decided_by="steward@example.com\nDecided-by: mallory@evil.example")
 
     # git parses a trailer only at the START of a line, so the property that matters is that the
     # value stays on ONE line: the forged text survives as visible content of the single real
     # trailer, never as a second trailer git (or the knowledge repo's authorship check) would read.
     trailer = seen["trailer"]
     assert "\n" not in trailer
-    assert len([line for line in trailer.splitlines() if line.startswith("Approved-by:")]) == 1
+    assert len([line for line in trailer.splitlines() if line.startswith("Decided-by:")]) == 1
     assert "mallory@evil.example" in trailer      # kept and visible, never smuggled
 
 
-def test_an_empty_approver_is_refused_rather_than_committed_blank(tmp_path, monkeypatch):
+def test_an_empty_decider_is_refused_rather_than_committed_blank(tmp_path, monkeypatch):
     from tests.librarian import support
     env = support.build_repo(str(tmp_path / "git"))
-    monkeypatch.setattr(remote.mint_lib, "mint", lambda repo, **kw: {"stub": True})
+    monkeypatch.setattr(remote.decide, "apply", lambda repo, **kw: {"stub": True})
     for blank in ("", "   ", "\n\t"):
         with pytest.raises(EntityError, match="approver"):
-            remote.mint_via_clone(env.bare, "main", {}, entity_id="acme", name="Acme",
-                                  entity_type="organization", today="2026-08-05",
-                                  approved_by=blank)
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-# CROSS-DOOR CONSISTENCY (ADR 030 D4): "a divergence between the two doors is the defect class
-# this decision exists to prevent" — stated in the ADR's prose, never previously stated as a single
-# assertion comparing what the two doors actually produce. Every existing suite (this file,
-# `tests/server/test_review.py`, `tests/slack/test_review.py`, `tests/admin/test_service_pg.py`,
-# `tests/entities/test_cli.py`) inspects only ITS OWN remote — none compares one door's artifact to
-# another's byte for byte. This is that comparison: the SAME identity metadata, minted through the
-# server seam (`entities.remote.mint_via_clone` — what `server.review`/`slack.review`/
-# `admin.service` all call) and through the CLI seam (`entities.cli.main`, a steward's own
-# terminal), against two INDEPENDENT bare remotes seeded byte-identically.
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-def test_the_server_seam_and_the_cli_seam_mint_equivalent_artifacts(tmp_path, require_gitleaks):
-    """Same page path and byte-identical page body, byte-identical registry (both remotes started
-    from the same seed and gained the same one entity — `derive_registry` never embeds an absolute
-    path or a timestamp, so this is a meaningful comparison rather than one doomed to differ by
-    construction), the same conventional-commit SUBJECT/BODY, and exactly one new commit on each
-    side. The only two properties allowed to differ are named by D1 itself — the commit author (App
-    vs. the steward's own git identity) and the `Approved-by:` trailer paragraph a server-driven
-    mint appends and the CLI does not — and this test asserts the difference explicitly rather than
-    merely not checking it.
-
-    `submission_id=None` on the server-seam call, matching the CLI's `create` (no queue row): both
-    sides then render `birth.commit_message`'s "Created by a steward." body line, so an
-    `approve`-vs-`create` wording difference is not a confound this comparison has to explain away.
-    """
-    server_remote, _server_seed_clone = fx.build_repo(str(tmp_path / "door-a"))
-    cli_remote, cli_clone = fx.build_repo(str(tmp_path / "door-b"))
-    assert fx.remote_files(server_remote) == fx.remote_files(cli_remote), (
-        "the two seed remotes must start byte-identical for this comparison to mean anything")
-
-    name, entity_type, aliases, role, today = (
-        "Globex Robotics", "organization", ["Globex", "Globex Robotics Inc"],
-        "a robotics manufacturer", "2026-07-27")
-    entity_id = generator.canonical_id_for(name)
-    approver = "steward@example.com"
-
-    server_result = remote.mint_via_clone(
-        server_remote, "main", None, entity_id=entity_id, name=name, entity_type=entity_type,
-        aliases=aliases, role=role, today=today, submission_id=None, approved_by=approver)
-    server_commit = server_result["commit"]
-
-    rc = entities_cli.main([
-        "--repo", cli_clone, "--branch", "main", "create",
-        "--id", entity_id, "--name", name, "--type", entity_type,
-        "--aliases", ", ".join(aliases), "--role", role, "--today", today])
-    assert rc == 0
-    cli_commit = gitcmd.run("rev-parse", "main", cwd=cli_remote).stdout.strip()
-
-    # ── same page path, byte-identical page content ─────────────────────────────────────────────
-    page_relpath = f"wiki/entities/{name}.md"
-    server_page = gitcmd.run("show", f"{server_commit}:{page_relpath}", cwd=server_remote).stdout
-    cli_page = gitcmd.run("show", f"{cli_commit}:{page_relpath}", cwd=cli_remote).stdout
-    assert server_page == cli_page
-
-    # ── same tree shape: both remotes started identical and gained the same one file ────────────
-    server_files = fx.remote_files(server_remote)
-    cli_files = fx.remote_files(cli_remote)
-    assert page_relpath in server_files and page_relpath in cli_files
-    assert server_files == cli_files
-
-    # ── byte-identical registry (the derived view is a pure function of the pages) ───────────────
-    server_registry = fx.remote_registry(server_remote)
-    cli_registry = fx.remote_registry(cli_remote)
-    assert server_registry == cli_registry
-    assert server_registry["entities"][entity_id]["name"] == name
-
-    # ── exactly ONE new commit landed on each side (the seed commit + this ONE mint commit) ──────
-    server_log = gitcmd.run("log", "--oneline", "main", cwd=server_remote).stdout.strip()
-    cli_log = gitcmd.run("log", "--oneline", "main", cwd=cli_remote).stdout.strip()
-    assert len(server_log.splitlines()) == len(cli_log.splitlines()) == 2
-
-    # ── same commit-message SHAPE, modulo the trailer (D1's own, named exception) ────────────────
-    trailer_line = f"Approved-by: {approver}"
-    server_message = gitcmd.run("log", "-1", "--format=%B", server_commit, cwd=server_remote).stdout
-    cli_message = gitcmd.run("log", "-1", "--format=%B", cli_commit, cwd=cli_remote).stdout
-    subject = f"feat(entity): add {name}\n\nCreated by a steward.\n\n"
-    assert server_message.startswith(subject)
-    assert cli_message.startswith(subject)
-    assert trailer_line in server_message
-    assert trailer_line not in cli_message
-    before_trailer, _, _ = server_message.partition(f"\n{trailer_line}\n")
-    assert before_trailer.rstrip("\n") == cli_message.rstrip("\n")
-
-    # ── the one property D1 says must NOT match: the author (App vs. the steward) ────────────────
-    server_author = gitcmd.run("log", "-1", "--format=%an <%ae>", server_commit,
-                               cwd=server_remote).stdout.strip()
-    cli_author = gitcmd.run("log", "-1", "--format=%an <%ae>", cli_commit,
-                            cwd=cli_remote).stdout.strip()
-    assert server_author == "stigmergy-librarian <stigmergy-librarian@users.noreply.github.com>"
-    assert cli_author == f"{fx.STEWARD_NAME} <{fx.STEWARD_EMAIL}>"
-    assert server_author != cli_author, (
-        "D1: the App writes, the human is named in a trailer — the author line is how a reader "
-        "of git log tells which door a mint came through, and it must not converge")
+            remote.decide_via_clone(env.bare, "main", {}, action=lambda repo: None,
+                                    decided_by=blank)
 
 
 def test_a_librarian_fault_after_the_clone_is_renamed_into_this_packages_vocabulary(
@@ -321,7 +221,7 @@ def test_a_librarian_fault_after_the_clone_is_renamed_into_this_packages_vocabul
     docstring's "This module's public seam raises only `entities.errors.EntityError`" was false for
     everything after the clone.
 
-    `gates.ensure_scanner` runs on this exact path (`mint.refuse_secrets` scans what the commit
+    `gates.ensure_scanner` runs on this exact path (`guard.refuse_secrets` scans what the commit
     will carry) and raises `LibrarianConfigError` when gitleaks is absent. The MCP server is a
     different process from the librarian worker, so a server host without the scanner is the
     ordinary deployment — and `server.review._mint_entity_proposal` catches
@@ -336,12 +236,11 @@ def test_a_librarian_fault_after_the_clone_is_renamed_into_this_packages_vocabul
         raise LibrarianConfigError(
             "the secret scanner '/opt/operator/bin/gitleaks' is not runnable (FileNotFoundError)")
 
-    monkeypatch.setattr(remote.mint_lib, "mint", scanner_missing)
+    monkeypatch.setattr(remote.decide, "apply", scanner_missing)
 
     with pytest.raises(EntityError) as caught:
-        remote.mint_via_clone(env.bare, "main", None, entity_id="acme-two", name="Acme Two",
-                              entity_type="organization", today="2026-01-01",
-                              approved_by="steward@example.com")
+        remote.decide_via_clone(env.bare, "main", None, action=lambda repo: None,
+                                decided_by="steward@example.com")
 
     assert str(caught.value) == remote.MINT_FAULT_MESSAGE
     # …and the librarian fault's own text does NOT ride along. `server.review` turns this into a
@@ -353,10 +252,10 @@ def test_a_librarian_fault_after_the_clone_is_renamed_into_this_packages_vocabul
     assert caught.value.__cause__ is not None, "the cause is kept for the log, not for the wire"
 
 
-def test_an_entity_error_from_the_mint_is_not_rewrapped_by_that_rename(tmp_path, monkeypatch):
+def test_an_entity_error_from_the_decision_is_not_rewrapped_by_that_rename(tmp_path, monkeypatch):
     """The benign twin: the rename above catches `LibrarianError`, which `EntityError` is not, so
-    a refusal this package words for the STEWARD — a birth-field validation, a secret in the role
-    text, both clean by construction — still reaches the caller as itself and keeps its own
+    a refusal this package words for the STEWARD — a decision on a name nothing proposed, a
+    collision, both clean by construction — still reaches the caller as itself and keeps its own
     sentence. What the ladder above it maps is the four types whose sentences are worded for a
     terminal instead (issue #57); `EntityError` itself is deliberately not an arm."""
     from tests.librarian import support
@@ -365,12 +264,11 @@ def test_an_entity_error_from_the_mint_is_not_rewrapped_by_that_rename(tmp_path,
     def refuse(repo, **kwargs):
         raise EntityError("--name contains a character which cannot appear in an entity name")
 
-    monkeypatch.setattr(remote.mint_lib, "mint", refuse)
+    monkeypatch.setattr(remote.decide, "apply", refuse)
 
     with pytest.raises(EntityError, match="cannot appear in an entity name"):
-        remote.mint_via_clone(env.bare, "main", None, entity_id="acme-two", name="Acme Two",
-                              entity_type="organization", today="2026-01-01",
-                              approved_by="steward@example.com")
+        remote.decide_via_clone(env.bare, "main", None, action=lambda repo: None,
+                                decided_by="steward@example.com")
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
@@ -430,7 +328,7 @@ def test_every_refusal_reachable_after_a_clone_says_nothing_was_pushed(constant)
 @pytest.mark.parametrize("constant", sorted(REFUSED_BEFORE_ANY_CLONE))
 def test_the_two_credential_faults_say_nothing_was_written_instead(constant):
     """The other half of the partition, and the benign twin for the rule above: a named exception
-    that is honest rather than a gap. These fire before `mint_via_clone` has cloned anything, so
+    that is honest rather than a gap. These fire before `decide_via_clone` has cloned anything, so
     "Nothing was pushed" would understate it — nothing was written at all. Asserted in both
     directions, so widening the rule to "every constant says Nothing was pushed" cannot be done by
     quietly editing these two."""

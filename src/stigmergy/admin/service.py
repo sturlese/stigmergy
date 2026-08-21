@@ -169,11 +169,15 @@ class AdminService:
     invariant: no cursor is ever held across an `await` — the two async digest methods await
     inside `digest.run`, between statements, never mid-cursor."""
 
-    def __init__(self, conn, *, server_settings, admin_settings: AdminSettings, gateway=None):
+    def __init__(self, conn, *, server_settings, admin_settings: AdminSettings, gateway=None,
+                 evidence=None):
         self._conn = conn
         self._server = server_settings
         self._admin = admin_settings
         self._gateway = gateway
+        # The evidence store the queue archives material into — the same instance the MCP server
+        # submits through; a steward registering an entity (ADR 042) submits a capture too.
+        self._evidence = evidence
 
     # ── meta / overview ───────────────────────────────────────────────────────────────────────
     def meta(self) -> dict:
@@ -731,35 +735,50 @@ class AdminService:
         return (lambda repo: entities_decide.decline_entity(
             repo, entity_id=item_id, today=today)), {}
 
-    def entity_create(self, *, actor: str, name: str, entity_type: str, entity_id: str = "",
-                      aliases: str = "", role: str = "") -> dict:
-        """A steward registering an entity nobody proposed, through
-        `server.review.create_and_record`: born confirmed by its creator, recorded as an approval
-        so "entities born" counts it like any other door's."""
+    def entity_create(self, *, actor: str, name: str, entity_type: str, about: str,
+                      entity_id: str = "", aliases: str = "") -> dict:
+        """A steward introducing an entity nobody proposed (ADR 042): what they know about it is
+        queued as a capture carrying the registration — `server.review.commission_registration` —
+        and the librarian writes the page, anchors the note and births the entity confirmed by the
+        steward. A name the served registry already resolves is refused here, before anything is
+        queued: the entity exists, so the thing to do is capture about it."""
         clean_name = " ".join(str(name or "").split())
         clean_type = str(entity_type or "").strip().lower()
-        missing = [field for field, value in (("name", clean_name), ("entity_type", clean_type))
-                   if not value]
+        clean_about = str(about or "").strip()
+        missing = [field for field, value in (("name", clean_name), ("entity_type", clean_type),
+                                              ("about", clean_about)) if not value]
         if missing:
             raise AdminBadRequest(
-                f"creating an entity needs {' and '.join(missing)}: pass name (the entity's page "
-                f"title) and entity_type (one of {', '.join(ENTITY_TYPES)})")
+                f"registering an entity needs {' and '.join(missing)}: name (its page title), "
+                f"entity_type (one of {', '.join(ENTITY_TYPES)}) and about — what it is, in your "
+                f"own words, which is what the librarian writes its page from")
         if clean_type not in ENTITY_TYPES:
             raise AdminBadRequest(
                 f"entity_type {clean_type!r} is not one of {', '.join(ENTITY_TYPES)}")
         resolved_id = str(entity_id or "").strip() or canonical_id_for(clean_name)
+        if resolved_id != canonical_id_for(clean_name):
+            raise AdminBadRequest(
+                f"entity_id {resolved_id!r} is not the slug of {clean_name!r} "
+                f"({canonical_id_for(clean_name)!r}) — the registry is derived from the page, so "
+                f"the id is the name's")
+        registry, _about = self._registry_or_none()
+        known = registry.canonical_id(clean_name) if registry is not None else ""
+        if known:
+            raise AdminBadRequest(
+                f"{clean_name!r} already resolves to the registered entity {known!r} — nothing to "
+                f"register; capture what you know about it and the librarian anchors it there")
         alias_list = [a.strip() for a in str(aliases or "").split(",") if a.strip()]
-        args = {"entity_id": resolved_id, "name": clean_name, "entity_type": clean_type}
+        args = {"entity_id": resolved_id, "name": clean_name, "entity_type": clean_type,
+                "about_chars": len(clean_about)}
 
         def _do(by: str) -> dict:
-            return server_review.create_and_record(
-                self._conn, repo_url=self._server.librarian_repo_url, entity_id=resolved_id,
-                name=clean_name, entity_type=clean_type, aliases=alias_list, role=role or "",
-                actor=by, source=server_review.SOURCE_ADMIN)
+            return server_review.commission_registration(
+                self._conn, self._evidence, name=clean_name, entity_type=clean_type,
+                aliases=alias_list, about=clean_about, actor=by, source=server_review.SOURCE_ADMIN)
 
         try:
             return self._mutate("entities.create", actor, args, _do)
-        except EntityError as ex:
+        except (EntityError, CaptureError) as ex:
             raise AdminRefused(str(ex)) from ex
 
     # ── repair proposals (read, and the second governed Approve — ADR 039) ────────────────────

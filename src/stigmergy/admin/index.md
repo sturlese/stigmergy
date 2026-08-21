@@ -11,7 +11,7 @@ Narrative: [`docs/reference/admin-console.md`](../../../docs/reference/admin-con
 `capture.retention`, `capture.queue` (reads, plus `release_expired`), `gardener.store`,
 `digest.run`, `index.check`, `repair.store`,
 `server.review.items_for_doorbell`, `server.review.decide_and_record`,
-`server.review.create_and_record`, `server.review.apply_repair_and_record`,
+`server.review.commission_registration`, `server.review.apply_repair_and_record`,
 `server.pilot_report` (the report and its per-day
 classifier), `capture.decisions.recent_decisions`, `repair.store.counts_by_status`,
 `kernel.registry`, `entities.decide`. The only state it owns is `admin_actions`.
@@ -34,8 +34,8 @@ out by `server.review`, not a page body this console went and read.)
 
 | Module | What it is |
 |---|---|
-| `routes.py` | `compose(inner, *, conn, server_settings, admin_settings=None, gateway=None)` — the only door into this package, called by `server.transport_http.build_http_app`. Also `_Branch` (outermost ASGI router), `_AdminGate` (host → token → security headers), `_json_endpoint` (domain-exception → status map) and the route table |
-| `service.py` | `AdminService`, one method per route; `CRON_WORKFLOWS`/`DISPATCHABLE` (the drivable-workflow allowlist); `worker_visibility_timeout_s()`/`WORKER_MAX_ATTEMPTS`; the pre-mint check's verdict constants (`VERDICT_*`) and its advisory similarity (folded once per request); the read ceilings (`INBOX_LIMIT`, `DECISIONS_LIMIT`, `REPAIR_PENDING_LIMIT`, the metrics window bounds); `_clean_leaves`, the walk that cleans every string leaf of a JSON value; the domain errors `AdminBadRequest`/`AdminNotFound`/`AdminRefused` |
+| `routes.py` | `compose(inner, *, conn, server_settings, admin_settings=None, gateway=None, evidence=None)` — the only door into this package, `evidence` being the process's one evidence store, without which Register an entity has nothing to archive a capture's material into, called by `server.transport_http.build_http_app`. Also `_Branch` (outermost ASGI router), `_AdminGate` (host → token → security headers), `_json_endpoint` (domain-exception → status map) and the route table |
+| `service.py` | `AdminService`, one method per route; `CRON_WORKFLOWS`/`DISPATCHABLE` (the drivable-workflow allowlist); `worker_visibility_timeout_s()`/`WORKER_MAX_ATTEMPTS`; the pre-registration check's verdict constants (`VERDICT_*`) and its advisory similarity (folded once per request); the read ceilings (`INBOX_LIMIT`, `DECISIONS_LIMIT`, `REPAIR_PENDING_LIMIT`, the metrics window bounds); `_clean_leaves`, the walk that cleans every string leaf of a JSON value; the domain errors `AdminBadRequest`/`AdminNotFound`/`AdminRefused` |
 | `settings.py` | `AdminSettings` + `from_env`, the five `*_ENV` constants, `DEFAULT_ACTOR`, `DEFAULT_WORKFLOWS_REPO`, and the sha256-shape refusal that turns a malformed hash into a `StartupError` |
 | `auth.py` | `token_matches` (sha256 + `hmac.compare_digest`), `bearer_token` (two `Authorization` headers → `None`), `host_allowed` |
 | `github.py` | `ActionsGateway` — the Jobs page's only reach out of this process (`workflows`/`runs`/`dispatch`/`set_enabled`), `urllib` with an injectable opener, a 60 s read cache that mutations clear, and `ActionsError` carrying the status and never the token |
@@ -75,7 +75,7 @@ cannot need a token to render).
 | GET | `/admin/api/entities/registry` | `entities_registry()` — the served registry, sorted by name, with `by_type` and freshness | yes |
 | POST | `/admin/api/entities/resolve` | `entities_resolve()` — `names` must be a JSON list of strings (≤ 50); one verdict per non-blank name. Writes no `admin_actions` row | yes |
 | POST | `/admin/api/entities/decide` | `entity_decide()` — `item_kind` (`identity-proposal` or `alias-proposal`), `item_id`, `verdict`, `into` (required for `merge`), optional `notes`; off the event loop, since a decision clones and pushes | yes |
-| POST | `/admin/api/entities/create` | `entity_create()` — `name`/`entity_type` required, `entity_id`/`aliases`/`role` optional; born confirmed by its creator | yes |
+| POST | `/admin/api/entities/create` | `entity_create()` — `name`/`entity_type`/`about` required, `entity_id`/`aliases` optional; commissions the entity by queueing a capture and answers the queued row (`id`, `status`, `entity_id`, `name`, `message`). The page is the librarian's to write, and the identity is born confirmed by the actor | yes |
 | GET | `/admin/api/entities/{id}` | `entities_show()` — one proposed identity, with the same `check` the list attaches | yes |
 | GET | `/admin/api/repairs` | `repairs_list()` — a bounded page of pending (`pending_truncated` says when it filled), the whole table's `counts` by status, recently decided, and the proposer's `job_runs` history | yes |
 | GET | `/admin/api/repairs/{id:int}` | `repair_show()` | yes |
@@ -130,10 +130,17 @@ catch-all converter can read one as an id.
   `(item_kind, stored verdict)` onto one `entities.decide` call and the ledger `extra` that goes
   with it. `entities.remote` is reached by that sequence, never from this
   package — its import allowlist grants `decide`, `generator` and `errors` only.
-  `server.review.create_and_record` is the sibling for an entity nobody proposed. The exception
+  `server.review.commission_registration` is `entity_create`'s seam, and it is NOT that shape: it
+  touches no git and writes no ledger row, it queues a capture carrying the registration and the
+  LIBRARIAN writes the page, births the identity confirmed by the actor and records the approval
+  after its own push ([ADR 042](../../../docs/decisions/042-an-entity-is-born-written.md)). What
+  stays here is the pre-flight `entity_create` owns: the required `about`, the slug-of-the-name
+  check on `entity_id`, and the refusal of a name the SERVED registry already resolves (the entity
+  exists — capture about it instead). It needs the evidence store the queue archives into, passed
+  as `AdminService(..., evidence=)` from `compose`. The exception
   mapping stays HERE by decision: nothing is caught inside `_do`, so `_mutate` records the
-  library's OWN class name in `admin_actions` before the `except EntityError` outside it raises
-  `AdminRefused` with the library's sentence.
+  library's OWN class name in `admin_actions` before the `except (EntityError, CaptureError)`
+  outside it raises `AdminRefused` with the library's sentence.
   `server.review.apply_repair_and_record`/`reject_repair_and_record` — `repair_approve`/
   `repair_reject`'s whole seam, and the SAME pair the MCP review lane decides a `repair-proposal`
   with (ADR 039): record the verdict as a CONDITIONAL update, apply through the governed door,
@@ -168,7 +175,7 @@ catch-all converter can read one as an id.
 - `ui.confirmForm` (frontend) — every mutation goes through one, and its `consequence` sentence is
   a required argument, enforced: an empty one throws, so a new workflow without a sentence fails
   in development rather than shipping a blank line over Dispatch. A field's `live(value, setNote,
-  allValues)` hook renders a node under the field as the user types — the mint form's registry
+  allValues)` hook renders a node under the field as the user types — the Register form's registry
   check is one; its debounce is cancelled when the dialog closes. The dialog traps Tab and hands
   focus back to the control that opened it.
 - `views/common.js` `mutate(path, body, message, onSuccess?)` (frontend) — every state-changing
@@ -339,13 +346,14 @@ every navigation (`state.notify`).
   identity while `actor` here is free text behind the operator token (ADR 029/030 D2). The console's
   authorization IS that token.
 - **The registry check is a warning, never a permission.** It reads the snapshot this server
-  serves; the birth gate re-checks against the registry the commit will publish, inside the clone.
+  serves; the birth gate re-checks against the registry the commit will publish — inside the clone
+  for a decision, inside the capture's own worktree when the librarian files a registration.
   When the snapshot is fresh the two agree; when it is stale the gate wins, and the console shows
-  the gate's own sentence as a 409.
-- **A decision's own reads are cheap and its write is not.** `entities/decide` and
-  `entities/create` run in a worker thread (`run_in_threadpool`) because each clones the knowledge
-  repo and pushes, and the MCP tools share this process; `metrics` does the same for its dozen
-  aggregate queries. The service holds no cursor across the call boundary, so the autocommit
+  the gate's own sentence as a 409 (for a registration, as the capture's refusal).
+- **A decision's own reads are cheap and its write is not.** `entities/decide` runs in a worker
+  thread (`run_in_threadpool`) because it clones the knowledge repo and pushes, and the MCP tools
+  share this process; `entities/create` rides the same thread for the archive write its capture
+  pays for, and `metrics` does the same for its dozen aggregate queries. The service holds no cursor across the call boundary, so the autocommit
   connection is safe to use from the thread.
 - **`repair_approve` applies server-side on the same terms.** `review_decide`'s per-target-path
   steward guard is likewise not reached: this console's authorization IS the operator token, and

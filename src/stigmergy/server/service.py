@@ -557,6 +557,9 @@ class BrainService:
         # The drive pair, refused with NO door exception: its one legitimate asserter is an
         # operator CLI that never passes through this service.
         capture_schema.reject_drive_provenance_hints(hints)
+        # The registration keys, refused for every client too: a steward registers from the
+        # console or the CLI, and `brain_submit` attributes material, never authority.
+        capture_schema.reject_registration_hints(hints)
         # `MCP_SUBMIT_KINDS`, never `KINDS`: `kind` is a MODEL-CHOSEN argument, so growing `KINDS`
         # for a drop CLI must not silently make its new value enqueueable here.
         if kind not in capture_schema.MCP_SUBMIT_KINDS:

@@ -659,37 +659,74 @@ def test_entity_decide_on_an_unknown_proposal_is_the_librarys_own_refusal(
     assert _actions(conn)[0]["error_class"] == "EntityError"
 
 
-def test_entity_create_births_a_confirmed_entity_and_records_it_as_born(
-        conn, entity_service, entity_mint_repo, require_gitleaks):
-    result = entity_service.entity_create(actor="steward@example.com", name="Stark Industries",
-                                         entity_type="organization", aliases="Stark, SI",
-                                         role="a client")
-    assert result["entity_id"] == "stark-industries" and len(result["commit"]) == 40
-    entry = remote_registry(entity_mint_repo)["stark-industries"]
-    assert entry["proposed"] is False and entry["approved_by"] == "steward@example.com"
-    assert set(entry["aliases"]) == {"Stark", "SI"}
+def test_entity_create_commissions_a_capture_the_librarian_writes_the_page_from(conn, admin_settings):
+    """ADR 042. OLD BEHAVIOUR: the console's Register minted the template with the name filled in,
+    pushed it and wrote the ledger row — an entity page with nothing said about the entity. Now it
+    QUEUES a capture: the steward's account is the material, the registration rides the hints,
+    the row is attributed to the steward the page will be born confirmed by, and an admin action
+    records the act. Git and the ledger stay untouched until the librarian has written the page."""
+    from stigmergy.capture.evidence import MemoryEvidenceStore
+    service = AdminService(conn, server_settings=Settings(), admin_settings=admin_settings,
+                           evidence=MemoryEvidenceStore())
+
+    result = service.entity_create(actor="steward@example.com", name="Stark Industries",
+                                   entity_type="organization", aliases="Stark, SI",
+                                   about="Stark Industries is the client whose reporting we automate.")
+
+    assert result["status"] == "queued" and result["entity_id"] == "stark-industries"
     with conn.cursor() as cur:
-        cur.execute("SELECT item_kind, item_id, verdict, extra FROM review_decisions")
-        [(kind, item_id, verdict, extra)] = cur.fetchall()
-    assert (kind, item_id, verdict) == ("identity-proposal", "stark-industries", "approve")
-    assert extra["created"] is True and extra["commit"] == result["commit"]
+        cur.execute("SELECT submitted_by, hints, payload FROM capture_queue WHERE id = %s",
+                    (result["id"],))
+        by, hints, payload = cur.fetchone()
+        cur.execute("SELECT count(*) FROM review_decisions")
+        assert cur.fetchone()[0] == 0, "the ledger row is the worker's to write, after the push"
+    assert by == "steward@example.com"
+    registration = capture_schema.registration_from_hints(hints)
+    assert registration.name == "Stark Industries" and set(registration.aliases) == {"Stark", "SI"}
+    assert registration.source == server_review.SOURCE_ADMIN
+    assert payload["text"].startswith("Stark Industries is the client")
+    action = _actions(conn)[0]
+    assert action["action"] == "entities.create" and action["args"]["about_chars"] > 0
 
 
-def test_entity_create_missing_name_and_type_is_a_bad_request_before_anything_is_attempted(
+def test_entity_create_missing_name_type_or_account_is_a_bad_request_before_anything_is_queued(
         conn, service):
-    with pytest.raises(AdminBadRequest, match="name and entity_type"):
-        service.entity_create(actor="marc", name="", entity_type="")
+    with pytest.raises(AdminBadRequest, match="name and entity_type and about"):
+        service.entity_create(actor="marc", name="", entity_type="", about="")
+    with pytest.raises(AdminBadRequest, match="about"):
+        service.entity_create(actor="marc", name="X", entity_type="organization", about="  ")
     with pytest.raises(AdminBadRequest, match="not one of"):
-        service.entity_create(actor="marc", name="X", entity_type="galaxy")
+        service.entity_create(actor="marc", name="X", entity_type="galaxy", about="A thing.")
+    with pytest.raises(AdminBadRequest, match="not the slug"):
+        service.entity_create(actor="marc", name="X Corp", entity_type="organization",
+                              about="A thing.", entity_id="y-corp")
     assert _actions(conn) == []
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        assert cur.fetchone()[0] == 0
 
 
-def test_entity_create_refuses_a_collision_with_the_librarys_own_sentence(
-        conn, entity_service, entity_mint_repo, require_gitleaks):
+def test_entity_create_refuses_a_name_the_served_registry_already_resolves(conn, admin_settings,
+                                                                          entity_mint_repo):
+    """The entity exists, so there is nothing to register: the steward is told which entity the
+    name resolves to, and that capturing about it is the thing to do. Refused before a row is
+    queued — the librarian would only have proposed a spelling."""
+    from stigmergy.capture.evidence import MemoryEvidenceStore
     register_entity(entity_mint_repo, conn, "Acme Corp", aliases=["Acme"])
-    with pytest.raises(AdminRefused, match="already resolves to the registered entity 'acme-corp'"):
-        entity_service.entity_create(actor="marc", name="Acme", entity_type="organization")
-    assert "acme" not in remote_registry(entity_mint_repo)
+    service = AdminService(conn, server_settings=Settings(), admin_settings=admin_settings,
+                           evidence=MemoryEvidenceStore())
+    with pytest.raises(AdminBadRequest, match="already resolves to the registered entity 'acme-corp'"):
+        service.entity_create(actor="marc", name="Acme", entity_type="organization",
+                              about="Our oldest client.")
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        assert cur.fetchone()[0] == 0
+
+
+def test_entity_create_without_an_evidence_store_is_a_refusal_naming_it(conn, service):
+    with pytest.raises(AdminRefused, match="evidence store"):
+        service.entity_create(actor="marc", name="Stark Industries", entity_type="organization",
+                              about="A client.")
 
 
 def test_activity_reads_the_audit_trail_and_never_a_submission_payload(conn, service):

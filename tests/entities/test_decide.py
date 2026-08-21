@@ -229,14 +229,14 @@ def test_apply_rolls_the_clone_back_when_the_decision_refuses(proposed):
     scan is made to refuse — must leave the clone byte-identical: the next decision starts from a
     clean tree, not from a half-applied one."""
     remote, clone = proposed
-    from stigmergy.entities import mint
+    from stigmergy.entities import guard
 
     def _boom(*_a, **_k):
         raise EntityError("refusing to decide — a planted refusal")
 
     import unittest.mock as mock
     head = fx.git("rev-parse", "HEAD", cwd=clone).stdout.strip()
-    with mock.patch.object(mint, "refuse_secrets", _boom), \
+    with mock.patch.object(guard, "refuse_secrets", _boom), \
             pytest.raises(EntityError, match="planted refusal"):
         decide.apply(clone,
                      action=lambda repo: decide.merge_entity(

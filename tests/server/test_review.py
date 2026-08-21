@@ -18,6 +18,7 @@ import os
 import pytest
 
 from stigmergy.capture import decisions
+from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.errors import CaptureError
 from stigmergy.entities import generator as entities_generator
 from stigmergy.entities import remote as entities_remote
@@ -455,18 +456,56 @@ def test_review_decide_safe_returns_the_refusal_as_an_error_dict_for_slack(env, 
     assert out == {"error": review.NOT_YOURS_TO_DECIDE}
 
 
-def test_create_and_record_births_a_confirmed_entity_and_counts_it_as_born(env, conn):
-    """The console's `create` door: no proposal behind it, confirmed by its creator, recorded as
-    an approval so the digest's "entities born" counts it like any other."""
-    result = review.create_and_record(
-        conn, repo_url=env.bare, entity_id="stark-industries", name="Stark Industries",
-        entity_type="organization", aliases=["Stark"], role="a client", actor=STEWARD,
-        source=review.SOURCE_ADMIN)
-    entry = _remote_registry(env)["entities"]["stark-industries"]
-    assert entry["proposed"] is False and entry["approved_by"] == STEWARD
-    row = _ledger(conn, KIND_IDENTITY_PROPOSAL, "stark-industries")
-    assert row["verdict"] == "approve" and row["extra"]["created"] is True
-    assert row["extra"]["commit"] == result["commit"]
+def test_commission_registration_queues_the_stewards_account_with_the_registration_and_touches_nothing_else(
+        env, conn):
+    """The console's `create` door, ADR 042. OLD BEHAVIOUR: `create_and_record` minted a page from
+    the template with the name filled in, pushed it and wrote the ledger row — an entity with
+    nothing said about it, recorded as born. Now the door QUEUES a capture: the registration rides
+    the hints, the steward's account is the material, the submitter is the steward the page will
+    be born confirmed by — and git and the ledger are untouched until the librarian has written
+    the page (`processing._record_registrations` writes the row after the push)."""
+    from stigmergy.capture.evidence import MemoryEvidenceStore
+    head_before = gitcmd.run("rev-parse", "main", cwd=env.bare).stdout.strip()
+
+    result = review.commission_registration(
+        conn, MemoryEvidenceStore(), name="Stark Industries", entity_type="organization",
+        aliases=["Stark"], about="Stark Industries is the client whose reporting we automate.",
+        actor=STEWARD, source=review.SOURCE_ADMIN)
+
+    assert result["status"] == "queued" and result["entity_id"] == "stark-industries"
+    assert "commissioned as capture #" in result["message"] and STEWARD in result["message"]
+    with conn.cursor() as cur:
+        cur.execute("SELECT submitted_by, hints, payload FROM capture_queue WHERE id = %s",
+                    (result["id"],))
+        by, hints, payload = cur.fetchone()
+    assert by == STEWARD
+    registration = capture_schema.registration_from_hints(hints)
+    assert registration.name == "Stark Industries" and registration.aliases == ("Stark",)
+    assert registration.source == review.SOURCE_ADMIN
+    assert payload["text"].startswith("Stark Industries is the client")
+    assert "stark-industries" not in _remote_registry(env)["entities"]
+    assert _ledger(conn, KIND_IDENTITY_PROPOSAL, "stark-industries") is None
+    assert gitcmd.run("rev-parse", "main", cwd=env.bare).stdout.strip() == head_before
+
+
+def test_commission_registration_refuses_a_missing_account_or_type_and_queues_nothing(env, conn):
+    from stigmergy.capture.evidence import MemoryEvidenceStore
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        before = cur.fetchone()[0]
+    for kwargs, words in ((dict(name="Stark", entity_type="organization", about="  "), "what it is"),
+                          (dict(name="", entity_type="organization", about="A client."), "its name"),
+                          (dict(name="Stark", entity_type="galaxy", about="A client."), "not one of")):
+        with pytest.raises(review.ReviewError, match=words):
+            review.commission_registration(conn, MemoryEvidenceStore(), aliases=[], actor=STEWARD,
+                                           source=review.SOURCE_ADMIN, **kwargs)
+    with pytest.raises(review.ReviewError, match="evidence store"):
+        review.commission_registration(conn, None, name="Stark", entity_type="organization",
+                                       aliases=[], about="A client.", actor=STEWARD,
+                                       source=review.SOURCE_ADMIN)
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        assert cur.fetchone()[0] == before
 
 
 def test_the_capture_and_entity_exception_hierarchies_stay_disjoint():
@@ -894,7 +933,7 @@ def test_approving_a_repair_with_a_note_records_it_on_the_row_and_in_the_ledger(
     """Red before the fix: `apply_repair_and_record` passed a hardcoded `""` to both writes, so a
     steward's note on an APPROVE vanished — while the same steward's note on a REJECT was kept in
     both places. The note is the only record of why a repair was worth applying, and
-    `mint_and_record_approval` already carries one from this same door.
+    `decide_and_record` already carries one from this same door.
 
     It is the CLEANED note the secrets scan already passed: `_decide_repair` runs
     `_refuse_secret_note` before either branch, and both destinations are append-only."""

@@ -2,7 +2,7 @@
 `entities.cli` maps them to one stderr line plus a non-zero exit. Messages are written for the
 operator in front of the clone, naming real paths and real git state.
 
-**The TYPE is what the second door reads.** `entities.remote.mint_via_clone` re-words the refusals
+**The TYPE is what the second door reads.** `entities.remote.decide_via_clone` re-words the refusals
 whose sentences only make sense to somebody holding that clone (ADR 030's two-door amendment), and
 it tells them apart by class and by nothing else — never by matching the text. So a raise site
 whose sentence names a path or a git command needs a class no clean raise site shares, and
@@ -68,7 +68,7 @@ class TemplateMissingError(EntityError):
 
 
 class CapabilityUnavailableError(EntityError):
-    """A server-driven mint (`entities.remote.mint_via_clone`) lacks a capability this process
+    """A server-driven decision (`entities.remote.decide_via_clone`) lacks a capability this process
     was not given: the librarian GitHub App credential, or a knowledge-repo URL to clone from. A
     named missing capability — not a governance refusal, not a startup failure. A distinct class
     because `stigmergy.entities` may not import `stigmergy.server.errors` to raise the server's

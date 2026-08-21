@@ -55,11 +55,22 @@ class Proposals:
     entity_pages: dict = field(default_factory=dict)    # created path -> canonical id
     alias_pages: dict = field(default_factory=dict)     # modified path -> [(canonical id, alias)]
     expected_bytes: dict = field(default_factory=dict)  # path -> the whole file, byte-proven
-    entities: list = field(default_factory=list)        # [{"id", "name", "type"}] for the report
+    entities: list = field(default_factory=list)        # [{"id", "name", "type", "confirmed_by"}] for the report
     aliases: list = field(default_factory=list)         # [{"entity", "alias"}] for the report
+    # The entity pages born CONFIRMED because a steward registered the entity through this
+    # capture (ADR 042): created path -> the steward (`approved_by`). Told to the gates as such.
+    confirmed: dict = field(default_factory=dict)
+    # ADR 042: the registered entity pages this filing ADDED facts or connections to — modified
+    # path -> canonical id — and the counts the report reads. Appended lines only, byte-proven.
+    updated_pages: dict = field(default_factory=dict)
+    updates: list = field(default_factory=list)         # [{"entity", "facts", "connections"}]
+
+    @property
+    def confirmed_ids(self) -> list:
+        return [self.entity_pages[path] for path in self.confirmed if path in self.entity_pages]
 
     def touched(self) -> bool:
-        return bool(self.entity_pages or self.alias_pages)
+        return bool(self.entity_pages or self.alias_pages or self.updated_pages)
 
     @property
     def lane(self) -> tuple[str, ...]:
@@ -73,10 +84,16 @@ class Proposals:
 
 
 def write_proposals(worktree: str, *, outcome, base_registry: Registry, material: str,
-                    hints: dict | None, declined_ids, today: str,
-                    related=()) -> "Proposals | list[gates.Finding]":
+                    hints: dict | None, declined_ids, today: str, related=(),
+                    registration=None, approver: str = "") -> "Proposals | list[gates.Finding]":
     """Create every entity and every alias the account proposes, in `worktree`, and return the
     facts about them — or the findings that refuse the account, having written nothing.
+
+    `registration` (ADR 042) is what a steward asked this capture to register, read off its hints
+    by the caller; `approver` is that steward — the capture's submitter. The entity the account
+    proposes under the registered name is born CONFIRMED by them instead of proposed, and an
+    account that proposes no such entity while the registry lacks it is refused with a brief, so
+    the corrective retry does what the steward asked.
 
     All-or-nothing like `edits.apply_declared`: the findings are collected over every declaration
     so the single corrective brief names all of them, and the worktree is left untouched when any
@@ -85,7 +102,12 @@ def write_proposals(worktree: str, *, outcome, base_registry: Registry, material
     """
     new_entities = list(getattr(outcome, "new_entities", ()) or ())
     new_aliases = list(getattr(outcome, "new_aliases", ()) or ())
-    if not new_entities and not new_aliases:
+    entity_updates = list(getattr(outcome, "entity_updates", ()) or ())
+    registered_id = (generator.canonical_id_for(registration.name)
+                     if registration is not None and registration.name else "")
+    if not new_entities and not new_aliases and not entity_updates:
+        if registered_id and not base_registry.canonical_id(registration.name):
+            return [_registration_missing(registration)]
         return Proposals(registry=base_registry)
 
     drift = generator.check(worktree).divergences
@@ -173,17 +195,22 @@ def write_proposals(worktree: str, *, outcome, base_registry: Registry, material
                 GATE, "invalid", f"proposed {name!r}, but {ex}", locator=name,
                 brief=f"`new_entities` entry {name!r} is not a valid identity: {ex}"))
             continue
-        text = birth.render_page(template, proposal, today=today, approved_by="", body=body,
-                                 related=related)
+        # The steward's registration is born confirmed — by the steward, who is the submitter;
+        # every other proposal arrives unconfirmed and waits on the inbox.
+        confirmed_by = approver if proposal.canonical_id == registered_id else ""
+        text = birth.render_page(template, proposal, today=today, approved_by=confirmed_by,
+                                 body=body, related=related)
         planned_pages[proposal.relpath] = text
         entry = registry_module.entry(proposal.name, proposal.entity_type, proposal.aliases,
-                                      proposed=True)
+                                      proposed=not confirmed_by, approved_by=confirmed_by)
         working.entities[proposal.canonical_id] = entry
         registry_module.index_entity(working, proposal.canonical_id, entry)
         page_by_id[proposal.canonical_id] = proposal.relpath
         proposals.entity_pages[proposal.relpath] = proposal.canonical_id
+        if confirmed_by:
+            proposals.confirmed[proposal.relpath] = confirmed_by
         proposals.entities.append({"id": proposal.canonical_id, "name": proposal.name,
-                                   "type": proposal.entity_type})
+                                   "type": proposal.entity_type, "confirmed_by": confirmed_by})
 
     edited_texts: dict[str, str] = {}
     for declared in new_aliases:
@@ -270,6 +297,62 @@ def write_proposals(worktree: str, *, outcome, base_registry: Registry, material
         proposals.alias_pages.setdefault(path, []).append((cid, alias))
         proposals.aliases.append({"entity": cid, "alias": alias})
 
+    for declared in entity_updates:
+        target = str(declared.get("entity") or "").strip()
+        cid = working.canonical_id(target)
+        facts = [str(line) for line in (declared.get("facts") or ()) if str(line).strip()]
+        connections = [str(line) for line in (declared.get("connections") or ())
+                       if str(line).strip()]
+        if not cid:
+            findings.append(gates.Finding(
+                GATE, "update-unknown-entity",
+                f"adds facts to {target!r}, which the registry does not resolve to any entity",
+                locator=target,
+                brief=f"`entity_updates` names {target!r}, and nothing registered resolves to it. "
+                      f"Name a registered entity's id — or, if the thing is new, propose it in "
+                      f"`new_entities` with these facts as its own."))
+            continue
+        if cid in proposals.entity_pages.values():
+            findings.append(gates.Finding(
+                GATE, "update-of-new-entity",
+                f"adds facts to {cid!r}, an entity this same account proposes — they belong in "
+                f"that entity's own `facts` and `connections`",
+                locator=target,
+                brief=f"`entity_updates` adds to {cid!r}, which `new_entities` creates in this same "
+                      f"account. Put the facts in that entry instead."))
+            continue
+        path = page_by_id.get(cid)
+        text = edited_texts.get(path)
+        if text is None:
+            text = _read(worktree, path)
+        if text is None:
+            findings.append(gates.Finding(
+                GATE, "unreadable-entity-page",
+                f"the page of {cid!r} ({path}) could not be read at this capture's base commit, "
+                f"so nothing can be added to it",
+                locator=path or cid, repairable=False))
+            continue
+        try:
+            body = birth.prepare_body(summary="-", facts=facts, connections=connections)
+        except EntityError as ex:
+            findings.append(gates.Finding(GATE, "invalid", f"an update, but {ex}", locator=target,
+                                          brief=f"`entity_updates`: {ex}"))
+            continue
+        appended = _append_to_sections(text, {
+            birth.FACTS_SECTION: [f"- {fact}" for fact in body.facts],
+            birth.CONNECTIONS_SECTION: [f"- {c}" for c in body.connections],
+        }, today=today)
+        if appended is None:
+            continue                   # every line was already on the page — nothing to learn
+        new_text, counts = appended
+        edited_texts[path] = new_text
+        proposals.updated_pages[path] = cid
+        proposals.updates.append({"entity": cid, "facts": counts[birth.FACTS_SECTION],
+                                  "connections": counts[birth.CONNECTIONS_SECTION]})
+
+    if (registered_id and registered_id not in proposals.entity_pages.values()
+            and not working.canonical_id(registration.name)):
+        findings.append(_registration_missing(registration))
     if findings:
         return findings
     if not proposals.touched():
@@ -293,6 +376,56 @@ def write_proposals(worktree: str, *, outcome, base_registry: Registry, material
     # the registry the commit PUBLISHES, and the gates must resolve against exactly that.
     proposals.registry = generator.derive_registry(worktree)
     return proposals
+
+
+def _append_to_sections(text: str, sections: dict, *, today: str):
+    """Append each section's NEW lines to the page — under its `## Heading` when the page has it,
+    as a new section at the end when it does not (a page born with nothing to say there has no
+    heading) — and move `updated:` to today. A line the page already carries, whitespace folded,
+    is not appended again. Returns `(text, {heading: appended})`, or `None` when nothing is new."""
+    try:
+        front, tail = page_policy.front_and_tail(text)
+    except ValueError:
+        return None
+    present = {" ".join(line.split()) for line in tail.split("\n")}
+    counts, lines = {}, tail.rstrip("\n").split("\n")
+    for heading, candidates in sections.items():
+        fresh = [c for c in candidates if " ".join(c.split()) not in present]
+        counts[heading] = len(fresh)
+        if not fresh:
+            continue
+        marker = f"## {heading}"
+        if marker in lines:
+            start = lines.index(marker) + 1
+            end = start
+            while end < len(lines) and not lines[end].startswith("## "):
+                end += 1
+            while end > start and not lines[end - 1].strip():
+                end -= 1
+            lines[end:end] = fresh
+        else:
+            lines.extend(["", marker, "", *fresh])
+        present.update(" ".join(c.split()) for c in fresh)
+    if not any(counts.values()):
+        return None
+    new_tail = "\n".join(lines).rstrip("\n") + "\n"
+    return page_policy.rebuild(page_policy.with_scalar_field(front, "updated", today), new_tail), counts
+
+
+def _registration_missing(registration) -> "gates.Finding":
+    """A steward asked this capture to register an entity and the account did neither of the two
+    honest things: propose it, or anchor to the registered entity it already is."""
+    name, kind = registration.name, registration.entity_type or "its type"
+    return gates.Finding(
+        GATE, "registration-missing",
+        f"a steward registered {name!r} ({kind}) through this capture, and the account neither "
+        f"proposes it nor resolves it to a registered entity",
+        locator=name,
+        brief=f"This capture REGISTERS {name!r} ({kind}). Propose it in `new_entities` under "
+              f"exactly that name and type, with `summary`, `facts` and `connections` written from "
+              f"the material and from what the brain already holds about it — or, if the registry "
+              f"already resolves that name, anchor to that entity and put the steward's spelling in "
+              f"`new_aliases`.")
 
 
 def _haystack(material: str, hints: dict | None) -> str:

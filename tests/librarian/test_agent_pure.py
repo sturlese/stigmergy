@@ -698,3 +698,28 @@ def test_the_meeting_account_carries_the_same_proposal_shape():
         "new_aliases": [{"entity": "acme-corp", "alias": "Acme Corporation"}]})
     assert outcome.new_entities[0]["name"] == "Scircle"
     assert outcome.new_aliases == ({"entity": "acme-corp", "alias": "Acme Corporation"},)
+
+
+# ── `entity_updates` (ADR 042): what a filing adds to a registered entity's page ──────────────────
+def test_entity_updates_are_parsed_bounded_and_an_update_naming_no_line_is_dropped():
+    from stigmergy.librarian import agent
+    raw = {"decision": "file", "title": "A note", "page_type": "note",
+           "anchoring": {"kind": "entity", "entities": ["acme-corp"]},
+           "entity_updates": [
+               {"entity": "acme-corp", "facts": ["Renewed.", " "], "connections": ["[[A Note]] — why"]},
+               {"entity": "acme-corp", "facts": [], "connections": []},
+           ]}
+    outcome = agent.parse_outcome(raw)
+    assert outcome.entity_updates == (
+        {"entity": "acme-corp", "facts": ("Renewed.",), "connections": ("[[A Note]] — why",)},)
+
+
+def test_an_entity_update_without_an_entity_is_a_shape_finding_the_retry_can_fix():
+    from stigmergy.librarian import agent
+    from stigmergy.librarian.errors import OutcomeShapeError
+    raw = {"decision": "file", "title": "A note", "page_type": "note",
+           "anchoring": {"kind": "entity", "entities": ["acme-corp"]},
+           "entity_updates": [{"facts": ["Renewed."]}]}
+    with pytest.raises(OutcomeShapeError) as caught:
+        agent.parse_outcome(raw)
+    assert "entity_updates[0].entity" in str(caught.value)

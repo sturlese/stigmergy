@@ -61,7 +61,7 @@ REPAIR_GIT_TIMEOUT_S = 60
 REPAIR_SUBPROCESS_TIMEOUT_S = 120
 
 # The same env var `librarian.config.Settings.gitleaks_bin` reads. Spelled here rather than
-# imported for the reason `entities.mint` spells it: this package must not construct a worker's
+# imported for the reason `entities.guard` spells it: this package must not construct a worker's
 # `Settings` to ask one question. The duplication is declared, not discovered.
 GITLEAKS_BIN_ENV = "STIGMERGY_GITLEAKS_BIN"
 

@@ -253,6 +253,10 @@ A frozen brief re-frozen is a new measurement, not a regression — nothing is r
 is back-filled, so read the first row under new bytes as a fresh baseline candidate. The re-freezes
 so far, newest first:
 
+- **`e118c8a` (2026-08-21, ADR 042)** — both briefs: the librarian looks before it proposes,
+  a steward's registration arrives as a capture the brief names, and `entity_updates` appends what
+  a filing established to a registered entity's page. The linter and the template did not change,
+  so the re-freeze moves the three provenance shas together and the two brief copies.
 - **`34cd668` (2026-08-21)** — the linter alone: a wikilink target resolves by its title (last
   segment minus `.md`), not by `Path().stem`, which amputated a dotted title such as
   `[[Acme Inc. Invoices]]` and vetoed a live page as a dead link. The briefs did not change, so

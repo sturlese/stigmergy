@@ -197,9 +197,10 @@ class NewEntity(StructuredInbound):
     anchor to its `name`. Fill every field: `name` spelled exactly as the material spells it,
     `entity_type` (person, organization, product, tool, repository, place or project), `role` (one
     line on what it is), `aliases` (the other spellings the material uses for it), `summary` (the
-    What / Who paragraph of its page), `facts` (what the material establishes about it, one line
-    each) and `connections` (`[[Page]] — why`, naming pages that exist or the page you are filing).
-    The worker creates the entity page from this, unconfirmed, and a steward confirms it."""
+    What / Who paragraph of its page), `facts` (what the material AND the pages already in this
+    brain establish about it, one line each — search for the name before you write) and
+    `connections` (`[[Page]] — why`, naming pages that exist or the page you are filing). The
+    worker creates the entity page from this, unconfirmed, and a steward confirms it."""
     name: str = ""
     entity_type: str = ""
     role: str = ""
@@ -215,6 +216,17 @@ class NewAlias(StructuredInbound):
     material writes it. The worker records it as a proposed spelling; a steward confirms it."""
     entity: str = ""
     alias: str = ""
+
+
+class EntityUpdate(StructuredInbound):
+    """Something the material ESTABLISHES about an entity the registry already knows, to be added
+    to that entity's own page: `entity` is its id (or registered name), `facts` the new one-line
+    facts, `connections` new `[[Page]] — why` lines (the page you are filing counts). Only what the
+    material establishes and the page does not already say — an entity page accretes facts, it
+    does not get rewritten."""
+    entity: str = ""
+    facts: list[str] = Field(default_factory=list)
+    connections: list[str] = Field(default_factory=list)
 
 
 class MeetingAccount(StructuredInbound):
@@ -242,6 +254,7 @@ class MeetingAccount(StructuredInbound):
     findings: list[MeetingFinding] = Field(default_factory=list)
     new_entities: list[NewEntity] = Field(default_factory=list)
     new_aliases: list[NewAlias] = Field(default_factory=list)
+    entity_updates: list[EntityUpdate] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _complete_for_its_decision(self):
@@ -310,6 +323,7 @@ class FilingAccount(StructuredInbound):
     findings: list[OrdinaryFinding] = Field(default_factory=list)
     new_entities: list[NewEntity] = Field(default_factory=list)
     new_aliases: list[NewAlias] = Field(default_factory=list)
+    entity_updates: list[EntityUpdate] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _complete_for_its_decision(self):

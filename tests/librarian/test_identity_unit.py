@@ -12,6 +12,7 @@ bounce a real proposal.
 """
 import json
 import os
+import re
 from types import SimpleNamespace
 
 import yaml
@@ -61,7 +62,8 @@ def test_a_proposed_entity_becomes_a_page_with_approved_by_empty_and_a_registry_
 
     assert isinstance(proposals, identity.Proposals), proposals
     assert proposals.entity_pages == {"wiki/entities/Scircle.md": "scircle"}
-    assert proposals.entities == [{"id": "scircle", "name": "Scircle", "type": "organization"}]
+    assert proposals.entities == [{"id": "scircle", "name": "Scircle", "type": "organization",
+                                   "confirmed_by": ""}]
     assert proposals.touched() and proposals.lane == ("wiki/entities/", "ops/entity-registry.json")
     page = _read(env.repo, "wiki/entities/Scircle.md")
     front = yaml.safe_load(page.split("---")[1])
@@ -232,3 +234,171 @@ def test_a_checkout_without_the_template_refuses_unrepairably(tmp_path):
     findings = _write(env.repo, _outcome([_proposal("Scircle", aliases=())]),
                       material="Scircle.")
     assert [f.code for f in findings] == ["no-template"] and findings[0].repairable is False
+
+
+# ── a steward's registration: born confirmed, or refused with a brief (ADR 042) ───────────────
+def _registration(name="Scircle", entity_type="organization", aliases=("S-Circle",), source="admin"):
+    from stigmergy.capture import schema
+    return schema.Registration(name=name, entity_type=entity_type, aliases=tuple(aliases),
+                               source=source)
+
+
+def test_the_entity_a_steward_registered_is_born_confirmed_by_that_steward(tmp_path):
+    """Before ADR 042 a steward registered an entity through `stigmergy-entities create` or the
+    console's form, and a script copied the template with the name filled in — twelve of the first
+    brain's nineteen entity pages were born that way, with nothing said about the entity. Now the
+    steward's description is a capture, the librarian writes the page from it and the brain, and
+    the one proposal whose name the steward registered is born CONFIRMED by them: `approved_by`
+    names the steward, the registry entry is not proposed, and the gates are told which page."""
+    env = support.build_repo(str(tmp_path / "git"))
+
+    proposals = identity.write_proposals(
+        env.repo, outcome=_outcome([_proposal()]), base_registry=_registry(env.repo),
+        material="Scircle sells personalised perfume online; I met them at a trade fair.",
+        hints={"entity": "Scircle", "register_name": "Scircle"}, declined_ids=set(),
+        today=TODAY, related=["A Note"], registration=_registration(),
+        approver="steward@example.com")
+
+    assert isinstance(proposals, identity.Proposals), proposals
+    page = yaml.safe_load(_read(env.repo, "wiki/entities/Scircle.md").split("---")[1])
+    assert page["approved_by"] == "steward@example.com"
+    registry = json.loads(_read(env.repo, "ops/entity-registry.json"))["entities"]["scircle"]
+    assert registry["proposed"] is False and registry["approved_by"] == "steward@example.com"
+    assert proposals.confirmed == {"wiki/entities/Scircle.md": "steward@example.com"}
+    assert proposals.confirmed_ids == ["scircle"]
+    assert proposals.entities[0]["confirmed_by"] == "steward@example.com"
+    assert "Scircle sells personalised perfume online." in _read(env.repo, "wiki/entities/Scircle.md")
+
+
+def test_a_second_entity_proposed_beside_the_registration_is_still_only_proposed(tmp_path):
+    """The benign twin: the registration confirms ONE name. Anything else the account proposes
+    from the same material waits on the inbox like every other proposal."""
+    env = support.build_repo(str(tmp_path / "git"))
+    outcome = _outcome([_proposal(), _proposal("Nebula Labs", aliases=(), summary="Nebula Labs is a lab.",
+                                               connections=("[[A Note]] — the note",))])
+
+    proposals = identity.write_proposals(
+        env.repo, outcome=outcome, base_registry=_registry(env.repo),
+        material="Scircle and Nebula Labs both came up.", hints={"register_name": "Scircle"},
+        declined_ids=set(), today=TODAY, related=["A Note"], registration=_registration(),
+        approver="steward@example.com")
+
+    assert isinstance(proposals, identity.Proposals), proposals
+    registry = json.loads(_read(env.repo, "ops/entity-registry.json"))["entities"]
+    assert registry["scircle"]["proposed"] is False
+    assert registry["nebula-labs"]["proposed"] is True and registry["nebula-labs"]["approved_by"] == ""
+    assert proposals.confirmed_ids == ["scircle"]
+
+
+def test_an_account_that_ignores_the_registration_is_refused_with_a_brief_and_writes_nothing(tmp_path):
+    """The steward asked for Scircle and the account proposed nothing: the refusal names the
+    entity and the brief tells the retry exactly what to do — propose it, or anchor to the
+    registered entity it already is."""
+    env = support.build_repo(str(tmp_path / "git"))
+    before = _read(env.repo, "ops/entity-registry.json")
+
+    findings = identity.write_proposals(
+        env.repo, outcome=_outcome(), base_registry=_registry(env.repo),
+        material="Scircle sells perfume.", hints={"register_name": "Scircle"}, declined_ids=set(),
+        today=TODAY, registration=_registration(), approver="steward@example.com")
+
+    assert isinstance(findings, list) and [f.code for f in findings] == ["registration-missing"]
+    assert findings[0].repairable and "Scircle" in findings[0].brief and "new_entities" in findings[0].brief
+    assert _read(env.repo, "ops/entity-registry.json") == before
+    assert not os.path.exists(os.path.join(env.repo, "wiki", "entities", "Scircle.md"))
+
+
+def test_registering_a_name_the_registry_already_resolves_asks_nothing_of_the_account(tmp_path):
+    """The other honest outcome: the steward registered `Acme Corporation`, which the fixture
+    registry already resolves to `acme-corp`. No twin is owed, so an account proposing nothing is
+    not refused — the capture files anchored to the entity it already is."""
+    env = support.build_repo(str(tmp_path / "git"))
+
+    proposals = identity.write_proposals(
+        env.repo, outcome=_outcome(), base_registry=_registry(env.repo),
+        material="Acme Corp again.", hints={"register_name": "Acme Corp"}, declined_ids=set(),
+        today=TODAY, registration=_registration(name="Acme Corp", aliases=()),
+        approver="steward@example.com")
+
+    assert isinstance(proposals, identity.Proposals), proposals
+    assert not proposals.touched() and proposals.confirmed == {}
+
+
+# ── the spine accretes (ADR 042): facts a filing ADDS to a registered entity's page ───────────────
+def _update(entity="acme-corp", facts=("Renewed the contract for another year.",),
+            connections=("[[A Note]] — the note that established it",)):
+    return {"entity": entity, "facts": tuple(facts), "connections": tuple(connections)}
+
+
+def _outcome_with_updates(updates, new_entities=()):
+    return SimpleNamespace(new_entities=tuple(new_entities), new_aliases=(),
+                           entity_updates=tuple(updates))
+
+
+def test_an_update_appends_facts_and_connections_to_the_registered_page_and_proves_the_bytes(tmp_path):
+    """Before ADR 042 an entity page was written once — at birth — and everything the brain
+    learned afterwards went to notes and views; the spine never grew. A filing may now declare
+    what the material established about a REGISTERED entity, and the writer APPENDS it: under the
+    page's own `## Facts` / `## Connections`, `updated:` moved to today, the whole file in
+    `expected_bytes` so `gate_body_rewrite` proves the edit byte for byte."""
+    env = support.build_repo(str(tmp_path / "git"))
+    before = _read(env.repo, "wiki/entities/Acme Corp.md")
+
+    proposals = _write(env.repo, _outcome_with_updates([_update()]), material="Acme Corp renewed.")
+
+    assert isinstance(proposals, identity.Proposals), proposals
+    after = _read(env.repo, "wiki/entities/Acme Corp.md")
+    assert after != before and after.startswith(before.split("updated:")[0])
+    assert "- Renewed the contract for another year." in after
+    assert "- [[A Note]] — the note that established it" in after
+    assert re.search(rf'^updated: "?{TODAY}"?$', after, re.M), "updated: moved to today"
+    assert proposals.updated_pages == {"wiki/entities/Acme Corp.md": "acme-corp"}
+    assert proposals.updates == [{"entity": "acme-corp", "facts": 1, "connections": 1}]
+    assert proposals.expected_bytes["wiki/entities/Acme Corp.md"] == after
+    assert proposals.touched() and proposals.entity_pages == {}
+
+
+def test_a_page_without_the_section_gets_it_appended_and_a_repeated_line_is_not_added_twice(tmp_path):
+    """Two edges of the append. A page born with nothing to say under Facts has no `## Facts` at
+    all (empty sections are not written since the same change), so the section is created at the
+    end; and a fact the page already carries — whitespace folded — is not learned twice, so an
+    account that only repeats the page changes nothing and the writer says so by writing nothing."""
+    env = support.build_repo(str(tmp_path / "git"))
+    path = os.path.join(env.repo, "wiki", "entities", "Acme Corp.md")
+    text = open(path, encoding="utf-8").read()
+    front, tail = text.split("---\n", 2)[1], text.split("---\n", 2)[2]
+    stripped = "\n".join(line for line in tail.split("\n")
+                         if not line.startswith("## Facts") and not line.startswith("- "))
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"---\n{front}---\n{stripped}")
+    support.commit_and_push(env.repo, "test: a page with no Facts section")
+
+    proposals = _write(env.repo, _outcome_with_updates([_update(connections=())]),
+                       material="Acme Corp renewed.")
+    assert isinstance(proposals, identity.Proposals), proposals
+    after = _read(env.repo, "wiki/entities/Acme Corp.md")
+    assert "\n## Facts\n\n- Renewed the contract for another year.\n" in after
+
+    support.commit_and_push(env.repo, "test: the fact is on the page now")
+    again = _write(env.repo, _outcome_with_updates([_update(connections=())]),
+                   material="Acme Corp renewed.")
+    assert isinstance(again, identity.Proposals) and not again.touched()
+    assert _read(env.repo, "wiki/entities/Acme Corp.md") == after
+
+
+def test_an_update_naming_an_unknown_entity_or_an_entity_this_account_proposes_is_refused(tmp_path):
+    """The two honesty checks, each with the brief the retry needs: a name the registry does not
+    resolve is not a page to append to (propose it instead), and facts about an entity this same
+    account creates belong in that entry. Nothing is written on either."""
+    env = support.build_repo(str(tmp_path / "git"))
+    before = _read(env.repo, "wiki/entities/Acme Corp.md")
+
+    unknown = _write(env.repo, _outcome_with_updates([_update(entity="Nobody Inc")]),
+                     material="Nobody Inc renewed.")
+    assert [f.code for f in unknown] == ["update-unknown-entity"] and "new_entities" in unknown[0].brief
+
+    both = _write(env.repo, _outcome_with_updates([_update(entity="Scircle")], new_entities=[_proposal()]),
+                  material="Scircle (S-Circle) renewed.")
+    assert [f.code for f in both] == ["update-of-new-entity"]
+    assert _read(env.repo, "wiki/entities/Acme Corp.md") == before
+    assert not os.path.exists(os.path.join(env.repo, "wiki", "entities", "Scircle.md"))

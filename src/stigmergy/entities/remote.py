@@ -1,5 +1,5 @@
 """The server's door into the knowledge repo: clone it with the librarian App's own credential,
-act — mint a brand-new entity through `entities.mint.mint`, or carry out a steward's decision on
+act — carry out a steward's decision on
 a proposal through `entities.decide.apply` — push, remove the clone.
 
 A throwaway clone per request, never a standing checkout — a standing one would couple the read
@@ -21,8 +21,7 @@ import logging
 import os
 import tempfile
 
-from stigmergy.entities import decide
-from stigmergy.entities import mint as mint_lib
+from stigmergy.entities import decide, generator
 from stigmergy.entities.errors import (
     CapabilityUnavailableError,
     CloneStateError,
@@ -58,7 +57,7 @@ MINT_FAULT_MESSAGE = (
 
 # ── the refusals this door RE-WORDS, and the ones it deliberately does not (ADR 030's amendment) ─
 # `stigmergy.entities` composes its refusals for an operator standing IN the clone: `clone.py` and
-# `mint.py` name that clone's path and hand out `git -C <path> ...` to run in it. Here the clone is
+# `guard.py` name that clone's path and hand out `git -C <path> ...` to run in it. Here the clone is
 # the `TemporaryDirectory` above, deleted before `server.review` echoes the sentence to a steward
 # over MCP — so the path is the SERVER HOST's, the command is unrunnable, and an instruction like
 # "commit or stash first" is addressed to nobody. Each arm below logs the library's diagnosis with
@@ -77,9 +76,9 @@ MINT_FAULT_MESSAGE = (
 #     registered entry and says to point the capture at it. Only `CollisionRaceError`, the
 #     post-rebase re-ask, is mapped; catching its base class here would turn a governance verdict
 #     into "something moved, approve again" and send a steward round a loop that cannot succeed.
-#   · the secrets refusal (`mint.refuse_secrets`) — `_relocate` has already rewritten gitleaks'
+#   · the secrets refusal (`guard.refuse_secrets`) — `_relocate` has already rewritten gitleaks'
 #     scratch path to the repo-relative page, and the rule id is what a steward would allowlist.
-#   · the drift refusal (`mint.refuse_drift`) — names `generator.FIX_COMMAND`, which is portable
+#   · the drift refusal (`guard.refuse_drift`) — names `generator.FIX_COMMAND`, which is portable
 #     and run against the knowledge repo, not against any clone this process made.
 # All four are `EntityError`s, which is why there is no bare `except EntityError` arm below and
 # must not become one: it would swallow every refusal a steward can actually act on.
@@ -88,10 +87,10 @@ CLONE_STATE_FAULT_MESSAGE = (
     "with the identity you approved. Nothing was pushed. The details are in the server log; "
     "approve again once whoever runs this deployment has looked")
 
-# The repo-relative path is the actionable half and is kept; `mint_lib.TEMPLATE_RELPATH` rather
+# The repo-relative path is the actionable half and is kept; `generator.TEMPLATE_RELPATH` rather
 # than a second literal, so the two doors can never name different files.
 TEMPLATE_MISSING_MESSAGE = (
-    f"the knowledge repo has no {mint_lib.TEMPLATE_RELPATH}, and a new entity page is that "
+    f"the knowledge repo has no {generator.TEMPLATE_RELPATH}, and a new entity page is that "
     f"template with its identity filled in. Nothing was pushed. Commit the template to the "
     f"knowledge repo (any checkout), then approve again — the next attempt clones fresh and will "
     f"see it")
@@ -134,26 +133,6 @@ CREDENTIAL_FAULT_MESSAGE = (
     "approved could not be minted. Nothing was written. Its installation may have been revoked or "
     "its key rotated — the details are in the server log; ask whoever runs this deployment to "
     "look, then approve again")
-
-
-def mint_via_clone(repo_url: str, branch: str, credential, *, entity_id: str, name: str,
-                   entity_type: str, aliases=(), role: str = "", today: str,
-                   submission_id: int | None = None, approved_by: str, on_output=None) -> dict:
-    """Clone `repo_url` into a throwaway directory, mint through `entities.mint.mint` as the
-    librarian App with an `Approved-by: {approved_by}` trailer, push, clean up in a `finally`.
-
-    `credential` is the env-shaped mapping `librarian.githubapp` reads — required ONLY when
-    `repo_url` is `https://`. A local path or `git://` URL authenticates nothing, so `credential`
-    may be `None`: the honest statement of when a credential is needed, and what lets the pg
-    suite drive this against a real bare remote with no key and no network.
-    """
-    trailer = f"Approved-by: {_trailer_actor(approved_by)}"
-    return _in_fresh_clone(
-        repo_url, branch, credential,
-        lambda repo, author: mint_lib.mint(
-            repo, entity_id=entity_id, name=name, entity_type=entity_type, aliases=aliases,
-            role=role, branch=branch, today=today, author=author, approved_by=approved_by,
-            submission_id=submission_id, trailer=trailer, on_output=on_output))
 
 
 def decide_via_clone(repo_url: str, branch: str, credential, *, action, decided_by: str,

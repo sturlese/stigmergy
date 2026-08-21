@@ -82,8 +82,9 @@ entities, proposed spellings, repair proposals) · Captures (read-only: the list
 **detail** with the report's proposals clause; Reclaim and Retention purge are the list-level
 buttons) · Entities (each proposal with the registry's verdict on its name — registered / collides
 / similar / clear — and Approve / Merge into… / Decline, each one governed commit; proposed
-spellings; the registry browser; and **Register an entity**, born confirmed, with the name checked
-live as you type) ·
+spellings; the registry browser; and **Register an entity**, which commissions a capture — you say
+what it is, the console takes you to that capture, and the entity's page appears here when the
+librarian files it, born confirmed by you; the name is still checked live as you type) ·
 Repairs (pending proposals, recently decided ones, and the proposer's own run history) · Gardener ·
 Index (the substrate check runs in-process) · Worker · Jobs (Run now, Enable, Disable for the four
 workflows — needs the fine-grained PAT; without it the page is read-only and says so) · Digest

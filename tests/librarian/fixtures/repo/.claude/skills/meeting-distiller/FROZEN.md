@@ -8,7 +8,7 @@ reasoning, as the frozen contract linter one directory over
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/skills/meeting-distiller/SKILL.md` |
-| **Copied at commit** | `34cd66856dfc246c4c29fbe22ffe83d53f206c83` |
+| **Copied at commit** | `e118c8a38c2bd447f27be5d5e07a7c9b9df57cce` |
 | **Drift guard** | `tests/librarian/test_meeting_brief_contract.py` |
 
 ## Why the copy exists (M9.5, ROADMAP item 7)

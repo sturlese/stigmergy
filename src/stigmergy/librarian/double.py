@@ -12,6 +12,7 @@ sensitivity and never its specificity. Behaviour comes from directives in the ma
                              — refused by the identity gate; on the corrective retry, anchor to
                              the registered entity instead
     DOUBLE:propose-unnamed   propose a name the material never mentions, on EVERY attempt
+    DOUBLE:update=<entity>   add two facts and a connection to a REGISTERED entity's page
     DOUBLE:alias=<spelling>  anchor to the registry's first entity and propose `<spelling>` as a
                              new alias of it
     DOUBLE:hallucinate       write a figure the material does not support, on EVERY attempt
@@ -144,6 +145,14 @@ class DoubleAgent:
                                                       note_title=title))
         if directives.get("alias"):
             new_aliases.append({"entity": anchor_entity, "alias": directives["alias"]})
+        entity_updates = []
+        if directives.get("update"):
+            # Facts the note establishes about a REGISTERED entity, appended to its page.
+            entity_updates.append({
+                "entity": directives["update"],
+                "facts": [f"Established by the capture filed as {title}",
+                          "Appended by the offline double, never a rewrite"],
+                "connections": [f"[[{title}]] — the note that established it"]})
         company = "company" in directives
         anchoring = ({"kind": "company", "entities": [],
                       "reason": "a practice that applies across the whole company, "
@@ -198,6 +207,7 @@ class DoubleAgent:
             "findings": [{"category": c} for c in findings],
             "new_entities": new_entities,
             "new_aliases": new_aliases,
+            "entity_updates": entity_updates,
             "summary": f"filed the capture as a {page_type}",
         }
         if "long-summary" in directives:

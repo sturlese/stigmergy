@@ -19,6 +19,7 @@ import os
 import re
 from dataclasses import dataclass, field
 
+from stigmergy.capture import schema as capture_schema
 from stigmergy.librarian import filing_port, gates
 from stigmergy.librarian import page as page_policy
 from stigmergy.librarian.errors import AgentError, LibrarianConfigError, OutcomeShapeError
@@ -117,6 +118,8 @@ NEW_ENTITY_FIELDS = ("name", "entity_type", "role", "aliases", "summary", "facts
 NEW_ALIAS_FIELDS = ("entity", "alias")
 MAX_NEW_ENTITIES = 10
 MAX_NEW_ALIASES = 20
+MAX_ENTITY_UPDATES = 10         # registered entities one filing may add facts to
+MAX_UPDATE_LINES = 20           # facts or connections per entity per filing
 
 MAX_OUTCOME_BYTES = 256 * 1024      # generous for an account of one page; not a memory budget
 MAX_OUTCOME_DEPTH = 8               # deeper than any legitimate shape below
@@ -167,6 +170,7 @@ class Outcome:
     findings: tuple = ()
     new_entities: tuple = ()      # tuple of {name, entity_type, role, aliases, summary, facts, connections}
     new_aliases: tuple = ()       # tuple of {entity, alias}
+    entity_updates: tuple = ()    # tuple of {entity, facts, connections} — ADR 042: the spine accretes
     page: "OutcomePage | None" = None
 
 
@@ -406,6 +410,38 @@ def _parse_new_aliases(raw: dict, *, shape: _Shape) -> tuple:
     return tuple(out)
 
 
+def _parse_entity_updates(raw: dict, *, shape: _Shape) -> tuple:
+    """What this filing ADDS to entities the registry already knows (ADR 042): `entity` (an id or
+    a registered name) with the `facts` and `connections` the material establishes about it — one
+    line each, appended to that entity's page by the worker and proved byte for byte. A line the
+    page already carries is not appended twice; an update naming no line is dropped here."""
+    out = []
+    entries = _list(raw.get("entity_updates"), field_name="entity_updates", shape=shape)
+    if len(entries) > MAX_ENTITY_UPDATES:
+        shape.add("too-many", f"updates {len(entries)} entities (max {MAX_ENTITY_UPDATES})")
+        entries = entries[:MAX_ENTITY_UPDATES]
+    for entry in entries:
+        item = _mapping(entry, field_name="an entity_updates entry", shape=shape)
+        label = f"entity_updates[{len(out)}]"
+        entity = _identifier(item.get("entity"), field_name=f"{label}.entity", shape=shape)
+        facts = tuple(_identifier(line, field_name=f"{label}.facts[]", shape=shape)
+                      for line in _list(item.get("facts"), field_name=f"{label}.facts",
+                                        shape=shape)[:MAX_UPDATE_LINES] if _declared(line))
+        connections = tuple(_identifier(line, field_name=f"{label}.connections[]", shape=shape)
+                            for line in _list(item.get("connections"),
+                                              field_name=f"{label}.connections",
+                                              shape=shape)[:MAX_UPDATE_LINES] if _declared(line))
+        if not _declared(item.get("entity")):
+            shape.add("missing-field",
+                      f"`{label}.entity` names no registered entity — an update says which "
+                      f"entity's page the facts belong on")
+            continue
+        if not facts and not connections:
+            continue
+        out.append({"entity": entity, "facts": facts, "connections": connections})
+    return tuple(out)
+
+
 def parse_outcome(raw) -> Outcome:
     """Validate one raw outcome object into an `Outcome`, coercing every field to the type the
     rest of the system assumes it has. Raises `AgentError` for a STRUCTURAL fault and
@@ -439,6 +475,7 @@ def parse_outcome(raw) -> Outcome:
     findings = _parse_findings(raw, shape=shape)
     new_entities = _parse_new_entities(raw, shape=shape)
     new_aliases = _parse_new_aliases(raw, shape=shape)
+    entity_updates = _parse_entity_updates(raw, shape=shape)
 
     # Absent (`page=None`) is the write-it-itself shape; whether it is REQUIRED is the caller's
     # question, since only the caller knows which backend ran.
@@ -490,6 +527,7 @@ def parse_outcome(raw) -> Outcome:
         findings=tuple(findings),
         new_entities=new_entities,
         new_aliases=new_aliases,
+        entity_updates=entity_updates,
         page=page,
     )
 
@@ -515,6 +553,7 @@ class MeetingOutcome:
     findings: tuple = ()
     new_entities: tuple = ()       # the same shape as `Outcome.new_entities`
     new_aliases: tuple = ()
+    entity_updates: tuple = ()
 
 
 def parse_meeting_outcome(raw) -> MeetingOutcome:
@@ -563,6 +602,7 @@ def parse_meeting_outcome(raw) -> MeetingOutcome:
     findings = _parse_findings(raw, shape=shape)
     new_entities = _parse_new_entities(raw, shape=shape)
     new_aliases = _parse_new_aliases(raw, shape=shape)
+    entity_updates = _parse_entity_updates(raw, shape=shape)
 
     meeting_title = _identifier(raw.get("meeting_title"), field_name="meeting_title", shape=shape)
     meeting_notes = _prose(raw.get("meeting_notes"), field_name="meeting_notes", shape=shape,
@@ -577,7 +617,7 @@ def parse_meeting_outcome(raw) -> MeetingOutcome:
                           meeting_notes=meeting_notes, action_items=tuple(action_items),
                           decisions=tuple(decisions), edits=tuple(edits), summary=summary,
                           findings=tuple(findings), new_entities=new_entities,
-                          new_aliases=new_aliases)
+                          new_aliases=new_aliases, entity_updates=entity_updates)
 
 
 def read_outcome(worktree: str, *, delete: bool = True) -> Outcome:
@@ -769,7 +809,13 @@ def build_prompt(*, material: str, hints: dict, submitted_by: str, corrective: s
     ]
     if flow_note:
         parts.append(f"\n{flow_note}")
-    client_hints = {k: v for k, v in (hints or {}).items() if v}
+    registration = capture_schema.registration_from_hints({"client": hints or {}})
+    if registration is not None:
+        # Server-composed, like `flow_note`: the registration keys are set by a steward door and
+        # refused from every client, so this paragraph is TOLD, never fenced as data.
+        parts.append(registration_note(registration))
+    client_hints = {k: v for k, v in (hints or {}).items()
+                    if v and k not in capture_schema.REGISTER_HINT_KEYS}
     if client_hints:
         # FENCED like the material: hints arrive through a door needing no credential at all.
         # A label is a request; a fence is a boundary.
@@ -789,6 +835,23 @@ def build_prompt(*, material: str, hints: dict, submitted_by: str, corrective: s
     if corrective:
         parts.append(f"\n{corrective}")
     return "\n".join(parts)
+
+
+def registration_note(registration) -> str:
+    """What the brief says when a steward is REGISTERING an entity through this capture (ADR 042):
+    the material is what the steward knows, the brain may know more, and the account must propose
+    that entity — or say the registry already has it. A twin is the one thing it may not create."""
+    spellings = (f", also spelled {', '.join(repr(a) for a in registration.aliases)}"
+                 if registration.aliases else "")
+    return (
+        f"\nREGISTRATION: a steward is introducing the entity {registration.name!r} "
+        f"({registration.entity_type or 'type unspecified'}{spellings}) to this brain, and this "
+        f"capture is what they know about it. Your account MUST propose it in `new_entities` under "
+        f"exactly that name and type, and the page is yours to write: search the brain for the name "
+        f"first, and write `summary`, `facts` and `connections` from what the material and the "
+        f"existing pages establish — nothing more, nothing invented. Anchor the page you file to "
+        f"it. If the registry ALREADY resolves that name to an entity, do not propose a twin: anchor "
+        f"to that entity, and put the steward's spelling in `new_aliases` if the registry lacks it.")
 
 
 # NOT a `config.Settings` property: `Settings` is the leaf of this package's import graph, and

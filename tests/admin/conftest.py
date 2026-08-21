@@ -4,7 +4,7 @@ Real Postgres through `tests.testdb` (never a faked queue — the house rule), w
 NETWORK edges faked: the GitHub gateway (a recording fake with the real gateway's four methods)
 and, where a digest posts, the digest suite's own fake-gateway posture (here: `gateway=None` plus
 env, since only dry-run runs in this suite). Since ADR 030, `entity_approve` reaches real git too
-(`entities.remote.mint_via_clone`) — `build_bare_knowledge_repo`/`require_gitleaks` below are this
+(`entities.remote.decide_via_clone`) — `build_bare_knowledge_repo`/`require_gitleaks` below are this
 package's OWN, minimal fixture for that, never a faked commit (this repo's own testing doctrine).
 
 The composed-branch fixtures drive the REAL `routes.compose` product over `httpx.ASGITransport`
@@ -262,7 +262,7 @@ def require_gitleaks():
 
 @pytest.fixture(autouse=True)
 def no_real_github_app(monkeypatch):
-    """`entity_approve` walks the same `entities.remote.mint_via_clone` door a `librarian_repo_url`
+    """`entity_approve` walks the same `entities.remote.decide_via_clone` door a `librarian_repo_url`
     pointed at a real `https://` remote would authenticate through — same guard
     `tests/server/conftest.py` applies to its own package: no test here may mint a real GitHub
     installation token out of an operator's `.env`. Harmless for every OTHER admin suite in this

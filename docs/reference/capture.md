@@ -47,7 +47,7 @@ Library code here never opens a connection and never reads the environment: ever
 
 | Tool | What it does |
 |---|---|
-| `brain_submit(kind, material, hints?)` | queue a capture. Over MCP `kind` is `raw` (a conversation excerpt, a decision, a gotcha) or `page` (markdown you drafted) — `MCP_SUBMIT_KINDS`, deliberately narrower than the queue's own `KINDS`, which also carries `meeting` and `drive`: those two are the drop CLIs' to enqueue, and restricting them here rather than leaving it to `KINDS` is what keeps `stigmergy-meeting` and `stigmergy-drive` genuinely the only doors onto their flows. `hints` optionally suggests placement — `type`, `path`, `entity`, `title`, suggestions only. Three further allowlists exist for the surfaces that carry provenance rather than placement (`SOURCE_HINT_KEYS` for Slack, `MEETING_HINT_KEYS` for the meeting drop CLI, `DRIVE_HINT_KEYS` for the Drive one). Two of the three name the small subset a downstream reader actually TRUSTS, and only those are refused at the client seam: `SOURCE_PROVENANCE_HINT_KEYS` (`source_client`, `source_permalink`) and `DRIVE_PROVENANCE_HINT_KEYS` (`drive_file_id`, `drive_url`). `MEETING_HINT_KEYS` has no such subset — a meeting row can only be created by the drop CLI in the first place. `ALLOWED_HINT_KEYS` is the union of all four lists, and anything outside it is refused by name. Returns an ack with the submission id, the archived object key and a message that promises exactly what happened: **queued and attributed**, not "saved" — plus `entities`, the registered entities this material already names (`{id, name, proposed}` each, ACL-scoped like `list_entities`), so a submitter sees on the spot which identities the brain recognises |
+| `brain_submit(kind, material, hints?)` | queue a capture. Over MCP `kind` is `raw` (a conversation excerpt, a decision, a gotcha) or `page` (markdown you drafted) — `MCP_SUBMIT_KINDS`, deliberately narrower than the queue's own `KINDS`, which also carries `meeting` and `drive`: those two are the drop CLIs' to enqueue, and restricting them here rather than leaving it to `KINDS` is what keeps `stigmergy-meeting` and `stigmergy-drive` genuinely the only doors onto their flows. `hints` optionally suggests placement — `type`, `path`, `entity`, `title`, suggestions only. Three further allowlists exist for the surfaces that carry provenance rather than placement (`SOURCE_HINT_KEYS` for Slack, `MEETING_HINT_KEYS` for the meeting drop CLI, `DRIVE_HINT_KEYS` for the Drive one), and a fifth carries AUTHORITY rather than either: `REGISTER_HINT_KEYS` (`register_name`, `register_type`, `register_aliases`, `register_source`), refused outright here — see [A registration is a capture](#a-registration-is-a-capture-and-only-two-doors-may-assert-one). Two of the three provenance lists name the small subset a downstream reader actually TRUSTS, and only those are refused at the client seam: `SOURCE_PROVENANCE_HINT_KEYS` (`source_client`, `source_permalink`) and `DRIVE_PROVENANCE_HINT_KEYS` (`drive_file_id`, `drive_url`). `MEETING_HINT_KEYS` has no such subset — a meeting row can only be created by the drop CLI in the first place. `ALLOWED_HINT_KEYS` is the union of all five lists, and anything outside it is refused by name. Returns an ack with the submission id, the archived object key and a message that promises exactly what happened: **queued and attributed**, not "saved" — plus `entities`, the registered entities this material already names (`{id, name, proposed}` each, ACL-scoped like `list_entities`), so a submitter sees on the spot which identities the brain recognises |
 | `brain_submissions(limit?, status?)` | what happened to what you captured: your own submissions, newest first, with state, timestamps, `result_ref`, the librarian's `report` (which names the page, the anchor, and any entity or spelling it PROPOSED), the row's `events` and a fenced excerpt. An unrestricted (steward) identity sees the whole queue with `mine` marking its own rows. A capture refused for a secret or PII echoes nothing — see [Withheld material](#withheld-material) |
 
 Both ride `BrainService._call`, so they inherit per-identity rate limiting, the audit row and
@@ -60,7 +60,7 @@ registry resolves is PROPOSED: the librarian creates the entity page in the same
 (`approved_by: ""`, the proposal mark), anchors the page to it, and files. The report says so, and a
 steward confirms, merges or declines the identity afterwards from the review inbox
 ([server.md → The review tools](./server.md#the-review-tools)). The mechanism is
-[librarian.md → Proposing an identity](./librarian.md#proposing-an-identity-what-a-filing-creates-unconfirmed);
+[librarian.md → Writing an identity](./librarian.md#writing-an-identity-what-a-filing-does-to-the-registry);
 the governance doors are
 [operator-runbook.md](./operator-runbook.md#governing-what-the-librarian-proposed).
 
@@ -109,6 +109,32 @@ subset is listed in `hints.flagged` and echoed in the ack:
 
 > Note: the material declares acl, content_hash, submitted_by, verification in its frontmatter;
 > recorded as a hint and ignored — those fields are the server's.
+
+### A registration is a capture, and only two doors may assert one
+
+A steward introducing an entity nobody has captured about does not write a page: what they know
+about it becomes the MATERIAL of an ordinary `raw` capture, and four hints say which entity that
+capture registers.
+
+| Hint | What it carries |
+|---|---|
+| `register_name` | the entity's name, as the steward spelled it — its page title, its filename, its wikilink target |
+| `register_type` | the entity's type, one of the registry's closed list of entity types |
+| `register_aliases` | the other spellings that mean it, comma-separated (empty when there are none) |
+| `register_source` | which door asked — `admin` or `cli`, `schema.REGISTRATION_SOURCES`, the same two spellings the review ledger records |
+
+`schema.registration_hints(...)` builds all four (plus the ordinary `entity` hint, so the steward's
+own spelling is in the haystack the librarian checks a proposed name against), and
+`schema.registration_from_hints(hints)` reads them back off a stored row as a `Registration`. The
+capture's `submitted_by` is the steward, which is what the entity page's `approved_by` is born
+carrying.
+
+**Exactly two doors may set them, and neither is a client.** The console's *Register an entity* and
+`stigmergy-entities create` call `queue.submit` directly. Every client-reachable door goes through
+`BrainService._submit`, which calls `schema.reject_registration_hints` and REFUSES any `register_*`
+key by name: a registration is an act of authority, and `brain_submit` attributes material, never
+authority. The refusal says so and names what to do instead — capture what you know about the
+thing, and the librarian proposes the entity for a steward to confirm.
 
 ## The queue
 

@@ -510,7 +510,7 @@ def test_review_decide_collapses_a_raw_entities_error_to_its_class_name_never_it
 def test_review_decide_maps_a_git_level_collision_inside_the_mint_correctly_already(fake_service):
     """Benign twin / no-regression: the OTHER race the issue names, tripped INSIDE the mint itself
     (`server/review.py::_mint_entity_proposal`'s own try/except, which maps every `EntityError`
-    from `entities.remote.mint_via_clone` into THIS package's own `ReviewError` — a `CaptureError`
+    from `entities.remote.decide_via_clone` into THIS package's own `ReviewError` — a `CaptureError`
     subclass), already reaches this surface correctly through the EXISTING
     `except (CaptureError, ...)` branch, with no change needed. Uses the REAL `ReviewError`, not a
     stand-in, so this pins the actual production type. Kept here so a fix for the pre-mint case

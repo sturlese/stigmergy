@@ -26,7 +26,7 @@ What each one needs before it will run at all:
 | `stigmergy-server` | `ops/identities.json` | stdio refuses to start; HTTP refuses every request with the generic `401`. Never an open brain, on either transport |
 | the librarian worker (either backend) | `.claude/tools/stigmergy_lint.py`, **in the commit it files against** | `LibrarianConfigError` at startup, before a single item is claimed |
 | the librarian worker, `--backend pydantic` | `.claude/skills/librarian/SKILL.md`, same commit | the same refusal — the real agent has no operating procedure without it |
-| `stigmergy-entities`, and the librarian PROPOSING an identity | `ops/templates/entity.md` | `TemplateMissingError` from the steward's door; a `no-template` veto on a capture that would have proposed one. A new entity page is that template with its identity fields filled in, and no door carries a copy of its own — which is why the librarian refuses to invent one. The CLI names which checkout is missing it; the server door says to commit it to the knowledge repo ([ADR 030](../decisions/030-server-side-entity-minting.md)'s two-door amendment) |
+| the librarian writing an identity — one it proposed, or one a steward registered | `ops/templates/entity.md` | a `no-template` veto on the capture that would have created it, saying to commit the template to the knowledge repo. A new entity page is that template with its identity filled in and its body written, and no door carries a copy of its own — which is why the librarian refuses to invent one |
 | anchoring to resolve against something | **at least one entity** in `ops/entity-registry.json` | nothing breaks and nothing waits: a capture about a name nothing resolves proposes that entity and files anchored to it, so an empty registry simply means the first captures each bring a proposal for a steward to confirm |
 
 So the honest minimum is: one seed page, `ops/identities.json`, the linter, and — the moment you
@@ -126,11 +126,14 @@ uncommitted local edit cannot change what a page is stamped with or who may sign
 is the copy the deploy baked into the image, so a channel's scope changes only with a redeploy.
 
 `ops/` carries one more thing that is not configuration: **`ops/templates/entity.md`**, the page
-shape a new entity takes. Both writers render from it — `stigmergy-entities create` for an entity a
-steward registers directly, and the librarian for one a capture proposes — and both refuse loudly
-when it is missing, because the template is the knowledge repo's own source of truth for what one of
-its pages looks like, not something this platform should be supplying from the outside. It carries
-one field the other templates do not: `approved_by: ""`.
+shape a new entity takes. There is exactly ONE renderer of it — the librarian, writing the entity
+inside the commit that files the capture, whether the capture proposed the entity or a steward
+registered it — and it refuses loudly when the template is missing, because the template is the
+knowledge repo's own source of truth for what one of its pages looks like, not something this
+platform should be supplying from the outside. It carries one field the other templates do not:
+`approved_by: ""`. Its own HTML comments are notes to whoever edits the TEMPLATE and are stripped
+from every page rendered from it, and a section the writer has no lines for is dropped heading and
+stub together — see [page-contract.md](./page-contract.md#the-body-an-entity-page-is-born-with).
 
 ## The identity lifecycle, on the page and nowhere else
 
@@ -216,14 +219,16 @@ only a defense if nothing in the repo can add to it.
   in the worktree nor an in-place rewrite of an approved page can ride along.
 - **It never writes outside the three zones and `ops/`.** `ops/entity-registry.json` is regenerated
   from the entity pages, in the same commit that changed one, and only by the two writers that may
-  change one: the librarian proposing (authored as the librarian App, `Submitted-by:` the capture's
-  submitter) and `stigmergy.entities` deciding or creating — a steward's own commit from the CLI
+  change one: the librarian WRITING an identity (authored as the librarian App, `Submitted-by:` the
+  capture's submitter) and `stigmergy.entities` DECIDING one — a steward's own commit from the CLI
   (authored as the steward), or a server-driven decision from MCP, Slack or the console (authored as
-  the librarian App, with the human named in a `Decided-by:` — or, for a `create`, an `Approved-by:`
-  — trailer) — [ADR 030](../decisions/030-server-side-entity-minting.md).
-- **It never confirms an identity by itself.** The librarian can create an entity page, and only
-  with `approved_by: ""`; the field is filled in by a person, through a door that authenticated
-  them, or not at all.
+  the librarian App, with the human named in a `Decided-by:` trailer) —
+  [ADR 030](../decisions/030-server-side-entity-minting.md).
+- **It never confirms an identity by itself.** The librarian writes an entity page with
+  `approved_by: ""` unless a STEWARD registered that entity through the capture it is filing, in
+  which case the field carries that steward's name and the ninth gate refuses any other
+  ([ADR 042](../decisions/042-an-entity-is-born-written.md)). Either way the name in that field is a
+  person's, put there by a door that authenticated them — never the worker's own judgment.
 - **One writer at a time.** The librarian claims a single queue item, works in a throwaway
   `git worktree`, and fetches before every claim. A concurrent human push is detected and the item
   is retried, never overwritten.

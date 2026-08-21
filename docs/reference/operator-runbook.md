@@ -211,7 +211,7 @@ do to change this" differently enough that guessing costs a redeploy or a silent
 The rows that name `ops/stewards.json` are one file read two ways: on the deployed `app`/`slack`
 groups a steward's authority is a deploy-time snapshot, while the worker (and any process holding a
 checkout) sees a push immediately. See Revocation. `ops/entity-registry.json` used to work that way
-too and no longer does — a mint that pushed a new entity left `describe_entity` serving it with no
+too and no longer does — a commit that pushed a new entity left `describe_entity` serving it with no
 name and no aliases until the next deploy, so the registry moved into the index where the webhook
 can refresh it for every group at once.
 
@@ -412,7 +412,7 @@ anything in this repo. Every zone has a closed set of writers:
 | `wiki/notes,decisions,concepts/` | the librarian, filing a capture through the nine gates |
 | `wiki/meetings/` + `sources/meetings/` | the meeting flow, from a `stigmergy-meeting drop` |
 | `sources/slack/`, `sources/drive/` | the librarian's source attachment, from the 🧠 gesture and `stigmergy-drive drop` |
-| `wiki/entities/` (+ `ops/entity-registry.json`) | two writers, and no third: `librarian.identity` CREATES a proposed page (`approved_by: ""`) inside the capture's own commit, and `stigmergy.entities` DECIDES one — a steward's own commit from the CLI, or a server-driven decision from MCP, Slack or the console ([ADR 030](../decisions/030-server-side-entity-minting.md)) |
+| `wiki/entities/` (+ `ops/entity-registry.json`) | two writers, and no third: `librarian.identity` CREATES an entity page inside the capture's own commit — `approved_by: ""` for one it proposed, the steward's name for one they REGISTERED through that capture — and appends new facts and connections to a registered entity's page; `stigmergy.entities` DECIDES a proposal — a steward's own commit from the CLI, or a server-driven decision from MCP, Slack or the console ([ADR 030](../decisions/030-server-side-entity-minting.md)) |
 | `views/` | `stigmergy.views` **only** — either `stigmergy-views regenerate` by hand, or the librarian's best-effort trigger right after a meeting files |
 
 After any bulk re-seed: rebuild the index (next section) and run `make index-check`.
@@ -569,11 +569,27 @@ the database only to write the ledger row:
 the source of truth — and prints the exact command for each row. `--by` sets who the decision is
 attributed to (default: your clone's git email); it is **attribution, not authorization**.
 
-A steward can also register an entity nobody proposed, born already confirmed:
+A steward can also register an entity nobody proposed. **`create` writes no page and makes no
+commit**: what you know about the entity is queued as a capture carrying the registration, and the
+LIBRARIAN writes the page — from your words and from what the brain already holds — anchors the
+note to it, and the identity is born confirmed by you:
 
 ```sh
 .venv/bin/stigmergy-entities create --id acme-corp --name "Acme Corp" --type organization \
-    --aliases "Acme, ACME" --role "A logistics customer"
+    --about "A logistics customer since 2024; renewals run through Ana." --aliases "Acme, ACME"
+```
+
+`--about` is required and must not be blank: it is the material the page is written from, and a
+page with nothing said about the entity is not written at all. `--id` must be the slug of `--name`
+— the registry is derived from the page. Because it enqueues a capture, `create` needs the queue
+database (`--dsn`) **and** the evidence store, from the same environment the drop CLIs read
+(`stigmergy-meeting`, `stigmergy-drive` — see [capture.md](./capture.md)); `--allow-split-stores`
+is the same escape hatch they carry. It prints the capture to follow:
+
+```
+commissioned — capture #41: the librarian writes the page of Acme Corp from what you said and what
+the brain already holds, anchors the note to it, and the entity is born confirmed by ana@example.com.
+Nothing is in the brain until it files; `stigmergy-queue show 41` follows it.
 ```
 
 Registry/pages drift is its own command, and it commits nothing:
@@ -583,9 +599,11 @@ Registry/pages drift is its own command, and it commits nothing:
 .venv/bin/stigmergy-entities regenerate                 # rewrite the registry from the pages (NOT committed)
 ```
 
-Every decision and `create` requires gitleaks (`brew install gitleaks`), refuses a drifted registry,
-and never force-pushes. Exit codes: `0` it did what it said, `1` it refused (a collision, a dirty
-clone, an id that is not a proposal, drift under `--check`), `2` the tool could not run (no repo, no
+Every DECISION requires gitleaks (`brew install gitleaks`), refuses a drifted registry, and never
+force-pushes; `create` touches git only to read your identity, since the commit it leads to is the
+librarian's and runs through the librarian's own nine gates. Exit codes: `0` it did what it said,
+`1` it refused (a collision, a dirty clone, an id that is not a proposal, an empty `--about`, an
+`--id` that is not the name's slug, drift under `--check`), `2` the tool could not run (no repo, no
 database).
 
 **The other three doors decide from the server process** instead of a steward's clone — a throwaway
@@ -711,7 +729,7 @@ apply is not a dismissal.
 
 **Usually you do not have to do anything.** The librarian worker converges `views/` to the corpus
 on its own interval, whenever its queue is idle — an ordinary capture, a Slack or Drive drop, an
-applied repair, an entity mint and a hand edit are all covered, and so is an entity that has never
+applied repair, an entity born and a hand edit are all covered, and so is an entity that has never
 had a view at all. `stigmergy-views` is for when you do not want to wait:
 
 ```sh

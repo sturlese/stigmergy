@@ -13,7 +13,7 @@ Authorization runs FIRST — every kind needs a STEWARD, a repair a steward for 
 edit — and a refusal never becomes more specific once a caller has failed it.
 
 Every git-touching verdict has ONE ordering function that every door runs (`decide_and_record`,
-`create_and_record`, `apply_repair_and_record`), so "the ledger row is written, and written after
+`commission_registration`, `apply_repair_and_record`), so "the ledger row is written, and written after
 the push" is a property of the code rather than of each surface remembering. The librarian reads
 that ledger: an identity whose latest decision is a decline is never proposed again.
 """
@@ -21,7 +21,7 @@ import logging
 import os
 from datetime import UTC, date, datetime
 
-from stigmergy.capture import decisions
+from stigmergy.capture import decisions, queue
 from stigmergy.capture import ops as capture_ops
 from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.errors import CaptureError
@@ -29,6 +29,7 @@ from stigmergy.entities import decide as entities_decide
 from stigmergy.entities import remote as entities_remote
 from stigmergy.entities.errors import CapabilityUnavailableError as EntityCapabilityUnavailableError
 from stigmergy.entities.errors import EntityError
+from stigmergy.entities.generator import canonical_id_for
 from stigmergy.librarian import base_inputs, gates, gitcmd
 from stigmergy.librarian.errors import LibrarianError
 from stigmergy.repair import remote as repair_remote
@@ -36,6 +37,7 @@ from stigmergy.repair import schema as repair_schema
 from stigmergy.repair import store as repair_store
 from stigmergy.repair.errors import RepairError
 from stigmergy.review_kinds import (
+    ENTITY_TYPES,
     ITEM_KINDS,
     KIND_ALIAS_PROPOSAL,
     KIND_IDENTITY_PROPOSAL,
@@ -731,7 +733,7 @@ def apply_repair_and_record(conn, *, repo_url: str, proposal: dict, actor: str, 
     steward's verdict, apply through the governed door, then write the governance ledger row.
 
     Both doors that approve a repair run THIS: the review lane through `_decide_repair`, the admin
-    console through `admin.service.repair_approve`. It is `mint_and_record_approval`'s lesson
+    console through `admin.service.repair_approve`. It is `decide_and_record`'s lesson
     applied to the second irreversible verdict this module owns — two copies of an ordering rule
     are two places for it to be reordered, and the reordering is invisible from either door's end
     state.
@@ -755,11 +757,11 @@ def apply_repair_and_record(conn, *, repo_url: str, proposal: dict, actor: str, 
     CALLER SET is closed and pinned in `tests/test_architecture.py`.
 
     `apply_approved` is reached as a MODULE ATTRIBUTE so it stays monkeypatchable, the same seam
-    `entities_remote.mint_via_clone` keeps one door over.
+    `entities_remote.decide_via_clone` keeps one door over.
 
     `notes` reaches BOTH writes, exactly as `reject_repair_and_record` already does with its
     reason — it is the only record of why a repair was worth applying, and it used to be dropped on
-    approve while being kept on reject. It is `mint_and_record_approval`'s asymmetry too: the review
+    approve while being kept on reject. It is `decide_and_record`'s asymmetry too: the review
     lane carries the steward's cleaned note, the console has no note field and passes nothing. It
     goes VERBATIM into an append-only table, so a caller supplying a non-empty one must already
     have run `_refuse_secret_note` — `review_decide` does, before either branch.
@@ -869,19 +871,39 @@ def decide_and_record(conn, *, repo_url: str, item_kind: str, item_id: str, verd
     return result
 
 
-def create_and_record(conn, *, repo_url: str, entity_id: str, name: str, entity_type: str,
-                      aliases: list[str], role: str, actor: str, source: str) -> dict:
-    """A steward registering an entity nobody proposed — the console's `create` door. The birth
-    is confirmed by its creator (`approved_by` = the steward) and recorded in the ledger as an
-    approval of that identity, so "entities born" counts every door the same way."""
-    result = entities_remote.mint_via_clone(
-        repo_url, _KNOWLEDGE_BRANCH, os.environ, entity_id=entity_id, name=name,
-        entity_type=entity_type, aliases=aliases, role=role, today=date.today().isoformat(),
-        approved_by=actor)
-    record_decision(conn, item_kind=KIND_IDENTITY_PROPOSAL, item_id=result["entity_id"],
-                    verdict=APPROVE, actor=actor, source=source,
-                    extra={"commit": result["commit"], "created": True})
-    return result
+def commission_registration(conn, evidence, *, name: str, entity_type: str, aliases: list[str],
+                            about: str, actor: str, source: str) -> dict:
+    """A steward introducing an entity nobody proposed — the console's `create` door, ADR 042.
+
+    There is no deterministic birth: what the steward knows about the entity (`about`) is queued
+    as a capture carrying the registration, the librarian writes the entity's page from it and
+    from what the brain already holds, anchors the note to it, and the worker births the entity
+    CONFIRMED by `actor` and writes the ledger row after the push — so "entities born" counts this
+    door exactly like an approval, and nothing here touches git or the ledger. `source` names the
+    door for that row. Like `decide_and_record`, this carries no authorization of its own: the
+    console decides under its operator token before calling it.
+    """
+    clean_name = " ".join(str(name or "").split())
+    clean_about = str(about or "").strip()
+    if not clean_name or not clean_about:
+        raise ReviewError(
+            "registering an entity needs its name and what it is: the librarian writes the page "
+            "from what you say and from what the brain already holds, and a page with nothing said "
+            "about the entity is not written at all")
+    if entity_type not in ENTITY_TYPES:
+        raise ReviewError(f"entity_type {entity_type!r} is not one of {', '.join(ENTITY_TYPES)}")
+    if evidence is None:
+        raise ReviewError("the capture queue is not available on this server, so nothing can be "
+                          "registered — it needs an evidence store configured")
+    hints = capture_schema.registration_hints(name=clean_name, entity_type=entity_type,
+                                              aliases=aliases, source=source)
+    ack = queue.submit(conn, evidence, kind=capture_schema.RAW, material=clean_about, hints=hints,
+                       submitted_by=actor)
+    return {**ack, "entity_id": canonical_id_for(clean_name), "name": clean_name,
+            "message": (f"commissioned as capture #{ack['id']}: the librarian writes the page of "
+                        f"{clean_name} from what you said and what the brain already holds, anchors "
+                        f"the note to it, and the entity is born confirmed by {actor}. It appears in "
+                        f"Entities when the capture files.")}
 
 
 def review_decide(service, *, item_kind: str, item_id: str, verdict: str, source: str,

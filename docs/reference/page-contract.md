@@ -65,7 +65,8 @@ would anchor to it, and the `entity` filter would match half the corpus.
   ownerless content accumulates. Seven rows, one per WRITER — see
   [`librarian.md`](./librarian.md#three-types-the-fast-lane-may-create-seven-it-knows). An `entity`
   page is the one a capture's own commit can still contain, and never as a DRAFT: the agent declares
-  the identity, code writes the page unconfirmed, and the lifecycle fields below say so.
+  the identity, code writes the page — unconfirmed, or confirmed by the steward who registered that
+  entity through the capture — and the lifecycle fields below say which.
 - **An absent `entity` key at all** is a pre-contract page — filed, or extracted, before this
   field existed. Detectable (a linter pass can simply ask whether the key exists), and a one-time
   backfill cleared them from the knowledge repo. That is a claim about the CONTENT repo, which lives
@@ -149,7 +150,7 @@ A **scalar string**, with three readings and no fourth:
 | Value | Reading | Written by |
 |---|---|---|
 | `approved_by: ""` | **PROPOSED.** The librarian created this page from a capture that was about the thing, and no steward has confirmed the identity. The empty string IS the mark — silence would be indistinguishable from an old page | `librarian.identity.write_proposals`, and only ever this value |
-| `approved_by: ana@example.com` | **CONFIRMED**, by that person | a steward's decision: `entities.decide.approve_entity`, or `entities.mint.mint` for a `create` |
+| `approved_by: ana@example.com` | **CONFIRMED**, by that person | a steward's decision (`entities.decide.approve_entity` / `merge_entity`), or — at BIRTH — `librarian.identity.write_proposals` naming the steward who registered this entity through the capture the page was written from ([ADR 042](../decisions/042-an-entity-is-born-written.md)) |
 | the key is **absent** | confirmed before the field existed. Pages written under the older contract are never migrated, and read as confirmed | nothing — it is what an old page already says |
 
 Absent-means-confirmed is deliberate and is the only reading that is safe: a repository whose entity
@@ -163,7 +164,9 @@ be separated.
 Two vetoes hold the empty-string spelling. `gates.gate_identity` refuses a created entity page whose
 `approved_by` is absent or non-empty (`approved-on-arrival`) — an identity that arrived confirmed is
 an identity nobody confirmed — and the knowledge repo's own contract linter raises a `lifecycle`
-error for a non-string value.
+error for a non-string value. The registration road does not weaken that: for a page born confirmed
+the gate is told, per path, WHICH steward may appear there, and any other name is
+`not-confirmed-by-its-steward`. A confirmed birth is never a page the gate merely let through.
 
 ### `proposed_aliases:` — spellings waiting on a steward
 
@@ -184,6 +187,30 @@ they disagree — a page proposed while the registry registers it confirmed, or 
 list the registry does not carry — naming `stigmergy-entities regenerate` as the fix. The reason is
 not tidiness: the review inbox is built from the REGISTRY, so a drifted registry shows a steward
 proposals that do not exist and hides ones that do.
+
+### The body an entity page is born with
+
+An entity page's frontmatter is not the whole contract. The BODY is written at birth too, by the
+only writer there is (`librarian.identity` through `entities.birth.render_page`), and three rules
+hold it:
+
+- **It is never empty.** `render_page` REFUSES a page whose body has no **What / Who** paragraph —
+  *"would be born with nothing said about it"* — and the entity is not created at all. The rule
+  exists because a page that says nothing still resolves, still ranks and still answers nothing:
+  twelve of the first brain's nineteen entity pages were born carrying the template's own
+  `<One clear paragraph: …>` stubs, which is knowledge-shaped noise, not knowledge.
+- **A section with nothing in it is not written.** `Facts` and `Connections` may legitimately be
+  empty — a name met once establishes little — and when they are, the heading goes with the stub.
+  A page carrying `- <fact…>` reads as a page with a fact, and something has to find it later to
+  say it has none.
+- **The template's comments never reach a page.** `ops/templates/entity.md` carries HTML comments
+  for whoever edits the TEMPLATE; they are stripped from every page rendered from it. The template
+  keeps its notes; the page a person reads carries none.
+
+The body is not frozen at birth either. A later filing may APPEND lines to a registered entity's
+`## Facts` and `## Connections` (creating the section when the page has none) and move `updated:`
+to that day — appends only, byte-proven, and never a line the page already carries. See
+[librarian.md](./librarian.md#the-spine-accretes-what-a-filing-adds-to-an-entity-it-already-knows).
 
 ## How it is read
 
