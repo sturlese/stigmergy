@@ -127,7 +127,7 @@ _PENDING_ALLOWED = (REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",)
 #      know with a question to the submitter and answers it with a PROPOSAL: the agent declares the
 #      identity it read out of the material and `librarian.identity` creates the page, with
 #      `approved_by:` empty, in the same commit as the capture. Knowledge-repo commit
-#      `6bfc4a013ce7909e8f9bc571fe2d4d3809be1850`.
+#      `7feee011691388224f4dc0daf1644b9d90efae1c`.
 #
 # All THREE numbers moved together at that last commit, which is the first time that has happened
 # and the reason `PROVENANCE.json`'s `stigmergy_sha_note` no longer needs its "not the commit each
