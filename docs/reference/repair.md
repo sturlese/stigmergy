@@ -309,11 +309,13 @@ stigmergy-repair [--dsn DSN] [--repo PATH] [--json] show <id>
 - **`list`** — what waits on a steward, plus what was recently decided.
 - **`show <id>`** — what one proposal would change, rendered from the ops without touching git. For
   an `entity-body` proposal that is the drafted body in full: the draft is the whole of what a
-  steward judges, so a preview that summarised it would hide the only thing worth reading. For a
-  `delete` or an `entity-alias` proposal it is what each page BECOMES — which pages stop existing,
-  or which identity absorbs which and how many pages move with it — never the
-  planned bytes, which are the apply's contract with its own recomputation and not something a
-  person reads.
+  steward judges, so a preview that summarised it would hide the only thing worth reading. A
+  `delete` proposal shows which pages stop existing and, for each page it rewrites, the page it
+  would BECOME in full — for the same reason, since ADR 043 made those bytes a model's prose and a
+  person deciding a pending deletion is the only reader they get before they land. An
+  `entity-alias` proposal shows which identity absorbs which and how many pages move with it,
+  never its planned bytes: what a steward judges there is the merge, and four whole files would
+  bury it.
 **There is no `apply`, and there will not be one. There is no `delete` either, since ADR 043.** A
 terminal knows who is typing and not what they are allowed to approve, so neither verb can be
 authorized from one: applying goes through a door that decides, and a deletion — which a person

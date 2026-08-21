@@ -249,10 +249,11 @@ def test_a_delete_previews_as_the_pages_that_go_and_the_pages_that_change():
     assert "no longer refers" in lines[3]
 
 
-def test_a_delete_preview_never_renders_the_additive_shape_or_the_planned_bytes():
-    """Two defects at once. The additive shape would show a link that does not exist; the planned
-    bytes would put a whole page into a scan a steward reads to decide which row to open."""
+def test_a_delete_preview_shows_the_prose_a_steward_has_to_read_and_never_the_additive_shape():
+    """The additive shape would show a link that does not exist. The planned bytes DO belong here
+    since ADR 043: a scrub's body is a model's prose now, and a person deciding a pending deletion
+    is the only reader it gets before it lands — `entity-body`'s reason, one kind over."""
     lines = cli.preview({"kind": schema.KIND_DELETE, "ops": DELETE_OPS})
 
     assert not any("related: [[" in line for line in lines)
-    assert not any("# X" in line for line in lines)
+    assert "+   # X" in lines, "the page it would become, in full"

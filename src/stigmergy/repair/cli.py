@@ -151,10 +151,11 @@ def preview(row: dict) -> list[str]:
     AND the callout block `page.with_callout` appends. An `entity-body` op REPLACES the body below
     the page's own `# Title`, so its preview says so with a `-` line and then shows the draft in
     full — for that kind the draft IS what a steward is judging, and a preview that summarised it
-    would be hiding the only thing worth reading. A `delete` op's two shapes both say what STOPS
-    being true, and the scrub deliberately does NOT show its planned bytes: they are the apply's
-    contract with itself, not the thing a steward is judging, and a whole page per scrubbed page
-    would bury the one line that matters — which pages cease to exist. An `entity-alias` op's four
+    would be hiding the only thing worth reading. A `delete` op's two shapes say what STOPS being
+    true, and a SCRUB shows its planned body in full, for `entity-body`'s reason: since ADR 043
+    those bytes are a MODEL's prose, and a person deciding a pending deletion is the only reader
+    they get before they land. Only the pending road reaches this — a person's own deletion is an
+    act, and its reading is the diff the door hands back. An `entity-alias` op's four
     shapes say what each page BECOMES, and they hide their planned bytes for the deletion's reason:
     what a steward is judging is which identity absorbs which, and four whole files would bury it.
     """
@@ -168,6 +169,9 @@ def preview(row: dict) -> list[str]:
         lines.append(f"--- {path}")
         if kind == schema.KIND_ENTITY_BODY:
             lines += _body_preview(op)
+            continue
+        if kind == schema.SCRUB_OP_NAME:
+            lines += _scrub_preview(op)
             continue
         if kind in _DELETE_PHRASES:
             lines.append(f"-   {_DELETE_PHRASES[kind]}")
@@ -198,7 +202,7 @@ _DELETE_PHRASES = {
     schema.DELETE_OP_NAME: "(the whole page is removed)",
     schema.SCRUB_OP_NAME: (
         "(rewritten so it no longer refers to the removed page(s); the frontmatter loses the "
-        "entries that named them, the body is written by a model)"),
+        "entries that named them, the body is written by a model — shown in full below)"),
 }
 
 # What each of the `entity-alias` kind's four ops does to one file, in the words a steward needs.
@@ -213,6 +217,15 @@ _MERGE_PHRASES = {
     schema.REGISTRY_OP_NAME: ("(regenerated from the entity pages by `stigmergy-entities "
                               "regenerate`)"),
 }
+
+
+def _scrub_preview(op: dict) -> list[str]:
+    """One page a sweep rewrites, as the page it would become. The whole file rather than the body
+    alone, because a scrub changes the frontmatter too — and unrendered, since what lands in the
+    repo is these bytes."""
+    lines = [f"-   {_DELETE_PHRASES[schema.SCRUB_OP_NAME]}"]
+    return lines + [f"+   {line}"
+                    for line in sanitize(str(op.get("planned_after") or "")).splitlines()]
 
 
 def _body_preview(op: dict) -> list[str]:
