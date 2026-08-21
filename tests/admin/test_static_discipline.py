@@ -457,3 +457,53 @@ def test_each_detail_route_parses_its_own_id_and_the_entity_route_keeps_the_slug
     assert dict(routes) == {"captures": "Number", "entities": "decodeURIComponent", "repairs": "Number"}, routes
     assert "Number(match[1])" not in app
     assert "d.id(match[1])" in app
+
+
+def _exports_of(path):
+    text = path.read_text(encoding="utf-8")
+    functions = re.findall(r"^export (?:async )?function (\w+)", text, re.M)
+    constants = re.findall(r"^export const (\w+)", text, re.M)
+    return set(functions) | set(constants)
+
+
+def _imported_from(view_text, module):
+    names = set()
+    pattern = r"import \{([^}]*)\} from \"\.\./(?:views/)?" + re.escape(module) + r"\";"
+    for block in re.findall(pattern, view_text, re.S):
+        for part in block.split(","):
+            part = part.strip()
+            if part:
+                names.add(part.split(" as ")[-1].strip())
+    for block in re.findall(r"import \{([^}]*)\} from \"\./" + re.escape(module) + r"\";", view_text, re.S):
+        for part in block.split(","):
+            part = part.strip()
+            if part:
+                names.add(part.split(" as ")[-1].strip())
+    return names
+
+
+def test_every_helper_a_view_calls_is_imported_by_that_view():
+    """The views are ES modules, so a helper called without an import is not a build error — it is
+    a `ReferenceError` at the moment that code path first runs, in the browser, for the steward who
+    clicked. The Captures detail page did exactly that on staging (`keyDot is not defined`): a list
+    that rendered fine, a detail that could not. No Python test can execute the views, so this
+    reads them: every `ui.js`, `charts.js` and `common.js` export a view calls by name must appear
+    in that view's import of that module."""
+    modules = {"ui.js": STATIC / "assets" / "ui.js", "charts.js": STATIC / "assets" / "charts.js",
+               "common.js": STATIC / "assets" / "views" / "common.js"}
+    offenders = []
+    for view in sorted((STATIC / "assets" / "views").glob("*.js")):
+        text = view.read_text(encoding="utf-8")
+        body = re.sub(r"^import [^;]*;", "", text, flags=re.M | re.S)
+        for module, path in modules.items():
+            if view == path:
+                continue
+            imported = _imported_from(text, module)
+            for name in _exports_of(path):
+                defined_here = re.search(
+                    rf"^(?:export )?(?:async )?function {name}\b|^(?:const|let) {name}\b", body, re.M)
+                if defined_here:
+                    continue
+                if re.search(rf"(?<![\w.$]){name}\(", body) and name not in imported:
+                    offenders.append(f"{view.name}: calls {name}() from {module} without importing it")
+    assert not offenders, "\n  ".join(["a view calls a helper it never imported:"] + offenders)
