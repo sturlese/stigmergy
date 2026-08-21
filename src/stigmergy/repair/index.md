@@ -18,8 +18,7 @@ console), or code derives it for exact-duplicate `sources/` pages, where the dec
 rather than a judgment (ADR 039's second amendment). And **a person's own deletion is decided by
 the call that asked for it** — the steward guard runs in the act, the row is born `approved` and
 applied in the same pass, and the diff goes back to them, because the reading of a written sweep
-moves after the push (ADR 043). Its pages are WRITTEN: `deletion` owns the frontmatter and the
-bounds, `sweep` owns the bodies. `entity-alias` is the one
+moves after the push (ADR 043). Its pages are WRITTEN: `deletion` owns the frontmatter, the bounds, and the machine zones whole — a view is regenerated and a source page is provenance, so both are unlinked deterministically rather than argued with; `sweep` owns the bodies of the pages a person wrote (`written_paths`). `entity-alias` is the one
 kind that answers a finding about a PAIR: two registry entries that are the same entity, where the
 model picks which name SURVIVES and says why, and code computes everything that follows — the
 spellings that move, the pages that re-anchor, the supersession, the regenerated registry (ADR

@@ -183,6 +183,12 @@ def test_the_knowledge_repo_carries_the_skill_where_the_code_looks_for_it():
     # admits a page cut down to its title) and the external-link rule (a bound that REFUSES must
     # not fire on a link the writer has no business touching).
     "Never cut a page down", "An external link is not a reference",
+    # The clause the FIRST real deletion on the deployment died on: the brief's "Never" list bans
+    # naming a path outside the three fast-lane folders, the sweep hands over whatever refers to
+    # the removed page — entity pages included — and the model returned nothing at all, correctly
+    # following its own procedure. The exemption is now stated on both roads, and this row is what
+    # keeps it stated.
+    "does not apply here",
 ])
 def test_the_skill_still_covers_every_clause_the_frame_assumes(phrase):
     """A contract TABLE rather than one "the file is long enough" check, because each row is a
