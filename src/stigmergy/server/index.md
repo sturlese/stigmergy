@@ -91,9 +91,9 @@ lives in `capture.decisions`, below both packages, and this package only re-expo
   budgets are per-identity across the process. No DB helper holds a cursor across an `await`,
   and no sync tool body may perform blocking network or subprocess I/O.
 - `submitted_by`, `verification`, `acl` and `content_hash` are declared on `brain_submit` ONLY to
-  be refused (FastMCP drops undeclared fields silently); `brain_submit` is pinned to
-  `MCP_SUBMIT_KINDS`, never `capture_schema.KINDS`; the trusted provenance hints are
-  door-gated (`SLACK_DOOR`).
+  be refused (FastMCP drops undeclared fields silently); `brain_submit` accepts every one of
+  `capture_schema.KINDS` — one vocabulary for every door, with each kind's required hints enforced
+  at the enqueue seam — while the trusted provenance hints stay door-gated (`SLACK_DOOR`).
 - `review_decide` touches git for EVERY verdict on a proposal kind and for a repair `approve`;
   a repair `reject` is the one Postgres-only verdict left. `brain_delete` touches it too, and it is
   the one tool that decides and writes in the same call — because the person calling it is the

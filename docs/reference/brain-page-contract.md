@@ -15,8 +15,8 @@ every field below as "what this page means," not "what gets written next."
 
 **What actually writes a `sources/` page today** is one function,
 `librarian.processing._build_source_parts`, called from three places: the meeting flow's transcript
-(`sources/meetings/`), the fast lane's attached Slack thread (`sources/slack/`) and the Drive door's
-fetched document (`sources/drive/` — [ADR 028](../decisions/028-drive-door.md), `stigmergy-drive`).
+(`sources/meetings/`), the fast lane's attached Slack thread (`sources/slack/`) and a document
+submitted as text (`sources/documents/` — [ADR 044](../decisions/044-the-capture-is-the-approval.md) D4).
 It drafts `type`, `title`, `source_kind`, `url`, `tags`, `related`, `sources`, and
 `page.stamp_source_fields` then overwrites `status`, `as_of`, `submitted_by`, `content_hash`,
 `extracted_at`, `tier` and `id` on top of whatever the draft said. That fourteen-field shape is the
@@ -98,8 +98,8 @@ And what a `sources/` page written **today** looks like — every field either d
 ---
 type: source
 title: "Q1 board call — transcript"
-source_kind: meeting                 # or `slack`, or `google-drive`
-url: ""                              # the thread permalink / Drive URL; "" when the door sent none
+source_kind: meeting                 # or `slack`, or `upload` for a submitted document
+url: ""                              # the thread permalink / the `source_url` hint; "" when none came
 tags: [source, meeting-transcript]
 related: []
 sources: []
@@ -130,7 +130,7 @@ the field — no writer produces one now.
 | `extraction_quality: manual_review` | page carries a warning banner; extraction was lossy — offer to open the original |
 | ~~`verification: failed` / `partial`~~ | **HISTORICAL.** Produced by nothing and read by nothing — not indexed, not filterable, not a ranking factor. A value on an old page describes the extraction run that wrote it, nothing about the page today. |
 | ~~`unverified_numbers` / `unanchored_numbers`~~ | **HISTORICAL**, same layer, same status. |
-| `extraction_method: vision` | body came from OCR (`ocr_model` says which); trust accordingly. Nothing sets it today: the Drive door's own vision fallback (`processing._with_vision_fallback`, code-decided, once per document) records the escalation in the operator's log and on no page field, so an OCR'd document and a text-layer one are indistinguishable to a reader |
+| `extraction_method: vision` | body came from OCR (`ocr_model` says which); trust accordingly. Nothing sets it today, and nothing extracts anything either: a document reaches the brain as text its CLIENT already extracted, so how it was read is a fact only the submitter has |
 | `mentions` | names the page refers to without anchoring to them. Still read: `index.corpus` folds them into the page's searchable text, so a mentioned name finds the page. Nothing writes them any more |
 | `as_of` | when the CONTENT is valid (`YYYY[-MM]` or `YYYY-QN`), only as precise as the source proves — rank current truth with it |
 | `superseded_by` | a newer version of this document exists — demote for "current" questions; keep for history/"as of" questions |
@@ -177,9 +177,9 @@ and the librarian imports them rather than re-declaring them, because a splitter
 linter that judges its output must agree or the split is pointless — the two literals had already
 been found drifting as independent copies. `librarian.processing._build_source_parts` is the live
 splitter: it writes the meeting flow's `sources/meetings/` transcript, the fast lane's attached
-`sources/slack/` thread and the Drive door's `sources/drive/` document as N ≥ 1 cross-linked parts
-under exactly this contract, preferring a blank-line boundary up to 30 lines back and never
-breaking inside a fenced code block.
+`sources/slack/` thread and a submitted document's `sources/documents/` text as N ≥ 1
+cross-linked parts under exactly this contract, preferring a blank-line boundary up to 30 lines
+back and never breaking inside a fenced code block.
 
 On a source page the FILENAME stem carries the `-p<n>` suffix, because a wikilink target must be a
 filename — but the part identity is **declared, not inferred from it**: the splitter computes
@@ -219,5 +219,5 @@ member pages' audiences: a rollup never widens access. They carry no
   `canonical` is not a value on the axis at all: it is a name the fast lane recognises only in order
   to refuse it (`declare-canonical` is one of the three injection categories the librarian records).
 - `source_kind` honors the contract enum — `google-drive`, `slack`, `meeting`, `github`, `upload`,
-  `distilled`. The three live writers emit `meeting`, `slack` and `google-drive`; the rest belong to
+  `distilled`. The three live writers emit `meeting`, `slack` and `upload`; the rest belong to
   pages already in the corpus.

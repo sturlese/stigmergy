@@ -94,7 +94,7 @@ decided in [ADR 022](../decisions/022-entity-navigation.md).
 
 | Tool | What it does |
 |---|---|
-| `brain_submit(kind, material, hints?)` | queue a capture (`kind`: `raw` or `page`), archived to the evidence plane and attributed by the SERVER. Returns an ack with the submission id; it promises **queued and attributed**, never "saved to the brain" — nothing is in the brain until the librarian files it. Beside the ack it returns `entities`: the registered entities this material already names, `{id, name, proposed}` each, so the submitter sees at once which identities the brain recognises and which are still unconfirmed |
+| `brain_submit(kind, material, hints?)` | queue a capture — `kind` is `raw`, `page`, `meeting` (the transcript, with `title` and `meeting_date` in `hints`, optionally `attendees`) or `document` (the document's text, with `title` in `hints` and optionally `source_url`), capped at 256 KB of material for `raw`/`page` and 1 MB for `meeting`/`document` — archived to the evidence plane and attributed by the SERVER. Returns an ack with the submission id; it promises **queued and attributed**, never "saved to the brain" — nothing is in the brain until the librarian files it. Beside the ack it returns `entities`: the registered entities this material already names, `{id, name, proposed}` each, so the submitter sees at once which identities the brain recognises and which are still unconfirmed |
 | `brain_submissions(limit?, status?)` | the caller's own submissions with state, timestamps, `result_ref` and the librarian's `report`; an unrestricted (steward) identity sees the whole queue with `mine` marking its own rows. Echoed capture text is fenced as `UNTRUSTED-DATA` |
 | `brain_delete(paths, why)` | remove pages and rewrite every page that referred to them, decided and applied in THIS call — stewards only, at the scope of every page it touches (the pages that go and the pages that refer to them, computed from a fresh clone). Code drops the frontmatter entries that named a removed page; a model writes those pages' bodies, so a sentence that cited one still reads and a callout that only existed because of one is gone. One App-authored commit with the caller in an `Approved-by:` trailer, and the response carries the per-page DIFF — nobody read that prose before it landed, so this is the reading ([ADR 043](../decisions/043-a-sweep-is-written.md)). Refuses whole: an entity page, a path outside the corpus, more than ten pages, a reason matching a secret, a body the writer could not reconcile in one retry |
 
@@ -119,9 +119,10 @@ argument model with pydantic's `extra="ignore"`, so an undeclared field is dropp
 SDK, and declaring them is what turns passing one into an **explicit error** with no row and no
 blob created. Fields NOT on that signature are still structurally safe (nothing anywhere reads
 client input into a server-computed column) but are dropped rather than refused — a residual
-[capture.md](./capture.md) records rather than papers over. `kind` is restricted here to
-`raw`/`page` (`capture_schema.MCP_SUBMIT_KINDS`) and NOT to the queue's full `KINDS`: growing that
-tuple for an operator CLI must never silently widen what a model-chosen MCP argument may be.
+[capture.md](./capture.md) records rather than papers over. `kind` is the queue's own
+`capture_schema.KINDS`, all four of them: every door speaks one vocabulary, and the per-kind hint
+requirements are validated at the enqueue seam every caller crosses rather than here
+([ADR 044](../decisions/044-the-capture-is-the-approval.md) D4).
 `brain_submit`'s audit row records the material's size and hash, never its text. Full mechanism, the
 queue's state machine and the evidence key scheme: [capture.md](./capture.md), decided in
 [ADR 014](../decisions/014-capture-queue-and-attribution.md) and
@@ -456,8 +457,9 @@ bound in particular keeps a deeply-nested `filters`/`hints` value from raising `
 inside the audit path and clobbering the caller's real result (`_audit_args` wraps the shaping so
 no failure there can ever surface through the served call).
 
-**Request-body cap** (`transport_http.py::MAX_REQUEST_BODY_BYTES`): 1 MiB — 4× the 256 KB
-material cap plus JSON-RPC envelope. A declared `content-length` above it is refused with a
+**Request-body cap** (`transport_http.py::MAX_REQUEST_BODY_BYTES`): derived, 4× the LARGEST
+per-kind material cap plus 64 KiB of JSON-RPC envelope room, so a transcript at its own cap fits
+however its JSON escaping inflates it. A declared `content-length` above it is refused with a
 generic `413` **before any of the body is read**; a chunked body with no declared length is cut
 off at the same bound as it streams. Nothing below this middleware bounds a body — the MCP SDK
 calls `await request.body()` with no limit and uvicorn imposes none — so without it the material

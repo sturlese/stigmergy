@@ -80,11 +80,8 @@ WORKDIR /app
 # `git` is the worker's substrate, not a convenience: it clones the knowledge repo, adds a
 # throwaway worktree per capture, commits and pushes. `ca-certificates` for the https remote.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git poppler-utils \
+ && apt-get install -y --no-install-recommends ca-certificates git \
  && rm -rf /var/lib/apt/lists/*
-# `poppler-utils` is the drive flow's document hand (ADR 028 D4), run AT THE WORKER over the
-# evidence blob: `pdftotext` extracts the text layer, and `pdftoppm`/`pdfinfo` from the same
-# package rasterize pages for a provider-prefixed vision OCR (`kernel/converters.py`).
 
 COPY --from=toolchain /usr/local/bin/gitleaks /usr/local/bin/gitleaks
 

@@ -51,26 +51,18 @@ def test_durable_tables_names_exactly_the_four_the_index_rebuild_must_not_take()
     assert schema.DURABLE_TABLES == ("capture_queue", "audit_log", "job_runs", "ingest_errors")
 
 
-def test_kinds_are_raw_page_meeting_and_drive():
-    """`"meeting"` and `"drive"` (ADR 028) name the shape of the material and the flow that reads
-    it, per `schema.KINDS`'s own docstring, never a topic. A contract change here is tracked
-    rather than silent: each drop CLI is the only writer of its kind."""
-    assert schema.KINDS == ("raw", "page", "meeting", "drive")
+def test_kinds_are_the_one_vocabulary_every_door_shares():
+    """`KINDS` names the SHAPE of the material — never a topic — and it is the ONE list: there is
+    no narrower `brain_submit` list and no operator door with a kind of its own (ADR 044 D4). A
+    contract change here is tracked rather than silent."""
+    assert schema.KINDS == ("raw", "page", "meeting", "document")
     assert schema.MEETING == "meeting"
-    assert schema.DRIVE == "drive"
+    assert schema.DOCUMENT == "document"
+    assert not hasattr(schema, "MCP_SUBMIT_KINDS")
 
 
-def test_mcp_submit_kinds_excludes_meeting_and_drive():
-    """`brain_submit` (`kind` a MODEL-CHOSEN MCP argument) must not accept every value `KINDS`
-    grows to include — `"meeting"` and `"drive"` are the drop CLIs' own kinds, and each CLI is
-    "the only door" onto its flow."""
-    assert schema.MCP_SUBMIT_KINDS == ("raw", "page")
-    assert schema.MEETING not in schema.MCP_SUBMIT_KINDS
-    assert schema.DRIVE not in schema.MCP_SUBMIT_KINDS
-
-
-# ── kind=="meeting" is validated at the ENQUEUE SEAM, not only inside the drop CLI's own early
-# copy — every caller of `queue.submit` passes through `prepare_submission` ─────────────────────
+# ── kind=="meeting" is validated at the ENQUEUE SEAM — every caller of `queue.submit` passes
+# through `prepare_submission`, whichever door it came from ─────────────────────────────────────
 def test_prepare_submission_refuses_a_meeting_with_no_title_hint():
     with pytest.raises(SubmissionRejected, match="title"):
         schema.prepare_submission(schema.MEETING, "a transcript",
@@ -107,34 +99,32 @@ def test_prepare_submission_does_not_require_meeting_hints_for_other_kinds():
     assert submission.kind == "raw"
 
 
-# ── ADR 028: kind=="drive" is validated at the SAME enqueue seam, day one ───────────────────────
-def test_prepare_submission_refuses_a_drive_row_with_no_file_id_hint():
-    with pytest.raises(SubmissionRejected, match="drive_file_id"):
-        schema.prepare_submission(schema.DRIVE, "a manifest", {"drive_name": "deck.pdf"})
+# ── kind=="document" is validated at the SAME enqueue seam (ADR 044 D4) ─────────────────────────
+def test_prepare_submission_refuses_a_document_with_no_title_hint():
+    """The title is the source page's identity; without it there is nothing to file the part as."""
+    with pytest.raises(SubmissionRejected, match="title"):
+        schema.prepare_submission(schema.DOCUMENT, "the document's text", {})
 
 
-def test_prepare_submission_refuses_a_drive_row_with_no_name_hint():
-    """`drive_name` carries the extension conversion dispatches on — absent, it would not fail
-    closed (the `text` fallback would file a PDF's raw bytes as prose), so it is required here."""
-    with pytest.raises(SubmissionRejected, match="drive_name"):
-        schema.prepare_submission(schema.DRIVE, "a manifest", {"drive_file_id": "X"})
+def test_prepare_submission_refuses_a_document_source_url_that_is_not_a_url():
+    """`source_url` lands as `url:` on a reader-facing source page, so a bare filename, a sentence
+    or a value carrying a second line is refused — the shape discipline `meeting_date` gets."""
+    for bad in ("notes.pdf", "see the shared drive", "https://x.example/a\nfoo: bar"):
+        with pytest.raises(SubmissionRejected, match="source_url"):
+            schema.prepare_submission(schema.DOCUMENT, "text",
+                                      {"title": "Deck", "source_url": bad})
 
 
-def test_prepare_submission_accepts_a_well_formed_drive_row():
-    submission = schema.prepare_submission(schema.DRIVE, "a manifest",
-                                           {"drive_file_id": "X", "drive_name": "deck.pdf"})
-    assert submission.kind == schema.DRIVE
-
-
-def test_reject_drive_provenance_hints_refuses_the_trusted_pair_and_only_it():
-    """The trusted-subset pattern, third application (ADR 028 D7): the two keys a downstream
-    reader trusts are refused loudly; the three plain-metadata drive hints stay ordinary
-    suggestions."""
-    with pytest.raises(SubmissionRejected, match="drive_file_id, drive_url"):
-        schema.reject_drive_provenance_hints({"drive_file_id": "X", "drive_url": "https://x"})
-    schema.reject_drive_provenance_hints({"drive_mime": "application/pdf",
-                                          "drive_modified": "2026-08-01", "drive_name": "a.pdf"})
-    schema.reject_drive_provenance_hints(None)
+def test_prepare_submission_accepts_a_document_with_and_without_a_source_url():
+    """The benign twin: a titled document files with a URL or with none — provenance is the
+    submitter's claim, and claiming none is allowed."""
+    with_url = schema.prepare_submission(
+        schema.DOCUMENT, "text",
+        {"title": "Deck", "source_url": "https://drive.google.com/file/d/X/view"})
+    assert with_url.kind == schema.DOCUMENT
+    assert with_url.hints["client"]["source_url"] == "https://drive.google.com/file/d/X/view"
+    without = schema.prepare_submission(schema.DOCUMENT, "text", {"title": "Deck"})
+    assert "source_url" not in without.hints["client"]
 
 
 def test_hint_keys_are_the_four_allowlisted_names():
@@ -440,16 +430,32 @@ def test_prepare_submission_rejects_non_string_material():
         schema.prepare_submission("raw", None)   # type: ignore[arg-type]
 
 
-def test_prepare_submission_rejects_material_over_the_byte_cap():
-    huge = "x" * (schema.MAX_MATERIAL_BYTES + 1)
-    with pytest.raises(SubmissionRejected, match="too large"):
+def test_prepare_submission_rejects_material_over_the_kinds_byte_cap():
+    huge = "x" * (schema.max_material_bytes("raw") + 1)
+    with pytest.raises(SubmissionRejected, match="too large for a raw"):
         schema.prepare_submission("raw", huge)
 
 
+def test_the_cap_is_per_kind_a_transcript_may_be_four_times_a_note():
+    """A 256 KB-and-one paste is refused as a `raw`; the same bytes are a modest `meeting` or
+    `document` (ADR 044 D4) — the refusal names the kind it bounds, and the largest cap is what
+    a transport's body limit has to fit."""
+    text = "x" * (256 * 1024 + 1)
+    with pytest.raises(SubmissionRejected, match="too large for a raw"):
+        schema.prepare_submission("raw", text)
+    meeting = schema.prepare_submission(schema.MEETING, text,
+                                        {"title": "Q3", "meeting_date": "2026-07-29"})
+    assert meeting.size == len(text)
+    document = schema.prepare_submission(schema.DOCUMENT, text, {"title": "Deck"})
+    assert document.size == len(text)
+    assert schema.MAX_MATERIAL_BYTES == max(schema.MATERIAL_CAP_BYTES.values()) == 1024 * 1024
+    assert schema.max_material_bytes("no-such-kind") == schema.MAX_MATERIAL_BYTES
+
+
 def test_prepare_submission_accepts_material_at_exactly_the_byte_cap():
-    exact = "x" * schema.MAX_MATERIAL_BYTES
+    exact = "x" * schema.max_material_bytes("raw")
     submission = schema.prepare_submission("raw", exact)
-    assert submission.size == schema.MAX_MATERIAL_BYTES
+    assert submission.size == schema.max_material_bytes("raw")
 
 
 def test_prepare_submission_builds_the_expected_payload_and_digest():

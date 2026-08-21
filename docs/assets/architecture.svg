@@ -44,7 +44,7 @@
 
   <rect class="human" x="24" y="150" width="132" height="52" rx="10"/>
   <text x="90" y="172" class="title">operator CLIs</text>
-  <text x="90" y="189" class="tagH">meeting · Drive</text>
+  <text x="90" y="189" class="tagH">queue · entities</text>
 
   <rect class="human" x="24" y="218" width="132" height="52" rx="10"/>
   <text x="90" y="240" class="title">MCP client</text>

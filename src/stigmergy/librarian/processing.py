@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import re
-import tempfile
 from dataclasses import dataclass, field
 
 from stigmergy import review_kinds
@@ -23,7 +22,6 @@ from stigmergy.capture import decisions, queue, schema
 from stigmergy.capture.errors import CaptureError
 
 # `MAX_BODY_LINES`/`SPLIT_CHUNK_LINES` are IMPORTED: the linter and the splitter must agree.
-from stigmergy.kernel import converters
 from stigmergy.kernel.normalize import slugify
 from stigmergy.kernel.page import MAX_BODY_LINES, SPLIT_CHUNK_LINES
 from stigmergy.librarian import (
@@ -37,7 +35,6 @@ from stigmergy.librarian import (
     gather,
     gitcmd,
     identity,
-    pricing,
     report,
 )
 from stigmergy.librarian import agent as agent_module
@@ -46,7 +43,6 @@ from stigmergy.librarian.errors import (
     AgentError,
     GitError,
     LeaseLostError,
-    LibrarianConfigError,
     LibrarianError,
     OutcomeShapeError,
     StaleBaseError,
@@ -80,22 +76,15 @@ class Result:
 @dataclass
 class AgentPasses:
     """Agent passes STARTED and their summed cost — mutable and shared on purpose: `process_item`
-    stamps both onto any `LibrarianError` on the way out. `conversion_cost_usd` is the DRIVE
-    road's pre-agent model spend — the vision OCR pass (issue #110) — carried here so every exit
-    (filed, refused, fault) bills it exactly once."""
+    stamps both onto any `LibrarianError` on the way out."""
     count: int = 0
     cost_usd: float = 0.0
-    conversion_cost_usd: float = 0.0
 
 
 def _stamp_cost(result: "Result", passes: "AgentPasses") -> "Result":
-    """`0.0` is a real answer: a park re-file or a pre-agent refusal spent nothing.
-    `cost_usd` is the item's WHOLE model spend; when conversion paid a vision pass, its share is
-    also named on its own key, so an operator can tell an expensive OCR from an expensive
-    filing."""
-    result.report["cost_usd"] = round(passes.cost_usd + passes.conversion_cost_usd, 6)
-    if passes.conversion_cost_usd:
-        result.report["conversion_cost_usd"] = round(passes.conversion_cost_usd, 6)
+    """`0.0` is a real answer: a park re-file or a pre-agent refusal spent nothing. `cost_usd` is
+    the item's WHOLE model spend."""
+    result.report["cost_usd"] = round(passes.cost_usd, 6)
     return result
 
 
@@ -308,11 +297,9 @@ def _resolve_filing_base(item: dict, deps: Deps, *, log_noun: str, stale_tail: s
                                      acl_config=base_inputs.load_acl(deps.repo, base))
 
 
-def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None,
-                 conversion_cost_usd: float = 0.0) -> Result:
+def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None) -> Result:
     """Take one claimed queue row to a terminal state. Never raises for an ordinary refusal —
-    every outcome is a `Result`; only an unexpected error propagates. `conversion_cost_usd` is
-    the drive road's pre-agent vision spend, billed on every exit through `_stamp_cost`."""
+    every outcome is a `Result`; only an unexpected error propagates."""
     material, early = _pre_agent(conn, item, deps, material=material)
     if early is not None:
         return early
@@ -320,7 +307,7 @@ def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None,
 
     base, deps = _resolve_filing_base(item, deps, log_noun="submission",
                                       stale_tail=_STALE_BASE_TAIL_ORDINARY)
-    passes = AgentPasses(conversion_cost_usd=conversion_cost_usd)
+    passes = AgentPasses()
     # The contract linter is materialized from THIS item's base commit, not the operator's disk.
     with base_inputs.linter_at(deps.repo, base) as linter_path, \
             gitcmd.ephemeral_worktree(deps.repo, base.sha, settings.worktree_root) as worktree:
@@ -328,10 +315,8 @@ def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None,
             return _run_in_worktree(conn, item, deps, material, worktree, passes,
                                     linter_path=linter_path)
         except LibrarianError as ex:
-            # Annotate, then re-raise unchanged: the worker owns the `failed` decision. The
-            # conversion spend rides along — a fault after a paid OCR still paid for the OCR.
-            ex.at_agent_attempt(passes.count,
-                                cost_usd=passes.cost_usd + passes.conversion_cost_usd)
+            # Annotate, then re-raise unchanged: the worker owns the `failed` decision.
+            ex.at_agent_attempt(passes.count, cost_usd=passes.cost_usd)
             raise
 
 
@@ -961,7 +946,7 @@ PROCESSING_ERRORS = (AgentError, GitError, WorktreeError, LeaseLostError, Captur
 # capture leaves none. With the parameter OFF the fast lane builds the ctx it always would.
 
 SLACK_SOURCE_PREFIX = "sources/slack/"
-DRIVE_SOURCE_PREFIX = "sources/drive/"
+DOCUMENT_SOURCE_PREFIX = "sources/documents/"
 
 
 @dataclass(frozen=True)
@@ -978,15 +963,17 @@ class SourceAttachment:
 
 
 def _source_attachment(item: dict) -> "SourceAttachment | None":
-    """The parameter's ON/OFF switch, decided per item from facts a DOOR asserted server-side;
-    `None` for every ordinary capture. Two ON positions: the Slack door (the `source_client` hint)
-    and the drive flow (the row's own `kind`, unreachable through `brain_submit`).
+    """The parameter's ON/OFF switch, decided per item from the row's own `kind` or from a fact
+    a DOOR asserted server-side; `None` for every ordinary capture. Two ON positions: a
+    `document` (the kind says the material has documentary existence of its own; `source_url` is
+    the submitter's claim of where, attributed like the material — ADR 044 D4) and the Slack door
+    (the `source_client` hint, which only that transport may assert).
     """
     client = (item.get("hints") or {}).get("client") or {}
-    if item.get("kind") == schema.DRIVE:
-        return SourceAttachment(prefix=DRIVE_SOURCE_PREFIX, source_kind="google-drive",
-                                tags=("source", "drive-document"),
-                                url=str(client.get("drive_url") or ""), suffix="document")
+    if item.get("kind") == schema.DOCUMENT:
+        return SourceAttachment(prefix=DOCUMENT_SOURCE_PREFIX, source_kind="upload",
+                                tags=("source", "document"),
+                                url=str(client.get("source_url") or ""), suffix="document")
     if client.get("source_client") != schema.SLACK_DOOR:
         return None
     return SourceAttachment(prefix=SLACK_SOURCE_PREFIX, source_kind="slack",
@@ -1050,148 +1037,6 @@ def _stamp_attached_sources(ctx: gates.GateContext, deps: Deps, item: dict,
         _stamp_one_source(ctx, path, submitted_by=item["submitted_by"], as_of=deps.as_of(),
                           digest=digest, extracted_at=extracted_at,
                           page_id=str(ids_by_path.get(path) or ""))
-
-
-# The drive flow: conversion at the worker, then the fast lane with the attachment ON. The
-# drive-specific code is the bytes→text step below plus the `_source_attachment` drive branch. A
-# conversion fault is a NAMED stage (`conversion`), never a submitter-blaming report.
-
-# A text-layer PDF yields well over this per page; a scanned one almost nothing. The form-feed
-# count is pdftotext's own page marker, so the heuristic needs no second parse.
-DRIVE_VISION_MIN_CHARS_PER_PAGE = 200
-# Below this many characters TOTAL the extraction is unusable: refuse rather than run an agent
-# pass over empty text.
-DRIVE_MIN_TEXT_CHARS = 50
-
-
-class _ConversionRefused(Exception):
-    """A drive conversion that cannot proceed. `str(self)` is the WIRE sentence and reaches the
-    submitter — no paths, no `str(exception)`; `log_detail` is the operator's."""
-
-    def __init__(self, wire: str, log_detail: str = ""):
-        super().__init__(wire)
-        self.log_detail = log_detail or wire
-
-
-def process_drive_item(conn, item: dict, deps: Deps) -> Result:
-    """`process_item`'s sibling for `kind == "drive"`: convert first, then delegate to the SAME
-    fast-lane path over the extracted text. Never raises for a refusal."""
-    try:
-        material, conversion_cost = _drive_material(deps, item)
-    except _ConversionRefused as ex:
-        log.error("item %s: drive conversion refused — %s", item.get("id"), ex.log_detail)
-        return failure_result(item, "conversion", str(ex))
-    return process_item(conn, item, deps, material=material,
-                        conversion_cost_usd=conversion_cost)
-
-
-def _drive_material(deps: Deps, item: dict) -> tuple[str, float]:
-    """The extracted text of a drive capture's original bytes — `blob_refs[1]`; `blob_refs[0]` is
-    the manifest — plus what extracting it COST: the deterministic converters spend nothing, the
-    vision fallback is a model pass and its dollars must reach the item's `cost_usd` (issue
-    #110). Deterministic converters first, vision as the bounded fallback."""
-    refs = item.get("blob_refs") or []
-    if len(refs) < 2:
-        raise _ConversionRefused(
-            "this drive capture carries no original-bytes blob — it was not enqueued by "
-            "stigmergy-drive; re-drop the file with the CLI")
-    client = (item.get("hints") or {}).get("client") or {}
-    name = str(client.get("drive_name") or "document")
-    ext = os.path.splitext(name)[1].lower()
-    method = converters.method_for_ext(ext)
-    data = deps.evidence.get(refs[1])
-
-    with tempfile.TemporaryDirectory(prefix="stigmergy-drive-conv-") as tmp:
-        path = os.path.join(tmp, "doc" + ext)
-        with open(path, "wb") as f:
-            f.write(data)
-        try:
-            text = converters.extract(path, method)["text"]
-        except Exception as ex:  # noqa: BLE001 — every converter failure becomes one named stage
-            raise _ConversionRefused(
-                f"the {method} converter could not extract text from {name!r} — the file may be "
-                f"corrupt or not what its extension claims; the operator's log has the detail",
-                log_detail=f"{ex.__class__.__name__}: {ex}") from ex
-        text, conversion_cost = _with_vision_fallback(path, method, text, name)
-
-    if not text.strip():
-        raise _ConversionRefused(
-            f"no text could be extracted from {name!r} — the document appears to carry none")
-    n_bytes = len(text.encode("utf-8"))
-    if n_bytes > schema.MAX_MATERIAL_BYTES:
-        raise _ConversionRefused(
-            f"the extracted text of {name!r} is {n_bytes:,} bytes, over the material cap of "
-            f"{schema.MAX_MATERIAL_BYTES:,} — the brain files documents, not databases; split "
-            f"the document and re-drop the part worth keeping")
-    return text, conversion_cost
-
-
-def _vision_spend(ocr: dict) -> float:
-    """One OCR pass's dollars, priced by the CONFIGURED model id exactly as a filing pass is —
-    and `0.0` with a LOUD line when no price is configured: the fallback must degrade, never
-    refuse a capture over bookkeeping (the same posture as `pydantic_backend._fault_cost`)."""
-    usage = ocr.get("usage") or {}
-    tokens_in = int(usage.get("input_tokens") or 0)
-    tokens_out = int(usage.get("output_tokens") or 0)
-    if not (tokens_in or tokens_out):
-        return 0.0
-    model = str(ocr.get("model") or "")
-    try:
-        return pricing.compute_cost_usd(model, input_tokens=tokens_in,
-                                        output_tokens=tokens_out)
-    except LibrarianConfigError:
-        log.warning("vision OCR by %r spent %d in / %d out tokens with no configured price — "
-                    "reported as $0.00; add a row to $%s or librarian/pricing.PRICES", model,
-                    tokens_in, tokens_out, pricing.PRICING_ENV)
-        return 0.0
-
-
-def _with_vision_fallback(path: str, method: str, text: str, name: str) -> tuple[str, float]:
-    """ONE bounded OCR pass for a PDF whose text layer came back thin, decided by CODE. Keeps
-    whichever extraction is LONGER, so degraded vision output cannot lose real text. Returns the
-    text AND the pass's dollars — an OCR the item paid for is billed even when the text layer
-    wins (issue #110): the spend happened, whichever text shipped."""
-    if method != "pdf":
-        return text, 0.0
-    stripped = text.strip()
-    pages = text.count("\f") + 1
-    if len(stripped) >= DRIVE_VISION_MIN_CHARS_PER_PAGE * pages:
-        return text, 0.0
-    config_error = converters.vision_config_error()
-    if config_error:
-        # The reason is `converters`' own sentence, so a prefixed-but-keyless VISION_MODEL names
-        # ITS provider's variable instead of sending the operator to GEMINI_API_KEY — advice
-        # that could never fix it (a message with a command in it is an executable promise).
-        if len(stripped) < DRIVE_MIN_TEXT_CHARS:
-            raise _ConversionRefused(
-                f"{name!r} looks like a scanned PDF (no usable text layer) and {config_error}; "
-                f"or drop a text-layer export instead")
-        log.warning("drive conversion: %r yields %d chars over %d page(s) — thin, and %s; "
-                    "proceeding with the text layer", name, len(stripped), pages, config_error)
-        return text, 0.0
-    try:
-        ocr = converters.vision_extract(path)
-    except Exception as ex:  # noqa: BLE001 — vision failing must degrade, not crash the item
-        log.warning("drive conversion: vision fallback for %r failed (%s: %s)", name,
-                    ex.__class__.__name__, ex)
-        if len(stripped) < DRIVE_MIN_TEXT_CHARS:
-            raise _ConversionRefused(
-                f"{name!r} looks like a scanned PDF and the vision OCR fallback failed — the "
-                f"operator's log has the detail; requeue to retry") from ex
-        return text, 0.0
-    spend = _vision_spend(ocr)
-    ocr_text = (ocr.get("text") or "").strip()
-    if ocr.get("truncated"):
-        # The structured half of the in-text cut note: the OPERATOR learns from this line, not
-        # from a sentence inside untrusted-adjacent text.
-        log.warning("drive conversion: %r OCR covered its first %s page(s) only — the "
-                    "%d-page ceiling; the transcription says so in-line", name,
-                    ocr.get("pages"), converters.MAX_VISION_PAGES)
-    if len(ocr_text) > len(stripped):
-        log.info("drive conversion: %r OCR'd by %s (%d chars over the text layer's %d)", name,
-                 ocr.get("model", "vision"), len(ocr_text), len(stripped))
-        return ocr_text, spend
-    return text, spend
 
 
 # The meeting flow: a page SET (source + meeting + N decisions), atomically or nothing. A SEPARATE

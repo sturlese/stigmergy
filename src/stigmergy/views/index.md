@@ -11,8 +11,8 @@ or the backlinks it is allowed to cite. This package is the ONLY writer of
 **Staleness is fixed by CONVERGENCE, not by a trigger per door.** The librarian worker runs
 `regenerate.sweep` periodically on its idle branch: it asks the corpus which entities diverge from
 `views/` right now and fixes those, so a view is never stale whatever wrote the page — an ordinary
-capture, a Slack or Drive drop, an applied repair, an entity mint, a hand edit. Three entry
-points, one guarantee and two latency optimisations on top of it: the periodic sweep (the
+capture, a 🧠 gesture, a submitted meeting or document, an applied repair, an entity born, a hand
+edit. Three entry points, one guarantee and two latency optimisations on top of it: the periodic sweep (the
 guarantee), the post-meeting hook in `librarian.processing` (best-effort, same run as the filing),
 and `stigmergy-views regenerate` (the operator's).
 

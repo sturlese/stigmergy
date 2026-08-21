@@ -1,6 +1,6 @@
-# The meeting distiller — `stigmergy-meeting` + the librarian's meeting flow
+# The meeting distiller — the librarian's meeting flow
 
-A transcript dropped by hand becomes, unattended, one atomic commit of pages: the source page(s)
+A transcript a client submits becomes, unattended, one atomic commit of pages: the source page(s)
 holding the transcript verbatim (permanent evidence), a `meeting` page (provenance), and N
 `decision` pages (knowledge, anchored, dated). The ordinary fast lane files exactly one page per
 capture; the meeting flow is a SECOND flow through the same queue and the same worker, filing a
@@ -14,25 +14,24 @@ The front half — [`capture.md`](./capture.md) and
 [ADR 014](../decisions/014-capture-queue-and-attribution.md) — and
 the back half's ordinary path — [`librarian.md`](./librarian.md) and
 [ADR 015](../decisions/015-librarian.md) — are unchanged and are not repeated here.
-The flow spans two packages, so it spans two code maps: the drop CLI is
+The flow spans two packages, so it spans two code maps: the queue and its submission contract are
 [`src/stigmergy/capture/index.md`](../../src/stigmergy/capture/index.md), the meeting flow itself
 [`src/stigmergy/librarian/index.md`](../../src/stigmergy/librarian/index.md).
 
 ```
-stigmergy-meeting drop <transcript> --title <t> --date <YYYY-MM-DD>
-                       --submitted-by <email>            (or $STIGMERGY_MEETING_OPERATOR_EMAIL;
-                       [--attendees a,b]                  refused by name without one — attribution
-                                                          is never guessed)
-  │  validates locally -> uploads to the SAME evidence store every capture uses
+brain_submit(kind="meeting", material=<the transcript>,
+             hints={"title": ..., "meeting_date": "YYYY-MM-DD", "attendees": "a, b"})
+  │  title and meeting_date REQUIRED (schema.prepare_submission, the seam every door crosses)
+  │  the CLIENT holds the transcript and sends it as text; submitted_by is server-resolved
+  │  the material -> the SAME evidence store every capture uses
   │  -> queue.submit, exactly ONE capture_queue row, kind="meeting"
-  │  (no MCP door: schema.MCP_SUBMIT_KINDS = ("raw", "page") only)
   ▼
 capture_queue row, kind="meeting" (claimed by the SAME librarian worker, same fenced claiming)
   │
   ├─ _pre_agent (SHARED with the ordinary flow): dedup levels 1-2, secrets/PII over the material
   │
   └─ librarian.processing.process_meeting_item  (process_item's sibling, not a branch inside it)
-       │  ephemeral worktree, agent fed the transcript AND the drop metadata as fenced
+       │  ephemeral worktree, agent fed the transcript AND the submitted metadata as fenced
        │  UNTRUSTED DATA (the metadata labelled HINTS, never instructions; the resolved entity
        │  registry stays outside the fence — server-derived, from governed birth) — the
        │  meeting-distiller brief instead of the librarian skill, read from the SAME worktree
@@ -136,9 +135,9 @@ once per capture. The map from a written page's path back to its anchoring comes
 are code-computed here, so the lookup is built from what code itself just wrote.
 
 **One field is stamped differently from every other page in this system:** `as_of` is the MEETING's
-own date (the operator's `--date`), never today's. A decision taken in a meeting is `as_of` that
-meeting, and time-sensitive ranking would otherwise read a transcript dropped a month late as
-current.
+own date (the `meeting_date` hint, required at the enqueue seam), never today's. A decision taken in
+a meeting is `as_of` that meeting, and time-sensitive ranking would otherwise read a transcript
+submitted a month late as current.
 
 Every ordinary (non-meeting) capture's `ctx.page_declared` stays empty, which is what keeps
 `gate_anchoring` asking its original, single-outcome question for every non-meeting run.
@@ -153,7 +152,7 @@ stamped with) does not write them, on purpose: a fast-lane page is never itself 
 machine-extracted evidence, so giving it a `content_hash`/`extracted_at` would claim a provenance
 chain that page does not have. The source page IS exactly that evidence, so it gets a sibling
 function instead, `page.stamp_source_fields`, which writes `content_hash` (`sha256:<hex>` of the
-same archived material bytes `capture.schema.material_digest` hashed at drop time — recomputed here
+same archived material bytes `capture.schema.material_digest` hashed at submit time — recomputed here
 from the bytes this run verified against, so the page's own claim and the evidence-store key can
 never disagree), `extracted_at` (this run's timestamp), `tier` (`"1"`, always — a meeting
 transcript is a direct recording, not second-hand or AI-generated; the tier is about provenance, not
@@ -181,7 +180,8 @@ belt-and-braces for pages filed before the field existed. Every part is then sta
 `content_hash`/`tier`/`status`/`as_of`/`submitted_by` is overwritten and never trusted (a drafted
 `id` is stripped the same way — `page.SERVER_OWNED_KEYS` names it). This is THE source-page writer
 in the codebase: `source_kind`/`tags`/`url` are parameters with no caller-favouring defaults, and
-the fast lane's Slack and Drive attachments call the same function rather than growing a second one.
+the fast lane's Slack and document attachments call the same function rather than growing a
+second one.
 
 `gates.gate_frontmatter`'s `FORBIDDEN_PAGE_KEYS` (`owner`, `id`, `content_hash`, `tier`,
 `extracted_at`) still refuses every one of these on every OTHER page — a decision or meeting page
@@ -190,7 +190,7 @@ one exemption is `ctx.provenance_pages`, a `frozenset` of paths the gate is TOLD
 provenance fields (never inferred from the diff's own shape — a gate is told a fact, it never
 interprets one). `processing._stamp_meeting` populates it with the capture's own `sources/meetings/`
 source-page parts; the fast lane's own source attachment populates it the same told-not-inferred
-way for its `sources/slack/`/`sources/drive/` parts
+way for its `sources/slack/`/`sources/documents/` parts
 ([librarian.md](./librarian.md#the-source-attachment-a-parameter-never-a-third-flow)), and a
 capture with no attachment at all leaves it empty, so `FORBIDDEN_PAGE_KEYS`'s check is unchanged
 there. A duplicate declaration of `content_hash`/`tier`/`extracted_at` (the capture's own forged
@@ -346,8 +346,8 @@ The steward-facing half — confirming, merging or declining what a meeting prop
 
 ## Where the code lives
 
-- `capture.meeting_cli` — `stigmergy-meeting drop`, the only door onto this flow. Validates locally,
-  uploads to the evidence store, enqueues exactly one `kind="meeting"` row. See
+- `capture.schema.prepare_submission` — the enqueue seam a `kind="meeting"` row crosses: it is where
+  `title` and `meeting_date` are required, so no door can enqueue a transcript without them. See
   [`../../src/stigmergy/capture/index.md`](../../src/stigmergy/capture/index.md).
 - `librarian.processing.process_meeting_item` and its private helpers — the flow itself. See
   [`../../src/stigmergy/librarian/index.md`](../../src/stigmergy/librarian/index.md).
@@ -420,7 +420,7 @@ The steward-facing half — confirming, merging or declining what a meeting prop
 
 | Suite | Covers |
 |---|---|
-| `tests/capture/test_meeting_cli.py` | `stigmergy-meeting drop`'s own refusals, ordering (validate → upload → insert) |
+| `tests/capture/test_schema.py` | the meeting kind's own submission contract: the hints it requires, the date it validates, its material cap |
 | `tests/librarian/test_meeting_processing_pg.py` | the whole flow over real Postgres + real git, including the long-transcript oversize case |
 | `tests/librarian/test_meeting_queue_fencing_pg.py` | the meeting kind claimed through the same fenced claiming as every capture |
 | `tests/librarian/test_meeting_brief_contract.py` | the brief↔gates two-sided contract, in both directions |

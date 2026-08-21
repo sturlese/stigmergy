@@ -32,19 +32,15 @@ Verified against the installed distributions' own metadata.
 | `psycopg` | **LGPL-3.0-only** | the hybrid derived index: Postgres + pgvector |
 | `aiohttp` | Apache-2.0 AND MIT | the Slack transport's async Socket Mode handler |
 | `boto3` | Apache-2.0 | the evidence plane's S3-compatible object store |
-| `google-genai` | Apache-2.0 | vision OCR for scanned documents |
 | `mcp` | MIT | the MCP server — the only API over the brain |
-| `openpyxl` | MIT | spreadsheet conversion |
 | `pydantic` | MIT | schema validation across every boundary |
 | `pydantic-ai` | MIT | the answering agent, and the librarian's filing backend |
 | `pyjwt` | MIT | the librarian GitHub App's RS256 assertion |
-| `python-docx` | MIT | document conversion |
 | `pyyaml` | MIT | page frontmatter |
 | `slack-bolt` | MIT | the Slack transport |
 | `httpx` | BSD-3-Clause | HTTP client |
 | `starlette` | BSD-3-Clause | the HTTP transport's ASGI layer |
 | `uvicorn` | BSD-3-Clause | the HTTP transport's ASGI server |
-| `xlrd` | BSD | legacy spreadsheet conversion |
 
 Everything above except `psycopg` is permissive and imposes no condition beyond attribution.
 

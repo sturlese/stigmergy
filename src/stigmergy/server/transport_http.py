@@ -31,7 +31,7 @@ from starlette.responses import JSONResponse
 
 from stigmergy.admin import routes as admin_routes
 from stigmergy.capture import evidence as evidence_plane
-from stigmergy.capture.schema import ensure_capture_schema
+from stigmergy.capture.schema import MAX_MATERIAL_BYTES, ensure_capture_schema
 from stigmergy.index import store
 from stigmergy.server import ops_files, review, webhook
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
@@ -48,11 +48,14 @@ log = logging.getLogger(__name__)
 _UNAUTHORIZED_BODY = {"error": "unauthorized"}
 
 # The ceiling on a request body, enforced BEFORE the body is buffered: nothing below this
-# middleware bounds it (the MCP SDK reads the whole body unbounded; the 256 KB material cap fires
-# only after buffering, JSON-parsing and hashing), so an authenticated caller could otherwise OOM
-# the machine. 1 MiB is 4x the material cap plus JSON-RPC envelope room — no legitimate capture
-# comes near it.
-MAX_REQUEST_BODY_BYTES = 1024 * 1024
+# middleware bounds it (the MCP SDK reads the whole body unbounded; the per-kind material caps
+# fire only after buffering, JSON-parsing and hashing), so an authenticated caller could otherwise
+# OOM the machine. Three times the LARGEST material cap plus JSON-RPC envelope room — derived, so a
+# transcript at its own cap fits however its JSON escaping inflates it — and nothing legitimate
+# comes near the rest. It sits BELOW the MCP SDK's own 4 MiB body ceiling on purpose: this
+# middleware, not the SDK, is what refuses, so the refusal keeps ONE shape on every road
+# (`tests/server/test_transport_http.py` pins the ordering).
+MAX_REQUEST_BODY_BYTES = 3 * MAX_MATERIAL_BYTES + 64 * 1024
 _TOO_LARGE_BODY = {"error": "request too large"}
 
 # `FastMCP.__init__` auto-builds DNS-rebinding protection ONLY when its OWN `host` ctor param

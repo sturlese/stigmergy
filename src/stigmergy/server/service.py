@@ -567,19 +567,11 @@ class BrainService:
         capture_schema.reject_server_owned_arguments(server_owned)
         # The two source hints the fast lane trusts — refused for every door but Slack's own.
         capture_schema.reject_source_provenance_hints(hints, door=self.door)
-        # The drive pair, refused with NO door exception: its one legitimate asserter is an
-        # operator CLI that never passes through this service.
-        capture_schema.reject_drive_provenance_hints(hints)
         # The registration keys, refused for every client too: a steward registers from the
         # console or the CLI, and `brain_submit` attributes material, never authority.
         capture_schema.reject_registration_hints(hints)
-        # `MCP_SUBMIT_KINDS`, never `KINDS`: `kind` is a MODEL-CHOSEN argument, so growing `KINDS`
-        # for a drop CLI must not silently make its new value enqueueable here.
-        if kind not in capture_schema.MCP_SUBMIT_KINDS:
-            raise CaptureError(
-                f"kind {kind!r} is not submittable through brain_submit (allowed: "
-                f"{', '.join(capture_schema.MCP_SUBMIT_KINDS)}) — a meeting transcript is dropped "
-                f"through the `stigmergy-meeting drop` operator CLI, the only door onto that flow")
+        # `kind` is MODEL-CHOSEN and `prepare_submission` refuses one outside `KINDS` by name —
+        # there is no narrower list for this door (ADR 044 D4).
         if self.evidence is None:
             raise CaptureError("the capture queue is not available on this server")
         if not self.identity:

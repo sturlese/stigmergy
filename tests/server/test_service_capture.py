@@ -50,17 +50,16 @@ def test_submit_with_no_resolved_identity_is_fail_closed():
         svc.submit("raw", "material")
 
 
-def test_submit_refuses_kind_meeting_before_the_evidence_or_identity_checks():
-    """`brain_submit(kind="meeting")` is a second door that must not exist — `kind` is a
-    MODEL-CHOSEN MCP argument, and `capture_schema.KINDS` growing to admit `"meeting"` (for the
-    drop CLI's own direct call to `queue.submit`) must not silently make it acceptable through
-    this transport too. Proven on a service with NEITHER an evidence store NOR
-    an identity, the same isolation `test_submit_rejects_a_forged_submitted_by_argument_before_
-    the_identity_or_evidence_checks` (below) uses for the server-owned-argument guard: if the kind
-    check did not run first, this would raise the wrong (evidence-unavailable) error instead."""
-    svc = _bare_service(identity=None, evidence=None)
-    with pytest.raises(CaptureError, match="meeting"):
-        svc.submit("meeting", "a transcript")
+def test_submit_takes_every_kind_in_the_one_vocabulary_meeting_and_document_included():
+    """OLD BEHAVIOUR: `kind="meeting"` and `kind="drive"` were refused here by name — the drop
+    CLIs were "the only doors" onto those flows. ADR 044 D4: there is no narrower list for this
+    door. Proven WITHOUT Postgres the way the Slack-door twin below is: on a bare service the call
+    falls through to the NEXT guard (no evidence store wired), so a `CaptureError` naming the
+    store is the proof that no kind check stood in front of it."""
+    svc = _bare_service(identity=STEWARD, evidence=None)
+    for kind in ("raw", "page", "meeting", "document"):
+        with pytest.raises(CaptureError, match="not available"):
+            svc.submit(kind, "text")
 
 
 def test_submit_rejects_a_forged_submitted_by_argument_before_the_identity_or_evidence_checks():
@@ -81,31 +80,6 @@ def test_submit_rejects_forged_slack_source_hints_from_a_clientfacing_service():
     svc = _bare_service(identity=None, evidence=None)
     with pytest.raises(SubmissionRejected, match="source_client"):
         svc.submit("raw", "material", hints={"source_client": "slack"})
-
-
-# ── the drive door cannot be reached or dressed through brain_submit (ADR 028 D7) ──────────────
-def test_submit_refuses_kind_drive_before_the_evidence_or_identity_checks():
-    """`kind="drive"` joins `KINDS` for the `stigmergy-drive` CLI's own direct call to
-    `queue.submit` — and, exactly like `"meeting"` above, it must never become submittable through
-    the MCP transport by that growth alone."""
-    svc = _bare_service(identity=None, evidence=None)
-    with pytest.raises(CaptureError, match="drive"):
-        svc.submit("drive", "a manifest")
-
-
-def test_submit_rejects_forged_drive_provenance_hints_from_every_door():
-    """`drive_file_id`/`drive_url` are trusted downstream (`drive_url` lands as `url:` on a
-    reader-facing `sources/drive/` page) and their one legitimate asserter never passes through
-    this service — so unlike Slack's pair there is NO door exception: even a service built with
-    `door=SLACK_DOOR` refuses them."""
-    svc = _bare_service(identity=None, evidence=None)
-    with pytest.raises(SubmissionRejected, match="drive_url"):
-        svc.submit("raw", "material", hints={"drive_url": "https://drive.google.com/file/d/X/view"})
-    settings = Settings(identity=STEWARD, identities_path="x")
-    slack_svc = BrainService(settings, conn=None, embedder=None, audiences=None, identity=STEWARD,
-                             evidence=None, door=capture_schema.SLACK_DOOR)
-    with pytest.raises(SubmissionRejected, match="drive_file_id"):
-        slack_svc.submit("raw", "material", hints={"drive_file_id": "X"})
 
 
 def test_submit_from_the_slack_door_accepts_its_own_source_hints():
@@ -139,6 +113,49 @@ def test_submit_end_to_end_creates_a_queued_row_with_the_material(indexed):
     assert status == "queued"
     assert payload["text"] == "a decision worth keeping"
     assert submitted_by == fx.STEWARD
+
+
+def test_submit_meeting_and_document_land_as_their_own_kinds_carrying_their_hints(indexed):
+    """ADR 044 D4, end to end: a transcript and a document's text enter at THIS door, each as its
+    own kind with the hints its flow reads — the meeting's date, the document's provenance claim —
+    stored exactly as `prepare_submission` validated them."""
+    conn, fx = indexed
+    svc = make_service(fx, conn, fx.STEWARD, evidence=MemoryEvidenceStore())
+    meeting = svc.submit("meeting", "Dana: we agreed the renewal terms.",
+                         hints={"title": "Q3 sync", "meeting_date": "2026-07-29",
+                                "attendees": "Dana, Alice"})
+    document = svc.submit("document", "Acme renewal pricing\nThe renewal closed in June.",
+                          hints={"title": "Acme renewal pricing",
+                                 "source_url": "https://drive.google.com/file/d/X/view"})
+    assert meeting["status"] == document["status"] == "queued"
+    with conn.cursor() as cur:
+        cur.execute("SELECT kind, hints FROM capture_queue WHERE id IN (%s, %s) ORDER BY id",
+                    (meeting["id"], document["id"]))
+        rows = cur.fetchall()
+    assert [kind for kind, _ in rows] == ["meeting", "document"]
+    assert rows[0][1]["client"]["meeting_date"] == "2026-07-29"
+    assert rows[0][1]["client"]["attendees"] == "Dana, Alice"
+    assert rows[1][1]["client"]["source_url"] == "https://drive.google.com/file/d/X/view"
+
+
+def test_submit_refuses_a_kind_outside_the_vocabulary_and_a_meeting_without_its_date(indexed):
+    """The seam every door crosses does the refusing, by name: a kind `KINDS` does not carry, and
+    a meeting missing the one hint every decision page's `as_of` derives from — no row, no
+    blob, either way."""
+    conn, fx = indexed
+    evidence = MemoryEvidenceStore()
+    svc = make_service(fx, conn, fx.STEWARD, evidence=evidence)
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        before = cur.fetchone()[0]
+    with pytest.raises(SubmissionRejected, match="unknown kind 'drive'"):
+        svc.submit("drive", "a manifest")
+    with pytest.raises(SubmissionRejected, match="meeting date"):
+        svc.submit("meeting", "a transcript", hints={"title": "Q3 sync"})
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        assert cur.fetchone()[0] == before
+    assert evidence.objects == {}
 
 
 def test_submit_attributes_to_the_services_own_resolved_identity(indexed):

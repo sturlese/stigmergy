@@ -73,6 +73,6 @@ deployment, export `STIGMERGY_INDEX_DSN` (the deployment's own DSN — `.env` ke
 deliberately different name so a test run cannot reach it) and the four `STIGMERGY_EVIDENCE_*`
 variables, which `.env` stores under `R2_*` names for the smoke check. Getting the second half
 wrong used to be silent and fatal — the row landed in the deployment's queue while the bytes
-went to a local store, and the capture failed seconds later. The drop doors now refuse that exact
-combination before anything is uploaded (exit 3, `--allow-split-stores` to override), so the
-mistake costs a refusal instead of a capture.
+went to a local store, and the capture failed seconds later. `stigmergy-entities create`, the one
+CLI left that enqueues, refuses that exact combination before anything is uploaded (exit 3,
+`--allow-split-stores` to override), so the mistake costs a refusal instead of a capture.

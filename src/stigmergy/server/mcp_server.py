@@ -140,10 +140,16 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
     def brain_submit(kind: str, material: str, hints: dict | None = None,
                      submitted_by: str | None = None, verification: str | None = None,
                      acl: str | list | None = None, content_hash: str | None = None) -> str:
-        """Capture something into the brain's write queue. `kind` is 'raw' (a conversation
-        excerpt, a decision, a gotcha — the usual case) or 'page' (markdown you already drafted).
-        `hints` optionally suggests placement: type, path, entity, title — suggestions only, the
-        librarian decides. Returns an acknowledgement with the submission id: the capture is
+        """Capture something into the brain's write queue. `kind` names the SHAPE of the
+        material: 'raw' (a conversation excerpt, a decision, a gotcha — the usual case), 'page'
+        (markdown you already drafted), 'meeting' (a transcript; hints carry `title`,
+        `meeting_date` as YYYY-MM-DD and optionally `attendees`, and it files as a source page, a
+        meeting page and one decision page per decision) or 'document' (the text of a document
+        you already hold — read it from Drive or disk yourself; hints carry `title` and optionally
+        `source_url`, where it came from — and it files as a synthesis page beside the verbatim
+        source). Text up to 256 KB for raw/page and 1 MB for meeting/document. `hints` otherwise
+        suggests placement: type, path, entity, title — suggestions only, the librarian
+        decides. Returns an acknowledgement with the submission id: the capture is
         QUEUED and attributed to you, not yet in the brain — a librarian files it, and
         `brain_submissions` tells you what happened to it. `entities` lists the registered
         entities the material already names (id, name, and whether a steward has confirmed the

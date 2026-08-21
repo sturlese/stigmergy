@@ -58,9 +58,9 @@ anybody: a capture reaches `filed`, `rejected` or `failed` and nothing else.
 
 `stigmergy.librarian` is a **worker beside the API, not a layer above or below it.** It may import
 `stigmergy.capture` (the queue primitives, the evidence plane, the operational spine) and
-`stigmergy.kernel` (the ACL resolver, the entity registry, the document converters — a library,
-importable from anywhere, [ADR 026](../decisions/026-the-purge.md) D4). It must **never** import
-`stigmergy.server` or `stigmergy.answer`, and the server must never import it — they talk through the
+`stigmergy.kernel` (the ACL resolver, the entity registry, the page contract's emitter — a
+library, importable from anywhere, [ADR 026](../decisions/026-the-purge.md) D4). It must **never**
+import `stigmergy.server` or `stigmergy.answer`, and the server must never import it — they talk through the
 queue, so a slow agent run can never happen inside an HTTP request. Both edges are asserted by
 `tests/test_architecture.py`.
 
@@ -84,7 +84,7 @@ doors stay out of reach: **the unattended worker writes identities, it never dec
 | `bootstrap.py` | `stigmergy-librarian-boot` — the DEPLOYED worker's entry point (clone, verify, exec) |
 | `gitcredential.py` | `stigmergy-librarian-credential` — the git credential helper the container fetches with |
 | `config.py` | every tunable, resolved once (`Settings.from_args`); the derived lease |
-| `processing.py` | one item, end to end: dedup → worktree → agent → edits → stamp → gates → commit. `process_item` is the ordinary flow; `process_meeting_item` is a genuine second flow (a page SET); `process_drive_item` converts the fetched bytes to text and then delegates to `process_item` itself |
+| `processing.py` | one item, end to end: dedup → worktree → agent → edits → stamp → gates → commit. `process_item` is the ordinary flow; `process_meeting_item` is a genuine second flow (a page SET), and the only kind routed away from `process_item` |
 | `base_inputs.py` | the three repo-sourced inputs, read at the item's own base commit |
 | `filing_port.py` | the PORT — the two calls `processing.py` makes, the `AgentRun` envelope, the fault contract, the per-flow side-effect rules |
 | `agent.py` | the shared agent seam: the outcome contract, the fence, the prompts, the write-confinement rule, the system-prompt frame the brief is injected under, and the `backend` dispatch. Drives no model itself |
@@ -146,7 +146,7 @@ the same names.
 ```
 filing into /path/to/stigmergy-brain against origin/main@a1b2c3d4e5f6
   swept 1 stranded claim(s) back to the queue and failed 0 that had burned every delivery
-  (claims held longer than 1290s (21 min 30s))
+  (claims held longer than 900s (15 min))
 #42 filed — wiki/notes/Acme renewal.md@9f8e7d…, anchored to Acme Corp. Becomes searchable…
 ```
 
@@ -165,7 +165,7 @@ refused-diff line: that path is only on the prose road, on stderr.
 
 ```
 filing into /path/to/stigmergy-brain against origin/main@a1b2c3d4e5f6
-  polling every 3s; lease 1290s (21 min 30s); Ctrl-C stops after the item in flight
+  polling every 3s; lease 900s (15 min); Ctrl-C stops after the item in flight
 #42 -> filed
 view sweep: 12 of 12 entity(ies) checked — 1 regenerated, 0 removed, 11 already current
 ^C
@@ -196,7 +196,7 @@ the NEXT item is claimed; only a hard kill returns the row to the queue.
 
 ```
 queue: queued=2 · claimed=1 · filed=37 · rejected=1 · failed=1
-in flight: #58 (raw) by ana@example.com attempts=2/3 held 3612.4s of 1290s (21 min 30s)
+in flight: #58 (raw) by ana@example.com attempts=2/3 held 3612.4s of 900s (15 min)
   LEASE EXPIRED — a live worker would have finished or renewed it by now; the next sweep returns it
   to the queue with an attempt burned
   to return it right now, with no librarian running:  stigmergy-queue reclaim --visibility-timeout 0
@@ -262,7 +262,7 @@ time, and model ids are configuration, never constants.
 | `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S` | 900 | how often the idle loop converges `views/` to the corpus (see [`views.md`](./views.md)). It runs on the IDLE branch only — a busy queue is drained first — and the first pass is at the first idle tick, so a restart converges without waiting an interval out. `0` turns the pass off, leaving the post-meeting hook and `stigmergy-views regenerate` as the only roads; a NEGATIVE value is refused by name, because it would rebuild a worktree and re-parse the corpus on every poll |
 | `STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING` | 10 | how many entities ONE pass may regenerate or remove — each is a model call, and nothing else bounds them. Entities that cost nothing (`unchanged`) do not consume it. What a pass defers is recorded in `job_runs.stats.skip_reasons` and picked up by the next one, since the population is recomputed from state every time. Below `1` is refused by name: every pass would defer everything |
 | (`--poll-interval`) | 3.0 | `run` only; must be > 0 |
-| (`--visibility-timeout`) | 1290 | derived: `2 × timeout_s + 120s` gates `+ 390s` conversion (the kernel's three vision clocks — a scanned deck converts BEFORE its first agent pass) `+ 180s` headroom |
+| (`--visibility-timeout`) | 900 | derived: `2 × timeout_s + 120s` gates `+ 180s` headroom — nothing converts before the first agent pass, since every kind arrives as text ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D4) |
 | (`--max-attempts`) | 3 | deliveries before an item is failed; must be ≥ 1 |
 | `STIGMERGY_GITLEAKS_BIN` | `gitleaks` | resolved on PATH, existence checked ONCE at startup |
 | `STIGMERGY_LIBRARIAN_WORKTREE_ROOT` | system temp | where ephemeral worktrees live |
@@ -539,12 +539,9 @@ the filed one that this commit touched. It is distinct from `overlaps_flagged`, 
 JUDGMENT about what overlaps.
 
 Reports also carry `cost_usd` — the item's WHOLE model spend: its agent passes, a pass that died
-mid-run included (a timeout is the honest `0.0`), plus the drive road's vision OCR when one ran,
-whose share is also named on its own `conversion_cost_usd` key so an expensive OCR is tellable
-from an expensive filing. A backend priced by its own provider passes its
+mid-run included (a timeout is the honest `0.0`). A backend priced by its own provider passes its
 number through; one that reports only TOKENS has them multiplied by `librarian/pricing.py`'s
-configured $/MTok table — the vision pass is priced through the same table, and an unpriced
-vision model degrades to a LOUD `$0.00` line rather than refusing the capture. The rule: present, possibly `0.0`, on every outcome that passed through an
+configured $/MTok table. The rule: present, possibly `0.0`, on every outcome that passed through an
 agent loop or the failure road — `filed`, `rejected` and `failed` alike — and absent only on
 terminal states decided before the loop (a duplicate, a `filed_retry`, a material-level secrets/PII
 rejection). Operators read it from the stored row (`stigmergy-queue show`, the admin console); the
@@ -717,25 +714,26 @@ mutual overlap callout. These two are deterministic and run before the agent, ch
 
 ## The source attachment: a parameter, never a third flow
 
-Material with independent documentary existence — a Slack thread, a document fetched from Drive —
+Material with independent documentary existence — a Slack thread, the text of a document —
 files a verbatim `sources/` page beside the synthesis; conversational material leaves none. The
 SHAPE of that is a **parameter on the fast lane**, not a third flow.
 
 `processing._source_attachment` is the on/off switch, decided per item; it returns `None` — the OFF
 position, where every `GateContext` the fast lane builds is byte-identical to the unattached one —
-for every ordinary MCP capture. **There are two ON positions**, each keyed on a fact a DOOR asserted
-server-side, never on something a client could write:
+for every ordinary capture. **There are two ON positions**, one keyed on the row's own `kind` and
+one on a fact the Slack transport asserted server-side:
 
 | ON when | Folder | `source_kind` | tags | `url:` |
 |---|---|---|---|---|
 | the `source_client` hint is Slack's (`SLACK_SOURCE_PREFIX`) | `sources/slack/` | `slack` | `source`, `slack-thread` | the thread permalink |
-| the ROW'S OWN `kind` is `drive` (`DRIVE_SOURCE_PREFIX`) | `sources/drive/` | `google-drive` | `source`, `drive-document` | the Drive URL |
+| the ROW'S OWN `kind` is `document` (`DOCUMENT_SOURCE_PREFIX`) | `sources/documents/` | `upload` | `source`, `document` | the `source_url` hint, `""` when the submitter sent none |
 
 Keying the Slack position on a hint is sound because
 `capture.schema.reject_source_provenance_hints` refuses `source_client`/`source_permalink` at the
-client seam for every door but Slack's own. The Drive position needs no hint — `kind: drive` is only
-ever written by the `stigmergy-drive` operator CLI (`schema.MCP_SUBMIT_KINDS` keeps it unreachable
-through `brain_submit`).
+client seam for every door but Slack's own. The document position keys on the row's own `kind`
+instead, and its `url:` is the submitter's claim rather than a fact the platform checked: a client
+holds the text and says where it came from, which has the standing the material itself has
+([ADR 044](../decisions/044-the-capture-is-the-approval.md) D4).
 
 When it is ON, the pieces are the meeting flow's: `_build_source_parts` writes the verbatim part(s),
 `page.stamp_source_fields` stamps the provenance group (`content_hash`, `extracted_at`, `tier: 1`,

@@ -138,7 +138,7 @@ def test_the_flagless_reclaim_leaves_a_claim_that_is_still_inside_the_workers_le
 
     OLD BEHAVIOUR: `queue_reclaim` with no explicit horizon fell back to
     `queue.DEFAULT_VISIBILITY_TIMEOUT_S` (300) while the worker's real lease is
-    the worker's own derived lease (1290 at the class default). Every capture held between those
+    the worker's own derived lease (900 at the class default). Every capture held between those
     two numbers — the long
     agent items the derived lease exists for — was requeued out from under a RUNNING worker by the
     ordinary Reclaim button, or failed outright once its attempts were spent. The read path in the
@@ -153,7 +153,7 @@ def test_the_flagless_reclaim_leaves_a_claim_that_is_still_inside_the_workers_le
     monkeypatch.delenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", raising=False)
     ack = submit_one(conn)
     queue.claim_next(conn, visibility_timeout_s=worker_visibility_timeout_s())
-    # Age the claim past the queue CLI's 300s default but well inside the worker's 1290s lease.
+    # Age the claim past the queue CLI's 300s default but well inside the worker's 900s lease.
     with conn.cursor() as cur:
         cur.execute("UPDATE capture_queue SET claimed_at = now() - interval '400 seconds' "
                     "WHERE id = %s", (ack["id"],))
@@ -166,7 +166,7 @@ def test_the_flagless_reclaim_leaves_a_claim_that_is_still_inside_the_workers_le
 
 
 def test_reclaim_still_releases_a_claim_that_outlived_the_workers_lease(conn, service, monkeypatch):
-    """The other edge of the same boundary: past 1290s the worker really is presumed dead, and the
+    """The other edge of the same boundary: past 900s the worker really is presumed dead, and the
     flagless console action must still recover the row. Moving the horizon must not turn Reclaim
     into a no-op."""
     # A check must not depend on ambient state: this one compares against the DERIVED
@@ -187,16 +187,16 @@ def test_reclaim_still_releases_a_claim_that_outlived_the_workers_lease(conn, se
 
 # ── the flagless reclaim horizon must DERIVE from the env, like the worker's real lease ────────────
 # The console USED to read `librarian_config.DEFAULT_VISIBILITY_TIMEOUT_S` — the librarian's
-# CLASS default (1290s), frozen at import time. The deployed worker's real lease
+# CLASS default (900s), frozen at import time. The deployed worker's real lease
 # derives from `$STIGMERGY_LIBRARIAN_TIMEOUT_S` (`librarian.config.Settings.from_args`; staging's
 # 600s agent budget -> 1500s). The two tests above never set that env var, so they cannot tell the
-# two numbers apart — both pass whether the console reads 1290 or the derived value, as long as
+# two numbers apart — both pass whether the console reads 900 or the derived value, as long as
 # nobody has STIGMERGY_LIBRARIAN_TIMEOUT_S exported. These do set it, explicitly, to prove the
 # horizon moves with it.
 def test_reclaim_default_horizon_derives_from_the_env_var_and_does_not_release_a_capture_still_within_it(
         conn, service, monkeypatch):
-    """OLD BEHAVIOUR: the flagless reclaim swept against the CLASS default (1290s) regardless of
-    `$STIGMERGY_LIBRARIAN_TIMEOUT_S`, so a capture aged 1400s — inside the 1890s lease staging's
+    """OLD BEHAVIOUR: the flagless reclaim swept against the CLASS default (900s) regardless of
+    `$STIGMERGY_LIBRARIAN_TIMEOUT_S`, so a capture aged 1400s — inside the 1500s lease staging's
     worker actually holds — gets swept anyway. A wasteful redelivery of an item a healthy worker
     still holds."""
     monkeypatch.setenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", "600")
@@ -209,18 +209,18 @@ def test_reclaim_default_horizon_derives_from_the_env_var_and_does_not_release_a
     result = service.queue_reclaim(actor="steward")
 
     assert result == {"released": 0, "failed": 0}, (
-        "the flagless reclaim swept a capture still inside the worker's real, env-derived 1890s "
-        "lease — it used the 1290s class default instead")
+        "the flagless reclaim swept a capture still inside the worker's real, env-derived 1500s "
+        "lease — it used the 900s class default instead")
     assert queue.current_status(conn, ack["id"]) == capture_schema.CLAIMED
     recorded = _actions(conn)[0]
-    assert recorded["args"]["visibility_timeout_s"] == 1890, (
+    assert recorded["args"]["visibility_timeout_s"] == 1500, (
         "admin_actions must record the horizon actually swept against, not the class default")
 
 
 def test_reclaim_default_horizon_falls_back_to_the_class_default_with_no_env_var(
         conn, service, monkeypatch):
     """Benign twin: with no env var, the flagless reclaim must still release a capture that has
-    genuinely outlived the class-default 1290s lease — deriving the horizon must not turn Reclaim
+    genuinely outlived the class-default 900s lease — deriving the horizon must not turn Reclaim
     into a no-op for the ordinary, unconfigured case. Complements
     `test_reclaim_still_releases_a_claim_that_outlived_the_workers_lease` above (which relies on
     the ambient environment simply never having set the var) with an explicit `delenv` and a check
@@ -238,7 +238,7 @@ def test_reclaim_default_horizon_falls_back_to_the_class_default_with_no_env_var
     assert result == {"released": 1, "failed": 0}
     assert queue.current_status(conn, ack["id"]) == capture_schema.QUEUED
     recorded = _actions(conn)[0]
-    assert recorded["args"]["visibility_timeout_s"] == 1290
+    assert recorded["args"]["visibility_timeout_s"] == 900
 
 
 def test_purge_dry_run_changes_nothing_and_the_real_run_purges(conn, service):
@@ -290,28 +290,28 @@ def test_worker_status_reads_the_lease_against_the_workers_own_numbers(conn, ser
 # ── the console meter must DERIVE its lease, not default to the librarian's class
 # constant ─────────────────────────────────────────────────────────────────────────────────────
 # The console USED to resolve its lease ONCE, at import time, from the librarian's CLASS
-# default (1290s) — never from `$STIGMERGY_LIBRARIAN_TIMEOUT_S`. The deployed worker's REAL lease derives from that
-# env var (`librarian.config.Settings.from_args`: staging's 600s agent budget -> 1890s). An item
-# legitimately in flight between 1290s and 1890s therefore reads "lease expired" on every one of
+# default (900s) — never from `$STIGMERGY_LIBRARIAN_TIMEOUT_S`. The deployed worker's REAL lease derives from that
+# env var (`librarian.config.Settings.from_args`: staging's 600s agent budget -> 1500s). An item
+# legitimately in flight between 900s and 1500s therefore reads "lease expired" on every one of
 # these three readers, and `queue_reclaim`'s default horizon (tested separately, below the drain
 # section) sweeps it — a wasteful redelivery of an item a healthy worker still holds.
 def test_worker_status_visibility_timeout_derives_from_the_env_var(service, monkeypatch):
     monkeypatch.setenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", "600")
     status = service.worker_status()
-    assert status["visibility_timeout_s"] == 1890, (
-        "worker_status() still reports the CLASS default (1290) instead of the lease the deployed "
-        "worker actually holds under STIGMERGY_LIBRARIAN_TIMEOUT_S=600 (2*600 + 120 + 390 + 180 = 1890)")
+    assert status["visibility_timeout_s"] == 1500, (
+        "worker_status() still reports the CLASS default (900) instead of the lease the deployed "
+        "worker actually holds under STIGMERGY_LIBRARIAN_TIMEOUT_S=600 (2*600 + 120 + 180 = 1500)")
 
 
 def test_meta_worker_visibility_timeout_derives_from_the_env_var(service, monkeypatch):
     monkeypatch.setenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", "600")
-    assert service.meta()["worker"]["visibility_timeout_s"] == 1890
+    assert service.meta()["worker"]["visibility_timeout_s"] == 1500
 
 
 def test_in_flight_verdict_honors_the_derived_lease_not_the_class_default(conn, service,
                                                                           monkeypatch):
-    """The meter's THIRD reader: a capture claimed 1400s ago is inside the 1890s lease staging's
-    worker actually holds even though it has already outlived the 1290s class default — the exact
+    """The meter's THIRD reader: a capture claimed 1400s ago is inside the 1500s lease staging's
+    worker actually holds even though it has already outlived the 900s class default — the exact
     false "lease expired" the issue reports."""
     monkeypatch.setenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", "600")
     ack = submit_one(conn)
@@ -324,15 +324,15 @@ def test_in_flight_verdict_honors_the_derived_lease_not_the_class_default(conn, 
     row = service.worker_status()["in_flight"][0]
 
     assert row["lease_expired"] is False, (
-        "a 1400s-old claim reads as expired against the 1290s class default even though the "
-        "worker's real, env-derived lease is 1890s")
+        "a 1400s-old claim reads as expired against the 900s class default even though the "
+        "worker's real, env-derived lease is 1500s")
     assert "within its lease" in row["verdict"]
 
 
 def test_in_flight_verdict_still_reads_expired_at_the_class_default_with_no_env_var(
         conn, service, monkeypatch):
     """Benign twin: where the environment says nothing, the meter must still read a 1000s-old
-    claim as expired against the 1290s class default — deriving the number for staging must not
+    claim as expired against the 900s class default — deriving the number for staging must not
     weaken the verdict for the ordinary, unconfigured case."""
     monkeypatch.delenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", raising=False)
     ack = submit_one(conn)

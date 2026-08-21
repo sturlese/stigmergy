@@ -159,8 +159,8 @@ toggle away, and nothing on a chart is reachable only by hovering.
   Reclaim sweeps against **the worker's own derived lease**,
   not the queue's 300 s and not the librarian's class default: the console resolves
   `$STIGMERGY_LIBRARIAN_TIMEOUT_S` through the same derivation the worker does (2× the agent
-  budget + 120 s gates + 390 s Drive conversion + 180 s headroom), per request, so staging's 600 s
-  budget reads 1890 s here exactly as it does on the worker; `fly.toml`'s `[env]` is app-wide, so
+  budget + 120 s gates + 180 s headroom), per request, so staging's 600 s
+  budget reads 1500 s here exactly as it does on the worker; `fly.toml`'s `[env]` is app-wide, so
   the console's environment IS the worker's, and an operator who splits them by hand fools the
   meter. The form's "release everything now" checkbox is what sends a horizon of 0, and it is only
   safe with no live worker mid-item.

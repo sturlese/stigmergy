@@ -385,8 +385,6 @@ def process_next(conn, deps: processing.Deps):
     try:
         if item.get("kind") == schema.MEETING:
             result = processing.process_meeting_item(conn, item, deps)
-        elif item.get("kind") == schema.DRIVE:
-            result = processing.process_drive_item(conn, item, deps)
         else:
             result = processing.process_item(conn, item, deps)
     except StaleBaseError:

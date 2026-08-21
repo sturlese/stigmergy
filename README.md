@@ -5,10 +5,10 @@
 **A team's knowledge, captured where the work happens, filed by an agent, and answered with
 citations you can check.**
 
-Notes, meeting transcripts and documents arrive from Slack or a CLI. An agent turns each one into a
-page in a plain git repository — but *code*, not the model, decides what is allowed to land. Reads
-go through a single MCP server that answers questions with sources, and refuses when it cannot
-support an answer. Everything it stores is a markdown file in a repo you own.
+Notes, meeting transcripts and documents arrive from Slack or any MCP client. An agent turns each
+one into a page in a plain git repository — but *code*, not the model, decides what is allowed to
+land. Reads go through a single MCP server that answers questions with sources, and refuses when it
+cannot support an answer. Everything it stores is a markdown file in a repo you own.
 
 ## One person's wiki, and a team's
 
@@ -118,7 +118,7 @@ steward later approves, merges or declines from Slack, the console, `stigmergy-e
 `review_decide`, and `stigmergy.entities` is the only writer of the registry however the decision
 arrives.
 
-Two flows sit on top: the **meeting distiller** (a dropped transcript becomes a source page, a
+Two flows sit on top: the **meeting distiller** (a submitted transcript becomes a source page, a
 meeting page and one decision page per decision, each anchored) and **views** (per-entity rollups
 whose ACL is the intersection of their members'). A view is derived, so it can go stale whatever
 wrote the page — the worker fixes that by CONVERGENCE rather than by a hook per door: whenever its
@@ -186,8 +186,8 @@ by name with its reason, and pruning tests that fail when a declared exception s
 - API keys only when you want real models, and **every seam reads its own provider's key** rather
   than one shared credential. `OPENAI_API_KEY` serves both defaults — the embedder and the `ask`
   model — and a seam moves by being pointed somewhere else: a provider-prefixed model id
-  (`ANSWER_MODEL`, `VISION_MODEL`, and `STIGMERGY_LIBRARIAN_MODEL`, which the librarian files
-  through under `STIGMERGY_LIBRARIAN_BACKEND=pydantic`) authenticates with that provider's key,
+  (`ANSWER_MODEL` and `STIGMERGY_LIBRARIAN_MODEL`, which the librarian files through under
+  `STIGMERGY_LIBRARIAN_BACKEND=pydantic`) authenticates with that provider's key,
   and embeddings take any OpenAI-compatible host (`EMBED_BASE_URL` + `EMBED_API_KEY`). The test
   suite is keyless by construction, and so is the walkthrough below.
 
@@ -259,11 +259,11 @@ beside it in the source; the two bare modules at the top are small enough to be 
 |---|---|
 | `text.py` | the bottom of the stack: the hardened UNTRUSTED-DATA fence, sanitize, clamp, and the one parser for a capture's `<path>@<sha>` result ref |
 | `review_kinds.py` | the review inbox's THREE kind constants (identity-proposal, alias-proposal, repair-proposal) and the two legacy names the ledger still holds — dependency-free, so a Block Kit renderer can name them without importing the server |
-| `kernel/` | a LIBRARY that imports nothing from this project: the model dispatch, the page contract's cap + scalar emitter, frontmatter parsing, the ACL resolver, the entity registry, and the document converters the Drive door runs — text extraction plus the vision OCR fallback |
+| `kernel/` | a LIBRARY that imports nothing from this project: the model dispatch, the page contract's cap + scalar emitter, frontmatter parsing, the ACL resolver, and the entity registry |
 | `index/` | the hybrid derived index: postgres+pgvector, reciprocal rank fusion, contract ranking |
 | `server/` | the single MCP server — the ONLY API over the brain; HTTP transport with per-request bearer auth, audit log, rate limits, the capture surface, the incremental-index webhook, entity navigation and the review lane |
 | `answer/` | the answering agent + deterministic verifier: powers the `ask` tool |
-| `capture/` | the durable capture queue: submit, claim, the evidence plane, retention; and the TWO operator drop CLIs — the meeting one, and the Drive door (fetch with the operator's own Google auth, original bytes to evidence, one `kind="drive"` row, no model) |
+| `capture/` | the durable capture queue: submit, claim, the evidence plane, retention — ONE vocabulary of four kinds (`raw`, `page`, `meeting`, `document`) for every door; and `stigmergy-queue`, the operator's view of the write path without a SQL client |
 | `librarian/` | the filing engine: the worker, the agent, the nine gates, the commit; the entity proposals it writes, the deployed worker, the meeting flow |
 | `entities/` | the rules of entity birth (the name gate, the collision fold, the page render the librarian runs) and the governance after it: a proposal → a steward's approve / merge / decline → registry regenerate. `stigmergy-entities create` introduces an entity by commissioning a capture, never by writing a page |
 | `slack/` | the Slack transport: 🧠 capture, Q&A, the steward doorbell |

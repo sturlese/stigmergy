@@ -9,8 +9,9 @@ crons (`index-rebuild` · `retention-purge` · `gardener` · `repair-propose`), 
 console on the `app` group, and the golden evals under `evals/` with the release gates
 (`make gates`) over them.
 
-Organized by OPERATION: Deploy · Wipe & re-seed · Capture from Drive · Index rebuild ·
-Govern · Remove pages · Recovery · Revocation · Release gates & drills · Troubleshooting.
+Organized by OPERATION: Deploy · Wipe & re-seed · Capturing a meeting or a document ·
+Index rebuild · Govern · Remove pages · Recovery · Revocation · Release gates & drills ·
+Troubleshooting.
 
 There is no read site: navigation happens through `read_page` and the entity tools
 ([ADR 022](../decisions/022-entity-navigation.md)).
@@ -57,11 +58,6 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    # (`anthropic:` -> ANTHROPIC_API_KEY, `openrouter:` -> OPENROUTER_API_KEY,
    # `google-gla:` -> GEMINI_API_KEY). A missing one is refused at startup, by name.
    fly secrets set ANTHROPIC_API_KEY="sk-ant-..."
-   # OPTIONAL, worker only: the Drive door's OCR fallback for a scanned PDF. Two forms: this key
-   # serves the bare Gemini VISION_MODEL; a provider-prefixed VISION_MODEL secret
-   # ("openrouter:qwen/qwen3-vl-8b-instruct", with OPENROUTER_API_KEY) OCRs rasterized pages
-   # instead. Neither set means a scanned deck refuses honestly (see "Capture from Drive").
-   fly secrets set GEMINI_API_KEY="..."
    # the Slack transport (`slack` group) — or `make slack-secrets` to stage all three from .env
    fly secrets set SLACK_APP_TOKEN="xapp-..."
    fly secrets set SLACK_BOT_TOKEN="xoxb-..."
@@ -254,13 +250,11 @@ Four standing rules:
   the count includes it. Two workers actually draining is `worker=3`. Read the STATE column,
   never the count. On a pinned deployment the standby does not exist at all.
 - **The kill window is shorter than one item.** Fly caps `kill_timeout` at 300s; one item's
-  worst case on the deployed worker is 1710s (two agent attempts at the deployed
-  `STIGMERGY_LIBRARIAN_TIMEOUT_S=600`, plus 120s for the gates, the commit and the push, plus
-  390s for a drive conversion — a scanned deck rasterizes and OCRs before its first agent pass).
-  A deploy
+  worst case on the deployed worker is 1320s (two agent attempts at the deployed
+  `STIGMERGY_LIBRARIAN_TIMEOUT_S=600`, plus 120s for the gates, the commit and the push). A deploy
   or `fly machine stop` SIGTERMs (the worker stops claiming and exits at the next terminal
   state), but an item still running at 300s is SIGKILLed — the row returns after the derived
-  1890s visibility timeout with an attempt burned, and the next worker files it. Drain first if
+  1500s visibility timeout with an attempt burned, and the next worker files it. Drain first if
   you would rather not exercise that: `make librarian-status` shows what is in flight.
 
 The first worker line after a deploy is the one worth reading:
@@ -410,63 +404,46 @@ anything in this repo. Every zone has a closed set of writers:
 | Zone | Written by |
 |---|---|
 | `wiki/notes,decisions,concepts/` | the librarian, filing a capture through the nine gates |
-| `wiki/meetings/` + `sources/meetings/` | the meeting flow, from a `stigmergy-meeting drop` |
-| `sources/slack/`, `sources/drive/` | the librarian's source attachment, from the 🧠 gesture and `stigmergy-drive drop` |
+| `wiki/meetings/` + `sources/meetings/` | the meeting flow, from a `brain_submit(kind="meeting", …)` |
+| `sources/slack/`, `sources/documents/` | the librarian's source attachment, from the 🧠 gesture and a `brain_submit(kind="document", …)` |
 | `wiki/entities/` (+ `ops/entity-registry.json`) | two writers, and no third: `librarian.identity` CREATES an entity page inside the capture's own commit — `approved_by: ""` for one it proposed, the steward's name for one they REGISTERED through that capture — and appends new facts and connections to a registered entity's page; `stigmergy.entities` DECIDES a proposal — a steward's own commit from the CLI, or a server-driven decision from MCP, Slack or the console ([ADR 030](../decisions/030-server-side-entity-minting.md)) |
 | `views/` | `stigmergy.views` **only** — either `stigmergy-views regenerate` by hand, or the librarian's best-effort trigger right after a meeting files |
 
 After any bulk re-seed: rebuild the index (next section) and run `make index-check`.
 
-## Capture from Drive
+## Capturing a meeting or a document
 
-### `stigmergy-drive drop` — the Drive door
+Both enter over `brain_submit`, from whatever client already holds the text. There is no operator
+command for either and no Google credential anywhere in the deployment: the CLIENT is the extractor
+— a Claude session with the Drive connector reads the document and submits it, a person with the
+file open sends what it says, a script sends what it already has
+([ADR 044](../decisions/044-the-capture-is-the-approval.md) D4).
 
-One command, from YOUR terminal, with YOUR Google auth ([ADR 028](../decisions/028-drive-door.md)
-— no Google credential exists server-side; the worker converts from the evidence blob and never
-talks to Drive):
+| What | The call |
+|---|---|
+| a transcript | `brain_submit(kind="meeting", material=<the transcript>, hints={"title": …, "meeting_date": "YYYY-MM-DD", "attendees": "a, b"})` — `title` and `meeting_date` are required |
+| a document | `brain_submit(kind="document", material=<the document's text>, hints={"title": …, "source_url": "https://…"})` — `title` is required, `source_url` is optional and must be an http(s) URL |
 
-    stigmergy-drive drop '<share-URL-or-file-id>' [--submitted-by you@example.com] \
-                       [--allow-split-stores]
+Material is capped at 1 MB for both (256 KB for `raw` and `page`), in UTF-8 bytes. A submission
+missing a required hint, or over its cap, is refused at the enqueue seam with no queue row and no
+evidence blob written.
 
-**The door refuses a queue and a store on different deployments** (exit 3, before any fetch or
-upload): a remote `STIGMERGY_INDEX_DSN` with a loopback evidence endpoint files a row whose bytes
-the deployed worker can never read. That is the shape `set -a; source .env` produces, because
-this repo's `.env` keeps the bucket under `R2_*` names while the code reads
-`STIGMERGY_EVIDENCE_*`. Export the deployment's own evidence group, or pass `--allow-split-stores`.
+A meeting files a page SET — the verbatim transcript under `sources/meetings/`, one `wiki/meetings/`
+page and one `wiki/decisions/` page per decision, atomically
+([meeting-distiller.md](./meeting-distiller.md)). A document files ONE synthesis page beside the
+verbatim `sources/documents/` part(s), anchored — to a registered entity, to one this capture
+proposes, or company-wide with a reason — like every capture; the `source_url` hint lands as `url:`
+on the source page, as the submitter's own claim of where the text came from.
 
-Requirements, all local: `gog` installed and authenticated (`brew install steipete/tap/gogcli`,
-`gog auth add` — check with `gog auth list`), and the same DSN/evidence environment every other
-operator CLI uses (`STIGMERGY_INDEX_DSN` + the `STIGMERGY_EVIDENCE_*` group for staging; compose
-defaults with none set). `--submitted-by` defaults to `$STIGMERGY_MEETING_OPERATOR_EMAIL`.
-
-**What it does — and nothing more**: resolves the file, refuses what the door does not convert,
-downloads (a native Google Doc/Slide/Sheet is exported to PDF by Drive itself), uploads the ORIGINAL
-BYTES to evidence, and enqueues exactly ONE `kind="drive"` row whose material is a deterministic
-manifest. No model, no conversion at the door. The worker extracts the text (pdftotext first; one
-bounded vision OCR pass for a scanned PDF when the worker has one configured — `GEMINI_API_KEY`
-for the bare Gemini model, or a provider-prefixed `VISION_MODEL` with its provider's key; the
-prefixed form transcribes at most the first 40 pages and says in-line where it cut; OPTIONAL,
-neither configured means scanned decks refuse honestly) and the librarian files ONE synthesis page plus the verbatim
-`sources/drive/` part(s), atomically, anchored — to a registered entity, to one this capture
-proposes, or company-wide with a reason — like every capture.
-
-**The format policy**: pdf · txt/md/json · xlsx/xls/csv/tsv · docx · any native Google file. An
-office binary (pptx/ppt/doc/odt/odp/ods/rtf) is refused naming its wake condition: the `office`
-conversion path works wherever `GOTENBERG_URL` points at a Gotenberg container, and
-`docker-compose.yml` runs none (the code's default `http://gotenberg:3000` resolves to nothing
-there), so such a document fails conversion until you stand one up. Files over 25 MB are refused at
-the door.
-
-**Reading the result**: `stigmergy-queue show <id>` — a `failed` row naming the `conversion`
-stage is the extraction refusing (scanned + no OCR, empty text, over the material cap, corrupt
-file); the operator's log has the detail the wire omits. The filed source page carries `url:` → the
-Drive link (the binary stays in Drive: door, never mirror) and its explicit chain `id:`.
+**Reading the result**: `stigmergy-queue show <id>`, or `brain_submissions` from the client that
+submitted it. A `failed` row names the stage the filing died at — there is no `conversion` stage,
+because nothing is fetched or converted server-side.
 
 **The agent budget for documents**: the deployed worker runs with
-`STIGMERGY_LIBRARIAN_TIMEOUT_S=600` (fly.toml), because a figure-dense deck overlapping an entity
-with existing pages exceeds the paste-sized 300s default. A `failed` row saying "the agent exceeded
-its NNNs budget" on a drive capture means the pass ran long, not that the capture is bad — re-drop
-it (identical bytes dedup only against FILED rows). The visibility timeout derives from this value.
+`STIGMERGY_LIBRARIAN_TIMEOUT_S=600` (fly.toml), because a figure-dense document overlapping an
+entity with existing pages exceeds the paste-sized 300s default. A `failed` row saying "the agent
+exceeded its NNNs budget" means the pass ran long, not that the capture is bad — submit it again
+(identical bytes dedup only against FILED rows). The visibility timeout derives from this value.
 
 ## Index rebuild
 
@@ -582,9 +559,9 @@ note to it, and the identity is born confirmed by you:
 `--about` is required and must not be blank: it is the material the page is written from, and a
 page with nothing said about the entity is not written at all. `--id` must be the slug of `--name`
 — the registry is derived from the page. Because it enqueues a capture, `create` needs the queue
-database (`--dsn`) **and** the evidence store, from the same environment the drop CLIs read
-(`stigmergy-meeting`, `stigmergy-drive` — see [capture.md](./capture.md)); `--allow-split-stores`
-is the same escape hatch they carry. It prints the capture to follow:
+database (`--dsn`) **and** the evidence store, from the same environment every other operator CLI
+reads (see [capture.md](./capture.md)). It is the ONE command left that enqueues, so it is the one
+that carries the split-stores refusal and its `--allow-split-stores` escape hatch. It prints the capture to follow:
 
 ```
 commissioned — capture #41: the librarian writes the page of Acme Corp from what you said and what
@@ -691,28 +668,28 @@ material and don't paste it into shared trackers.
 ### A dead worker mid-item — lease redelivery
 
 A dead worker costs one delivery, never a capture: the row returns to `queued` after the visibility
-timeout (1290s default) with `attempts` incremented, and the next worker files it. Observe and force:
+timeout (900s default) with `attempts` incremented, and the next worker files it. Observe and force:
 
 ```sh
 .venv/bin/stigmergy-queue list                              # depth per status + newest submissions
 .venv/bin/stigmergy-queue show 7                            # one submission's trace and latencies
 .venv/bin/stigmergy-queue reclaim --visibility-timeout 0    # release EVERY claimed row, right now
-.venv/bin/stigmergy-queue reclaim --visibility-timeout 1290  # ...only ones past a 1290s lease
+.venv/bin/stigmergy-queue reclaim --visibility-timeout 900   # ...only ones past a 900s lease
 ```
 
 `--visibility-timeout` is mandatory on `reclaim` and the command refuses without it: it decides
 how dead a worker must be before its work is taken away, and the CLI cannot see the lease that
 worker actually holds — a shorter horizon requeues captures out from under processes still filing
 them. Pass `0` when you know the worker is gone, or the worker's own lease otherwise. That lease is
-DERIVED from the per-item budget rather than fixed: 1290s at the default
-`STIGMERGY_LIBRARIAN_TIMEOUT_S`, **1890s on the deployed worker**, which runs at 600 (the extra
-390s in both is the drive conversion's bounded worst case — the kernel's three vision clocks).
+DERIVED from the per-item budget rather than fixed: 900s at the default
+`STIGMERGY_LIBRARIAN_TIMEOUT_S` (two agent attempts, 120s of gates, 180s of headroom), **1500s on
+the deployed worker**, which runs at 600.
 `stigmergy-librarian status --json` prints the resolved `visibility_timeout_s` for the environment
 it is run in — read it there rather than assuming the default.
 
 The admin console's Reclaim button states **the same derived lease**, resolving
 `STIGMERGY_LIBRARIAN_TIMEOUT_S` through the worker's own arithmetic per request, so the Worker tab's
-meter and the button agree with `status --json` (1890s on staging). Two conditions make that hold:
+meter and the button agree with `status --json` (1500s on staging). Two conditions make that hold:
 `fly.toml`'s `[env]` is app-wide, so the console process reads the variable the worker resolved; and
 the worker command passes no `--visibility-timeout`, which would beat the derivation and which the
 console cannot see. It does **not** hold in the local composition, where `docker-compose.yml` gives
@@ -760,9 +737,9 @@ apply is not a dismissal.
 ### A view that did not catch up
 
 **Usually you do not have to do anything.** The librarian worker converges `views/` to the corpus
-on its own interval, whenever its queue is idle — an ordinary capture, a Slack or Drive drop, an
-applied repair, an entity born and a hand edit are all covered, and so is an entity that has never
-had a view at all. `stigmergy-views` is for when you do not want to wait:
+on its own interval, whenever its queue is idle — an ordinary capture, a 🧠 gesture, a submitted
+meeting or document, an applied repair, an entity born and a hand edit are all covered, and so is
+an entity that has never had a view at all. `stigmergy-views` is for when you do not want to wait:
 
 ```sh
 .venv/bin/stigmergy-views regenerate --entity acme-corp           # exactly this entity
@@ -986,7 +963,7 @@ kill -9 <that pid>                            # mid-item, no goodbye
 .venv/bin/stigmergy-queue list                  # still `claimed` — the lease is honest about the hold
 .venv/bin/stigmergy-queue reclaim --visibility-timeout 0   # force redelivery now — you killed it, so
                                                          # there is no lease left to respect (the
-                                                         # worker's own horizon is 1290s, derived
+                                                         # worker's own horizon is 900s, derived
                                                          # from the per-item budget)
 .venv/bin/stigmergy-queue show <id>             # attempts incremented; the row is `queued` again
 ```

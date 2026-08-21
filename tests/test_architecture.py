@@ -84,12 +84,10 @@ def test_the_kernel_imports_nothing_from_this_project_except_itself(path):
 def test_the_kernel_never_imports_an_agent_framework_at_module_level(path):
     """A keyless offline run must never load a provider SDK — the rule, applied where the
     dispatch lives. `kernel.llm` imports `pydantic_ai.Agent` for its type surface, but the
-    model/provider construction (`build_model`) is imported INSIDE the openai branch, and
-    `converters.vision_extract` imports its SDKs (the Gemini one on the bare form, pydantic-ai
-    on the provider-prefixed form) only when vision is actually used."""
+    model/provider construction (`build_model`) is imported INSIDE the openai branch."""
     offenders = [f"{path.name}:{line} -> {mod}"
                  for mod, line in _module_level_all(path)
-                 if mod.startswith(("google.genai", "pydantic_ai.models", "pydantic_ai.providers"))]
+                 if mod.startswith(("pydantic_ai.models", "pydantic_ai.providers"))]
     assert not offenders, (
         "stigmergy.kernel loads a provider SDK at module level (move it inside the branch that "
         "needs it):\n  " + "\n  ".join(offenders))
@@ -157,13 +155,6 @@ _REVIEW_DECLARED_TRANSITIVE_KERNEL_MODULES = frozenset({
     "stigmergy.kernel",
     "stigmergy.kernel.acl",
     "stigmergy.kernel.frontmatter",
-    # `librarian.config`'s lease derivation imports the drive conversion's three timeout
-    # ceilings from the module that owns them (issue #113: CONVERSION_BUDGET_S is imported,
-    # never retyped, so the lease term cannot drift from the clocks it stands for) — and
-    # `review` reaches `config` through the same librarian primitives it already declares.
-    # Import-time weight only; no provider SDK loads at module level (the kernel's own rule,
-    # pinned above).
-    "stigmergy.kernel.converters",
     # `kernel.registry.save_registry` writes through `fsutil.write_text_atomic` (and
     # `entities.decide` rolls back through `clone.restore_tracked`), so an interrupted write cannot
     # leave a truncated `ops/entity-registry.json`.
@@ -371,13 +362,10 @@ def test_only_capture_cli_may_import_the_index():
     queue lives (`capture/cli.py`: "the ONLY place in `stigmergy.capture` that opens a database
     connection or reads the environment").
 
-    **`capture.meeting_cli` and `capture.drive_cli` share the exemption**, for the identical
-    reason: they are the second and third operator CLI entry points (`stigmergy-meeting`,
-    `stigmergy-drive`) in the `stigmergy-queue` mold — same posture, same job (open a connection, read
-    the environment), same "this module IS the CLI" argument `capture/cli.py`'s own docstring
-    already makes for itself. The Drive seam library (`drive_client`) stays out of the exemption:
-    it talks to `gog`, never to Postgres. Nothing else in `stigmergy.capture` has an opinion about
-    where the queue lives.
+    It is the ONLY operator CLI left in the package: the meeting and the document flows are
+    entered at `brain_submit` like every other kind (ADR 044 D4), so no second module here opens
+    a connection or reads the environment. Nothing else in `stigmergy.capture` has an opinion
+    about where the queue lives.
 
     **This assertion was once split in two, and putting it back together moved code rather than
     narrowing the rule.** A steward's `--reason` was reaching a submitter unsanitized, and the
@@ -394,13 +382,13 @@ def test_only_capture_cli_may_import_the_index():
     """
     offenders = [f"{p.name}:{line} -> {mod}"
                  for p in CAPTURE_SOURCES
-                 if p.name not in ("cli.py", "meeting_cli.py", "drive_cli.py")
+                 if p.name != "cli.py"
                  for mod, line in _all_module_imports(p)
                  if mod.startswith("stigmergy.index")]
     assert not offenders, (
-        "a stigmergy.capture module OTHER than the operator CLIs (cli.py/meeting_cli.py/"
-        "drive_cli.py) imported stigmergy.index — the queue does not depend on the search index, "
-        "and text hygiene lives in stigmergy.text:\n  " + "\n  ".join(offenders))
+        "a stigmergy.capture module OTHER than the operator CLI (cli.py) imported "
+        "stigmergy.index — the queue does not depend on the search index, and text hygiene lives "
+        "in stigmergy.text:\n  " + "\n  ".join(offenders))
     used = {mod for mod, _ in _all_module_imports(CAPTURE / "cli.py") if mod.startswith("stigmergy.index")}
     assert used, "capture.cli no longer imports stigmergy.index — the connection seam drifted"
 
@@ -418,17 +406,16 @@ def test_stigmergy_text_is_the_bottom_of_the_stack():
         "it must depend on none of them:\n  " + "\n  ".join(offenders))
 
 
-@pytest.mark.parametrize("path", [p for p in CAPTURE_SOURCES
-                                  if p.name not in ("cli.py", "meeting_cli.py")],
+@pytest.mark.parametrize("path", [p for p in CAPTURE_SOURCES if p.name != "cli.py"],
                         ids=lambda p: p.name)
 def test_capture_library_modules_never_import_raw_psycopg(path):
     """No capture library module may open its own Postgres connection — every function takes
     `conn` as an argument (module docstring: "library code in this package never opens a
     connection"). `queue.py`/`ops.py` import `psycopg.types.json.Jsonb` for JSONB marshalling,
     which is fine (no connection capability); importing bare `psycopg` (the module `.connect`
-    lives on) would be the actual violation, and only the three operator CLIs — `cli.py`,
-    `meeting_cli.py` and `drive_cli.py` (all via `stigmergy.index.store.connect`, checked above —
-    entry points, which is what the exemption is for) — may reach a database at all."""
+    lives on) would be the actual violation, and only the operator CLI — `cli.py`, via
+    `stigmergy.index.store.connect`, checked above; an entry point, which is what the exemption
+    is for — may reach a database at all."""
     offenders = [f"{path.name}:{line} -> {mod}"
                  for mod, line in _all_module_imports(path) if mod == "psycopg"]
     assert not offenders, (

@@ -100,7 +100,7 @@ MEETING_MATERIAL = (
 
 
 def submit_meeting(conn, evidence_store, material: str) -> dict:
-    """`stigmergy-meeting drop`'s own enqueue seam, called directly rather than via subprocess."""
+    """The meeting kind's own enqueue seam — what `brain_submit(kind="meeting")` calls — used directly."""
     hints = {"title": MEETING_TITLE, "meeting_date": MEETING_DATE,
              "source_label": "granola-manual"}
     return queue.submit(conn, evidence_store, kind=schema.MEETING, material=material, hints=hints,

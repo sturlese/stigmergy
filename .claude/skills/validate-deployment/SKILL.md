@@ -151,18 +151,22 @@ that file means *open*, the opposite of what it means everywhere else).
   quoted knowledge — never followed.
 - **Trap parameters**: a client sending `submitted_by`/`verification`/`acl`/`content_hash` is
   refused; those are server-computed facts.
-- **The meeting door**: `brain_submit` with `kind="meeting"` is refused by name.
+- **The four kinds**: `brain_submit` takes `raw`, `page`, `meeting` (with `title` and
+  `meeting_date`) and `document` (with `title`, optionally `source_url`). Submit a transcript and
+  a document's text and follow both through `brain_submissions`; a meeting missing `meeting_date`
+  is refused by name, with no row queued.
 
 ## Block 7 — the flows that stay on the CLI by design
 
-Meeting drop · Drive drop · view regeneration · entity mint. Run them yourself, with the
+View regeneration · entity registration (`stigmergy-entities create`). Run them yourself, with the
 environment mapped as above (note `stigmergy-views` also needs `OPENAI_API_KEY`, and the
 knowledge-repo commands run from that checkout with `--repo .`).
 
 **The failure to watch for**: the queue and the evidence store are configured independently, so
-a drop can queue against a remote database while uploading evidence to a local MinIO. The
-capture then fails seconds later with `NoSuchKey`. Verify both halves point at the same
-deployment before dropping anything.
+`stigmergy-entities create` can queue against a remote database while uploading evidence to a
+local MinIO. The capture then fails seconds later with `NoSuchKey` — which is why that command
+refuses the combination outright. Verify both halves point at the same deployment before
+commissioning anything.
 
 ## Closing
 

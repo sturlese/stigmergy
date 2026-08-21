@@ -46,7 +46,7 @@ stigmergy-brain/
 ├── sources/           # captured raw material, verbatim — never edited
 │   ├── meetings/      # the transcript behind a meeting page
 │   ├── slack/         # the thread behind a 🧠 capture
-│   └── drive/         # the document behind a `stigmergy-drive drop`
+│   └── documents/     # the text behind a `kind="document"` capture
 ├── views/             # views/<entity-id>.md — written only by `stigmergy.views`
 └── ops/               # configuration the platform reads
     ├── identities.json        # REQUIRED — the server fails closed without it
@@ -73,8 +73,8 @@ The zones differ by **who writes them**:
 | `sources/` | the librarian worker only, from the captured material, byte for byte | what someone said or sent — written once, never edited |
 | `views/` | `stigmergy.views` only — ONE writer, three entry points: the librarian worker's periodic convergence sweep (the guarantee), the librarian right after a meeting files (best-effort), and `stigmergy-views regenerate` by hand | derived rollups, regenerated from their members |
 
-A capture **door** (the 🧠 gesture, `stigmergy-meeting drop`, `stigmergy-drive drop`, `brain_submit`)
-never writes a page. It puts a row on the queue and uploads the original bytes to the evidence
+A capture **door** (the 🧠 gesture, `brain_submit` from any MCP client, the console's *Register an
+entity*) never writes a page. It puts a row on the queue and archives the material in the evidence
 plane; the worker is what turns that into commits. So "nothing reached the repo" and "nothing was
 captured" are different states, and the second one is much rarer than it looks.
 

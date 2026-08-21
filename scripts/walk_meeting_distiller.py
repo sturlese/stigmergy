@@ -67,7 +67,7 @@ def main() -> int:
         settings = support.build_settings(env, worktree_root=os.path.join(tmp, "worktrees"))
         deps = support.build_deps(env, settings)
 
-        step("drop a transcript naming two decisions (stigmergy-meeting drop, simulated)")
+        step("drop a transcript naming two decisions (brain_submit kind=meeting, simulated)")
         ack = support.submit_meeting(conn, deps, TRANSCRIPT, title="Q3 Pricing Sync",
                                      meeting_date="2026-07-29", attendees="Dana, Alice")
         show("queued", f"#{ack['id']} (kind={schema.MEETING!r})")

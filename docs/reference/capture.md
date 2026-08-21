@@ -30,28 +30,49 @@ in are retired (see [The queue](#the-queue)).
 | `retention.py` | `purge` — physical deletion of `payload`/`hints`/`outcome` on old terminal rows, plus the age-independent reconciliation for a secret/PII rejection; `purge_secret_capture_immediately` — `payload`/`hints`, right now, for exactly that rejection |
 | `latency.py` | capture→filed and capture→searchable p50/p95 from the trace alone, here rather than in `stigmergy.librarian` so `stigmergy.server.pilot_report` can reach it too |
 | `render.py` | the operator dialect every CLI prints in: `depth_line`, `format_ms`, `format_age`, `clean_for_terminal`, `RECLAIM_NOW`. Below the CLIs, because `latency.py` and `stigmergy-librarian`/`stigmergy-entities` read it too; it reaches nothing but `stigmergy.text` |
-| `cli.py` | `stigmergy-queue` — the operator's view: list · show · claim · reclaim · purge; `render.py`'s names are re-exported here for the CLIs that already take them from this module |
-| `meeting_cli.py` | `stigmergy-meeting drop` — the ONE door onto the meeting flow: validate → upload the transcript as evidence → enqueue exactly one `kind="meeting"` row, and nothing else. See [meeting-distiller.md](./meeting-distiller.md) |
-| `drive_cli.py` | `stigmergy-drive drop` — the ONE door onto the Drive flow ([ADR 028](../decisions/028-drive-door.md)): fetch one Drive file with the operator's own Google auth, upload the ORIGINAL bytes to evidence, enqueue exactly one `kind="drive"` row. It runs no model and performs no conversion — extraction is the worker's |
-| `drive_client.py` | the Drive seam the drop CLI fetches through; it talks to `gog`, never to Postgres |
+| `cli.py` | `stigmergy-queue` — the operator's view: list · show · claim · reclaim · purge; `render.py`'s names are re-exported here for the CLIs that already take them from this module; and the split-stores guard (`add_split_stores_flag` / `refuse_split_stores` / `EXIT_SPLIT_STORES`) the one CLI that still enqueues runs before it does |
 | `errors.py` | the domain exceptions (`SubmissionRejected`, `EvidenceError`, `QueueStateError`), all under `CaptureError` |
 
 **Layering.** `capture` must never import `stigmergy.server` or `stigmergy.answer`; `stigmergy.server`
-imports `capture`. The outward edge is to `stigmergy.index`, with one rule: **only the three
-operator CLIs may import `stigmergy.index`** — `capture.cli`, `capture.meeting_cli` and
-`capture.drive_cli`, asserted by `tests/test_architecture.py::test_only_capture_cli_may_import_the_index`.
-Library code here never opens a connection and never reads the environment: every function takes
-`conn`, and an entry point supplies it. `drive_client` talks to `gog`, not to a database.
+imports `capture`. The outward edge is to `stigmergy.index`, with one rule: **only `capture.cli` may
+import `stigmergy.index`**, asserted by
+`tests/test_architecture.py::test_only_capture_cli_may_import_the_index`. Library code here never
+opens a connection and never reads the environment: every function takes `conn`, and an entry point
+supplies it.
 
 ## The two MCP tools
 
 | Tool | What it does |
 |---|---|
-| `brain_submit(kind, material, hints?)` | queue a capture. Over MCP `kind` is `raw` (a conversation excerpt, a decision, a gotcha) or `page` (markdown you drafted) — `MCP_SUBMIT_KINDS`, deliberately narrower than the queue's own `KINDS`, which also carries `meeting` and `drive`: those two are the drop CLIs' to enqueue, and restricting them here rather than leaving it to `KINDS` is what keeps `stigmergy-meeting` and `stigmergy-drive` genuinely the only doors onto their flows. `hints` optionally suggests placement — `type`, `path`, `entity`, `title`, suggestions only. Three further allowlists exist for the surfaces that carry provenance rather than placement (`SOURCE_HINT_KEYS` for Slack, `MEETING_HINT_KEYS` for the meeting drop CLI, `DRIVE_HINT_KEYS` for the Drive one), and a fifth carries AUTHORITY rather than either: `REGISTER_HINT_KEYS` (`register_name`, `register_type`, `register_aliases`, `register_source`), refused outright here — see [A registration is a capture](#a-registration-is-a-capture-and-only-two-doors-may-assert-one). Two of the three provenance lists name the small subset a downstream reader actually TRUSTS, and only those are refused at the client seam: `SOURCE_PROVENANCE_HINT_KEYS` (`source_client`, `source_permalink`) and `DRIVE_PROVENANCE_HINT_KEYS` (`drive_file_id`, `drive_url`). `MEETING_HINT_KEYS` has no such subset — a meeting row can only be created by the drop CLI in the first place. `ALLOWED_HINT_KEYS` is the union of all five lists, and anything outside it is refused by name. Returns an ack with the submission id, the archived object key and a message that promises exactly what happened: **queued and attributed**, not "saved" — plus `entities`, the registered entities this material already names (`{id, name, proposed}` each, ACL-scoped like `list_entities`), so a submitter sees on the spot which identities the brain recognises |
+| `brain_submit(kind, material, hints?)` | queue a capture. `kind` names the SHAPE of the material, and it is the queue's own `KINDS` with nothing held back: `raw` (a conversation excerpt, a decision, a gotcha), `page` (markdown you drafted), `meeting` (a transcript) or `document` (the text of a document you already hold). ONE vocabulary for every door — no door has a kind of its own, so nothing here is narrower than anywhere else ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D4). The material cap is per kind, in UTF-8 bytes: 256 KB for `raw` and `page`, 1 MB for `meeting` and `document` (`MATERIAL_CAP_BYTES`, read through `max_material_bytes(kind)`; `MAX_MATERIAL_BYTES` is the largest of them, which is what a transport's request-body limit has to fit). `hints` optionally suggests placement — `type`, `path`, `entity`, `title`, suggestions only. Three further allowlists carry provenance rather than placement (`SOURCE_HINT_KEYS` for the Slack transport, `MEETING_HINT_KEYS` — `meeting_date`, `attendees`, `source_label` — and `DOCUMENT_HINT_KEYS` — `source_url`), and a fifth carries AUTHORITY rather than either: `REGISTER_HINT_KEYS` (`register_name`, `register_type`, `register_aliases`, `register_source`), refused outright here — see [A registration is a capture](#a-registration-is-a-capture-and-only-two-doors-may-assert-one). Exactly one provenance subset is door-gated: `SOURCE_PROVENANCE_HINT_KEYS` (`source_client`, `source_permalink`), refused at the client seam because the Slack TRANSPORT asserts that pair, not a person. Neither a meeting's hints nor a document's are refused from anybody: what a submitter asserts about their own material has the standing the material itself has, and is attributed to them the same way. `ALLOWED_HINT_KEYS` is the union of all five lists, and anything outside it is refused by name. Returns an ack with the submission id, the archived object key and a message that promises exactly what happened: **queued and attributed**, not "saved" — plus `entities`, the registered entities this material already names (`{id, name, proposed}` each, ACL-scoped like `list_entities`), so a submitter sees on the spot which identities the brain recognises |
 | `brain_submissions(limit?, status?)` | what happened to what you captured: your own submissions, newest first, with state, timestamps, `result_ref`, the librarian's `report` (which names the page, the anchor, and any entity or spelling it PROPOSED), the row's `events` and a fenced excerpt. An unrestricted (steward) identity sees the whole queue with `mine` marking its own rows. A capture refused for a secret or PII echoes nothing — see [Withheld material](#withheld-material) |
 
 Both ride `BrainService._call`, so they inherit per-identity rate limiting, the audit row and
 the error shaping the read tools have — one seam, not a second write path.
+
+### How a meeting and a document enter
+
+Through `brain_submit`, like everything else. Both kinds carry TEXT the CLIENT already holds, and
+the client is what extracted it: an agent session with a Drive connector, a person with the file
+open in front of them, a script. Nothing is fetched or converted server-side — no Google credential
+exists there ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D4).
+
+| Kind | Material | Required hints | Optional hints | Cap |
+|---|---|---|---|---|
+| `meeting` | the transcript | `title`, `meeting_date` (`YYYY-MM-DD`) | `attendees`, `source_label` | 1 MB |
+| `document` | the document's text | `title` | `source_url`, one line and `http(s)` | 1 MB |
+
+Both requirement sets are checked in `schema.prepare_submission` — the seam every caller of
+`queue.submit` crosses, so no door can skip them, and the refusal happens before any blob or row is
+written. Each requirement earns its place: a missing `meeting_date` silently degrades every filed
+decision page's `as_of` to today, and a document with no title has no identity for its source page
+to carry.
+
+What the worker does with them differs. A `meeting` runs the second flow and files a page SET
+(source + meeting + one decision page per decision — [meeting-distiller.md](./meeting-distiller.md));
+a `document` runs the ordinary flow with the source attachment on, so a synthesis page lands beside
+the verbatim `sources/documents/` part(s), and `source_url` lands as `url:` on them
+([librarian.md → The source attachment](./librarian.md#the-source-attachment-a-parameter-never-a-third-flow)).
 
 ### Nothing is ever asked of a submitter
 
@@ -194,11 +215,10 @@ N parallel claimers against M queued rows produce exactly M claims, no row claim
 
 A claim is a **lease**: `claimed_at` plus the visibility timeout the claimer states. `claim_next`
 defaults to 300 s (a human-scale `stigmergy-queue claim`); the librarian's worker claims with its own
-derived lease, 1290 s by default, because one item can run two agent attempts plus the gates
-plus a drive conversion's bounded worst case
-(`librarian.config.minimum_visibility_timeout_s`). A worker that dies mid-item leaves a stale claim
-the next claimer's sweep returns to `queued`. That sweep also runs in the librarian's worker loop
-and standalone as `stigmergy-queue reclaim`; `queue.release_expired` has **no default** horizon,
+derived lease, 900 s by default, because one item can run two agent attempts plus the gates plus
+the headroom on top of both (`librarian.config.minimum_visibility_timeout_s`). A worker that dies
+mid-item leaves a stale claim the next claimer's sweep returns to `queued`. That sweep also runs in
+the librarian's worker loop and standalone as `stigmergy-queue reclaim`; `queue.release_expired` has **no default** horizon,
 because a sweeper cannot see the lease of the worker whose work it is taking away.
 
 `attempts` counts **deliveries**: incremented when a row is claimed, never on release. A worker
@@ -231,23 +251,24 @@ The key is verifiable: re-hash the bytes and compare (`content_key` is pure). Th
 appears in the submission's `audit_log` row, so "who submitted what, when" joins to "which object
 holds it" without the audit row ever carrying the material.
 
-`blob_refs[0]` is always the text material. A Drive row carries a second key: `queue.submit`'s
-`extra_blob_refs` appends the ORIGINAL document bytes at `blob_refs[1]`, so the row's material (the
-deterministic manifest dedup keys on) and the artefact the worker converts are separate objects.
-Operator CLIs only — the MCP transport never passes it.
+`blob_refs[0]` is the text material, and today it is the only entry: every kind reaches the queue
+as text, so there is no second artefact to archive beside it. `queue.submit` still takes
+`extra_blob_refs`, appended AFTER the material's own blob so `blob_refs[0]` stays what every reader
+assumes — a door that one day archives an original alongside its text has the seam, and nothing
+passes it now.
 
 The blob is written **before** the queue row, and the order is load-bearing: an orphan blob is
 inert and gets reused by the next identical submission, whereas a row pointing at a blob that was
 never written is a capture whose evidence cannot be produced on demand.
 
-**Both drop CLIs refuse to write across a split deployment.** `stigmergy-meeting drop` and
-`stigmergy-drive drop` check, before any fetch or upload, that the queue's database host and the
-evidence endpoint can plausibly belong to the same deployment (`capture.cli.refuse_split_stores`,
-`evidence.split_stores_reason`, shared by both doors) — a remote queue paired with a loopback
-evidence endpoint is refused with exit `3`, since a deployed worker can never reach a store on the
-operator's laptop and the capture would fail with `NoSuchKey` seconds after being claimed. The
-escape hatch is `--allow-split-stores`. `stigmergy-queue` carries no such guard: none of its
-subcommands upload evidence.
+**The one CLI that enqueues refuses to write across a split deployment.** `stigmergy-entities
+create` checks, before any upload, that the queue's database host and the evidence endpoint can
+plausibly belong to the same deployment (`capture.cli.refuse_split_stores`,
+`evidence.split_stores_reason`) — a remote queue paired with a loopback evidence endpoint is refused
+with exit `3`, since a deployed worker can never reach a store on the operator's laptop and the
+capture would fail with `NoSuchKey` seconds after being claimed. The escape hatch is
+`--allow-split-stores`. `stigmergy-queue` carries no such guard: none of its subcommands upload
+evidence.
 
 ### Configuration
 
@@ -278,7 +299,7 @@ check against the raw bucket.
 .venv/bin/stigmergy-queue show 7                        # one submission's trace and latencies
 .venv/bin/stigmergy-queue claim --hold 60               # take one item; hold the lease, file nothing
 .venv/bin/stigmergy-queue reclaim --visibility-timeout 0    # release EVERY claimed row, right now
-.venv/bin/stigmergy-queue reclaim --visibility-timeout 1290  # ...only ones past the worker's lease
+.venv/bin/stigmergy-queue reclaim --visibility-timeout 900   # ...only ones past the worker's lease
 .venv/bin/stigmergy-queue purge --dry-run               # retention: what would go
 .venv/bin/stigmergy-queue purge                         # retention: delete payload+hints
 ```
@@ -313,7 +334,7 @@ visibility timeout, or `stigmergy-queue reclaim --visibility-timeout 0`.
 > **On `reclaim` the flag is REQUIRED** and the command refuses without it: this CLI cannot see the
 > lease the other worker holds, and a shorter horizon requeues captures out from under processes
 > still filing them. The refusal names the two values that are almost always right: `0` after you
-> killed the worker yourself, and the worker's own lease (1290 s by default) otherwise.
+> killed the worker yourself, and the worker's own lease (900 s by default) otherwise.
 
 Every command exits **130** on Ctrl-C, never `0` — a real lease may still be outstanding.
 
@@ -439,9 +460,9 @@ row keeps its payload, and therefore keeps both.
   It comes from the resolved identity or the submission does not happen.
 - **Never open a second write path.** Both MCP tools go through `BrainService._call`; a
   surface that writes to `capture_queue` directly skips rate limiting, the audit row and
-  attribution at once. The three operator CLIs (`stigmergy-queue`, `stigmergy-meeting`,
-  `stigmergy-drive`) are the declared exception: they hold the DSN, so `--submitted-by` there is
-  attribution, not authorization.
+  attribution at once. The operator CLIs holding the DSN are the declared exception —
+  `stigmergy-queue` for reading and moving rows, `stigmergy-entities create` for the one enqueue
+  left outside the server — so `--submitted-by` there is attribution, not authorization.
 - **Never add a transition that moves a row on a person's behalf.** A capture is finished by the
   worker holding its claim or by the expiry sweep; the parked states and the three dispositions over
   them are retired, and a governance decision is about an IDENTITY, taken after the filing, through

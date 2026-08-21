@@ -180,20 +180,30 @@ def clean_note(text: str, width: int = MAX_NOTE_CHARS) -> str:
 DURABLE_TABLES = ("capture_queue", "audit_log", "job_runs", "ingest_errors")
 
 # ── the submission contract ───────────────────────────────────────────────────────────────────
-# A kind names the SHAPE of the material and which reader claims the row, never a topic.
-KINDS = ("raw", "page", "meeting", "drive")
+# A kind names the SHAPE of the material and which reader claims the row, never a topic. ONE
+# vocabulary for every door (ADR 044 D4): no operator door has a kind of its own, so nothing here
+# is narrower for `brain_submit` than for anyone else.
 RAW = "raw"
+PAGE = "page"
 MEETING = "meeting"
-# A Drive-fetched document: original bytes at blob_refs[1], the text manifest the row's material
-# and dedup key at blob_refs[0]; the worker converts.
-DRIVE = "drive"
+# A document's TEXT, as the client already holds it — an agent with a Drive connector, a person
+# with a file open. Nothing is fetched or converted server-side; the worker files a synthesis page
+# beside the verbatim `sources/documents/` part(s).
+DOCUMENT = "document"
+KINDS = (RAW, PAGE, MEETING, DOCUMENT)
 
-# The kinds `brain_submit` may enqueue, where `kind` is MODEL-CHOSEN. Listed explicitly rather than
-# left to `KINDS`: the drop CLIs are the only doors onto the meeting and drive flows.
-MCP_SUBMIT_KINDS = ("raw", "page")
+# The cap on captured text, in UTF-8 BYTES — what the row and the object store pay for. Per kind,
+# because a transcript or a document's text is legitimately several times a pasted note.
+MATERIAL_CAP_BYTES = {RAW: 256 * 1024, PAGE: 256 * 1024,
+                      MEETING: 1024 * 1024, DOCUMENT: 1024 * 1024}
+# The largest of them: what a transport's request-body limit has to fit.
+MAX_MATERIAL_BYTES = max(MATERIAL_CAP_BYTES.values())
 
-# The hard cap on captured text, in UTF-8 BYTES — what the row and the object store pay for.
-MAX_MATERIAL_BYTES = 256 * 1024
+
+def max_material_bytes(kind: str) -> int:
+    """A kind's own cap — the largest for a kind this module does not know, so a refusal names a
+    real bound rather than raising `KeyError` before `prepare_submission` can refuse the kind."""
+    return MATERIAL_CAP_BYTES.get(kind, MAX_MATERIAL_BYTES)
 
 # Hand-mirrors `stigmergy.server.service.MAX_ARG_CHARS` — `capture` may not import `server`.
 MAX_HINT_CHARS = 8192
@@ -207,8 +217,8 @@ SOURCE_HINT_KEYS = ("source_client", "source_permalink", "source_channel_id",
                     "source_channel_name", "source_thread_ts", "source_participants",
                     "source_message_timestamps")
 
-# The meeting drop CLI's metadata: the date (every filed decision page's `as_of`), attendee names
-# (hints, never identities) and a source label.
+# A meeting's metadata: the date (every filed decision page's `as_of`), attendee names (hints,
+# never identities) and a source label.
 MEETING_HINT_KEYS = ("meeting_date", "attendees", "source_label")
 
 
@@ -219,14 +229,11 @@ SOURCE_PROVENANCE_HINT_KEYS = frozenset({"source_client", "source_permalink"})
 # The Slack door's name for itself, as `BrainService.door` spells it. Imported, never re-spelled.
 SLACK_DOOR = "slack"
 
-# The drive drop CLI's provenance: file id, display name (whose extension the worker converts by),
-# webViewLink, mime type and modifiedTime.
-DRIVE_HINT_KEYS = ("drive_file_id", "drive_name", "drive_url", "drive_mime", "drive_modified")
-
-# The trusted pair, refused from EVERY client door: a hint a reader will trust must not be
-# assertable from any client door. `drive_name` is required at the submit seam but trusted by
-# nothing, a different property.
-DRIVE_PROVENANCE_HINT_KEYS = frozenset({"drive_file_id", "drive_url"})
+# A document's provenance: where the submitter says it came from. It lands as `url:` on the
+# reader-facing source page with the standing the material itself has — the submitter's claim,
+# attributed to the submitter — which is why it is accepted from every door where the Slack pair
+# above is not: that pair is asserted by a transport, this one by a person (ADR 044 D4).
+DOCUMENT_HINT_KEYS = ("source_url",)
 
 # The union `normalize_hints` checks a key against.
 # A steward REGISTERING an entity (ADR 042): the two steward doors — the console's "Register an
@@ -236,7 +243,7 @@ DRIVE_PROVENANCE_HINT_KEYS = frozenset({"drive_file_id", "drive_url"})
 # seam for every client, because a registration is an act of authority and `brain_submit`
 # attributes material, never authority.
 REGISTER_HINT_KEYS = ("register_name", "register_type", "register_aliases", "register_source")
-ALLOWED_HINT_KEYS = (HINT_KEYS + SOURCE_HINT_KEYS + MEETING_HINT_KEYS + DRIVE_HINT_KEYS
+ALLOWED_HINT_KEYS = (HINT_KEYS + SOURCE_HINT_KEYS + MEETING_HINT_KEYS + DOCUMENT_HINT_KEYS
                      + REGISTER_HINT_KEYS)
 
 # Fields a client may never assert: as an argument or a hint each is an explicit error; declared in
@@ -402,19 +409,6 @@ def validate_meeting_date(value: str) -> str:
     return text
 
 
-def reject_drive_provenance_hints(hints: dict | None) -> None:
-    """Fail LOUDLY on `drive_file_id`/`drive_url` from ANY client door: the one legitimate asserter
-    (`stigmergy-drive drop`) never passes through `BrainService._submit`."""
-    present, plural = _present_and_plural(hints, DRIVE_PROVENANCE_HINT_KEYS)
-    if not present:
-        return
-    raise SubmissionRejected(
-        f"{', '.join(present)} {'are' if plural else 'is'} set by the stigmergy-drive operator "
-        f"CLI itself, not by a caller — remove {'them' if plural else 'it'} and resubmit (Drive "
-        f"provenance on a reader-facing source page must come from a fetch that actually "
-        f"happened)")
-
-
 def reject_registration_hints(hints: dict | None) -> None:
     """Fail LOUDLY on any `register_*` hint from ANY client door: the two legitimate asserters
     (the console's Register an entity, `stigmergy-entities create`) never pass through
@@ -469,18 +463,24 @@ def registration_from_hints(hints: dict | None) -> Registration | None:
                         aliases=aliases, source=str(client.get("register_source") or "").strip())
 
 
-def _require_drive_hints(client: dict) -> None:
-    """`kind == DRIVE` requires both hints at THIS seam, which every caller of `queue.submit`
-    crosses. `drive_name` carries the extension conversion dispatches on; missing, it falls
-    through to the `text` method and files a PDF's raw bytes as prose."""
-    if not str(client.get("drive_file_id") or "").strip():
+# A `source_url` is a URL or nothing: one line, a scheme a reader can follow. A bare path or a
+# sentence is not a place the source page could send anybody.
+_SOURCE_URL_RE = re.compile(r"^https?://\S+$")
+
+
+def _require_document_hints(client: dict) -> None:
+    """`kind == DOCUMENT` requires `title` at THIS seam, which every caller of `queue.submit`
+    crosses: the title is the source page's identity. `source_url` is optional, and a URL when
+    present — it lands as `url:` on a reader-facing page."""
+    if not str(client.get("title") or "").strip():
         raise SubmissionRejected(
-            "a drive submission requires hints['drive_file_id'] — the Drive file this capture "
-            "was fetched from")
-    if not str(client.get("drive_name") or "").strip():
+            "a document submission requires hints['title'] — the document's name, used as this "
+            "capture's source page identity")
+    url = str(client.get("source_url") or "").strip()
+    if url and not _SOURCE_URL_RE.match(url):
         raise SubmissionRejected(
-            "a drive submission requires hints['drive_name'] — the file's display name; its "
-            "extension is what the worker's conversion dispatches on")
+            "hints['source_url'] must be an http(s) URL on one line — it lands as `url:` on the "
+            "source page, where a reader follows it")
 
 
 def _require_meeting_hints(client: dict) -> None:
@@ -507,15 +507,16 @@ def prepare_submission(kind: str, material: str, hints: dict | None = None) -> S
             "material contains unpaired surrogate characters, which are not text this can archive "
             "— re-send it as valid UTF-8")
     digest, size = material_digest(material)
-    if size > MAX_MATERIAL_BYTES:
+    cap = max_material_bytes(kind)
+    if size > cap:
         raise SubmissionRejected(
-            f"material too large: {size} bytes (max {MAX_MATERIAL_BYTES}) — submit the part "
-            "worth keeping, not the whole transcript")
+            f"material too large for a {kind}: {size} bytes (max {cap}) — submit the part worth "
+            f"keeping")
     normalized_hints = normalize_hints(hints, material)
     if kind == MEETING:
         _require_meeting_hints(normalized_hints["client"])
-    if kind == DRIVE:
-        _require_drive_hints(normalized_hints["client"])
+    if kind == DOCUMENT:
+        _require_document_hints(normalized_hints["client"])
     return Submission(
         kind=kind,
         material=material,

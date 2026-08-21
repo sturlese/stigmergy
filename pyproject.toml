@@ -15,11 +15,7 @@ dependencies = [
   "pydantic-ai==2.13.0",      # the agents (answer synthesizer, view synthesis, gardener sweep) — pinned exactly: the agent framework's API drives tool wiring and output schemas, so a float would let a minor bump silently change behavior between CI and dev
   "anthropic>=0.108.0,<1",    # pulled in by pydantic-ai; bounded below 1.0 because anthropic 1.0 takes an `httpx2.AsyncClient` as `http_client`, which the offline MockTransport tests (and pydantic-ai 2.13's provider wiring) do not speak yet — CI resolved 1.0.0 the day it shipped and went red on main's own green suite
   "httpx>=0.27",
-  "openpyxl>=3.1",
-  "xlrd>=2.0",                # legacy .xls (old BIFF); openpyxl only reads .xlsx
-  "python-docx>=1.1",
   "pyyaml>=6.0",              # kernel/page.py frontmatter emitter: round-trip plain-scalar validation
-  "google-genai>=1.0",        # vision OCR (Gemini) — kernel/converters.py's vision_extract, the drive flow's scanned-PDF fallback (ADR 028 D4)
   "psycopg[binary]>=3.2",     # the hybrid derived index: Postgres + pgvector
   "mcp>=1.28,<2",             # the single MCP server: FastMCP stdio adapter (major-pinned)
   "starlette>=0.37",          # the streamable HTTP transport + the per-user auth ASGI middleware (already an mcp[http] transitive dep — declared explicitly since transport_http.py imports it directly)
@@ -43,8 +39,6 @@ stigmergy-search = "stigmergy.index.cli:search_main"
 stigmergy-server = "stigmergy.server.mcp_server:main"
 stigmergy-issue-token = "stigmergy.server.issue_token:main"
 stigmergy-queue = "stigmergy.capture.cli:main"
-stigmergy-meeting = "stigmergy.capture.meeting_cli:main"                   # the drop CLI — the meeting flow's only door, and the webhook's future target
-stigmergy-drive = "stigmergy.capture.drive_cli:main"                       # the Drive door (ADR 028) — operator CLI over the operator's own Google auth; fetch + evidence + ONE drive row, no model, no conversion
 stigmergy-librarian = "stigmergy.librarian.cli:main"
 stigmergy-librarian-boot = "stigmergy.librarian.bootstrap:main"          # the DEPLOYED worker's entry point — clone the knowledge repo, verify checkout == base ref, strip the read path's secrets, exec `stigmergy-librarian run`
 stigmergy-librarian-credential = "stigmergy.librarian.gitcredential:main" # git credential helper backed by the GitHub App, so the fetch before every claim authenticates in a container with no operator git config

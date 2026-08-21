@@ -19,7 +19,6 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 | `registry.py` | `Registry`, `load_registry` / `registry_from_text` / `save_registry` / `index_entity` — `ops/entity-registry.json`'s one reader/writer, plus `title` / `type_of` and the TWO lookups the registry is asked for: `canonical_id` (which entity does this text MEAN — filing) and `collision_id` (would this new name be confused with one we have — the mint gate). Missing file = empty registry; malformed = loud error. The reader is split path-from-text because the registry also reaches a reader as BYTES now (the index's snapshot, which `index.check` lints through this same parse) |
 | `normalize.py` | `resolution_key(name)` (accents, case and punctuation folded — and nothing that is a judgment), `normalize(name)` (that plus the legal-suffix table: the COLLISION key), `slugify(s)` (≤60 chars) |
 | `fsutil.py` | `write_text_atomic(path, text)` — tmp file + same-directory `os.replace`, so a concurrent reader never sees a partial |
-| `converters.py` | the document HANDS: `method_for_ext`, `extract` (pdf/sheet/docx/office/text → `{method, text}`), `sheet_rows`, `vision_extract` (two-form OCR: bare = Gemini native-PDF, provider-prefixed = pydantic-ai over rasterized pages; lazy SDK imports). Faithful text, no judgment |
 
 ## Reuse — one definition per concern
 
@@ -53,8 +52,8 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 
 - Importing anything from `stigmergy.*` except `stigmergy.kernel` itself. The day this package
   needs a stigmergy import, whatever it wanted belongs in the CALLING package.
-- Loading a provider SDK at module level: `llm.build_model` and `converters.vision_extract`
-  import theirs inside the function body, so a keyless offline run pays for neither.
+- Loading a provider SDK at module level: `llm.build_model` imports its own inside the function
+  body, so a keyless offline run pays for nothing.
 - Reading the environment anywhere but at call time.
 - Renaming `acl._MATCHERS` or `acl._check_labels` casually: `librarian.acl_rules` reaches both to
   translate its on-disk dialect, and two architecture tests pin the coupling so a rename fails a
@@ -71,29 +70,6 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
   all-`None` yields `None` (open), an empty intersection is restrictive by construction.
   `visible_to_view`: an open row renders anywhere; an open view admits only open rows; a narrowed
   view admits a restricted row only when `set(view_acl) <= set(row_acl)`.
-- `converters.EXT_METHOD` is the one extension→method table (`method_for_ext` its only reader,
-  defaulting to `text`). `.ods` routes through `office` (LibreOffice via Gotenberg) — openpyxl
-  cannot read OpenDocument spreadsheets. Grids cap at `SHEET_MAX_ROWS` with a `SHEET_SAMPLE_ROWS`
-  profile shown to the model.
-- `extract`'s pdf/office paths run `pdftotext -layout`, which can hard-wrap a long token across a
-  line break — so a credential in a dropped document can reach the worker already split, and
-  gitleaks matches only within one line. `librarian.gates` scans every surface twice (as written,
-  and with adjacent line pairs rejoined) for exactly that; changing what these converters emit
-  changes what that gate can see.
-- `converters.vision_extract` reads `VISION_MODEL`, two forms. BARE (the default
-  `gemini-3-flash-preview`): Gemini native PDF, requires `GEMINI_API_KEY`; PDFs ≤14 MB go inline
-  as bytes (the Files API's ASCII header encoding breaks on non-ASCII filenames), larger ones
-  upload through an ASCII-named temp copy. PROVIDER-PREFIXED
-  (`openrouter:qwen/qwen3-vl-8b-instruct`): pdftoppm-rasterized page images through pydantic-ai
-  — output box bounded by `-scale-to` (a fixed DPI is a raster bomb on a max-MediaBox page),
-  both subprocesses and the model call on their own clocks, at most `MAX_VISION_PAGES` pages
-  with a spoken cut and `pages`/`truncated` returned as data beside it. Either form returns the
-  configured id as provenance and the pass's token `usage` (`None` when the framework reported
-  none — absent is honest where a zero reads as free), which is what lets `librarian.processing`
-  price an OCR exactly as it prices a filing pass. `vision_config_error` is the one answer to "can
-  this run, and if not why" (`librarian.processing` asks it before paying for a call; a KNOWN prefix
-  with no key is unconfigured with the variable named, an unknown prefix is configured by
-  naming itself).
 - `normalize.py`'s suite is `tests/kernel/test_normalize.py`, added with the split that gave it a
   second key; `frontmatter.py`'s lives in `tests/kernel/test_frontmatter.py`. Every case there is
   written against a spelling that DISCRIMINATES the two keys — one both answer alike proves nothing
