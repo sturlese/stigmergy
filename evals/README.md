@@ -253,6 +253,10 @@ A frozen brief re-frozen is a new measurement, not a regression — nothing is r
 is back-filled, so read the first row under new bytes as a fresh baseline candidate. The re-freezes
 so far, newest first:
 
+- **`34cd668` (2026-08-21)** — the linter alone: a wikilink target resolves by its title (last
+  segment minus `.md`), not by `Path().stem`, which amputated a dotted title such as
+  `[[Acme Inc. Invoices]]` and vetoed a live page as a dead link. The briefs did not change, so
+  the re-freeze moves the three provenance shas together and no other byte.
 - **`7feee01` (2026-08-21, ADR 041)** — all four frozen files in one commit, which is what makes
   this the cleanest re-freeze the fixture has had: the librarian brief and the meeting-distiller
   brief stop telling the agent to park a capture on the person who wrote it and tell it to PROPOSE

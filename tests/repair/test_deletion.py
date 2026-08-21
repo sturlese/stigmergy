@@ -541,3 +541,17 @@ def test_a_page_that_mentions_nothing_going_is_left_out_of_the_plan_byte_for_byt
     ops = deletion.plan(root, ["wiki/notes/Doomed.md"])
 
     assert deletion.scrubbed_paths(ops) == []
+
+
+def test_link_stem_keeps_a_dotted_title_whole_and_strips_only_a_path_and_an_md():
+    """The link question, asked the linter's way — and the linter changed its answer: it used
+    `Path(target).stem`, so `[[Booking.com]]` resolved to `Booking` and `[[Acme Inc. Invoices]]` to
+    `Acme Inc`, and this mirror amputated with it on purpose. Now both keep the dots and take only
+    the last path segment minus a trailing `.md`; a mirror that still amputated would plan a scrub
+    of links the gate no longer sees as naming the deleted page."""
+    assert deletion.link_stem("Booking.com") == "Booking.com"
+    assert deletion.link_stem("Acme Inc. Invoice Management With Hermes") == "Acme Inc. Invoice Management With Hermes"
+    assert deletion.link_stem("wiki/entities/Acme Inc..md") == "Acme Inc."
+    assert deletion.link_stem("Another Page.md|shown as|x") == "Another Page"
+    assert deletion.link_stem("Another Page#Section") == "Another Page"
+    assert deletion.link_stem("") == ""

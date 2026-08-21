@@ -4,7 +4,7 @@
   "why": "The filing golden measures the ONE writer of the knowledge repo. Its score is only comparable across runs if every run filed into the same repo, under the same brief, judged by the same contract linter — so the whole mini repo is committed and frozen rather than assembled on demand. Same argument evals/corpus/PROVENANCE.json makes for the retrieval and QA corpus, applied to a fixture that is also an INPUT to the thing being measured rather than only a target for it.",
   "pages": 8,
   "entities": 6,
-  "stigmergy_sha": "7feee011691388224f4dc0daf1644b9d90efae1c",
+  "stigmergy_sha": "34cd66856dfc246c4c29fbe22ffe83d53f206c83",
   "stigmergy_sha_note": "The ONE knowledge-repo commit every frozen copy in this tree matches byte for byte \u2014 the linter, both skills and the four templates \u2014 and, since ADR 041 moved all four in a single commit, also the commit each copy was physically taken at. Recording it here is what lets a future reader answer 'which version of the librarian's brief scored this?', the question the series exists to answer and the one a fixture assembled at run time cannot. Each FROZEN.md records the same one.",
   "frozen_copies": [
     ".claude/tools/stigmergy_lint.py",

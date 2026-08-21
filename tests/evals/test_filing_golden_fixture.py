@@ -127,7 +127,7 @@ _PENDING_ALLOWED = (REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",)
 #      know with a question to the submitter and answers it with a PROPOSAL: the agent declares the
 #      identity it read out of the material and `librarian.identity` creates the page, with
 #      `approved_by:` empty, in the same commit as the capture. Knowledge-repo commit
-#      `7feee011691388224f4dc0daf1644b9d90efae1c`.
+#      `34cd66856dfc246c4c29fbe22ffe83d53f206c83`.
 #
 # All THREE numbers moved together at that last commit, which is the first time that has happened
 # and the reason `PROVENANCE.json`'s `stigmergy_sha_note` no longer needs its "not the commit each
@@ -136,7 +136,7 @@ _PENDING_ALLOWED = (REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",)
 # commit and not one freeze, every copy edited — read the four moves above with that in mind.
 FROZEN_SHA256 = {
     ".claude/tools/stigmergy_lint.py":
-        "3c3b52a951136754a91e44f1d888cb9510589c61e203fe089271f85e2e3061cd",
+        "d476ed2d5ab145069ec36e25c621e8f1566ccec5f8acc32a04783fd5f0c9394e",
     ".claude/skills/librarian/SKILL.md":
         "d81691fa364d2daeeba36af9994a3243ee18cc83b4356442cc0559fd3ea2aabe",
     ".claude/skills/meeting-distiller/SKILL.md":

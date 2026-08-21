@@ -799,6 +799,13 @@ def strip_code(text):
     return INLINE_CODE_RE.sub("", text)
 
 
+def link_stem(target):
+    """The page name a wikilink target resolves to: its last path segment, minus a trailing
+    `.md`. A title keeps every dot it has."""
+    name = target.rsplit("/", 1)[-1]
+    return name[:-3] if name.lower().endswith(".md") else name
+
+
 def link_targets(text):
     targets = []
     for m in WIKILINK_RE.finditer(strip_code(text)):
@@ -1024,7 +1031,11 @@ def scan(root):
 
         # wikilink resolution
         for target in link_targets(text):
-            stem = Path(target).stem
+            # A wikilink target names a page by TITLE, optionally path-shaped
+            # (`[[wiki/entities/X.md]]`): the last segment, with only a trailing `.md` taken off.
+            # Never `Path(target).stem`, which amputates a dotted name — `[[Acme Inc. Invoices]]`
+            # became `Acme Inc` and a live page was vetoed as a dead link.
+            stem = link_stem(target)
             if stem not in by_name:
                 add("error", "dead_links", p, f"dead link: [[{target}]]")
             else:
