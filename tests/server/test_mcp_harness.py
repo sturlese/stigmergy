@@ -2,6 +2,7 @@
 and drive it over stdio with a real MCP client — the transport layer is part of the contract, so
 nothing here is an in-process shortcut. Skips without postgres."""
 import asyncio
+import json
 import time
 
 import pytest
@@ -34,6 +35,32 @@ def test_server_exposes_the_read_tools_and_ask_over_stdio(indexed):
             # `test_mcp_adapter.py::test_the_mounted_tool_list_is_exactly_the_ten_supported_tools`
             # — that one proves `build_mcp()`'s own output; this one proves the REAL entry point
             # mounts the same set over the wire.
+    _run(go())
+
+
+def test_brain_delete_runs_off_the_event_loop_and_answers_over_the_protocol(indexed):
+    """**Found on the deployment, not in the suite.** `brain_delete` was a SYNC tool, so FastMCP
+    drove it on the event-loop thread — where the sweep writer's `asyncio.run` raises
+    `RuntimeError: cannot be called from a running event loop`. Every unit and Postgres test called
+    the service from an ordinary thread, so all of them passed and the first real call over HTTP
+    returned `brain_delete failed (RuntimeError)`.
+
+    The tool is `async` now and hands the whole blocking sequence to a worker thread, which is also
+    the layering rule: a clone, a model call, gitleaks, a whole-repo lint and a push must never sit
+    on the loop.
+
+    This fixture's server has no knowledge-repo URL, so the honest answer here is the REFUSAL that
+    names the missing variable — which is exactly the property that was broken: reaching a
+    steward-facing sentence at all rather than a class name."""
+    _, fx = indexed
+
+    async def go():
+        async with mcp_session(fx, fx.STEWARD) as session:
+            out = await call_json(session, "brain_delete",
+                                  paths=["wiki/notes/Whatever.md"], why="a reason")
+            assert "RuntimeError" not in json.dumps(out), (
+                "the tool ran on the event loop again — this is the deployment's own failure")
+            assert "STIGMERGY_LIBRARIAN_REPO_URL" in out["error"]
     _run(go())
 
 

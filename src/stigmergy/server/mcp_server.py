@@ -5,10 +5,12 @@ echoes only messages proven safe by construction and collapses everything unanti
 name.
 """
 import argparse
+import functools
 import json
 import logging
 import sys
 
+import anyio
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
@@ -243,7 +245,7 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             return _failure("review_decide", ex)
 
     @mcp.tool()
-    def brain_delete(paths: list[str], why: str) -> str:
+    async def brain_delete(paths: list[str], why: str) -> str:
         """Remove pages from the brain and rewrite every page that referred to them — stewards
         only, and it happens in this call rather than waiting on anybody.
 
@@ -268,8 +270,18 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             check_arg_length("why", why)
             for path in paths or ():
                 check_arg_length("path", str(path))
-            return json.dumps(service.delete_pages(paths, why, source=decisions.SOURCE_MCP),
-                              **_DUMP)
+            # In a WORKER THREAD, and this tool is `async` for that reason alone. FastMCP drives a
+            # sync tool on the event loop thread, and everything below this line blocks it for the
+            # length of a clone, a model call, gitleaks, a whole-repo lint and a push — the exact
+            # layering violation `tests/test_architecture.py` pins one package over. It also
+            # simply does not work there: the sweep writer awaits its agent through
+            # `asyncio.run`, which raises inside a running loop (found on the deployment, not in
+            # the suite, because a test calls the service from an ordinary thread).
+            return json.dumps(
+                await anyio.to_thread.run_sync(
+                    functools.partial(service.delete_pages, paths, why,
+                                      source=decisions.SOURCE_MCP)),
+                **_DUMP)
         except (CaptureError, RateLimitError, CapabilityUnavailableError) as ex:
             return _error(str(ex))
         except Exception as ex:  # noqa: BLE001 — the same narrowing review_decide takes: only
