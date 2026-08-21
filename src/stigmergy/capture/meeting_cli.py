@@ -100,8 +100,9 @@ def _cmd_drop(args) -> int:
     print(f"  attendees hint: {attendees or '(none given)'} — a hint for the agent, not an "
           f"identity: it resolves nothing and authorizes nothing")
     print(f"exiting WITHOUT filing #{ack['id']} — the librarian files it as a page set (one "
-          f"source page, one meeting page, any decision pages) or parks it; nothing is in the "
-          f"brain until it does. `stigmergy-queue show {ack['id']}` to check.")
+          f"source page, one meeting page, any decision pages), proposing any entity it names that "
+          f"the registry does not know; nothing is in the brain until it does. "
+          f"`stigmergy-queue show {ack['id']}` to check.")
     return 0
 
 

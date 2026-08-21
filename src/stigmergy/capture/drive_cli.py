@@ -168,8 +168,9 @@ def _cmd_drop(args) -> int:
           f"binary itself stays in Drive ({meta.url})")
     print(f"queued #{ack['id']} (drive) — attributed to {submitted_by}")
     print(f"exiting WITHOUT converting or filing #{ack['id']} — the worker extracts the text "
-          f"and the librarian files a synthesis page plus verbatim source parts, or parks it; "
-          f"nothing is in the brain until it does. `stigmergy-queue show {ack['id']}` to check.")
+          f"and the librarian files a synthesis page plus verbatim source parts, proposing any "
+          f"entity it names that the registry does not know; nothing is in the brain until it "
+          f"does. `stigmergy-queue show {ack['id']}` to check.")
     return 0
 
 
