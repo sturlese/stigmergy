@@ -11,7 +11,7 @@ treats its test suite as the contract.
 
 ## [0.8.0] - 2026-08-21
 
-**An entity is born written, and keeps being written** ([ADR 042](./docs/decisions/042-an-entity-is-born-written.md)).
+**An entity is born written, and keeps being written** ([ADR 042](./docs/decisions/042-an-entity-is-born-written.md), #131).
 Twelve of the first brain's nineteen entity pages said nothing about the entity: the two hand
 doors rendered the template with the name filled in. There is no deterministic birth any more — a
 steward's registration is a capture, the librarian writes the page from what the steward said and
