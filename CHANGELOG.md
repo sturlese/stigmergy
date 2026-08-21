@@ -11,8 +11,8 @@ treats its test suite as the contract.
 
 ## [0.7.0] - 2026-08-21
 
-**File first, govern after** ([ADR 041](./docs/decisions/041-file-first-govern-after.md)). A
-capture never waits on a person any more. A name the registry does not know used to park the
+**File first, govern after** ([ADR 041](./docs/decisions/041-file-first-govern-after.md), #125).
+A capture never waits on a person any more. A name the registry does not know used to park the
 capture on a question to its submitter and then on a steward; two of five real notes were cancelled
 by their own authors that way. Now the librarian files at once and PROPOSES the entity — a complete
 page with `approved_by: ""` and a `proposed` registry entry — and a steward approves, merges or
