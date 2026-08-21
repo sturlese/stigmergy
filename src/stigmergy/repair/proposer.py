@@ -50,7 +50,7 @@ from stigmergy.kernel.result import fake_result
 from stigmergy.librarian import config as librarian_config
 from stigmergy.librarian import edits, gather
 from stigmergy.librarian import page as page_policy
-from stigmergy.repair import deletion, entity_alias, entity_body, schema, store
+from stigmergy.repair import brief, deletion, entity_alias, entity_body, schema, store, sweep
 from stigmergy.repair.errors import RepairError
 from stigmergy.text import clamp, fence, is_one_line, one_line, sanitize
 
@@ -187,10 +187,12 @@ MIN_ANCHORED_PAGES = 2
 MAX_ANCHORED_PAGES = 10
 
 # ── the operating procedure, in the knowledge repo ───────────────────────────────────────────
-SKILL_RELPATH = ".claude/skills/repair-proposer/SKILL.md"
-# The same ceiling `librarian.agent` puts on its own skill, for the same reason: a procedure is a
-# page of prose, and anything larger is a mistake or a payload.
-MAX_SKILL_BYTES = 256 * 1024
+# Owned by `repair.brief` — the sweep writer the server runs reads the same file through the same
+# seam — and re-exported here under the names every caller already uses.
+SKILL_RELPATH = brief.SKILL_RELPATH
+MAX_SKILL_BYTES = brief.MAX_SKILL_BYTES
+read_skill = brief.read_skill
+skill_path = brief.skill_path
 
 # ── the bounds on what the model may hand back ───────────────────────────────────────────────
 MAX_RATIONALE_CHARS = 400
@@ -395,7 +397,7 @@ The frame that does not come from the skill, and that the skill cannot change:
 
 """
 
-SKILL_SEPARATOR = "── the `repair-proposer` skill, from {relpath} ──\n\n"
+SKILL_SEPARATOR = brief.SKILL_SEPARATOR
 
 # The body road's own frame. A separate header rather than a widened one, because almost every
 # clause differs: this road answers ONE finding about ONE page, returns prose instead of ops, and
@@ -474,77 +476,27 @@ The frame that does not come from the skill, and that the skill cannot change:
 MERGE_CHOICE_LIMITS = BODY_DRAFT_LIMITS
 
 
-def skill_path(repo: str) -> str:
-    """Where the `repair-proposer` skill lives in a checkout of the knowledge repo."""
-    return os.path.join(repo, *SKILL_RELPATH.split("/"))
-
-
-def read_skill(repo: str) -> str:
-    """The skill's text, size-capped BEFORE the bytes are read, from the checkout being repaired.
-
-    A missing or empty skill raises: this is the agent's whole operating procedure, and a
-    proposer running without it would be one briefed only by the header above — which says what it
-    may not do and nothing at all about what is worth doing.
-
-    The LEAF is judged before anything resolves it, `gather.confined_page`'s own ordering: both
-    `getsize` and `open` follow a link, so the size ceiling would measure the target instead of
-    guarding it, and whatever the link pointed at would become the system prompt.
-    """
-    path = skill_path(repo)
-    if os.path.islink(path):
-        raise RepairError(
-            f"the repair-proposer skill at {SKILL_RELPATH} is a symlink — it is read as the "
-            f"proposer's entire operating procedure and must be a real file committed in the "
-            f"knowledge repo, not a pointer at something else on the host")
-    try:
-        size = os.path.getsize(path)
-        if size > MAX_SKILL_BYTES:
-            raise RepairError(f"the repair-proposer skill at {SKILL_RELPATH} is {size} bytes, over "
-                              f"the {MAX_SKILL_BYTES}-byte ceiling")
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
-    except RepairError:
-        raise
-    except (OSError, UnicodeDecodeError) as ex:
-        raise RepairError(
-            f"the repair-proposer skill is missing or unreadable at {SKILL_RELPATH} in the "
-            f"knowledge repo ({ex.__class__.__name__}) — it is the proposer's operating procedure "
-            f"and it will not propose without it") from ex
-    if not text.strip():
-        raise RepairError(f"the repair-proposer skill at {SKILL_RELPATH} is empty")
-    return text
-
 
 def build_system_prompt(skill_text: str) -> str:
     """The code-owned header plus the skill's body, frontmatter dropped (loader metadata, and an
     `allowed-tools` key would be a second, unenforced tool list). `replace`, not `format`: a
     procedure containing a JSON example would otherwise take the run down at the last moment."""
-    return _with_skill(SYSTEM_HEADER, skill_text)
+    return brief.with_skill(SYSTEM_HEADER, skill_text)
 
 
 def build_entity_body_system_prompt(skill_text: str) -> str:
     """The body road's frame plus the SAME skill. One procedure, two frames: which entity is worth
     writing about and how to write it is editorial and belongs to the knowledge repo, while what a
     draft may contain at all is code's."""
-    return _with_skill(ENTITY_BODY_HEADER, skill_text)
+    return brief.with_skill(ENTITY_BODY_HEADER, skill_text)
 
-
-def _with_skill(header: str, skill_text: str) -> str:
-    body = skill_text
-    if body.startswith("---"):
-        end = body.find("\n---", 3)
-        if end != -1:
-            body = body[end + len("\n---"):]
-    return (header.replace("{relpath}", SKILL_RELPATH)
-            + SKILL_SEPARATOR.replace("{relpath}", SKILL_RELPATH)
-            + body.strip() + "\n")
 
 
 def build_entity_alias_system_prompt(skill_text: str) -> str:
     """The merge road's frame plus the SAME skill. One procedure, three frames: whether two names
     denote one entity, and which is canonical, is editorial and belongs to the knowledge repo,
     while what a choice may BE at all is code's."""
-    return _with_skill(ENTITY_ALIAS_HEADER, skill_text)
+    return brief.with_skill(ENTITY_ALIAS_HEADER, skill_text)
 
 
 def build_proposer(skill_text: str, *, model_name: str | None = None):
@@ -655,8 +607,8 @@ def build_entity_merge_chooser(skill_text: str, *, model_name: str | None = None
 # contains. That is what lets `FakeRepairProposer` read the batch's structure without a fence
 # parser of its own, and it is why one page path per line: a path may carry spaces and commas, so
 # a single delimited header line would be ambiguous exactly where a filename is unusual.
-DETAILS_MARKER = "## the findings' own words, and the pages they name"
-_PAGE_LINE = "page: "
+DETAILS_MARKER = brief.DETAILS_MARKER
+_PAGE_LINE = brief.PAGE_LINE
 
 
 def build_prompt(findings: list[dict], pages: dict[str, str]) -> str:
@@ -1263,14 +1215,15 @@ async def _propose_run(conn, *, settings, repo: str = "") -> ProposeResult:
         accepted += got
         skip_reasons += reasons
 
-    # The deterministic road runs LAST and outside the findings check, because it reads no findings
-    # at all — a corpus can hold a duplicate filing on a night the gardener found nothing. Last for
-    # two reasons: it costs no model call, so nothing is saved by running it first; and if the
-    # ceiling is already full, a deletion nobody has been asked for yet is the safest thing to
-    # defer to tomorrow.
-    got, reasons = _propose_duplicate_sources(
+    # The duplicate road runs LAST and outside the findings check, because it reads no findings
+    # at all — a corpus can hold a duplicate filing on a night the gardener found nothing. Last
+    # because if the ceiling is already full, a deletion nobody has been asked for yet is the
+    # safest thing to defer to tomorrow; and its one model call, the sweep writer's, is spent only
+    # when some page refers to the copy that goes.
+    got, reasons = await _propose_duplicate_sources(
         repo=repo, settings=settings, answered_page_sets=answered_page_sets,
-        budget=ceiling - len(accepted), ceiling=ceiling)
+        skill_text=skill_text, budget=ceiling - len(accepted), ceiling=ceiling,
+        spend=model_calls)
     accepted += got
     skip_reasons += reasons
 
@@ -1564,12 +1517,13 @@ def _merge_anchored_pages(deps: ProposerContext, candidates: list[str]) -> dict[
 DUPLICATE_REFUSED_REASON = "duplicate-sources refused for {path}: {reason}"
 
 
-def _propose_duplicate_sources(*, repo: str, settings, answered_page_sets: set,
-                               budget: int, ceiling: int) -> tuple[list[dict], list[str]]:
-    """The one road that asks no model: exact-duplicate `sources/` pages, one proposal per group.
-
-    Plainly synchronous, where the other two roads are coroutines, and the signature is the point:
-    there is nothing here to await, because there is nobody to ask.
+async def _propose_duplicate_sources(*, repo: str, settings, answered_page_sets: set,
+                                     skill_text: str, budget: int, ceiling: int,
+                                     spend: list | None = None) -> tuple[list[dict], list[str]]:
+    """The one road that asks no model WHICH pages go: exact-duplicate `sources/` pages, one
+    proposal per group, derived by a lookup. What it does ask a model for — since ADR 043 — is the
+    bodies of the pages that refer to the copy that goes, exactly as a person's deletion does:
+    `sweep.write`, one call over the referring set, or a recorded skip when the writer refuses.
 
     The dismissal memory is asked with the DELETED pages as the page set, which is also what the
     proposal stores as its `finding_subjects`. A duplicate pair does not stop being a duplicate
@@ -1588,14 +1542,16 @@ def _propose_duplicate_sources(*, repo: str, settings, answered_page_sets: set,
             continue
         try:
             ops = deletion.plan(repo, doomed)
+            oversize = deletion.oversize_reason(ops, settings.max_plan_bytes)
+            if oversize:
+                skip_reasons.append(oversize)
+                continue
+            ops = await sweep.write(repo, ops, skill_text=skill_text, model_name=settings.model,
+                                    spend=spend)
         except RepairError as ex:
-            # The sentence names the page whose reference the sweep cannot rewrite, which is the
+            # The sentence names the page whose reference could not be reconciled, which is the
             # actionable half; the operator reads it in `job_runs.stats`.
             skip_reasons.append(DUPLICATE_REFUSED_REASON.format(path=doomed[0], reason=str(ex)))
-            continue
-        oversize = deletion.oversize_reason(ops, settings.max_plan_bytes)
-        if oversize:
-            skip_reasons.append(oversize)
             continue
         accepted.append({
             "finding_ids": [], "ops": ops, "kind": schema.KIND_DELETE,
@@ -1605,9 +1561,10 @@ def _propose_duplicate_sources(*, repo: str, settings, answered_page_sets: set,
             # sweep would also rewrite, which move with the corpus and would re-ask a declined
             # deletion every time somebody added a link.
             "finding_subjects": [list(doomed)],
-            # No model was asked. Stamping the run's model here would attribute a code decision to
-            # something that never saw it, and this column is where that stays true afterwards.
-            "model_id": "",
+            # No model decided WHICH page goes; one wrote the pages that refer to it, when there
+            # were any. The column says which, so a ledger read months later can tell a lookup
+            # from a written sweep.
+            "model_id": settings.model if deletion.scrubbed_paths(ops) else "",
         })
     return accepted, skip_reasons
 

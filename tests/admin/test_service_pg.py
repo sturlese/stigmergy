@@ -853,7 +853,8 @@ def _apply_records(monkeypatch, paths=("wiki/notes/Renewals.md",)):
     (`mark_decided`, `mark_applied`, the ledger row) is the real thing."""
     calls = []
 
-    def fake(repo_url, branch, credential, *, proposal, approved_by, on_output=None):
+    def fake(repo_url, branch, credential, *, proposal, approved_by, on_output=None,
+             prepared=None):
         calls.append({"repo_url": repo_url, "approved_by": approved_by, "proposal": proposal})
         return {"commit": FAKE_COMMIT, "paths": list(paths)}
 
@@ -959,6 +960,56 @@ def test_repair_approve_applies_and_records_both_ledgers(conn, repair_service, m
         "steward@example.com", "repairs.approve", "ok")
 
 
+def test_pages_delete_runs_the_shared_sequence_and_records_the_console_as_the_door(
+        conn, repair_service, monkeypatch):
+    """The console's deletion door (ADR 043 D2). It reaches `server.review.delete_and_record` — the
+    SAME sequence MCP's `brain_delete` runs — and hands in NO authorization: its token is the
+    authorization, exactly as `repair_approve` and `entity_approve` do. So what this asserts is the
+    wiring and the two bookkeeping rows, not a second copy of the sequence's own behaviour
+    (`tests/server/test_delete_pages_pg.py` proves that against a real remote)."""
+    seen = {}
+
+    def fake(conn_arg, *, repo_url, paths, why, actor, source, authorize=None):
+        seen.update({"repo_url": repo_url, "paths": list(paths), "why": why, "actor": actor,
+                     "source": source, "authorize": authorize})
+        return {"deleted": list(paths), "rewritten": {}, "commit": FAKE_COMMIT,
+                "proposal_id": 7, "model_calls": 0, "message": "done"}
+
+    monkeypatch.setattr(server_review, "delete_and_record", fake)
+
+    result = repair_service.pages_delete(actor="ops@example.com",
+                                         paths=["wiki/notes/Old Memo.md"], why="superseded")
+
+    assert result["commit"] == FAKE_COMMIT
+    assert seen["paths"] == ["wiki/notes/Old Memo.md"]
+    assert (seen["actor"], seen["source"]) == ("ops@example.com", server_review.SOURCE_ADMIN)
+    assert seen["authorize"] is None, (
+        "the console passes no steward guard — its token is the authorization (ADR 029/030 D2)")
+    recorded = _actions(conn)[0]
+    assert (recorded["actor"], recorded["action"], recorded["outcome"]) == (
+        "ops@example.com", "pages.delete", "ok")
+    assert "superseded" not in str(recorded["args"]), (
+        "the reason is free text a person wrote: `admin_actions` keeps its LENGTH, not the words")
+
+
+def test_a_refused_deletion_records_the_real_class_before_it_becomes_AdminRefused(
+        conn, repair_service, monkeypatch):
+    """`_mutate`'s ordering, on this door too: the console's own log keeps the library's exception
+    class, and the caller gets the sentence as a refusal rather than a 500."""
+    def refuse(*_a, **_k):
+        raise server_review.ReviewError("wiki/entities/Acme Corp.md is an entity page")
+
+    monkeypatch.setattr(server_review, "delete_and_record", refuse)
+
+    with pytest.raises(AdminRefused, match="entity page"):
+        repair_service.pages_delete(actor="ops@example.com",
+                                    paths=["wiki/entities/Acme Corp.md"], why="stale")
+
+    recorded = _actions(conn)[0]
+    assert (recorded["action"], recorded["outcome"], recorded["error_class"]) == (
+        "pages.delete", "error", "ReviewError")
+
+
 def test_repair_approve_maps_a_refusal_to_AdminRefused_after_recording_the_real_class(
         conn, repair_service, monkeypatch):
     """The mapping order `entity_approve` established: `_mutate` sees the LIBRARY's exception and
@@ -1033,11 +1084,14 @@ def test_repair_approve_and_reject_404_on_a_proposal_that_does_not_exist(conn, r
     assert _actions(conn) == [], "a 404 is not an attempted mutation — no admin_actions row"
 
 
-def test_a_deletion_reaches_the_console_as_the_pages_it_would_remove(conn, service):
-    """The third kind's shape, and the one field it must NOT carry across: `planned_after` is a
-    whole page per scrubbed page, and it is the apply's contract with its own recomputation — not
-    something a steward reads. What the console needs is which pages stop existing and which get
-    rewritten, which is exactly what the two op names and their paths say."""
+def test_a_deletion_reaches_the_console_with_the_prose_a_steward_has_to_read(conn, service):
+    """The third kind's shape. A DELETE op is a path and nothing else — which page stops existing
+    is the whole of it — and a SCRUB op carries its `planned_after` through, because since ADR 043
+    those bytes are a MODEL's prose and this is the only reading they get before they land.
+
+    Red before that: the console showed two path lists, so a steward approved model-written bodies
+    they could not see anywhere — `entity-body`'s own mistake, which that kind's renderer exists to
+    avoid."""
     proposal_id = propose_delete(conn)
 
     row = service.repair_show(proposal_id)
@@ -1046,5 +1100,7 @@ def test_a_deletion_reaches_the_console_as_the_pages_it_would_remove(conn, servi
     assert [op["op"] for op in row["ops"]] == [repair_schema.DELETE_OP_NAME,
                                                repair_schema.SCRUB_OP_NAME]
     assert sorted(row["ops"][0]) == ["op", "path"]
-    assert sorted(row["ops"][1]) == ["op", "path"]
-    assert "No link any more" not in json.dumps(row)
+    assert sorted(row["ops"][1]) == ["op", "path", "planned_after"]
+    assert "No link any more" in row["ops"][1]["planned_after"]
+    assert "\n" in row["ops"][1]["planned_after"], (
+        "a page flattened to one line is a page nobody can read as the page it would become")

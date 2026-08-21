@@ -396,6 +396,39 @@ def test_an_approve_that_clones_never_runs_on_the_event_loop(conn, app, monkeypa
     assert response.json() == {"on_the_event_loop": False}
 
 
+def test_pages_delete_needs_the_token_and_a_non_empty_paths_list(conn, app, monkeypatch):
+    """The console's most consequential control (ADR 043 D2): its token IS the authorization, so
+    the tokenless call must never reach the sequence at all — and an empty `paths` is a 400 rather
+    than a clone that finds nothing to do."""
+    from stigmergy.server import review as server_review
+
+    def never(*_a, **_k):
+        raise AssertionError("a deletion ran for a request that should have been refused")
+
+    monkeypatch.setattr(server_review, "delete_and_record", never)
+
+    tokenless = _request(app, "POST", "/admin/api/pages/delete", token=None,
+                         json_body={"actor": "ops@example.com", "paths": ["wiki/notes/X.md"],
+                                    "why": "stale"})
+    empty = _request(app, "POST", "/admin/api/pages/delete",
+                     json_body={"actor": "ops@example.com", "paths": [], "why": "stale"})
+
+    assert tokenless.status_code in (401, 404)
+    assert empty.status_code == 400
+    assert "paths" in empty.json()["error"]
+
+
+def test_pages_delete_on_an_unconfigured_deployment_is_the_409(conn, app):
+    """The same deployment shape the approve route meets before a knowledge-repo URL is
+    configured: a refusal naming the variable, never a 500 naming a class."""
+    response = _request(app, "POST", "/admin/api/pages/delete",
+                        json_body={"actor": "ops@example.com", "paths": ["wiki/notes/X.md"],
+                                   "why": "stale"})
+
+    assert response.status_code == 409
+    assert "STIGMERGY_LIBRARIAN_REPO_URL" in response.json()["error"]
+
+
 def test_repairs_approve_on_an_unconfigured_deployment_is_the_409(conn, app):
     """`app` carries a default `Settings()` — no `librarian_repo_url` — so this is the deployment
     shape an operator meets before configuring one, and it must read as a refusal with the reason

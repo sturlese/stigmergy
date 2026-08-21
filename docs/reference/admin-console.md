@@ -212,6 +212,16 @@ toggle away, and nothing on a chart is reachable only by hovering.
   exactly like every other console mutation — MCP and Slack instead enforce a resolved identity's
   steward status; the console does not, because the shared admin credential cannot back a
   second-human rule.
+- **Repairs** — and the one BUTTON on this console that is not a verdict on somebody else's
+  proposal: **Remove pages**. A person names the pages and says why, and it lands in that call —
+  the pages go, every page that referred to them is rewritten (its frontmatter by code, its body
+  by a model), the nine gates judge it, and one App-authored commit is pushed. There is no
+  proposal and no second click, because the judgment was the operator's when they typed it
+  ([ADR 043](../decisions/043-a-sweep-is-written.md)); what the console's token buys here is the
+  whole authorization, so this is its most consequential control and its confirm says so. The
+  per-page diffs come back in a dialog: nobody read that prose before it landed, and a revert in
+  the knowledge repo is the undo.
+
 - **Repairs** — what the `repair-propose` cron made of the gardener's findings
   ([repair.md](./repair.md), ADR 039): proposals by outcome over the whole table, the proposer's
   run strip, a bounded page of the pending proposals (oldest first, filterable by kind, and it

@@ -1,39 +1,46 @@
-"""The `delete` kind: a page leaves the corpus, and every reference to it leaves with it.
+"""The `delete` kind: a page leaves the corpus, and every page that referred to it is rewritten.
 
 Deletion is the one repair whose blast radius is not the page it names. Removing a file is trivial;
 what is not trivial is that the corpus afterwards still has to be a graph — the knowledge repo's
 contract linter treats an unresolvable `[[wikilink]]` as an ERROR, and `gate_contract` turns that
-into a veto. So this kind is not "remove a file", it is a **sweep**: the pages that go, and the
-full planned bytes of every page that mentioned one of them.
+into a veto — and still has to READ: a sentence that cited the page, a callout that announced an
+overlap with it, must not be left saying something that stopped being true. So this kind is not
+"remove a file", it is a **sweep**: the pages that go, and the full planned bytes of every page
+that referred to one of them.
 
-**No model is asked, ever.** Every judgment here is a lookup — which pages name this stem, which
-entries in a list point at it — and a judgment-free decision belongs to code (ADR 039's second
-amendment). The one automatic road (exact-duplicate `sources/` pages) is deterministic for the same
-reason; a human types the rest at `stigmergy-repair delete`, because judging that a page is stale
-is the judgment that is neither code's nor a model's.
+**Structure is code's; prose is a model's (ADR 043 D1).** This module owns the deterministic half
+of the plan — which pages go, which pages refer to them, and their FRONTMATTER with the entries
+that named a going page dropped — and every bound the written half has to satisfy. The bodies of
+the referring pages are written by `repair.sweep`, one model call over the whole referring set,
+and land here as the same `planned_after` bytes. Which pages go is never a model's: a person names
+them, or `duplicate_source_groups` derives them for exact-duplicate `sources/` pages, where the
+decision is a lookup (ADR 039's second amendment, which stands).
 
 Three properties buy this kind its safety, and each is asked of a different thing:
 
   · **The zone is a whitelist.** `wiki/entities/` is absent by construction — an identity is
     retired through governance, not deletion (ADR 016) — and so is everything outside the corpus.
-  · **The plan is a pure function of the bytes on disk.** It is computed at propose time against
-    the operator's checkout and RECOMPUTED at apply time against a fresh clone, and the apply
-    refuses unless the two agree byte for byte. A corpus that moved under a proposal is a
-    re-proposal, never a best-effort sweep.
-  · **The plan proves itself.** Before it is stored, every planned page is re-scanned for a link to
-    a page that is going. This module knows how to rewrite four frontmatter fields and the body; a
-    reference anywhere else refuses the whole plan rather than becoming a question whose answer a
-    gate would later veto.
+  · **The plan proves its own bounds, at both ends.** `validate` — run when a plan is stored and
+    again against the clone it lands on — proves every scrubbed page's frontmatter is code's own
+    scrub of the page as it stands, and that no planned page still names a going one. A base hash
+    per page says whether the corpus moved under a stored plan; the apply refuses on either.
+  · **Nothing outside the plan refers to a going page.** Asked of the whole corpus at apply time,
+    so a page that gained a reference since a plan was stored refuses it rather than surviving it
+    as a dead link.
 
 Every link question is asked EXACTLY as the frozen contract linter asks it — code fences and inline
-code blanked first, alias and anchor split off, the last path segment minus `.md` — and the regexes are
-hand-mirrored from it rather than imported, the posture `entity_body` states for the same reason:
-this package talks to the linter through FILES. A scanner that sees more links than the linter edits
-prose nobody asked about; one that sees fewer leaves a dead link and a veto at apply time.
+code blanked first, alias and anchor split off, the last path segment minus `.md` — and the regexes
+are hand-mirrored from it rather than imported, the posture `entity_body` states for the same
+reason: this package talks to the linter through FILES. A scanner that sees fewer links than the
+linter leaves a dead link and a veto at apply time. It sees one MORE shape than the linter does —
+a markdown link at a going page's path — because a writer reconciles prose, and a path in prose is
+a reference whether or not the linter counts it.
 """
+import difflib
 import hashlib
 import os
 import re
+import urllib.parse
 from pathlib import PurePosixPath
 
 import yaml
@@ -128,6 +135,83 @@ def _live_links(text: str):
             yield match, stem
 
 
+# A markdown link's target — `[text](wiki/notes/Old Memo.md)`, `[text](../Old%20Memo.md)`,
+# `[text](<wiki/notes/Old Memo.md>)`, `[text](path "title")` — the one reference shape the linter
+# does not count and a writer still has to reconcile. Resolved to a stem exactly as a wikilink
+# target is, after the angle brackets, the optional title and the URL-encoding come off.
+#
+# Everything up to the closing paren is taken, SPACES INCLUDED: a path with a bare space is not
+# well-formed markdown, and a scanner that stopped at whitespace would have missed
+# `[the memo](wiki/notes/Old Memo.md)` — a reference a reader plainly sees and the contract linter
+# never counts, so nothing downstream would have caught it either. Matching a little more than
+# markdown does is the safe direction here: a false positive only means a page is handed to the
+# writer, and it reconciles what it finds.
+_MD_LINK_RE = re.compile(r"\]\(([^)]*)\)")
+
+
+def _md_target(raw: str) -> str:
+    """One markdown link's target when it names a PAGE IN THIS CORPUS, `""` otherwise.
+
+    Two shapes are dropped, and the second is the one that matters: a target carrying a URL SCHEME
+    (`https://`, `mailto:`) is somebody's external link, and a target not ending in `.md` is not a
+    page. Without that rule `[the roadmap](https://notion.so/team/Roadmap)` counted as a reference
+    to `Roadmap` — and since a surviving reference REFUSES a deletion rather than merely widening
+    it, deleting `Roadmap.md` would have demanded that the writer destroy an unrelated external
+    link, or the deletion could never happen at all. A bound must not fire on something the writer
+    has no business touching.
+    """
+    text = str(raw or "").strip()
+    if text.startswith("<") and ">" in text:
+        text = text[1:text.index(">")]
+    else:
+        # `[x](path "title")` — the title is not the target, and it is the only thing after a
+        # space that markdown allows there.
+        quote = min((i for i in (text.find(' "'), text.find(" '")) if i != -1), default=-1)
+        if quote != -1:
+            text = text[:quote]
+    text = text.strip()
+    if _URL_SCHEME_RE.match(text):
+        return ""
+    return text if text.split("#", 1)[0].strip().lower().endswith(".md") else ""
+
+
+# `scheme:` at the start of a link target. Anything with one is a URL somebody wrote, not a page
+# in this repo — and `mailto:`/`tel:` carry no `.md` anyway, so this is belt and braces on the
+# suffix rule below it.
+_URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+
+
+def _live_references(text: str):
+    """Every stem this text still refers to: the linter's wikilinks, plus markdown links. The
+    question `references` and the post-sweep proof both ask, over the code-blanked text."""
+    for _match, stem in _live_links(text):
+        yield stem
+    blanked = _blanked_code(text)
+    for match in _MD_LINK_RE.finditer(blanked):
+        stem = link_stem(urllib.parse.unquote(_md_target(match.group(1))))
+        if stem:
+            yield stem
+
+
+def references(text: str, stems: set[str]) -> bool:
+    """Does this page, as these bytes, still refer to a page that is going — anywhere?"""
+    return any(stem in stems for stem in _live_references(text or ""))
+
+
+def _frontmatter_reference(text: str, stems: set[str]) -> str:
+    """The first going stem the FRONTMATTER still refers to after code's scrub, or `""`.
+
+    Frontmatter is code's half and the writer never sees it, so a reference in a field this kind
+    does not rewrite is one nothing can remove — and the plan refuses to exist, with a sentence
+    naming the page, rather than becoming a question a gate would later veto. It asks the SAME
+    question `validate`'s bound asks (`_live_references`, markdown links included): asking a
+    narrower one here meant a `see: "[x](Old Memo.md)"` field surfaced two model calls later as a
+    body problem the writer structurally could not fix.
+    """
+    front, _rest = page_policy.split_frontmatter(text or "")
+    return next((stem for stem in _live_references(front) if stem in stems), "")
+
+
 def _names_a_going_page(value: str, stems: set[str]) -> bool:
     """Does this frontmatter VALUE point at a page that is going? A wikilink is read as one; a
     bare value is read as a page name, which is how `supersedes: "Old Decision"` is spelled."""
@@ -138,13 +222,24 @@ def _names_a_going_page(value: str, stems: set[str]) -> bool:
     return link_stem(text) in stems
 
 
-# ── the sweep, on one page's bytes ────────────────────────────────────────────────────────────
-def scrubbed(text: str, stems: set[str]) -> tuple[str, str]:
-    """`(planned bytes, refusal)` for ONE page against the set of stems that are going.
+def _readable_frontmatter(text: str) -> bool:
+    """Does this page open with a frontmatter block `split_frontmatter` recognises?
 
-    A non-empty refusal means this page still names a page that is going after everything this
-    module knows how to rewrite has been rewritten — the self-check that keeps a stored plan from
-    being a question the contract linter would later veto.
+    A page that does not — CRLF, a BOM, an unterminated `---` — is one whose frontmatter code
+    cannot scrub and whose whole file would otherwise be handed to the writer as "the body". Every
+    outcome of that is wrong: the writer returns the frontmatter and is refused for opening a
+    `---`, or drops it and the page loses what it declares. So such a page refuses the DELETION,
+    by name, at plan time — the one moment a person can act on it.
+    """
+    front, rest = page_policy.split_frontmatter(text or "")
+    return bool(front.strip()) and len(rest) != len(text or "")
+
+
+# ── the sweep, on one page's bytes ────────────────────────────────────────────────────────────
+def scrubbed(text: str, stems: set[str]) -> str:
+    """Code's half of ONE page's planned bytes: the frontmatter with every entry naming a going
+    page dropped, and the body VERBATIM — the body is the writer's (`repair.sweep`), and this is
+    the page it is handed and the frontmatter `validate` holds its answer to.
 
     Pure, and byte-exact about the parts it does not touch: the frontmatter block is reassembled
     from its own lines and the body is spliced rather than re-rendered, so a page whose `related:`
@@ -153,39 +248,16 @@ def scrubbed(text: str, stems: set[str]) -> tuple[str, str]:
     text = text or ""
     front, rest = page_policy.split_frontmatter(text)
     if len(text) == len(rest):
-        # No frontmatter block at all. The linter refuses such a page for other reasons; scrubbing
-        # its body is still the honest thing to do rather than leaving a dead link behind.
-        after = _scrubbed_body(text, stems)
-    else:
-        # The separator is taken FROM THE FILE rather than assumed: a page whose closing `---` has
-        # no newline after it would otherwise gain one, and a page that gained a byte is a page in
-        # the sweep's blast radius — a scrub op, a steward, an approval — for a change nobody made.
-        head = text[:len(text) - len(rest)]
-        front_lines = _scrubbed_front(front.split("\n"), stems)
-        after = ("---\n" + "\n".join(front_lines) + "\n---" + ("\n" if head.endswith("\n") else "")
-                 + _scrubbed_body(rest, stems))
-    return after, _unremovable_reference(after, stems)
-
-
-def _unremovable_reference(text: str, stems: set[str]) -> str:
-    """The first stem this page still points at after the sweep, or `""`."""
-    return next((stem for _match, stem in _live_links(text) if stem in stems), "")
-
-
-def _scrubbed_body(text: str, stems: set[str]) -> str:
-    """Unlink, never delete. `[[X]]` becomes `X` and `[[X|alias]]` becomes `alias`, so the sentence
-    that cited a page survives the page — the whole difference between a sweep and a shredder."""
-    out, cut = [], 0
-    for match, stem in _live_links(text):
-        if stem not in stems:
-            continue
-        target, _, alias = match.group(1).partition("|")
-        display = alias.strip() or target.split("#", 1)[0].strip()
-        out.append(text[cut:match.start()])
-        out.append(display)
-        cut = match.end()
-    out.append(text[cut:])
-    return "".join(out)
+        # No frontmatter block at all. The linter refuses such a page for other reasons; the body
+        # is still the writer's to reconcile rather than left pointing at a page that is gone.
+        return text
+    # The separator is taken FROM THE FILE rather than assumed: a page whose closing `---` has no
+    # newline after it would otherwise gain one, and a page that gained a byte is a page in the
+    # sweep's blast radius — a scrub op, a steward, an approval — for a change nobody made.
+    head = text[:len(text) - len(rest)]
+    front_lines = _scrubbed_front(front.split("\n"), stems)
+    return ("---\n" + "\n".join(front_lines) + "\n---" + ("\n" if head.endswith("\n") else "")
+            + rest)
 
 
 def _scrubbed_front(front_lines: list[str], stems: set[str]) -> list[str]:
@@ -335,14 +407,18 @@ def page_refusal(worktree: str, path: str, *, symlink_why: str, missing_why: str
 
 # ── the plan ──────────────────────────────────────────────────────────────────────────────────
 def plan(worktree: str, paths) -> list[dict]:
-    """The whole sweep for a deletion set, as the stored `ops` list.
+    """Code's half of the whole sweep, as the stored `ops` list: the deletions, then one scrub op
+    for every page that refers to a going page — its frontmatter already scrubbed, its body
+    verbatim, its base hash recorded. `repair.sweep.write` is what turns the bodies into the
+    reconciled ones; a plan stored without that step is refused by `validate`, because a body
+    still naming a going page is exactly what the bound forbids.
 
-    Deterministic and ORDERED — the deletions by path, then the scrubs by path — because the
-    apply's proof is `recomputed == stored`, and two runs over the same bytes have to produce the
-    same list rather than the same set.
+    Deterministic and ORDERED — the deletions by path, then the scrubs by path — so two runs over
+    the same bytes produce the same list rather than the same set.
 
     Raises `RepairError`, with a sentence a steward reads verbatim, for a target this kind may not
-    delete and for a page whose reference the sweep cannot remove.
+    delete and for a page whose FRONTMATTER names a going page in a field this kind does not
+    rewrite.
     """
     targets = sorted({str(p) for p in (paths or ()) if str(p)})
     if not targets:
@@ -363,18 +439,45 @@ def plan(worktree: str, paths) -> list[dict]:
         text = read_text(worktree, rel)
         if text is None:
             continue                    # unreadable as text: it declares no wikilink either
-        after, unremovable = scrubbed(text, stems)
+        after = scrubbed(text, stems)
+        if references(text, stems) and not _readable_frontmatter(text):
+            raise RepairError(
+                f"{rel} refers to a page this deletion removes, and its frontmatter is not a shape "
+                f"this can read (a CRLF or BOM page, or an unterminated `---` block) — so the "
+                f"entries naming that page cannot be taken out, and the rest of the page cannot be "
+                f"written around it. Fix that page's frontmatter by hand first, then delete again")
+        unremovable = _frontmatter_reference(after, stems)
         if unremovable:
             raise RepairError(
-                f"{rel} refers to [[{unremovable}]] somewhere this sweep cannot rewrite — the "
-                f"reference would survive the deletion as a dead link and the contract linter "
-                f"would refuse the commit. Move or remove that reference by hand first, then "
-                f"propose the deletion again")
-        if after == text:
+                f"{rel} names [[{unremovable}]] in a frontmatter field this sweep does not "
+                f"rewrite — the reference would survive the deletion as a dead link and the "
+                f"contract linter would refuse the commit. Move or remove that reference by hand "
+                f"first, then delete again")
+        if after == text and not references(text, stems):
             continue
         ops.append({schema.OP_KIND_KEY: OP_SCRUB, "path": rel,
                     "expected_before_hash": sha256(text), "planned_after": after})
     return ops
+
+
+def going_stems(ops) -> set[str]:
+    """The stems a plan removes — the set every reference question about it is asked against."""
+    return {page_stem(path) for path in deleted_paths(ops)}
+
+
+def unified_diffs(worktree: str, ops) -> dict[str, str]:
+    """`{path: unified diff}` of what this plan does to each page it rewrites, against the page as
+    it stands in `worktree` — what a person reads when the act road hands the result back (ADR
+    043 D5): nobody read the written prose before it landed, so the diff IS the reading. A removed
+    page is listed by its deletion op and needs no diff."""
+    out: dict[str, str] = {}
+    for path in scrubbed_paths(ops):
+        before = read_text(worktree, path) or ""
+        after = expected_bytes(ops).get(path, "")
+        out[path] = "".join(difflib.unified_diff(
+            before.splitlines(keepends=True), after.splitlines(keepends=True),
+            fromfile=path, tofile=path, n=2))
+    return out
 
 
 def corpus_pages(worktree: str) -> list[str]:
@@ -489,12 +592,29 @@ def oversize_reason(ops, ceiling: int) -> str:
 
 
 # ── the validator both ends run ───────────────────────────────────────────────────────────────
+# The two bounds on a WRITTEN sweep, as finding codes a steward reads: the writer owns the body
+# and nothing else, and afterwards nothing it wrote may still name a page that is going.
+FRONTMATTER_REWRITTEN_CODE = "frontmatter-rewritten"
+REFERENCE_SURVIVES_CODE = "reference-survives"
+
+
+def _frontmatter_of(text: str) -> str:
+    """The frontmatter block plus its fences, exactly as the bytes carry it — the head `scrubbed`
+    reassembles, compared whole so a byte moved in it is a byte noticed."""
+    _front, rest = page_policy.split_frontmatter(text or "")
+    return (text or "")[:len(text or "") - len(rest)]
+
+
 def validate(worktree: str, ops) -> list[gates.Finding]:
     """Every reason this plan could not be performed against `worktree`, or `[]`.
 
-    The SHAPE half only — that the ops are well-formed and every path they name is a page this kind
-    may touch in this tree. Whether the plan is still the RIGHT plan is `apply_declared`'s
-    recomputation, which is a question about the corpus rather than about the row.
+    The SHAPE half — that the ops are well-formed and every path they name is a page this kind
+    may touch in this tree — and the two bounds a written sweep has to satisfy (ADR 043 D1): every
+    scrubbed page's frontmatter is code's own scrub of the page as it stands here, byte for byte,
+    and no planned page still refers to a page that is going. Both are asked of the stored bytes
+    against THIS tree, which is what lets the same function prove a plan at propose time and again
+    against the clone it lands on. Whether the corpus moved under the plan is `apply_declared`'s
+    question, asked of the base hashes.
     """
     ops = list(ops or ())
     if not ops:
@@ -524,7 +644,22 @@ def validate(worktree: str, ops) -> list[gates.Finding]:
         if name == OP_SCRUB and not str(op.get("planned_after", "")):
             out.append(_finding("no-planned-bytes",
                                 f"the scrub of {path} carries no planned bytes, so there is "
-                                f"nothing to compare a recomputation against", path))
+                                f"nothing to write and nothing to prove", path))
+    stems = going_stems(ops)
+    for path in scrubbed_paths(ops) if stems else ():
+        planned = expected_bytes(ops).get(path, "")
+        current = read_text(worktree, path)
+        if not planned or current is None:
+            continue                    # already refused above, by name
+        if _frontmatter_of(planned) != _frontmatter_of(scrubbed(current, stems)):
+            out.append(_finding(FRONTMATTER_REWRITTEN_CODE,
+                                f"the planned bytes of {path} carry a frontmatter that is not "
+                                f"code's own scrub of the page as it stands: the writer owns the "
+                                f"body and nothing else", path))
+        if references(planned, stems):
+            out.append(_finding(REFERENCE_SURVIVES_CODE,
+                                f"{path} would still refer to a page this sweep removes after it "
+                                f"is written — the reference would survive as a dead link", path))
     if not deleted_paths(ops):
         out.append(_finding("no-deletion",
                             f"a {schema.KIND_DELETE} proposal that removes no page is a rewrite of "
@@ -645,24 +780,40 @@ PLAN_DRIFT_CODE = "plan-drift"
 
 
 def apply_declared(worktree: str, ops) -> tuple[list[str], list[gates.Finding]]:
-    """Validate, RECOMPUTE, byte-compare, then perform — all-or-nothing.
+    """Validate, prove the corpus did not move, then perform — all-or-nothing.
 
-    The recomputation is this kind's whole propose-to-apply contract. `entity_body` can re-run its
-    validator against the clone and know the draft still applies; a sweep cannot, because what it
-    would write depends on every OTHER page in the corpus. A page that gained a link to the doomed
-    page since the proposal was made is a different sweep, and performing the old one would leave
-    exactly the dead link this kind exists to prevent. So the plan is derived again from the clone's
-    own bytes and refused unless it is identical — the corpus moved, propose again.
+    Two questions replace the recomputation ADR 039 B4 ran, because a written sweep cannot be
+    recomputed (ADR 043 D3). The base hash every scrub op carries says whether a page the plan
+    rewrites changed since the plan was made; a walk of the corpus says whether a page the plan
+    does NOT rewrite now refers to a going page — the latecomer that would otherwise survive the
+    deletion as a dead link. Either refuses the whole plan: the corpus moved, delete again. On the
+    act road the plan was made against this very tree moments ago, so both are a formality that
+    costs one walk; on the inbox road they are the whole contract.
     """
     findings = validate(worktree, ops)
     if findings:
         return [], findings
-    recomputed = plan(worktree, deleted_paths(ops))
-    if recomputed != [dict(o) for o in ops]:
-        return [], [_finding(PLAN_DRIFT_CODE,
-                             "the sweep this repo needs now is not the sweep that was approved — "
-                             "the pages that reference the deletion have changed since it was "
-                             "proposed")]
+    stems = going_stems(ops)
+    planned = set(scrubbed_paths(ops)) | set(deleted_paths(ops))
+    for op in ops:
+        if str(op.get(schema.OP_KIND_KEY, "")) != OP_SCRUB:
+            continue
+        current = read_text(worktree, str(op["path"]))
+        if sha256(current) != str(op.get("expected_before_hash", "")):
+            return [], [_finding(PLAN_DRIFT_CODE,
+                                 f"{op['path']} has changed since this sweep was written, so the "
+                                 f"bytes it would land are a rewrite of a page nobody read — the "
+                                 f"corpus moved, delete again", str(op["path"]))]
+    for rel in corpus_pages(worktree):
+        if rel in planned:
+            continue
+        text = read_text(worktree, rel)
+        if text is None:
+            continue
+        if references(text, stems) or scrubbed(text, stems) != text:
+            return [], [_finding(PLAN_DRIFT_CODE,
+                                 f"{rel} now refers to a page this sweep removes and the plan "
+                                 f"never rewrote it — the corpus moved, delete again", rel)]
     for path in scrubbed_paths(ops):
         full = os.path.join(worktree, *path.split("/"))
         with page_policy.open_for_rewrite(full) as f:

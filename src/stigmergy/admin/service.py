@@ -36,7 +36,12 @@ from stigmergy.kernel.normalize import normalize
 from stigmergy.librarian import config as librarian_config
 from stigmergy.repair import store as repair_store
 from stigmergy.repair.errors import RepairError
-from stigmergy.repair.schema import ALIAS_OP_NAMES, DELETE_OP_NAMES, KIND_ENTITY_BODY
+from stigmergy.repair.schema import (
+    ALIAS_OP_NAMES,
+    DELETE_OP_NAMES,
+    KIND_ENTITY_BODY,
+    SCRUB_OP_NAME,
+)
 from stigmergy.repair.schema import JOB_NAME as REPAIR_JOB
 from stigmergy.repair.schema import KINDS as REPAIR_KINDS
 from stigmergy.review_kinds import ITEM_KINDS, KIND_ALIAS_PROPOSAL, KIND_IDENTITY_PROPOSAL
@@ -835,6 +840,29 @@ class AdminService:
             # be published to a steward, so it crosses as the refusal's own text.
             raise AdminRefused(str(ex)) from ex
 
+    def pages_delete(self, *, actor: str, paths, why: str) -> dict:
+        """Remove pages and rewrite every page that referred to them, through
+        `server.review.delete_and_record` — the SAME sequence the MCP door runs (ADR 043 D2), so
+        which door a person deleted from changes the ledger's `source` and nothing else.
+
+        `review_decide`'s per-path steward check is deliberately not reached, exactly as
+        `repair_approve` and `entity_approve` do not reach theirs: that guard resolves an IDENTITY,
+        and `actor` here is free text behind the operator token (ADR 029/030 D2). **The console's
+        authorization IS the token**, and it is the one door where that is the whole of it — which
+        is why this is the console's most consequential button and its confirm says so.
+
+        Nothing is caught inside `_do`, so `_mutate` records the library's own class name in
+        `admin_actions` before `ReviewError` becomes `AdminRefused` for the caller.
+        """
+        def _do(by: str) -> dict:
+            return server_review.delete_and_record(
+                self._conn, repo_url=self._server.librarian_repo_url, paths=paths, why=why,
+                actor=by, source=server_review.SOURCE_ADMIN)
+
+        return self._mutate("pages.delete", actor,
+                            {"paths": [str(p) for p in (paths or ())], "why_chars": len(why or "")},
+                            _do)
+
     def repair_reject(self, proposal_id: int, *, actor: str, reason: str) -> dict:
         """Decline it, through the same shared writer the review lane rejects with — the reason
         lands on the PROPOSAL and in the ledger, which is what stops the proposer re-deriving the
@@ -1097,11 +1125,16 @@ class AdminService:
         control characters and KEEPS newlines: a body flattened to one line is a body nobody can
         read as the page it would become.
 
-        `delete` and `entity-alias` are the shapes that reach the console with LESS than they were
-        stored with: `planned_after` is a whole page per op, and it is the apply's contract with
-        its own recomputation rather than something a steward reads. What the console owes here is
-        which pages stop existing or which identity absorbs which, and the op NAME plus the path is
-        all of it.
+        `entity-alias` is the shape that reaches the console with LESS than it was stored with:
+        `planned_after` is a whole page per op, and what a steward judges there is which identity
+        absorbs which, not four regenerated files.
+
+        A `delete` SCRUB carries its planned bytes through, and that is ADR 043's doing: those
+        bytes are a MODEL's prose now, not a bracket scrub, and this is the one road where a person
+        approves them before they land — the act road's reading happens after the push, on the diff
+        it hands back, and there is no equivalent here. Hiding them would be `entity-body`'s
+        mistake made twice: the only thing worth reading, dropped silently, since a missing key
+        renders as an empty cell.
 
         Both are matched as GROUPS, imported from `repair.schema` rather than rebuilt from the
         individual names here: matching one name at a time is how one op of a kind gets a link
@@ -1113,6 +1146,8 @@ class AdminService:
         if kind == KIND_ENTITY_BODY:
             return {**common, "body_markdown": _clean(op.get("body_markdown")),
                     "role": _clean(op.get("role"))}
+        if kind == SCRUB_OP_NAME:
+            return {**common, "planned_after": _clean(op.get("planned_after"))}
         if kind in DELETE_OP_NAMES or kind in ALIAS_OP_NAMES:
             return common
         return {**common, "link": _clean(op.get("link")), "note": _clean(op.get("note"))}

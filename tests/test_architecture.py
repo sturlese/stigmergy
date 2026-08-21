@@ -895,11 +895,29 @@ def test_server_never_imports_entities_beyond_the_one_declared_review_lane_excep
 # server process — a synchronous MCP call must never carry a model run, which is the same layering
 # rule `_LIBRARIAN_ASYNC_LOOP_MODULES` states one exception over. The package's own suite pins the
 # other half (`test_only_the_proposer_loads_a_model_stack`), so the two halves fail independently.
+# ADR 043's act road adds four, and every one is reached from `delete_pages` alone: `deletion`
+# (the plan and its readers — code's half of a sweep), `sweep` (the writer, the ONE model road the
+# server enters at all), `brief` (the skill the writer is briefed with, read from the clone), and
+# `settings.RepairSettings` (the model and the plan ceiling, read
+# through the one function in that package that consults the environment). The last two are
+# imported INSIDE the function, exactly as `mcp_server.ask` imports the answer layer inside its
+# tool: `sweep` loads a model stack, and this module is imported by every process that serves an
+# MCP call. `_imported_symbols` walks function bodies too, so the grant is still declared here and
+# still pruned — what moves is the import-time weight, not the edge.
+#
+# `brief` is imported BY NAME rather than reached as `sweep.brief`, and the difference is this
+# list: an attribute hop through an allowed module lands on an undeclared one invisibly, since
+# `_imported_symbols` reads imports and not attribute access. A grant that can be side-stepped by
+# spelling is not a grant.
 _REVIEW_ALLOWED_REPAIR_SYMBOLS = (
     "stigmergy.repair.remote",
     "stigmergy.repair.store",
     "stigmergy.repair.schema",
     "stigmergy.repair.errors.RepairError",
+    "stigmergy.repair.deletion",
+    "stigmergy.repair.sweep",
+    "stigmergy.repair.brief",
+    "stigmergy.repair.settings.RepairSettings",
 )
 
 
@@ -2557,7 +2575,12 @@ _REPAIR_CLI_EXTRA_ALLOWED_PREFIXES = _REPAIR_ALLOWED_PREFIXES + (
 # inside the MCP server process, and `pydantic_ai` arriving there through a DDL module or a store
 # would be an import-graph accident nobody would notice — the process would simply get slower and
 # heavier, and the dependency would be real. Declared by NAME so widening it is a decision.
-_REPAIR_MODEL_STACK_MODULES = ("proposer.py",)
+#
+# `sweep.py` is the second, and it is a DECISION rather than a drift (ADR 043 D4): the act road
+# writes a deletion's sweep inside the server process, so a model runs there — as one already does
+# for `ask`. What the rule still says, and what `remote.py` must keep proving, is that the APPLY
+# — clone, gates, commit, push — loads none of it: `remote.py` is handed a finished plan.
+_REPAIR_MODEL_STACK_MODULES = ("proposer.py", "sweep.py")
 
 
 def test_repair_sources_found():

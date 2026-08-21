@@ -243,6 +243,42 @@ def build_mcp(service: BrainService, *, stateless_http: bool = False, transport_
             return _failure("review_decide", ex)
 
     @mcp.tool()
+    def brain_delete(paths: list[str], why: str) -> str:
+        """Remove pages from the brain and rewrite every page that referred to them — stewards
+        only, and it happens in this call rather than waiting on anybody.
+
+        You are the person deciding it: name the pages (repo-relative, as `search_brain` and
+        `read_page` give them) and say what makes them stale, in a sentence `git log` carries
+        afterwards. It requires you to be a steward for every page it would touch — the pages that
+        go AND the pages that refer to them, which are computed here and may be somebody else's.
+
+        What happens, in one pass: the pages are removed; every page that referred to one of them
+        has its `related:`/`sources:` entries dropped by code and its BODY rewritten by a model, so
+        a sentence that cited a removed page still reads and a callout that only existed because of
+        one is gone; the librarian's nine gates judge the result; and one App-authored commit lands
+        with your name in an `Approved-by` trailer. Nobody reads the rewritten prose before it lands,
+        so the response carries the per-page diff — that IS the reading — and `git revert` in the
+        knowledge repo is the undo. Nothing is written if any page cannot be reconciled: the
+        refusal names it.
+
+        An entity page is never deletable here (an identity is retired through governance), nor is
+        anything outside the corpus.
+        """
+        try:
+            check_arg_length("why", why)
+            for path in paths or ():
+                check_arg_length("path", str(path))
+            return json.dumps(service.delete_pages(paths, why, source=decisions.SOURCE_MCP),
+                              **_DUMP)
+        except (CaptureError, RateLimitError, CapabilityUnavailableError) as ex:
+            return _error(str(ex))
+        except Exception as ex:  # noqa: BLE001 — the same narrowing review_decide takes: only
+            # `check_arg_length`'s own marked rejection is known-safe to echo.
+            if getattr(ex, "is_arg_length_error", False):
+                return _error(str(ex))
+            return _failure("brain_delete", ex)
+
+    @mcp.tool()
     async def ask(question: str) -> str:
         """Answer a question from the brain. An evidence-gathering agent writes a cited answer;
         a deterministic verifier then traces every figure to the evidence the tools returned this

@@ -103,6 +103,31 @@ Three things worth proving here specifically:
   dismissal memory, so the evidence is a `rejected` row the next `repair-propose` run leaves alone.
   With nothing pending (`stigmergy-repair list` against the staging DSN settles it), report an
   empty tab as an empty tab: it proves the route serves, never that a repair applies.
+- **Remove pages on Repairs is the one button that decides as well as writes** (ADR 043): there is
+  no proposal and no second click, so the evidence is the commit it names PLUS the diffs it hands
+  back in the dialog — read them, because nobody read that prose before it landed. Delete a page
+  something else refers to in PROSE, not only in `related:`, or the sweep writer never runs and the
+  step proves nothing. `brain_delete` over MCP is the same act from the other door; a caller who is
+  not a steward for one of the touched pages must get `there is nothing for you to decide at that
+  id` and no commit.
+
+### The deletion drill
+
+The one act that both decides and writes. Do it on a page you are prepared to lose and that
+something else refers to **in prose** — a `related:` entry alone exercises code's half and proves
+nothing about the writer.
+
+```
+brain_delete(paths=["wiki/notes/<a junk page>.md"], why="<what makes it stale>")
+```
+
+Evidence: the commit it names, present in the knowledge repo with an `Approved-by:` trailer; the
+page gone; each referring page reconciled — a sentence that cited it still reading, a callout that
+only existed because of it gone; and the diffs the response carries, which are the only reading
+that prose gets. A `repair_proposals` row in `applied`, never `pending`, decided by you.
+
+Then the refusals, each landing nothing: an entity page, and a caller who is not a steward for one
+of the touched pages (`there is nothing for you to decide at that id`).
 
 ## Block 5 — identity and ACL
 

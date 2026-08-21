@@ -2,15 +2,15 @@
 
 Everything below is for the operator running the system. The live world this runbook covers:
 **three zones** in the knowledge repo (`wiki/` · `sources/` · `views/`), the librarian's
-**9 gates**, **9 MCP tools** (`search_brain`/`read_page`/`list_entities`/`describe_entity`,
-`ask`, `brain_submit`/`brain_submissions`, `review_queue`/`review_decide`),
+**9 gates**, **10 MCP tools** (`search_brain`/`read_page`/`list_entities`/`describe_entity`,
+`ask`, `brain_submit`/`brain_submissions`/`brain_delete`, `review_queue`/`review_decide`),
 **one Fly app** with three process groups (`app` · `slack` · `worker`), four GitHub Actions
 crons (`index-rebuild` · `retention-purge` · `gardener` · `repair-propose`), the optional `/admin`
 console on the `app` group, and the golden evals under `evals/` with the release gates
 (`make gates`) over them.
 
 Organized by OPERATION: Deploy · Wipe & re-seed · Capture from Drive · Index rebuild ·
-Govern · Recovery · Revocation · Release gates & drills · Troubleshooting.
+Govern · Remove pages · Recovery · Revocation · Release gates & drills · Troubleshooting.
 
 There is no read site: navigation happens through `read_page` and the entity tools
 ([ADR 022](../decisions/022-entity-navigation.md)).
@@ -619,6 +619,38 @@ than degrading.
 the Slack card name who decided, on which road and when (read out of the ledger, and only after you
 have cleared authorization); `stigmergy-entities` and the console report that the id is no longer a
 proposal, which tells you the decision is gone without telling you whose it was.
+
+## Removing pages
+
+**A deletion is decided by the person who asks for it, and it happens in that call** — there is no
+proposal to approve and no `stigmergy-repair delete` any more ([ADR 043](../decisions/043-a-sweep-is-written.md)).
+Two doors, and the same sequence behind both:
+
+- **MCP**: `brain_delete(paths=["wiki/notes/Old Memo.md"], why="what makes it stale")`. It requires
+  you to be a steward for every page it touches — the pages that go AND the pages that refer to
+  them, which it computes from a fresh clone and which may be somebody else's zone.
+- **The console**, Repairs → **Remove pages**. Its token is the whole authorization there, which
+  makes it the most consequential button on that console.
+
+What happens in the call: the pages go; every page that referred to one has its `related:`/`sources:`
+entries dropped by code and its BODY rewritten by a model, so a sentence that cited a removed page
+still reads and a callout that only existed because of one is gone; the nine gates judge the result;
+one App-authored commit lands with your name in an `Approved-by:` trailer.
+
+**Read the diff it hands back.** Nobody read that prose before it landed — that is the trade the ADR
+states rather than softens — so the response (and the console's dialog) carries a unified diff per
+rewritten page, ACL-scoped and fenced. A diff you may not read is named rather than dropped.
+
+It refuses whole, changing nothing, on: an entity page (an identity is retired through governance,
+never deleted), a path outside the corpus, more than ten pages in one call, a reason matching a
+likely secret, a page whose frontmatter is not a shape this can read (CRLF, a BOM, an unterminated
+`---`), a reference in a frontmatter field the sweep does not rewrite, and a body the writer could
+not reconcile in one retry. Every refusal names the page.
+
+**The undo is `git revert` in the knowledge repo**, by an operator with a checkout. When the sweep
+rewrote a `views/` or `sources/` page, that revert is an operator commit in a machine-owned zone —
+so it needs adding to that repo's reviewed authorship baseline, or its CI goes red on every later
+push.
 
 ## Recovery
 

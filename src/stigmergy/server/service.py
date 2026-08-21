@@ -346,6 +346,19 @@ class BrainService:
         }
 
     # ── page read (the shared base + its two semantic renderings) ─────────────
+    def may_read_page(self, path: str) -> bool:
+        """Is this page in THIS client's audience? `acl.visible()`'s question, asked of one path
+        and answered nowhere else — the deletion door hands this in as its `can_read` seam, because
+        the diffs it returns are page bytes and being a steward of a folder is not being in the
+        audience of every page in it.
+
+        A page the index does not carry answers False, the same fail-closed reading
+        `fetch_page_raw` gives: existence itself is scoped, and a page removed by the very sweep
+        being reported is one this cannot ask about any more.
+        """
+        page = search.fetch_pages(self.conn, [str(path)]).get(str(path))
+        return page is not None and visible(page.get("acl"), self.audiences)
+
     def fetch_page_raw(self, path: str) -> dict | None:
         """One page's raw fields (sanitized, excerpted, UNFENCED), ACL-scoped — None when the path
         is nonexistent OR out of scope, since existence itself is scoped. The single fetch+ACL
@@ -678,6 +691,20 @@ class BrainService:
             lambda: review.review_decide(
                 self, item_kind=item_kind, item_id=item_id, verdict=verdict, source=source,
                 notes=notes, into=into))
+
+    def delete_pages(self, paths, why: str = "", *, source: str) -> dict:
+        """Remove pages and rewrite every page that referred to them, as ONE commit attributed to
+        THIS service's resolved identity; `review.delete_pages` carries the contract. Like
+        `review_decide`, `source` is REQUIRED and never defaulted — the ledger row names the DOOR,
+        and a default would attribute one door's act to another the day a third arrives.
+
+        The audit row keeps the shape and never the reason: `why` is free text a person wrote.
+        """
+        return self._call(
+            "brain_delete",
+            {"paths": [str(p) for p in (paths or ())], "why_chars": len(why or ""),
+             "source": source},
+            lambda: review.delete_pages(self, paths=paths, why=why, source=source))
 
     # ── scoped read helpers (reused by the answer layer) ──────────────────────
     def scoped_entities(self) -> list[str]:

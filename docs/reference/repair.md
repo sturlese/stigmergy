@@ -3,23 +3,38 @@
 A finding's path to zero. `stigmergy-repair propose` turns the gardener's findings into concrete
 changes a steward can approve one at a time — additive edits to pages that already exist, a
 drafted BODY for an entity page whose own body says nothing about it, and a MERGE of two registry
-entries that turn out to be the same entity — while `stigmergy-repair delete` is where a
-person proposes removing a page and everything that points at it. The review lane and the admin
-console are where one is approved; and only then does code perform exactly the approved ops,
-through the librarian's own validator, its nine gates and its governed commit.
-Design record: [ADR 039](../decisions/039-governed-repair-loop.md) — it holds the decisions this
-document only shows the results of.
+entries that turn out to be the same entity. The review lane and the admin console are where one
+is approved; and only then does code perform exactly the approved ops, through the librarian's own
+validator, its nine gates and its governed commit.
+
+**A person's own deletion is not one of those.** It enters at an authenticated door — `brain_delete`
+over MCP, or the console's Repairs page — and lands in that same call: the judgment was already
+theirs, so what the second click supplied was an authentication, and it now runs in the act
+([ADR 043](../decisions/043-a-sweep-is-written.md)).
+
+Design record: [ADR 039](../decisions/039-governed-repair-loop.md), amended by
+[ADR 043](../decisions/043-a-sweep-is-written.md) — they hold the decisions this document only
+shows the results of.
 The findings themselves are covered in [`gardener-digest.md`](./gardener-digest.md), the review lane
 in [`server.md`](./server.md#the-review-tools) and the console's panel in
 [`admin-console.md`](./admin-console.md). Code map:
 [`src/stigmergy/repair/index.md`](../../src/stigmergy/repair/index.md).
 
-**The covenant, in one sentence: a MODEL proposes, CODE validates twice, a HUMAN approves one at a
-time, and code applies exactly what was approved.** Nothing reaches the knowledge repo without
-having passed all four. Deletion is the one kind whose first clause reads differently, and
-deliberately: a model may never propose one in any spelling, so the proposer there is a person at a
-terminal, or — for exact-duplicate `sources/` pages, where the decision is a lookup rather than a
-judgment — code itself.
+**The covenant, in one sentence: a MODEL proposes, CODE validates twice, a HUMAN decides, and code
+applies exactly what was decided.** Nothing reaches the knowledge repo without having passed all
+four. Deletion is the one kind that reads differently on two of them, and deliberately:
+
+- **a model may never propose one, in any spelling** — the proposer is a person at an
+  authenticated door, or, for exact-duplicate `sources/` pages where the decision is a lookup
+  rather than a judgment, code itself;
+- **the human decides at the command when they gave it, and in the inbox when a model did**
+  (ADR 043 D2). A person's deletion applies in the same call: they already judged it, and asking
+  them to approve their own request supplied an authentication, not a second opinion. What a model
+  initiated overnight still waits for somebody.
+
+And its pages are WRITTEN. Code drops the frontmatter entries that named a removed page — a lookup
+— and a model writes the bodies of the pages that referred to it, so a sentence that cited one
+still reads and a callout that only existed because of one is gone (ADR 043 D1).
 
 ```
   gardener findings                stigmergy-repair propose            a steward, one at a time
@@ -34,16 +49,25 @@ judgment — code itself.
         │                            │   delete: duplicate sources/ pages,          │
         └────────── read ───────────>│     derived by CODE, no model                │
                                      ├─ drop keys already reviewed        server.review.apply_repair_and_record
-  a person, at a terminal            ├─ the model, 2 READ tools             ├─ mark_decided (WHERE pending)
-   stigmergy-repair delete ─────────>├─ validate the answer, one retry      ├─ clone → the kind's applier
-     <path>... --why "…"             ├─ validate against the real           ├─ the cross-check: the diff's
-   (the ONLY door for a deletion     │    checkout (the kind's own          │    paths == target_paths, and
-    a person judged; a model may     │    validator, the applier's)         │    its SHAPE, per kind
-    never propose one)               └─ INSERT ... status='pending'         ├─ run_gates(ALL_GATES), told the
+                                     ├─ the model, 2 READ tools             ├─ mark_decided (WHERE pending)
+                                     ├─ validate the answer, one retry      ├─ clone → the kind's applier
+                                     ├─ validate against the real           ├─ the cross-check: the diff's
+                                     │    checkout (the kind's own          │    paths == target_paths, and
+                                     │    validator, the applier's)         │    its SHAPE, per kind
+                                     └─ INSERT ... status='pending'         ├─ run_gates(ALL_GATES), told the
                                           content_key = kind + what it      │    lane and what it may suspend
                                           would do                          ├─ gitcmd.commit(gated_entries=…)
                                                                             │    + push, App-authored
                                                                             └─ mark_applied + review_decisions
+
+  a person, at an authenticated door — and there is nobody left to ask, so it lands in this call
+   brain_delete(paths, why)  ──>  steward guard on what they named  ──>  clone
+   (MCP / the console)             ──>  deletion.plan: the referring set, the frontmatter
+                                   ──>  steward guard on the FULL touched set
+                                   ──>  sweep.write: a model writes their bodies, one retry
+                                   ──>  the bounds, run_gates(ALL_GATES), commit + push
+                                   ──>  the row is born `approved`, then `applied`
+                                   ──>  back to the caller: the commit, and the DIFF per page
 ```
 
 ## The six checks a repair can answer
@@ -145,8 +169,10 @@ a file, so it carries two op shapes:
  "planned_after": "<the whole page, as it would be written>"}
 ```
 
-- **Who may propose one.** A person, at `stigmergy-repair delete <path>... --why "<reason>"` — and
-  nothing else, except the one deterministic road below. **A model may never propose a deletion in
+- **Who may propose one.** A person, at `brain_delete(paths, why)` over MCP or the console's own
+  button — and nothing else, except the one deterministic road below. Theirs is not a proposal at
+  all: it is decided, written, gated and pushed in that call, and what comes back is the commit and
+  the per-page diff. **A model may never propose a deletion in
   any spelling**: `validate_batch` drops such an op by name with a sentence saying the road does
   not exist. Judging that a page is stale is the judgment that is neither code's nor a model's.
 - **The one automatic road.** Two `sources/` pages declaring the same `content_hash:` are the same
@@ -160,23 +186,38 @@ a file, so it carries two op shapes:
   absent by CONSTRUCTION rather than by rule: the entity type carries no folder, so it is not in the
   lane the deletable set extends. Never `ops/` or `.claude/`, and never anything outside the three
   content zones. A whitelist, so tomorrow's zone is undeletable by default.
-- **What the sweep does to everything else.** For each page that mentions a page that is going:
-  `related:`/`sources:` entries naming it are dropped (an emptied field's line goes with it),
-  `supersedes:`/`superseded_by:` pointers at it are removed, and body wikilinks are UNLINKED —
-  `[[X]]` becomes `X` and `[[X|alias]]` becomes `alias`, so the sentence that cited a page survives
-  the page. Every link question is asked exactly as the knowledge repo's contract linter asks it
-  (code fences and inline code blanked first, alias and anchor split off, `Path(target).stem`). A
-  reference the sweep cannot rewrite — a `[[wikilink]]` in some other frontmatter field — refuses
-  the whole plan at propose time rather than becoming a question a gate would later veto.
+- **What the sweep does to everything else**, and it is split down the middle (ADR 043 D1). CODE
+  owns the frontmatter: `related:`/`sources:` entries naming a going page are dropped (an emptied
+  field's line goes with it) and `supersedes:`/`superseded_by:` pointers at it are removed — a
+  lookup, and a model asked to do it would be re-deriving what the parser already states. A MODEL
+  owns the bodies: one call over the WHOLE referring set, returning each page's body reconciled, so
+  a sentence that cited a removed page still reads, a callout that only existed because of one is
+  gone, and a markdown link at its path goes with the rest. Every link question is asked exactly as
+  the knowledge repo's contract linter asks it (code fences and inline code blanked first, alias
+  and anchor split off, the last path segment minus `.md`) plus one shape the linter does not
+  count — a markdown link at a going page's path — because a writer reconciles prose. A reference
+  in a frontmatter field this kind does not rewrite refuses the whole plan rather than becoming a
+  question a gate would later veto; a reference in a BODY never does, since a writer reconciles
+  anything.
+- **What bounds the writer.** The pages it returns must be exactly the pages that refer to a going
+  one; each body keeps its `# Title` line, opens no `---` block, is never emptied and may grow by
+  at most a sentence or two (a sweep reconciles, it does not write); each planned page's
+  frontmatter must be byte-identical to code's own scrub of the page as it stands; and nothing it
+  wrote may still refer to a going page. One retry carrying the reasons, then a refusal naming the
+  page — **there is no deterministic fallback**, because two writers of one page are two
+  implementations that can disagree about it.
 - **What a steward is authorizing.** `target_paths` carries the FULL touched set, deleted and
   scrubbed alike, so the review lane's per-path steward guard covers the whole blast radius: the
   steward of the page being removed is not automatically the steward of every page the sweep would
   rewrite. `STIGMERGY_REPAIR_MAX_PLAN_BYTES` bounds how much one approval may be, shared with the
   entity-alias kind because both store whole pages.
-- **How the apply proves it.** The plan is RECOMPUTED from the fresh clone and refused unless it is
-  identical to the stored one, op for op and byte for byte — a page that gained a link since the
-  proposal was made is a different sweep, and performing the old one would leave the dead link this
-  kind exists to prevent. Then the gates are told `deletions_allowed={the pages that go}` and
+- **How the apply proves it.** A written sweep cannot be recomputed, so the recomputation ADR 039
+  B4 ran is replaced by three questions asked of the clone (ADR 043 D3): the two bounds above,
+  re-run there; the per-page base hash every scrub op carries, so a page that CHANGED since the
+  plan was written refuses it; and a walk of the corpus for a page the plan never rewrote that now
+  refers to a going one — the latecomer B4's recomputation used to catch. On the act road all three
+  are a formality that costs one walk, because the plan was made in that very clone. Then the gates
+  are told `deletions_allowed={the pages that go}` and
   `expected_bytes={path: the planned file}`; for a planned path the additive proof is replaced by
   byte-equality, which is a STRONGER statement than it (additive says "nothing disappeared";
   byte-equality says "this is precisely the file that was approved"). Finally the knowledge repo's
@@ -253,7 +294,6 @@ carries four op shapes and every one of them holds the whole file it would write
 stigmergy-repair [--dsn DSN] [--repo PATH] [--json] propose
 stigmergy-repair [--dsn DSN] [--repo PATH] [--json] list
 stigmergy-repair [--dsn DSN] [--repo PATH] [--json] show <id>
-stigmergy-repair [--dsn DSN] [--repo PATH] [--json] delete <path>... --why "<reason>"
 ```
 
 - **`propose`** — the pass a cron runs. Reads the latest COMPLETED gardener run, keeps the
@@ -269,23 +309,46 @@ stigmergy-repair [--dsn DSN] [--repo PATH] [--json] delete <path>... --why "<rea
 - **`list`** — what waits on a steward, plus what was recently decided.
 - **`show <id>`** — what one proposal would change, rendered from the ops without touching git. For
   an `entity-body` proposal that is the drafted body in full: the draft is the whole of what a
-  steward judges, so a preview that summarised it would hide the only thing worth reading. For a
-  `delete` or an `entity-alias` proposal it is what each page BECOMES — which pages stop existing,
-  or which identity absorbs which and how many pages move with it — never the
-  planned bytes, which are the apply's contract with its own recomputation and not something a
-  person reads.
-- **`delete <path>... --why "<reason>"`** — the only verb that CREATES a proposal from a terminal,
-  at the same authority level as `propose`: it computes the sweep, refuses everything wrong with it
-  before a row exists (an entity page, a path outside the corpus, a reference it cannot rewrite, a
-  plan over its ceiling, a deletion already waiting on somebody), inserts ONE pending row and prints
-  the plan in plain English. `--why` is required — it is what a steward reads beside Approve and
-  what `git log` carries afterwards — and the row's `model_id` is empty, which is the durable
-  statement that no model proposed it.
+  steward judges, so a preview that summarised it would hide the only thing worth reading. A
+  `delete` proposal shows which pages stop existing and, for each page it rewrites, the page it
+  would BECOME in full — for the same reason, since ADR 043 made those bytes a model's prose and a
+  person deciding a pending deletion is the only reader they get before they land. An
+  `entity-alias` proposal shows which identity absorbs which and how many pages move with it,
+  never its planned bytes: what a steward judges there is the merge, and four whole files would
+  bury it.
+**There is no `apply`, and there will not be one. There is no `delete` either, since ADR 043.** A
+terminal knows who is typing and not what they are allowed to approve, so neither verb can be
+authorized from one: applying goes through a door that decides, and a deletion — which a person
+judges and code then carries out — is now itself an act at such a door (`brain_delete`, below).
+`--repo` (or `$STIGMERGY_REPO`) must be a real git checkout, because a proposal is validated
+against the pages that are actually committed there.
 
-**There is no `apply`, and there will not be one.** A terminal knows who is typing and not what they
-are allowed to approve; applying goes through a door that decides. `--repo` (or `$STIGMERGY_REPO`)
-must be a real git checkout, because a proposal is validated against the pages that are actually
-committed there.
+## `brain_delete` — a person removes pages
+
+```
+brain_delete(paths=["wiki/notes/Old Memo.md"], why="what makes it stale")
+```
+
+One call, and everything happens inside it. The identity is the caller's resolved one, so the
+per-path steward guard runs here rather than at a second click — over the pages that GO **and** the
+pages that refer to them, which are computed from a fresh clone and may be somebody else's zone.
+Then: `deletion.plan` for the frontmatter and the referring set, `sweep.write` for the bodies, the
+nine gates, one App-authored commit with the caller in an `Approved-by:` trailer, and a push that
+never rebases.
+
+- **What comes back** is the commit, the pages removed, and a unified DIFF per rewritten page.
+  Nobody read that prose before it landed — that is the trade ADR 043 D5 states rather than softens
+  — so the diff is the reading, and `git revert` in the knowledge repo is the undo.
+- **The row is born `approved`** in the caller's name and applied at once, so the console's
+  Repairs history, the metrics and the governance ledger keep one source of truth and the inbox
+  never lists it. `model_id` names the model that wrote the pages that stay, and is empty when
+  nothing referred to the removed ones — no model decides WHICH page goes, ever.
+- **What it refuses, before anything is cloned**: no page, no reason, more than
+  `MAX_DELETED_PAGES` (10) pages in one call, a reason matching a likely secret, a caller who is
+  not a steward for what they named. And after the clone: an entity page, a path outside the
+  corpus, a plan over `STIGMERGY_REPAIR_MAX_PLAN_BYTES`, a frontmatter reference the sweep cannot
+  rewrite, and a body the writer could not reconcile in one retry. Every one of those lands
+  nothing at all.
 
 | Setting | Default | Effect |
 |---|---|---|
@@ -380,7 +443,8 @@ Three independent checks, each chosen because the other two cannot see what it s
 
 1. **The kind's own applier against a fresh clone.** The propose-time validation ran against a
    checkout that may be hours old; a page deleted since then refuses here. For `delete` this step
-   is a full RECOMPUTATION of the sweep, refused unless it is byte-identical to the stored plan.
+   is the two bounds re-run against the clone, plus a base hash per rewritten page and a walk of
+   the corpus for a latecomer that now refers to a going page (ADR 043 D3).
 2. **`run_gates(ALL_GATES)`** judges the resulting diff exactly as it judges the librarian's own —
    all eight, not a subset. A `delete` apply additionally runs the knowledge repo's own linter over
    the WHOLE clone, because that kind's blast radius is the graph rather than the diff.
@@ -400,7 +464,7 @@ diff that lands, bytes included. The commit is authored by the librarian App, it
 proposal and the findings it answers, and it carries an `Approved-by:` trailer naming the human.
 
 The push closes one more, for the two NON-ADDITIVE kinds: it never rebases. Their apply is a proof
-against a base — recompute, byte-compare, perform — and a rebase would replay the approved diff
+against a base — the bounds and the base hashes, then perform — and a rebase would replay the approved diff
 onto a tip the gates never judged: a delete can leave a dead link a fresh plan would have scrubbed,
 a merge can leave a page anchored to the retired identity forever. A push that loses the race (the
 view sweep pushes up to its ceiling every interval, so it is a race that happens) fails CLEAN —

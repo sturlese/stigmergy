@@ -726,9 +726,10 @@ def _apply_records(monkeypatch, paths=("wiki/notes/Some Page.md",)):
     name; the surrounding `mark_applied`/`mark_failed` bookkeeping is the real thing."""
     calls = []
 
-    def fake(repo_url, branch, credential, *, proposal, approved_by, on_output=None):
+    def fake(repo_url, branch, credential, *, proposal, approved_by, on_output=None,
+             prepared=None):
         calls.append({"repo_url": repo_url, "branch": branch, "proposal": proposal,
-                      "approved_by": approved_by})
+                      "approved_by": approved_by, "prepared": prepared})
         return {"commit": FAKE_COMMIT, "paths": list(paths)}
 
     monkeypatch.setattr(repair_remote, "apply_via_clone", fake)
@@ -1338,7 +1339,8 @@ def test_the_ledger_records_what_a_deletion_removed_and_how_much_it_rewrote(env,
     are gone and `git log` is the only other place it is written down."""
     proposal_id = _propose_delete(conn)
 
-    def fake(repo_url, branch, credential, *, proposal, approved_by, on_output=None):
+    def fake(repo_url, branch, credential, *, proposal, approved_by, on_output=None,
+             prepared=None):
         return {"commit": FAKE_COMMIT, "paths": ["wiki/notes/Old Memo.md"],
                 "deleted": ["wiki/notes/Old Memo.md"], "scrubbed_pages": 1}
 

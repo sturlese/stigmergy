@@ -360,6 +360,16 @@ def _build_admin_app(service: AdminService) -> Starlette:
                                        actor=_str(data, "actor"))
 
     @_json_endpoint
+    async def pages_delete(request):
+        data = await _body(request)
+        paths = [p for p in (data.get("paths") or []) if str(p).strip()]
+        if not paths:
+            raise AdminBadRequest("'paths' is required — a deletion names the pages that go")
+        return await run_in_threadpool(service.pages_delete, actor=_str(data, "actor"),
+                                       paths=[str(p).strip() for p in paths],
+                                       why=_str(data, "why"))
+
+    @_json_endpoint
     async def repairs_reject(request):
         data = await _body(request)
         reason = _str(data, "reason")
@@ -434,6 +444,7 @@ def _build_admin_app(service: AdminService) -> Starlette:
         Route(API_PREFIX + "repairs/{id:int}", repairs_show, methods=["GET"]),
         Route(API_PREFIX + "repairs/{id:int}/approve", repairs_approve, methods=["POST"]),
         Route(API_PREFIX + "repairs/{id:int}/reject", repairs_reject, methods=["POST"]),
+        Route(API_PREFIX + "pages/delete", pages_delete, methods=["POST"]),
         Route(API_PREFIX + "activity", activity, methods=["GET"]),
         Route(API_PREFIX + "worker", worker, methods=["GET"]),
         Route(API_PREFIX + "crons", crons, methods=["GET"]),

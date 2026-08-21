@@ -28,10 +28,10 @@ def test_server_exposes_the_read_tools_and_ask_over_stdio(indexed):
         async with mcp_session(fx, fx.STEWARD) as session:
             names = {t.name for t in (await session.list_tools()).tools}
             assert names == {"search_brain", "read_page", "list_entities", "describe_entity",
-                             "ask", "brain_submit", "brain_submissions",
+                             "ask", "brain_submit", "brain_submissions", "brain_delete",
                              "review_queue", "review_decide"}
-            # exactly nine tools and no more. The in-process mirror of this same closed set is
-            # `test_mcp_adapter.py::test_the_mounted_tool_list_is_exactly_the_nine_supported_tools`
+            # exactly ten tools and no more. The in-process mirror of this same closed set is
+            # `test_mcp_adapter.py::test_the_mounted_tool_list_is_exactly_the_ten_supported_tools`
             # — that one proves `build_mcp()`'s own output; this one proves the REAL entry point
             # mounts the same set over the wire.
     _run(go())
