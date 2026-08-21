@@ -6,7 +6,7 @@
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/tools/stigmergy_lint.py` |
-| **Copied at commit** | `6bfc4a013ce7909e8f9bc571fe2d4d3809be1850` |
+| **Copied at commit** | `7feee011691388224f4dc0daf1644b9d90efae1c` |
 | **Drift guard** | `tests/librarian/test_frozen_linter.py` |
 
 What the copy carries is whatever the knowledge repo's linter carries at that commit; the rule

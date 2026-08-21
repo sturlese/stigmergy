@@ -253,7 +253,7 @@ A frozen brief re-frozen is a new measurement, not a regression — nothing is r
 is back-filled, so read the first row under new bytes as a fresh baseline candidate. The re-freezes
 so far, newest first:
 
-- **`6bfc4a0` (2026-08-21, ADR 041)** — all four frozen files in one commit, which is what makes
+- **`7feee01` (2026-08-21, ADR 041)** — all four frozen files in one commit, which is what makes
   this the cleanest re-freeze the fixture has had: the librarian brief and the meeting-distiller
   brief stop telling the agent to park a capture on the person who wrote it and tell it to PROPOSE
   the identity instead, the contract linter learns the `approved_by:` / `proposed_aliases:`
