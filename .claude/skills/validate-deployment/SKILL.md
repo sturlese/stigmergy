@@ -111,6 +111,24 @@ Three things worth proving here specifically:
   not a steward for one of the touched pages must get `there is nothing for you to decide at that
   id` and no commit.
 
+### The deletion drill
+
+The one act that both decides and writes. Do it on a page you are prepared to lose and that
+something else refers to **in prose** — a `related:` entry alone exercises code's half and proves
+nothing about the writer.
+
+```
+brain_delete(paths=["wiki/notes/<a junk page>.md"], why="<what makes it stale>")
+```
+
+Evidence: the commit it names, present in the knowledge repo with an `Approved-by:` trailer; the
+page gone; each referring page reconciled — a sentence that cited it still reading, a callout that
+only existed because of it gone; and the diffs the response carries, which are the only reading
+that prose gets. A `repair_proposals` row in `applied`, never `pending`, decided by you.
+
+Then the refusals, each landing nothing: an entity page, and a caller who is not a steward for one
+of the touched pages (`there is nothing for you to decide at that id`).
+
 ## Block 5 — identity and ACL
 
 With two identities (one unrestricted, one scoped), prove what is provable today:
