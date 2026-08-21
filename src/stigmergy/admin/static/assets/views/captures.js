@@ -8,7 +8,7 @@ import { OUTCOME_ORDER, status as statusCopy } from "../copy.js";
 import { getMeta, windowDays } from "../state.js";
 import {
   banner, chips, confirmForm, copyButton, el, fmtAge, fmtDay, fmtMs, fmtNum,
-  fmtWhen, icon, kv, link, mono, pill, render, statusPill, table, toast,
+  fmtWhen, icon, keyDot, kv, link, mono, pill, render, statusPill, table, toast,
 } from "../ui.js";
 import { actorField, go, latencyLine, loading, materialPanel, mutate, reportPanel, rerender, statusSentence, timeline } from "./common.js";
 
