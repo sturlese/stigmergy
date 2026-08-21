@@ -1,10 +1,13 @@
-# entities — the identity lifecycle: decide what was proposed, create what nobody did
+# entities — the identity lifecycle: the rules of birth, and the decisions after it
 
-The librarian never CONFIRMS an entity: it proposes one while filing (`librarian.identity` writes
-the page with `approved_by: ""`), and a steward decides it here. This package is the human half —
-the only place an identity is approved, merged, declined or born already confirmed, and the ONE
-path-scoped human-driven writer of `ops/`. Nothing here runs in a worker, on a poll, or behind an
-agent.
+The librarian WRITES every entity page (`librarian.identity`, inside the commit that files the
+capture); a steward decides the proposals here. This package is two things: the pure rules a birth
+has to satisfy — the name gate, the collision fold, the page render — which `librarian.identity`
+imports and runs, and the human half proper, the only place an identity is approved, merged or
+declined and the ONE path-scoped human-driven writer of `ops/`. Nothing here runs in a worker, on a
+poll, or behind an agent, and **nothing here creates an entity**: `stigmergy-entities create` asks
+the librarian to, by queueing a capture ([ADR
+042](../../../docs/decisions/042-an-entity-is-born-written.md)).
 
 **The proposal is the PAGE, not a database row.** `approved_by: ""` in an entity page's
 frontmatter is the whole of it; `ops/entity-registry.json` is a derived view, and the review inbox
@@ -18,7 +21,8 @@ Four properties:
   any page that changes one (`regenerate --check` makes that falsifiable);
 - **"who decided this identity" is always answerable with a person** — a steward's own git identity
   on the commit, or, for a server-driven decision, the App's author line plus a `Decided-by:`
-  trailer (an `Approved-by:` one for a `create`);
+  trailer; for an entity a steward REGISTERED, the `approved_by:` their capture's page was born
+  carrying, and the ledger row the worker wrote after the push;
 - **a decision is one commit, or nothing** — the checkout is restored on any failure, and the
   ledger row is written only after the push.
 
@@ -26,13 +30,13 @@ Four properties:
 
 | Module | What it is |
 |---|---|
-| `cli.py` | `stigmergy-entities` — `pending · approve · decline · merge · create · regenerate [--check]`; a thin adapter over `decide.apply` (and `mint.mint` for `create`), deriving `author` from the steward's clone via `clone.preflight`. The only module here that opens a database connection, and it does so because every decision writes the `review_decisions` row through `capture.decisions` — below the `entities` -> `server` edge — naming this door with `decisions.SOURCE_CLI`. `pending` needs no database: it reads the clone's own entity pages |
+| `cli.py` | `stigmergy-entities` — `pending · approve · decline · merge · create · regenerate [--check]`; a thin adapter over `decide.apply`, deriving `author` from the steward's clone via `clone.preflight`. `create` is the odd one out and writes no page at all: it COMMISSIONS one, submitting `--about` as the material of a `raw` capture carrying `schema.registration_hints(...)`, so it reaches for `capture.evidence`/`capture.queue` rather than for git. The only module here that opens a database connection — every decision writes the `review_decisions` row through `capture.decisions`, below the `entities` -> `server` edge, naming this door with `decisions.SOURCE_CLI`, and `create` enqueues through it. `pending` needs no database: it reads the clone's own entity pages |
 | `decide.py` | the five decisions as pure worktree operations — `approve_entity`, `merge_entity`, `decline_entity`, `approve_alias`, `decline_alias` — each returning an `Outcome` (kind, entity id, `into`/`alias`, `changed_paths`, `reanchored`, a commit `subject` and a human `summary`). No database, no auth, no commit. `apply()` is the commit discipline both doors share, and `commit_message` the one dialect. `_reanchor` is the part a caller must not reinvent: a decline or a merge takes a page away, so every `wiki/**` page whose `entity:` names it is rewritten in the SAME commit — to the survivor, or to nothing |
-| `birth.py` | resolve-before-write as a pure function of a proposal and a registry (`prepare`, `recheck`, `_refuse_collisions`), the terminal name gate every door passes (`_clean_name`, `clean_aliases`, `_refuse_control_characters`), the body builder (`prepare_body`) and the page renderer (`render_page`, `_yaml_str`, `commit_message`). `render_page` takes `approved_by` and `related` as arguments — the librarian passes `""` and the page it proposed from, `create` passes the steward |
+| `birth.py` | resolve-before-write as a pure function of a proposal and a registry (`prepare`, `recheck`, `_refuse_collisions`), the terminal name gate every birth passes (`_clean_name`, `clean_aliases`, `_refuse_control_characters`), the body builder (`prepare_body`, with `EntityBody` and its per-field ceilings) and the page renderer (`render_page`, `_yaml_str`, `commit_message`), plus the section names the body fills (`SUMMARY_SECTION` = `What / Who`, `FACTS_SECTION`, `CONNECTIONS_SECTION`). `render_page` REFUSES a body with no What / Who paragraph, drops a section it was given no lines for heading and stub together, and strips the template's HTML comments (`_strip_comments`). `approved_by` and `related` are arguments: `""` for a proposal, the registering steward's name for an entity born confirmed |
 | `generator.py` | the registry generator: `read_entity_pages` (each page's `PageEntity`, carrying `proposed` / `approved_by` / `proposed_aliases`), `derive_registry`, `registry_of`, `compare` (semantic drift, lifecycle included), `check` / `regenerate`, `canonical_id_for`, and the layout constants every other package spells through it (`ENTITIES_RELDIR`, `REGISTRY_RELPATH`, `TEMPLATE_RELPATH`, `APPROVED_BY_KEY`, `PROPOSED_ALIASES_KEY`, `ENTITY_TYPES`, `FIX_COMMAND`) |
 | `clone.py` | the working copy's checks and push: `preflight` (branch/identity/clean/in-sync), `commit_and_push` with fetch-regenerate-retry, `write_page` / `discard_untracked` / `restore_tracked`. Never repairs, never force-pushes |
-| `mint.py` | the ONE birth orchestration `cli._cmd_create` and `remote.mint_via_clone` both call: drift refusal, the gate against the registry the commit will PUBLISH, the template render, `generator.regenerate`, the gitleaks scan, ONE commit, bounded rebase-and-retry. `refuse_drift` and `refuse_secrets` are reused by `decide.apply`, so a birth and a decision are held to the same two checks |
-| `remote.py` | the server-driven door: `decide_via_clone` (a throwaway clone with the librarian App's credential, `decide.apply` with a `Decided-by:` trailer) and `mint_via_clone` (its `mint.mint` sibling with an `Approved-by:` trailer), cleanup in a `finally`. `credential` is needed only for `https://` remotes; raises only this package's own error types. Also the ONE place a refusal changes audience: the post-clone ladder re-words the four types whose sentences name that clone, and passes the door-neutral ones through |
+| `guard.py` | the two refusals every governed write from this package shares, and the ONLY thing left of the old hand-mint: `refuse_drift` (a clone whose registry and pages already disagree) and `refuse_secrets` (gitleaks over exactly the files the commit will carry, through `librarian.gates`, refusing rather than skipping when the scanner is absent). `decide.apply` runs both |
+| `remote.py` | the server-driven door, and now `decide_via_clone` ALONE: a throwaway clone with the librarian App's credential, `decide.apply` with a `Decided-by:` trailer, cleanup in a `finally`. `credential` is needed only for `https://` remotes; raises only this package's own error types. Also the ONE place a refusal changes audience: the post-clone ladder re-words the four types whose sentences name that clone, and passes the door-neutral ones through |
 | `errors.py` | `EntityError` (base), `CollisionError` (the governance verdict) and its `CollisionRaceError` subclass (the post-rebase re-ask), `CloneStateError`, `PushRaceError`, `TemplateMissingError`, `CapabilityUnavailableError`. Neither inbound consumer lets one of these out: `stigmergy.server.review` translates at the raise site into `ReviewError`/its own `CapabilityUnavailableError`, `stigmergy.admin` into `AdminRefused` at its own boundary — a surface barred from importing this package could catch one only as an unanticipated fault, whose text it must not show |
 
 ## Use these
@@ -44,9 +48,9 @@ Four properties:
   four. Each refuses with an `EntityError` carrying a one-line human message — an unknown id, an id
   that is not a proposal, an `into` that is unknown/proposed/the same entity, a spelling that is not
   proposed, a merge whose spellings would collide with a THIRD entity.
-- `decide.apply(repo, *, action, branch, author, trailer=…)` — the commit discipline both doors
-  share, in the order a birth uses: branch/clean/in-sync preflight, `mint.refuse_drift`, the
-  decision, `mint.refuse_secrets` over exactly the files the commit will carry, then one commit
+- `decide.apply(repo, *, action, branch, author, trailer=…)` — the commit discipline both decision
+  doors share: branch/clean/in-sync preflight, `guard.refuse_drift`, the
+  decision, `guard.refuse_secrets` over exactly the files the commit will carry, then one commit
   rebased and re-derived on a race. `action` is `lambda repo: decide.approve_entity(repo, …)` or any
   sibling. On ANY exception the tracked files are restored to the head it started from.
 - `decide.Outcome` — what a commit message, a ledger row and a human's confirmation line are all
@@ -63,10 +67,11 @@ Four properties:
 - `generator.APPROVED_BY_KEY` / `PROPOSED_ALIASES_KEY` / `TEMPLATE_RELPATH` / `REGISTRY_RELPATH` /
   `ENTITIES_RELDIR` — the knowledge repo's identity layout, spelled ONCE. `librarian.identity`
   imports these rather than retyping them, which is the whole reason that import edge exists.
-- `mint.mint` — any new caller that creates a CONFIRMED entity calls THIS, never re-derives the
-  discipline. `author` is the caller's to resolve; `mint()` never reads git config to find one.
-- `remote.decide_via_clone` / `remote.mint_via_clone` — the ONE way a process with no steward's
-  checkout writes; never open a second clone path or mint an installation token elsewhere. Both go
+- `capture.schema.registration_hints` — the ONE builder of the four `register_*` hints a
+  registration travels as, shared with the console's door so the two cannot describe a registration
+  differently. `cli._cmd_create` names its own door with `decisions.SOURCE_CLI`.
+- `remote.decide_via_clone` — the ONE way a process with no steward's
+  checkout writes; never open a second clone path or mint an installation token elsewhere. It goes
   through `_in_fresh_clone`, which is also where a refusal is re-worded
   for a steward who holds no clone (ADR 030's "two-door refusal wording" amendment): the module's
   own constants carry the argument, and the mapping keys on the exception TYPE, never on its text.
@@ -87,9 +92,10 @@ Four properties:
 ## Avoid
 
 - **Never let `stigmergy.librarian` import this package beyond `identity.py`.** That ONE module may
-  reach `birth`, `generator` and `errors` — a proposed page must be the page `create` renders, and
-  the registry must be regenerated by the same function. Everything else here is out of the
-  worker's reach: the unattended worker proposes, it never decides.
+  reach `birth`, `generator` and `errors` — it is the only writer of an entity page there is, and
+  the registry must be regenerated by the same function everything else derives it with. Everything
+  else here is out of the worker's reach: the unattended worker writes identities, it never decides
+  them.
 - **Never decide an identity without recording it.** The page change and the ledger row are two
   halves of one decision, in that order (`decide.apply` then `record_decision`, after the push). A
   decline the ledger never learned about is one the librarian re-proposes on the next capture that
@@ -98,11 +104,11 @@ Four properties:
   operations in this system that remove a page, and each must rewrite every `entity:` pointing at
   it in the same commit: a page whose anchor names an id the registry no longer has is a page the
   gates would refuse to file today.
-- **Never resolve a collision against the file on disk when a repo could be drifting.** `mint.mint`
-  asks the gate about the registry the COMMIT will publish (`generator.registry_of` over freshly
-  re-read pages); `mint.refuse_drift` runs first so that answer means something, and `decide.apply`
-  runs it for the same reason — regenerating somebody else's drift inside a commit that says
-  "confirm X" is `ensure_clean`'s argument applied to the derived file.
+- **Never resolve a collision against the file on disk when a repo could be drifting.** The gate is
+  asked about the registry the COMMIT will publish (`generator.registry_of` over freshly re-read
+  pages — `librarian.identity` builds exactly that and refuses on drift too), and `decide.apply`
+  runs `guard.refuse_drift` first for the same reason: regenerating somebody else's drift inside a
+  commit that says "confirm X" is `ensure_clean`'s argument applied to the derived file.
 - **Never repair, reset, stash or discard anything in the steward's clone.** Every check REFUSES
   and says what to do; the one deletion (`discard_untracked`) is bounded to a file this process
   itself just wrote, by absolute path.
@@ -113,6 +119,11 @@ Four properties:
   past the collision gate (`birth.py`'s module docstring). Frontmatter EDITS go through
   `librarian.page`'s primitives (`with_list_field` / `with_scalar_field` / `rebuild`) for the same
   reason — `decide.py` never rewrites a line itself.
+- **Never bring back a deterministic birth.** An entity page is written by the librarian, from
+  material, or it is not written (ADR 042): a door that rendered the template with a name in it and
+  pushed produced pages that said nothing about the entity, which is why `render_page` now refuses
+  a body with no What / Who at all. A new "create" surface commissions a capture; it does not
+  render.
 - **Never add a second implementation of "collides".** `prepare` and `recheck` both call
   `_refuse_collisions`; reuse it. `merge_entity` asks the same question a third way and still
   through the registry (`collision_id` over the survivor's world WITHOUT the proposal), because a
@@ -165,7 +176,11 @@ Four properties:
   registry id; an alias's is `<entity id>:<alias>`.
 - The template, `ops/templates/entity.md`, is read from the repo and never reproduced here — an
   edit to it reaches every new entity page with no platform release, whether the librarian proposed
-  it or a steward created it.
+  the entity or a steward registered it. Its own HTML comments never reach a page.
+- `birth.EntityBody` (frozen) — `summary`, `facts`, `connections`, constructed only by
+  `prepare_body`, which folds each value to one line, clips it at its ceiling and refuses control
+  characters. `summary` is REQUIRED at render time; the other two may be empty, and then their
+  sections are not written.
 
 ## Layering
 
@@ -182,15 +197,16 @@ back.
 
 **Four inbound edges**, each a named, symbol-scoped exception with its own architecture test:
 
-- `stigmergy.librarian.identity` — `birth`, `generator`, `errors`. The PROPOSER, and the only
-  librarian module allowed in; it never reaches `decide`, `clone`, `mint`, `remote` or `cli`.
+- `stigmergy.librarian.identity` — `birth`, `generator`, `errors`. The entity WRITER, and the only
+  librarian module allowed in; it never reaches `decide`, `clone`, `guard`, `remote` or `cli`.
 - `stigmergy.server.review` — `decide` (the five decisions, handed to the door as `action`),
-  `remote` (the door itself, reached as a module ATTRIBUTE so a test can monkeypatch it) and the
+  `remote` (the door itself, reached as a module ATTRIBUTE so a test can monkeypatch it),
+  `generator.canonical_id_for` (the id a registration will bear, for its acknowledgement) and the
   two error names it maps into its own vocabulary.
 - `stigmergy.admin` — `decide`, `generator` (`ENTITY_TYPES` and `canonical_id_for`) and `errors`.
   `remote` is deliberately ABSENT: the console reaches the governed door through
-  `server.review.decide_and_record` / `create_and_record`, the ONE ordering every server-side door
-  runs.
+  `server.review.decide_and_record`, the ONE ordering every server-side door runs, and its Register
+  form through `server.review.commission_registration`, which queues a capture instead.
 - `stigmergy.repair.entity_alias` — `generator` and `errors`, to REGENERATE
   `ops/entity-registry.json` inside a governed merge commit, because the registry has exactly one
   writer and hand-building that file would be a second.
@@ -199,8 +215,10 @@ No edge is a license for another to widen.
 
 ## Proofs that live elsewhere
 
-`tests/entities/` is keyless and DB-less (real git via a per-test bare remote; gitleaks skipped
-on a laptop without the binary, required in CI). The cross-package proofs live with their
-fixtures: `tests/librarian/test_identity_unit.py` (what the librarian's proposal actually writes,
-against the same page shape this package renders), `tests/server/test_review.py` (the review-inbox
-door decides for real) and `tests/admin/` (the console door).
+`tests/entities/` is keyless (real git via a per-test bare remote; gitleaks skipped
+on a laptop without the binary, required in CI) and reaches Postgres only where the CLI itself does
+— the ledger row a decision writes, and the capture `create` queues. The cross-package proofs live
+with their fixtures: `tests/librarian/test_identity_unit.py` (what the librarian actually writes,
+against the same page shape this package renders — including the registration born confirmed and
+the appended facts), `tests/server/test_review.py` (the review-inbox door decides, and
+`commission_registration` queues, for real) and `tests/admin/` (the console door).

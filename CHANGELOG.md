@@ -9,6 +9,47 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
+## [0.8.0] - 2026-08-21
+
+**An entity is born written, and keeps being written** ([ADR 042](./docs/decisions/042-an-entity-is-born-written.md)).
+Twelve of the first brain's nineteen entity pages said nothing about the entity: the two hand
+doors rendered the template with the name filled in. There is no deterministic birth any more — a
+steward's registration is a capture, the librarian writes the page from what the steward said and
+what the brain already holds, and a filing that establishes something about a known entity grows
+its page.
+
+### ⚠ BREAKING CHANGES
+- `stigmergy-entities create` commissions a capture instead of committing a page: it needs
+  `--about` (what the entity is, in your own words), the database (`--dsn`) and the evidence
+  environment the drop CLIs use, and prints the capture to follow; the page appears when the
+  capture files, born confirmed by `--by` (or your git email)
+- `POST /admin/api/entities/create` takes `about` (required) and no `role`, and answers the queued
+  row (`id`, `status: queued`, `entity_id`, `name`, `message`) instead of a commit; the console's
+  Register form asks "What is it?" and opens the capture
+- `server.review.create_and_record` is gone (`commission_registration` replaces it);
+  `entities.mint` and `entities.remote.mint_via_clone` are gone (`entities.guard` keeps the two
+  shared refusals; `decide_via_clone` is the one server-driven door)
+- `brain_submit` refuses the four `register_*` hints from every client door
+- the knowledge repo's briefs change with it (`e118c8a`): look before you write, the registration
+  paragraph, `entity_updates`
+
+### Added
+- `entity_updates` in the librarian's account (both flows): what the material establishes about a
+  registered entity is APPENDED under that page's own `## Facts` / `## Connections`, `updated:`
+  moved, lines the page already carries skipped, the file proved byte for byte; the report says
+  "It adds N facts and M connections to the page of `id`"; refusals `update-unknown-entity` and
+  `update-of-new-entity`
+- a steward's registration through the librarian: `capture.schema.registration_hints` /
+  `registration_from_hints`, the brief's REGISTRATION paragraph, `identity/registration-missing`
+  for an account that ignores it, the identity gate's `not-confirmed-by-its-steward`, the ledger
+  row written by the worker after the push
+- `birth.render_page` refuses an entity page with no What / Who, drops a section with nothing to
+  say, and strips the template's HTML comments — nineteen pages had carried them, indexed as text
+
+### Removed
+- the deterministic mint: `entities/mint.py`, `remote.mint_via_clone`, `review.create_and_record`,
+  the console's synchronous Register and the CLI's `create` commit
+
 ## [0.7.0] - 2026-08-21
 
 **File first, govern after** ([ADR 041](./docs/decisions/041-file-first-govern-after.md), #125).

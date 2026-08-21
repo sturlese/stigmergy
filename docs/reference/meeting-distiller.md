@@ -319,7 +319,9 @@ A transcript can name more than one entity the registry does not know — a call
 and an unregistered project code. It proposes them, exactly as an ordinary capture does: the account
 declares `new_entities`/`new_aliases`, `processing` hands them to `identity.write_proposals` (the
 SAME writer the fast lane uses — a meeting is not a second way of creating an identity), and each
-decision page anchors to the entity born in its own commit.
+decision page anchors to the entity born in its own commit. The meeting account carries
+`entity_updates` too, and it means the same thing here as on the fast lane: facts and connections
+appended to the page of an entity the registry ALREADY knows, in this set's own commit.
 
 **The one meeting-specific parameter is `related`.** `write_proposals` takes the page names a new
 entity's `Connections` section should point back at, and the meeting flow passes this set's own

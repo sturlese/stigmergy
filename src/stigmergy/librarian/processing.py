@@ -208,7 +208,14 @@ def _commit_message(item: dict, outcome, page_path: str, *, n_sources: int = 0,
     body = f"Filed by the librarian from capture #{item['id']}."
     if n_sources:
         body += f" {n_sources} source page(s) — the captured thread, verbatim — ride in it too."
-    names = [_subject(str(e.get("name", ""))) for e in proposed if e.get("name")]
+    registered = [_subject(str(e.get("name", ""))) for e in proposed
+                  if e.get("name") and e.get("confirmed_by")]
+    names = [_subject(str(e.get("name", ""))) for e in proposed
+             if e.get("name") and not e.get("confirmed_by")]
+    if registered:
+        body += (f" Registers {len(registered)} new entity page(s) — {', '.join(registered)} — "
+                 f"born confirmed by the steward who asked for it; the registry is regenerated in "
+                 f"this same commit.")
     if names:
         body += (f" Proposes {len(names)} new entity page(s) — {', '.join(names)} — with "
                  f"approved_by empty, for a steward to confirm; the registry is regenerated in "
@@ -479,6 +486,8 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         worktree, outcome=outcome, base_registry=deps.registry, material=material,
         hints=(item.get("hints") or {}).get("client", {}),
         declined_ids=_declined_identity_ids(conn), today=deps.as_of(),
+        registration=schema.registration_from_hints(item.get("hints")),
+        approver=str(item.get("submitted_by") or ""),
         related=[outcome.title] if outcome.title else ())
     if isinstance(proposals, list):
         return None, proposals, outcome
@@ -555,10 +564,34 @@ def _declare_proposals(ctx: gates.GateContext, proposals: identity.Proposals) ->
     ctx.derived_files = ctx.derived_files | proposals.derived_files
     ctx.expected_bytes = {**ctx.expected_bytes, **proposals.expected_bytes}
     ctx.proposed_entity_pages = frozenset(proposals.entity_pages)
+    ctx.confirmed_entity_pages = dict(proposals.confirmed)
     for path, entity_id in proposals.entity_pages.items():
         # What `gate_frontmatter` re-reads the page against: its own anchor and its own state.
         ctx.stamped_by_path[path] = {"status": page_policy.FILED_STATUS, "entity": [entity_id],
-                                     "approved_by": ""}
+                                     "approved_by": proposals.confirmed.get(path, "")}
+
+
+def _record_registrations(conn, item, proposals, sha: str) -> None:
+    """An entity born confirmed through a steward's registration is recorded in the governance
+    ledger as that steward's approval (ADR 042) — the same row the inbox's Approve writes, so
+    "entities born" counts every door the same way and the librarian's decline memory sees the
+    identity as decided. After the push, like every door: a ledger row for a commit that did not
+    land would be a decision about nothing."""
+    if proposals is None or not proposals.confirmed:
+        return
+    registration = schema.registration_from_hints(item.get("hints"))
+    source = registration.source if registration else ""
+    for entity_id in proposals.confirmed_ids:
+        try:
+            decisions.record_decision(
+                conn, item_kind=review_kinds.KIND_IDENTITY_PROPOSAL, item_id=entity_id,
+                verdict=decisions.APPROVE, actor=str(item.get("submitted_by") or ""),
+                source=source, extra={"commit": sha, "created": True, "capture": item.get("id")})
+        except Exception:  # noqa: BLE001 — the commit has LANDED; a ledger fault is logged, never
+            # allowed to report a filed capture as failed. The page and the registry say the
+            # entity is confirmed; the row is what the digest and the decline memory would miss.
+            log.error("item %s: the registration of %r landed in %s but its ledger row could not "
+                      "be written", item.get("id"), entity_id, sha[:12], exc_info=True)
 
 
 def _declined_identity_ids(conn) -> set[str]:
@@ -812,6 +845,7 @@ def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
     message = _commit_message(item, outcome, page_path, n_sources=len(source_pages),
                               proposed=proposed)
     sha = _commit_and_push(conn, item, deps, ctx, worktree, message, what="this item")
+    _record_registrations(conn, item, proposals, sha)
 
     notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
     notes += [f.message for f in findings if f.severity == gates.SEVERITY_NOTE]
@@ -827,7 +861,8 @@ def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
                      agent_rationale=getattr(outcome, "summary", ""),
                      findings=notes,
                      source_pages=list(source_pages),
-                     entities_proposed=proposed, aliases_proposed=proposed_aliases),
+                     entities_proposed=proposed, aliases_proposed=proposed_aliases,
+                     entities_updated=proposals.updates if proposals is not None else []),
         findings=notes)
 
 
@@ -1548,6 +1583,8 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
     proposals = identity.write_proposals(
         worktree, outcome=outcome, base_registry=deps.registry, material=material,
         hints=meeting_meta, declined_ids=_declined_identity_ids(conn), today=deps.as_of(),
+        registration=schema.registration_from_hints(item.get("hints")),
+        approver=str(item.get("submitted_by") or ""),
         related=decision_stems or [written["meeting_stem"]])
     if isinstance(proposals, list):
         return None, proposals, outcome
@@ -1720,6 +1757,7 @@ def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
     meeting_page = meeting_pages[0]
     message = _meeting_commit_message(item, outcome, len(decision_pages))
     sha = _commit_and_push(conn, item, deps, ctx, worktree, message, what="this meeting")
+    _record_registrations(conn, item, proposals, sha)
 
     decisions_by_path = written.get("decisions_by_path", {})
     decisions = [{"path": path, "anchoring": (decisions_by_path.get(path) or {}).get("anchoring", {})}
@@ -1751,7 +1789,8 @@ def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
                              agent_rationale=getattr(outcome, "summary", ""),
                              registry=ctx.registry,
                              entities_proposed=proposals.entities if proposals else [],
-                             aliases_proposed=proposals.aliases if proposals else []),
+                             aliases_proposed=proposals.aliases if proposals else [],
+                             entities_updated=proposals.updates if proposals else []),
         findings=notes)
 
 

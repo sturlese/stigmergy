@@ -127,7 +127,7 @@ _PENDING_ALLOWED = (REPO / ".claude" / "skills" / "librarian" / "FROZEN.md",)
 #      know with a question to the submitter and answers it with a PROPOSAL: the agent declares the
 #      identity it read out of the material and `librarian.identity` creates the page, with
 #      `approved_by:` empty, in the same commit as the capture. Knowledge-repo commit
-#      `34cd66856dfc246c4c29fbe22ffe83d53f206c83`.
+#      `e118c8a38c2bd447f27be5d5e07a7c9b9df57cce`.
 #
 # All THREE numbers moved together at that last commit, which is the first time that has happened
 # and the reason `PROVENANCE.json`'s `stigmergy_sha_note` no longer needs its "not the commit each
@@ -138,9 +138,9 @@ FROZEN_SHA256 = {
     ".claude/tools/stigmergy_lint.py":
         "d476ed2d5ab145069ec36e25c621e8f1566ccec5f8acc32a04783fd5f0c9394e",
     ".claude/skills/librarian/SKILL.md":
-        "d81691fa364d2daeeba36af9994a3243ee18cc83b4356442cc0559fd3ea2aabe",
+        "d5d8c2796a69a91baf8075670bb32350e3d762893874224fdae445d1fd10ebba",
     ".claude/skills/meeting-distiller/SKILL.md":
-        "310230563c616b10e79331c758ec8795e7232d8ecdb69406a9f9a6de643c6253",
+        "76d3967ff88766f1463670121711456ce7f79b789a375e87438074138b657e1b",
 }
 
 # Vocabulary that belongs to the MEASUREMENT and never to a page inside the fixture repo. The

@@ -14,7 +14,7 @@ from stigmergy.entities.errors import (
     TemplateMissingError,
 )
 
-# The four arms of `entities.remote.mint_via_clone`'s post-clone ladder (issue #57).
+# The four arms of `entities.remote.decide_via_clone`'s post-clone ladder (issue #57).
 MAPPED_AT_THE_SERVER_DOOR = (CloneStateError, TemplateMissingError, CollisionRaceError,
                              PushRaceError)
 
@@ -35,7 +35,7 @@ def test_no_mapped_refusal_type_is_a_subclass_of_another():
         for other in MAPPED_AT_THE_SERVER_DOOR:
             assert cls is other or not issubclass(cls, other), (
                 f"{cls.__name__} became a subclass of {other.__name__} — the refusal ladder in "
-                f"`entities.remote.mint_via_clone` now depends on which arm is written first")
+                f"`entities.remote.decide_via_clone` now depends on which arm is written first")
 
 
 def test_the_collision_race_is_a_collision_and_the_plain_verdict_is_not_a_race():

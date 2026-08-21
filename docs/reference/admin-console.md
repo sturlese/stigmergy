@@ -78,7 +78,7 @@ running yesterday's `app.js` against today's imports; the API carries `no-store`
 | Jobs: Run now, Enable/Disable, run history | `STIGMERGY_ADMIN_GITHUB_TOKEN` (fine-grained PAT: **Actions read+write on the repository the crons RUN IN — the knowledge repo, see the runbook — and on that one only**) + `STIGMERGY_ADMIN_GITHUB_REPO` (`<owner>/<repo>`; there is no default) | the Jobs page shows the database truth (`job_runs`, `index_meta.built_at`) read-only and says so in a banner; the levers are not rendered at all, and the Run-now buttons on the Gardener and Index pages are disabled with the reason beside them |
 | Digest: Post now | `SLACK_BOT_TOKEN` (already an app-wide Fly secret) + `STIGMERGY_DIGEST_CHANNEL_ID` | the post button refuses naming the missing piece; Preview still works |
 | Digest: audience scoping | `STIGMERGY_ADMIN_CHANNELS_PATH` → the baked `/app/slack-channels.json` (set in `fly.toml`, written by `scripts/deploy_staging.sh`) | every audience falls back to the safe empty default — same behavior as a repo with no channels file |
-| The proposal inbox, the registry check on a name, the registry browser | a registry this server can read: the index's `ops/entity-registry.json` snapshot (refreshed by the push webhook and the nightly rebuild), or the `--entity-registry` file where there is no snapshot | the Inbox and the Entities desk list no identity or spelling proposal at all — a proposal IS a registry entry, and that list is read off the SNAPSHOT alone, so a stack answering from the `--entity-registry` file shows none either (repair proposals are a table of their own and still list). Every name check answers `unchecked` and the page says no registry is readable here; the birth gate still runs against the repo as it stands, inside the clone |
+| The proposal inbox, the registry check on a name, the registry browser | a registry this server can read: the index's `ops/entity-registry.json` snapshot (refreshed by the push webhook and the nightly rebuild), or the `--entity-registry` file where there is no snapshot | the Inbox and the Entities desk list no identity or spelling proposal at all — a proposal IS a registry entry, and that list is read off the SNAPSHOT alone, so a stack answering from the `--entity-registry` file shows none either (repair proposals are a table of their own and still list). Every name check answers `unchecked` and the page says no registry is readable here; the birth gate still runs when the librarian files, inside that capture's own worktree, against the knowledge repo as it stands |
 | Actor prefill on mutation forms | `STIGMERGY_ADMIN_ACTOR` (default `admin-console`) | forms prefill the default; every form field is editable |
 
 PAT rotation is the standard drill: revoke on GitHub, `fly secrets set
@@ -192,16 +192,26 @@ toggle away, and nothing on a chart is reachable only by hovering.
   after — and it lands in BOTH ledgers, `admin_actions` and the append-only `review_decisions`
   (ADR 030). Beside the proposals: the registry by type, and a searchable browser over every entry
   with its aliases, a proposed one marked as such and its proposed spellings listed.
-  **Register an entity** is the door for a name nobody has captured about yet:
-  `server.review.create_and_record` mints it born CONFIRMED (an `Approved-by:` trailer, and a
-  ledger row recorded as an approval, so "entities born" counts every door alike). Its form checks
-  the Name and every Alias live as the steward types, through the `entities/resolve` call, and
-  says so under the field; the gate runs again against the registry the commit will publish, so
-  this is a warning that is right whenever the snapshot is fresh — never a permission. Type is the
-  closed list shipped from `/admin/api/meta`; aliases and role are optional. The console decides
-  and registers under the admin token with the actor as ATTRIBUTION, exactly like every other
-  console mutation — MCP and Slack instead enforce a resolved identity's steward status; the
-  console does not, because the shared admin credential cannot back a second-human rule.
+  **Register an entity** is the door for a name nobody has captured about yet, and it writes no
+  page: the form's required **What is it?** field — everything the steward knows about the thing,
+  in their own words — becomes the MATERIAL of a capture carrying the registration
+  (`server.review.commission_registration`), and the librarian writes the page from that material
+  and from what the brain already holds, anchors the note to it, and births the identity CONFIRMED
+  by the steward. The response is the queued row (`id`, `status: queued`, `entity_id`, `name` and a
+  message saying what will happen), and the console goes straight to `captures/<id>` — the entity
+  appears on this desk when the capture files, a few minutes later, not on the click. A name the
+  SERVED registry already resolves is refused here before anything is queued: the entity exists, so
+  the thing to do is capture about it. The door needs the evidence store the queue archives material
+  into (`AdminService(..., evidence=)`, threaded from the HTTP transport through
+  `admin.routes.compose`); a console composed without one refuses by saying so rather than queueing
+  a row with no archive behind it. The form still checks the Name and every Alias live as the
+  steward types, through the `entities/resolve` call, and says so under the field — the birth gate
+  runs again when the librarian files, so this is a warning that is right whenever the snapshot is
+  fresh, never a permission. Type is the closed list shipped from `/admin/api/meta`; aliases are
+  optional. The console decides and registers under the admin token with the actor as ATTRIBUTION,
+  exactly like every other console mutation — MCP and Slack instead enforce a resolved identity's
+  steward status; the console does not, because the shared admin credential cannot back a
+  second-human rule.
 - **Repairs** — what the `repair-propose` cron made of the gardener's findings
   ([repair.md](./repair.md), ADR 039): proposals by outcome over the whole table, the proposer's
   run strip, a bounded page of the pending proposals (oldest first, filterable by kind, and it
@@ -276,9 +286,9 @@ not. That row is attribution, not authorization: the actor name is recorded and 
 exactly like `--by` on the steward CLIs. If the bookkeeping write itself fails it is logged
 loudly and the work still lands; bookkeeping must never fail the work it records.
 
-**Every governed verdict writes a SECOND row.** Four routes take one — `entities/decide` (an
-identity's Approve, Merge or Decline, and a spelling's Approve or Decline), `entities/create`,
-and the two Repairs verdicts — and each writes into `review_decisions` beside its `admin_actions`
+**Every governed verdict writes a SECOND row.** Three routes take one — `entities/decide` (an
+identity's Approve, Merge or Decline, and a spelling's Approve or Decline) and the two Repairs
+verdicts — and each writes into `review_decisions` beside its `admin_actions`
 row. That is the same append-only governance ledger MCP's `review_decide` and Slack's review card
 write into, so "who decided this identity" answers from one table regardless of which SERVER-SIDE
 door it came through (ADR 030) — and, since issue #51, regardless of which door at all:
@@ -291,6 +301,15 @@ the row itself: `extra->>'source'` is one of `mcp`/`slack`/`admin`/`cli`, requir
 The `review_decisions` write and the git push it follows happen inside the SAME `_mutate`-wrapped
 attempt as the `admin_actions` row, not before it: a refusal anywhere in the clone leaves neither
 ledger touched.
+
+**`entities/create` is the one mutation whose ledger row is not the console's to write.** It
+touches no git and decides nothing here: it writes its `admin_actions` row and a `capture_queue`
+row, and that is all this process does. The `review_decisions` row for the entity — recorded as
+the steward's own APPROVE, so "entities born" still counts every door alike — is written by the
+LIBRARIAN worker (`librarian.processing`) after the commit that births the entity has been pushed,
+carrying the commit sha, the door (`admin`) and the capture id in `extra`. A ledger fault there is
+logged and never turns a landed commit into a failed capture; the page and the registry are what
+say the identity is confirmed.
 
 Repairs writes into that same ledger through the same shared functions the review lane runs —
 `server.review.apply_repair_and_record` and `reject_repair_and_record`, an approve's row carrying

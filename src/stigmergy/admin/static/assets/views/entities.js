@@ -262,20 +262,21 @@ async function createFlow() {
   };
   const answer = await confirmForm({
     title: "Register an entity",
-    consequence: "creates a real, confirmed entity: pushes ONE commit to the knowledge repo (authored by the librarian App, approved by you) with the page and the registry entry. Cancelling after this point cannot undo it. The gate re-checks collisions against the repo as it stands.",
+    consequence: "commissions the entity: what you write below is queued as a capture, the librarian writes the page from it and from what the brain already holds, anchors the note to it, and the entity is born confirmed by you — one commit, a few minutes from now. Cancelling after this point cannot undo it; the gates re-check collisions against the repo as it stands.",
     wide: true,
     fields: [
       actorField(),
       { name: "name", label: "Name", required: true, hint: "the entity's page title, filename and wikilink target — checked live against the registry", live: liveCheck("name") },
       { name: "entity_type", label: "Type", kind: "select", options: meta.entity_types, required: true },
       { name: "aliases", label: "Aliases (optional, comma-separated)", hint: "other spellings captures use for it — each one is checked too, because an alias that collides is refused like a name", live: liveCheck("aliases") },
-      { name: "role", label: "Role (optional)", hint: "one line on what this entity is" },
+      { name: "about", label: "What is it?", kind: "textarea", required: true, hint: "in your own words, everything you know: what it is, what it does, who is behind it, how it relates to what the brain already holds. The librarian writes the page from this — a page with nothing said about the entity is not written at all" },
     ],
     confirmLabel: "Register",
   });
   if (!answer) return;
-  if (await mutate("entities/create", answer.values,
-    (r) => `registered ${r.name} (${r.entity_id}) — commit ${String(r.commit || "").slice(0, 12) || "?"}`)) go("entities");
+  const ack = await mutate("entities/create", answer.values,
+    (r) => `commissioned as capture #${r.id} — the librarian is writing ${r.name}'s page; it appears here when the capture files`);
+  if (ack && ack.id) go(`captures/${ack.id}`);
 }
 
 function liveVerdict(check, label) {

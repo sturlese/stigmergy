@@ -123,7 +123,8 @@ def _resolution_note(anchoring: dict, registry=None) -> str:
 
 def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps: list,
           findings: list, pages_edited: list = (), agent_rationale: str = "", registry=None,
-          source_pages: list = (), entities_proposed: list = (), aliases_proposed: list = ()) -> dict:
+          source_pages: list = (), entities_proposed: list = (), aliases_proposed: list = (),
+          entities_updated: list = ()) -> dict:
     """The ordinary success: page, commit and anchor, plus the not-searchable-yet clause in the same
     sentence. `pages_edited` is what code actually wrote from the agent's declared edits, while
     `overlaps_flagged` is the agent's JUDGMENT about which pages overlap — a different field.
@@ -155,7 +156,8 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
         summary += (f" The captured material itself is filed verbatim at "
                     f"{_listed(source_paths)}, and the page cites it in `sources:`.")
     proposed, proposed_aliases = _proposed_lists(entities_proposed, aliases_proposed)
-    summary += proposals_clause(proposed, proposed_aliases)
+    updated = _updated_list(entities_updated)
+    summary += proposals_clause(proposed, proposed_aliases, updated)
     return base_report(
         status=schema.FILED, summary=summary,
         page_path=page_path, commit=commit, anchored_to=anchor,
@@ -166,27 +168,51 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
         agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
         findings=list(_as_list(findings)),
         entities_proposed=proposed, aliases_proposed=proposed_aliases,
+        entities_updated=updated,
         **({"source_pages": source_paths} if source_paths else {}))
 
 
 # ── proposals: what a filing created unconfirmed ──────────────────────────────────────────────
+def _updated_list(entities_updated) -> list:
+    return [{"entity": _clean_identity((u or {}).get("entity", ""), 80),
+             "facts": int((u or {}).get("facts") or 0),
+             "connections": int((u or {}).get("connections") or 0)}
+            for u in _as_list(entities_updated) if isinstance(u, dict)]
+
+
 def _proposed_lists(entities_proposed, aliases_proposed) -> tuple[list, list]:
     """The two lists as the report carries them — cleaned, identity fields through the identity
     cleaner, never a raw object from the worker."""
-    proposed = [{"id": _clean_identity((e or {}).get("id", ""), 80),
-                 "name": _clean_identity((e or {}).get("name", ""), 120),
-                 "type": _clean((e or {}).get("type", ""), 40)}
-                for e in _as_list(entities_proposed) if isinstance(e, dict)]
+    proposed = []
+    for e in _as_list(entities_proposed):
+        if not isinstance(e, dict):
+            continue
+        entry = {"id": _clean_identity(e.get("id", ""), 80),
+                 "name": _clean_identity(e.get("name", ""), 120),
+                 "type": _clean(e.get("type", ""), 40)}
+        # Present only on an entity a steward REGISTERED through this capture (ADR 042) — born
+        # confirmed by them; an ordinary proposal keeps the three-field shape every reader knows.
+        if e.get("confirmed_by"):
+            entry["confirmed_by"] = _clean_identity(e["confirmed_by"], 120)
+        proposed.append(entry)
     aliases = [{"entity": _clean_identity((a or {}).get("entity", ""), 80),
                 "alias": _clean_identity((a or {}).get("alias", ""), 120)}
                for a in _as_list(aliases_proposed) if isinstance(a, dict)]
     return proposed, aliases
 
 
-def proposals_clause(proposed: list, proposed_aliases: list) -> str:
+def proposals_clause(proposed: list, proposed_aliases: list, updated: list = ()) -> str:
     """The sentence telling a submitter the page landed AND an identity still waits on a person.
     Empty when nothing was proposed, so an ordinary filing's sentence is unchanged."""
     parts = []
+    registered = [e for e in proposed if e.get("confirmed_by")]
+    proposed = [e for e in proposed if not e.get("confirmed_by")]
+    if registered:
+        named = _listed([f"{e['name']} (`{e['id']}`), confirmed by {e['confirmed_by']}"
+                         for e in registered])
+        parts.append(f"It registers {_plural(len(registered), 'new entity', 'new entities')}: "
+                     f"{named} — the page is written from the material and what the brain held, "
+                     f"and the identity is born confirmed, as the steward asked.")
     if proposed:
         named = _listed([f"{e['name']} (`{e['id']}`)" for e in proposed])
         parts.append(f"It proposes {_plural(len(proposed), 'new entity', 'new entities')}: "
@@ -196,13 +222,20 @@ def proposals_clause(proposed: list, proposed_aliases: list) -> str:
         named = _listed([f"\"{a['alias']}\" for `{a['entity']}`" for a in proposed_aliases])
         parts.append(f"It proposes {_plural(len(proposed_aliases), 'new spelling')}: {named} — "
                      f"the spelling resolves now, and a steward confirms or declines it.")
+    for u in updated:
+        added = [w for w in (_plural(int(u.get("facts") or 0), "fact") if u.get("facts") else "",
+                             _plural(int(u.get("connections") or 0), "connection")
+                             if u.get("connections") else "") if w]
+        if added:
+            parts.append(f"It adds {' and '.join(added)} to the page of `{u.get('entity', '')}`.")
     return (" " + " ".join(parts)) if parts else ""
 
 
 # ── filed_meeting: the report for a page SET ──────────────────────────────────────────────────
 def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, commit: str,
                   pages_edited: list = (), agent_rationale: str = "", registry=None,
-                  entities_proposed: list = (), aliases_proposed: list = ()) -> dict:
+                  entities_proposed: list = (), aliases_proposed: list = (),
+                  entities_updated: list = ()) -> dict:
     """`filed`'s sibling for a page SET: N >= 1 source pages, a meeting page, and N decision pages,
     each with its OWN anchor outcome. `decisions` is `[{"path": ..., "anchoring": ...}]`, and
     `result_ref` names the MEETING PAGE alone or `dedup.Match.page_path`'s `rsplit("@")` breaks.
@@ -244,9 +277,10 @@ def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, com
     lines.append(f"  pages_edited      {_listed(edited_paths)}")
     lines.append(f"  agent_rationale   {_clean(agent_rationale, RATIONALE_WIDTH) or NONE_LABEL}")
     proposed, proposed_aliases = _proposed_lists(entities_proposed, aliases_proposed)
-    if proposed or proposed_aliases:
+    updated = _updated_list(entities_updated)
+    if proposed or proposed_aliases or updated:
         lines.append("")
-        lines.append("  " + proposals_clause(proposed, proposed_aliases).strip())
+        lines.append("  " + proposals_clause(proposed, proposed_aliases, updated).strip())
     return base_report(
         status=schema.FILED, summary="\n".join(lines), page_path=meeting_page, commit=commit,
         agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
@@ -254,7 +288,7 @@ def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, com
         # The structured sibling of the rendered lines above, for a caller that branches on facts.
         filed_meeting={"source_pages": [_clean(p, 200) for p in source_pages],
                       "meeting_page": meeting_page, "decisions": decision_rows},
-        entities_proposed=proposed, aliases_proposed=proposed_aliases)
+        entities_proposed=proposed, aliases_proposed=proposed_aliases, entities_updated=updated)
 
 
 def filed_retry(*, original_id: int, page_path: str, commit: str) -> dict:

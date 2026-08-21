@@ -147,6 +147,10 @@ class GateContext:
     # neither a declared proposal nor a planned edit, which is what makes "the agent never writes
     # an identity" a proof rather than a tool's refusal.
     proposed_entity_pages: frozenset = field(default_factory=frozenset)
+    # Of those, the pages born CONFIRMED — `{path: approver}` — because a steward registered the
+    # entity through this capture (ADR 042): `approved_by` must name exactly that steward, where
+    # every other created entity page must arrive with it empty.
+    confirmed_entity_pages: dict = field(default_factory=dict)
 
     @property
     def changes(self) -> list[tuple[str, str]]:
@@ -1390,7 +1394,16 @@ def _proposed_page_findings(ctx: GateContext, path: str) -> list[Finding]:
                            f"{path} was proposed as an entity but declares "
                            f"type {parsed.get('type')!r}",
                            locator=path, repairable=False))
-    if "approved_by" not in parsed or str(parsed.get("approved_by") or "").strip():
+    expected = str(ctx.confirmed_entity_pages.get(path) or "").strip()
+    actual = str(parsed.get("approved_by") or "").strip() if "approved_by" in parsed else None
+    if expected:
+        if actual != expected:
+            out.append(Finding("identity", "not-confirmed-by-its-steward",
+                               f"{path} says `approved_by: {actual!r}` where the steward who "
+                               f"registered this entity through this capture, {expected!r}, is the "
+                               f"one name it may carry",
+                               locator=path, repairable=False))
+    elif actual is None or actual:
         out.append(Finding("identity", "approved-on-arrival",
                            f"{path} does not say `approved_by: \"\"`: a proposed identity arrives "
                            f"unconfirmed, and only a steward's decision fills that field",

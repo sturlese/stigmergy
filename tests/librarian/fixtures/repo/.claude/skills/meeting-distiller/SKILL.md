@@ -142,6 +142,11 @@ read-then-delete lifecycle as the ordinary librarian skill, but a page-SET shape
   "new_aliases": [
     {"entity": "acme-corp", "alias": "Acme Industries"}
   ],
+  "entity_updates": [
+    {"entity": "acme-corp",
+     "facts": ["Renewal terms revisited in this meeting; the Q3 pricing floor applies"],
+     "connections": ["[[Q3 pricing floor]] — the decision this meeting took about its renewal"]}
+  ],
   "edits": [
     {"path": "wiki/decisions/Acme renewal terms.md",
      "kind": "overlap",
@@ -173,6 +178,12 @@ read-then-delete lifecycle as the ordinary librarian skill, but a page-SET shape
   registered entity or company-wide, which is the usual case.
 - `new_aliases` — spellings this transcript uses for REGISTERED entities that the registry does
   not list: `{"entity": "<id or registered name>", "alias": "<the spelling>"}`.
+- `entity_updates` — what this meeting ESTABLISHED about entities the registry already knows, to
+  be appended to their own pages: `{"entity": "<id or registered name>", "facts": ["…"],
+  "connections": ["[[Decision title]] — why"]}`, one line each, only what the transcript
+  establishes and the page does not already say. Never for an entity you propose in this same
+  account — its facts go in that entry. Empty when the meeting established nothing new about a
+  registered entity.
 - `edits` — the links you want added to decision pages that already exist; see "Edits to existing
   pages" below. `kind` is `"backlink"`, `"overlap"` or `"contradiction"`, and `link` is a page
   NAME — one of your own decision titles above, or a name from `link_names` — never a filename.

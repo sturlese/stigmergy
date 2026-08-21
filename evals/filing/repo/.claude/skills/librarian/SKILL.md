@@ -222,14 +222,28 @@ So propose the name as the material uses it, and put the candidate you suspect i
 justification for a merge you are unsure of is the failure mode this instruction exists to
 prevent.
 
+### When a steward is registering the entity
+
+Some captures exist to introduce an entity: a steward wrote what they know about it and asked
+for it to be registered. The item's own brief says so (a **REGISTRATION** paragraph naming the
+entity and its type), and the rule is the one above with one difference — the entity you
+propose under that name is born **confirmed** by that steward instead of waiting on the inbox.
+Write it exactly as carefully: the steward's words are the material, the brain may know more,
+and nothing is invented. If the registry already resolves the name, do not propose a twin —
+anchor to the entity it is and teach the registry the steward's spelling in `new_aliases`.
+
 ## Proposing an entity — fill every field
 
 A proposed entity becomes a real page the moment your account is verified — `wiki/entities/<Name>.md`,
 built from `ops/templates/entity.md`, marked unconfirmed until a steward approves it, and already
 visible to search. So a proposal is not a name on a list; it is the first version of that entity's
 page, written from the only material anybody has on it yet, and a steward decides on what you
-wrote. Fill every field from the material and from what the context shows — never from outside
-knowledge:
+wrote. **Look before you write**: search the brain for the name (`search_pages`, and read what
+comes back) — a name the registry does not know may already appear in notes, decisions and
+meetings, and what those pages establish belongs in the proposal as much as the material does.
+Fill every field from the material and from what the brain already holds — never from outside
+knowledge, and never with filler: a page that says nothing about the entity is worse than no
+page, and code refuses a proposal without its `summary`.
 
 ```json
 "new_entities": [
@@ -263,6 +277,31 @@ Three of them are required — `name`, `entity_type`, `summary` — and an accou
 refused by shape. The rest you fill when the material supports them and leave empty when it does
 not; a fact the material does not support is a wrong page with your name on it, exactly like a
 figure on the note.
+
+## Adding to an entity the brain already knows
+
+An entity's page is its spine: what the entity is, the facts the brain has established about it,
+the pages it connects to. It is written at birth from one capture — and every capture after that
+may know something more. When the material ESTABLISHES something about a **registered** entity
+that its page does not yet say — a fact, a relationship, a page that should be connected — declare
+it in `entity_updates` and the worker appends it to that entity's page, under its own `## Facts`
+and `## Connections`, in the same commit as your page:
+
+```json
+"entity_updates": [
+  {"entity": "ledgerly",
+   "facts": ["Extended the reconciliation pilot to a second team in September 2026"],
+   "connections": ["[[Ledgerly pilot extension]] — the decision that extended it"]}
+]
+```
+
+The rules are the proposal's own: only what the material establishes, one line per fact, the
+page you are filing counts as a connection, nothing from outside knowledge. Code appends — it
+never rewrites a line the page already has, skips a line it already carries, and refuses an
+update that names an entity the registry does not resolve (propose it instead) or one you are
+proposing in this same account (its facts go in that entry). At most ten entities and twenty
+lines each per filing; the What / Who paragraph is not yours to change here — a page whose
+summary has become wrong is the repair loop's business, not a filing's.
 
 ## Writing the page
 
@@ -414,6 +453,11 @@ One object. This is the only channel back to the worker.
   "new_aliases": [
     {"entity": "reconciliation-product", "alias": "Recon"}
   ],
+  "entity_updates": [
+    {"entity": "reconciliation-product",
+     "facts": ["Entered a paid pilot with Ledgerly in August 2026"],
+     "connections": ["[[Ledgerly pilot kickoff]] — the pilot that exercises it"]}
+  ],
   "links_created": ["Reconciliation product"],
   "overlaps": [],
   "edits": [
@@ -446,6 +490,10 @@ One object. This is the only channel back to the worker.
 - **`new_aliases`** — spellings the material uses for REGISTERED entities that the registry does not
   list yet: `{"entity": "<id or registered name>", "alias": "<the spelling>"}`. Never an alias of
   an entity you are proposing in this same account — put those in the proposal's own `aliases`.
+- **`entity_updates`** — what the material ESTABLISHES about entities the registry already knows,
+  to be added to their own pages: `{"entity": "<id or registered name>", "facts": ["…"],
+  "connections": ["[[Page]] — why"]}`. See "Adding to an entity the brain already knows". Empty
+  when the material establishes nothing new about a registered entity, which is common.
 - **`links_created`** — the bare page names you linked from this page. The worker builds the
   page's `related:` list from exactly this, so it is not bookkeeping — it is the graph edge.
 - **`overlaps`** — the existing pages you judged to cover the same ground, for the submitter's

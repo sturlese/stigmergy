@@ -2528,3 +2528,29 @@ def test_a_derived_file_is_not_a_new_page(tmp_path):
                write_prefixes=gates.ALLOWED_WRITE_PREFIXES + ("ops/entity-registry.json",),
                derived_files=frozenset({"ops/entity-registry.json"}))
     assert ctx.in_lane_new_pages() == ["wiki/notes/New.md"]
+
+
+def test_an_entity_page_a_steward_registered_must_carry_exactly_that_steward(tmp_path):
+    """ADR 042: a proposal born through a steward's registration arrives CONFIRMED — `approved_by`
+    names the steward the caller told the gate about, and no one else. Every other created entity
+    page still has to arrive with it empty (the test above), so the two rules are asserted side by
+    side: the registered page passes with its steward, is refused with nobody, and is refused with
+    somebody else."""
+    confirmed = _PROPOSED.replace('approved_by: ""', 'approved_by: "steward@example.com"')
+    entry = gitcmd.DiffEntry("A", _ENTITY_PAGE, new_mode="100644")
+    told = {"proposed_entity_pages": frozenset({_ENTITY_PAGE}),
+            "confirmed_entity_pages": {_ENTITY_PAGE: "steward@example.com"}}
+
+    _write_entity_page(tmp_path, confirmed)
+    assert gates.gate_identity(_ctx(tmp_path, [entry], **told)) == []
+
+    _write_entity_page(tmp_path, _PROPOSED)
+    assert [f.code for f in gates.gate_identity(_ctx(tmp_path, [entry], **told))] == ["not-confirmed-by-its-steward"]
+
+    _write_entity_page(tmp_path, confirmed.replace("steward@example.com", "somebody@example.com"))
+    assert [f.code for f in gates.gate_identity(_ctx(tmp_path, [entry], **told))] == ["not-confirmed-by-its-steward"]
+
+    # and a confirmed page the caller did NOT declare as a registration is the old refusal
+    _write_entity_page(tmp_path, confirmed)
+    plain = _ctx(tmp_path, [entry], proposed_entity_pages=frozenset({_ENTITY_PAGE}))
+    assert [f.code for f in gates.gate_identity(plain)] == ["approved-on-arrival"]

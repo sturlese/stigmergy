@@ -303,9 +303,12 @@ def recheck(proposal: Proposal, *, registry: Registry, existing_pages=()) -> Non
 
 
 # ── the page ──────────────────────────────────────────────────────────────────────────────────
-# What a page's body may carry when its author knows something about the entity — the librarian
-# does, having just read a capture about it; a steward at `create` may not, and leaves the
-# template's stubs. Each field is bounded and control-stripped like every other authored value:
+# What a page's body carries. The summary is not optional on any road: an entity page that says
+# nothing about the entity is worse than no page — it looks like knowledge, ranks like knowledge
+# and answers nothing, and twelve of them accumulated in the first fortnight because the two hand
+# doors wrote the template's stubs verbatim. Facts and connections may legitimately be empty (a
+# name met once establishes little), and then their sections are NOT written: a page with no facts
+# must not claim one. Each field is bounded and control-stripped like every other authored value:
 # the body is markdown, not YAML, so the one character class that matters is the invisible one.
 MAX_SUMMARY_CHARS = 1500
 MAX_FACTS = 20
@@ -380,6 +383,7 @@ def render_page(template: str, proposal: Proposal, *, today: str, approved_by: s
     the newborn page is never an orphan.
     """
     front, page_body = _split(template)
+    page_body = _strip_comments(page_body)
     today = _clean_today(today)
     approver = " ".join(str(approved_by or "").split())
     _refuse_control_characters(approver, subject="approved_by",
@@ -407,12 +411,18 @@ def render_page(template: str, proposal: Proposal, *, today: str, approved_by: s
     }
     rendered = _rewrite_frontmatter(front, fields)
     page_body = page_body.replace("<Entity Name>", proposal.name)
-    if body is not None:
-        page_body = _fill_sections(page_body, {
-            SUMMARY_SECTION: [body.summary] if body.summary else [],
-            FACTS_SECTION: [f"- {fact}" for fact in body.facts],
-            CONNECTIONS_SECTION: [f"- {connection}" for connection in body.connections],
-        })
+    body = body if body is not None else EntityBody()
+    if not body.summary:
+        raise EntityError(
+            f"{proposal.name} would be born with nothing said about it: an entity page needs its "
+            f"What / Who paragraph, written by the librarian from what the person introducing the "
+            f"entity said and what the brain already holds. A page that says nothing ranks like "
+            f"knowledge and answers nothing, so it is not written at all")
+    page_body = _fill_sections(page_body, {
+        SUMMARY_SECTION: [body.summary],
+        FACTS_SECTION: [f"- {fact}" for fact in body.facts],
+        CONNECTIONS_SECTION: [f"- {connection}" for connection in body.connections],
+    })
     return f"---\n{rendered}\n---\n{page_body}"
 
 
@@ -426,24 +436,42 @@ def _clean_link_name(name) -> str:
     return value
 
 
+_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def _strip_comments(page_body: str) -> str:
+    """The template's HTML comments are notes to whoever edits the TEMPLATE, and they were copied
+    verbatim into every page it rendered — nineteen entity pages in the first brain opened with a
+    paragraph about how the template works, indexed and searchable as if it were knowledge. The
+    template keeps its notes; the page a person reads carries none."""
+    text = _COMMENT_RE.sub("", page_body)
+    while "\n\n\n" in text:
+        text = text.replace("\n\n\n", "\n\n")
+    return text.lstrip("\n")
+
+
 def _fill_sections(page_body: str, sections: dict[str, list[str]]) -> str:
     """Replace each `## Heading` section's stub with the supplied lines, IN PLACE; a heading the
-    template lacks is appended. Sections given no lines keep the template's stub, so a person can
-    still see what the page is waiting for. Line-based, like the frontmatter rewrite: the
-    template's order and its comments survive."""
+    template lacks is appended. A section given NO lines is dropped entirely, heading and stub
+    together: a page carrying `- <fact...>` reads as a page with a fact, and the gardener has to
+    find it later to say it has none. Line-based, like the frontmatter rewrite: the template's
+    order survives."""
     lines = page_body.split("\n")
     out, written = [], set()
     index = 0
     while index < len(lines):
         line = lines[index]
         heading = line[3:].strip() if line.startswith("## ") else None
-        if heading is None or heading not in sections or not sections[heading]:
+        if heading is None or heading not in sections:
             out.append(line)
             index += 1
             continue
         end = index + 1
         while end < len(lines) and not lines[end].startswith("## "):
             end += 1
+        if not sections[heading]:
+            index = end                      # the heading and its stub go together
+            continue
         out.extend([line, "", *sections[heading], ""])
         written.add(heading)
         index = end

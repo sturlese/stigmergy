@@ -62,7 +62,7 @@ _MISDIRECTED = {"error": "misdirected request"}
 
 
 def compose(inner, *, conn, server_settings, admin_settings: AdminSettings | None = None,
-            gateway=None):
+            gateway=None, evidence=None):
     """Build the branch. `admin_settings`/`gateway` are injectable for tests; production
     resolves both from the environment (a malformed token hash raises `StartupError` at startup —
     fail closed and loudly)."""
@@ -81,7 +81,7 @@ def compose(inner, *, conn, server_settings, admin_settings: AdminSettings | Non
     if gateway is None and settings.github_configured():
         gateway = ActionsGateway(settings.github_token, settings.github_repo)
     service = AdminService(conn, server_settings=server_settings, admin_settings=settings,
-                           gateway=gateway)
+                           gateway=gateway, evidence=evidence)
     public_hosts = _public_hosts_from_env()
     admin_app = _AdminGate(_build_admin_app(service), settings, public_hosts)
     return _Branch(inner, admin_app)
@@ -342,8 +342,8 @@ def _build_admin_app(service: AdminService) -> Starlette:
         data = await _body(request)
         return await run_in_threadpool(
             service.entity_create, actor=_str(data, "actor"), name=_str(data, "name"),
-            entity_type=_str(data, "entity_type"), entity_id=_str(data, "entity_id"),
-            aliases=_str(data, "aliases"), role=_str(data, "role"))
+            entity_type=_str(data, "entity_type"), about=_str(data, "about"),
+            entity_id=_str(data, "entity_id"), aliases=_str(data, "aliases"))
 
     @_json_endpoint
     async def repairs_list(_request):

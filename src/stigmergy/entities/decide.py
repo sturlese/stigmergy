@@ -2,7 +2,7 @@
 entity it turns out to be, decline it; confirm or decline a proposed spelling. Every decision is
 ONE function over a checkout that edits pages, regenerates the registry and returns an `Outcome`
 naming what changed — nothing here commits, pushes, records a ledger row or checks who is asking.
-`apply` wraps a decision in the same commit discipline `entities.mint` gives a birth (preflight,
+`apply` wraps a decision in one commit discipline (preflight,
 drift refusal, secrets scan, one commit, bounded rebase-and-retry), and the two doors —
 `stigmergy-entities` in a steward's clone, `entities.remote.decide_via_clone` in a throwaway one
 — both go through it, so the git history of a decision reads the same whoever made it.
@@ -17,7 +17,7 @@ registry no longer has is a page the gates would refuse to file today.
 import os
 from dataclasses import dataclass, field
 
-from stigmergy.entities import birth, clone, generator
+from stigmergy.entities import birth, clone, generator, guard
 from stigmergy.entities.errors import EntityError
 from stigmergy.kernel.fsutil import write_text_atomic
 from stigmergy.librarian import page as page_policy
@@ -174,25 +174,24 @@ def apply(repo: str, *, action, branch: str, author: tuple[str, str], trailer: s
     """Run one decision in `repo` and land it as ONE pushed commit, or refuse with the checkout
     exactly as it was.
 
-    The same order as a birth (`entities.mint.mint`): the branch, cleanliness and sync checks,
+    The order: the branch, cleanliness and sync checks,
     the drift refusal (a decision regenerates the registry, and regenerating somebody else's drift
     inside a commit that says "confirm X" is `ensure_clean`'s argument applied to the derived
     file), then the decision, then gitleaks over the files the commit will carry — a merge writes
     a steward-typed spelling into a page — then the commit, rebased and re-derived on a race.
     `action` is `lambda repo: decide.approve_entity(repo, ...)` or any of its four siblings.
     """
-    from stigmergy.entities import mint as mint_lib
 
     clone.ensure_on_branch(repo, branch, action="decide")
     clone.ensure_clean(repo, action="decide")
     clone.ensure_in_sync(repo, branch, action="decide")
-    mint_lib.refuse_drift(repo, action="decide")
+    guard.refuse_drift(repo, action="decide")
     before = clone.head(repo)
     try:
         outcome = action(repo)
         present = [p for p in outcome.changed_paths
                    if os.path.exists(os.path.join(repo, *p.split("/")))]
-        mint_lib.refuse_secrets(repo, present, action="decide")
+        guard.refuse_secrets(repo, present, action="decide")
     except BaseException:
         # The decision edits tracked files in place and deletes some, so the rollback is git's:
         # unlike a birth, there is nothing untracked of the steward's own to protect —

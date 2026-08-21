@@ -22,7 +22,7 @@ def test_a_crlf_page_is_not_a_malformed_one():
 
     It is not cosmetic here either: `entities.generator` reads entity pages through this function,
     so such a page produced `{}` and the generator refused it with "declares no `title`, so it
-    names no entity" — blocking `stigmergy-entities regenerate` and, through `mint_via_clone`, the
+    names no entity" — blocking `stigmergy-entities regenerate` and, through `decide_via_clone`, the
     governed mint door `review_decide`'s approve reaches.
     """
     fm, body = frontmatter.split_frontmatter("---\r\ntitle: Globex\r\n---\r\n\r\nbody text\r\n")

@@ -9,6 +9,7 @@ Nothing in a payload can set a server-computed field: `submitted_by` comes from 
 identity and is never read from client input — that structural fact is the security property, and
 the refusals here are loud annotation on top of it.
 """
+import dataclasses
 import datetime
 import hashlib
 import logging
@@ -181,6 +182,7 @@ DURABLE_TABLES = ("capture_queue", "audit_log", "job_runs", "ingest_errors")
 # ── the submission contract ───────────────────────────────────────────────────────────────────
 # A kind names the SHAPE of the material and which reader claims the row, never a topic.
 KINDS = ("raw", "page", "meeting", "drive")
+RAW = "raw"
 MEETING = "meeting"
 # A Drive-fetched document: original bytes at blob_refs[1], the text manifest the row's material
 # and dedup key at blob_refs[0]; the worker converts.
@@ -227,7 +229,15 @@ DRIVE_HINT_KEYS = ("drive_file_id", "drive_name", "drive_url", "drive_mime", "dr
 DRIVE_PROVENANCE_HINT_KEYS = frozenset({"drive_file_id", "drive_url"})
 
 # The union `normalize_hints` checks a key against.
-ALLOWED_HINT_KEYS = HINT_KEYS + SOURCE_HINT_KEYS + MEETING_HINT_KEYS + DRIVE_HINT_KEYS
+# A steward REGISTERING an entity (ADR 042): the two steward doors — the console's "Register an
+# entity" and `stigmergy-entities create` — submit what the steward knows as a capture carrying
+# these, and the librarian writes the entity's page from that material and the brain, born
+# confirmed by the steward. Allowed here so `queue.submit` stores them; refused at the service
+# seam for every client, because a registration is an act of authority and `brain_submit`
+# attributes material, never authority.
+REGISTER_HINT_KEYS = ("register_name", "register_type", "register_aliases", "register_source")
+ALLOWED_HINT_KEYS = (HINT_KEYS + SOURCE_HINT_KEYS + MEETING_HINT_KEYS + DRIVE_HINT_KEYS
+                     + REGISTER_HINT_KEYS)
 
 # Fields a client may never assert: as an argument or a hint each is an explicit error; declared in
 # a page's frontmatter each is recorded as a flagged hint and otherwise inert.
@@ -403,6 +413,60 @@ def reject_drive_provenance_hints(hints: dict | None) -> None:
         f"CLI itself, not by a caller — remove {'them' if plural else 'it'} and resubmit (Drive "
         f"provenance on a reader-facing source page must come from a fetch that actually "
         f"happened)")
+
+
+def reject_registration_hints(hints: dict | None) -> None:
+    """Fail LOUDLY on any `register_*` hint from ANY client door: the two legitimate asserters
+    (the console's Register an entity, `stigmergy-entities create`) never pass through
+    `BrainService._submit`, and a registration is a steward's act, not a submitter's suggestion."""
+    present, plural = _present_and_plural(hints, REGISTER_HINT_KEYS)
+    if not present:
+        return
+    raise SubmissionRejected(
+        f"{', '.join(present)} {'are' if plural else 'is'} set by the steward doors themselves "
+        f"(the console's Register an entity, `stigmergy-entities create`), not by a caller — "
+        f"remove {'them' if plural else 'it'} and resubmit. To introduce an entity, capture what "
+        f"you know about it: the librarian proposes it and a steward confirms")
+
+
+@dataclasses.dataclass(frozen=True)
+class Registration:
+    """What a steward asked the librarian to register, read off a capture's hints: the entity's
+    name and type as the steward spelled them, the spellings they listed, and which door asked
+    (the ledger's `source`). The capture's `submitted_by` is the steward, and therefore the
+    `approved_by` the page is born with."""
+    name: str
+    entity_type: str
+    aliases: tuple
+    source: str
+
+
+# The doors a registration can come from — the ledger's own spellings (`capture.decisions` names
+# the same two, and refuses any other after the push, which is too late to learn it).
+REGISTRATION_SOURCES = ("admin", "cli")
+
+
+def registration_hints(*, name: str, entity_type: str, aliases=(), source: str) -> dict:
+    """The hints a steward door submits with a registration — built here so both doors build the
+    same ones. `entity` rides along as the ordinary hint it is, so the haystack the proposal writer
+    checks a proposed name against carries the steward's spelling."""
+    if source not in REGISTRATION_SOURCES:
+        raise ValueError(f"a registration comes from one of {', '.join(REGISTRATION_SOURCES)}, "
+                         f"not {source!r} — the ledger records the door by that name")
+    return {"entity": name, "register_name": name, "register_type": entity_type,
+            "register_aliases": ", ".join(a for a in aliases if a), "register_source": source}
+
+
+def registration_from_hints(hints: dict | None) -> Registration | None:
+    """The registration a stored capture carries, or `None` for every ordinary capture."""
+    client = (hints or {}).get("client") or {}
+    name = " ".join(str(client.get("register_name") or "").split())
+    if not name:
+        return None
+    aliases = tuple(a.strip() for a in str(client.get("register_aliases") or "").split(",")
+                    if a.strip())
+    return Registration(name=name, entity_type=str(client.get("register_type") or "").strip().lower(),
+                        aliases=aliases, source=str(client.get("register_source") or "").strip())
 
 
 def _require_drive_hints(client: dict) -> None:

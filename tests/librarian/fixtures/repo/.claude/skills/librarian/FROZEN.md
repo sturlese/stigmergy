@@ -7,7 +7,7 @@ reasoning, as its sibling one directory over (`../meeting-distiller/FROZEN.md`).
 | | |
 |---|---|
 | **Source** | `<stigmergy>/.claude/skills/librarian/SKILL.md` |
-| **Copied at commit** | `34cd66856dfc246c4c29fbe22ffe83d53f206c83` |
+| **Copied at commit** | `e118c8a38c2bd447f27be5d5e07a7c9b9df57cce` |
 | **Drift guard** | `tests/librarian/test_librarian_brief_contract.py` — the rule table runs against THIS copy in CI, and a separate test asserts the copy is byte-identical to the knowledge repo's own whenever that checkout is present |
 
 > **The row above always names the CURRENT bytes.** The brief has been rewritten several times

@@ -269,7 +269,7 @@ def build_http_app(settings, *, token_store: dict[str, str]):
     # never reaches `_BearerAuthMiddleware`, everything else flows through unchanged, and with
     # `$STIGMERGY_ADMIN_TOKEN_HASH` unset the branch is inert 404s — so the ONE webhook exemption
     # keeps meaning exactly one path.
-    return admin_routes.compose(app, conn=conn, server_settings=settings)
+    return admin_routes.compose(app, conn=conn, server_settings=settings, evidence=evidence)
 
 
 def serve_http(settings, host: str, port: int) -> None:

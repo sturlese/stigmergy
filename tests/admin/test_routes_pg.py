@@ -221,19 +221,26 @@ def test_entities_decide_lands_over_http(conn, admin_settings, fake_gateway, ent
     assert verdict == "merge" and extra["into"] == "acme-corp"
 
 
-def test_entities_create_lands_over_http(conn, admin_settings, fake_gateway, entity_mint_repo,
-                                         require_gitleaks):
-    app = compose(_inner, conn=conn, server_settings=Settings(librarian_repo_url=entity_mint_repo),
-                  admin_settings=admin_settings, gateway=fake_gateway)
+def test_entities_create_commissions_over_http(conn, admin_settings, fake_gateway):
+    """ADR 042: the route queues the steward's account as a capture carrying the registration
+    and answers with the row — no commit, no ledger row, the librarian does the writing."""
+    from stigmergy.capture.evidence import MemoryEvidenceStore
+    app = compose(_inner, conn=conn, server_settings=Settings(), admin_settings=admin_settings,
+                  gateway=fake_gateway, evidence=MemoryEvidenceStore())
 
     response = _request(app, "POST", "/admin/api/entities/create", json_body={
         "actor": "steward@example.com", "name": "Stark Industries", "entity_type": "organization",
-        "aliases": "Stark",
+        "aliases": "Stark", "about": "Stark Industries is the client whose reporting we automate.",
     })
 
     assert response.status_code == 200
-    assert response.json()["entity_id"] == "stark-industries"
-    assert remote_registry(entity_mint_repo)["stark-industries"]["approved_by"] == "steward@example.com"
+    body = response.json()
+    assert body["status"] == "queued" and body["entity_id"] == "stark-industries"
+    with conn.cursor() as cur:
+        cur.execute("SELECT submitted_by, hints FROM capture_queue WHERE id = %s", (body["id"],))
+        by, hints = cur.fetchone()
+    assert by == "steward@example.com"
+    assert capture_schema.registration_from_hints(hints).name == "Stark Industries"
 
 
 def test_entities_decide_and_create_require_the_token(conn, app):
@@ -251,13 +258,15 @@ def test_entities_decide_and_create_require_the_token(conn, app):
 
 def test_entities_create_error_mapping_over_http(conn, app):
     bad = _request(app, "POST", "/admin/api/entities/create",
-                   json_body={"actor": "steward", "name": "", "entity_type": ""})
-    assert bad.status_code == 400 and "name and entity_type" in bad.json()["error"]
+                   json_body={"actor": "steward", "name": "", "entity_type": "", "about": ""})
+    assert bad.status_code == 400 and "name and entity_type and about" in bad.json()["error"]
+    # `app` composes no evidence store: the refusal names what is missing, as a 409.
     refused = _request(app, "POST", "/admin/api/entities/create", json_body={
         "actor": "steward@example.com", "name": "Globex Robotics", "entity_type": "organization",
+        "about": "A robotics company.",
     })
     assert refused.status_code == 409
-    assert "STIGMERGY_LIBRARIAN_REPO_URL" in refused.json()["error"]
+    assert "evidence store" in refused.json()["error"]
 
 
 # ── crons over HTTP: the wire shape ───────────────────────────────────────────────────────────
@@ -370,8 +379,6 @@ def _on_the_event_loop_probe(monkeypatch, method: str):
     ("entity_decide", "/admin/api/entities/decide",
      {"actor": "steward@example.com", "item_kind": "identity-proposal", "item_id": "globex",
       "verdict": "approve"}),
-    ("entity_create", "/admin/api/entities/create",
-     {"actor": "steward@example.com", "name": "Globex Robotics", "entity_type": "organization"}),
 ])
 def test_an_approve_that_clones_never_runs_on_the_event_loop(conn, app, monkeypatch, method, path,
                                                              body):

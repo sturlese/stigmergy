@@ -37,7 +37,7 @@ LEGACY_KINDS = (LEGACY_KIND_ENTITY_PROPOSAL, LEGACY_KIND_PARKED_CAPTURE)
 # source is `entities.generator.ENTITY_TYPES`; this is a RESTATEMENT (this module may depend on
 # nothing), pinned against drift by `tests/test_architecture.py::
 # test_review_kinds_entity_types_matches_the_generators_closed_list`. `stigmergy.server.review`
-# does not read this constant — it imports the generator's directly.
+# reads THIS constant (a registration's type check), the generator reads its own.
 ENTITY_TYPES = ("person", "organization", "product", "tool", "repository", "place", "project")
 
 

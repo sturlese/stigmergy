@@ -20,7 +20,8 @@ import unicodedata
 
 import pytest
 
-from stigmergy.capture import queue, schema
+from stigmergy import review_kinds
+from stigmergy.capture import decisions, queue, schema
 from stigmergy.librarian import double as double_module
 from stigmergy.librarian import page as page_policy
 from stigmergy.librarian import processing, worker
@@ -1197,3 +1198,90 @@ def test_a_resubmission_outside_the_window_is_still_the_level_two_rejection(rig,
 #   `test_hallucinate_every_attempt_is_rejected_and_files_no_page`,
 #   `test_hallucinate_once_succeeds_on_the_corrective_retry_and_is_filed`,
 #   `test_the_page_itself_still_carries_the_verdict_vocabulary_the_linter_validates`
+
+
+# ── a steward's registration (ADR 042): the capture births the entity CONFIRMED ──────────────────
+def _registration_hints(name="Globex Corp", entity_type="organization", aliases=("Globex",)):
+    return schema.registration_hints(name=name, entity_type=entity_type, aliases=aliases,
+                                     source="admin")
+
+
+def test_a_stewards_registration_births_the_entity_confirmed_and_records_the_approval(rig, clean_queue):
+    """OLD BEHAVIOUR: a steward registered an entity through `stigmergy-entities create` or the
+    console, and a script copied the template with the name filled in — twelve of the first brain's
+    nineteen entity pages had nothing said about the entity. Now the steward's account is a capture
+    carrying the registration: the agent writes the page from it, the page lands in the same
+    commit as the note with `approved_by` naming the steward, the registry entry is NOT proposed,
+    the ledger carries the steward's approval (written after the push, like every door's), and
+    the report says "registers", not "proposes"."""
+    env, deps = rig
+    steward = "steward@example.com"
+
+    item, result = _file(clean_queue, deps, "DOUBLE:propose=Globex Corp\n" + ACME_MATERIAL,
+                         submitted_by=steward, hints=_registration_hints())
+
+    assert result.status == schema.FILED, result.report.get("summary")
+    page_path, sha = result.result_ref.rsplit("@", 1)
+    changed = support.changed_paths(env.bare, sha)
+    assert "wiki/entities/Globex Corp.md" in changed and "ops/entity-registry.json" in changed
+    entity_page = support.read_filed_page(env.bare, sha, "wiki/entities/Globex Corp.md")
+    assert f'approved_by: "{steward}"' in entity_page
+    assert "proposed by the offline double" in entity_page        # written, never a stub
+    registry = json.loads(support.read_filed_page(env.bare, sha, "ops/entity-registry.json"))
+    entry = registry["entities"]["globex-corp"]
+    assert entry["proposed"] is False and entry["approved_by"] == steward
+    assert result.report["entities_proposed"] == [
+        {"id": "globex-corp", "name": "Globex Corp", "type": "organization", "confirmed_by": steward}]
+    assert "It registers 1 new entity: Globex Corp (`globex-corp`), confirmed by" in result.report["summary"]
+    assert "It proposes" not in result.report["summary"]
+    decided = decisions.latest_decision_for(clean_queue, item_kind=review_kinds.KIND_IDENTITY_PROPOSAL,
+                                            item_id="globex-corp")
+    assert decided["verdict"] == decisions.APPROVE and decided["actor"] == steward
+    assert decided["source"] == decisions.SOURCE_ADMIN
+    assert decided["extra"] == {"commit": sha, "created": True, "capture": item["id"]}
+    assert _row(clean_queue, item["id"])["status"] == schema.FILED
+
+
+def test_a_registration_the_agent_ignores_fails_by_name_and_commits_nothing(rig, clean_queue):
+    """The steward asked for Globex Corp and the account proposed nothing, twice (the double
+    proposes only on its directive, so the corrective retry changes nothing): the row ends
+    `failed` naming the entity, the remote is untouched, and no ledger row claims a birth."""
+    env, deps = rig
+    before = support.branch_sha(env.bare)
+
+    item, result = _file(clean_queue, deps, ACME_MATERIAL, submitted_by="steward@example.com",
+                         hints=_registration_hints())
+
+    assert result.status == schema.FAILED, result.report.get("summary")
+    assert "registration-missing" in result.report["summary"] or "Globex Corp" in result.report["summary"]
+    assert support.branch_sha(env.bare) == before
+    assert decisions.latest_decision_for(clean_queue, item_kind=review_kinds.KIND_IDENTITY_PROPOSAL,
+                                         item_id="globex-corp") is None
+
+
+# ── the spine accretes (ADR 042): a filing adds what it established to a registered entity ───────
+def test_a_capture_that_establishes_something_about_a_registered_entity_appends_it_to_the_page(
+        rig, clean_queue):
+    """OLD BEHAVIOUR: the entity page was written at birth and never again; what later captures
+    established went to notes and to the synthesized view, and the spine stayed as thin as the
+    day it was born. The account now declares `entity_updates`; code appends the lines under the
+    page's own sections, proves the bytes, and the same commit carries the note and the grown
+    page. The report says what was added."""
+    env, deps = rig
+    page = "wiki/entities/Acme Corp.md"
+    before = support.read_filed_page(env.bare, support.branch_sha(env.bare), page)
+
+    item, result = _file(clean_queue, deps, "DOUBLE:update=acme-corp\n" + ACME_MATERIAL)
+
+    assert result.status == schema.FILED, result.report.get("summary")
+    page_path, sha = result.result_ref.rsplit("@", 1)
+    changed = support.changed_paths(env.bare, sha)
+    assert page_path in changed and page in changed
+    after = support.read_filed_page(env.bare, sha, page)
+    assert after.startswith(before.split("updated:")[0])          # appended, never rewritten
+    assert "- Established by the capture filed as" in after
+    assert f"- [[{ACME_TITLE}]] — the note that established it" in after
+    assert result.report["entities_updated"] == [{"entity": "acme-corp", "facts": 2, "connections": 1}]
+    assert "It adds 2 facts and 1 connection to the page of `acme-corp`." in result.report["summary"]
+    assert result.report["entities_proposed"] == []
+    assert _row(clean_queue, item["id"])["status"] == schema.FILED

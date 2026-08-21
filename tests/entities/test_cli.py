@@ -1,9 +1,10 @@
 """`entities.cli` — `stigmergy-entities`'s six subcommands, driven end-to-end through
-`cli.main` against a real bare remote and a real clone: the birth (`create`), the three decisions
-on what the librarian proposed (`approve`/`decline`/`merge`, which also write the review ledger),
-`pending`, and `regenerate`. The defects it carries regressions for: no secret scanner on a
-human-driven write path, the collision gate consulting the wrong registry (or skipping the recheck
-on a rebase retry), and an interrupted command leaving the steward's clone dirty.
+`cli.main`: `create` (ADR 042 — a steward's registration becomes a CAPTURE the librarian writes
+the page from; there is no deterministic birth any more, so the collision, secret-scan, drift and
+rebase-retry regressions this file used to carry for it now live with the librarian's proposal
+writer and the gates), the three decisions on what the librarian proposed (`approve`/`decline`/
+`merge`, against a real bare remote and a real clone, which also write the review ledger),
+`pending`, and `regenerate`.
 """
 import io
 import json
@@ -13,10 +14,11 @@ import subprocess
 import pytest
 
 from stigmergy.capture import decisions
-from stigmergy.entities import cli, clone, generator, mint
-from stigmergy.kernel.normalize import normalize
+from stigmergy.capture import schema as capture_schema
+from stigmergy.capture.evidence import MemoryEvidenceStore
+from stigmergy.entities import cli, generator
 from stigmergy.review_kinds import KIND_ALIAS_PROPOSAL, KIND_IDENTITY_PROPOSAL
-from tests import adversarial_payloads, testdb
+from tests import testdb
 from tests.entities import conftest as fx
 from tests.entities.test_decide import _commit_all, _note, _proposed_page, _write
 
@@ -40,219 +42,6 @@ def run_cli(*argv) -> tuple[int, str, str]:
     return rc, out.getvalue(), err.getvalue()
 
 
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-# `create`: the birth path with no queue row — driven end-to-end through `cli.main`, no database
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-def test_create_benign_twin_mints_commits_and_pushes(repo):
-    """Resolve-before-mint's benign twin at the CLI layer: a genuinely new entity passes end to
-    end."""
-    remote, steward = repo
-    rc, out, _err = run_cli("--repo", steward, "--branch", "main", "create",
-                            "--id", "globex", "--name", "Globex", "--type", "organization",
-                            "--aliases", "Globex Corporation", "--today", "2026-07-27")
-    assert rc == 0, out
-    assert "Globex" in fx.remote_files(remote)[0] or any(
-        "Globex" in p for p in fx.remote_files(remote))
-    body = subprocess.run(["git", "show", "main:wiki/entities/Globex.md"], cwd=remote,
-                          capture_output=True, text=True, check=True).stdout
-    assert 'title: "Globex"' in body
-    trailer = subprocess.run(["git", "log", "-1", "--format=%an <%ae>"], cwd=remote,
-                             capture_output=True, text=True, check=True).stdout.strip()
-    assert trailer == f"{fx.STEWARD_NAME} <{fx.STEWARD_EMAIL}>"
-
-
-def test_create_json_mode_reports_the_commit_and_the_entity(repo):
-    _remote, steward = repo
-    rc, out, _err = run_cli("--repo", steward, "--branch", "main", "--json", "create",
-                            "--id", "globex", "--name", "Globex", "--type", "organization",
-                            "--today", "2026-07-27")
-    assert rc == 0
-    payload = json.loads(out)
-    assert payload["entity_id"] == "globex"
-    assert len(payload["commit"]) == 40
-
-
-# ── refuses a collision, naming it, at the CLI layer ─────────────────────────────────────────────
-def test_create_refuses_a_collision_and_names_the_registered_entry(repo):
-    _remote, steward = repo
-    rc, _out, err = run_cli("--repo", steward, "--branch", "main", "create",
-                            "--id", "jordan-reyes", "--name", "Jordan Reyes",
-                            "--type", "person", "--today", "2026-07-27")
-    assert rc == cli.EXIT_REFUSED
-    assert "already resolves to the registered entity" in err
-    assert "jordan-reyes" in err
-
-
-# ── the CLI door keeps its full local diagnostics (issue #57, ADR 030's two-door amendment) ─────
-def test_the_cli_door_still_names_the_stewards_own_clone_when_the_template_is_missing(repo):
-    """The SERVER door now maps this refusal's TYPE (`TemplateMissingError`) to a sentence written
-    for a steward with no clone. This door must not have moved a byte: the operator running
-    `stigmergy-entities` IS standing in the clone the message names, and the path is the whole
-    diagnosis — which of their checkouts is missing the template.
-
-    Pinned byte-for-byte rather than by substring, because the two doors' wordings are now free to
-    diverge and nothing else would notice this one drifting toward the other. Reached through
-    `cli.main` (a real refusal, a real exit code, the real stderr line), not by asserting on the
-    exception, so what is pinned is what an operator actually reads.
-    """
-    _remote, steward = repo
-    os.remove(os.path.join(steward, "ops", "templates", "entity.md"))
-    fx.git("commit", "--quiet", "--all", "-m", "chore: drop the entity template", cwd=steward)
-    fx.git("push", "--quiet", "origin", "main", cwd=steward)
-
-    rc, _out, err = run_cli("--repo", steward, "--branch", "main", "create",
-                            "--id", "globex", "--name", "Globex", "--type", "organization",
-                            "--today", "2026-07-27")
-
-    assert rc == cli.EXIT_REFUSED
-    assert err == (
-        f"stigmergy-entities: {mint.TEMPLATE_RELPATH} is missing from {steward} — a new entity "
-        f"page is that template with its identity fields filled in, and this command does not "
-        f"carry its own copy (the template is the knowledge repo's own source of truth for the "
-        f"page's shape)\n")
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-# The one human-driven write path used to run no secret scanner
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-# The shared fixture PAT, NOT a second literal of the same shape. `adversarial_payloads`' own
-# docstring makes the argument: the constant lives in one place "since each copy would need its
-# own exemption and each exemption is a place a real credential could later hide." A copy was
-# written here once anyway, and the repo-wide `gitleaks detect` in CI is what caught it.
-SEEDED_SECRET = f"the client's deploy bot, token {adversarial_payloads.GITHUB_PAT}"
-
-
-def test_create_refuses_a_seeded_secret_in_role_and_names_the_rule(repo, require_gitleaks):
-    """Assert the MECHANISM fired, not just the outcome: the message must name gitleaks' OWN rule
-    id, not merely say "refused" for some other reason. `ghp_...` is a github-pat shape chosen for
-    this reproduction (not real, not valid anywhere) — never the well-known
-    `AKIAIOSFODNN7EXAMPLE`, which is on gitleaks' own allowlist and would prove nothing."""
-    remote, steward = repo
-    rc, _out, err = run_cli("--repo", steward, "--branch", "main", "create",
-                            "--id", "globex", "--name", "Globex", "--type", "organization",
-                            "--role", SEEDED_SECRET, "--today", "2026-07-27")
-    assert rc == cli.EXIT_REFUSED
-    assert "secret scanner matched" in err
-    assert "rule: github-pat" in err
-    assert "Globex" not in fx.remote_files(remote)
-    # the rollback: no orphaned page, no leftover registry edit
-    status = subprocess.run(["git", "status", "--porcelain"], cwd=steward,
-                            capture_output=True, text=True, check=True).stdout.strip()
-    assert status == "", f"the clone was left dirty after a refused create: {status!r}"
-
-
-def test_create_benign_twin_an_ordinary_role_with_no_secret_shape_passes(repo, require_gitleaks):
-    """The benign twin: the scanner must not have become trigger-happy on ordinary prose."""
-    _remote, steward = repo
-    rc, _out, err = run_cli("--repo", steward, "--branch", "main", "create",
-                            "--id", "globex", "--name", "Globex", "--type", "organization",
-                            "--role", "the client's deploy tooling vendor",
-                            "--today", "2026-07-27")
-    assert rc == 0, err
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-# The collision gate used to consult the COMMITTED registry while the commit published the
-# DERIVED one — an unregistered page (drift) made the gate blind to exactly the collision
-# `--check` exists to find.
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-def test_create_refuses_to_mint_into_a_clone_with_pre_existing_drift(tmp_path):
-    remote, steward = fx.build_repo(str(tmp_path / "git"),
-                                    extra_pages=[("Acme Corp", "organization", ())])
-    drift = generator.check(steward)
-    assert drift.divergences, "the fixture must start drifted for this reproduction to mean anything"
-
-    rc, _out, err = run_cli("--repo", steward, "--branch", "main", "create",
-                            "--id", "acme", "--name", "Acme", "--type", "organization",
-                            "--today", "2026-07-27")
-
-    assert rc == cli.EXIT_REFUSED
-    assert generator.FIX_COMMAND in err
-    # the regression this pins: the OLD code passed both checks here and published TWO registry
-    # entries whose matcher keys collapse onto one ("acme" / "Acme Corp") — the fix refuses before
-    # any of that, so nothing new landed on the remote at all.
-    assert "Acme.md" not in fx.remote_files(remote)
-    registry = fx.remote_registry(remote)
-    assert "acme" not in registry["entities"]
-
-
-def test_create_benign_twin_a_clean_clone_with_no_drift_still_mints(repo):
-    _remote, steward = repo
-    assert generator.check(steward).divergences == []
-    rc, _out, err = run_cli("--repo", steward, "--branch", "main", "create",
-                            "--id", "globex", "--name", "Globex", "--type", "organization",
-                            "--today", "2026-07-27")
-    assert rc == 0, err
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-# The post-rebase retry used to regenerate without re-checking collisions. A retry path needs a
-# test that actually loses the race, so the race is forced deterministically by landing steward
-# A's commit inside steward B's `write_page` — the window `commit_and_push`'s retry loop exists for.
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-def _race(tmp_path, label: str, b_args: list[str]) -> tuple[str, str, int]:
-    remote, steward_b = fx.build_repo(str(tmp_path / f"git-{label}"))
-    steward_a = fx.clone_of(remote, str(tmp_path / f"clone-a-{label}"), name="Steward A",
-                            email="a@example.com")
-
-    original_write_page = clone.write_page
-    landed = []
-
-    def racing_write_page(repo, relpath, text):
-        if not landed:
-            landed.append(True)
-            rc, _o, _e = run_cli("--repo", steward_a, "--branch", "main", "create",
-                                 "--id", "acme", "--name", "Acme", "--type", "organization",
-                                 "--today", "2026-07-27")
-            landed.append(rc)
-        return original_write_page(repo, relpath, text)
-
-    import stigmergy.entities.cli as cli_mod
-    cli_mod.clone.write_page = racing_write_page
-    try:
-        rc, _out, err = run_cli("--repo", steward_b, "--branch", "main", "create", *b_args,
-                                "--today", "2026-07-27")
-    finally:
-        cli_mod.clone.write_page = original_write_page
-    return remote, err, rc
-
-
-def test_the_post_rebase_retry_still_refuses_an_alias_that_now_collides(tmp_path):
-    """Steward A mints `Acme`; steward B (racing) mints `Zenith Systems` with `Acme` as an alias —
-    B's own preflight passed against a registry that no longer exists by the time B's commit would
-    land. The FIX must refuse B at the retry, naming the collision, rather than silently landing
-    an ambiguous `by_alias` entry (last-wins)."""
-    remote, err, rc = _race(tmp_path, "attack",
-                            ["--id", "zenith-systems", "--name", "Zenith Systems",
-                             "--type", "organization", "--aliases", "Acme"])
-
-    assert rc == cli.EXIT_REFUSED, err
-    assert "collision did not exist when the command started" in err
-
-    registry = fx.remote_registry(remote)
-    keys: dict[str, list[str]] = {}
-    for canonical_id, entity in registry["entities"].items():
-        for spelling in (entity["name"], *entity.get("aliases", ())):
-            keys.setdefault(normalize(spelling), []).append(canonical_id)
-    ambiguous = {k: v for k, v in keys.items() if len(set(v)) > 1}
-    assert not ambiguous, f"a spelling resolves to more than one entity: {ambiguous}"
-
-
-def test_the_post_rebase_retry_benign_twin_two_unrelated_entities_both_land(tmp_path):
-    """The benign twin — the race the retry loop was BUILT for: two stewards, two unrelated
-    entities. B must still fetch, rebase, regenerate and land — the fix must not turn every race
-    into a refusal."""
-    remote, err, rc = _race(tmp_path, "benign",
-                            ["--id", "zenith-systems", "--name", "Zenith Systems",
-                             "--type", "organization"])
-    assert rc == 0, err
-    registry = fx.remote_registry(remote)
-    assert {"acme", "zenith-systems"} <= set(registry["entities"])
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-# `--repo`: what the three operator CLIs agree a checkout is
-# ══════════════════════════════════════════════════════════════════════════════════════════════
 def test_repo_accepts_a_real_git_worktree_checkout(repo, tmp_path):
     """**Old behaviour: `isdir(os.path.join(path, ".git"))` refused a genuine worktree.** A
     `git worktree add` checkout carries a `.git` FILE (a `gitdir:` pointer), not a directory, so
@@ -370,63 +159,6 @@ def test_regenerate_check_json_mode(repo):
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # interrupt handling: a REAL KeyboardInterrupt during the write path, never a stubbed handler
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-def test_a_keyboard_interrupt_during_create_is_answered_cleanly_not_with_a_traceback(
-        repo, monkeypatch):
-    _remote, steward = repo
-
-    def _boom(*a, **kw):
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(clone, "commit_and_push", _boom)
-    rc, _out, err = run_cli("--repo", steward, "--branch", "main", "create",
-                            "--id", "globex", "--name", "Globex", "--type", "organization",
-                            "--today", "2026-07-27")
-    assert rc == cli.EXIT_INTERRUPTED
-    assert "Traceback" not in err
-    assert "interrupted" in err
-    assert "not pushed" in err or "local clone" in err
-
-
-def test_a_keyboard_interrupt_before_the_commit_rolls_the_clone_back(repo, monkeypatch):
-    """**Old behaviour: Ctrl-C during the pre-commit gates left the clone dirty.** `mint`'s
-    rollback arm was `except Exception`, which cannot see a `KeyboardInterrupt` — so an operator
-    who interrupted the window between `write_page` and the commit (the registry regeneration and
-    the gitleaks scan, the slowest thing here and therefore the likeliest moment to hit Ctrl-C)
-    was left with an untracked entity page AND a rewritten `ops/entity-registry.json`. The next
-    `create`/`approve` then refused on `ensure_clean` — a dirty tree it had made itself, blamed on
-    the steward's own work. `views/regenerate.run` names `KeyboardInterrupt` explicitly for the
-    identical window; this one only had to widen to `BaseException`.
-
-    Interrupted at `refuse_secrets`, i.e. AFTER `generator.regenerate` has already rewritten the
-    registry: interrupting the try block's first statement would restore a registry nothing had
-    touched yet and prove nothing about the rollback.
-    """
-    _remote, steward = repo
-    registry_path = os.path.join(steward, "ops", "entity-registry.json")
-    page_path = os.path.join(steward, "wiki", "entities", "Globex.md")
-    with open(registry_path, encoding="utf-8") as f:
-        registry_before = f.read()
-
-    def _boom(*a, **kw):
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(mint, "refuse_secrets", _boom)
-    rc, _out, _err = run_cli("--repo", steward, "--branch", "main", "create",
-                             "--id", "globex", "--name", "Globex", "--type", "organization",
-                             "--today", "2026-07-27")
-
-    assert rc == cli.EXIT_INTERRUPTED
-    assert not os.path.exists(page_path), "the page this command wrote must not survive its own abort"
-    with open(registry_path, encoding="utf-8") as f:
-        assert f.read() == registry_before, "the registry must be back to its pre-mint bytes"
-    status = subprocess.run(["git", "status", "--porcelain"], cwd=steward,
-                            capture_output=True, text=True, check=True).stdout
-    assert status == "", f"the clone must be clean again, not {status!r}"
-
-
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-# the decisions: approve / decline / merge land a commit AND a ledger row; pending reads the clone
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 @pytest.fixture()
 def ledger():
@@ -554,3 +286,92 @@ def test_a_decision_needs_the_database_and_says_why(proposed):
                             "--repo", steward, "decline", "ledgerly")
     assert rc == cli.EXIT_CANNOT_RUN
     assert "review ledger" in err
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+# `create` (ADR 042): a steward's registration is a CAPTURE — queued with the registration hints
+# and what the steward said as its material; the librarian writes the page, and the entity is
+# born confirmed by the steward. Real Postgres, the evidence store in memory (the bytes are not the
+# claim here; the row and its hints are).
+# ══════════════════════════════════════════════════════════════════════════════════════════════
+@pytest.fixture()
+def queue_conn(monkeypatch):
+    conn = testdb.connect_or_skip("entities-create")
+    capture_schema.ensure_capture_schema(conn)
+    with conn.cursor() as cur:
+        cur.execute("TRUNCATE capture_queue RESTART IDENTITY")
+    monkeypatch.setattr(cli.evidence, "store_from_env", lambda env=None: MemoryEvidenceStore())
+    yield conn
+    conn.close()
+
+
+def _queued(conn, submission_id):
+    with conn.cursor() as cur:
+        cur.execute("SELECT status, submitted_by, hints, payload FROM capture_queue WHERE id = %s",
+                    (submission_id,))
+        status, by, hints, payload = cur.fetchone()
+    return status, by, hints, payload
+
+
+def test_create_commissions_a_capture_carrying_the_registration_and_what_the_steward_said(queue_conn):
+    """OLD BEHAVIOUR: `create` rendered the template with the name filled in and pushed a commit
+    — an entity page with nothing said about the entity, twelve of which accumulated in the first
+    brain. Now it queues ONE capture: `register_*` hints name the entity, type, spellings and door;
+    the material is the steward's own account; `submitted_by` is the steward the page will be
+    born confirmed by. Nothing touches git here."""
+    rc, out, err = run_cli("--dsn", testdb.dsn(), "--json", "create", "--id", "globex",
+                           "--name", "Globex", "--type", "organization", "--aliases", "Globex Corp, GX",
+                           "--about", "Globex is the conglomerate we pilot reporting automation with.",
+                           "--by", "steward@example.com")
+    assert rc == 0, err
+    ack = json.loads(out)
+    assert ack["status"] == "queued" and ack["entity_id"] == "globex" and ack["name"] == "Globex"
+    status, by, hints, payload = _queued(queue_conn, ack["id"])
+    assert (status, by) == ("queued", "steward@example.com")
+    registration = capture_schema.registration_from_hints(hints)
+    assert registration == capture_schema.Registration(
+        name="Globex", entity_type="organization", aliases=("Globex Corp", "GX"),
+        source=decisions.SOURCE_CLI)
+    assert hints["client"]["entity"] == "Globex"
+    assert payload["text"].startswith("Globex is the conglomerate")
+
+
+def test_create_prints_the_capture_to_follow_and_names_who_confirms_it(queue_conn):
+    """A message containing a command is an executable promise: the sentence names
+    `stigmergy-queue show <id>`, and the id it names is the row that was queued."""
+    rc, out, _err = run_cli("--dsn", testdb.dsn(), "create", "--id", "globex", "--name", "Globex",
+                            "--type", "organization", "--about", "A conglomerate.",
+                            "--by", "steward@example.com")
+    assert rc == 0
+    assert "commissioned — capture #1" in out and "stigmergy-queue show 1" in out
+    assert "born confirmed by steward@example.com" in out
+    assert _queued(queue_conn, 1)[0] == "queued"
+
+
+def test_create_refuses_an_empty_account_and_queues_nothing(queue_conn):
+    """`--about` is required by the parser; an account that is whitespace gets past it and is
+    refused by name, with nothing queued — a page with nothing said about the entity is the
+    defect this command used to produce."""
+    rc, _out, err = run_cli("--dsn", testdb.dsn(), "create", "--id", "globex", "--name", "Globex",
+                            "--type", "organization", "--about", "   ", "--by", "steward@example.com")
+    assert rc == cli.EXIT_REFUSED and "--about is empty" in err
+    with queue_conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        assert cur.fetchone()[0] == 0
+
+
+def test_create_without_about_is_an_argparse_refusal_that_names_the_flag(queue_conn, capsys):
+    with pytest.raises(SystemExit) as caught:
+        cli.main(["--dsn", testdb.dsn(), "create", "--id", "globex", "--name", "Globex",
+                  "--type", "organization", "--by", "steward@example.com"])
+    assert caught.value.code == 2
+    assert "--about" in capsys.readouterr().err
+
+
+def test_create_refuses_an_id_that_is_not_the_names_slug(queue_conn):
+    """The registry is derived from the page, so an id nothing regenerates would vanish at the
+    next regenerate — refused before anything is queued, as it was refused before the mint."""
+    rc, _out, err = run_cli("--dsn", testdb.dsn(), "create", "--id", "acme", "--name", "Globex",
+                            "--type", "organization", "--about", "A conglomerate.",
+                            "--by", "steward@example.com")
+    assert rc == cli.EXIT_REFUSED and "not the slug of --name" in err and "'globex'" in err

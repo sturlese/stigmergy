@@ -19,10 +19,10 @@ import datetime
 import json
 import sys
 
-from stigmergy.capture import decisions, schema
+from stigmergy.capture import cli as capture_cli
+from stigmergy.capture import decisions, evidence, queue, schema
 from stigmergy.capture.errors import CaptureError
 from stigmergy.entities import birth, clone, decide, generator
-from stigmergy.entities import mint as mint_lib
 from stigmergy.entities.errors import EntityError
 from stigmergy.index import store
 from stigmergy.librarian import config as librarian_config
@@ -30,6 +30,7 @@ from stigmergy.librarian.errors import LibrarianError
 from stigmergy.review_kinds import KIND_ALIAS_PROPOSAL, KIND_IDENTITY_PROPOSAL, alias_item_id
 
 _DUMP = {"ensure_ascii": False, "indent": 2}
+PROG = "stigmergy-entities"
 
 EXIT_REFUSED = 1
 EXIT_CANNOT_RUN = 2
@@ -189,23 +190,54 @@ def _print_decision(result: dict, args, *, verb: str) -> int:
     return 0
 
 
-# ── create: a birth with no proposal behind it ────────────────────────────────────────────────
+# ── create: a steward introduces an entity — as a capture the librarian writes the page from ──
 def _cmd_create(conn, args) -> int:
-    repo = _repo(args)
-    author = clone.preflight(repo, args.branch, action="create")
-    result = mint_lib.mint(
-        repo, entity_id=args.entity_id, name=args.name, entity_type=args.type,
-        aliases=_aliases(args.aliases), role=args.role or "", branch=args.branch,
-        today=args.today, author=author, approved_by=args.by or author[1],
-        on_output=lambda line: print(line, file=sys.stderr))
+    """ADR 042: there is no deterministic birth. What the steward knows about the entity is the
+    material of a capture carrying the registration; the librarian writes the page from it and
+    from what the brain already holds, anchors the note to it, and the entity is born CONFIRMED by
+    the steward instead of proposed. `stigmergy-queue show <id>` follows it like any capture."""
+    about = " ".join(str(args.about or "").split())
+    if not about:
+        print("stigmergy-entities: --about is empty — say what the entity is, in your own words: "
+              "the librarian writes its page from that and from what the brain already holds, and "
+              "a page with nothing said about the entity is not written at all", file=sys.stderr)
+        return EXIT_REFUSED
+    if args.entity_id != generator.canonical_id_for(args.name):
+        print(f"stigmergy-entities: --id {args.entity_id!r} is not the slug of --name "
+              f"({generator.canonical_id_for(args.name)!r}) — the registry is derived from the "
+              f"page, so the id is the name's and nothing else", file=sys.stderr)
+        return EXIT_REFUSED
+    ev = evidence.store_from_env()
+    refused = capture_cli.refuse_split_stores(args, PROG, ev)
+    if refused:
+        return refused
+    hints = schema.registration_hints(name=args.name, entity_type=args.type,
+                                      aliases=_aliases(args.aliases), source=decisions.SOURCE_CLI)
+    ack = queue.submit(conn, ev, kind=schema.RAW, material=about, hints=hints,
+                       submitted_by=_submitter(args))
     if args.json:
-        print(json.dumps(result, **_DUMP))
+        print(json.dumps({**ack, "entity_id": args.entity_id, "name": args.name}, **_DUMP))
         return 0
-    print(f"created — {result['page']} ({result['entity_type']}), regenerated "
-          f"{result['registry']}")
-    print(f"  committed as {result['commit'][:12]} (steward: {result['steward']}), pushed to "
-          f"{result['branch']}")
+    print(f"commissioned — capture #{ack['id']}: the librarian writes the page of {args.name} from "
+          f"what you said and what the brain already holds, anchors the note to it, and the entity "
+          f"is born confirmed by {ack['submitted_by']}. Nothing is in the brain until it files; "
+          f"`stigmergy-queue show {ack['id']}` follows it.")
     return 0
+
+
+def _submitter(args) -> str:
+    """Who is registering — `--by`, else the git email of the clone `--repo` names; a `create`
+    with neither is refused, because the entity is born confirmed by this name."""
+    if args.by:
+        return args.by
+    try:
+        return _steward_name(args)
+    except (EntityError, LibrarianError, OSError) as ex:
+        # The cause rides along for a traceback, never spliced into the sentence: the clone's
+        # refusal names a path, and this one has to read the same wherever it is printed.
+        raise EntityError(
+            "--by is needed: `create` attributes the capture and confirms the entity by that "
+            "name, and no git identity could be read from --repo") from ex
 
 
 # ── regenerate ────────────────────────────────────────────────────────────────────────────────
@@ -285,7 +317,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_merge.set_defaults(fn=_cmd_merge, needs_db=True)
 
     p_create = sub.add_parser(
-        "create", help="register a brand-new, already-confirmed entity nobody has proposed")
+        "create", help="introduce a brand-new entity nobody has proposed: what you know about it "
+                       "becomes a capture, the librarian writes its page, and it is born confirmed "
+                       "by you")
     p_create.add_argument("--id", dest="entity_id", required=True,
                           help="the canonical registry id. It must be the slug of --name: the "
                                "registry is DERIVED from the pages, so an id nothing regenerates "
@@ -295,13 +329,15 @@ def build_parser() -> argparse.ArgumentParser:
                                "wikilink every other page resolves it by")
     p_create.add_argument("--type", required=True, choices=birth.ENTITY_TYPES,
                           help="the page's `entity_type` and the registry's `type`")
+    p_create.add_argument("--about", required=True,
+                          help="what the entity is, in your own words — the material the "
+                               "librarian writes its page from, with what the brain already holds")
     p_create.add_argument("--aliases", action="append", default=[],
                           help="other spellings that mean this entity (comma-separated, "
                                "repeatable). Every alias silently reassigns mentions to it, so an "
                                "alias that collides with another entity is refused")
-    p_create.add_argument("--role", default="",
-                          help="one line on what this entity is, for the page's `role` field")
-    p_create.set_defaults(fn=_cmd_create, needs_db=False)
+    capture_cli.add_split_stores_flag(p_create)
+    p_create.set_defaults(fn=_cmd_create, needs_db=True)
 
     for parser in (p_approve, p_decline, p_merge, p_create):
         parser.add_argument("--by", default=None,

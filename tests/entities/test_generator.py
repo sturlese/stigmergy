@@ -115,7 +115,8 @@ def test_a_project_entity_round_trips_from_birth_to_the_registry(repo):
     proposal = birth.prepare(canonical_id="atlas", name="Atlas", entity_type="project",
                              registry=generator.derive_registry(clone))
     with open(os.path.join(clone, "wiki", "entities", "Atlas.md"), "w", encoding="utf-8") as f:
-        f.write(birth.render_page(template, proposal, today="2026-08-16"))
+        f.write(birth.render_page(template, proposal, today="2026-08-16",
+                                  body=birth.prepare_body(summary="Atlas is a project.")))
 
     reg = generator.derive_registry(clone)
     assert reg.entities["atlas"]["type"] == "project"

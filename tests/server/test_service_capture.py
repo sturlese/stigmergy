@@ -688,3 +688,17 @@ def test_the_submit_ack_names_no_bucket_and_no_endpoint(indexed):
     for forbidden in ("stigmergy-evidence", "127.0.0.1", "localhost", "r2.cloudflarestorage",
                       "minioadmin", "9000"):
         assert forbidden not in body
+
+
+def test_submit_rejects_registration_hints_from_every_door():
+    """ADR 042: a `register_*` hint makes the librarian bear an entity CONFIRMED by the submitter.
+    Its two legitimate asserters (the console, `stigmergy-entities create`) never pass through this
+    service, so there is no door exception — Slack's own service refuses them too."""
+    svc = _bare_service(identity=None, evidence=None)
+    with pytest.raises(SubmissionRejected, match="register_name"):
+        svc.submit("raw", "Scircle sells perfume.", hints={"register_name": "Scircle"})
+    settings = Settings(identity=STEWARD, identities_path="x")
+    slack_svc = BrainService(settings, conn=None, embedder=None, audiences=None, identity=STEWARD,
+                             evidence=None, door=capture_schema.SLACK_DOOR)
+    with pytest.raises(SubmissionRejected, match="register_type"):
+        slack_svc.submit("raw", "Scircle sells perfume.", hints={"register_type": "organization"})
