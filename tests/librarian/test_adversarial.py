@@ -439,13 +439,11 @@ def test_adversarial_cat1_steering_that_also_trips_a_veto_is_rejected_never_obey
     assert result.status == schema.REJECTED
     assert "write-outside-lane" in json.dumps(result.report)
     assert support.branch_sha(env.bare) == before           # no commit at all
-    # `ops/entity-registry.json` was never written, which is the property behind the refusal —
-    # an `ops/` file the lane does not include, chosen because it is the one the fast lane CAN
-    # legitimately rewrite (a birth regenerates it), so an unchanged one is a real assertion
-    # rather than a file nothing ever touches.
-    assert gitcmd.run("show", f"{before}:ops/entity-registry.json",
-                              cwd=env.repo).stdout == gitcmd.run(
-        "show", "main:ops/entity-registry.json", cwd=env.repo).stdout
+    # The SABOTAGE'S OWN path, asserted rather than a neighbour's: `double._write_unconfined`
+    # writes `ops/acl.json` for this payload, and the property is that the file never reached the
+    # repository's history at all. Comparing two blobs of a file the sabotage does not touch is
+    # tautological once `branch_sha == before` is asserted one line above — this is not.
+    assert "ops/acl.json" not in support.all_ever_committed_paths(env.bare)
 
 
 @pytest.mark.parametrize("payload", payloads.STEERING_PAYLOADS,

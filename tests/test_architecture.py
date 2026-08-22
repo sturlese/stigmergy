@@ -1854,6 +1854,11 @@ _GARDENER_ALLOWED_PREFIXES = (
     "stigmergy.capture.ops",             # job_runs bookkeeping (capture.ops.record_job_run)
     "stigmergy.capture.schema",          # startup_ddl_lock (this package's own DDL) +
                                        # ensure_capture_schema — several checks read the queue
+    "stigmergy.kernel.acl",              # `flows_into` — `check_link_to_narrower_page` asks the
+                                       # SAME predicate the write path and the view feeds ask, of
+                                       # the same two label lists. A second comparison here would
+                                       # be a finding that disagrees with the gate about what an
+                                       # upward link is (ADR 045 D3)
     "stigmergy.kernel.registry",         # the entity registry loader — the operator-tier reader
                                        # `views/cli.py` already uses, not `server.entity_aliases`
     "stigmergy.kernel.normalize",        # normalize/slugify — the duplicate-identity pass places an
@@ -3160,6 +3165,12 @@ _GATE_CONTEXT_DATA_KEYWORDS = frozenset({
     "worktree", "entries", "added", "material", "outcome", "registry", "linter_path",
     "gitleaks_bin", "subprocess_timeout_s", "stamped", "findings", "write_prefixes",
     "creatable_types", "extra_folder_types", "page_declared", "stamped_by_path", "edits_allowed",
+    # `acl` is EVIDENCE, not a permission, and the distinction is the whole point of this test:
+    # a permission tells a gate to suspend a proof, and this tells `gate_zone` the fact it judges
+    # AGAINST — the audience the door filed this capture at (ADR 045 D2). It can only ever make a
+    # run refuse more, never less: `None`, the default and the value every flow that carries no
+    # capture passes, is an OPEN capture, which flows into any page and changes nothing.
+    "acl",
 })
 
 

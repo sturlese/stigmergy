@@ -340,8 +340,8 @@ def stamp_server_fields(text: str, *, submitted_by: str,
 
 
 def stamp_source_fields(text: str, *, submitted_by: str, as_of: str,
-                        content_hash: str, extracted_at: str, tier: str = "1",
-                        page_id: str = "", acl: list[str] | None = None) -> str:
+                        content_hash: str, extracted_at: str, acl: list[str] | None,
+                        tier: str = "1", page_id: str = "") -> str:
     """`stamp_server_fields`'s sibling for a `sources/` page. `content_hash` is recomputed from the
     bytes this run verified, so the page's claim and the evidence-store key cannot disagree.
 

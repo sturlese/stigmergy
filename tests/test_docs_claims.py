@@ -100,6 +100,20 @@ def test_every_relative_link_in_the_docs_resolves():
 ROOT_DOCS = sorted(p for p in ROOT.glob("*.md"))
 CODE_MAPS = sorted((ROOT / "src" / "stigmergy").glob("*/index.md")) + [ROOT / "evals" / "index.md"]
 
+# The module-existence check below runs over the code maps AND `docs/reference/`. It used to be
+# the code maps alone, and that scoping cost it the one thing it exists for: ADR 045 deleted
+# `librarian/acl_rules.py`, the code map's row was removed, and `docs/reference/librarian.md`
+# went on naming the module with nothing noticing. A reference document names modules for the
+# same reason a code map does, so it rots the same way.
+MODULE_NAMING_DOCS = CODE_MAPS + sorted(REFERENCE.glob("*.md"))
+
+# Modules that live in the KNOWLEDGE repo, named here because this platform's own behaviour
+# depends on them (the contract linter the gates run, the authorship check its CI runs). They are
+# not this repository's files and never will be, so the existence check cannot resolve them —
+# listing them is what keeps the check honest rather than switching it off for the documents that
+# mention them.
+KNOWLEDGE_REPO_MODULES = frozenset({"stigmergy_lint.py", "check_trust_authorship.py"})
+
 
 @pytest.mark.parametrize("label, docs", [
     ("the root documents", ROOT_DOCS),
@@ -130,15 +144,16 @@ def _python_files_that_exist() -> set[str]:
     return names
 
 
-def test_every_python_module_a_code_map_names_exists():
+def test_every_python_module_a_doc_names_exists():
     known = _python_files_that_exist()
     assert known, "no Python files found — this check has lost its source of truth"
     ghosts = sorted({f"{_rel(doc)}: {token}"
-                     for doc in CODE_MAPS
+                     for doc in MODULE_NAMING_DOCS
                      for token in _MODULE_TOKEN.findall(_text(doc))
-                     if token not in known and token.rsplit("/", 1)[-1] not in known})
-    assert not ghosts, ("code maps name Python modules that do not exist — a rename or a deletion "
-                        "left the sentence behind:\n  " + "\n  ".join(ghosts))
+                     if token not in known and token.rsplit("/", 1)[-1] not in known
+                     and token.rsplit("/", 1)[-1] not in KNOWLEDGE_REPO_MODULES})
+    assert not ghosts, ("documentation names Python modules that do not exist — a rename or a "
+                        "deletion left the sentence behind:\n  " + "\n  ".join(ghosts))
 
 
 # ── what the reference docs tell an operator to run, and to set ───────────────────────────────

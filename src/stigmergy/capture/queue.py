@@ -199,7 +199,7 @@ def submit(conn, evidence, *, kind: str, material: str, hints: dict | None,
     with conn.cursor() as cur:
         cur.execute(_INSERT, (submission.kind, Jsonb(submission.payload), blob_refs, submitted_by,
                               Jsonb(submission.hints), schema.QUEUED,
-                              list(acl) if acl else None))
+                              None if acl is None else list(acl)))
         submission_id, status, created_at = cur.fetchone()
     return {
         "id": submission_id,
@@ -210,7 +210,10 @@ def submit(conn, evidence, *, kind: str, material: str, hints: dict | None,
         "content_sha256": submission.digest,
         "bytes": submission.size,
         "flagged_hints": submission.hints["flagged"],
-        "acl": list(acl) if acl else None,
+        # `is None`, never truthiness: `[]` is a VALUE meaning nobody, and collapsing it to
+        # NULL here would mean open — the two-dialect defect ADR 045 D9 ends, at the lowest
+        # layer of all. No door produces `[]` today; the rule is the point.
+        "acl": None if acl is None else list(acl),
     }
 
 

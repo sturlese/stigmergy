@@ -20,6 +20,7 @@ from stigmergy.gardener.schema import (
     SEVERITY_WARN,
     SOURCE_DETERMINISTIC,
 )
+from stigmergy.kernel.acl import flows_into
 from stigmergy.kernel.registry import Registry
 from stigmergy.librarian import page as page_policy
 from stigmergy.text import parse_result_ref
@@ -50,11 +51,18 @@ CHECK_ENTITY_PLACEHOLDER_BODY = "entity-placeholder-body"
 # the measurable target the filing-time fix (issue #77's other half) converges to zero.
 CHECK_ANCHORED_TO_SUPERSEDED_ENTITY = "anchored-to-superseded-entity"
 
+# The one link a model can no longer write and a person still can (ADR 045 D3): a page whose body
+# wikilinks a page NARROWER than itself. Its readers see a title they cannot open, which is the
+# only thing a link leaks — and nothing is rewritten for it. A human writing a restricted page's
+# title into open material is the same act as posting it in a public channel, and the brain does
+# not police what people say; it reports it, so somebody who knows the material can decide.
+CHECK_LINK_TO_NARROWER_PAGE = "link-to-narrower-page"
+
 ALL_CHECK_SLUGS = (
     CHECK_ORPHAN_PAGE, CHECK_AGING_SEED, CHECK_STALE_VIEW, CHECK_ANCHOR_CONCENTRATION,
     CHECK_DEAD_VOCABULARY, CHECK_COMPANY_WIDE_FRACTION, CHECK_COMPANY_PAGE_NAMES_ENTITY,
     CHECK_DATE_BEARING_BODY_LINK, CHECK_ENTITY_PLACEHOLDER_BODY,
-    CHECK_ANCHORED_TO_SUPERSEDED_ENTITY,
+    CHECK_ANCHORED_TO_SUPERSEDED_ENTITY, CHECK_LINK_TO_NARROWER_PAGE,
 )
 
 # The tail of every "this page may be anchored wrong" action — `check_company_page_names_entity`
@@ -671,4 +679,54 @@ def check_entity_placeholder_bodies(pages: list[dict]) -> list[dict]:
                 detail=("its body says nothing at all below the title — this identity exists "
                         "and says nothing about itself"),
                 suggested_action=action))
+    return findings
+
+
+# ── a link pointing at a narrower page ────────────────────────────────────────────────────────
+_LINK_NARROWER_SQL = """
+SELECT p.path, p.acl, q.path, q.acl
+FROM pages_index p
+JOIN pages_index q ON q.path = ANY(p.links)
+WHERE p.path <> q.path
+ORDER BY p.path, q.path
+"""
+
+
+def check_link_to_narrower_page(conn) -> list[dict]:
+    """A page whose body links a page its own readers cannot open (ADR 045 D3).
+
+    Reported and never repaired. The three things the brain could do instead are all worse:
+    narrowing the linking page punishes a human's capture for what somebody else restricted;
+    demoting the link to plain text leaves the TITLE, which is the whole of what a link leaks;
+    and deleting the link edits somebody's words. So this names the pair and stops.
+
+    The comparison is `kernel.acl.flows_into` — the same predicate the write path and the view
+    feeds use — asked of the TARGET flowing into the SOURCE: the link's readers are the source
+    page's audience, so the target must already be readable by all of them. It runs over
+    `pages_index.links`, the resolved outbound graph the index computes once, rather than
+    re-parsing bodies: one wikilink resolution in this system, and it is the index's.
+    """
+    findings = []
+    with conn.cursor() as cur:
+        cur.execute(_LINK_NARROWER_SQL)
+        rows = cur.fetchall()
+    by_source: dict[str, list[str]] = {}
+    for source_path, source_acl, target_path, target_acl in rows:
+        if not flows_into(target_acl, source_acl):
+            by_source.setdefault(source_path, []).append(target_path)
+    for source_path, targets in sorted(by_source.items()):
+        findings.append(build_finding(
+            check=CHECK_LINK_TO_NARROWER_PAGE, severity=SEVERITY_WARN, subject=source_path,
+            subjects=[source_path, *targets],
+            detail=(f"it links `{targets[0]}`"
+                    + (f" (and {len(targets) - 1} more)" if len(targets) > 1 else "")
+                    + ", which is restricted to an audience this page's own readers are not all "
+                      "in — they see the title and cannot open it"),
+            suggested_action=(
+                "decide which of the two is wrong, by hand: if the LINK is what belongs in the "
+                "open, reword the sentence without the bracketed name; if the MATERIAL is, remove "
+                "the open page and file it again at the narrower audience. Nothing is rewritten "
+                "for you — a model cannot tell a citation from a see-also, and both answers "
+                "change what somebody wrote"),
+        ))
     return findings

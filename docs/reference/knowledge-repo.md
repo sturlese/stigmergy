@@ -119,8 +119,15 @@ restrictions apply".
 is happening against, never from a working tree: the librarian resolves
 `entity-registry.json` at the base commit each item files against, so an uncommitted local edit
 cannot change what a page is stamped with or what it anchors to.
-`slack-channels.json` is the exception — it is read as a plain FILE path, which on the deployed app
-is the copy the deploy baked into the image, so a channel's scope changes only with a redeploy.
+`slack-channels.json` rides the SNAPSHOT road that `identities.json` does
+(`slack.channels.channel_audiences_live` → `server.ops_files`): the index's cached copy wherever
+the database carries one, the process's own baked file where it does not. So a channel scoped by
+a push takes effect within seconds on process groups that hold no checkout, rather than at the
+next deploy (issue #79). Since [ADR 045](../decisions/045-audience-from-the-door.md) D2 that file
+decides two things rather than one — the scope an answer in a channel is computed at, AND the
+audience a 🧠 capture taken there is filed at — and the 🧠 door refuses outright when the file is
+absent entirely, because "no map at all" would silently file every scoped channel's captures
+open. A brain with no scoped channels says so with `{}`.
 
 `ops/` carries one more thing that is not configuration: **`ops/templates/entity.md`**, the page
 shape a new entity takes. There is exactly ONE renderer of it — the librarian, writing the entity

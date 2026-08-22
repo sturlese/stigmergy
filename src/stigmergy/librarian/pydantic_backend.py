@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, model_validator
 from stigmergy import text as textutil
 from stigmergy.kernel import registry as registry_module
 from stigmergy.librarian import agent as agent_module
-from stigmergy.librarian import config, edits, gates, gather, gitcmd, pricing
+from stigmergy.librarian import config, gates, gather, gitcmd, pricing
 from stigmergy.librarian import page as page_policy
 from stigmergy.librarian.errors import AgentError, LibrarianConfigError, OutcomeShapeError
 from stigmergy.librarian.filing_port import AgentRun, priced
@@ -509,10 +509,16 @@ class FilingToolbox:
     most once" true under that concurrency rather than "once if the calls happen to be serial".
     """
 
-    def __init__(self, worktree: str, *, top_k: int, excerpt_lines: int):
+    def __init__(self, worktree: str, *, top_k: int, excerpt_lines: int,
+                 acl: list[str] | None = None):
         self.worktree = os.path.realpath(worktree)
         self.top_k = max(int(top_k), 1)
         self.excerpt_lines = max(int(excerpt_lines), 0)
+        # The audience of the page this run is writing. Every tool below answers from the corpus
+        # scoped to it (ADR 045 D3), so the model cannot read — and therefore cannot cite or link
+        # to — a page its own output would not be readable beside. `None` is an open page, which
+        # admits open rows only: the fail-closed direction for a caller that forgets to pass it.
+        self.acl = list(acl) if acl else None
         # ONCE, before the model runs: recomputing per call would let a page the agent just wrote
         # count as "existing", denying it a second write of its own draft.
         self.existing = gitcmd.tracked_paths(self.worktree)
@@ -525,7 +531,7 @@ class FilingToolbox:
         if self._corpus is None:
             with self._lock:
                 if self._corpus is None:
-                    self._corpus = gather.load_corpus(self.worktree)
+                    self._corpus = gather.load_corpus(self.worktree, acl=self.acl)
         return self._corpus
 
     def registry(self):
@@ -559,12 +565,25 @@ class FilingToolbox:
                 _FENCED_KEY: {"excerpts": excerpts}}
 
     def read_page(self, path: str) -> dict:
-        """One page in full — refused unless `gather.confined_page` allows it. That rule admits
-        the content zones AND `ops/templates/*.md`, since this run writes a page's own container.
-        Everything else stays refused, `ops/entity-registry.json` and `ops/identities.json` first. The
-        refusal names what IS readable, never the path asked."""
+        """One page in full — refused unless `gather.confined_page` allows it AND the page is one
+        this run's own audience may cite. The first rule admits the content zones AND
+        `ops/templates/*.md`, since this run writes a page's own container; everything else stays
+        refused, `ops/entity-registry.json` and `ops/identities.json` first.
+
+        The second rule is ADR 045 D3, and it is asked HERE as well as in `corpus()` because this
+        tool reaches the filesystem rather than the parsed rows: a path the model names directly —
+        guessed, or read off a wikilink in material it was given — must meet the same scope its
+        searches do. A template is not a corpus page and carries no audience, so it is admitted by
+        the first rule alone.
+
+        Both refusals return the SAME sentence. "You may not read that" and "there is no such
+        page" must not be distinguishable, or this tool becomes an existence oracle for a model
+        that will happily report what it found."""
         resolved_rel = gather.confined_page(self.worktree, path or "")
         if not resolved_rel:
+            return {"refused": REFUSED_READ}
+        if (not resolved_rel.startswith(f"{gather.TEMPLATE_DIR}/")
+                and page_policy.path_key(resolved_rel) not in self.corpus().visible_keys):
             return {"refused": REFUSED_READ}
         # The CANONICAL relpath the rule judged, never the asked string: no symlink re-follow,
         # no NFD spelling that names another page.
@@ -580,10 +599,14 @@ class FilingToolbox:
                 _FENCED_KEY: {"content": _readable(text)}}
 
     def list_page_names(self) -> dict:
-        """The wikilink vocabulary through `edits.page_names` — the SAME reading `edits.validate`
-        answers "does this link resolve" with, so a name offered here cannot be refused later."""
+        """The wikilink vocabulary, derived from the SAME scoped corpus every other tool answers
+        from (ADR 045 D3) — so a page this run may not cite is not offered as something to link
+        to, which is how the upward link stops being writable rather than being caught afterwards.
+
+        Still a subset of what `edits.validate` resolves, so the old promise holds: a name offered
+        here cannot be refused later as a dead link."""
         ps = gather.prompt_scalar
-        names = sorted(edits.page_names(self.worktree, confined=True))
+        names = self.corpus().link_names
         return {"names": [ps(name) for name in names[:gather.MAX_LINK_NAMES]], "total": len(names)}
 
     def resolve_entities(self, names) -> dict:
@@ -676,7 +699,8 @@ class PydanticFilingAgent:
         pricing.require_priced(settings.model)
 
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
-            corrective: str = "", flow_note: str = "", gathered: str = "") -> AgentRun:
+            corrective: str = "", flow_note: str = "", gathered: str = "",
+            acl: list[str] | None = None) -> AgentRun:
         """The ordinary flow: file ONE capture, ITERATING over the checkout. Deliberately NOT
         parallel to `run_meeting` — a meeting is handed everything it could need, while an
         ordinary capture is one paragraph about a brain of unknown shape whose pages need not use
@@ -684,7 +708,7 @@ class PydanticFilingAgent:
         import asyncio
         return asyncio.run(self._run(
             worktree=worktree, material=material, hints=hints, submitted_by=submitted_by,
-            corrective=corrective, flow_note=flow_note, gathered=gathered))
+            corrective=corrective, flow_note=flow_note, gathered=gathered, acl=acl))
 
     def _register_tools(self, filer, toolbox: "FilingToolbox") -> None:
         """Register the five tools on one `Agent`, binding each to `toolbox`'s own body.
@@ -783,7 +807,7 @@ class PydanticFilingAgent:
             return _tool_payload(toolbox.write_page(path, content))
 
     async def _run(self, *, worktree, material, hints, submitted_by, corrective,
-                   flow_note="", gathered="") -> AgentRun:
+                   flow_note="", gathered="", acl=None) -> AgentRun:
         import asyncio
 
         # Imported HERE, never at module scope — see the module docstring.
@@ -826,7 +850,7 @@ class PydanticFilingAgent:
         # AFTER that try, so model resolution stays the first thing a misconfigured worker meets;
         # OUTSIDE it, because a tool signature the framework cannot schema is OUR defect.
         toolbox = FilingToolbox(worktree_root, top_k=self.settings.gather_top_k,
-                                excerpt_lines=self.settings.gather_excerpt_lines)
+                                excerpt_lines=self.settings.gather_excerpt_lines, acl=acl)
         self._register_tools(filer, toolbox)
         # OURS, handed in rather than read off the result: a run that dies mid-flight still
         # leaves its real counts here.

@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 import yaml
 
 from stigmergy import text as textutil
+from stigmergy.kernel.acl import flows_into
 from stigmergy.librarian import gitcmd
 from stigmergy.librarian import page as page_policy
 from stigmergy.librarian.errors import LibrarianConfigError
@@ -151,6 +152,14 @@ class GateContext:
     # (ADR 044 D1). `approved_by` on the page must name exactly them: an identity is born
     # confirmed, and one that named nobody would be an identity nobody stands behind.
     confirmed_entity_pages: dict = field(default_factory=dict)
+    # The audience THIS capture is filed at — `capture_queue.acl`, the door's own decision
+    # ([ADR 045](../../../docs/decisions/045-audience-from-the-door.md) D2). `gate_zone` asks it of
+    # every page this run MODIFIED: material at one audience may only be added to a page whose
+    # readers could already read that material. `None` is an open capture, which flows into any
+    # page — and is the right default for the flows that carry no capture at all (the repair loop,
+    # the deletion sweep), whose work is derived from the corpus rather than from somebody's
+    # material.
+    acl: list = None
 
     @property
     def changes(self) -> list[tuple[str, str]]:
@@ -179,6 +188,39 @@ class GateContext:
 
     def touched_pages(self) -> list[str]:
         return [e.path for e in self.entries]
+
+
+# What `_page_acl` returns when the base version of a page cannot be read or parsed. Distinct
+# from `None` (an open page) on purpose: "I could not establish this page's audience" must not
+# read as "this page is open", which is the fail-OPEN answer. `gate_body_rewrite` refuses such a
+# page on its own ground — an unestablishable "before" — so this gate declines to add a second,
+# differently-worded veto for the same file rather than guessing at its audience.
+_ACL_UNREADABLE = object()
+
+
+def _page_acl(worktree: str, path: str):
+    """The audience of the page as it exists at the BASE commit, `None` for an open one.
+
+    The base version, never the working tree: the working tree is what this run just wrote, and a
+    run that widened a page's own `acl:` would then be judged against its own widening."""
+    text = _base_text(worktree, path)
+    if text is None:
+        return _ACL_UNREADABLE
+    front, _ = page_policy.split_frontmatter(text)
+    try:
+        parsed = yaml.safe_load(front) if front.strip() else {}
+    except yaml.YAMLError:
+        return _ACL_UNREADABLE
+    if not isinstance(parsed, dict) or "acl" not in parsed:
+        return None
+    value = parsed.get("acl")
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return [s for s in (part.strip() for part in value.split(",")) if s]
+    if isinstance(value, list) and all(isinstance(a, str) for a in value):
+        return [a.strip() for a in value if a.strip()]
+    return _ACL_UNREADABLE
 
 
 # ── zone and path: writes stay in the lane ────────────────────────────────────────────────────
@@ -212,6 +254,28 @@ def gate_zone(ctx: GateContext) -> list[Finding]:
                                    f"permission and the lane disagree, so neither is honoured",
                                    locator=path, repairable=False))
             continue
+        # ADR 045 D3, the write lane: an EXISTING page may only gain material its own readers
+        # could already have read. A `[leadership]` capture appending lines to an open note is the
+        # leak this closes, and it is asked here rather than at the input scope because the model
+        # is not the only way an edit is produced (`edits.apply_declared` performs what the
+        # account declared, and the account is the model's, but the sweep and the repair loop
+        # write here too). New pages are stamped WITH the capture's audience, so they are in scope
+        # by construction and are not asked.
+        if status == "M" and path.startswith(ctx.write_prefixes):
+            page_acl = _page_acl(ctx.worktree, path)
+            if page_acl is not _ACL_UNREADABLE and not flows_into(ctx.acl, page_acl):
+                out.append(Finding(
+                    "zone", "edit-outside-audience",
+                    f"this capture is filed at a narrower audience than {path}, so adding to that "
+                    f"page would put restricted material in front of readers it was restricted "
+                    f"from. File the material as its own page instead",
+                    # REPAIRABLE, unlike the other unrepairable zone vetoes: the agent DECLARED
+                    # this edit and can repair it by not declaring it, and the capture then files
+                    # as its own page — which is the outcome the sentence above asks for. A
+                    # `repairable=False` here would spend the retry on nothing and lose the
+                    # capture over a choice the model is free to make differently.
+                    locator=path))
+                continue
         # Refused BY NAME rather than falling through: a typechange (`T`, a page replaced by a
         # symlink) is outside every status the content gates read.
         if status not in ("A", "M"):

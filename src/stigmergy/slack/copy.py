@@ -110,6 +110,20 @@ PRIVATE_CHANNEL_REFUSAL = ("🧠 doesn't work here — a private channel's mater
                           "channels only, for now.")
 
 
+def not_in_this_channels_groups(channel_name: str) -> str:
+    """The 🧠 refusal when the reactor does not hold the groups this channel files at.
+
+    A capture from a scoped channel is filed at that channel's groups (ADR 045 D2), and the door's
+    rule is that you may file only what you could read afterwards — so somebody who cannot read
+    the channel's material cannot capture it either. It names the CHANNEL, which they are already
+    in and can see, and never the groups: which groups exist is not this message's to disclose.
+    """
+    where = f"#{channel_name}" if channel_name else "this channel"
+    return (f"I can't capture that for you — {where} files into the brain at an audience you're "
+            f"not in, so you wouldn't be able to read the page afterwards. Ask whoever looks "
+            f"after the brain to add you, or ask someone in that audience to react instead.")
+
+
 # ── the push channel ────────────────────────────────────────────────────────────────────────────
 def filed(*, page_path: str, commit: str, anchor: str, source_page: str = "",
           anchor_reason: str = "", born: list[str] = ()) -> str:

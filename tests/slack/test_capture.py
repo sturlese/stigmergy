@@ -14,7 +14,12 @@ from stigmergy.slack.capture import (
 )
 from stigmergy.slack.gateway import FakeSlackGateway, SlackApiError
 from stigmergy.slack.identity import NoAccess, Resolved, TransientFailure, resolve_slack_identity
-from tests.slack.conftest import FINANCE_CHANNEL, TEAM_ID, build_context
+from tests.slack.conftest import (
+    FINANCE_CHANNEL,
+    TEAM_ID,
+    UNLISTED_CHANNEL,
+    build_context,
+)
 
 pytestmark = pytest.mark.timeout(30)
 
@@ -551,3 +556,98 @@ def test_a_thread_read_failure_tells_the_reactor_instead_of_vanishing(indexed, c
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM capture_queue")
         assert cur.fetchone()[0] == 0   # nothing queued, and nothing half-queued
+
+
+# ── the audience a 🧠 files at is the channel's, and the reactor must hold it ──────────────────
+# ADR 045 D2. The door's rule is `acl.visible()` asked of the WRITER: you may file only what you
+# could read afterwards. Asked BEFORE the dedup reservation, so a refusal reads as a refusal
+# rather than as a capture that failed.
+
+def _acl_of(conn, submission_id=None):
+    with conn.cursor() as cur:
+        cur.execute("SELECT acl FROM capture_queue ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def test_a_capture_from_a_scoped_channel_is_filed_at_that_channels_groups(indexed, clean_tables):
+    """The benign twin, and the case that carries the feature: a member of the channel captures,
+    and the page set lands at the channel's audience."""
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    _seed_thread(gw, FINANCE_CHANNEL, "200.1")
+    ctx = build_context(fixture, conn, gateway=gw)
+    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
+
+    queued = _run(handle_reaction_added(
+        ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
+        message_ts="200.1", slack_user_id="U_ANA", identity_result=identity))
+
+    assert queued is True
+    assert _acl_of(conn) == ["finance"]
+
+
+def test_a_capture_from_an_UNLISTED_channel_is_filed_open(indexed, clean_tables):
+    """A channel not listed is public, and public is OPEN — stored as NULL, never `{}`. "This
+    channel has no groups" is a fact about the channel; `{}` on a page means nobody."""
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    _seed_thread(gw, UNLISTED_CHANNEL, "201.1")
+    ctx = build_context(fixture, conn, gateway=gw)
+    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
+
+    queued = _run(handle_reaction_added(
+        ctx, reaction="brain", team_id=TEAM_ID, channel_id=UNLISTED_CHANNEL,
+        message_ts="201.1", slack_user_id="U_ANA", identity_result=identity))
+
+    assert queued is True
+    assert _acl_of(conn) is None
+
+
+def test_a_reactor_outside_the_channels_groups_is_refused_and_nothing_is_queued(
+        indexed, clean_tables):
+    """The refusal. Somebody who cannot read the channel's material cannot capture it either —
+    the page would be one they could not read back, which is what makes a mislabelled page
+    unfixable. It must leave NO row: a reservation spent here would make the retry a duplicate."""
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    _seed_thread(gw, FINANCE_CHANNEL, "202.1")
+    gw.seed_user("U_BOB", "bob@example.com", display_name="Bob")
+    ctx = build_context(fixture, conn, gateway=gw)
+    # Bob is authenticated and holds no group: he reads every open page and no other.
+    identity = Resolved(email="bob@example.com", audiences=frozenset())
+
+    queued = _run(handle_reaction_added(
+        ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
+        message_ts="202.1", slack_user_id="U_BOB", identity_result=identity))
+
+    assert queued is False
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        assert cur.fetchone()[0] == 0
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM slack_submissions")
+        assert cur.fetchone()[0] == 0, "the dedup reservation must not be spent on a refusal"
+
+
+def test_the_refusal_reaches_the_person_and_names_the_channel_not_the_groups(
+        indexed, clean_tables):
+    """It is ephemeral — a refusal about somebody's access is never posted to the channel — and it
+    names the CHANNEL, which they are already in and can see. Which groups EXIST is not this
+    message's to disclose."""
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    _seed_thread(gw, FINANCE_CHANNEL, "203.1")
+    gw.seed_user("U_BOB", "bob@example.com", display_name="Bob")
+    ctx = build_context(fixture, conn, gateway=gw)
+
+    _run(handle_reaction_added(
+        ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
+        message_ts="203.1", slack_user_id="U_BOB",
+        identity_result=Resolved(email="bob@example.com", audiences=frozenset())))
+
+    assert gw.ephemeral, "the reactor was told nothing at all"
+    text = " ".join(str(e) for e in gw.ephemeral)
+    assert "finance-team" in text, text
+    assert "finance" not in text.replace("finance-team", ""), (
+        "the refusal must not name the groups it checked against")

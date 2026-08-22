@@ -15,7 +15,8 @@ from dataclasses import dataclass
 
 from stigmergy import text as textutil
 from stigmergy.index import corpus
-from stigmergy.librarian import edits, gates
+from stigmergy.kernel.acl import flows_into
+from stigmergy.librarian import gates
 from stigmergy.librarian import page as page_policy
 
 log = logging.getLogger(__name__)
@@ -116,20 +117,52 @@ class Gathered:
 
 @dataclass(frozen=True)
 class Corpus:
-    """The checkout's pages, PARSED AND TOKENIZED ONCE: `search_pages` asks its question an
-    unbounded number of times per run. `rows` is already `_confined`; nothing downstream re-filters."""
+    """The checkout's pages, PARSED, FILTERED AND TOKENIZED ONCE: `search_pages` asks its question
+    an unbounded number of times per run. `rows` is already `_confined` AND already scoped to what
+    the page being written may cite; nothing downstream re-filters."""
     rows: tuple
     by_path: dict
     terms_by_path: dict
+    link_names: tuple
+    # `page.path_key` (NFC + casefold) of every visible row — what `read_page` asks membership of.
+    # The same spelling the WRITE path compares on, and for the same reason: on a case- and
+    # normalization-insensitive filesystem the NFD respelling of a page names that page, so a raw
+    # `in by_path` would refuse a page the model may legitimately read. Casefolding cannot make a
+    # RESTRICTED page readable through an open one's casing, because the knowledge repo's linter
+    # refuses duplicate basenames case-insensitively — the same assumption the write path rests on.
+    visible_keys: frozenset
 
 
-def load_corpus(worktree: str) -> Corpus:
-    """Parse and tokenize the checkout once — one parse, one containment filter, one tokenization,
-    whoever is asking."""
-    rows = _confined(worktree, corpus.load_pages(worktree))
+def load_corpus(worktree: str, *, acl: list[str] | None = None) -> Corpus:
+    """Parse, scope and tokenize the checkout once — one parse, one containment filter, one
+    audience filter, one tokenization, whoever is asking.
+
+    **`acl` is the audience of the page ABOUT TO BE WRITTEN, and this is where ADR 045 D3 lives.**
+    Every row is kept only when `flows_into(row.acl, acl)`: writing at open, a model sees open
+    pages and nothing else; writing at `[leadership]`, it sees open and leadership. The upward
+    link — an open page carrying a restricted page's title — is not something a human did, it is
+    the agent searching the corpus unrestricted and writing what it found, so the correction is on
+    the INPUT side rather than a gate over the output. Narrowing the page afterwards would punish
+    the human's capture for the model's retrieval; demoting the link to plain text would leave the
+    title, which IS the leak.
+
+    The default is `None` — an open page — which is the fail-closed direction here: it admits open
+    rows only, so a caller that forgets to pass the capture's audience starves the model rather
+    than widening it.
+
+    `link_names` is the wikilink vocabulary derived from the SAME filtered rows, so a restricted
+    page's name is not offered as something to link to. It is a subset of what `edits.page_names`
+    resolves, which keeps `list_page_names`' promise that a name offered here cannot be refused
+    later — `edits.validate` still answers the different question, "would this link be dead".
+    """
+    rows = [row for row in _confined(worktree, corpus.load_pages(worktree))
+            if flows_into(row.acl, acl)]
     return Corpus(rows=tuple(rows),
                   by_path={row.path: row for row in rows},
-                  terms_by_path={row.path: _terms(f"{row.title}\n{row.body}") for row in rows})
+                  terms_by_path={row.path: _terms(f"{row.title}\n{row.body}") for row in rows},
+                  link_names=tuple(sorted({row.path.rsplit("/", 1)[-1][: -len(".md")]
+                                           for row in rows if row.path.endswith(".md")})),
+                  visible_keys=page_policy.path_keys(row.path for row in rows))
 
 
 def search_candidates(parsed: Corpus, query: str, *, top_k: int, excerpt_lines: int,
@@ -185,11 +218,14 @@ def confined_page(worktree: str, relpath: str) -> str:
 
 
 def gather(worktree: str, registry, material: str, *, top_k: int,
-           excerpt_lines: int) -> Gathered:
+           excerpt_lines: int, acl: list[str] | None = None) -> Gathered:
     """The whole gather, in one pass over the checkout. `top_k` and `excerpt_lines` are the
     caller's, never defaulted here: a bound with a default at the point of use is one two places
-    can disagree about. Deterministic end to end — every ranking breaks ties by path."""
-    parsed = load_corpus(worktree)
+    can disagree about. Deterministic end to end — every ranking breaks ties by path.
+
+    `acl` is the audience of the page being written; see `load_corpus` for what it does and why
+    its default is the narrow one."""
+    parsed = load_corpus(worktree, acl=acl)
     rows = parsed.rows
     entities, entities_total = _entities(rows, registry, material)
     entity_paths = {e.page_path for e in entities if e.page_path}
@@ -200,9 +236,10 @@ def gather(worktree: str, registry, material: str, *, top_k: int,
                              [*(c.path for c in candidates), *sorted(entity_paths)],
                              skip=entity_paths | {c.path for c in candidates})
 
-    # The SAME function `edits.validate` answers "does this link resolve" with: a gatherer that
-    # offered a name the validator refuses costs a full corrective retry.
-    names = sorted(edits.page_names(worktree, confined=True))
+    # Derived from the SAME filtered rows the candidates came from, so a restricted page's name is
+    # never offered as something to link to. A subset of what `edits.validate` resolves, which is
+    # what keeps the old promise: a name offered here cannot be refused later.
+    names = list(parsed.link_names)
     log.info("gathered for one capture: %d of %d entities (%d a near miss), %d candidate(s) of "
              "%d page(s), %d neighbour(s)",
              len(entities), entities_total,

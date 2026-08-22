@@ -12,7 +12,7 @@ Code maps, one per command:
 
 ```
 stigmergy-gardener                                  stigmergy-digest
-  ├─ 10 deterministic checks  (checks.py)            ├─ corpus health          (the LATEST
+  ├─ 11 deterministic checks  (checks.py)            ├─ corpus health          (the LATEST
   │    pages_index / capture_queue / the registry /  │    completed gardener run's findings —
   │    the repo checkout                             │    reused, never re-derived)
   ├─ model editorial sweep    (sweep.py)             └─ corpus deltas          (capture_queue
@@ -51,13 +51,13 @@ The narrative is [repair.md](./repair.md), decided in
 [ADR 039](../decisions/039-governed-repair-loop.md) and amended by
 [ADR 044](../decisions/044-the-capture-is-the-approval.md) D2.
 
-## The ten deterministic checks
+## The eleven deterministic checks
 
 `checks.ALL_CHECK_SLUGS` is the list, and the report prints `len()` of it rather than a
 hand-written number, so the count in this document is the only copy that can go stale. Each check
 is a query over `pages_index`, `capture_queue`, the entity registry or the repo checkout — none
 interprets meaning. The five thresholds named below are settings, env-tunable
-(`gardener.settings.GardenerSettings`), and they cover three of the ten checks; the other seven
+(`gardener.settings.GardenerSettings`), and they cover three of the eleven checks; the other eight
 have no threshold to tune, because staleness is a hash mismatch and an orphan is a zero, not an
 amount.
 
@@ -73,6 +73,7 @@ amount.
 | Date-bearing body link (`date-bearing-body-link`) | every `wiki/`, `sources/`, `views/` page's BODY prose, read from the repo checkout, for a `[[YYYY-MM-DD-…]]` wikilink target | any match — one finding per page, naming the first offending stem | warn |
 | Entity placeholder body (`entity-placeholder-body`) | every `wiki/entities/` page's BODY, read from the repo checkout, for a line that is wholly angle-marked (`<…>`) — the entity template's unwritten spans | any such line survives — the identity exists and says nothing about itself | info |
 | Anchored to a superseded entity (`anchored-to-superseded-entity`) | knowledge pages (`wiki/`, minus the entity zone) whose `entity:` names an id whose own entity page declares `superseded_by:` | any such anchor — the page's history sits on the retired side of an applied merge | info |
+| Link to a narrower page (`link-to-narrower-page`) | every resolved outbound link in `pages_index.links` | a link whose TARGET does not `flows_into` its SOURCE — the linking page's readers see a title they cannot open | warn |
 
 **`stale-view` is the one check with an actor outside this package, and that is a division of
 labour rather than a gap.** The librarian worker's periodic view sweep converges `views/` to the
@@ -90,6 +91,15 @@ to REFUSE a whole capture over it (`processing._cross_check_meeting_outcome`) �
 holding a veto. It lives here now under the same slug — deliberately the same
 string, so an operator's grep finds both eras — and the line it draws is the house rule: **gates veto
 the irreversible, the gardener flags conventions.**
+
+**`link-to-narrower-page` is the one link a model can no longer write and a person still can.**
+Since [ADR 045](../decisions/045-audience-from-the-door.md) D3 every page a model reads while
+writing is scoped to what that page may cite, so the librarian cannot produce an upward link at
+all. What remains is a human writing a restricted page's title into open material — the same act
+as posting it in a public channel — and the brain reports it rather than policing it. Nothing is
+repaired: narrowing the linking page would punish one person's capture for what somebody else
+restricted, demoting the link to plain text leaves the title (which is the whole of what a link
+leaks), and deleting it edits somebody's words. The finding names the pair and stops.
 
 **`anchored-to-superseded-entity` is the residual of an applied merge, counted where it accrues.** A merge moves the absorbed entity's aliases and never its name, so the absorbed id stays registered and a capture filed later spelling that name anchors to the retired identity — and the repair loop can never re-propose the pair (its `content_key` is a permanent decision). The population excludes the entity zone and the machine zones on purpose: the absorbed page's own self-anchor and its member-set-of-one view are BY DESIGN and would otherwise be two permanent, unfixable findings per merge. The count is exactly zero the moment a merge lands; what it measures afterwards is the accumulation the filing-time fix (issue #77's other half) exists to end.
 
@@ -274,7 +284,7 @@ gardener report" below.
 $ stigmergy-gardener
 # Gardener report — run #128, completed 2026-07-31T05:07:03Z
 
-checked 412 pages, 38 entities — 10 deterministic checks, plus a model sweep over 6 changed page(s)
+checked 412 pages, 38 entities — 11 deterministic checks, plus a model sweep over 6 changed page(s)
 and 10 sampled unchanged page(s), and a body sweep over 24 entity page(s), and an identity sweep
 over 38 registered entity(ies)
 

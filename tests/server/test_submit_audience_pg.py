@@ -98,12 +98,13 @@ def test_omitting_audience_files_open_and_stores_NULL(indexed):
     assert _row_acl(indexed, ack["id"]) is None
 
 
-def test_an_empty_audience_list_is_the_same_as_omitting_it(indexed):
-    """`[]` from a client is "I named nothing", not "nobody" — a caller cannot ask for a page no
-    one can read, because that is not a thing anyone means."""
-    ack = _service(indexed, ENG).submit("raw", "Another ordinary note.", audience=[])
-    assert ack["acl"] is None
-    assert _row_acl(indexed, ack["id"]) is None
+def test_an_empty_audience_list_is_REFUSED_rather_than_read_as_open(indexed):
+    """`[]` is the corpus's spelling for NOBODY, so a caller sending it may mean the exact
+    opposite of "open" — and a request whose two readings are "everyone" and "no one" is not one
+    to guess at. Omitting the argument is the unambiguous way to say open, and the refusal says
+    so."""
+    with pytest.raises(CaptureError, match="not a request"):
+        _service(indexed, ENG).submit("raw", "Another ordinary note.", audience=[])
 
 
 # ── the vocabulary is the roster's, and the remedy is the door's ──────────────────────────────

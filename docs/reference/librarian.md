@@ -106,7 +106,6 @@ nothing left for anyone to decide about one afterwards
 | `page.py` | the page vocabulary — SEVEN known types, of which the fast lane may CREATE three — their folders, the server-owned frontmatter stamp, path identity (case/Unicode-fold), and what a filename may be (`unnameable_reason`, bounded in UTF-8 BYTES) |
 | `gitcmd.py` | worktrees, the diff, the commit, the push |
 | `githubapp.py` | app JWT → installation token → push URL; the commit identity |
-| `acl_rules.py` | audience labels from the ordered path rules, fail-closed |
 | `dedup.py` | the two deterministic dedup levels |
 | `report.py` | what a person is told, one fact set rendered two ways |
 | `errors.py` | the domain errors; `LibrarianConfigError` means the WORKER cannot run — and never crosses to the wire once an item is already claimed: a mid-run one becomes a fixed sentence naming only the stage, the detail goes to the operator's log (`worker.process_next`) |

@@ -188,11 +188,11 @@ reads as open).
 This computation covers **members only**. One other feed renders content from a governed source
 that is *not* a member — backlinks (any page in the corpus that happens to link to the entity's
 own page) — and a naive skeleton would let it leak a restricted string onto an open or narrower
-view. `stigmergy.kernel.acl.visible_to_view` is the
+view. `stigmergy.kernel.acl.flows_into` is the
 **second, separate gate** this feed passes through before rendering (`skeleton.backlinks_of`): a
 governed-but-non-member row must be excluded from a view it cannot read, but — critically — it must
 never *narrow* `view_acl` itself. The two computations stay separate on purpose: `view_acl` answers
-"what is this view's own audience, from its members," and `visible_to_view` answers "may this
+"what is this view's own audience, from its members," and `flows_into` answers "may this
 other row be shown here," and folding the second into the first would let a backlink silently
 restrict a view its own members never restricted.
 

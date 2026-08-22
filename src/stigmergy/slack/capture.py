@@ -203,7 +203,7 @@ async def handle_reaction_added(ctx, *, reaction: str, team_id: str, channel_id:
     # failed", which is the wrong sentence and the wrong recovery. `resolve_submit_audience` is
     # the SAME check `brain_submit` runs — one rule, two doors.
     try:
-        channel_groups = sorted(channels.channel_audiences_live(
+        channel_groups = sorted(channels.channel_groups_for_capture(
             ctx.conn, ctx.settings.channels_path, channel_id))
     except IdentityError:
         log.error("slack capture: channel scope unreadable for %s", channel_id, exc_info=True)
@@ -215,7 +215,7 @@ async def handle_reaction_added(ctx, *, reaction: str, team_id: str, channel_id:
         return False
     probe = ctx.build_service(email, audiences)
     try:
-        capture_acl = probe.resolve_submit_audience(channel_groups or None)
+        capture_acl = probe.check_submit_audience(channel_groups or None)
     except SubmitRefused:
         log.info("slack capture: %s is not in the groups %s files at — refused", email, channel_id)
         await ctx.post_or_log(

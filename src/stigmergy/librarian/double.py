@@ -105,8 +105,10 @@ class DoubleAgent:
         self.settings = settings
 
     def run(self, *, worktree: str, material: str, hints: dict, submitted_by: str,
-            corrective: str = "", flow_note: str = "", gathered: str = "") -> AgentRun:
-        # `flow_note`/`gathered` are accepted and unused: the signature answers the PORT.
+            corrective: str = "", flow_note: str = "", gathered: str = "",
+            acl: list[str] | None = None) -> AgentRun:
+        # `flow_note`/`gathered`/`acl` are accepted and unused: the signature answers the PORT,
+        # and this backend holds no read tool for `acl` to scope.
         directives = _directives(material)
         findings = _findings(material)
         run = AgentRun(turns=1, tool_calls=3)

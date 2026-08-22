@@ -10,11 +10,17 @@ This is the through-the-filing-path proof, on real git and the real gates: what 
 what the committed page carries, for every page in the set — including the ones that used to carry
 no audience at all by contract, which is what §4 case 5 leaked.
 """
+import json
+import pathlib
+
 from stigmergy.capture import schema
-from stigmergy.librarian import worker
+from stigmergy.librarian import dedup, worker
 from tests.librarian import support
 
 SCOPED = ["leadership"]
+# A page the fixture repo already carries, with no `acl:` — the open page a scoped
+# capture must not be allowed to append to.
+EXISTING_OPEN_PAGE = "wiki/notes/Existing Note.md"
 
 
 def _material(label: str) -> str:
@@ -108,8 +114,107 @@ def test_every_page_of_a_meeting_set_carries_the_captures_audience(rig, clean_qu
     assert result.status == schema.FILED, result.report.get("summary")
     _path, sha = result.result_ref.rsplit("@", 1)
 
-    pages = [p for p in support.paths_in_commit(env.repo, sha) if p.endswith(".md")]
+    # `wiki/entities/` is excluded BY DESIGN, not by accident: an entity page is the brain's
+    # shared vocabulary and carries no audience at all (ADR 045 D6). Asserting "every page" would
+    # demand the wrong behaviour the day a meeting births one.
+    pages = [p for p in support.paths_in_commit(env.repo, sha)
+             if p.endswith(".md") and not p.startswith("wiki/entities/")]
     assert len(pages) >= 3, f"a meeting set is a source, a meeting page and its decisions: {pages}"
     for page_path in pages:
         page = support.read_filed_page(env.repo, sha, page_path)
         assert _acl_line(page) == 'acl: ["leadership"]', f"{page_path}\n{page}"
+
+
+# ── the write lane: material may only be ADDED to a page its readers could already read ───────
+def test_a_scoped_capture_may_not_append_to_an_open_page(rig, clean_queue):
+    """ADR 045 D3's other half. The input scope stops a model READING out of scope; this stops the
+    edit it declares landing out of scope — and edits are not only a model's doing (the deletion
+    sweep and the repair loop write here too), so the check belongs at the gate.
+
+    `gate_zone` judges what the diff DID: a `[leadership]` capture appending a back-link sentence
+    to an open note would put restricted material in front of readers it was restricted from."""
+    env, deps = rig
+    support.submit(clean_queue, deps,
+                   f"DOUBLE:backlink={EXISTING_OPEN_PAGE}\n{_material('append')}",
+                   submitted_by="scoped@stigmergy.test", acl=SCOPED)
+    before = support.branch_sha(env.bare)
+    _item, result = worker.process_next(clean_queue, deps)
+    # The status is the double's: it declares the same edit again on the corrective pass, so the
+    # veto fires twice and the row ends terminal-but-not-filed. What this test pins is the
+    # PROPERTY — the edit was refused and nothing reached the remote — not which terminal state a
+    # test double's second identical answer produces.
+    assert result.status != schema.FILED, result.report.get("summary")
+    assert support.branch_sha(env.bare) == before, "a refused edit must commit nothing at all"
+    # WHICH gate refused, read off the preserved diff's own header rather than inferred from the
+    # terminal status — `report["stage"]` says only "zone", and this run must fail for THIS
+    # reason and not for any other zone veto.
+    refused = pathlib.Path(result.diagnostics_path).read_text(encoding="utf-8")
+    assert "zone/edit-outside-audience" in refused, refused[:400]
+
+
+def test_the_benign_twin_an_OPEN_capture_may_append_to_an_open_page(rig, clean_queue):
+    """The specificity half: this gate runs on every declared edit anybody makes, and open into
+    open is the case that must sail through untouched."""
+    env, deps = rig
+    support.submit(clean_queue, deps,
+                   f"DOUBLE:backlink={EXISTING_OPEN_PAGE}\n{_material('append-open')}",
+                   submitted_by="open@stigmergy.test")
+    _item, result = worker.process_next(clean_queue, deps)
+    assert result.status == schema.FILED, result.report.get("summary")
+
+
+# ── dedup is scoped, in both directions ───────────────────────────────────────────────────────
+# Asked of `dedup` directly, against real rows: the offline double names a page after the
+# material's first line, so two captures with the SAME digest would collide on the page name
+# before dedup's answer could be observed through a filing. The property is about the query.
+
+def _queued(conn, *, digest: str, acl, submitted_by: str, status: str, result_ref: str = "") -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO capture_queue (kind, payload, submitted_by, status, acl, result_ref) "
+            "VALUES ('raw', %s::jsonb, %s, %s, %s, %s) RETURNING id",
+            (json.dumps({"sha256": digest, "text": "x"}), submitted_by, status, acl, result_ref))
+        return cur.fetchone()[0]
+
+
+def test_the_same_material_at_a_DIFFERENT_audience_is_not_a_duplicate(rig, clean_queue):
+    """Two failures in one shape. Collapsing them would silently DISCARD the restriction — the
+    submitter is told "filed" and pointed at the OPEN page — and it would make the duplicate
+    refusal an existence oracle, since that refusal names a page path and a date for a page the
+    caller may not read."""
+    digest = "d" * 64
+    _queued(clean_queue, digest=digest, acl=None, submitted_by="first@x", status=schema.FILED,
+            result_ref="wiki/notes/Open.md@abc")
+    mine = _queued(clean_queue, digest=digest, acl=SCOPED, submitted_by="second@x",
+                   status=schema.QUEUED)
+    item = {"id": mine, "kind": "raw", "payload": {"sha256": digest}, "acl": SCOPED,
+            "submitted_by": "second@x"}
+    assert dedup.find_already_filed(clean_queue, item) is None
+
+
+def test_the_benign_twin_the_same_material_at_the_SAME_audience_still_collapses(rig, clean_queue):
+    """Dedup is not turned off — it is keyed on one more fact. NULL matches NULL through
+    `IS NOT DISTINCT FROM`; a plain `=` would make every open capture stop deduplicating at all,
+    which is almost all of them."""
+    digest = "e" * 64
+    first = _queued(clean_queue, digest=digest, acl=None, submitted_by="first@x",
+                    status=schema.FILED, result_ref="wiki/notes/Open.md@abc")
+    mine = _queued(clean_queue, digest=digest, acl=None, submitted_by="second@x",
+                   status=schema.QUEUED)
+    item = {"id": mine, "kind": "raw", "payload": {"sha256": digest}, "acl": None,
+            "submitted_by": "second@x"}
+    match = dedup.find_already_filed(clean_queue, item)
+    assert match is not None and match.submission_id == first
+
+
+def test_a_scoped_capture_still_collapses_against_its_own_audience(rig, clean_queue):
+    """The other half of the twin: scoping dedup must not mean scoped captures never dedup."""
+    digest = "f" * 64
+    first = _queued(clean_queue, digest=digest, acl=SCOPED, submitted_by="first@x",
+                    status=schema.FILED, result_ref="wiki/notes/Board.md@abc")
+    mine = _queued(clean_queue, digest=digest, acl=SCOPED, submitted_by="second@x",
+                   status=schema.QUEUED)
+    item = {"id": mine, "kind": "raw", "payload": {"sha256": digest}, "acl": SCOPED,
+            "submitted_by": "second@x"}
+    match = dedup.find_already_filed(clean_queue, item)
+    assert match is not None and match.submission_id == first

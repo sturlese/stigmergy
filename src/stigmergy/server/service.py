@@ -592,6 +592,19 @@ class BrainService:
                           lambda: self._submit(kind, material, hints, server_owned,
                                                audience=audience))
 
+    def check_submit_audience(self, audience) -> list[str] | None:
+        """`resolve_submit_audience` through the audited seam — what a DOOR calls when it needs
+        the answer before it commits to anything else.
+
+        The Slack door asks before it reserves its dedup row, so a refusal reads as a refusal
+        rather than as a capture that failed. Routed through `_call` because `_submit_audit_args`
+        makes an argument of it: "who asked to restrict what, and when" has to be answerable from
+        the audit trail rather than from a row a refusal never wrote — and a refusal is exactly
+        the case where no row exists to answer it.
+        """
+        return self._call("brain_submit_audience", {"audience": _audit_audience(audience)},
+                          lambda: self.resolve_submit_audience(audience))
+
     def resolve_submit_audience(self, audience) -> list[str] | None:
         """The DOOR's audience decision for one capture: the label the row carries, or `None` for
         open. Raises `CaptureError` when the caller may not file there.
@@ -608,6 +621,15 @@ class BrainService:
         """
         if audience is None:
             return None
+        if isinstance(audience, list) and not audience:
+            # NOT silently "open". `[]` is the corpus's spelling for NOBODY, so a caller sending it
+            # may mean the exact opposite of what the old short-circuit did — and a request whose
+            # two readings are "everyone" and "no one" is not one to guess at. Omitting the
+            # argument is the unambiguous way to say open.
+            raise CaptureError(
+                "an empty `audience` is not a request: `[]` means NOBODY where audiences are "
+                "read, and omitting `audience` is how you file a capture open. Send the groups "
+                "this material is for, or leave the argument out")
         if isinstance(audience, str):
             raise CaptureError(
                 f"audience must be a list of group names, not a single string — send "
@@ -809,9 +831,21 @@ def _submit_audit_args(kind: str, material: str, hints: dict | None,
         "material_bytes": size,
         "material_sha256": digest if size else "",
         "hint_keys": _audit_hint_keys(hints),
-        "audience": sorted({str(a) for a in audience}) if isinstance(audience, list) else None,
+        "audience": _audit_audience(audience),
         "server_owned_args_present": sorted(k for k, v in server_owned.items() if v is not None),
     }
+
+
+def _audit_audience(audience) -> list[str] | None:
+    """The audience a caller asked for, as the audit records it: sorted, deduplicated, bounded.
+
+    Recorded BY VALUE, unlike the server-owned four beside it, because it is the caller's own
+    request about who may read what they filed. Bounded like every other audited argument — the
+    row is written whatever the outcome, refusals included, so an unbounded list would land a
+    large row on a call that was rejected anyway."""
+    if not isinstance(audience, list):
+        return None
+    return sorted({str(a)[:MAX_ARG_CHARS] for a in audience[:MAX_AUDIT_HINT_KEYS]})
 
 
 def _audit_hint_keys(hints) -> list[str]:

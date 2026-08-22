@@ -59,6 +59,29 @@ def channel_audiences_from_text(text: str, channel_id: str, *, origin: str) -> s
     return set(groups.get(channel_id, ()))
 
 
+def channel_groups_for_capture(conn, channels_path: str, channel_id: str) -> set[str]:
+    """The WRITE side's resolution, and it differs from the read side's in exactly one way: the
+    map must EXIST.
+
+    Reading, an absent map is fail-closed — every channel gets the empty set and sees only open
+    pages. Writing, the same empty set files every capture from every scoped channel OPEN, which
+    is the same silence pointing the other way. So a deployment that has not configured the map
+    at all is refused here rather than quietly publishing: `ops/identities.json` already takes
+    that posture, and this file decides the same class of fact.
+
+    A channel that is genuinely public is spelled by its ABSENCE FROM a map that exists, or by
+    `{}` — a committed statement — never by no file at all.
+    """
+    if ops_files.text_or_none(conn, ops_files.SLACK_CHANNELS_RELPATH) is None and (
+            not channels_path or not os.path.exists(channels_path)):
+        raise IdentityError(
+            "no slack channels map is configured, so the audience a capture from this channel "
+            f"would be filed at cannot be established (expected {DEFAULT_RELATIVE} in the "
+            "knowledge repo, or --channels). A brain with no scoped channels declares that with "
+            "an empty object, which is a committed statement rather than a missing file")
+    return channel_audiences_live(conn, channels_path, channel_id)
+
+
 def channel_audiences_live(conn, channels_path: str, channel_id: str) -> set[str]:
     """The deployed resolution: the index's snapshot wherever the database carries one, this
     process's own file where it does not (`server.ops_files` states the order once). The DEPLOYED
