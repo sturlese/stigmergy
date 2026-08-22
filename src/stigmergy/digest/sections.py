@@ -3,8 +3,8 @@ this becomes text.
 
 Corpus health reads the latest completed gardener run through `gardener.store` — reused, never
 re-derived. Corpus deltas: "pages filed" resolves `capture_queue.result_ref`/`report` through
-`_filed_page_paths`; "entities born" reads the governed-birth log (`review_decisions` approvals)
-— never `pages_index.updated` (an entity page updates long after its birth) and never a registry
+`_filed_page_paths`; "entities born" sums `report -> 'entities_born'` over the same filings —
+never `pages_index.updated` (an entity page updates long after its birth) and never a registry
 run-over-run diff.
 
 Every page this module names passes `_visible_pages`, the ONE `server.acl.visible()` call in the
@@ -13,11 +13,9 @@ through a gardener-precomputed shape for a structural reason: the gardener does 
 destination channel, so a title it precomputed would sit in `job_runs.stats` having passed no ACL
 predicate at all — the scoping decision must live where the channel is known.
 """
-from stigmergy.capture import decisions
 from stigmergy.capture import schema as capture_schema
 from stigmergy.gardener import schema as gardener_schema
 from stigmergy.gardener import store as gardener_store
-from stigmergy.review_kinds import KIND_IDENTITY_PROPOSAL, LEGACY_KIND_ENTITY_PROPOSAL
 from stigmergy.server.acl import visible
 from stigmergy.text import parse_result_ref
 
@@ -117,30 +115,28 @@ def _pages_filed(conn, *, since, until, audiences: set[str]) -> dict:
     return {"count": len(ordered_visible), "titles": titles}
 
 
+# An entity is born when a capture introduces it, so the count comes off the filings themselves —
+# each filed report names the identities its own capture created (`librarian.report`,
+# `entities_born`). There is no approval to count any more (ADR 044 D1), and no second table that
+# could disagree with the commits.
 _ENTITIES_BORN_SQL = (
-    "SELECT count(*) FROM review_decisions "
-    "WHERE item_kind = ANY(%(item_kinds)s) AND verdict = %(verdict)s "
-    "AND created_at >= %(since)s AND created_at < %(until)s")
-
-# An entity is born when a steward approves an identity proposal. The ledger also holds approvals
-# under the kind the parked-capture mint door wrote before ADR 041; a week's window straddling the
-# change would silently under-count the births it saw without them.
-_BIRTH_KINDS = [KIND_IDENTITY_PROPOSAL, LEGACY_KIND_ENTITY_PROPOSAL]
+    "SELECT coalesce(sum(jsonb_array_length(report -> 'entities_born')), 0) "
+    "FROM capture_queue "
+    "WHERE status = %(filed)s AND finished_at >= %(since)s AND finished_at < %(until)s "
+    "AND jsonb_typeof(report -> 'entities_born') = 'array'")
 
 
 def _entities_born_count(conn, *, since, until) -> int:
     with conn.cursor() as cur:
-        cur.execute(_ENTITIES_BORN_SQL, {"item_kinds": _BIRTH_KINDS,
-                                         "verdict": decisions.APPROVE, "since": since,
+        cur.execute(_ENTITIES_BORN_SQL, {"filed": capture_schema.FILED, "since": since,
                                          "until": until})
-        return cur.fetchone()[0]
+        return int(cur.fetchone()[0] or 0)
 
 
 def gather_corpus_deltas(conn, *, since, until, audiences: set[str]) -> dict:
     """The section's two facts: pages filed (count + titles, ACL-scoped) and entities born — a
-    COUNT only. Every door writes the ledger and every row now carries `extra` (at minimum its
-    `source`), but only an APPROVE through a minting door fills in `entity_id`, so naming entities
-    would read as a complete list and would not be one."""
+    COUNT only. The identities are named on the filings that created them, and a page a channel
+    may not see would be named through its entity here; the count is the honest half."""
     pages = _pages_filed(conn, since=since, until=until, audiences=audiences)
     return {
         "pages_filed_count": pages["count"],

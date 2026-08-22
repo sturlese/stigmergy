@@ -1,10 +1,10 @@
 # stigmergy — working notes for an AI agent
 
-This repository holds the **code**: the durable capture queue and its two drop CLIs (the meeting
-one and the Drive door), the librarian service that drains it, the hybrid index builder, the single
-MCP server (the only API) and the answering half behind its `ask`, the governed entity-birth tooling
-(`stigmergy-entities`), the Slack transport, the meeting distiller, the view layer, the gardener,
-the weekly digest, the admin console, `docker-compose` for the local test stack, and the evals.
+This repository holds the **code**: the durable capture queue and the doors that fill it, the
+librarian service that drains it, the hybrid index builder, the single MCP server (the only API)
+and the answering half behind its `ask`, the entity-birth rules the librarian writes through, the
+Slack transport, the meeting distiller, the view layer, the gardener, the weekly digest, the admin
+console, `docker-compose` for the local test stack, and the evals.
 
 **This repo never stores pages.** Knowledge content lives in a separate git repository — the
 knowledge repo — that you point at with `STIGMERGY_REPO`. Its page format is
@@ -46,7 +46,7 @@ Not style — these are enforced, and the enforcement is where to look when one 
 | The frozen contract linter and the frozen meeting brief match the knowledge repo's own | `tests/librarian/test_frozen_linter.py`, `test_meeting_brief_contract.py` |
 | The diff the nine gates approved is the diff that lands | `gitcmd.commit(gated_entries=…)` + `tests/librarian/test_gitcmd_unit.py` |
 | `server.acl.visible()` is the ONE place read access is decided, and the only implementation of it | `server/acl.py`, `tests/test_contract_parity.py` |
-| The librarian reaches `stigmergy.entities` from `librarian/identity.py` only, and only for the birth fold, the generator and its errors — the proposal writer is the one seam between filing and governance | `tests/test_architecture.py`, a named exception with its own pruning test |
+| The librarian reaches `stigmergy.entities` from `librarian/identity.py` only, and only for the birth fold, the generator and its errors — the birth writer is the one seam between filing and identity | `tests/test_architecture.py`, a named exception with its own pruning test |
 | The shared mint sequence carries no authorization, so its caller set is closed to the surfaces that decide their own | `tests/test_architecture.py` — set equality both ways, so a caller that stops calling it fails too |
 | The README's countable claims match the code | `tests/test_readme_claims.py` |
 | `docs/reference/` names no command, variable or count the code does not have, and `docs/README.md` lists every document that exists | `tests/test_docs_claims.py` — ADRs are exempt by design: they record a decision, not the present |

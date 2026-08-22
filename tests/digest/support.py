@@ -1,7 +1,8 @@
 """Non-fixture test support for the digest suite. Reuses `tests.gardener.support` for the shared
 connection/schema bootstrap and the corpus/queue fixtures — the SAME tables this package reads —
 rather than re-deriving any of it; adds only what is specific to the digest: the Slack channels
-file, review_decisions (governed-birth) rows, and gardener `job_runs`+`gardener_findings` fixtures
+file, the filed reports that name what a capture introduced, and gardener
+`job_runs`+`gardener_findings` fixtures
 shaped for the digest's OWN corpus-health read.
 
 Deliberately a plain module, not a `conftest.py` — the same reasoning `tests/gardener/support.py`
@@ -9,7 +10,6 @@ gives for itself: fixtures are per-package pytest wiring, this is plain code any
 """
 from stigmergy.capture import ops as capture_ops
 from stigmergy.gardener.schema import JOB_NAME as GARDENER_JOB_NAME
-from stigmergy.server import review
 from tests.gardener import support as gardener_support
 
 STEWARD = gardener_support.STEWARD
@@ -27,27 +27,17 @@ unlabelled_page = gardener_support.unlabelled_page
 write_channels_file = gardener_support.write_channels_file
 
 
-# ── review_decisions: entities born — the governed-birth log ────────────────────────────────────
-def seed_entity_approval(conn, *, created_days_ago: int = 0, item_id: str = "1",
-                         verdict: str = review.APPROVE,
-                         item_kind: str = review.KIND_IDENTITY_PROPOSAL) -> int:
-    """One `review_decisions` row shaped like the one `server.review.decide_and_record` writes for
-    an approved identity proposal — `item_kind=KIND_IDENTITY_PROPOSAL`, `item_id` the entity id
-    (`stigmergy.digest.sections`'s own module docstring explains why this governed-birth log is a
-    COUNT source, never a names source). `item_kind` is a parameter so the legacy kind the
-    parked-capture mint door wrote before ADR 041 can be seeded too."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO review_decisions (item_kind, item_id, verdict, actor, notes, extra) "
-            "VALUES (%s, %s, %s, %s, '', NULL) RETURNING id",
-            (item_kind, item_id, verdict, STEWARD))
-        decision_id = cur.fetchone()[0]
-    if created_days_ago:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE review_decisions SET created_at = now() - make_interval(days => %s) "
-                "WHERE id = %s", (created_days_ago, decision_id))
-    return decision_id
+# ── entities born — counted off the filings that introduced them (ADR 044) ─────────────────────
+def seed_entity_births(conn, *, count: int = 1, finished_days_ago: int = 0,
+                       result_ref: str = "wiki/notes/x.md@abc1234") -> int:
+    """A FILED capture whose report names the identities that capture introduced — the shape
+    `librarian.report.filed` produces (`entities_born`), and the only place a birth is recorded
+    since ADR 044: an entity is born when a capture introduces it, so the digest counts the
+    filings rather than a second table that could disagree with the commits."""
+    born = [{"id": f"e{n}", "name": f"Entity {n}", "type": "organization",
+             "confirmed_by": STEWARD} for n in range(count)]
+    return seed_filed_capture(conn, result_ref=result_ref, finished_days_ago=finished_days_ago,
+                              report={"entities_born": born})
 
 
 # ── gardener job_runs + gardener_findings: the corpus-health source ─────────────────────────────

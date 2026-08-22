@@ -12,6 +12,7 @@ for itself: fixtures are per-package pytest wiring, this is plain code any file 
 import asyncio
 import json
 import os
+import re
 
 from stigmergy.capture import ops as capture_ops
 from stigmergy.capture import schema as capture_schema
@@ -406,3 +407,30 @@ def stem(path: str) -> str:
 def page_text(repo: str, path: str) -> str:
     with open(os.path.join(repo, path), encoding="utf-8") as f:
         return f.read()
+
+
+# ── what a refusal published to a PERSON may say ──────────────────────────────────────────────
+# The rule the server doors' own refusals are held to, shared by every suite that publishes one
+# (`tests/repair/test_remote_pg.py`, `tests/server/test_delete_pages_pg.py`). It moved here when
+# `tests/entities/` lost its decision half (ADR 044): the property outlived the package that
+# happened to hold it first.
+#
+# Strictly stronger than the `/tmp` · `/private/` · `/Users/` roots the issue named: any token
+# STARTING with `/` is an absolute path on some host. A repo-relative path
+# (`ops/templates/entity.md`) and a spaced-out alternative (`list_entities / describe_entity`) are
+# both deliberately outside it — they name nothing about the host.
+_ABSOLUTE_PATH = re.compile(r"(?:^|[\s(\[\"'`])/\S")
+
+
+def assert_person_facing(message: str) -> None:
+    """Raise unless `message` is safe to publish to the person who asked, over MCP or the console."""
+    leak = _ABSOLUTE_PATH.search(message)
+    assert not leak, (
+        f"a server-door refusal named an absolute path ({message[leak.start():leak.start() + 60]!r} "
+        f"…) — the person reading this over MCP has no filesystem to find it on, and it is the "
+        f"server host's temp directory. Log it with `exc_info=True` and map the type to a written "
+        f"sentence:\n  {message}")
+    assert "git -C" not in message, (
+        f"a server-door refusal told a person to run a git command — `git -C` names a clone that "
+        f"exists only inside the server process and is deleted before anyone reads this:\n  "
+        f"{message}")

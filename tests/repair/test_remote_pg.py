@@ -37,7 +37,6 @@ from stigmergy.repair import (
 from stigmergy.repair.errors import ProposalStateError, RepairError
 from stigmergy.repair.settings import RepairSettings
 from tests import adversarial_payloads
-from tests.entities import conftest as entities_conftest
 from tests.librarian import support as librarian_support
 from tests.repair import support
 
@@ -393,7 +392,7 @@ def test_no_refusal_this_module_publishes_names_a_path_or_a_runnable_git_command
     """The same predicate `tests/entities/test_remote.py` applies to the mint door, reused rather
     than re-derived: both doors clone into a `TemporaryDirectory` on the SERVER host, and both
     publish to a steward who holds neither that filesystem nor that clone."""
-    entities_conftest.assert_steward_facing(getattr(remote, constant))
+    support.assert_person_facing(getattr(remote, constant))
 
 
 @pytest.mark.parametrize("constant", ALL_REFUSAL_MESSAGES)
@@ -427,13 +426,13 @@ def test_the_refusals_raised_at_runtime_meet_the_same_bar(conn, repo_env):
 
     assert len(said) == 3
     for message in said:
-        entities_conftest.assert_steward_facing(message)
+        support.assert_person_facing(message)
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # The second kind: `entity-body` — the one apply that REPLACES prose (ADR 039 amendment)
 #
-# Everything here runs against the same real remote, the same eight gates and the same real
+# Everything here runs against the same real remote, the same nine gates and the same real
 # gitleaks as the additive kinds above. That is the point: the new kind buys its safety from the
 # SAME machinery, plus one told fact (`GateContext.body_rewrite_allowed`) naming the single page
 # this approval covers.
@@ -659,7 +658,7 @@ def test_the_whole_road_from_an_empty_body_finding_to_a_commit_on_main(conn, rep
     """**Finding to `main`, with nothing hand-built in between.** Every other test in this section
     starts from a proposal a test wrote; this one starts from the gardener finding
     `model-empty-entity-body` files, lets the REAL proposer draft the body, approves the row a
-    steward would see, and applies it through the same eight gates and the same real remote.
+    steward would see, and applies it through the same nine gates and the same real remote.
 
     It is the criterion #78 turns on: the fifth check's finding has a path to zero. The page it
     rewrites is written prose, so the draft that lands is replacing somebody's sentences — the
@@ -713,7 +712,7 @@ def test_the_permitted_rewrite_of_written_prose_is_still_judged_by_the_real_gate
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # The third kind: `delete` — a page leaves the corpus and every reference to it leaves with it
 #
-# The same real remote, the same eight gates, the same real gitleaks. What is new is the SHAPE of
+# The same real remote, the same nine gates, the same real gitleaks. What is new is the SHAPE of
 # what has to agree: this kind's diff is not additive and is not one permitted body rewrite either,
 # so the apply hands the gates a plan it recomputed from the clone's own bytes and the gates prove
 # the tree IS that plan — deletions by path, scrubbed pages byte for byte.
@@ -1044,7 +1043,7 @@ def test_the_delete_kinds_own_refusals_are_written_for_a_steward(conn, repo_env)
 
     assert len(said) == 2
     for message in said:
-        entities_conftest.assert_steward_facing(message)
+        support.assert_person_facing(message)
 
 
 def test_a_sweep_whose_only_rewrite_removes_a_line_lands(conn, repo_env):
@@ -1095,11 +1094,11 @@ def test_a_sources_page_that_cites_a_removed_page_is_scrubbed_and_not_vetoed(con
         assert line in landed, f"{line} is the librarian's own stamp and not this sweep's to remove"
 
 
-# ── the `entity-alias` kind: two identities become one, through the same eight gates ───────────
+# ── the `entity-alias` kind: two identities become one, through the same nine gates ───────────
 # Every test here goes through the REAL gates against a REAL bare remote. That is the whole point:
 # this kind is the first thing in the system to put a file that is NOT a page into a governed
 # commit, and `gate_zone` refuses one by default. Whether `derived_files` actually carries
-# `ops/entity-registry.json` past eight gates is not something a unit test can answer.
+# `ops/entity-registry.json` past nine gates is not something a unit test can answer.
 def _merge_proposal(conn, repo, survivor, absorbed, **over):
     return _proposal(conn, entity_alias.plan(repo, survivor, absorbed),
                      kind=schema.KIND_ENTITY_ALIAS,

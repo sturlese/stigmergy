@@ -57,11 +57,11 @@ class StaleBaseError(LibrarianConfigError):
 
 # ── the three credential states `githubapp.authenticated_clone_url` distinguishes ─────────────
 # Siblings, never a chain: a caller re-words all three for its own audience, and a subclass here
-# would make one arm shadow another depending on the order they happen to be written in. They
-# exist because the shared clone-URL resolver has TWO callers with different vocabularies
-# (`entities.remote` re-words for a steward over MCP, `repair.remote` for the same steward), and
-# a caller cannot tell "nothing is configured" from "half of it is" from "GitHub said no" when
-# every one of them arrives as a bare `LibrarianConfigError`.
+# would make one arm shadow another depending on the order they happen to be written in. They are
+# separate states because a caller cannot tell "nothing is configured" from "half of it is" from
+# "GitHub said no" when every one of them arrives as a bare `LibrarianConfigError` — and the
+# server-side write door (`repair.remote`, through `server.review`) publishes the difference to
+# whoever asked.
 class CloneCredentialUnavailable(LibrarianConfigError):
     """Nothing to authenticate a clone WITH: no repo URL configured, or no App configured at all.
     An absent capability, not a fault — the fix is "configure one"."""

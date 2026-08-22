@@ -1,47 +1,48 @@
 # admin — code map
 
-The operations console: one web surface over what already runs — the inbox of everything waiting on
-a steward, the identity decisions and the registry behind them, the captures (read-only), the repair
-proposals, the four scheduled workflows, the gardener's findings, the digest, the index and the ops
-files it serves, activity and the worker's lease. Mounted as an ASGI branch in front of the MCP
+The operations console: one web surface over what already runs — the entity registry and the door
+for registering one, the captures (read-only), the repair proposals, page removal, the four
+scheduled workflows, the gardener's findings, the digest, the index and the ops files it serves,
+activity and the worker's lease. Mounted as an ASGI branch in front of the MCP
 transport, inside the `app` process group, behind its own single credential.
 Narrative: [`docs/reference/admin-console.md`](../../../docs/reference/admin-console.md).
 
 **It is a skin, not a subsystem.** Every act lands on a seam another package owns and tests:
-`capture.retention`, `capture.queue` (reads, plus `release_expired`), `gardener.store`,
-`digest.run`, `index.check`, `repair.store`,
-`server.review.items_for_doorbell`, `server.review.decide_and_record`,
-`server.review.commission_registration`, `server.review.apply_repair_and_record`,
-`server.pilot_report` (the report and its per-day
-classifier), `capture.decisions.recent_decisions`, `repair.store.counts_by_status`,
-`kernel.registry`, `entities.decide`. The only state it owns is `admin_actions`.
+`capture.retention`, `capture.queue` (reads, plus `release_expired`), `capture.latency`,
+`gardener.store`, `digest.run`, `index.check`, `index.store`, `repair.store`,
+`server.review.commission_registration`, `server.review.apply_repair_and_record` /
+`reject_repair_and_record`, `server.review.delete_and_record`, `server.pilot_report` (the report
+and its per-day classifier), `kernel.registry`. The only state it owns is `admin_actions`.
 
 **Captures are READ-ONLY here.** Nothing drains a queue row: the two write buttons on that page
 (Reclaim, Purge) act on the queue as a WHOLE, and a capture reaches its terminal state through the
-librarian or the expiry sweep. What a steward decides in this console is an IDENTITY, after the
-filing — Approve / Merge into… / Decline on the Inbox and the Entities desk.
+librarian or the expiry sweep. Nothing on this console decides an identity either: a capture
+introduces the entity it is about, confirmed by whoever captured
+([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md)).
 
 **It is not a read surface over the corpus** — no search, no `ask`, no page bodies.
 `test_admin_never_imports_the_read_path_or_the_mcp_adapter` bans `stigmergy.index.search`,
 `stigmergy.answer`, `stigmergy.server.mcp_server`, `.service` and `.transport_http` from every
 module here, so the rule is a property of the import graph. (The Activity page does show `ask`
 questions — user content, not corpus content — and the Entities page reads the entity REGISTRY,
-an `ops/` control file every MCP identity already reads through `list_entities`. A proposal's
-`summary` is the What / Who paragraph the LIBRARIAN wrote on the entity page it created, carried
-out by `server.review`, not a page body this console went and read.)
+an `ops/` control file every MCP identity already reads through `list_entities`. An
+`entity-body` repair proposal carries the drafted body in full — text a model wrote, sitting in
+`repair_proposals`, which is not a page yet and was never one this console fetched. And a page
+removal hands back a unified diff per rewritten page: page bytes, but bytes the removal this
+console just performed produced, read AFTER the push because nothing read them before it.)
 
 ## Modules
 
 | Module | What it is |
 |---|---|
 | `routes.py` | `compose(inner, *, conn, server_settings, admin_settings=None, gateway=None, evidence=None)` — the only door into this package, `evidence` being the process's one evidence store, without which Register an entity has nothing to archive a capture's material into, called by `server.transport_http.build_http_app`. Also `_Branch` (outermost ASGI router), `_AdminGate` (host → token → security headers), `_json_endpoint` (domain-exception → status map) and the route table |
-| `service.py` | `AdminService`, one method per route; `CRON_WORKFLOWS`/`DISPATCHABLE` (the drivable-workflow allowlist); `worker_visibility_timeout_s()`/`WORKER_MAX_ATTEMPTS`; the pre-registration check's verdict constants (`VERDICT_*`) and its advisory similarity (folded once per request); the read ceilings (`INBOX_LIMIT`, `DECISIONS_LIMIT`, `REPAIR_PENDING_LIMIT`, the metrics window bounds); `_clean_leaves`, the walk that cleans every string leaf of a JSON value; the domain errors `AdminBadRequest`/`AdminNotFound`/`AdminRefused` |
+| `service.py` | `AdminService`, one method per route; `ADMIN_DOOR` (the `source` every governed call names); `CRON_WORKFLOWS`/`DISPATCHABLE` (the drivable-workflow allowlist); `worker_visibility_timeout_s()`/`WORKER_MAX_ATTEMPTS`; the registry check's verdict constants (`VERDICT_*`) and its advisory similarity (folded once per request); the read ceilings (`REPAIR_PENDING_LIMIT`, `MAX_RESOLVE_NAMES`, `LATENCY_SAMPLE_LIMIT`, `MAX_METRICS_DAYS`); `_clean`, the one sanitizing seam every untrusted string leaves through; the domain errors `AdminBadRequest`/`AdminNotFound`/`AdminRefused` |
 | `settings.py` | `AdminSettings` + `from_env`, the five `*_ENV` constants, `DEFAULT_ACTOR`, `DEFAULT_WORKFLOWS_REPO`, and the sha256-shape refusal that turns a malformed hash into a `StartupError` |
 | `auth.py` | `token_matches` (sha256 + `hmac.compare_digest`), `bearer_token` (two `Authorization` headers → `None`), `host_allowed` |
 | `github.py` | `ActionsGateway` — the Jobs page's only reach out of this process (`workflows`/`runs`/`dispatch`/`set_enabled`), `urllib` with an injectable opener, a 60 s read cache that mutations clear, and `ActionsError` carrying the status and never the token |
 | `schema.py` | `admin_actions`: `ensure_admin_schema` (behind `capture.schema.startup_ddl_lock`), `record_action` (never raises), `recent_actions` |
 | `cli.py` | `stigmergy-admin-token` — mints the one credential: 32 random bytes, plaintext printed once beside its `STIGMERGY_ADMIN_TOKEN_HASH=` line, nothing stored |
-| `static/` | the SPA, no build step: `index.html` + `assets/app.js` (shell, grouped nav with the inbox badge, hash router with the old tab names as aliases, login), `theme.js` (the ONE classic script: it stamps the chosen theme on `<html>` before the first paint — a module would be deferred and flash, an inline script is refused by the CSP), `api.js` (the one fetch seam), `state.js` (the server's meta + the chart window), `copy.js` (the VOCABULARY — every system word's human label, meaning and who decides; the per-page explainers), `ui.js` (DOM helpers, pills, the confirm-with-form modal with live field checks, tooltips, the theme picker), `charts.js` (SVG charts built with `createElementNS`, each with a table twin), `views/` (one module per page: `dashboard`, `inbox`, `captures`, `entities`, `repairs`, `gardener`, `index`, `worker`, `jobs`, `digest`, `activity`, plus `common.js` for the loading wrapper, the mutation helper, the report renderer and the trace timeline), `styles.css` |
+| `static/` | the SPA, no build step: `index.html` + `assets/app.js` (shell, grouped nav, hash router with the old tab names as aliases, login), `theme.js` (the ONE classic script: it stamps the chosen theme on `<html>` before the first paint — a module would be deferred and flash, an inline script is refused by the CSP), `api.js` (the one fetch seam), `state.js` (the server's meta + the chart window), `copy.js` (the VOCABULARY — every system word's human label, meaning and who decides; the per-page explainers), `ui.js` (DOM helpers, pills, the confirm-with-form modal with live field checks, tooltips, the theme picker), `charts.js` (SVG charts built with `createElementNS`, each with a table twin), `views/` (one module per page: `dashboard`, `captures`, `entities`, `repairs`, `gardener`, `index`, `worker`, `jobs`, `digest`, `activity`, plus `common.js` for the loading wrapper, the mutation helper, the report renderer and the trace timeline), `styles.css` |
 
 Exactly one module imports this package — `server/transport_http.py`, pinned by
 `test_only_the_http_transport_composes_the_admin_branch`.
@@ -59,8 +60,7 @@ cannot need a token to render).
 | GET | `/admin/assets/…` | `StaticFiles(static/assets)` | no |
 | GET | `/admin/api/meta` | `meta()` — configuration facts plus every closed vocabulary the frontend renders | yes |
 | GET | `/admin/api/overview` | `overview()` | yes |
-| GET | `/admin/api/inbox` | `inbox()` — `server.review.items_for_doorbell`, every string leaf cleaned, with per-kind counts and a conservative `truncated` flag | yes |
-| GET | `/admin/api/metrics` | `metrics()`, in a worker thread — `?days=` (default 30, clamped to 1–365; non-integer is a 400): captures by arrival day and current status, capture→filed samples, `ask` outcomes per day (`pilot_report.answer_shape_by_day`, grouped in SQL), calls per day/tool/identity, each job's run history, the ledger's newest rows (`decisions.recent_decisions`, bounded in SQL), the repair table's status counts (`repair.store.counts_by_status`) | yes |
+| GET | `/admin/api/metrics` | `metrics()`, in a worker thread — `?days=` (default 30, clamped to 1–365; non-integer is a 400): captures by arrival day and current status, capture→filed samples, `ask` outcomes per day (`pilot_report.answer_shape_by_day`, grouped in SQL), calls per day/tool/identity, each job's run history, and the repair table's status counts beside a bounded page of decided rows (`repair.store.counts_by_status` / `recent_decided`) | yes |
 | GET | `/admin/api/queue` | `queue_list()` — repeatable `?status=`, `?submitter=`, `?limit=` (default 50; non-integer is a 400) | yes |
 | POST | `/admin/api/queue/reclaim` | `queue_reclaim()` — optional int `visibility_timeout_s`; omitted means the worker's derived lease, resolved per call; the horizon is clamped at 0 | yes |
 | POST | `/admin/api/queue/purge` | `queue_purge()` — optional int `older_than_days`, `dry_run` | yes |
@@ -71,17 +71,14 @@ cannot need a token to render).
 | POST | `/admin/api/digest/post` | `digest_post()` (async) | yes |
 | GET | `/admin/api/index` | `index_state()` | yes |
 | POST | `/admin/api/index/check` | `index_substrate_check()` | yes |
-| GET | `/admin/api/entities` | `entities_list()` — `{"proposals": [...], "aliases": [...], "registry_check": {...}}`; each proposal carries the lane's `merge_candidates` plus `check`, the registry verdict on its own name | yes |
 | GET | `/admin/api/entities/registry` | `entities_registry()` — the served registry, sorted by name, with `by_type` and freshness | yes |
-| POST | `/admin/api/entities/resolve` | `entities_resolve()` — `names` must be a JSON list of strings (≤ 50); one verdict per non-blank name. Writes no `admin_actions` row | yes |
-| POST | `/admin/api/entities/decide` | `entity_decide()` — `item_kind` (`identity-proposal` or `alias-proposal`), `item_id`, `verdict`, `into` (required for `merge`), optional `notes`; off the event loop, since a decision clones and pushes | yes |
-| POST | `/admin/api/entities/create` | `entity_create()` — `name`/`entity_type`/`about` required, `entity_id`/`aliases` optional; commissions the entity by queueing a capture and answers the queued row (`id`, `status`, `entity_id`, `name`, `message`). The page is the librarian's to write, and the identity is born confirmed by the actor | yes |
-| GET | `/admin/api/entities/{id}` | `entities_show()` — one proposed identity, with the same `check` the list attaches | yes |
+| POST | `/admin/api/entities/resolve` | `entities_resolve()` — `names` must be a JSON list of strings (≤ `MAX_RESOLVE_NAMES`); one verdict per non-blank name. Writes no `admin_actions` row | yes |
+| POST | `/admin/api/entities/create` | `entity_create()` — `name`/`entity_type`/`about` required, `entity_id`/`aliases` optional; commissions the entity by queueing a capture and answers the queued row (`id`, `status`, `entity_id`, `name`, `message`). Off the event loop, for the archive write. The page is the librarian's to write, and the identity is born confirmed by the actor | yes |
 | GET | `/admin/api/repairs` | `repairs_list()` — a bounded page of pending (`pending_truncated` says when it filled), the whole table's `counts` by status, recently decided, and the proposer's `job_runs` history | yes |
 | GET | `/admin/api/repairs/{id:int}` | `repair_show()` | yes |
-| POST | `/admin/api/repairs/{id:int}/approve` | `repair_approve()` — applies the proposal's ops as ONE commit through `server.review.apply_repair_and_record` | yes |
+| POST | `/admin/api/repairs/{id:int}/approve` | `repair_approve()` — applies the proposal's ops as ONE commit through `server.review.apply_repair_and_record`; off the event loop, since it clones and pushes | yes |
 | POST | `/admin/api/repairs/{id:int}/reject` | `repair_reject()` — non-blank `reason` required | yes |
-| POST | `/admin/api/pages/delete` | `pages_delete()` — a PERSON removes pages: `paths` (non-empty) + `why`, applied in the same call through `server.review.delete_and_record`, the same sequence MCP's `brain_delete` runs. The console passes NO steward guard: its token is the authorization (ADR 029/030 D2), which makes this its most consequential button | yes |
+| POST | `/admin/api/pages/delete` | `pages_delete()` — a PERSON removes pages: `paths` (non-empty) + `why`, applied in the same call through `server.review.delete_and_record`, the same sequence MCP's `brain_delete` runs. It passes NO per-path guard and no `can_read`: the operator token is the authorization and the console is not a read surface over pages, which makes this its most consequential button. Off the event loop | yes |
 | GET | `/admin/api/activity` | `activity()` | yes |
 | GET | `/admin/api/worker` | `worker_status()` | yes |
 | GET | `/admin/api/crons` | `crons_state()` | yes |
@@ -91,11 +88,12 @@ cannot need a token to render).
 
 `{workflow_file}` is a free path segment on the route and an allowlist check in the service
 (`_require_workflow`, before `_require_gateway` and therefore before any network call): the refusal
-must not depend on a converter, so an unlisted file is a 400 naming the allowed set.
-`entities/registry`, `entities/resolve`, `entities/decide` and `entities/create` are declared BEFORE
-`entities/{id}` in the route table, and that order is load-bearing now that an entity id is a slug
-rather than an int: Starlette matches in order, so the four literal segments win before the
-catch-all converter can read one as an id.
+must not depend on a converter, so an unlisted file is a 400 naming the allowed set. It is the ONLY
+free segment in the table, and therefore the only place a path could be read as data. No route
+under `entities/` takes a converter any more — the three there are literal segments — so no
+declaration order here is load-bearing, and the two id routes are `{id:int}`, which cannot swallow
+`reclaim`, `purge`, `approve` or `reject`. Adding a catch-all under an existing prefix brings the
+ordering hazard back with it.
 
 ## Reuse
 
@@ -105,64 +103,50 @@ catch-all converter can read one as an id.
   injectable. Never `os.environ` at module scope here.
 - `AdminService._mutate` / `_mutate_async` — every state-changing call goes through it: actor
   fallback, an `admin_actions` row on both outcomes, `CaptureError` → `AdminRefused`.
-- `server.review.items_for_doorbell` — the inbox's whole read, the SAME one the Slack doorbell
-  rings from, so the two surfaces cannot disagree about what is waiting on a person. The console
-  adds only its control-character strip — over EVERY string leaf, by `_clean_leaves`, never a list
-  of keys that a field added upstream would miss — and the per-kind counts.
-- `AdminService._served_registry` / `_check_name` — the registry check, used two ways: BEFORE a
-  `create` (is this name already registered, or confusable with something registered?) and ON a
-  proposal, where it is the Merge picker's strongest hint. The registry is
+- `AdminService._served_registry` / `_check_name` — the registry check, asked BEFORE anything is
+  queued: is this name already registered, or confusable with something registered? The registry is
   `index.check.served_registry`'s answer (the index's snapshot, else the `--entity-registry`
   file) parsed by `kernel.registry.registry_from_text` — the ONE loader, so a snapshot the server
   refuses is refused here too. The verdicts are the gate's own questions in the gate's own order:
   `Registry.canonical_id` (the filing fold — `registered`), then `Registry.collision_id` (the
   birth gate's fold — `collides`), then an ADVISORY similarity listing this module computes for a
-  human to judge and nothing acts on. Never a second "collides": a looser fold here would stop a
-  steward registering a legitimately distinct entity, and a stricter one would promise a write the
-  gate refuses. `_registry_or_none` turns an unreadable snapshot
-  into `registry_check.error` rather than a blank page; `entities_resolve` (the live check as a
-  steward types) refuses it outright, the substrate check's posture. `_with_registry_check` asks the
-  question against the registry WITHOUT the proposal itself — a proposal always resolves to itself,
-  which says nothing. The similarity listing folds the registry
-  ONCE per request (`_similarity_index`): N names against M entities is M + N folds, not N × M.
-- `server.review.decide_and_record` — `entity_decide`'s whole seam, and the SAME function MCP and
-  Slack decide through: land the commit through the governed clone door, THEN the ledger row.
-  `_decision_action` is this module's only per-verdict code, and it is a lambda factory: it maps
-  `(item_kind, stored verdict)` onto one `entities.decide` call and the ledger `extra` that goes
-  with it. `entities.remote` is reached by that sequence, never from this
-  package — its import allowlist grants `decide`, `generator` and `errors` only.
-  `server.review.commission_registration` is `entity_create`'s seam, and it is NOT that shape: it
-  touches no git and writes no ledger row, it queues a capture carrying the registration and the
-  LIBRARIAN writes the page, births the identity confirmed by the actor and records the approval
-  after its own push ([ADR 042](../../../docs/decisions/042-an-entity-is-born-written.md)). What
-  stays here is the pre-flight `entity_create` owns: the required `about`, the slug-of-the-name
-  check on `entity_id`, and the refusal of a name the SERVED registry already resolves (the entity
-  exists — capture about it instead). It needs the evidence store the queue archives into, passed
-  as `AdminService(..., evidence=)` from `compose`. The exception
-  mapping stays HERE by decision: nothing is caught inside `_do`, so `_mutate` records the
-  library's OWN class name in `admin_actions` before the `except (EntityError, CaptureError)`
-  outside it raises `AdminRefused` with the library's sentence.
-  `server.review.apply_repair_and_record`/`reject_repair_and_record` — `repair_approve`/
-  `repair_reject`'s whole seam, and the SAME pair the MCP review lane decides a `repair-proposal`
-  with (ADR 039): record the verdict as a CONDITIONAL update, apply through the governed door,
-  write the `review_decisions` row after the push. `repair.remote` is reached by that sequence,
-  never from this package — its import allowlist grants `repair.store`, `repair.schema` and
-  `repair.errors` only, the same shape the entities edge has. The exception mapping stays HERE for
-  the same reason it does for a decision: nothing is caught inside `_do`, so `_mutate` records
-  `RepairError` in `admin_actions` before the `except` outside it raises `AdminRefused`. Every
-  write names this door with `server.review.SOURCE_ADMIN` — required on every ledger write, so a
-  console row is told apart from an MCP or Slack one on the row itself rather than by inference.
-- `server.review.VERDICTS_BY_KIND` — the ONE translation from a button's word to the stored verdict.
-  `entity_decide` reads its keys to validate the request and its VALUES to act, so the console can
-  never accept a verdict a kind does not take, nor store one under a spelling the ledger's other
-  readers do not know.
+  human to judge and nothing acts on. Never a second "collides": a looser fold here would stop an
+  operator registering a legitimately distinct entity, and a stricter one would promise a write the
+  gate refuses. `entities_resolve` and `entities_registry` let an unreadable snapshot refuse
+  outright (the substrate check's posture); `_registry_or_none` is the swallowing variant and
+  `entity_create` is its only caller, because a registry this server cannot read must not stop
+  somebody registering — the birth gate checks again inside the commit either way. The similarity
+  listing folds the registry ONCE per request (`_similarity_index`): N names against M entities is
+  M + N folds, not N × M.
+- `server.review.commission_registration` — `entity_create`'s whole seam, and it touches no git and
+  writes no ledger row: it queues a capture carrying the registration and the LIBRARIAN writes the
+  page, births the identity confirmed by the actor and records the approval after its own push
+  ([ADR 042](../../../docs/decisions/042-an-entity-is-born-written.md),
+  [ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md) D1). What stays here is the
+  pre-flight `entity_create` owns: the required `about`, the slug-of-the-name check on `entity_id`,
+  and the refusal of a name the SERVED registry already resolves (the entity exists — capture about
+  it instead). It needs the evidence store the queue archives into, passed as
+  `AdminService(..., evidence=)` from `compose`. The exception mapping stays HERE by decision:
+  nothing is caught inside `_do`, so `_mutate` records the library's OWN class name in
+  `admin_actions` before the `except (EntityError, CaptureError)` outside it raises `AdminRefused`
+  with the library's sentence.
+- `server.review.apply_repair_and_record` / `reject_repair_and_record` / `delete_and_record` —
+  `repair_approve`, `repair_reject` and `pages_delete`'s whole seams, and the same functions the
+  MCP deletion door runs, so which door a person acted from changes the recorded `source` and
+  nothing else. Each lands the commit through the governed door, then the row. `repair.remote` is
+  reached by that sequence, never from this package — its import allowlist grants `repair.store`,
+  `repair.schema` and `repair.errors` only, and `stigmergy.entities.remote` is absent for the same
+  reason. The exception mapping stays HERE for `commission_registration`'s reason: nothing is
+  caught inside `_do`, so `_mutate` records `RepairError` in `admin_actions` before the `except`
+  outside it raises `AdminRefused`. Every one of them is passed `source=ADMIN_DOOR` — this
+  package's one spelling of its own name, so a console act is told apart from an MCP one on the row
+  itself rather than by inference.
 - `queue.outcomes_by_day` — the metrics' capture series, beside `counts_by_status` in the queue
   module because it is the same fact with a time axis; the console never carries its own query
   over `capture_queue`. `pilot_report.answer_shape_by_day` is the `ask` series: the report's own
   classifier (`shape_of`) as SQL, pinned against the Python original by test, so a chart and the
-  report cannot disagree about what an answer was. `decisions.recent_decisions` and
-  `repair.store.counts_by_status` are the ledger feed and the proposal histogram — each bounded or
-  aggregated in the database, because both tables only grow.
+  report cannot disagree about what an answer was. `repair.store.counts_by_status` is the proposal
+  histogram — aggregated in the database, because that table only grows.
 - `auth.token_matches` / `bearer_token` / `host_allowed` — pure; never re-derive a header parse.
 - `service._clean` (= `stigmergy.text.sanitize`) — the one cleaning seam for untrusted strings on
   the way out: control characters die, newlines and a literal `<script>` survive, because HTML
@@ -178,15 +162,16 @@ catch-all converter can read one as an id.
   in development rather than shipping a blank line over Dispatch. A field's `live(value, setNote,
   allValues)` hook renders a node under the field as the user types — the Register form's registry
   check is one; its debounce is cancelled when the dialog closes. The dialog traps Tab and hands
-  focus back to the control that opened it.
+  focus back to the control that opened it, and with no fields at all it is the plainest panel this
+  console has, which is what a removal's diffs come back in.
 - `views/common.js` `mutate(path, body, message, onSuccess?)` (frontend) — every state-changing
   button goes through it: one toast per outcome, the server's `warning` folded into a warning
   toast rather than a second, contradictory one, the result handed on for the flows that need a
   sha or a count. `runShape`/`runTable` — one shape for every run strip and its table twin.
-- `copy.js` (frontend) — the vocabulary: `word()`, `status()`, `decisionVerb()`, `itemKind()`,
-  `repairKind()`, `verdict()`, `check()`, `severity()`, `jobName()`, `door()`, `page()`. Every
-  lookup falls back to the raw word, so a new status renders ugly and never invisible. The closed
-  LISTS come from `/admin/api/meta`; this file only knows how to say them.
+- `copy.js` (frontend) — the vocabulary: `word()`, `status()`, `repairKind()`, `verdict()`,
+  `check()`, `severity()`, `jobName()`, `jobConsequence()`, `page()`. Every lookup falls back to
+  the raw word, so a new status renders ugly and never invisible. The words themselves come from
+  `/admin/api/meta` or from the constant that produced them; this file only knows how to say them.
 - `charts.js` (frontend) — `stackedColumns`, `hbars` (HTML, so labels stay legible at any card
   width), `partToWhole`, `sparkline`, `histogram`, `meter`, `runStrip`, and `chartCard` (title,
   the chart, its table twin one toggle away). A series' colour is its KEY role
@@ -213,11 +198,11 @@ catch-all converter can read one as an id.
 - Raising a message that could carry captured content across the HTTP boundary. The catch-all in
   `_json_endpoint` returns `the operation failed (<ClassName>)`; only the three domain errors and
   `ActionsError` cross with their sentence.
-- Deciding anything about a proposal in `views/entities.js` or `views/inbox.js`. A Merge picker
-  offers `merge_candidates` first and the rest of the registry after, and hands the chosen id to
-  `entities/decide` as `into`; whether that entity exists, is confirmed, or would collide is
-  `server.review` and `entities.decide`'s to refuse, on every door alike. The frontend renders a
-  decision and never derives one.
+- Deriving a decision in the frontend. `views/repairs.js` sends Approve, Decline and Remove pages
+  and computes no verdict of its own; `views/entities.js` renders the registry check's verdict
+  beside the field it belongs to and acts on none of it. Whether a name may be born is the birth
+  gate's answer inside the commit, and whether a repair may land is `server.review`'s and the nine
+  gates' — on every door alike. The frontend renders a decision and never derives one.
 - Turning the `similar` verdict into a refusal, anywhere. It is a listing for a person's eyes;
   the only "collides" is `Registry.collision_id`, and the gate runs again after the clone.
 - Offering a way to move a capture out of its state. The Captures page reads; a queue row is the
@@ -240,9 +225,8 @@ catch-all converter can read one as an id.
 `actor` is **attribution, not authorization** — recorded, never checked.
 
 Compose-time DDL, only when configured: `ensure_admin_schema` plus
-`gardener.schema.ensure_gardener_schema`, `repair.schema.ensure_repair_schema` and
-`server.review.ensure_review_schema`, which the read paths would otherwise meet as a bare
-`UndefinedTable` on a fresh database.
+`gardener.schema.ensure_gardener_schema` and `repair.schema.ensure_repair_schema`, which the read
+paths would otherwise meet as a bare `UndefinedTable` on a fresh database.
 
 | Env var | Default | Effect |
 |---|---|---|
@@ -267,17 +251,17 @@ includeSubDomains`; `/admin/api/*` additionally `cache-control: no-store`, the s
 assets `cache-control: no-cache` (an ETag round trip on every load, so a deploy that renames a
 module never leaves a browser running the old `app.js` against new imports).
 
-**The registry check's wire shape** (`entities_resolve`'s `checks[]`, and `check` on each proposal):
-`{"name", "verdict": registered|collides|similar|clear|unchecked, "match": {id, name, type,
-aliases} | null, "similar": [{id, name, type, aliases, why}]}`, beside `registry` /
-`registry_check`: `{"available", "road": snapshot|file|none, "source", "refreshed_at"}` (plus
-`error` on the entity routes when the snapshot could not be read).
+**The registry check's wire shape** (`entities_resolve`'s `checks[]`):
+`{"name", "verdict": registered|collides|similar|clear|unchecked, "match": <entry> | null,
+"similar": [<entry> + "why"]}`, beside `registry`: `{"available", "road": snapshot|file|none,
+"source", "refreshed_at"}`. An `<entry>` is `{id, name, type, aliases, approved_by}` — the same
+shape `entities_registry` lists, `approved_by` being whoever's capture introduced the entity, empty
+where the page records nobody.
 
 **The vocabularies the frontend renders all ship from `meta()`**, never a second copy in JS:
 `entity_types`, `statuses`, `terminal_statuses`, `legacy_statuses` (today just `resolved`),
-`repair_kinds`, `gardener_severities`, `item_kinds`, `verdicts_by_kind` (per kind, the stored words
-`server.review.VERDICTS_BY_KIND` accepts) and `decision_sources`. `copy.js` knows only how to SAY
-them, and every lookup falls back to the raw word — a new status renders ugly and never invisible.
+`repair_kinds` and `gardener_severities`. `copy.js` knows only how to SAY them, and every lookup
+falls back to the raw word — a new status renders ugly and never invisible.
 
 `CRON_WORKFLOWS` — `index-rebuild.yml`, `retention-purge.yml`, `gardener.yml`,
 `repair-propose.yml`, each naming its `schedule_utc` and where the database truth lives
@@ -295,17 +279,15 @@ names — a classic script cannot be imported by a module — and `test_static_d
 two spellings against each other.
 
 **Frontend**: each view module exports `render(host, params?) → cleanup?`, dispatched from
-`app.js`'s `GROUPS` (the sidebar, grouped by the job a person came to do) and `DETAIL_ROUTES`;
-the old tab names (`overview`, `queue`, `crons`) are aliases, so a bookmark still lands, and a
-page may carry a sub-path of its own (`#/inbox/entity` is the inbox, filtered). The token lives in
-`sessionStorage` under `stigmergy-ops-token` — no cookie, therefore no CSRF surface — and any 401
-clears it, stashes the reason for one reload, and lands on the login screen with that reason
-shown. The chart window (7/30/90 days) lives in `sessionStorage` too, and the per-page explainer's
-collapsed state in `localStorage`. Only the dashboard polls (30 s, skipped while
+`app.js`'s `GROUPS` (the sidebar, grouped by the job a person came to do) and `DETAIL_ROUTES`
+(`captures/…` and `repairs/…`, each naming its OWN id parser — a shared blanket `Number(...)` once
+turned a non-numeric segment into `NaN` and asked the API for it); the old tab names (`overview`, `queue`, `crons`) are aliases, so a bookmark still lands. The token
+lives in `sessionStorage` under `stigmergy-ops-token` — no cookie, therefore no CSRF surface — and
+any 401 clears it, stashes the reason for one reload, and lands on the login screen with that
+reason shown. The chart window (7/30/90 days) lives in `sessionStorage` too, and the per-page
+explainer's collapsed state in `localStorage`. Only the dashboard polls (30 s, skipped while
 `document.hidden`), and it is the only view returning a cleanup function; `navigate()` carries a
-token so a view that resolves after the next navigation started has its cleanup run at once. The
-inbox badge refreshes every 60 s on the same visibility rule, and unconditionally on load and on
-every navigation (`state.notify`).
+token so a view that resolves after the next navigation started has its cleanup run at once.
 
 ## Behaviour worth knowing before editing
 
@@ -322,12 +304,16 @@ every navigation (`state.notify`).
 - **Not every POST is a mutation.** `queue/purge --dry-run`, `digest/preview`, `index/check` and
   `entities/resolve` write no `admin_actions` row. `digest/preview` still records a
   `digest-dry-run` row in `job_runs`, which is why the Digest page's history fills with them.
-- **Every read of a table that only grows has a ceiling**, applied in SQL: the inbox (`limit`,
-  with a conservative `truncated`), the ledger feed (`DECISIONS_LIMIT`), the pending proposals
-  (`REPAIR_PENDING_LIMIT`, with `pending_truncated`), the metrics window (`MAX_METRICS_DAYS`). The
-  one unbounded per-item read, `latest_decisions`, is the doorbell's and is not reached from here.
+- **Every read of a table that only grows has a ceiling**, applied in SQL: the pending proposals
+  (`REPAIR_PENDING_LIMIT`, with `pending_truncated`) and the decided page beside them, the
+  capture→filed sample the percentiles are cut from (`LATENCY_SAMPLE_LIMIT`), the metrics window
+  (`MAX_METRICS_DAYS`), and the two `audit_log` ROW reads (`_ask_questions`, `_rate_limited`, each
+  clamped again inside the method) — the per-identity/tool figures need none, being an aggregate
+  bounded by cardinality. `entities/resolve` is the one that REFUSES instead of truncating
+  (`MAX_RESOLVE_NAMES`): it is called as somebody types, so its input is a form's worth of names
+  and a longer list is a caller doing something else.
 - **The console reads page PATHS, never page BODIES.** `index/check` and `gardener` carry paths out
-  of the corpus, both behind the operator token and both declared ACL exceptions.
+  of the corpus, both behind the operator token and both covered by the declared ACL exception.
 - `_zone_counts` and `schema.record_action` are the only two places a swallowing `except` is right
   here — no index yet is a state, and bookkeeping must never fail the work.
 - **The worker's lease is resolved per call** (`worker_visibility_timeout_s()` →
@@ -340,28 +326,34 @@ every navigation (`state.notify`).
 - `_mutate` records `outcome='error'` and re-raises, including for a domain refusal, so the action
   log answers "what was attempted", not only "what succeeded".
 - **The Gardener page's `urgent` (`sla`) chip is permanently empty** and that is not a console
-  defect: `sla` is a real member of `gardener.schema.SEVERITIES` that nothing in that package
-  produces. The chip becomes live the day a check emits one.
-- **`entity_decide` decides server-side**, through `server.review.decide_and_record` — never through
-  `review_decide`/`BrainService` (both banned imports), whose steward check is for a RESOLVED
-  identity while `actor` here is free text behind the operator token (ADR 029/030 D2). The console's
-  authorization IS that token.
+  defect: `sla` is a real member of `gardener.schema.SEVERITIES` that no check in that package
+  produces. The chip becomes live the day one emits it.
 - **The registry check is a warning, never a permission.** It reads the snapshot this server
-  serves; the birth gate re-checks against the registry the commit will publish — inside the clone
-  for a decision, inside the capture's own worktree when the librarian files a registration.
-  When the snapshot is fresh the two agree; when it is stale the gate wins, and the console shows
-  the gate's own sentence as a 409 (for a registration, as the capture's refusal).
-- **A decision's own reads are cheap and its write is not.** `entities/decide` runs in a worker
-  thread (`run_in_threadpool`) because it clones the knowledge repo and pushes, and the MCP tools
-  share this process; `entities/create` rides the same thread for the archive write its capture
-  pays for, and `metrics` does the same for its dozen aggregate queries. The service holds no cursor across the call boundary, so the autocommit
-  connection is safe to use from the thread.
-- **`repair_approve` applies server-side on the same terms.** `review_decide`'s per-target-path
-  steward guard is likewise not reached: this console's authorization IS the operator token, and
-  `actor` is attribution. What it does NOT skip is anything the apply itself proves — the clone's
-  own re-validation, the nine gates, and the cross-check that the produced diff is exactly the
-  proposal's stored `target_paths`. A failed apply comes back as a 409 with the gate's own
-  sentence, and the row stays `failed` with its reason rather than returning to pending.
+  serves; the birth gate re-checks against the registry the commit will publish, inside the
+  capture's own worktree when the librarian files the registration. When the snapshot is fresh the
+  two agree; when it is stale the gate wins, and the console shows the gate's own sentence as the
+  capture's refusal on the row it navigated to.
+- **The console's authorization IS its token** ([ADR 029](../../../docs/decisions/029-admin-console.md)
+  D3: one dedicated credential, revoked by one secret change), and `actor` is free text behind it —
+  attribution, never checked. That is why `pages_delete` and `repair_approve` reach the shared
+  sequences with no authorization argument: authorization is per-surface, decided before the call,
+  and the caller sets are pinned both ways in `tests/test_architecture.py`. A second surface added
+  here without deciding who may is exactly what those pins exist to catch.
+- **A read is cheap and a write to git is not.** `repairs/{id}/approve` and `pages/delete` run in a
+  worker thread (`run_in_threadpool`) because each clones the knowledge repo, runs the nine gates
+  — `git` and `gitleaks` subprocesses — and pushes, and the MCP tools share this process;
+  `entities/create` rides the same thread for the archive write its capture pays for, and `metrics`
+  does the same for its dozen aggregate queries. The service holds no cursor across the call
+  boundary, so the autocommit connection is safe to use from the thread.
+- **`repair_approve` applies server-side, and what it does NOT skip is anything the apply itself
+  proves**: the clone's own re-validation, the nine gates, and the cross-check that the produced
+  diff is exactly the proposal's stored `target_paths`. A failed apply comes back as a 409 with the
+  gate's own sentence, and the row stays `failed` with its reason rather than returning to pending.
+- **A removal's reading happens after the push.** `pages_delete` returns the unified diff of every
+  page the sweep rewrote, and the console shows them in a fieldless `confirmForm` UNRENDERED: what
+  landed in the repo is those bytes, nobody read the model's prose before it landed, and `git
+  revert` in the knowledge repo is the undo
+  ([ADR 043](../../../docs/decisions/043-a-sweep-is-written.md) D5).
 
 ## Common tasks
 
@@ -380,18 +372,21 @@ every navigation (`state.notify`).
 
 ## Tests
 
-`tests/admin/` runs against real Postgres through `tests.testdb` and real git for the identity
-decisions (`conftest.build_bare_knowledge_repo`); only the two network edges — GitHub Actions and
-Slack — are
-faked. `test_settings_and_auth.py` and `test_cli.py` are keyless; `test_github_gateway.py` drives
-an injected opener; `test_service_pg.py` is the largest suite (queue reads, reclaim on
-both edges of the worker's lease, purge dry-run vs real, cron paths, and the five decisions plus a
-`create` against a throwaway bare remote); `test_console_reads_pg.py` covers the inbox, the served
-registry, the registry check (every verdict beside its benign twin, the gate's fold against a
-looser one) and the metrics window, through the service and over the wire; `test_routes_pg.py` exercises the real
-`compose` product over `httpx.ASGITransport` (inert 404s, the tokenless shell vs the 401 API, the
-security and cache headers, the status mapping); `test_static_discipline.py` greps the shipped
-frontend files. Auth refusals are tested beside their benign twins throughout.
+`tests/admin/` runs against real Postgres through `tests.testdb` and real git wherever a claim
+needs it (`conftest.build_bare_knowledge_repo` — the bare remote the registry fixtures publish an
+entity page into, and the one an approve or a removal clones); only the two network edges — GitHub
+Actions and Slack — are faked. `test_settings_and_auth.py` and `test_cli.py` are keyless;
+`test_github_gateway.py` drives an injected opener; `test_service_pg.py` is the largest suite
+(queue reads, reclaim on both edges of the worker's lease, purge dry-run vs real, cron paths, a
+registry the loader refuses, `entity_create` against a throwaway bare remote, and the repair
+approve/decline pair beside `pages_delete` through the shared sequence);
+`test_console_reads_pg.py` covers the served registry, the registry check (every verdict beside its
+benign twin, the gate's fold against a looser one) and the metrics window, through the service and
+over the wire; `test_routes_pg.py` exercises the real `compose` product over
+`httpx.ASGITransport` (inert 404s, the tokenless shell vs the 401 API, the security and cache
+headers, the status mapping, and the two handlers that clone proving they never run on the event
+loop); `test_static_discipline.py` greps the shipped frontend files. Auth refusals are tested
+beside their benign twins throughout.
 
 `tests/server/test_admin_branch.py` proves the branch on the real `build_http_app` wiring: the MCP
 token store does not open the console, the admin token opens nothing on `/mcp`, and
@@ -400,8 +395,11 @@ token store does not open the console, the admin token opens nothing on `/mcp`, 
 `tests/test_architecture.py` holds the boundary: `test_admin_sources_found` (the anti-blindness
 floor), `test_admin_imports_only_its_declared_set`,
 `test_admin_reaches_the_librarian_through_config_alone`,
-`test_admin_actually_uses_its_declared_librarian_exception` (the pruning half),
+`test_admin_actually_uses_its_declared_librarian_exception` and
+`test_every_declared_admin_import_prefix_is_actually_imported` (the pruning halves),
 `test_admin_loads_the_slack_sdk_door_lazily`,
 `test_admin_never_imports_the_read_path_or_the_mcp_adapter`,
-`test_only_the_http_transport_composes_the_admin_branch`, and the ACL-reachability parametrization
-naming `admin/service.py`.
+`test_only_the_http_transport_composes_the_admin_branch`, the ACL-reachability parametrization
+naming `admin/service.py`, and the two caller pins that name this package as the surface deciding
+its own authorization — `test_the_shared_mint_sequence_is_entered_from_exactly_the_authorizing_surfaces`
+and `test_the_governed_repair_apply_is_entered_from_exactly_the_declared_surfaces`.

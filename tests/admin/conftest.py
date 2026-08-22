@@ -41,7 +41,7 @@ def conn():
     connection = testdb.connect_or_skip("admin")
     capture_schema.ensure_capture_schema(connection)
     ensure_audit_table(connection)
-    review.ensure_review_schema(connection)
+    review.ensure_repair_schema(connection)
     ensure_gardener_schema(connection)
     repair_schema.ensure_repair_schema(connection)
     ensure_admin_schema(connection)
@@ -61,7 +61,7 @@ def clean_tables(conn):
     with conn.cursor() as cur:
         cur.execute(
             "TRUNCATE capture_queue, job_runs, ingest_errors, audit_log, admin_actions,"
-            " gardener_findings, review_decisions, repair_proposals RESTART IDENTITY")
+            " gardener_findings, repair_proposals RESTART IDENTITY")
     # The registry snapshot is what the inbox and the Entities desk read: a test that published
     # one must not hand its proposals to the next.
     index_store.clear_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH)
@@ -274,15 +274,16 @@ def no_real_github_app(monkeypatch):
 
 
 # ── what the librarian leaves behind: proposals, pushed to the bare remote and published ──────
-def _proposed_page(name: str, entity_type: str, aliases, proposed_aliases=()) -> str:
+def _entity_page(name: str, entity_type: str, aliases, approved_by: str) -> str:
+    """One entity page as the librarian writes it (ADR 044): born confirmed by the person whose
+    capture introduced it, with every spelling the material used among its own `aliases`."""
     from stigmergy.entities import generator
     listed = "[" + ", ".join(f'"{a}"' for a in aliases) + "]"
-    pending = "[" + ", ".join(f'"{a}"' for a in proposed_aliases) + "]"
     return (f'---\ntype: entity\ntitle: "{name}"\nentity_type: {entity_type}\nrole: ""\n'
             f'status: developing\naliases: {listed}\ncreated: 2026-08-20\nupdated: 2026-08-20\n'
             f'tags: [entity, {entity_type}]\nentity: ["{generator.canonical_id_for(name)}"]\n'
-            f'related: []\nsources: []\napproved_by: ""\nproposed_aliases: {pending}\n---\n\n'
-            f"# {name}\n\n## What / Who\n\n{name} is a {entity_type} the librarian proposed.\n")
+            f'related: []\nsources: []\napproved_by: "{approved_by}"\n---\n\n'
+            f"# {name}\n\n## What / Who\n\n{name} is a {entity_type} a capture introduced.\n")
 
 
 def _with_clone(bare: str, work) -> None:
@@ -309,10 +310,11 @@ def publish_registry(bare: str, conn) -> None:
     index_store.write_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH, text, "test")
 
 
-def propose_identity(bare: str, conn, name: str = "Globex Robotics", *,
-                     entity_type: str = "organization", aliases=(), proposed_aliases=()) -> str:
-    """One proposed entity page (plus a note anchored to it) on the bare remote, and the
-    snapshot published. Returns the entity id."""
+def introduce_entity(bare: str, conn, name: str = "Globex Robotics", *,
+                     entity_type: str = "organization", aliases=(),
+                     approved_by: str = "ana@example.com") -> str:
+    """One entity page a capture introduced (plus that note, anchored to it) on the bare remote,
+    and the snapshot published. Returns the entity id."""
     from stigmergy.entities import generator
     entity_id = generator.canonical_id_for(name)
 
@@ -320,7 +322,7 @@ def propose_identity(bare: str, conn, name: str = "Globex Robotics", *,
         os.makedirs(os.path.join(clone, "wiki", "entities"), exist_ok=True)
         os.makedirs(os.path.join(clone, "wiki", "notes"), exist_ok=True)
         with open(os.path.join(clone, "wiki", "entities", f"{name}.md"), "w", encoding="utf-8") as f:
-            f.write(_proposed_page(name, entity_type, aliases, proposed_aliases))
+            f.write(_entity_page(name, entity_type, aliases, approved_by))
         with open(os.path.join(clone, "wiki", "notes", f"{name} kickoff.md"), "w",
                   encoding="utf-8") as f:
             f.write(f'---\ntype: note\ntitle: "{name} kickoff"\nstatus: developing\n'
@@ -332,18 +334,16 @@ def propose_identity(bare: str, conn, name: str = "Globex Robotics", *,
 
 
 def register_entity(bare: str, conn, name: str, *, entity_type: str = "organization",
-                    aliases=(), proposed_aliases=()) -> str:
-    """A CONFIRMED entity page on the bare remote (the merge target, or an alias proposal's
-    owner), and the snapshot published. Returns the entity id."""
+                    aliases=(), approved_by: str = "steward@example.com") -> str:
+    """An entity page on the bare remote with no note beside it — the registry entry alone, for a
+    test that needs a name to already resolve. The snapshot is published. Returns the entity id."""
     from stigmergy.entities import generator
     entity_id = generator.canonical_id_for(name)
 
     def work(clone):
         os.makedirs(os.path.join(clone, "wiki", "entities"), exist_ok=True)
-        text = _proposed_page(name, entity_type, aliases, proposed_aliases).replace(
-            'approved_by: ""', 'approved_by: "steward@example.com"')
         with open(os.path.join(clone, "wiki", "entities", f"{name}.md"), "w", encoding="utf-8") as f:
-            f.write(text)
+            f.write(_entity_page(name, entity_type, aliases, approved_by))
     _with_clone(bare, work)
     publish_registry(bare, conn)
     return entity_id

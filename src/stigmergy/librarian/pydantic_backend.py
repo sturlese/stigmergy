@@ -200,7 +200,7 @@ class NewEntity(StructuredInbound):
     What / Who paragraph of its page), `facts` (what the material AND the pages already in this
     brain establish about it, one line each — search for the name before you write) and
     `connections` (`[[Page]] — why`, naming pages that exist or the page you are filing). The
-    worker creates the entity page from this, unconfirmed, and a steward confirms it."""
+    worker writes the entity page from this, confirmed by whoever captured."""
     name: str = ""
     entity_type: str = ""
     role: str = ""
@@ -213,7 +213,7 @@ class NewEntity(StructuredInbound):
 class NewAlias(StructuredInbound):
     """A spelling the material uses for a REGISTERED entity that the registry does not list yet:
     `entity` is that entity's id (or registered name) and `alias` the spelling, exactly as the
-    material writes it. The worker records it as a proposed spelling; a steward confirms it."""
+    material writes it. The worker adds it to that entity's registered spellings."""
     entity: str = ""
     alias: str = ""
 
@@ -356,8 +356,8 @@ def _complete_proposals(new_entities) -> None:
         for field_name, why in (("name", "an entity is a name before it is anything else"),
                                 ("entity_type", "one of person, organization, product, tool, "
                                                 "repository, place or project"),
-                                ("summary", "the What / Who paragraph a steward reads before "
-                                            "approving the identity")):
+                                ("summary", "the What / Who paragraph the entity page lands "
+                                            "with — nobody edits it afterwards")):
             if not (getattr(proposed, field_name, "") or "").strip():
                 raise ValueError(_needed(f"new_entities[{n}].{field_name}", f"{why}."))
 
@@ -594,8 +594,7 @@ class FilingToolbox:
         An unresolved name carries `near`: the registered entities that name partly spells, through
         `gather.match_registry` — the SAME rule that built the seeded block, so asking again cannot
         get a different set. They are candidates to JUDGE. Resolving one is still declaring its id
-        and still meeting `gate_anchoring`. A resolved entity says whether it is still `proposed`
-        (unconfirmed by a steward): it anchors exactly the same, and the agent should know it.
+        and still meeting `gate_anchoring`.
         """
         ps = gather.prompt_scalar
         registry = self.registry()
@@ -759,11 +758,11 @@ class PydanticFilingAgent:
             judgment, not answers — read the corpus and decide whether the material really is about
             one of them, and anchor by declaring THAT entity's id.
 
-            If none of them is it, the thing is NEW: propose it in your account's `new_entities`
-            (every field filled) and anchor to its name — the worker creates the entity page
-            beside yours and a steward confirms it. Never invent an entity id, and never fall back
-            to company-wide scope to get something filed: a wrong anchor corrupts a timeline
-            silently, a proposal costs a steward one click.
+            If none of them is it, the thing is NEW: declare it in your account's `new_entities`
+            (every field filled) and anchor to its name — the worker writes the entity page beside
+            yours, confirmed by whoever captured. Never invent an entity id, and never fall back to
+            company-wide scope to get something filed: a wrong anchor corrupts a timeline silently,
+            a declared identity costs nobody anything.
             """
             return _tool_payload(toolbox.resolve_entities(names))
 

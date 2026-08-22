@@ -9,6 +9,50 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
+## [Unreleased]
+
+**The capture is the approval** ([ADR 044](./docs/decisions/044-the-capture-is-the-approval.md), #134).
+Every write used to end in a queue somebody had to come back to: an entity waited to be approved, a
+spelling waited to be approved, a repair waited to be approved, and the doorbell existed to nag the
+person who had already made the decision by capturing. Nothing waits any more. A person's capture IS
+their approval — the librarian writes what it establishes in the commit that files it — and every
+kind of material enters at the same door.
+
+### ⚠ BREAKING CHANGES
+- **`stigmergy-meeting` and `stigmergy-drive` are gone.** A meeting and a document enter at
+  `brain_submit` with `kind="meeting"` / `kind="document"`: the client holds the text, and the
+  worker files it. `kernel/converters.py`, the Drive client and `CONVERSION_BUDGET_S` go with them;
+  the librarian's lease default drops to 900 s (1500 s on staging) now that no capture carries a
+  conversion budget
+- **`review_queue` and `review_decide` are gone from the MCP server** — eight tools where there were
+  ten. There is no queue to read and no verdict to cast: what a capture establishes is written when
+  it files
+- **An entity page's `approved_by:` names the person whose capture introduced the identity, and is
+  never empty.** The proposed state is gone from the page, from `ops/entity-registry.json` (an entry
+  is `{name, type, aliases, approved_by}` — no `proposed`, no `proposed_aliases`) and from the
+  librarian's report (`entities_born` / `aliases_added` where it said proposals). An alias the
+  material used for a registered entity is written straight to `aliases:`
+- **`stigmergy-entities` is gone** — the CLI, the clone path, the decision fold and the entry point.
+  Registering an entity is a capture like any other: the console's **Register an entity**, or
+  `brain_submit`. `stigmergy.entities` is now the pure rules the librarian births through
+- **The steward is gone as a concept**: no `deploy/stewards.json`, no `--stewards` flag, no
+  `steward_notifications` table, no Slack doorbell, no console Inbox. `brain_delete` authorizes on
+  the caller's unrestricted reach, which is what the flag stood for
+- the knowledge repo changes with it: `ops/stewards.json` deleted, the contract linter refuses an
+  empty `approved_by:`, and the entity template's own comment no longer describes a waiting state
+
+### Changed
+- `brain_submit` takes `kind` in `raw` · `page` · `meeting` · `document`; a `document` also takes
+  `source_url`, and its text is filed as a synthesis page beside a verbatim `sources/documents/`
+  part in one commit. A `meeting` rides the distiller as before
+- the HTTP transport's body ceiling is derived from the material cap (three parts plus headroom) and
+  pinned below the MCP SDK's own 4 MiB, so the outer ceiling is always the one that answers
+- the gates speak in births: `born_entity_pages`, and the refusals `unborn-entity-page`,
+  `not-an-entity-page`, `not-confirmed-by-its-submitter`
+- the admin console loses its Inbox tab; the dashboard leads with captures filed, Captures' detail
+  names the identities a capture introduced, and Entities is the registry browser plus Register
+- the weekly digest counts births from the report's `entities_born`
+
 ## [0.8.0] - 2026-08-21
 
 **An entity is born written, and keeps being written** ([ADR 042](./docs/decisions/042-an-entity-is-born-written.md), #131).

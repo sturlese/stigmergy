@@ -1,8 +1,7 @@
 # kernel — the shared bottom of the stack
 
 A LIBRARY, not a layer: importable from anywhere, and it imports nothing from this project except
-itself. `stigmergy.text` and `stigmergy.review_kinds` are siblings at the bottom of the stack, not
-part of it. The layering, the no-SDK-at-module-level rule and each consumer's declared reach are
+itself. `stigmergy.text` is a sibling at the bottom of the stack, not part of it. The layering, the no-SDK-at-module-level rule and each consumer's declared reach are
 pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/`.
 
 ## Modules

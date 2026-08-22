@@ -316,7 +316,7 @@ def test_commit_with_nothing_staged_raises(tmp_path):
 # ══════════════════════════════════════════════════════════════════════════════════════════════
 # The TOCTOU window between the gated diff and the commit.
 #
-# Every gated caller reads `diff_entries`, runs eight gates over it — the contract linter and
+# Every gated caller reads `diff_entries`, runs nine gates over it — the contract linter and
 # gitleaks as SUBPROCESSES, with the worktree sitting on disk — and then committed with
 # `add --all`, i.e. whatever was on disk at commit time. Anything written into the worktree in
 # that window landed UNGATED. The property the whole write path rests on is "the diff the gates

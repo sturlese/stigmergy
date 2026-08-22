@@ -70,7 +70,7 @@ REQUIRED_FIELDS = ["type", "title", "created", "updated", "tags", "status"]
 # views/ page's type is checked like any other, not warned-and-passed.
 MACHINE_REQUIRED_FIELDS = ["type", "title", "tags"]
 RECOMMENDED_FIELDS = ["related", "sources"]
-LIST_FIELDS = ("tags", "related", "sources", "aliases", "acl", "proposed_aliases")
+LIST_FIELDS = ("tags", "related", "sources", "aliases", "acl")
 
 # Per-type required extras beyond the universal set. Templates in
 # ops/templates/ are the source of truth for structure; this mirrors their
@@ -116,7 +116,7 @@ SIZE_MIN, SIZE_MAX = 30, 150
 # --- the derived view: entity pages <-> ops/entity-registry.json (M6c §4.4) -
 # `ops/entity-registry.json` is DERIVED from wiki/entities/*.md (SI-06, DB-20b):
 # the pages are the source of truth and the registry is generated from them by
-# `stigmergy-entities regenerate`, in the same commit a steward approves an entity in.
+# the librarian worker, in the same commit that introduces or merges an entity.
 # Nothing enforced that until now, which made "derived view" a claim rather than a
 # property — a hand-edited registry entry, or a page edited without regenerating,
 # left the graph resolving names nobody registered (or failing to resolve names
@@ -124,10 +124,16 @@ SIZE_MIN, SIZE_MAX = 30, 150
 #
 # This is the KNOWLEDGE repo's own gate on that contract: CI here goes red on drift,
 # so a page and the registry cannot disagree on `main`. The platform has the mirror
-# check (`stigmergy-entities regenerate --check`) for a steward's local clone.
+# check (`stigmergy-index --check`) for a local clone.
 ENTITIES_DIR = ("wiki", "entities")
 REGISTRY_RELPATH = "ops/entity-registry.json"
-REGISTRY_FIX = "stigmergy-entities regenerate"
+# `ops/entity-registry.json` is DERIVED from the entity pages and written by the librarian worker
+# alone (ADR 044): a DRIFT between pages and registry is reported as `warn`, not `error`, because
+# nothing in the repo is broken — but it does not heal itself either, since the worker refuses to
+# write an identity while the two sides disagree. A page the worker cannot regenerate over at all
+# (no title, two titles with one id) stays `error`: only a person fixes it.
+REGISTRY_FIX = ("an operator puts the pages and the registry back in step in the knowledge repo, "
+                "and the librarian refuses to write an identity until they do")
 DEFAULT_ENTITY_TYPE = "organization"
 
 
@@ -189,9 +195,9 @@ def _entity_pages(root, pages, texts, frontmatter, add):
     on a page with no title and on two pages whose titles slug to one id; this
     function used to `continue` past the first ("the missing-required-field rule
     already reported this") and silently last-wins on the second. Both leave CI
-    green on a repo where `stigmergy-entities regenerate` refuses to run at all — the
+    green on a repo where the worker cannot regenerate the registry at all — the
     linter is the knowledge repo's own gate on the derived view, so a state the
-    generator cannot survive has to be red HERE, not discovered by the steward whose
+    generator cannot survive has to be red HERE, not discovered by the reader whose
     approval it blocks.
 
     The first delegation was not even reliable: the frontmatter rule reports a
@@ -209,8 +215,8 @@ def _entity_pages(root, pages, texts, frontmatter, add):
         title = str(fm.get("title") or fm.get("name") or "").strip()
         if not title:
             add("error", "registry", p,
-                f"an entity page with no title names no entity, and "
-                f"`{REGISTRY_FIX}` refuses to run at all while it is in "
+                f"an entity page with no title names no entity, and the worker cannot "
+                f"regenerate the registry at all while it is in "
                 f"{'/'.join(ENTITIES_DIR)}/ — give it a title (the page contract "
                 f"requires one anyway) or move it out of the entity folder")
             continue
@@ -220,8 +226,8 @@ def _entity_pages(root, pages, texts, frontmatter, add):
             add("error", "registry", p,
                 f"{title!r} and {first['name']!r} "
                 f"({first['path'].relative_to(root)}) both produce the registry id "
-                f"{canonical_id!r}, so one would overwrite the other and "
-                f"`{REGISTRY_FIX}` refuses to run while both exist — ids are the "
+                f"{canonical_id!r}, so one would overwrite the other and the worker "
+                f"cannot regenerate the registry while both exist — ids are the "
                 f"slug of the page title, so two titles differing only by "
                 f"punctuation or case collide. Rename one, or make it an alias of "
                 f"the other and delete its page")
@@ -229,7 +235,7 @@ def _entity_pages(root, pages, texts, frontmatter, add):
 
         # M8a (spec §4.4, criterion 11): mirrors `entities.generator._duplicate_match_keys` — two
         # pages whose TITLES fold to one entity-MATCHING key even though their ids (slugs) differ,
-        # which `stigmergy-entities regenerate` refuses to run over. A literal mirror of the
+        # which the worker refuses to regenerate the registry over. A literal mirror of the
         # generator's own wording, not a paraphrase, so the two checks agree about what the fix is.
         match_key = normalize_name(title)
         earlier = seen_match_keys.get(match_key) if match_key else None
@@ -240,8 +246,7 @@ def _entity_pages(root, pages, texts, frontmatter, add):
                 f'("{match_key}") even though their registry ids differ '
                 f'("{earlier["id"]}" vs "{canonical_id}") — every mention of that name would '
                 f'silently anchor to whichever page the registry happens to index last. Rename '
-                f'one, or make it an alias of the other and delete its page, then run '
-                f'`{REGISTRY_FIX}` to fix it')
+                f'one, or make it an alias of the other and delete its page — {REGISTRY_FIX}')
         elif match_key:
             seen_match_keys[match_key] = {"path": p, "name": title, "id": canonical_id}
 
@@ -250,40 +255,32 @@ def _entity_pages(root, pages, texts, frontmatter, add):
             aliases = [aliases] if aliases else []
         alias_set = {str(a).strip() for a in aliases if str(a).strip()}
 
-        # The identity lifecycle (File First, Govern After): `approved_by` EMPTY is a proposal the
-        # librarian made and a steward has not confirmed; a name is who confirmed it; ABSENT is a
-        # page from before the field existed, which counts as confirmed. `proposed_aliases` are
-        # spellings the librarian appended, waiting on the same steward — never already aliases.
+        # The identity's lifecycle has ONE state (ADR 044): `approved_by` names the person whose
+        # capture introduced the entity — born confirmed, never waiting on anybody. ABSENT is a
+        # page from before the field existed, which reads the same; EMPTY is the old "proposed"
+        # mark, and nothing may write it any more. `proposed_aliases` is not a field: a spelling
+        # the material uses is an alias.
         approved_by = fm.get("approved_by")
         if approved_by is not None and not isinstance(approved_by, str):
             add("error", "lifecycle", p,
-                f"approved_by must be a string (who confirmed this identity, or \"\" while it "
-                f"is only proposed), got: {approved_by!r}")
+                f"approved_by must be a string (who introduced this identity), got: "
+                f"{approved_by!r}")
             approved_by = str(approved_by)
-        proposed = approved_by is not None and not approved_by.strip()
-        proposed_aliases = fm.get("proposed_aliases")
-        if not isinstance(proposed_aliases, list):
-            proposed_aliases = [proposed_aliases] if proposed_aliases else []
-        proposed_set = set()
-        for spelling in proposed_aliases:
-            spelling = str(spelling).strip()
-            if not spelling:
-                continue
-            if spelling.lower() == title.lower() or spelling.lower() in {a.lower() for a in alias_set}:
-                add("error", "lifecycle", p,
-                    f"proposed alias {spelling!r} is already this entity's name or one of its "
-                    f"aliases — a spelling the registry lists needs no proposal; remove it from "
-                    f"proposed_aliases")
-                continue
-            proposed_set.add(spelling)
+        if approved_by is not None and not approved_by.strip():
+            add("error", "lifecycle", p,
+                "approved_by is empty: an identity is born confirmed by the person whose capture "
+                "introduced it, and nothing waits on a steward any more (ADR 044) — name them, or "
+                "drop the field on a page that predates it")
+        if "proposed_aliases" in fm:
+            add("error", "lifecycle", p,
+                "proposed_aliases is not a field any more (ADR 044): a spelling the material uses "
+                "is one of the entity's aliases — move it to `aliases`")
 
         out[canonical_id] = {
             "path": p, "name": title,
             "type": str(fm.get("entity_type") or DEFAULT_ENTITY_TYPE).strip()
                     or DEFAULT_ENTITY_TYPE,
             "aliases": sorted(alias_set),
-            "proposed": proposed,
-            "proposed_aliases": sorted(proposed_set),
         }
     return out
 
@@ -300,10 +297,10 @@ def check_registry(root, pages, texts, frontmatter, add):
     fresh clone of a repo layout this rule is not responsible for creating.
 
     **Except for the pages the generator cannot read.** `_entity_pages` runs FIRST and
-    above that early return, because "`stigmergy-entities regenerate` refuses to run" is
-    true whether or not a registry file exists yet — a title-less page or a slug
-    collision blocks the command that would create one. Comparing pages against a
-    registry is the part that needs the file; reading the pages at all is not.
+    above that early return, because "the worker cannot regenerate the registry" is true
+    whether or not a registry file exists yet — a title-less page or a slug collision blocks
+    the regeneration that would create one. Comparing pages against a registry is the part
+    that needs the file; reading the pages at all is not.
     """
     declared = _entity_pages(root, pages, texts, frontmatter, add)
     registry_file = root / REGISTRY_RELPATH
@@ -315,52 +312,39 @@ def check_registry(root, pages, texts, frontmatter, add):
         if not isinstance(registered, dict):
             raise ValueError("top-level 'entities' must be an object")
     except (ValueError, KeyError, OSError) as ex:
-        add("error", "registry", REGISTRY_RELPATH,
+        add("warn", "registry", REGISTRY_RELPATH,
             f"could not be read as a registry ({ex}) — it is what every entity anchor "
             f"resolves against, so a broken one silently stops resolving names; "
-            f"run `{REGISTRY_FIX}` to rebuild it from {'/'.join(ENTITIES_DIR)}/")
+            f"{REGISTRY_FIX}")
         return
 
     for canonical_id in sorted(set(declared) | set(registered)):
         mine, theirs = declared.get(canonical_id), registered.get(canonical_id)
         if theirs is None:
-            add("error", "registry", mine["path"],
+            add("warn", "registry", mine["path"],
                 f"{mine['name']!r} is an entity page that {REGISTRY_RELPATH} does not "
-                f"register at all — run `{REGISTRY_FIX}` to fix it")
+                f"register at all — {REGISTRY_FIX}")
             continue
         if mine is None:
-            add("error", "registry", REGISTRY_RELPATH,
+            add("warn", "registry", REGISTRY_RELPATH,
                 f"{REGISTRY_RELPATH} registers {canonical_id!r} "
                 f"({theirs.get('name')!r}) but no page in {'/'.join(ENTITIES_DIR)}/ "
-                f"declares it — run `{REGISTRY_FIX}` to fix it")
+                f"declares it — {REGISTRY_FIX}")
             continue
         if mine["name"] != theirs.get("name"):
-            add("error", "registry", mine["path"],
+            add("warn", "registry", mine["path"],
                 f"page title is {mine['name']!r} but {REGISTRY_RELPATH} registers "
-                f"{canonical_id!r} as {theirs.get('name')!r} — run `{REGISTRY_FIX}` to fix it")
+                f"{canonical_id!r} as {theirs.get('name')!r} — {REGISTRY_FIX}")
         if mine["type"] != str(theirs.get("type") or DEFAULT_ENTITY_TYPE):
-            add("error", "registry", mine["path"],
+            add("warn", "registry", mine["path"],
                 f"{mine['name']!r} declares entity_type {mine['type']!r} but "
                 f"{REGISTRY_RELPATH} has type {theirs.get('type')!r} — "
-                f"run `{REGISTRY_FIX}` to fix it")
+                f"{REGISTRY_FIX}")
         listed = sorted({str(a) for a in (theirs.get("aliases") or [])})
         if mine["aliases"] != listed:
-            add("error", "registry", mine["path"],
+            add("warn", "registry", mine["path"],
                 f"{mine['name']!r} declares aliases {_fmt(mine['aliases'])} but "
-                f"{REGISTRY_RELPATH} has {_fmt(listed)} — run `{REGISTRY_FIX}` to fix it")
-        # The lifecycle is part of the derived view too: an inbox built from the registry must
-        # show exactly the proposals the pages carry, or a steward confirms what is not there.
-        if mine["proposed"] != bool(theirs.get("proposed")):
-            page_says = "proposed (approved_by is empty)" if mine["proposed"] else "confirmed"
-            add("error", "registry", mine["path"],
-                f"{mine['name']!r} is {page_says} on its page but {REGISTRY_RELPATH} registers "
-                f"it as {'proposed' if theirs.get('proposed') else 'confirmed'} — "
-                f"run `{REGISTRY_FIX}` to fix it")
-        pending = sorted({str(a) for a in (theirs.get("proposed_aliases") or [])})
-        if mine["proposed_aliases"] != pending:
-            add("error", "registry", mine["path"],
-                f"{mine['name']!r} declares proposed_aliases {_fmt(mine['proposed_aliases'])} "
-                f"but {REGISTRY_RELPATH} has {_fmt(pending)} — run `{REGISTRY_FIX}` to fix it")
+                f"{REGISTRY_RELPATH} has {_fmt(listed)} — {REGISTRY_FIX}")
 
 
 # --- entity: aboutness, validated against the registry (M8a spec §4.1/§4.4) -------------------
@@ -428,10 +412,10 @@ def _entity_values(raw):
 def _unresolved_entity_message(value, ids):
     """M8a UX §3.1, the recommended (adopted) shape: the registry listed in full below the bound,
     named by count above it — never silently truncated."""
-    fix = ("Register it first (a steward runs `stigmergy-entities create`/`approve`), or use one "
+    fix = ("Register it first (capture something about it, or register it from the console), or use one "
           "of these ids if it's actually about an entity already registered under a different "
           "name." if ids else
-          "Register it first (a steward runs `stigmergy-entities create`/`approve`).")
+          "Register it first (capture something about it, or register it from the console).")
     if not ids:
         return (f'entity: "{value}" does not match any registered entity — nothing is '
                 f'registered yet. {fix}')
@@ -441,7 +425,7 @@ def _unresolved_entity_message(value, ids):
                 f'display name, or an alias of one. Registered ids today: {listing}. {fix}')
     return (f'entity: "{value}" does not match any registered entity — not as an id, a display '
             f'name, or an alias of one. {len(ids)} ids are registered today, too many to list '
-            f'here. Register it first (a steward runs `stigmergy-entities create`/`approve`), or '
+            f'here. Register it first (capture something about it, or register it from the console), or '
             f'check `{REGISTRY_RELPATH}` if it is actually about an entity already registered '
             f'under a different name.')
 
@@ -516,8 +500,8 @@ KEY_RE = re.compile(r"""^(?:"([^"]*)"|'([^']*)'|([A-Za-z_][\w-]*))\s*:\s*(.*)$""
 # (the `#` is preceded by a space), not `Acme #2 Holdings` verbatim. That single-character
 # disagreement is exactly the M8a findings-cycle-1 criterion-11 reproduction — `registry_id`
 # folds the *linter's* (wrong) reading, the generator folds PyYAML's, and the two ids differ on
-# a repo with no registry file to catch it, so the linter stays clean while `stigmergy-entities
-# regenerate` refuses. Fixed here for the RULE itself; getting the rule applied correctly to
+# a repo with no registry file to catch it, so the linter stays clean while the worker's
+# regeneration refuses. Fixed here for the RULE itself; getting the rule applied correctly to
 # every SHAPE a value can take (a quoted scalar with a trailing comment, a `#` inside a quoted
 # inline-list element) took a second pass — `_strip_comment` and `_end_of_bracket` below are
 # where that shows up (findings cycle 2, A2: six more silent-divergence constructs, both
@@ -537,7 +521,7 @@ _UNREPRESENTABLE_MARKERS = ">|&*!"
 # YAML 1.1 implicit-typing words a BARE (unquoted) frontmatter value must never be, because
 # PyYAML's resolver reads each of these as a bool/null, not the literal text — the contract's
 # fields are all strings, so accepting one here as a string is a silent divergence from what
-# `stigmergy-entities regenerate` (real PyYAML) actually stores (findings cycle 2, A2.3). Refusing
+# the worker's registry regeneration (real PyYAML) actually stores (findings cycle 2, A2.3). Refusing
 # is the doctrine this cycle sets: "when you cannot represent something faithfully, refuse it
 # loudly — do not guess." Quoting the value sidesteps the whole class (a quoted scalar is never
 # implicitly retyped), so the fix is always available to whoever wrote the page.
@@ -574,7 +558,7 @@ def _is_ambiguous_scalar(key, value):
 
 def _ambiguous_scalar_error(key, value):
     return (f'{key}: {value!r} is an unquoted YAML 1.1 implicit value — a real YAML parser '
-           f'(PyYAML, what `stigmergy-entities regenerate` uses) reads it as a boolean, null, or '
+           f'(PyYAML, what the worker regenerates the registry with) reads it as a boolean, null, or '
            f'sexagesimal number, not literal text. Quote it (e.g. "{value}") if a plain string '
            f'is meant')
 

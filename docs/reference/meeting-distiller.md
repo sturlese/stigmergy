@@ -33,7 +33,7 @@ capture_queue row, kind="meeting" (claimed by the SAME librarian worker, same fe
   └─ librarian.processing.process_meeting_item  (process_item's sibling, not a branch inside it)
        │  ephemeral worktree, agent fed the transcript AND the submitted metadata as fenced
        │  UNTRUSTED DATA (the metadata labelled HINTS, never instructions; the resolved entity
-       │  registry stays outside the fence — server-derived, from governed birth) — the
+       │  registry stays outside the fence — server-derived, never captured material) — the
        │  meeting-distiller brief instead of the librarian skill, read from the SAME worktree
        │  at base.sha
        │
@@ -43,9 +43,9 @@ capture_queue row, kind="meeting" (claimed by the SAME librarian worker, same fe
        │    exactly 1 meeting page     wiki/meetings/YYYY-MM-DD-<slug>.md  (provenance only)
        │    N >= 0 decision pages      wiki/decisions/<slug>.md   (each its OWN anchor)
        │
-       ├─ identity.write_proposals: every identity the account proposes, created unconfirmed
-       │     (`approved_by: ""`) with the registry regenerated — the fast lane's own writer,
-       │     `related=` naming this set's DECISION pages by stem
+       ├─ identity.write_births: every identity the account declares, born CONFIRMED by the
+       │     submitter (`approved_by: <them>`) with the registry regenerated — the fast lane's
+       │     own writer, `related=` naming this set's DECISION pages by stem
        ├─ edits.apply_declared: the account's DECLARED additive edits, performed by code on pages
        │     that already exist — all-or-nothing, the fast lane's own call (ADR 038)
        ├─ _stamp_meeting: PER-PAGE server stamp (source parts get the provenance group;
@@ -65,7 +65,7 @@ filed: report.filed_meeting names every page path and every decision's anchor ou
 **Read the diagram's second box twice: the agent does not write pages.** It holds no tool at all
 and returns the decisions, their anchors and the drafted prose as DATA;
 `processing._write_meeting_pages` builds and writes every page of the set from that one structured
-object. Everything downstream — the proposals, the stamp, all nine gates, the cross-check, the
+object. Everything downstream — the births, the stamp, all nine gates, the cross-check, the
 commit — is unchanged and unaware. An account declared beside separately-written pages would be two
 independent claims that could disagree; with code as the sole author, only one claim exists.
 
@@ -108,7 +108,7 @@ arm is explicitly kept as one — it cannot fire by construction either.
 meeting page's filename carries a calendar date, so a `[[YYYY-MM-DD-…]]` target in body prose is a
 pointer that belongs in `sources:`/`related:` frontmatter — but gates veto the irreversible and
 the gardener flags conventions; see
-[`gardener-digest.md`](./gardener-digest.md#the-eight-deterministic-checks). The
+[`gardener-digest.md`](./gardener-digest.md#the-ten-deterministic-checks). The
 `_build_decision_page` builder still avoids producing one, by citing the transcript through
 `sources:` rather than a body wikilink.
 
@@ -300,8 +300,8 @@ ordinary flow calls, not a mirror of it. Two destinations, split by cause: `reje
 the submitter's (a secret, a PII match, steering with a traceable injection category, a
 frontmatter-only veto), `failed` when it is the librarian's (everything else, a per-decision
 anchoring veto that survived the corrective retry included). There is no meeting-specific park,
-because there is no park: a decision page about an unregistered name proposes the entity and files
-with it, and the whole set still lands or none of it does.
+because there is no park: a decision page about an unregistered name introduces the entity and
+files with it, and the whole set still lands or none of it does.
 
 **One correction to that routing.** The steering branch tests
 `f.repairable`, so an UNREPAIRABLE zone finding is excluded from it even when the agent declared an
@@ -316,22 +316,25 @@ could be the agent acting on injected text.
 ## Several unregistered names, and the set still files
 
 A transcript can name more than one entity the registry does not know — a call naming two customers
-and an unregistered project code. It proposes them, exactly as an ordinary capture does: the account
-declares `new_entities`/`new_aliases`, `processing` hands them to `identity.write_proposals` (the
-SAME writer the fast lane uses — a meeting is not a second way of creating an identity), and each
-decision page anchors to the entity born in its own commit. The meeting account carries
-`entity_updates` too, and it means the same thing here as on the fast lane: facts and connections
-appended to the page of an entity the registry ALREADY knows, in this set's own commit.
+and an unregistered project code. It introduces them, exactly as an ordinary capture does: the
+account declares `new_entities`/`new_aliases`, `processing` hands them to `identity.write_births`
+(the SAME writer the fast lane uses — a meeting is not a second way of creating an identity), and
+each decision page anchors to the entity born in its own commit. Each of those identities is born
+CONFIRMED by the person who submitted the transcript — the capture is the approval, and nobody is
+asked afterwards ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1). The meeting
+account carries `entity_updates` too, and it means the same thing here as on the fast lane: facts
+and connections appended to the page of an entity the registry ALREADY knows, in this set's own
+commit.
 
-**The one meeting-specific parameter is `related`.** `write_proposals` takes the page names a new
+**The one meeting-specific parameter is `related`.** `write_births` takes the page names a new
 entity's `Connections` section should point back at, and the meeting flow passes this set's own
 DECISION pages, by STEM — `os.path.basename(path)` minus `.md`, which is what a wikilink resolves
 by — falling back to the meeting page's stem when the set filed no decision. The ordinary flow
-passes its one page's title. Both end up with a proposed entity whose page says which page it was
-proposed from, instead of a template placeholder.
+passes its one page's title. Both end up with a newborn entity whose page says which page it was
+introduced from, instead of a template placeholder.
 
 **Why this replaced a park, in one paragraph of evidence.** The old loop parked a meeting on one
-unregistered name and re-filed after a steward registered it — a fresh agent read of the same
+unregistered name and re-filed after a person registered it — a fresh agent read of the same
 transcript, which produced a *different, thinner* distillation, judged "faithful, and incomplete" by
 the person who had attended. The system had discarded a good distillation over an anchoring failure
 that had nothing to do with its content, and it got worse with transcript length: more names, more
@@ -340,9 +343,10 @@ nothing is parked: the distillation that was produced is the one that lands. `ca
 the column a park stored that account in, is legacy and nothing writes it
 ([capture.md](./capture.md#the-queue)).
 
-The steward-facing half — confirming, merging or declining what a meeting proposed — is
-[`operator-runbook.md`](./operator-runbook.md#governing-what-the-librarian-proposed) and
-[`../../src/stigmergy/entities/index.md`](../../src/stigmergy/entities/index.md).
+There is no half after this one. Nobody confirms what a meeting introduced: the identity is
+confirmed in the act of capturing the transcript, and a second identity for one thing is found
+afterwards by the gardener's duplicate-identity pass and merged by the repair that follows
+([`gardener-digest.md`](./gardener-digest.md), [`repair.md`](./repair.md)).
 
 ## Where the code lives
 
@@ -357,7 +361,7 @@ The steward-facing half — confirming, merging or declining what a meeting prop
   parser since [ADR 038](../decisions/038-meeting-distiller-corpus-context.md), so a declared edit
   is bounded identically whichever flow produced it. The prompt carries the WORKER's gathered
   block (`gather.gather` → `agent.render_gathered`, no-tools defaults, fenced) between the registry
-  and the transcript: context above the thing it is context for, and the governed registry above
+  and the transcript: context above the thing it is context for, and the derived registry above
   page titles people wrote. The single write an
   agent is permitted on this flow is allowed by `confined_write`'s unconditional outcome-file
   exception, and code is the sole author of every page in the set. The backend holds no tool, so
@@ -404,7 +408,7 @@ The steward-facing half — confirming, merging or declining what a meeting prop
   planted in the transcript itself: `DOUBLE:decisions=<n>`, the four
   `DOUBLE:meeting-hallucinate*` variants (first decision, first pass only, LAST decision, the
   meeting page's own notes), `DOUBLE:meeting-propose=a,b` (the decisions anchor to entities the
-  registry lacks, and the account proposes each one), `DOUBLE:meeting-anchor=<name>`,
+  registry lacks, and the account declares each one), `DOUBLE:meeting-anchor=<name>`,
   `DOUBLE:meeting-company[=n]`, `DOUBLE:meeting-body-date-link`, `DOUBLE:meeting-collide` and the
   three declared-edit ones — `DOUBLE:meeting-backlink=<path>`, `DOUBLE:meeting-overlap=<path>` and
   `DOUBLE:meeting-bad-edit[=<path>]`, which put an edit in the outcome and never on a page. Every
@@ -425,8 +429,8 @@ The steward-facing half — confirming, merging or declining what a meeting prop
 | `tests/librarian/test_meeting_queue_fencing_pg.py` | the meeting kind claimed through the same fenced claiming as every capture |
 | `tests/librarian/test_meeting_brief_contract.py` | the brief↔gates two-sided contract, in both directions |
 | `tests/librarian/test_gates_unit.py` | the flow-scoped `GateContext` fields, per-page anchoring, the provenance-group exemption |
-| `tests/librarian/test_report.py` | `report.filed_meeting`, including the proposals clause in both the rendered block and the fact set |
-| `tests/librarian/test_identity_unit.py` | `write_proposals` itself — the writer both flows hand their declarations to |
+| `tests/librarian/test_report.py` | `report.filed_meeting`, including the births clause in both the rendered block and the fact set |
+| `tests/librarian/test_identity_unit.py` | `write_births` itself — the writer both flows hand their declarations to |
 
 No test needs an API key: `double.DoubleAgent.run_meeting` drives every sabotage in the table above,
 offline, against `--backend double`.

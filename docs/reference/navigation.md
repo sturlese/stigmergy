@@ -10,7 +10,7 @@ wikilinks one hop. The code is the server's, so the code map is
 Making that literally true took five things, and they are what this document covers: the graph
 becomes a stored, ACL-scoped column; `read_page` serves it; two tools (`list_entities`,
 `describe_entity`) expose the entity vocabulary; entity-first resolution lives in the one place
-every MCP client shares; and an entity page's own steward-authored metadata becomes lexically
+every MCP client shares; and an entity page's own hand-written metadata becomes lexically
 findable.
 
 ## The graph in the index
@@ -108,10 +108,16 @@ caller), each enriched from `ops/entity-registry.json`:
 
 ```json
 {"count": 2, "entities": [
-  {"id": "acme", "name": "Acme Corp", "type": "organization", "aliases": ["Acme"]},
+  {"id": "acme", "name": "Acme Corp", "type": "organization", "aliases": ["Acme"],
+   "approved_by": "ana@example.com"},
   {"id": "ghostco"}
 ]}
 ```
+
+`approved_by` is the one lifecycle fact the registry carries: the person whose capture introduced
+the identity ([ADR 044](../decisions/044-the-capture-is-the-approval.md)). There is no `proposed`
+state to serve — an identity is born confirmed — and a record from before the field existed carries
+it empty.
 
 An anchored id absent from the registry serves as `{"id": ...}` alone — honest, and the
 gardener's business, not an error. `count` states how many; nothing is dropped past it (the
@@ -130,8 +136,8 @@ membership of the caller's own scoped-id set, never
 normalized, when no registry match exists: the same existence rule the absence check below already
 consults, not a second resolver.
 
-1. **`entity`** — registry metadata (`id`, `name`, `type`, `aliases`) plus the entity's own page
-   reference `{path, title}` (found via `type = 'entity' AND <the id> = ANY(entity)` — entity pages
+1. **`entity`** — registry metadata (`id`, `name`, `type`, `aliases`, `approved_by`) plus the
+   entity's own page reference `{path, title}` (found via `type = 'entity' AND <the id> = ANY(entity)` — entity pages
    self-anchor — `ORDER BY path LIMIT 1`, so a multiply-self-anchored id returns the same row
    across rebuilds instead of whatever Postgres's scan order happened to be), when that page is
    visible; `null` otherwise. The lookup itself is UNSCOPED on purpose: the path is needed to
@@ -208,24 +214,27 @@ layered account directly instead of reconstructing it from search hits.
 ## Entity metadata pays — indexed
 
 `corpus.page_row` folds a `type: entity` page's own `role` and `aliases` frontmatter into the
-`tsv` source text (`corpus._entity_meta_text`, joined in `store._TSV_SQL`) — steward-authored
-context becomes lexically findable exactly like `tags`/`mentions` already were. No ranking factor
-is added or changed; this only widens what a plain lexical search can FIND.
+`tsv` source text (`corpus._entity_meta_text`, joined in `store._TSV_SQL`) — the context a person
+wrote on the page becomes lexically findable exactly like `tags`/`mentions` already were. No
+ranking factor is added or changed; this only widens what a plain lexical search can FIND.
 
 **The direction is one way, and it matters for anyone editing an entity page.** The entity page in
-`wiki/entities/` is the ONE source: steward-authored `role`, `aliases` and everything else a human
-writes there. Two things derive from it, independently and in one direction each:
+`wiki/entities/` is the ONE source: the `role`, `aliases` and everything else written there. Two
+things derive from it, independently and in one direction each:
 
-- **the registry** — `stigmergy-entities regenerate` scans `wiki/entities/` and nothing else, and
-  writes `ops/entity-registry.json` as a pure function of those pages (the canonical id is
-  `slugify(title)`, so nothing in the file is unrecoverable). That is what `--check` can then verify
-  as drift rather than as opinion.
+- **the registry** — `entities.generator` reads `wiki/entities/` and nothing else, and writes
+  `ops/entity-registry.json` as a pure function of those pages (the canonical id is
+  `slugify(title)`, so nothing in the file is unrecoverable). It is a library, not a command: the
+  librarian worker regenerates the whole file inside the commit that introduces an identity or
+  teaches a registered one a spelling.
 - **the index** — a rebuild folds the entity page's OWN `role`/`aliases` frontmatter into `tsv`.
 
 So editing `aliases` on the page changes BOTH, at their own cadences: `tsv` at the next index
-rebuild, the registry only when a steward regenerates and commits it. No ranking or retrieval
-query reads the registry, and the registry generator never reads the index. Three artifacts, one
-direction each time data moves between them, never a cycle.
+rebuild, the registry at the worker's next write into the identity zone. Nobody hand-edits either
+side — a page and the registry that disagree are drift, which the knowledge repo's own contract
+linter reports and which the librarian refuses to introduce an identity against. No ranking or
+retrieval query reads the registry, and the registry generator never reads the index. Three
+artifacts, one direction each time data moves between them, never a cycle.
 
 The index does CACHE the registry — one `ops_file_snapshot` row, written by the push webhook and
 by the nightly rebuild — but purely as a courier for the server, which holds no checkout in

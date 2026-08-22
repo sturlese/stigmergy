@@ -50,7 +50,7 @@ kill_timeout = "300s"
   # EXPLICIT path for the same reason `--identities` already is one:
   # this process never receives `--repo`, so `ask`'s entity-first resolution would silently never
   # fire without it (`scripts/deploy_staging.sh` bakes the file to this exact path).
-  app = "stigmergy-server --transport http --host 0.0.0.0 --port 8080 --identities /app/identities.json --entity-registry /app/entity-registry.json --stewards /app/stewards.json"
+  app = "stigmergy-server --transport http --host 0.0.0.0 --port 8080 --identities /app/identities.json --entity-registry /app/entity-registry.json"
   # NOT `stigmergy-librarian run` directly. A container starts with no knowledge repo in it, so
   # `stigmergy-librarian-boot` clones it with the App's identity, verifies the checkout IS
   # `origin/main` — the worker reads the ACL config, the entity registry and the contract linter
@@ -62,7 +62,7 @@ kill_timeout = "300s"
   # mirror the `app` command above; the three Slack secrets
   # (SLACK_APP_TOKEN/SLACK_BOT_TOKEN/SLACK_TEAM_ID) and $STIGMERGY_INDEX_DSN come from the
   # environment, never from a flag here.
-  slack = "stigmergy-slack --identities /app/identities.json --entity-registry /app/entity-registry.json --stewards /app/stewards.json"
+  slack = "stigmergy-slack --identities /app/identities.json --entity-registry /app/entity-registry.json"
 
 [env]
   # Non-secret only. OPENAI_API_KEY, STIGMERGY_INDEX_DSN, STIGMERGY_TOKEN_STORE, the STIGMERGY_EVIDENCE_*

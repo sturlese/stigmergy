@@ -69,8 +69,8 @@ def startup_checks(settings) -> dict:
 
     Returns the resolved objects the run reuses, all read **at `base.sha`** rather than off the
     working tree (`base_inputs`). The registry and the ACL config returned here are a PRE-FLIGHT
-    only — `processing.process_item` re-reads both at each item's own `base`, so a steward's
-    approval or a tightened ACL pushed between two polls takes effect without a restart.
+    only — `processing.process_item` re-reads both at each item's own `base`, so an entity born
+    or a tightened ACL pushed between two polls takes effect without a restart.
     """
     repo = gitcmd.ensure_repo(settings.repo)
     agent_module.ensure_known_backend(settings.backend)

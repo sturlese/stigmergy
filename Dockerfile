@@ -6,7 +6,7 @@
 #
 # One image and not three, for the reason there is one app: one build, one deploy, one place to
 # read logs, and no way for the three halves to drift onto different code. The cost is that the
-# server's container carries the worker's toolchain (git, gitleaks, poppler) — accepted for the
+# server's container carries the worker's toolchain (git, gitleaks) — accepted for the
 # pilot and named in the spec's risks as image bloat, with every version pinned so a rebuild is
 # reproducible. That toolchain is much smaller than it was: retiring the harness-driven filing
 # backend took the Node runtime and its ~500MB agent CLI out of this image entirely, so the bloat
@@ -110,7 +110,6 @@ RUN pip install --no-cache-dir .
 COPY deploy/identities.json /app/identities.json
 COPY deploy/entity-registry.json /app/entity-registry.json
 COPY deploy/slack-channels.json /app/slack-channels.json
-COPY deploy/stewards.json /app/stewards.json
 
 # Non-root. The SERVER never needs to write anywhere in the image; the WORKER does — it keeps its
 # knowledge-repo clone under the app user's home, which is why that home exists and is owned by it.
@@ -131,5 +130,4 @@ EXPOSE 8080
 # overrides this, and a plain `docker run` of this image still starts the server.
 CMD ["stigmergy-server", "--transport", "http", "--host", "0.0.0.0", "--port", "8080", \
      "--identities", "/app/identities.json", \
-     "--entity-registry", "/app/entity-registry.json", \
-     "--stewards", "/app/stewards.json"]
+     "--entity-registry", "/app/entity-registry.json"]

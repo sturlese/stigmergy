@@ -30,8 +30,8 @@ EXIT_INTERRUPTED = 130
 
 
 def _repo(args) -> str:
-    # The worktree-tolerant predicate this command was already right about lives in
-    # `librarian.config.is_repo_checkout` now — `stigmergy-entities` had its own, stricter copy.
+    # ONE definition of "a git checkout", in `librarian.config.is_repo_checkout`: a worktree's
+    # `.git` is a FILE, not a directory, and a stricter local copy of this test refused one.
     path = librarian_config.repo_path(args.repo)
     if not librarian_config.is_repo_checkout(path):
         raise ViewError(
@@ -145,9 +145,9 @@ def _report_single(o: regenerate.RegenOutcome, args) -> int:
             "acl": o.acl, "commit": o.commit, "path": o.path}, **_DUMP))
     elif o.action == "refused-unknown-entity":
         print(f'stigmergy-views: refusing to regenerate — "{o.entity_id}" is not a registered '
-             f"entity. Check the id (`stigmergy-entities list` shows what's parked; the registry "
-             f"itself is `{librarian_config.REGISTRY_RELPATH}` in the knowledge repo), or mint it first with "
-             f"`stigmergy-entities create`/`approve` if it should exist.", file=sys.stderr)
+             f"entity. Check the id against `{librarian_config.REGISTRY_RELPATH}` in the knowledge "
+             f"repo; nothing mints one by hand — an entity is born when a capture introduces it.",
+             file=sys.stderr)
     elif o.action == "refused-unusable-id":
         print(f"stigmergy-views: refusing to regenerate — {o.message}.", file=sys.stderr)
     elif o.action == "refused-no-members":
@@ -167,7 +167,7 @@ def _report_single(o: regenerate.RegenOutcome, args) -> int:
         # message, where the pages still anchor the entity and only the registry stopped
         # governing them.
         print(f"removed {o.path} — {o.message}.")
-        print(f"  committed {o.commit[:12]} (steward: App bot), pushed to {args.branch}")
+        print(f"  committed {o.commit[:12]} (author: App bot), pushed to {args.branch}")
     else:
         shown = _timeline_phrase(o)
         print(f"regenerated {o.path} — {o.member_count} page(s) anchored"
@@ -180,7 +180,7 @@ def _report_single(o: regenerate.RegenOutcome, args) -> int:
         acl_note = _acl_note(o)
         if acl_note:
             print(acl_note)
-        print(f"  committed {o.commit[:12]} (steward: App bot), pushed to {args.branch}")
+        print(f"  committed {o.commit[:12]} (author: App bot), pushed to {args.branch}")
     return EXIT_REFUSED if o.action.startswith("refused") else 0
 
 

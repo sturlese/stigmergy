@@ -18,7 +18,7 @@ from stigmergy import text as textutil
 from stigmergy.admin import schema as admin_schema
 from stigmergy.admin.github import ActionsError
 from stigmergy.admin.settings import AdminSettings
-from stigmergy.capture import decisions, latency, queue, retention
+from stigmergy.capture import latency, queue, retention
 from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.errors import CaptureError
 from stigmergy.digest import run as digest_run
@@ -44,7 +44,6 @@ from stigmergy.repair.schema import (
 )
 from stigmergy.repair.schema import JOB_NAME as REPAIR_JOB
 from stigmergy.repair.schema import KINDS as REPAIR_KINDS
-from stigmergy.review_kinds import ITEM_KINDS, KIND_ALIAS_PROPOSAL, KIND_IDENTITY_PROPOSAL
 from stigmergy.server import pilot_report
 from stigmergy.server import review as server_review
 from stigmergy.server.errors import StartupError
@@ -54,24 +53,17 @@ log = logging.getLogger(__name__)
 
 PURGE_JOB, PURGE_DRY_RUN_JOB = "capture-purge", "capture-purge-dry-run"
 
-# The inbox is the doorbell's own read, bounded the way the doorbell bounds it.
-INBOX_LIMIT = server_review.DOORBELL_ITEM_LIMIT
+# The door name this console records on every capture and repair it queues or decides.
+ADMIN_DOOR = "admin"
 
 # The metrics window: a console chart's x-axis. Clamped, never trusted from the query string.
 DEFAULT_METRICS_DAYS, MAX_METRICS_DAYS = 30, 365
 # How many capture->filed samples a histogram gets; the percentiles come from the same window.
 LATENCY_SAMPLE_LIMIT = 200
-# The ledger feed: the newest rows, bounded in SQL (`decisions.recent_decisions`) — the table is
-# append-only and never truncated, so every read of it needs a ceiling.
-DECISIONS_LIMIT = 200
 # A request-scoped page of pending proposals, never the whole table (`repair.store` says the bound
 # is the caller's): a nightly proposer can produce a thousand overnight, each carrying its ops.
 REPAIR_PENDING_LIMIT = 200
-# How deep a cleaned JSON value is walked; past it the subtree is DROPPED — a bound that handed
-# back what it declined to clean would be fail-open.
-CLEAN_DEPTH = 6
-
-# `entities/resolve` is called as a steward types; one call checks the whole form, never a
+# `entities/resolve` is called as somebody types; one call checks the whole form, never a
 # registry-sized list of names.
 MAX_RESOLVE_NAMES = 50
 
@@ -154,21 +146,6 @@ def _iso(value) -> str | None:
     return value.isoformat() if value is not None else None
 
 
-def _clean_leaves(value, depth: int):
-    """`_clean` over every string leaf of a JSON-shaped value; dicts and lists are walked, every
-    other scalar passes through. Past `depth` the subtree is DROPPED (`None`), never returned
-    unchecked — the same fail-closed bound `server.service._neutralize_report` holds."""
-    if depth < 0:
-        return None
-    if isinstance(value, str):
-        return _clean(value)
-    if isinstance(value, dict):
-        return {key: _clean_leaves(item, depth - 1) for key, item in value.items()}
-    if isinstance(value, list | tuple):
-        return [_clean_leaves(item, depth - 1) for item in value]
-    return value
-
-
 class AdminService:
     """One instance per process, sharing the process-wide autocommit connection. Concurrency
     invariant: no cursor is ever held across an `await` — the two async digest methods await
@@ -181,7 +158,7 @@ class AdminService:
         self._admin = admin_settings
         self._gateway = gateway
         # The evidence store the queue archives material into — the same instance the MCP server
-        # submits through; a steward registering an entity (ADR 042) submits a capture too.
+        # submits through; registering an entity (ADR 042) submits a capture too.
         self._evidence = evidence
 
     # ── meta / overview ───────────────────────────────────────────────────────────────────────
@@ -196,9 +173,8 @@ class AdminService:
             # Every closed vocabulary the console renders ships from HERE, so the frontend never
             # hardcodes a second copy that could drift: `generator.ENTITY_TYPES` first, then the
             # queue's status machine (its terminal subset, and `resolved` as the one legacy word),
-            # the repair kinds, the gardener's severities and the review lane's item kinds, the
-            # verdicts each kind takes, and the doors. The HUMAN wording for each word is the
-            # frontend's (it is copy), keyed on these.
+            # the repair kinds and the gardener's severities. The HUMAN wording for each word is
+            # the frontend's (it is copy), keyed on these.
             "entity_types": list(ENTITY_TYPES),
             "statuses": list(capture_schema.STATUSES),
             "terminal_statuses": [s for s in capture_schema.STATUSES
@@ -206,51 +182,11 @@ class AdminService:
             "legacy_statuses": [capture_schema.RESOLVED],
             "repair_kinds": list(REPAIR_KINDS),
             "gardener_severities": list(GARDENER_SEVERITIES),
-            "item_kinds": list(ITEM_KINDS),
-            "verdicts_by_kind": {kind: sorted(set(verdicts.values()))
-                                 for kind, verdicts in server_review.VERDICTS_BY_KIND.items()},
-            "decision_sources": list(server_review.DECISION_SOURCES),
             "metrics": {"default_days": DEFAULT_METRICS_DAYS, "max_days": MAX_METRICS_DAYS},
             # The purge form's consequence sentence names this number; it is the library's, not
             # the frontend's to remember.
             "retention": {"default_days": retention.DEFAULT_RETENTION_DAYS},
         }
-
-    # ── inbox: everything waiting on a steward, one list ──────────────────────────────────────
-    def inbox(self, *, limit: int = INBOX_LIMIT) -> dict:
-        """The unified work list — `server.review.items_for_doorbell`, the SAME read the Slack
-        doorbell rings from, so the console and the doorbell can never disagree about what is
-        waiting on a steward: the identities and spellings the librarian proposed (read off the
-        registry the index snapshot carries) and the nightly repairs. Every item carries the
-        ledger's latest decision on it, which is how a steward sees that a second door got there
-        first. `truncated` is conservative: a list exactly `limit` long reports it, because the
-        read cannot tell "exactly that many" from "more than that"."""
-        limit = max(1, int(limit))
-        items = self._inbox_items(limit)
-        counts = {kind: 0 for kind in ITEM_KINDS}
-        for item in items:
-            counts[item["kind"]] = counts.get(item["kind"], 0) + 1
-        return {"count": len(items), "counts": counts,
-                "truncated": len(items) >= limit, "limit": limit, "items": items}
-
-    def _inbox_items(self, limit: int) -> list[dict]:
-        """The lane's open items, derived from the registry THIS console serves — the same copy
-        the Entities desk checks names against (`index.check.served_registry`: the snapshot, else
-        the `--entity-registry` file). The doorbell reads the snapshot alone because it has only a
-        connection; a console on a stack with no snapshot (the local recipe) would otherwise list
-        every entity in its browser and no proposal in its inbox."""
-        text, origin = index_check.served_registry(self._conn,
-                                                   self._server.entity_registry_path or None)
-        registry = server_review.registry_records(text, origin)
-        return [self._inbox_item(item) for item in
-                server_review.items_for_doorbell(self._conn, limit=limit, registry=registry)]
-
-    def _inbox_item(self, item: dict) -> dict:
-        """One review item, cleaned for the web — EVERY string leaf, by a walk rather than a list
-        of keys: the lane's own docstring (`server.review._neutralize_leaves`) records that
-        per-field calls "reliably miss a field", and a key added upstream must arrive cleaned by
-        default. The lane already serializes the decision's timestamp."""
-        return _clean_leaves(item, CLEAN_DEPTH)
 
     # ── the entity registry this stack serves, and the pre-create check over it ───────────────
     def entities_registry(self) -> dict:
@@ -270,7 +206,7 @@ class AdminService:
                 "entities": entities}
 
     def entities_resolve(self, names) -> dict:
-        """The pre-create registry check over names a steward is about to submit — the same
+        """The pre-create registry check over names about to be submitted — the same
         question the birth gate will ask, asked BEFORE the clone: `Registry.canonical_id` (does
         the filing fold already resolve this spelling? then there is nothing to create) and
         `Registry.collision_id` (would the gate refuse it as confusable with an existing entity?),
@@ -321,10 +257,7 @@ class AdminService:
         return {"id": _clean(canonical_id), "name": _clean(entry.get("name")),
                 "type": _clean(entry.get("type")),
                 "aliases": [_clean(a) for a in entry.get("aliases") or []],
-                "proposed": bool(entry.get(kernel_registry.PROPOSED_KEY)),
-                "approved_by": _clean(entry.get(kernel_registry.APPROVED_BY_KEY) or ""),
-                "proposed_aliases": [_clean(a) for a in
-                                     entry.get(kernel_registry.PROPOSED_ALIASES_KEY) or []]}
+                "approved_by": _clean(entry.get(kernel_registry.APPROVED_BY_KEY) or "")}
 
     def _check_name(self, name: str, registry, index) -> dict:
         """One name's verdict, as the birth gate would give it."""
@@ -415,7 +348,6 @@ class AdminService:
             "job_history": {job: self._job_runs((job,), limit=60) for job in (
                 GARDENER_JOB, REPAIR_JOB, PURGE_JOB, PURGE_DRY_RUN_JOB, WEBHOOK_JOB,
                 digest_run.JOB_NAME, digest_run.JOB_NAME_DRY_RUN)},
-            "decisions": self._decisions(),
             "repairs": self._repair_counts(),
         }
 
@@ -464,14 +396,6 @@ class AdminService:
         return [{"identity": _clean(identity), "calls": int(calls), "asks": int(asks),
                  "submits": int(submits), "rate_limited": int(limited), "last_at": _iso(last)}
                 for identity, calls, asks, submits, limited, last in rows]
-
-    def _decisions(self) -> list[dict]:
-        """The ledger's newest rows — bounded in SQL, every decision rather than the latest per
-        item: this is a feed, and the doorbell's per-item read has no ceiling by design."""
-        return [{"kind": d["item_kind"], "id": d["item_id"], "verdict": _clean(d["verdict"]),
-                 "actor": _clean(d["actor"]), "source": _clean(d["source"]),
-                 "created_at": _iso(d["created_at"])}
-                for d in decisions.recent_decisions(self._conn, limit=DECISIONS_LIMIT)]
 
     def _repair_counts(self) -> dict:
         """`by_status` is the store's own aggregate over the WHOLE table; `recent` is a bounded
@@ -641,111 +565,13 @@ class AdminService:
                 "errors": sum(1 for f in findings if f["severity"] == "error"),
                 "warnings": sum(1 for f in findings if f["severity"] == "warn")}
 
-    # ── the proposals: what the librarian created unconfirmed, and the steward's three verbs ──
-    def entities_list(self) -> dict:
-        """Every identity and spelling the librarian proposed, off the same read as the inbox,
-        plus the registry the proposals will join. The proposals carry `merge_candidates` from the
-        lane; `checks` adds the registry verdict for the proposed name (already registered under
-        another spelling? colliding?), which is the Merge picker's strongest hint."""
-        registry, about = self._registry_or_none()
-        index = self._similarity_index(registry)
-        items = self._inbox_items(INBOX_LIMIT)
-        proposals = [self._with_registry_check(item, registry, index)
-                     for item in items if item["kind"] == KIND_IDENTITY_PROPOSAL]
-        aliases = [item for item in items if item["kind"] == KIND_ALIAS_PROPOSAL]
-        return {"proposals": proposals, "aliases": aliases, "registry_check": dict(about)}
-
-    def entities_show(self, entity_id: str) -> dict:
-        """One proposed identity, as the list carries it — the detail page's read."""
-        for item in self._inbox_items(INBOX_LIMIT):
-            if item["kind"] == KIND_IDENTITY_PROPOSAL and str(item["id"]) == str(entity_id):
-                registry, _about = self._registry_or_none()
-                return self._with_registry_check(item, registry, self._similarity_index(registry))
-        raise AdminNotFound(f"no proposed entity {_clean(entity_id)!r} is waiting")
-
-    def _with_registry_check(self, item: dict, registry, index) -> dict:
-        """The birth gate's verdict on the proposal's own name, against the registry WITHOUT the
-        proposal itself — a proposal always resolves to itself, which says nothing."""
-        others = None
-        if registry is not None:
-            others = kernel_registry.Registry()
-            for cid, entry in registry.entities.items():
-                if cid != item["id"]:
-                    kernel_registry.index_entity(others, cid, entry)
-        check = self._check_name(item.get("name", ""), others, self._similarity_index(others))
-        return {**item, "check": check}
-
-    def entity_decide(self, item_kind: str, item_id: str, *, actor: str, verdict: str,
-                      into: str = "", notes: str = "") -> dict:
-        """A steward's decision on a proposal through `server.review.decide_and_record` — the
-        same sequence the review lane runs (land the commit through the governed door, then the
-        ledger row). `review_decide`'s steward check is deliberately not reached: it is for a
-        resolved identity, and `actor` here is free text behind the operator token (ADR 029/030
-        D2). Nothing is caught inside `_do`, so `_mutate` records the library's own class name
-        before `EntityError` becomes `AdminRefused`."""
-        verdicts = server_review.VERDICTS_BY_KIND.get(item_kind)
-        if verdicts is None or item_kind not in (KIND_IDENTITY_PROPOSAL, KIND_ALIAS_PROPOSAL):
-            raise AdminBadRequest(f"item_kind must be {KIND_IDENTITY_PROPOSAL!r} or "
-                                  f"{KIND_ALIAS_PROPOSAL!r}")
-        stored = verdicts.get(str(verdict or "").strip().lower())
-        if stored is None:
-            raise AdminBadRequest(f"verdict for {item_kind} must be one of "
-                                  f"{', '.join(sorted(verdicts))}")
-        item_id = str(item_id or "").strip()
-        target = " ".join(str(into or "").split())
-        if stored == server_review.MERGE and not target:
-            raise AdminBadRequest("merge needs `into`: the registered entity this proposal really is")
-        clean_notes = capture_schema.clean_note(notes)
-        args = {"item_kind": item_kind, "item_id": item_id, "verdict": stored, "into": target}
-
-        def _do(by: str) -> dict:
-            action, extra = self._decision_action(item_kind, item_id, stored, by, target)
-            result = server_review.decide_and_record(
-                self._conn, repo_url=self._server.librarian_repo_url, item_kind=item_kind,
-                item_id=item_id, verdict=stored, actor=by, source=server_review.SOURCE_ADMIN,
-                notes=clean_notes, action=action, extra=extra)
-            return {"recorded": stored, "item_kind": item_kind, "item_id": item_id,
-                    "commit": result["commit"], "summary": _clean(result["summary"]),
-                    "reanchored": list(result.get("reanchored") or []), "into": target}
-
-        try:
-            return self._mutate("entities.decide", actor, args, _do)
-        except EntityError as ex:
-            # Caught HERE, outside `_mutate`: the row already captured the ORIGINAL class name.
-            raise AdminRefused(str(ex)) from ex
-
-    @staticmethod
-    def _decision_action(item_kind: str, item_id: str, stored: str, by: str, into: str):
-        """`(action, ledger extra)` — the `entities.decide` call the door runs in its clone."""
-        from datetime import date
-
-        from stigmergy.entities import decide as entities_decide
-        from stigmergy.review_kinds import split_alias_item_id
-        today = date.today().isoformat()
-        if item_kind == KIND_ALIAS_PROPOSAL:
-            entity_id, alias = split_alias_item_id(item_id)
-            if not entity_id:
-                raise AdminBadRequest("an alias item id is `<entity id>:<alias>`")
-            if stored == server_review.APPROVE:
-                return (lambda repo: entities_decide.approve_alias(
-                    repo, entity_id=entity_id, alias=alias, approved_by=by, today=today)), {}
-            return (lambda repo: entities_decide.decline_alias(
-                repo, entity_id=entity_id, alias=alias, today=today)), {}
-        if stored == server_review.MERGE:
-            return (lambda repo: entities_decide.merge_entity(
-                repo, entity_id=item_id, into=into, approved_by=by, today=today)), {"into": into}
-        if stored == server_review.APPROVE:
-            return (lambda repo: entities_decide.approve_entity(
-                repo, entity_id=item_id, approved_by=by, today=today)), {}
-        return (lambda repo: entities_decide.decline_entity(
-            repo, entity_id=item_id, today=today)), {}
-
+    # ── registering an entity: one capture, and the librarian writes the page ─────────────
     def entity_create(self, *, actor: str, name: str, entity_type: str, about: str,
                       entity_id: str = "", aliases: str = "") -> dict:
-        """A steward introducing an entity nobody proposed (ADR 042): what they know about it is
-        queued as a capture carrying the registration — `server.review.commission_registration` —
-        and the librarian writes the page, anchors the note and births the entity confirmed by the
-        steward. A name the served registry already resolves is refused here, before anything is
+        """Introducing an entity the brain does not know (ADR 042): what the person knows about
+        it is queued as a capture carrying the registration — `server.review.commission_registration`
+        — and the librarian writes the page, anchors the note and births the entity confirmed by
+        them. A name the served registry already resolves is refused here, before anything is
         queued: the entity exists, so the thing to do is capture about it."""
         clean_name = " ".join(str(name or "").split())
         clean_type = str(entity_type or "").strip().lower()
@@ -779,7 +605,7 @@ class AdminService:
         def _do(by: str) -> dict:
             return server_review.commission_registration(
                 self._conn, self._evidence, name=clean_name, entity_type=clean_type,
-                aliases=alias_list, about=clean_about, actor=by, source=server_review.SOURCE_ADMIN)
+                aliases=alias_list, about=clean_about, actor=by, source=ADMIN_DOOR)
 
         try:
             return self._mutate("entities.create", actor, args, _do)
@@ -788,7 +614,7 @@ class AdminService:
 
     # ── repair proposals (read, and the second governed Approve — ADR 039) ────────────────────
     def repairs_list(self) -> dict:
-        """Everything waiting on a steward, plus what was recently decided.
+        """Everything waiting on an operator, plus what was recently decided.
 
         Both halves, and the second is not decoration: a REJECTED row is the dismissal memory the
         proposer skips against, so "why does the nightly run not propose this any more" is only
@@ -810,18 +636,16 @@ class AdminService:
         return self._proposal(row)
 
     def repair_approve(self, proposal_id: int, *, actor: str) -> dict:
-        """Apply the proposal through `server.review.apply_repair_and_record` (ADR 039) — the same
-        ordering the review lane runs, for the same reason `entity_approve` shares the mint
-        sequence: two copies of an irreversible ordering are two places for it to be reordered.
+        """Apply the proposal through `server.review.apply_repair_and_record` (ADR 039) — the
+        shared sequence rather than a copy of it, because two copies of an irreversible ordering
+        are two places for it to be reordered.
 
-        `review_decide`'s per-path steward check is deliberately not reached, exactly as
-        `entity_approve` does not reach its steward check: that guard is for a RESOLVED identity,
-        and `actor` here is free text behind the operator token (ADR 029/030 D2). The console's
-        authorization IS the token.
+        This is the ONLY door that decides a repair (ADR 044 retired the MCP review lane), and it
+        carries no per-path guard: `actor` is free text behind the operator token, and **the
+        console's authorization IS that token** (ADR 029 D3).
 
         Nothing is caught inside `_do`, so `_mutate` records the library's own class name in
-        `admin_actions` before `RepairError` becomes `AdminRefused` for the caller — the shape
-        `entity_approve` established.
+        `admin_actions` before `RepairError` becomes `AdminRefused` for the caller.
         """
         proposal = repair_store.proposal(self._conn, proposal_id)
         if proposal is None:
@@ -830,14 +654,14 @@ class AdminService:
         def _do(by: str) -> dict:
             return server_review.apply_repair_and_record(
                 self._conn, repo_url=self._server.librarian_repo_url, proposal=proposal, actor=by,
-                source=server_review.SOURCE_ADMIN)
+                source=ADMIN_DOOR)
 
         try:
             return self._mutate("repairs.approve", actor, {"id": proposal_id}, _do)
         except RepairError as ex:
-            # Caught HERE, outside `_mutate`, for `entity_approve`'s reason: the row already
-            # captured the ORIGINAL class name. Every sentence `repair.remote` raises is written to
-            # be published to a steward, so it crosses as the refusal's own text.
+            # Caught HERE, outside `_mutate`, so the row has already captured the ORIGINAL class
+            # name. Every sentence `repair.remote` raises is written to be published, so it crosses
+            # as the refusal's own text.
             raise AdminRefused(str(ex)) from ex
 
     def pages_delete(self, *, actor: str, paths, why: str) -> dict:
@@ -845,11 +669,10 @@ class AdminService:
         `server.review.delete_and_record` — the SAME sequence the MCP door runs (ADR 043 D2), so
         which door a person deleted from changes the ledger's `source` and nothing else.
 
-        `review_decide`'s per-path steward check is deliberately not reached, exactly as
-        `repair_approve` and `entity_approve` do not reach theirs: that guard resolves an IDENTITY,
-        and `actor` here is free text behind the operator token (ADR 029/030 D2). **The console's
-        authorization IS the token**, and it is the one door where that is the whole of it — which
-        is why this is the console's most consequential button and its confirm says so.
+        The MCP door requires an unrestricted identity; this one carries no such check, because
+        `actor` is free text behind the operator token and **the console's authorization IS that
+        token** (ADR 029 D3). It is the one door where that is the whole of it — which is why this
+        is the console's most consequential button and its confirm says so.
 
         Nothing is caught inside `_do`, so `_mutate` records the library's own class name in
         `admin_actions` before `ReviewError` becomes `AdminRefused` for the caller.
@@ -857,7 +680,7 @@ class AdminService:
         def _do(by: str) -> dict:
             return server_review.delete_and_record(
                 self._conn, repo_url=self._server.librarian_repo_url, paths=paths, why=why,
-                actor=by, source=server_review.SOURCE_ADMIN)
+                actor=by, source=ADMIN_DOOR)
 
         return self._mutate("pages.delete", actor,
                             {"paths": [str(p) for p in (paths or ())], "why_chars": len(why or "")},
@@ -873,7 +696,7 @@ class AdminService:
         return self._mutate(
             "repairs.reject", actor, {"id": proposal_id},
             lambda by: server_review.reject_repair_and_record(
-                self._conn, proposal=proposal, actor=by, source=server_review.SOURCE_ADMIN,
+                self._conn, proposal=proposal, actor=by, source=ADMIN_DOOR,
                 reason=reason))
 
     # ── activity ──────────────────────────────────────────────────────────────────────────────
@@ -1120,13 +943,13 @@ class AdminService:
 
         The additive kinds carry a link and a note; `entity-body` carries the drafted prose and,
         sometimes, a role. A single four-field reshape dropped the draft entirely, which for that
-        kind removes the only thing a steward has to judge — and it would do it silently, since a
+        kind removes the only thing there is to judge — and it would do it silently, since a
         missing key renders as an empty cell. Every value goes through `_clean`, which strips
         control characters and KEEPS newlines: a body flattened to one line is a body nobody can
         read as the page it would become.
 
         `entity-alias` is the shape that reaches the console with LESS than it was stored with:
-        `planned_after` is a whole page per op, and what a steward judges there is which identity
+        `planned_after` is a whole page per op, and what a reader judges there is which identity
         absorbs which, not four regenerated files.
 
         A `delete` SCRUB carries its planned bytes through, and that is ADR 043's doing: those

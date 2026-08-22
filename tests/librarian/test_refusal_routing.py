@@ -11,7 +11,7 @@ are left over, and this module is for both of them.
 so `ensure_creatable` cannot raise for a type `type_for_folder` just returned, and no capture — and
 no double directive — can produce the finding today. Its destination is still pinned: a page of a
 type the fast lane may not create is the LIBRARIAN's fault (the brief tells it which three types
-exist and how to propose an entity instead), so it is `failed`, never `rejected` onto a submitter
+exist and how to introduce an entity instead), so it is `failed`, never `rejected` onto a submitter
 who did nothing wrong — and never parked, because nothing parks any more.
 
 The future is simulated with ONE line — a governed type given a folder
@@ -101,7 +101,7 @@ def test_a_traceable_steering_attempt_beside_the_type_veto_stays_content_actiona
 # ── an unresolved anchor that survives the corrective pass is the librarian's fault ──────────
 # OLD BEHAVIOUR: an anchoring veto that was the WHOLE story parked the capture on a steward
 # (`_unanchorable`, with a companion dead link admitted when it named the same entity). The brief
-# now offers the agent a third outcome that FILES — propose the entity — so an anchor that still
+# now offers the agent a third outcome that FILES — introduce the entity — so an anchor that still
 # resolves to nothing after the retry is a model that did not take it: `failed`, never a park.
 ANCHOR_PAGE = "wiki/notes/Acme Ventures Inc.md"
 

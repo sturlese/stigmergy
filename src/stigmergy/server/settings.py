@@ -26,18 +26,14 @@ class Settings:
     # deployed server passes no `--repo` at all, so derivation alone would leave this empty in
     # production, which is exactly where the fallback has to work.
     entity_registry_path: str = ""
-    # A local checkout of the knowledge repo, fetchable from `origin` — only `review_decide`'s
-    # steward resolution needs it; everything else works with it empty.
+    # A local checkout of the knowledge repo, fetchable from `origin`. Nothing on the serving
+    # path needs it since ADR 044 retired the review lane; it stays because a local stdio server
+    # started with `--repo` derives the ops-file paths below from it.
     knowledge_repo: str = ""
-    # The deploy-time SNAPSHOT of `ops/stewards.json`, for a process holding no checkout (the
-    # deployed `app`/`slack` groups) — without it steward resolution there fails closed and the
-    # doorbell rings for nobody. The repo read WINS wherever a checkout exists
-    # (`review.load_stewards`), keeping per-decision freshness for the worker and local stdio.
-    stewards_path: str = ""
-    # `$STIGMERGY_LIBRARIAN_REPO_URL` — where an entity-proposal approve clones from to mint. A
-    # settings field rather than a raw env read inside `review.py`, so a test can point a mint at
-    # a local bare remote with no env monkeypatching. Empty = no server-driven mint here, refused
-    # by name, never a silent no-op.
+    # `$STIGMERGY_LIBRARIAN_REPO_URL` — where `brain_delete` clones from to apply. A settings field
+    # rather than a raw env read inside `review.py`, so a test can point one at a local bare remote
+    # with no env monkeypatching. Empty = no server-driven write here, refused by name, never a
+    # silent no-op.
     librarian_repo_url: str = ""
     dsn: str | None = None             # Postgres DSN (None -> store.dsn())
     embedder: str | None = None        # 'openai' | 'fake' | None (None = match the index's model)
@@ -58,8 +54,6 @@ class Settings:
         entity_registry_path = (getattr(args, "entity_registry", None)
                                or entity_aliases.default_path(repo))
         knowledge_repo = os.environ.get("STIGMERGY_KNOWLEDGE_REPO") or repo or ""
-        stewards_path = (getattr(args, "stewards", None)
-                        or os.environ.get("STIGMERGY_STEWARDS_PATH") or "")
         librarian_repo_url = os.environ.get(LIBRARIAN_REPO_URL_ENV, "")
 
         return cls(
@@ -67,7 +61,6 @@ class Settings:
             identities_path=identities_path,
             entity_registry_path=entity_registry_path,
             knowledge_repo=knowledge_repo,
-            stewards_path=stewards_path,
             librarian_repo_url=librarian_repo_url,
             dsn=args.dsn or store.dsn(),
             embedder=args.embedder,

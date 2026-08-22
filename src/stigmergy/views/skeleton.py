@@ -168,8 +168,8 @@ def backlink_hash(rows: list[corpus.PageRow]) -> str:
 
     Beside `member_hash` and never folded into it — that name says what it hashes, and a backlink
     is not a member. What it covers is the POST-GATE set: `backlinks_of` has already applied
-    `visible_to_view`, so a source a steward narrows to an audience the view does not have drops
-    OUT of these rows and the hash moves, which is what makes the narrowing a regeneration.
+    `visible_to_view`, so a source whose `acl:` is narrowed to an audience the view does not have
+    drops OUT of these rows and the hash moves, which is what makes the narrowing a regeneration.
     Hashing the pre-gate candidates instead would fire on any ACL edit anywhere, including the
     ones that change nothing on the page.
 

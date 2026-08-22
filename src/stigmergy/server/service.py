@@ -1,5 +1,6 @@
 """BrainService — the transport-agnostic serving core: read primitives, the write half and the
-review lane, every entry point riding the ONE `_call`/`call_async` seam for the rate-limit check
+governed deletion door, every entry point riding the ONE `_call`/`call_async` seam for the
+rate-limit check
 and the audit row. Attribution and scope are decided HERE and nowhere else, because only this
 layer knows the caller: `submitted_by` is `self.identity`, read scope is `self.audiences`.
 """
@@ -122,17 +123,14 @@ fence = textutil.fence
 
 
 def _neutralize_entity_record(record: dict) -> dict:
-    """A registry record with every steward-authored string neutralized; `id` is a KEY. The
-    lifecycle rides along: a caller reading `proposed: true` knows a steward has not confirmed
-    the identity yet — it resolves and anchors all the same."""
+    """A registry record with every authored string neutralized; `id` is a KEY. `approved_by`
+    rides along: it names the person whose capture introduced the identity (ADR 044)."""
     return {
         "id": record["id"],
         "name": neutralize_fence(record.get("name", "")),
         "type": neutralize_fence(record.get("type", "")),
         "aliases": [neutralize_fence(a) for a in record.get("aliases") or []],
-        "proposed": bool(record.get("proposed", False)),
         "approved_by": neutralize_fence(record.get("approved_by", "") or ""),
-        "proposed_aliases": [neutralize_fence(a) for a in record.get("proposed_aliases") or []],
     }
 
 
@@ -349,8 +347,8 @@ class BrainService:
     def may_read_page(self, path: str) -> bool:
         """Is this page in THIS client's audience? `acl.visible()`'s question, asked of one path
         and answered nowhere else — the deletion door hands this in as its `can_read` seam, because
-        the diffs it returns are page bytes and being a steward of a folder is not being in the
-        audience of every page in it.
+        the diffs it returns are page bytes, and being allowed to delete a page is not being in the
+        audience of every page that referred to it.
 
         A page the index does not carry answers False, the same fail-closed reading
         `fetch_page_raw` gives: existence itself is scoped, and a page removed by the very sweep
@@ -511,9 +509,8 @@ class BrainService:
 
         return {
             "entity": {"id": record["id"], "name": record["name"], "type": record["type"],
-                      "aliases": record["aliases"], "proposed": record["proposed"],
-                      "approved_by": record["approved_by"],
-                      "proposed_aliases": record["proposed_aliases"], "page": page_ref},
+                      "aliases": record["aliases"],
+                      "approved_by": record["approved_by"], "page": page_ref},
             "view": view_ref,
             "timeline": timeline_items, "timeline_note": timeline_note,
         }
@@ -567,9 +564,6 @@ class BrainService:
         capture_schema.reject_server_owned_arguments(server_owned)
         # The two source hints the fast lane trusts — refused for every door but Slack's own.
         capture_schema.reject_source_provenance_hints(hints, door=self.door)
-        # The registration keys, refused for every client too: a steward registers from the
-        # console or the CLI, and `brain_submit` attributes material, never authority.
-        capture_schema.reject_registration_hints(hints)
         # `kind` is MODEL-CHOSEN and `prepare_submission` refuses one outside `KINDS` by name —
         # there is no narrower list for this door (ADR 044 D4).
         if self.evidence is None:
@@ -599,8 +593,7 @@ class BrainService:
             for spelling in (record.get("name", ""), *record.get("aliases", ())):
                 needle = resolution_key(spelling)
                 if len(needle) >= MIN_MATCH_CHARS and f" {needle} " in haystack:
-                    out.append({"id": cid, "name": neutralize_fence(record.get("name", "")),
-                                "proposed": bool(record.get("proposed", False))})
+                    out.append({"id": cid, "name": neutralize_fence(record.get("name", ""))})
                     break
             if len(out) >= MAX_SUBMIT_MATCHES:
                 break
@@ -655,34 +648,9 @@ class BrainService:
             "excerpt": fence(excerpt) if excerpt else "",
             "report": _without_operator_telemetry(_neutralize_report(row["report"])),
         }
-
-    # ── the review lane ────────────────────────────────────────────────────────
+    # ── the write lane's governed door ─────────────────────────────────────────
     # The mechanics live in `server.review`: it needs librarian primitives this module may not
-    # import.
-    def review_queue(self, limit: int = 50) -> dict:
-        """The unified inbox over the librarian's proposals — identities, spellings — and the
-        nightly repairs, ACL-scoped to the caller (`server.review.review_queue`)."""
-        return self._call("review_queue", {"limit": limit},
-                          lambda: review.review_queue(self, limit=limit))
-
-    def review_decide(self, item_kind: str, item_id: str, verdict: str, notes: str = "", *,
-                      source: str, into: str = "") -> dict:
-        """Record a verdict on one review-queue item, attributed to THIS service's resolved
-        identity; `review.review_decide` carries the contract. The audit row keeps lengths and
-        closed-vocabulary fields only, never the free text.
-
-        `source` is REQUIRED and never defaulted here, deliberately: this method serves both the
-        MCP tool closure and Slack's card handler through `review_decide_safe`, and a default
-        would attribute whichever one forgot to pass it to the other. It rides the audit args
-        too — a closed vocabulary, and the one field that tells the two callers apart in
-        `audit_log`, which otherwise records them identically."""
-        return self._call(
-            "review_decide",
-            {"item_kind": item_kind, "item_id": item_id, "verdict": verdict, "source": source,
-             "notes_chars": len(notes or ""), "into": into or ""},
-            lambda: review.review_decide(
-                self, item_kind=item_kind, item_id=item_id, verdict=verdict, source=source,
-                notes=notes, into=into))
+    # import, and a deletion clones the knowledge repo and runs a model.
 
     def delete_pages(self, paths, why: str = "", *, source: str) -> dict:
         """Remove pages and rewrite every page that referred to them, as ONE commit attributed to
@@ -691,12 +659,22 @@ class BrainService:
         and a default would attribute one door's act to another the day a third arrives.
 
         The audit row keeps the shape and never the reason: `why` is free text a person wrote.
+
+        Both free-text arguments are length-checked INSIDE the `_call` seam, so an over-long one
+        is refused before anything is cloned AND recorded as the caller behaviour it is — a check
+        run in the tool closure instead would be invisible to `audit_log`.
         """
+        def _checked():
+            check_arg_length("why", why or "")
+            for path in paths or ():
+                check_arg_length("path", str(path))
+            return review.delete_pages(self, paths=paths, why=why, source=source)
+
         return self._call(
             "brain_delete",
             {"paths": [str(p) for p in (paths or ())], "why_chars": len(why or ""),
              "source": source},
-            lambda: review.delete_pages(self, paths=paths, why=why, source=source))
+            _checked)
 
     # ── scoped read helpers (reused by the answer layer) ──────────────────────
     def scoped_entities(self) -> list[str]:
@@ -742,7 +720,7 @@ def _ack_message(ack: dict, entities: list[dict] = ()) -> str:
         line += f" The registry already knows {names}; the librarian will anchor to what fits."
     else:
         line += (" The registry recognises no entity in this material; if it is about one, the "
-                 "librarian will propose it and a steward confirms it afterwards.")
+                 "librarian introduces it, confirmed by you.")
     if ack.get("flagged_hints"):
         line += (f" Note: the material declares {', '.join(ack['flagged_hints'])} in its "
                  "frontmatter; recorded as a hint and ignored — those fields are the server's.")
@@ -853,8 +831,8 @@ def build_service(settings: Settings, conn=None) -> BrainService:
 
     ensure_audit_table(conn)
     ensure_capture_schema(conn)
-    # unconditional: the review tools work on any server, knowledge repo configured or not.
-    review.ensure_review_schema(conn)
+    # unconditional: the repair ledger is read on any server, knowledge repo configured or not.
+    review.ensure_repair_schema(conn)
     # Created single-threaded here so the webhook's own `IF NOT EXISTS` has nothing left to race:
     # losing that race inside its phase-2 transaction would roll the pushed pages back with it.
     store.ensure_ops_file_table(conn)

@@ -372,16 +372,16 @@ def test_run_gardener_writes_nothing_but_its_own_findings_and_job_runs_row(conn,
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM capture_queue")
         capture_before = cur.fetchone()[0]
-        cur.execute("SELECT count(*) FROM review_decisions")
-        decisions_before = cur.fetchone()[0]
+        cur.execute("SELECT count(*) FROM repair_proposals")
+        repairs_before = cur.fetchone()[0]
 
     _run(conn, repo, settings=GardenerSettings())   # no channel configured; sla finding present
 
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM capture_queue")
         assert cur.fetchone()[0] == capture_before
-        cur.execute("SELECT count(*) FROM review_decisions")
-        assert cur.fetchone()[0] == decisions_before
+        cur.execute("SELECT count(*) FROM repair_proposals")
+        assert cur.fetchone()[0] == repairs_before
 
 
 # ── the model sweep, wired end to end ───────────────────────────────────────────────────────────

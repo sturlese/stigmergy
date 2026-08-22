@@ -198,11 +198,12 @@ def test_a_company_wide_slack_capture_files_with_the_citation_and_empty_entity(r
     assert "-thread]]" in syn                       # cited, whatever the derived title slug
 
 
-# ── a thread about a new name lands whole: the thread, the note AND the proposed entity ─────────
-def test_a_slack_capture_about_a_new_name_files_the_thread_the_note_and_the_proposed_entity(
+# ── a thread about a new name lands whole: the thread, the note AND the newborn entity ──────────
+def test_a_slack_capture_about_a_new_name_files_the_thread_the_note_and_the_newborn_entity(
         rig, clean_queue):
     """OLD BEHAVIOUR: parked with no source page written. The set lands in one commit now — the
-    verbatim thread, the synthesis anchored to the newborn entity, the entity page for a steward."""
+    verbatim thread, the synthesis anchored to the newborn entity, and the entity page itself,
+    confirmed by whoever captured it (ADR 044)."""
     env, deps = rig
     item, result = _file(clean_queue, deps,
                          f"DOUBLE:propose=Umbrella Corp\n{THREAD_MATERIAL}",

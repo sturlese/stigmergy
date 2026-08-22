@@ -26,20 +26,20 @@ QUEUED = "queued"
 CLAIMED = "claimed"
 FILED = "filed"
 REJECTED = "rejected"
-# LEGACY, read-only. A steward closed the row by hand, back when a capture could park on a
-# person. Nothing writes it since the parked states retired: rows carrying it stay readable and
-# purgeable, because rewriting a closed row's history would lie about what happened to it.
+# LEGACY, read-only. A human closed the row by hand, back when a capture could park on a person.
+# Nothing writes it since the parked states retired: rows carrying it stay readable and purgeable,
+# because rewriting a closed row's history would lie about what happened to it.
 RESOLVED = "resolved"
 FAILED = "failed"
 
 STATUSES = (QUEUED, CLAIMED, FILED, REJECTED, RESOLVED, FAILED)
 
-# The two states a capture used to wait on a person in, RETIRED: a name nothing resolves to is
-# proposed as an entity and filed now (`librarian.identity`), and the steward confirms it from the
-# inbox afterwards. Rows still in either state are returned to `queued` at startup
-# (`_CAPTURE_QUEUE_PARKED_MIGRATION`) and re-filed under that rule; the status CHECK is swapped so
-# the words cannot come back. Named rather than deleted so the migration and the CHECK guard spell
-# them once.
+# The two states a capture used to wait on a person in, RETIRED: a name nothing resolves to
+# becomes an entity the librarian writes in the same commit that files the capture, confirmed by
+# whoever captured (`librarian.identity`). Rows still in either state are returned to `queued` at
+# startup (`_CAPTURE_QUEUE_PARKED_MIGRATION`) and re-filed under that rule; the status CHECK is
+# swapped so the words cannot come back. Named rather than deleted so the migration and the CHECK
+# guard spell them once.
 RETIRED_STATUSES = ("needs_input", "triage")
 
 # Terminal = will not move again on its own; retention purges terminal rows only.
@@ -56,9 +56,10 @@ REASON_SECRET = "secret"
 REASON_PII = "pii"
 REASON_DUPLICATE = "duplicate"
 REASON_STEERING = "steering"
-# LEGACY, read-only: a steward declined a parked row by hand, when rows could park. Kept so the
-# rows that carry it keep reading as a judgment call rather than a match — `queue._MATERIAL_WITHHELD`
-# fails CLOSED on a `rejected` row with NO code. Not in `WITHHELD_REASONS`.
+# LEGACY, read-only: a human declined a parked row by hand, when rows could park. The value is
+# the word those stored rows carry and cannot be renamed. Kept so the rows that carry it keep
+# reading as a judgment call rather than a match — `queue._MATERIAL_WITHHELD` fails CLOSED on a
+# `rejected` row with NO code. Not in `WITHHELD_REASONS`.
 REASON_STEWARD = "steward"
 # A drafted page whose frontmatter cannot be re-serialized after server-owned fields are stripped
 # and restamped: content-caused, which is what routes it to `rejected` rather than `failed`.
@@ -156,10 +157,10 @@ def base_report(*, status: str, summary: str, **facts) -> dict:
 MIGRATION_ACTOR = "migration"
 MIGRATION_EVENT = "requeued"
 MIGRATION_NOTE = ("the parked states retired — a capture about a name the registry does not know "
-                  "is filed with the entity proposed, for a steward to confirm; re-filed under "
+                  "is filed with that entity born, confirmed by whoever captured; re-filed under "
                   "that rule")
 
-# ── what a steward types beside a decision ────────────────────────────────────────────────────
+# ── what a person types beside an act ─────────────────────────────────────────────────────────
 # One sentence quoted inside a sentence code composes — past this it reads as a document that
 # lost its formatting.
 MAX_NOTE_CHARS = 500
@@ -236,12 +237,11 @@ SLACK_DOOR = "slack"
 DOCUMENT_HINT_KEYS = ("source_url",)
 
 # The union `normalize_hints` checks a key against.
-# A steward REGISTERING an entity (ADR 042): the two steward doors — the console's "Register an
-# entity" and `stigmergy-entities create` — submit what the steward knows as a capture carrying
-# these, and the librarian writes the entity's page from that material and the brain, born
-# confirmed by the steward. Allowed here so `queue.submit` stores them; refused at the service
-# seam for every client, because a registration is an act of authority and `brain_submit`
-# attributes material, never authority.
+# REGISTERING an entity (ADR 042, ADR 044 D1): a capture carrying these says what the person
+# introducing the entity calls it and what type it is, and the librarian writes the page from that
+# material and from what the brain already holds, born confirmed by them. Accepted from every door
+# — pinning a name is not an act of authority, because there is no authority left to hold: an
+# identity is born confirmed by whoever captured it either way.
 REGISTER_HINT_KEYS = ("register_name", "register_type", "register_aliases", "register_source")
 ALLOWED_HINT_KEYS = (HINT_KEYS + SOURCE_HINT_KEYS + MEETING_HINT_KEYS + DOCUMENT_HINT_KEYS
                      + REGISTER_HINT_KEYS)
@@ -409,41 +409,28 @@ def validate_meeting_date(value: str) -> str:
     return text
 
 
-def reject_registration_hints(hints: dict | None) -> None:
-    """Fail LOUDLY on any `register_*` hint from ANY client door: the two legitimate asserters
-    (the console's Register an entity, `stigmergy-entities create`) never pass through
-    `BrainService._submit`, and a registration is a steward's act, not a submitter's suggestion."""
-    present, plural = _present_and_plural(hints, REGISTER_HINT_KEYS)
-    if not present:
-        return
-    raise SubmissionRejected(
-        f"{', '.join(present)} {'are' if plural else 'is'} set by the steward doors themselves "
-        f"(the console's Register an entity, `stigmergy-entities create`), not by a caller — "
-        f"remove {'them' if plural else 'it'} and resubmit. To introduce an entity, capture what "
-        f"you know about it: the librarian proposes it and a steward confirms")
-
-
 @dataclasses.dataclass(frozen=True)
 class Registration:
-    """What a steward asked the librarian to register, read off a capture's hints: the entity's
-    name and type as the steward spelled them, the spellings they listed, and which door asked
-    (the ledger's `source`). The capture's `submitted_by` is the steward, and therefore the
-    `approved_by` the page is born with."""
+    """What a capture asked the librarian to register, read off its hints: the entity's name and
+    type as the person spelled them, the spellings they listed, and which door asked. The
+    capture's `submitted_by` is that person, and therefore the `approved_by` the page is born
+    with — as it is for every identity a capture introduces (ADR 044 D1)."""
     name: str
     entity_type: str
     aliases: tuple
     source: str
 
 
-# The doors a registration can come from — the ledger's own spellings (`capture.decisions` names
-# the same two, and refuses any other after the push, which is too late to learn it).
-REGISTRATION_SOURCES = ("admin", "cli")
+# The doors a registration can come from. Any client door may pin what the librarian would
+# otherwise infer (ADR 044 D1) — a registration carries no authority, so there is nothing here for
+# a closed list to protect; the tuple stays as the vocabulary a door names itself with.
+REGISTRATION_SOURCES = ("mcp", "admin", "slack")
 
 
 def registration_hints(*, name: str, entity_type: str, aliases=(), source: str) -> dict:
-    """The hints a steward door submits with a registration — built here so both doors build the
-    same ones. `entity` rides along as the ordinary hint it is, so the haystack the proposal writer
-    checks a proposed name against carries the steward's spelling."""
+    """The hints a door submits with a registration — built here so every door builds the same
+    ones. `entity` rides along as the ordinary hint it is, so the haystack `librarian.identity`
+    checks a declared name against carries the submitter's own spelling."""
     if source not in REGISTRATION_SOURCES:
         raise ValueError(f"a registration comes from one of {', '.join(REGISTRATION_SOURCES)}, "
                          f"not {source!r} — the ledger records the door by that name")

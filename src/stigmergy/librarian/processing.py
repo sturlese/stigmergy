@@ -4,8 +4,8 @@ Cheapest-first: material -> retry collapse -> already-filed -> secrets/PII over 
 worktree -> agent -> declared edits -> stamp -> gates -> [one corrective retry] -> commit -> push.
 The scan runs over the MATERIAL because a capture containing a secret bounces WHOLE. Terminal
 states split by CAUSE, not by gate: content `rejected`, system `failed`. A name nothing resolves
-to does not stop the page: the agent proposes the entity in its account, `identity.write_proposals`
-creates it in the same commit with `approved_by` empty, and a steward confirms it afterwards.
+to does not stop the page: the agent declares the entity in its account, and
+`identity.write_births` writes it in the same commit, confirmed by whoever captured (ADR 044).
 """
 import asyncio
 import dataclasses
@@ -17,8 +17,7 @@ import os
 import re
 from dataclasses import dataclass, field
 
-from stigmergy import review_kinds
-from stigmergy.capture import decisions, queue, schema
+from stigmergy.capture import queue, schema
 from stigmergy.capture.errors import CaptureError
 
 # `MAX_BODY_LINES`/`SPLIT_CHUNK_LINES` are IMPORTED: the linter and the splitter must agree.
@@ -132,7 +131,7 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
     anchoring = getattr(ctx.outcome, "anchoring", None) or {}
     kind = str(anchoring.get("kind", "")).lower() if isinstance(anchoring, dict) else ""
     # `ctx.registry`, never `deps.registry`: the former is the registry this commit PUBLISHES,
-    # proposals included, and an entity born in this commit must stamp like any other.
+    # births included, and an entity born in this commit must stamp like any other.
     entity, unresolved = gates.resolve_entity_ids(anchoring, ctx.registry)
     if kind == "entity" and (unresolved or not entity):
         entity = []
@@ -141,8 +140,8 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
     for path in ctx.in_lane_new_pages():
         if path in ctx.provenance_pages:
             continue    # stamped by `_stamp_attached_sources`, under the provenance group
-        if path in ctx.proposed_entity_pages:
-            continue    # an identity page carries its OWN anchor; `_declare_proposals` told the gates
+        if path in ctx.born_entity_pages:
+            continue    # an identity page carries its OWN anchor; `_declare_births` told the gates
         full = os.path.join(ctx.worktree, path)
         try:
             with open(full, encoding="utf-8") as f:
@@ -188,27 +187,19 @@ def _subject(title: str) -> str:
 
 
 def _commit_message(item: dict, outcome, page_path: str, *, n_sources: int = 0,
-                    proposed=()) -> str:
+                    born=()) -> str:
     """One capture, one commit, one filed page — enforced by `_cross_check_outcome`. The type in
     the subject comes from the FOLDER the page landed in: the folder is the fact. An identity the
-    commit CREATED unconfirmed is named in the body, so `git log` answers "where did this entity
-    come from" with the capture that proposed it."""
+    commit CREATED is named in the body, so `git log` answers "where did this entity come from"
+    with the capture that introduced it."""
     page_type = page_policy.type_for_folder(page_path) or "note"
     body = f"Filed by the librarian from capture #{item['id']}."
     if n_sources:
         body += f" {n_sources} source page(s) — the captured thread, verbatim — ride in it too."
-    registered = [_subject(str(e.get("name", ""))) for e in proposed
-                  if e.get("name") and e.get("confirmed_by")]
-    names = [_subject(str(e.get("name", ""))) for e in proposed
-             if e.get("name") and not e.get("confirmed_by")]
-    if registered:
-        body += (f" Registers {len(registered)} new entity page(s) — {', '.join(registered)} — "
-                 f"born confirmed by the steward who asked for it; the registry is regenerated in "
-                 f"this same commit.")
+    names = [_subject(str(e.get("name", ""))) for e in born if e.get("name")]
     if names:
-        body += (f" Proposes {len(names)} new entity page(s) — {', '.join(names)} — with "
-                 f"approved_by empty, for a steward to confirm; the registry is regenerated in "
-                 f"this same commit.")
+        body += (f" Introduces {len(names)} new entity page(s) — {', '.join(names)} — born "
+                 f"confirmed by the submitter; the registry is regenerated in this same commit.")
     return (f"feat({page_type}): {_subject(getattr(outcome, 'title', ''))}\n\n"
             f"{body}\n\n"
             f"Submitted-by: {item['submitted_by']}\n")
@@ -464,21 +455,20 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
             return None, written_page, outcome
         # The plan's own `path` is NOT carried forward: `_file` reads `page_path` off the DIFF.
 
-    # The identities the account proposes, created BEFORE the diff the gates judge is taken, so
+    # The identities the account introduces, created BEFORE the diff the gates judge is taken, so
     # the entity pages and the regenerated registry land in the same diff as the note — and the
     # gates resolve against the registry this commit will PUBLISH.
-    proposals = identity.write_proposals(
+    births = identity.write_births(
         worktree, outcome=outcome, base_registry=deps.registry, material=material,
-        hints=(item.get("hints") or {}).get("client", {}),
-        declined_ids=_declined_identity_ids(conn), today=deps.as_of(),
+        hints=(item.get("hints") or {}).get("client", {}), today=deps.as_of(),
         registration=schema.registration_from_hints(item.get("hints")),
         approver=str(item.get("submitted_by") or ""),
         related=[outcome.title] if outcome.title else ())
-    if isinstance(proposals, list):
-        return None, proposals, outcome
+    if isinstance(births, list):
+        return None, births, outcome
 
     # With the attachment ON, the lane widens by exactly the attachment's own folder; with
-    # proposals, by exactly the identity zone and the registry file.
+    # births, by exactly the identity zone and the registry file.
     write_prefixes = gates.ALLOWED_WRITE_PREFIXES
     creatable_types = frozenset(page_policy.FAST_LANE_TYPES)
     extra_folder_types = {}
@@ -490,12 +480,12 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         worktree=worktree,
         entries=gitcmd.diff_entries(worktree),
         added=gitcmd.added_lines(worktree),
-        material=material, outcome=outcome, registry=proposals.registry,
+        material=material, outcome=outcome, registry=births.registry,
         # The linter materialized from this item's base commit — NOT `settings.linter_path`.
         linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin,
         write_prefixes=write_prefixes, creatable_types=creatable_types,
         extra_folder_types=extra_folder_types)
-    _declare_proposals(ctx, proposals)
+    _declare_births(ctx, births)
 
     if not ctx.entries:
         raise AgentError("code wrote nothing for a capture the agent decided to file"
@@ -531,63 +521,31 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
     if not gates.vetoes(findings):
         return (_file(conn, item, deps, ctx, outcome, findings, worktree, edited=edited,
                       source_pages=tuple(written_sources["paths"]) if written_sources else (),
-                      proposals=proposals),
+                      births=births),
                 [], outcome)
     return None, findings, outcome
 
 
-def _declare_proposals(ctx: gates.GateContext, proposals: identity.Proposals) -> None:
-    """Tell the gates what `identity.write_proposals` did — the lane, the byte proofs, and which
-    entity-zone entries are this run's own. Told, never inferred: a gate that worked out on its
-    own which entity page was "probably ours" would be a gate the agent could talk to."""
-    if not proposals.touched():
+def _declare_births(ctx: gates.GateContext, births: identity.Births) -> None:
+    """Tell the gates what `identity.write_births` did — the lane, the byte proofs, which
+    entity-zone entries are this run's own, and who each one names. Told, never inferred: a gate
+    that worked out on its own which entity page was "probably ours" would be a gate the agent
+    could talk to."""
+    if not births.touched():
         return
-    ctx.write_prefixes = ctx.write_prefixes + proposals.lane
+    ctx.write_prefixes = ctx.write_prefixes + births.lane
     ctx.creatable_types = ctx.creatable_types | {page_policy.ENTITY_PAGE_TYPE}
     ctx.extra_folder_types = {**ctx.extra_folder_types,
                               identity.ENTITY_ZONE_PREFIX.rstrip("/"): page_policy.ENTITY_PAGE_TYPE}
-    ctx.derived_files = ctx.derived_files | proposals.derived_files
-    ctx.expected_bytes = {**ctx.expected_bytes, **proposals.expected_bytes}
-    ctx.proposed_entity_pages = frozenset(proposals.entity_pages)
-    ctx.confirmed_entity_pages = dict(proposals.confirmed)
-    for path, entity_id in proposals.entity_pages.items():
+    ctx.derived_files = ctx.derived_files | births.derived_files
+    ctx.expected_bytes = {**ctx.expected_bytes, **births.expected_bytes}
+    ctx.born_entity_pages = frozenset(births.entity_pages)
+    ctx.confirmed_entity_pages = dict(births.confirmed)
+    for path, entity_id in births.entity_pages.items():
         # What `gate_frontmatter` re-reads the page against: its own anchor and its own state.
         ctx.stamped_by_path[path] = {"status": page_policy.FILED_STATUS, "entity": [entity_id],
-                                     "approved_by": proposals.confirmed.get(path, "")}
+                                     "approved_by": births.confirmed.get(path, "")}
 
-
-def _record_registrations(conn, item, proposals, sha: str) -> None:
-    """An entity born confirmed through a steward's registration is recorded in the governance
-    ledger as that steward's approval (ADR 042) — the same row the inbox's Approve writes, so
-    "entities born" counts every door the same way and the librarian's decline memory sees the
-    identity as decided. After the push, like every door: a ledger row for a commit that did not
-    land would be a decision about nothing."""
-    if proposals is None or not proposals.confirmed:
-        return
-    registration = schema.registration_from_hints(item.get("hints"))
-    source = registration.source if registration else ""
-    for entity_id in proposals.confirmed_ids:
-        try:
-            decisions.record_decision(
-                conn, item_kind=review_kinds.KIND_IDENTITY_PROPOSAL, item_id=entity_id,
-                verdict=decisions.APPROVE, actor=str(item.get("submitted_by") or ""),
-                source=source, extra={"commit": sha, "created": True, "capture": item.get("id")})
-        except Exception:  # noqa: BLE001 — the commit has LANDED; a ledger fault is logged, never
-            # allowed to report a filed capture as failed. The page and the registry say the
-            # entity is confirmed; the row is what the digest and the decline memory would miss.
-            log.error("item %s: the registration of %r landed in %s but its ledger row could not "
-                      "be written", item.get("id"), entity_id, sha[:12], exc_info=True)
-
-
-def _declined_identity_ids(conn) -> set[str]:
-    """Every identity a steward declined, by registry id, read from the governance ledger — so the
-    librarian never proposes the same name twice. The ledger is the ONE memory of a decision
-    (`capture.decisions`), and reading it here is what keeps a declined proposal from coming back
-    on the next capture that mentions the name."""
-    latest = decisions.latest_decisions(conn)
-    return {item_id for (kind, item_id), decided in latest.items()
-            if kind == review_kinds.KIND_IDENTITY_PROPOSAL
-            and (decided or {}).get("verdict") == decisions.REJECT}
 
 
 # Nothing in the account can name a path: `page.FOLDER_BY_TYPE` decides the folder, the title the
@@ -763,7 +721,7 @@ def _cross_check_outcome(ctx: gates.GateContext) -> list:
     past `gate_anchoring`. `ctx.provenance_pages` is excluded, or attached captures are all vetoed.
     """
     new_pages = [p for p in ctx.in_lane_new_pages()
-                 if p not in ctx.provenance_pages and p not in ctx.proposed_entity_pages]
+                 if p not in ctx.provenance_pages and p not in ctx.born_entity_pages]
     out = []
     if not new_pages:
         out.append(gates.Finding(
@@ -817,26 +775,25 @@ def _commit_and_push(conn, item, deps, ctx, worktree, message, *, what: str) -> 
 
 
 def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
-          source_pages=(), proposals=None) -> Result:
+          source_pages=(), births=None) -> Result:
     """The gates passed: commit, push, and say what happened. `page_path` comes from the DIFF,
     never the outcome. `source_pages` arrives in PART order from the writer's own plan, and is
     excluded when picking `page_path` because `sources/` sorts before `wiki/`; the identity pages
-    this run proposed are excluded for the same reason — the note is the page this capture filed.
+    this run created are excluded for the same reason — the note is the page this capture filed.
     """
     page_path = [p for p in ctx.in_lane_new_pages()
-                 if p not in ctx.provenance_pages and p not in ctx.proposed_entity_pages][0]
-    proposed = proposals.entities if proposals is not None else []
-    proposed_aliases = proposals.aliases if proposals is not None else []
+                 if p not in ctx.provenance_pages and p not in ctx.born_entity_pages][0]
+    born = births.entities if births is not None else []
+    added_aliases = births.aliases if births is not None else []
     message = _commit_message(item, outcome, page_path, n_sources=len(source_pages),
-                              proposed=proposed)
+                              born=born)
     sha = _commit_and_push(conn, item, deps, ctx, worktree, message, what="this item")
-    _record_registrations(conn, item, proposals, sha)
 
     notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
     notes += [f.message for f in findings if f.severity == gates.SEVERITY_NOTE]
     return Result(
         schema.FILED, f"{page_path}@{sha}",
-        # `ctx.registry`, the registry this commit PUBLISHED: a proposed entity's name renders
+        # `ctx.registry`, the registry this commit PUBLISHED: a newborn entity's name renders
         # from it, where `deps.registry` (the base commit's) would print the bare id.
         report.filed(page_path=page_path, commit=sha,
                      anchoring=outcome.anchoring or {}, registry=ctx.registry,
@@ -846,8 +803,8 @@ def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
                      agent_rationale=getattr(outcome, "summary", ""),
                      findings=notes,
                      source_pages=list(source_pages),
-                     entities_proposed=proposed, aliases_proposed=proposed_aliases,
-                     entities_updated=proposals.updates if proposals is not None else []),
+                     entities_born=born, aliases_added=added_aliases,
+                     entities_updated=births.updates if births is not None else []),
         findings=notes)
 
 
@@ -1419,20 +1376,20 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
     if isinstance(written, list):
         return None, written, outcome
 
-    # The identities the account proposes — the same writer the ordinary flow uses, so a meeting
+    # The identities the account introduces — the same writer the ordinary flow uses, so a meeting
     # whose decisions are about something new lands with that something created beside them.
     # `related` names pages by STEM, which is what a wikilink resolves by: the decision pages
     # this set wrote (slugified, never their titles), or the meeting page when there is none.
     decision_stems = [os.path.basename(path)[:-len(".md")]
                       for path in written.get("decisions_by_path", {})]
-    proposals = identity.write_proposals(
+    births = identity.write_births(
         worktree, outcome=outcome, base_registry=deps.registry, material=material,
-        hints=meeting_meta, declined_ids=_declined_identity_ids(conn), today=deps.as_of(),
+        hints=meeting_meta, today=deps.as_of(),
         registration=schema.registration_from_hints(item.get("hints")),
         approver=str(item.get("submitted_by") or ""),
         related=decision_stems or [written["meeting_stem"]])
-    if isinstance(proposals, list):
-        return None, proposals, outcome
+    if isinstance(births, list):
+        return None, births, outcome
 
     # `edits_allowed` keeps its `True` default: this flow HAS an edit mechanism now, the same one
     # the fast lane has — declared in the account, performed by `edits.apply_declared` below,
@@ -1441,11 +1398,11 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
         worktree=worktree,
         entries=gitcmd.diff_entries(worktree),
         added=gitcmd.added_lines(worktree),
-        material=material, outcome=outcome, registry=proposals.registry,
+        material=material, outcome=outcome, registry=births.registry,
         linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin,
         write_prefixes=MEETING_WRITE_PREFIXES, creatable_types=MEETING_CREATABLE_TYPES,
         extra_folder_types=dict(MEETING_EXTRA_FOLDER_TYPES))
-    _declare_proposals(ctx, proposals)
+    _declare_births(ctx, births)
 
     if not ctx.entries:
         raise AgentError("the meeting flow wrote nothing for a transcript it decided to file")
@@ -1471,7 +1428,7 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
                 + _cross_check_meeting_outcome(ctx, outcome))
     if not gates.vetoes(findings):
         return (_file_meeting(conn, item, deps, ctx, outcome, findings, worktree,
-                              written, edited=edited, proposals=proposals),
+                              written, edited=edited, births=births),
                 [], outcome)
     return None, findings, outcome
 
@@ -1496,7 +1453,7 @@ def _cross_check_meeting_outcome(ctx: gates.GateContext, outcome) -> list:
     filename carries a date, and a date-bearing name in body prose is style rather than safety, so
     the gardener's `date-bearing-body-link` check flags it over the committed corpus instead."""
     out = []
-    new_pages = set(ctx.in_lane_new_pages()) - ctx.proposed_entity_pages
+    new_pages = set(ctx.in_lane_new_pages()) - ctx.born_entity_pages
     source_pages, meeting_pages, decision_pages = (set(_source_pages(ctx)), set(_meeting_pages(ctx)),
                                                     set(_decision_pages(ctx)))
     other = new_pages - source_pages - meeting_pages - decision_pages
@@ -1591,7 +1548,7 @@ def _meeting_commit_message(item: dict, outcome, n_decisions: int) -> str:
 
 
 def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
-                  *, edited=(), proposals=None) -> Result:
+                  *, edited=(), births=None) -> Result:
     """The gates passed over the whole SET: one commit, push, report. `written` carries the
     code-computed source parts and the decision-path-to-anchoring map; `edited` is what
     `edits.apply_declared` actually changed on pages that already existed — the one surface a human
@@ -1602,7 +1559,6 @@ def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
     meeting_page = meeting_pages[0]
     message = _meeting_commit_message(item, outcome, len(decision_pages))
     sha = _commit_and_push(conn, item, deps, ctx, worktree, message, what="this meeting")
-    _record_registrations(conn, item, proposals, sha)
 
     decisions_by_path = written.get("decisions_by_path", {})
     decisions = [{"path": path, "anchoring": (decisions_by_path.get(path) or {}).get("anchoring", {})}
@@ -1633,9 +1589,9 @@ def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
                              decisions=decisions, commit=sha, pages_edited=list(edited),
                              agent_rationale=getattr(outcome, "summary", ""),
                              registry=ctx.registry,
-                             entities_proposed=proposals.entities if proposals else [],
-                             aliases_proposed=proposals.aliases if proposals else [],
-                             entities_updated=proposals.updates if proposals else []),
+                             entities_born=births.entities if births else [],
+                             aliases_added=births.aliases if births else [],
+                             entities_updated=births.updates if births else []),
         findings=notes)
 
 

@@ -92,8 +92,8 @@ def _private_key(env: dict) -> str:
             return f.read()
     except OSError as ex:
         # The path is where the App's PRIVATE KEY lives and stays out of the MESSAGE:
-        # `entities.remote` catches this exception on the server-side mint path and `server.review`
-        # echoes it to a steward verbatim, so the path goes to the operator's log at ERROR and the
+        # `repair.remote` catches this exception on the server-side apply path and `server.review`
+        # echoes it to the caller verbatim, so the path goes to the operator's log at ERROR and the
         # message names ${PRIVATE_KEY_FILE_ENV} instead.
         log.error("cannot read the librarian App private key file at %r", path, exc_info=True)
         raise LibrarianConfigError(

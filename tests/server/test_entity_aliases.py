@@ -101,7 +101,7 @@ def test_load_registry_returns_full_records(tmp_path):
     registry = entity_aliases.load_registry(entity_aliases.default_path(repo))
     assert registry == {"globex": {"id": "globex", "name": "Globex", "type": "organization",
                                    "aliases": ["Globex Corp", "GX Industries"],
-                                   "proposed": False, "approved_by": "", "proposed_aliases": []}}
+                                   "approved_by": ""}}
 
 
 def test_load_registry_defaults_missing_fields_honestly(tmp_path):
@@ -109,7 +109,7 @@ def test_load_registry_defaults_missing_fields_honestly(tmp_path):
     repo = _write_registry(tmp_path, {"acme": {"name": "Acme"}})
     registry = entity_aliases.load_registry(entity_aliases.default_path(repo))
     assert registry["acme"] == {"id": "acme", "name": "Acme", "type": "", "aliases": [],
-                                "proposed": False, "approved_by": "", "proposed_aliases": []}
+                                "approved_by": ""}
 
 
 def test_load_registry_skips_a_non_mapping_record_like_load_aliases_does(tmp_path):
@@ -452,16 +452,18 @@ def test_the_shared_fold_is_the_narrow_one_not_the_collision_key(tmp_path):
     assert entity_aliases.resolve_exact(aliases, "Cofers") is None
 
 
-def test_load_registry_carries_the_identity_lifecycle(tmp_path):
-    """The keys the generator writes since identities are proposed: a proposal reads as
-    `proposed`, its approver empty, and the spellings waiting on a steward beside it."""
+def test_load_registry_carries_who_introduced_each_identity(tmp_path):
+    """OLD BEHAVIOUR: the reader also carried `proposed` and `proposed_aliases`, the two keys a
+    waiting identity was marked with. ADR 044: an identity is born confirmed by whoever captured,
+    so `approved_by` is the whole lifecycle — and a registry still carrying the retired keys is
+    read WITHOUT them rather than half-understood."""
     repo = _write_registry(tmp_path, {
-        "ledgerly": {"name": "Ledgerly", "type": "organization", "aliases": [], "proposed": True,
-                     "approved_by": "", "proposed_aliases": ["LDG"]},
-        "acme": {"name": "Acme", "type": "organization", "aliases": [], "proposed": False,
-                 "approved_by": "ana@example.com", "proposed_aliases": []},
+        "ledgerly": {"name": "Ledgerly", "type": "organization", "aliases": ["LDG"],
+                     "approved_by": "ana@example.com"},
+        "acme": {"name": "Acme", "type": "organization", "aliases": [],
+                 "proposed": True, "approved_by": "", "proposed_aliases": ["ACME"]},
     })
     registry = entity_aliases.load_registry(entity_aliases.default_path(repo))
-    assert registry["ledgerly"]["proposed"] is True
-    assert registry["ledgerly"]["proposed_aliases"] == ["LDG"]
-    assert registry["acme"]["approved_by"] == "ana@example.com"
+    assert registry["ledgerly"] == {"id": "ledgerly", "name": "Ledgerly", "type": "organization",
+                                    "aliases": ["LDG"], "approved_by": "ana@example.com"}
+    assert sorted(registry["acme"]) == ["aliases", "approved_by", "id", "name", "type"]

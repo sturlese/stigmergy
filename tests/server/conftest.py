@@ -328,14 +328,17 @@ def run_http_server(app):
         thread.stop()
 
 
-# ── the review lane's own fixtures ─────────────────────────────────────────────────────────────
+# ── the governed doors' own fixtures ───────────────────────────────────────────────────────────
 # They live here, in the package conftest, which is where pytest finds them without any test
 # module importing them from a sibling (and without the redefinition warnings that the
 # fixture-as-parameter idiom draws when a fixture is imported by name).
 #
-# Real git + real Postgres, same posture as `tests/librarian/`: `review_decide`'s authorization
-# reads `ops/stewards.json` at the base commit through a real `git fetch`, and a faked one would
-# prove nothing about the property under test.
+# Real git + real Postgres, same posture as `tests/librarian/`: a deletion clones, gates and pushes
+# for real, and a faked one would prove nothing about the property under test.
+#
+# `STEWARD` is UNRESTRICTED in the fixture identities file (`"*"`) and `ALICE` is scoped — which is
+# exactly the split `brain_delete` authorizes on since ADR 044 D3. The name is kept because that is
+# what a person who may remove pages is called in this repo's prose.
 STEWARD = "steward@example.com"
 ALICE = "alice@example.com"
 
@@ -353,13 +356,8 @@ def no_real_github_app(monkeypatch):
 def review_connect_or_skip():
     from stigmergy.capture import schema as capture_schema
     from stigmergy.repair import schema as repair_schema
-    from stigmergy.server import review
     conn = testdb.connect_or_skip("review")
     capture_schema.ensure_capture_schema(conn)
-    review.ensure_review_schema(conn)
-    # The third kind's own table. Ensured HERE rather than per test module for the reason the other
-    # two are: the review lane reads all three in one query path, and a fixture that sets up only
-    # the tables its own file happens to touch turns a missing kind into `UndefinedTable`.
     repair_schema.ensure_repair_schema(conn)
     return conn
 
@@ -369,7 +367,6 @@ def conn():
     c = review_connect_or_skip()
     with c.cursor() as cur:
         cur.execute("DELETE FROM capture_queue")
-        cur.execute("DELETE FROM review_decisions")
         cur.execute("DELETE FROM repair_proposals")
     yield c
     c.close()
@@ -382,42 +379,24 @@ def require_gitleaks():
         return
     pytest.skip("gitleaks not on PATH (brew install gitleaks) — the write path's gates need it")
 
-
-def seed_stewards(env, mapping: dict) -> None:
-    """Commit `ops/stewards.json` to the fixture repo and push it: `review_decide`'s authorization
-    resolves stewardship from this file, read fresh at the base commit exactly like every other
-    governed input (`load_stewards`), so a test that wants `STEWARD` authorized has to land it."""
-    from tests.librarian import support
-    path = os.path.join(env.repo, "ops", "stewards.json")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(mapping))
-    support.commit_and_push(env.repo, "test: seed ops/stewards.json")
-
-
 @pytest.fixture()
 def env(tmp_path, require_gitleaks):
     from tests.librarian import support
-    repo_env = support.build_repo(str(tmp_path))
-    seed_stewards(repo_env, {"*": [STEWARD]})
-    return repo_env
+    return support.build_repo(str(tmp_path))
 
 
 def make_review_service(env, conn, identity_name=ALICE, *, audiences=None, evidence=None,
-                        knowledge_repo=None, stewards_path="", librarian_repo_url=None,
+                        knowledge_repo=None, librarian_repo_url=None,
                         entity_registry_path=None):
-    """`knowledge_repo=""` with a `stewards_path` builds the DEPLOYED shape: the app/slack groups
-    hold no checkout and resolve stewards from the map the deploy baked into the image.
-
-    `librarian_repo_url` defaults to `env.bare` — the same local `git init --bare` remote `env.repo`
-    is a clone of — so a test that decides a proposal lands it for real, through
-    `entities.remote.decide_via_clone`, against a real bare remote with no GitHub and no App
-    credential (`env.bare` is not `https://`, so the door needs none). Pass `""` explicitly for a
-    test that wants the capability refusal (no repo URL configured) instead."""
+    """`librarian_repo_url` defaults to `env.bare` — the same local `git init --bare` remote
+    `env.repo` is a clone of — so a test that removes pages lands the commit for real, against a
+    real bare remote with no GitHub and no App credential (`env.bare` is not `https://`, so the
+    door needs none). Pass `""` explicitly for a test that wants the capability refusal (no repo
+    URL configured) instead."""
     from stigmergy.capture.evidence import MemoryEvidenceStore
     from stigmergy.server import entity_aliases
     from stigmergy.server.settings import Settings
-    settings = Settings(identity=identity_name, stewards_path=stewards_path,
+    settings = Settings(identity=identity_name,
                         knowledge_repo=env.repo if knowledge_repo is None else knowledge_repo,
                         librarian_repo_url=env.bare if librarian_repo_url is None
                         else librarian_repo_url,

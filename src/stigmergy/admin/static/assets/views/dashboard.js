@@ -1,9 +1,9 @@
-// The dashboard: what is waiting on a person, and what happened to what arrived. Polls every
-// 30 s while visible — the only view that does — and returns a cleanup.
+// The dashboard: what the brain took in, and what it did with it. Polls every 30 s while
+// visible — the only view that does — and returns a cleanup.
 
 import { api } from "../api.js";
 import { chartCard, fillDays, histogram, partToWhole, seriesColor, sparkline, stackedColumns } from "../charts.js";
-import { decisionVerb, door, itemKind, jobName, OUTCOME_ORDER, status as statusCopy } from "../copy.js";
+import { jobName, OUTCOME_ORDER, status as statusCopy } from "../copy.js";
 import { getMeta, windowDays } from "../state.js";
 import {
   agoFrom, card, el, fmtAge, fmtDay, fmtMs, fmtNum, fmtWhen, keyDot, link, pill, relTime, render,
@@ -15,12 +15,13 @@ export async function dashboardView(host) {
   let alive = true;
   const draw = async () => {
     const days = windowDays();
-    const [overview, inbox, metrics, worker] = await Promise.all([
-      api.get("overview"), api.get("inbox"), api.get(`metrics?days=${days}`), api.get("worker"),
+    const [overview, metrics, worker] = await Promise.all([
+      api.get("overview"), api.get(`metrics?days=${days}`), api.get("worker"),
     ]);
     if (!alive) return;
+    const sums = windowSums(metrics);
     render(host,
-      hero(inbox, overview, pipelineCard(metrics, days)),
+      hero(sums, overview, metrics, days, pipelineCard(sums, days)),
       el("div", { class: "grid halves" },
         capturesChart(metrics, days),
         questionsChart(metrics, days)),
@@ -29,7 +30,7 @@ export async function dashboardView(host) {
         latencyCard(metrics, worker),
         jobsCard(overview, metrics)),
       el("div", { class: "grid halves" },
-        activityCard(overview, metrics),
+        consoleActionsCard(overview),
         overview.ingest_errors.rows.length ? ingestCard(overview) : gardenerCard(overview)),
     );
   };
@@ -38,37 +39,42 @@ export async function dashboardView(host) {
   return () => { alive = false; clearInterval(timer); };
 }
 
-// ── the hero: the inbox is the number that means work ─────────────────────────────────────────
-function hero(inbox, overview, pipelineNode) {
-  const counts = inbox.counts || {};
+// ── the hero: what the window's captures BECAME ───────────────────────────────────────────────
+// Filed is the number that means the brain grew: a capture that landed is a page, and the
+// identities it introduced were born in the same commit. Nothing waits on a person to make that
+// true, so the number beside it is not a backlog — it is what did NOT land.
+function hero(sums, overview, metrics, days, pipelineNode) {
+  const filed = sums.filed || 0;
   const rows = [
-    ["identity-proposal", counts["identity-proposal"] || 0, "proposed entities", "inbox/identity"],
-    ["alias-proposal", counts["alias-proposal"] || 0, "proposed spellings", "inbox/alias"],
-    ["repair-proposal", counts["repair-proposal"] || 0, "repair proposals", "inbox/repair"],
+    [sums.rejected || 0, "refused by a gate", "code"],
+    [sums.failed || 0, "could not finish", "fail"],
+    [(sums.queued || 0) + (sums.claimed || 0), "still moving", "model"],
   ];
+  const waiting = (metrics.repairs && metrics.repairs.pending) || 0;
   return el("div", { class: "hero-wrap" },
     el("div", { class: "hero-card" },
-      el("div", { class: "eyebrow" }, "waiting on a steward"),
-      el("div", { class: `hero-number${inbox.count ? "" : " calm"}` }, String(inbox.count)),
-      el("div", { class: "hero-label" }, inbox.count === 1 ? "thing owes a steward a decision"
-        : inbox.count ? "things owe a steward a decision" : "nothing is waiting on anyone right now"),
+      el("div", { class: "eyebrow" }, "landed in git"),
+      el("div", { class: `hero-number${filed ? "" : " calm"}` }, String(filed)),
+      el("div", { class: "hero-label" }, filed === 1
+        ? `capture became a page in the last ${days} days`
+        : `captures became pages in the last ${days} days`),
       el("div", { class: "hero-breakdown" },
-        rows.map(([kind, n, label, hash]) => el("a", { href: `#/${hash}` },
-          keyDot(itemKind(kind).who), el("strong", {}, String(n)), el("span", {}, label)))),
+        rows.map(([n, label, who]) => el("a", { href: "#/captures" },
+          keyDot(who), el("strong", {}, String(n)), el("span", {}, label)))),
       el("div", { class: "hr" }),
       el("div", { class: "statline" },
         el("span", {}, "in flight ", el("strong", {}, String(overview.in_flight.length))),
-        el("span", {}, "queued ", el("strong", {}, String(overview.queue.counts.queued || 0)))),
+        el("span", {}, "queued ", el("strong", {}, String(overview.queue.counts.queued || 0))),
+        el("span", {}, "repairs waiting ", el("strong", {}, String(waiting)))),
       el("div", { class: "row", style: { marginTop: "14px" } },
-        link("inbox", el("span", { class: "btn primary small" }, "Open the inbox")),
-        link("captures", el("span", { class: "btn small" }, "All captures")))),
+        link("captures", el("span", { class: "btn primary small" }, "All captures")),
+        link("repairs", el("span", { class: "btn small" }, "Repairs")))),
     pipelineNode);
 }
 
-// ── the pipeline: the write path with live counts — colour is who decides ─────────────────────
-function pipelineCard(metrics, days) {
-  // Summed over the SERVER's status vocabulary, so a status added to the queue cannot silently
-  // drop out of "captured"; the frontend only knows how to say each one.
+// The window's captures, summed over the SERVER's status vocabulary, so a status added to the
+// queue cannot silently drop out of "captured"; the frontend only knows how to say each one.
+function windowSums(metrics) {
   const meta = getMeta();
   const statuses = meta.statuses && meta.statuses.length ? meta.statuses : OUTCOME_ORDER;
   const sums = { total: 0 };
@@ -76,6 +82,11 @@ function pipelineCard(metrics, days) {
   for (const row of metrics.captures_by_day) {
     for (const s of statuses) { sums[s] += row[s] || 0; sums.total += row[s] || 0; }
   }
+  return sums;
+}
+
+// ── the pipeline: the write path with live counts — colour is who decides ─────────────────────
+function pipelineCard(sums, days) {
   const landed = sums.filed || 0;
   const byHand = sums.resolved || 0;
   const refused = sums.rejected || 0;
@@ -104,12 +115,12 @@ function pipelineCard(metrics, days) {
   // stages — the two in the middle carry no count: every capture passes through both, so the
   // number would repeat "captured" and invite a reconciliation the outcomes already give
   node.append(stage(0, 80, 150, 84, "captured", sums.total, `in the last ${days} days`, null));
-  node.append(stage(200, 80, 150, 84, "the model drafts", null, "a page, proposed", "model"));
+  node.append(stage(200, 80, 150, 84, "the model drafts", null, "a page, and the names in it", "model"));
   node.append(stage(400, 80, 150, 84, "code gates", null, "nine deterministic gates", "code"));
   const outs = [
-    [landed, "landed in git", "git", "filed — proposing what it had to"],
-    [byHand, "handled by hand", "human", "legacy: closed by a steward before captures stopped parking"],
-    [refused, "refused", "code", "by a gate, or declined by a steward"],
+    [landed, "landed in git", "git", "filed — with the identities it introduced"],
+    [byHand, "handled by hand", "human", "legacy: closed by hand before captures stopped parking"],
+    [refused, "refused", "code", "one of the nine gates said no"],
     [broke, "could not finish", "fail", "failed — deliveries exhausted"],
   ];
   outs.forEach(([n, label, who, sub], i) => {
@@ -131,7 +142,7 @@ function pipelineCard(metrics, days) {
   return el("div", { class: "card", style: { marginBottom: 0 } },
     el("div", { class: "card-head" },
       el("div", { class: "card-title" }, el("h2", {}, "The write path, live"),
-        el("div", { class: "sub" }, "what happened to everything that arrived in the window: the model drafts, code decides, and each capture lands, parks or is refused"))),
+        el("div", { class: "sub" }, "what happened to everything that arrived in the window: the model drafts, code decides, and each capture lands in git, is refused, or could not finish"))),
     node);
 }
 
@@ -227,22 +238,18 @@ function jobsCard(overview, metrics) {
     table(["job", "last run", "when", ""], rows, { dense: true, empty: "no job has run yet — the four workflows run nightly in GitHub Actions" }));
 }
 
-function activityCard(overview, metrics) {
-  const events = [];
-  for (const a of overview.admin_actions || []) {
-    events.push({ at: a.ts, who: "human", head: `${a.actor} · ${a.action}`, note: a.outcome === "ok" ? "" : `${a.outcome} ${a.error_class}`.trim() });
-  }
-  for (const d of (metrics.decisions || []).slice(0, 6)) {
-    events.push({ at: d.created_at, who: "human", head: `${d.actor} ${decisionVerb(d.verdict)} ${itemKind(d.kind).label.toLowerCase()} #${d.id}`, note: `via ${door(d.source)}` });
-  }
-  events.sort((a, b) => (b.at || "").localeCompare(a.at || ""));
-  return card({ title: "Recent decisions and console actions", sub: "the two ledgers, merged", actions: [link("activity", el("span", { class: "btn small ghost" }, "Activity"))] },
-    events.length ? el("ul", { class: "timeline" }, events.slice(0, 8).map((e) => el("li", {},
+function consoleActionsCard(overview) {
+  const events = (overview.admin_actions || []).map((a) => ({
+    at: a.ts, who: "human", head: `${a.actor} · ${a.action}`,
+    note: a.outcome === "ok" ? "" : `${a.outcome} ${a.error_class}`.trim(),
+  }));
+  return card({ title: "Recent console actions", sub: "this console's own ledger — every mutation it attempted, succeeded or not", actions: [link("activity", el("span", { class: "btn small ghost" }, "Activity"))] },
+    events.length ? el("ul", { class: "timeline" }, events.map((e) => el("li", {},
       el("div", { class: `tl-dot k-${e.who}` }),
       el("div", { class: "what" },
         el("div", { class: "head" }, el("span", {}, e.head), el("span", { class: "when" }, fmtWhen(e.at))),
         e.note ? el("div", { class: "note" }, e.note) : null))))
-      : el("div", { class: "empty" }, el("div", { class: "empty-title" }, "no decisions or console actions yet")));
+      : el("div", { class: "empty" }, el("div", { class: "empty-title" }, "nothing has been done from this console yet")));
 }
 
 function ingestCard(overview) {

@@ -116,9 +116,9 @@ _FINISH_DIAGNOSE = "SELECT status, attempts FROM capture_queue WHERE id = %s"
 
 # THE definition of "this row's material may not be read back", evaluated IN POSTGRES so a withheld
 # value never crosses the wire. Two clauses: a secret/PII `reason_code`, and a `rejected` row with
-# NO code at all — fail-closed, because under-withholding hands a steward somebody else's live
+# NO code at all — fail-closed, because under-withholding hands a reader somebody else's live
 # credential. `hints` loses `client`/`declared_frontmatter` and keeps `flagged` (field names only);
-# `trace` stays, its notes being code-built or steward-authored.
+# `trace` stays: every note in it is code-built.
 _WITHHELD_REASON_LITERALS = schema.sql_literals(schema.WITHHELD_REASONS)
 _REASON_CODE_SQL = f"report ->> '{schema.REASON_CODE_KEY}'"
 # `schema._reason_flagged` is the Python mirror of exactly this expression — change both.

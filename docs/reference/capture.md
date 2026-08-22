@@ -4,8 +4,8 @@ The front half of the fast lane: the durable queue a capture lands in, the exact
 primitive that drains it, the content-addressed evidence archive, the operational spine and
 retention. Design record: [ADR 014](../decisions/014-capture-queue-and-attribution.md); the two
 MCP tools that reach it are served by [server.md](./server.md), which owns identity, rate limiting
-and audit; what a steward does after a filing is
-[operator-runbook.md → Governing what the librarian proposed](./operator-runbook.md#governing-what-the-librarian-proposed).
+and audit; what a filing does to the identity layer is
+[librarian.md → Writing an identity](./librarian.md#writing-an-identity-what-a-filing-does-to-the-registry).
 Code map: [`src/stigmergy/capture/index.md`](../../src/stigmergy/capture/index.md).
 
 **This package drains nothing.** Filing a capture into a page — the git commit, dedup, wikilink
@@ -14,9 +14,10 @@ resolution, entity anchoring, template validation and the nine gates — lives i
 figure at write time**: the only deterministic figure check runs at ANSWER time ([answer.md](./answer.md)).
 
 **Nothing here ever waits on a person.** A capture is queued, claimed and finished; a name the
-registry does not know does not stop it — the librarian files the page and proposes the identity,
-and a steward confirms it afterwards from the review inbox. The two states a capture used to park
-in are retired (see [The queue](#the-queue)).
+registry does not know does not stop it — the librarian writes that entity's page inside the same
+commit as the note, born CONFIRMED by whoever captured, and nobody is asked afterwards: **the
+capture is the approval** ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1). The two
+states a capture used to park in are retired (see [The queue](#the-queue)).
 
 ## Module map
 
@@ -24,13 +25,12 @@ in are retired (see [The queue](#the-queue)).
 |---|---|
 | `schema.py` | the DDL this package owns — `capture_queue`, `job_runs`, `ingest_errors`, all `CREATE TABLE IF NOT EXISTS` plus every additive column (`audit_log` is the fourth durable table and is created by `stigmergy.server.audit`; it is only NAMED here, because this is the one place the durable/disposable boundary is written down) — the status enum with its retired pair and the startup migration that empties it, `DURABLE_TABLES`, the hint allowlists, `clean_note` (the bound-and-sanitize every operator-typed string crosses), and the pure submission contract: size cap, kind/hint validation, server-owned-field refusal, frontmatter flagging |
 | `queue.py` | insert · claim (`FOR UPDATE SKIP LOCKED`) · release-expired · the one terminal transition (`finish`, fenced by `attempts`) · the one listing query and its two semantic entry points · the per-submission trace |
-| `decisions.py` | the append-only `review_decisions` ledger — its DDL, `record_decision`, the three reads (`latest_decisions` for every item at once; `latest_decision_for` for one, off the table's own index, which is what a refusal path asks; `recent_decisions` as a bounded feed), the verdict vocabulary (`approve`, `reject`, `merge`, `request_changes`) and `DECISION_SOURCES`. It lives here because all four deciding doors have to write it, and one of them (`stigmergy-entities`) may not import `stigmergy.server`. Every write names its door (`mcp`, `slack`, `admin`, `cli`) in a required `source` argument, refused with a `ValueError` if it is not one of the four — the table is append-only, so a door's own misspelling could never be corrected. It is stamped into `extra` LAST, so the validated value wins: a caller cannot override its door by putting a `source` key in `extra`. Both reads give back `""` for the rows written before the field existed. **This ledger is also the librarian's decline memory**: `librarian.processing._declined_identity_ids` reads it, so an identity a steward declined is never proposed again |
 | `evidence.py` | the content-addressed store: `S3EvidenceStore` (MinIO/R2), `MemoryEvidenceStore` (the offline double), `content_key` |
 | `ops.py` | the operational spine: `job_runs` / `ingest_errors` writers and the `job_run` context manager |
 | `retention.py` | `purge` — physical deletion of `payload`/`hints`/`outcome` on old terminal rows, plus the age-independent reconciliation for a secret/PII rejection; `purge_secret_capture_immediately` — `payload`/`hints`, right now, for exactly that rejection |
 | `latency.py` | capture→filed and capture→searchable p50/p95 from the trace alone, here rather than in `stigmergy.librarian` so `stigmergy.server.pilot_report` can reach it too |
-| `render.py` | the operator dialect every CLI prints in: `depth_line`, `format_ms`, `format_age`, `clean_for_terminal`, `RECLAIM_NOW`. Below the CLIs, because `latency.py` and `stigmergy-librarian`/`stigmergy-entities` read it too; it reaches nothing but `stigmergy.text` |
-| `cli.py` | `stigmergy-queue` — the operator's view: list · show · claim · reclaim · purge; `render.py`'s names are re-exported here for the CLIs that already take them from this module; and the split-stores guard (`add_split_stores_flag` / `refuse_split_stores` / `EXIT_SPLIT_STORES`) the one CLI that still enqueues runs before it does |
+| `render.py` | the operator dialect every CLI prints in: `depth_line`, `format_ms`, `format_age`, `clean_for_terminal`, `RECLAIM_NOW`. Below the CLIs, because `latency.py` and `stigmergy-librarian` read it too; it reaches nothing but `stigmergy.text` |
+| `cli.py` | `stigmergy-queue` — the operator's view: list · show · claim · reclaim · purge. None of the five enqueues anything. `render.py`'s names are re-exported here for the CLIs that already take them from this module |
 | `errors.py` | the domain exceptions (`SubmissionRejected`, `EvidenceError`, `QueueStateError`), all under `CaptureError` |
 
 **Layering.** `capture` must never import `stigmergy.server` or `stigmergy.answer`; `stigmergy.server`
@@ -44,8 +44,8 @@ supplies it.
 
 | Tool | What it does |
 |---|---|
-| `brain_submit(kind, material, hints?)` | queue a capture. `kind` names the SHAPE of the material, and it is the queue's own `KINDS` with nothing held back: `raw` (a conversation excerpt, a decision, a gotcha), `page` (markdown you drafted), `meeting` (a transcript) or `document` (the text of a document you already hold). ONE vocabulary for every door — no door has a kind of its own, so nothing here is narrower than anywhere else ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D4). The material cap is per kind, in UTF-8 bytes: 256 KB for `raw` and `page`, 1 MB for `meeting` and `document` (`MATERIAL_CAP_BYTES`, read through `max_material_bytes(kind)`; `MAX_MATERIAL_BYTES` is the largest of them, which is what a transport's request-body limit has to fit). `hints` optionally suggests placement — `type`, `path`, `entity`, `title`, suggestions only. Three further allowlists carry provenance rather than placement (`SOURCE_HINT_KEYS` for the Slack transport, `MEETING_HINT_KEYS` — `meeting_date`, `attendees`, `source_label` — and `DOCUMENT_HINT_KEYS` — `source_url`), and a fifth carries AUTHORITY rather than either: `REGISTER_HINT_KEYS` (`register_name`, `register_type`, `register_aliases`, `register_source`), refused outright here — see [A registration is a capture](#a-registration-is-a-capture-and-only-two-doors-may-assert-one). Exactly one provenance subset is door-gated: `SOURCE_PROVENANCE_HINT_KEYS` (`source_client`, `source_permalink`), refused at the client seam because the Slack TRANSPORT asserts that pair, not a person. Neither a meeting's hints nor a document's are refused from anybody: what a submitter asserts about their own material has the standing the material itself has, and is attributed to them the same way. `ALLOWED_HINT_KEYS` is the union of all five lists, and anything outside it is refused by name. Returns an ack with the submission id, the archived object key and a message that promises exactly what happened: **queued and attributed**, not "saved" — plus `entities`, the registered entities this material already names (`{id, name, proposed}` each, ACL-scoped like `list_entities`), so a submitter sees on the spot which identities the brain recognises |
-| `brain_submissions(limit?, status?)` | what happened to what you captured: your own submissions, newest first, with state, timestamps, `result_ref`, the librarian's `report` (which names the page, the anchor, and any entity or spelling it PROPOSED), the row's `events` and a fenced excerpt. An unrestricted (steward) identity sees the whole queue with `mine` marking its own rows. A capture refused for a secret or PII echoes nothing — see [Withheld material](#withheld-material) |
+| `brain_submit(kind, material, hints?)` | queue a capture. `kind` names the SHAPE of the material, and it is the queue's own `KINDS` with nothing held back: `raw` (a conversation excerpt, a decision, a gotcha), `page` (markdown you drafted), `meeting` (a transcript) or `document` (the text of a document you already hold). ONE vocabulary for every door — no door has a kind of its own, so nothing here is narrower than anywhere else ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D4). The material cap is per kind, in UTF-8 bytes: 256 KB for `raw` and `page`, 1 MB for `meeting` and `document` (`MATERIAL_CAP_BYTES`, read through `max_material_bytes(kind)`; `MAX_MATERIAL_BYTES` is the largest of them, which is what a transport's request-body limit has to fit). `hints` optionally suggests placement — `type`, `path`, `entity`, `title`, suggestions only. Three further allowlists carry provenance rather than placement (`SOURCE_HINT_KEYS` for the Slack transport, `MEETING_HINT_KEYS` — `meeting_date`, `attendees`, `source_label` — and `DOCUMENT_HINT_KEYS` — `source_url`), and a fifth PINS an identity instead of placing a page: `REGISTER_HINT_KEYS` (`register_name`, `register_type`, `register_aliases`, `register_source`), accepted from every door — see [A registration is a capture](#a-registration-is-a-capture). Exactly one provenance subset is door-gated: `SOURCE_PROVENANCE_HINT_KEYS` (`source_client`, `source_permalink`), refused at the client seam because the Slack TRANSPORT asserts that pair, not a person. Neither a meeting's hints nor a document's are refused from anybody: what a submitter asserts about their own material has the standing the material itself has, and is attributed to them the same way. `ALLOWED_HINT_KEYS` is the union of all five lists, and anything outside it is refused by name. Returns an ack with the submission id, the archived object key and a message that promises exactly what happened: **queued and attributed**, not "saved" — plus `entities`, the registered entities this material already names (`{id, name}` each, ACL-scoped like `list_entities`), so a submitter sees on the spot which identities the brain recognises |
+| `brain_submissions(limit?, status?)` | what happened to what you captured: your own submissions, newest first, with state, timestamps, `result_ref`, the librarian's `report` (which names the page, the anchor, and any entity or spelling the capture INTRODUCED), the row's `events` and a fenced excerpt. An unrestricted identity sees the whole queue with `mine` marking its own rows. A capture refused for a secret or PII echoes nothing — see [Withheld material](#withheld-material) |
 
 Both ride `BrainService._call`, so they inherit per-identity rate limiting, the audit row and
 the error shaping the read tools have — one seam, not a second write path.
@@ -77,13 +77,14 @@ the verbatim `sources/documents/` part(s), and `source_url` lands as `url:` on t
 ### Nothing is ever asked of a submitter
 
 There is no reply tool, and no state a capture sits in waiting for one. A name nothing in the
-registry resolves is PROPOSED: the librarian creates the entity page in the same commit as the note
-(`approved_by: ""`, the proposal mark), anchors the page to it, and files. The report says so, and a
-steward confirms, merges or declines the identity afterwards from the review inbox
-([server.md → The review tools](./server.md#the-review-tools)). The mechanism is
-[librarian.md → Writing an identity](./librarian.md#writing-an-identity-what-a-filing-does-to-the-registry);
-the governance doors are
-[operator-runbook.md](./operator-runbook.md#governing-what-the-librarian-proposed).
+registry resolves is INTRODUCED: the librarian creates the entity page in the same commit as the
+note, with `approved_by:` naming the submitter, anchors the page to it, and files. The report says
+which identities the capture bore, and that is the whole of it — no queue, no second click, nothing
+to decide ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1). The mechanism is
+[librarian.md → Writing an identity](./librarian.md#writing-an-identity-what-a-filing-does-to-the-registry).
+What a wrong identity costs is paid afterwards, not before: a second identity for one thing is what
+the gardener's duplicate-identity pass finds and a merge repair fixes
+([gardener-digest.md](./gardener-digest.md), [repair.md](./repair.md)).
 
 ### Attribution is the server's
 
@@ -131,31 +132,31 @@ subset is listed in `hints.flagged` and echoed in the ack:
 > Note: the material declares acl, content_hash, submitted_by, verification in its frontmatter;
 > recorded as a hint and ignored — those fields are the server's.
 
-### A registration is a capture, and only two doors may assert one
+### A registration is a capture
 
-A steward introducing an entity nobody has captured about does not write a page: what they know
-about it becomes the MATERIAL of an ordinary `raw` capture, and four hints say which entity that
-capture registers.
+Introducing an entity nobody has captured about does not mean writing a page: what you know about
+it becomes the MATERIAL of an ordinary `raw` capture, and four hints say which entity that capture
+registers.
 
 | Hint | What it carries |
 |---|---|
-| `register_name` | the entity's name, as the steward spelled it — its page title, its filename, its wikilink target |
+| `register_name` | the entity's name, as you spelled it — its page title, its filename, its wikilink target |
 | `register_type` | the entity's type, one of the registry's closed list of entity types |
 | `register_aliases` | the other spellings that mean it, comma-separated (empty when there are none) |
-| `register_source` | which door asked — `admin` or `cli`, `schema.REGISTRATION_SOURCES`, the same two spellings the review ledger records |
+| `register_source` | which door asked — `mcp`, `admin` or `slack`, `schema.REGISTRATION_SOURCES`, the vocabulary a door names itself with |
 
-`schema.registration_hints(...)` builds all four (plus the ordinary `entity` hint, so the steward's
-own spelling is in the haystack the librarian checks a proposed name against), and
+`schema.registration_hints(...)` builds all four (plus the ordinary `entity` hint, so your own
+spelling is in the haystack the librarian checks a declared name against), and
 `schema.registration_from_hints(hints)` reads them back off a stored row as a `Registration`. The
-capture's `submitted_by` is the steward, which is what the entity page's `approved_by` is born
-carrying.
+capture's `submitted_by` is you, which is what the entity page's `approved_by` is born carrying —
+exactly as it is for an identity the librarian read out of the material itself.
 
-**Exactly two doors may set them, and neither is a client.** The console's *Register an entity* and
-`stigmergy-entities create` call `queue.submit` directly. Every client-reachable door goes through
-`BrainService._submit`, which calls `schema.reject_registration_hints` and REFUSES any `register_*`
-key by name: a registration is an act of authority, and `brain_submit` attributes material, never
-authority. The refusal says so and names what to do instead — capture what you know about the
-thing, and the librarian proposes the entity for a steward to confirm.
+**Every door may assert one** ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1). A
+registration PINS the name and type the librarian would otherwise infer, and it carries no
+authority, because there is no authority left to carry: the identity is born confirmed by whoever
+captured either way. So the hints ride `brain_submit` like any other, and the console's *Register
+an entity* — `server.review.commission_registration`, which builds the same hints and calls
+`queue.submit` — is a form, not a privileged door.
 
 ## The queue
 
@@ -179,7 +180,7 @@ Retention still nulls `outcome` along with `payload`/`hints`.
 | `claimed` | a worker holds a lease on it | `claim_next` |
 | `filed` | a page exists; `result_ref` points at it | the librarian |
 | `rejected` | a gate refused it; `error` says why and `report.reason_code` says which class | the librarian |
-| `resolved` | **LEGACY, read-only**: a steward closed the row by hand, back when a capture could park on a person. Nothing writes it; rows carrying it stay readable and purgeable | nothing |
+| `resolved` | **LEGACY, read-only**: a person closed the row by hand, back when a capture could park on one. Nothing writes it; rows carrying it stay readable and purgeable | nothing |
 | `failed` | the librarian could not finish the item, or the attempts ran out; an `ingest_errors` row has the detail (stage `librarian` in the first case, `claim` in the second) | the librarian, or the expiry sweep |
 
 Every status but `queued` and `claimed` is terminal (`TERMINAL_STATUSES`), and `finish` may move a
@@ -190,7 +191,7 @@ nothing reaches it). `error` is the one "why is this row where it is" field
 ### The two retired states, and the migration that empties them
 
 `needs_input` and `triage` are `schema.RETIRED_STATUSES`. They were the two states a capture waited
-on a person in; a name the registry does not know is now proposed and filed instead. They are NAMED
+on a person in; a name the registry does not know is now written and filed instead. They are NAMED
 rather than deleted because two statements spell them:
 
 - `_CAPTURE_QUEUE_PARKED_MIGRATION` runs at startup, BEFORE the CHECK swap, and returns any row
@@ -261,14 +262,13 @@ The blob is written **before** the queue row, and the order is load-bearing: an 
 inert and gets reused by the next identical submission, whereas a row pointing at a blob that was
 never written is a capture whose evidence cannot be produced on demand.
 
-**The one CLI that enqueues refuses to write across a split deployment.** `stigmergy-entities
-create` checks, before any upload, that the queue's database host and the evidence endpoint can
-plausibly belong to the same deployment (`capture.cli.refuse_split_stores`,
-`evidence.split_stores_reason`) — a remote queue paired with a loopback evidence endpoint is refused
-with exit `3`, since a deployed worker can never reach a store on the operator's laptop and the
-capture would fail with `NoSuchKey` seconds after being claimed. The escape hatch is
-`--allow-split-stores`. `stigmergy-queue` carries no such guard: none of its subcommands upload
-evidence.
+**No CLI enqueues any more.** Every capture enters at `brain_submit`, inside a deployment whose
+queue and evidence plane are configured from one environment — so the split-stores guard went with
+the drop doors it protected (ADR 044 D4), refusal, exit code, escape hatch and all. The hazard it
+existed for was an operator's: a remote queue paired with a loopback evidence endpoint files a row
+whose bytes the deployed worker can never read, and the capture dies with `NoSuchKey` seconds after
+being claimed. A future door that enqueues from somebody's own machine brings that hazard back with
+it, and would have to answer it again.
 
 ### Configuration
 
@@ -309,12 +309,10 @@ check against the raw bucket.
 **Five subcommands, and none of them moves a row on a person's behalf.** A capture reaches a
 terminal state through the librarian or through the expiry sweep, and nowhere else: the three
 dispositions this CLI used to carry (`requeue`, `resolve`, `reject`) retired with the parked states
-they operated on. What replaced them is a decision about an IDENTITY rather than about a queue row,
-taken after the page is already filed, through `stigmergy-entities` and its three sibling doors —
-[operator-runbook.md](./operator-runbook.md#governing-what-the-librarian-proposed).
+they operated on, and nothing replaced them — the judgment a person makes is the capture itself.
 
-`show` still prints a row's `trace`, because an old row's history is still its history: what a
-steward did to it while captures could park, and the one `requeued` event the startup migration
+`show` still prints a row's `trace`, because an old row's history is still its history: what an
+operator did to it while captures could park, and the one `requeued` event the startup migration
 appended on the way out of a retired state.
 
 `--dsn` (or `$STIGMERGY_INDEX_DSN`) picks the database; `--json` makes any command machine-readable.
@@ -397,7 +395,7 @@ the purge; the purge does not do it on every run.
 Some rows are listed with **no excerpt and no client hints**. `withheld_reason` carries
 the sentence saying why, on `brain_submissions` and on `stigmergy-queue list` alike. What survives:
 id, submitter, status, all three timestamps, `attempts`, `blob_refs`, the `trace` (code-built or
-steward-authored notes, never captured material) and the refusal sentence itself.
+operator-authored notes, never captured material) and the refusal sentence itself.
 
 **Three non-overlapping reasons, each with its OWN sentence** (`schema.withheld_reason`, in
 priority order — the query decides the boolean, this function picks which sentence explains it):
@@ -445,8 +443,8 @@ row keeps its payload, and therefore keeps both.
   claim returned; `expected_attempts` is required, not optional.
 - `capture.schema.clean_note(text)` — the ONE seam an operator-typed string crosses on its way into
   a ledger row or a report: control characters stripped, newlines flattened, clipped word-safe.
-- `capture.decisions.record_decision` / `latest_decisions` / `latest_decision_for` /
-  `recent_decisions` — the governance ledger, below every door that decides an identity.
+- `capture.schema.registration_hints` / `registration_from_hints` — the four `register_*` hints,
+  built in one place and read back in one place, so no door spells a registration its own way.
 - `capture.queue.query_submissions` — the ONE listing query (scope, status filter, ordering,
   paging). New surfaces attach through `list_own_submissions` / `list_all_submissions`.
 - `capture.evidence.content_key(bytes)` — the key scheme, as a pure function.
@@ -460,16 +458,15 @@ row keeps its payload, and therefore keeps both.
   It comes from the resolved identity or the submission does not happen.
 - **Never open a second write path.** Both MCP tools go through `BrainService._call`; a
   surface that writes to `capture_queue` directly skips rate limiting, the audit row and
-  attribution at once. The operator CLIs holding the DSN are the declared exception —
-  `stigmergy-queue` for reading and moving rows, `stigmergy-entities create` for the one enqueue
-  left outside the server — so `--submitted-by` there is attribution, not authorization.
+  attribution at once. `stigmergy-queue`, which holds the DSN for reading and moving rows, is the
+  declared exception, and it enqueues nothing.
 - **Never add a transition that moves a row on a person's behalf.** A capture is finished by the
   worker holding its claim or by the expiry sweep; the parked states and the three dispositions over
-  them are retired, and a governance decision is about an IDENTITY, taken after the filing, through
-  `stigmergy.entities`.
+  them are retired, and nothing is decided about a capture after it is submitted — the capture is
+  the approval ([ADR 044](../decisions/044-the-capture-is-the-approval.md)).
 - **Never generalize the index rebuild's `DROP`.** `store.init_schema` drops `pages_index` by
-  name; the four tables in `schema.DURABLE_TABLES` and `review_decisions` share that database and
-  cannot be rebuilt from git — [hybrid-index.md → Sharing the database with the durable
+  name; the four tables in `schema.DURABLE_TABLES` share that database and cannot be rebuilt from
+  git — [hybrid-index.md → Sharing the database with the durable
   half](./hybrid-index.md#sharing-the-database-with-the-durable-half).
 - **Never echo captured material unfenced.** It is untrusted data like any page body;
   `brain_submissions` fences excerpts and neutralizes every other free-text field it returns.
@@ -486,7 +483,7 @@ row keeps its payload, and therefore keeps both.
 make db-up                                   # postgres + minio (the evidence plane)
 make e2e-write                               # the write-path e2e, from empty volumes
 
-.venv/bin/stigmergy-server --identity steward@example.com --repo ../stigmergy-brain   # submit over stdio
+.venv/bin/stigmergy-server --identity ana@example.com --repo ../stigmergy-brain   # submit over stdio
 .venv/bin/stigmergy-queue list                 # what is waiting
 ```
 

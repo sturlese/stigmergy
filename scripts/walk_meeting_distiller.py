@@ -2,14 +2,13 @@
 
 Not a test: a narrated walk the way an operator meets it — drop a transcript, watch the meeting
 flow claim it, read the filed page-set report, then drop a transcript naming two entities the
-registry has never heard of and watch the librarian PROPOSE them and file the set anyway. Real
+registry has never heard of and watch the librarian INTRODUCE them and file the set anyway. Real
 Postgres, real git, real gates, the offline double for the agent.
 
-Nothing parks and nobody is asked a question. An unknown name becomes an entity page with
-`approved_by` EMPTY — that empty string IS the proposal mark — plus a `proposed` registry entry,
-written into the SAME commit as the meeting's pages, and the capture ends `filed`. A steward
-confirms, merges or declines the identity afterwards; the last step prints exactly what they would
-see, read out of a clone of the remote the walk just pushed to.
+Nothing parks and nobody is asked a question, before or after (ADR 044). An unknown name becomes an
+entity page born CONFIRMED by the person whose capture introduced it, written into the SAME commit
+as the meeting's pages, and the capture ends `filed`. The last step reads the identities and their
+approver out of a clone of the remote the walk just pushed to.
 
 Run: `.venv/bin/python scripts/walk_meeting_distiller.py` from the repo root, after `make db-up`.
 """
@@ -21,7 +20,6 @@ import tempfile
 sys.path.insert(0, os.getcwd())
 
 from stigmergy.capture import schema  # noqa: E402
-from stigmergy.entities import cli as entities_cli  # noqa: E402
 from stigmergy.entities import generator  # noqa: E402
 from stigmergy.librarian import gitcmd, worker  # noqa: E402
 from tests import testdb  # noqa: E402
@@ -91,7 +89,7 @@ def main() -> int:
         print(result2.report["summary"])
         assert result2.status == schema.FILED, f"expected filed, got {result2.status}"
 
-        step("ONE commit: the meeting's pages AND the identities it proposed to carry them")
+        step("ONE commit: the meeting's pages AND the identities it introduced to carry them")
         sha2 = result2.result_ref.rsplit("@", 1)[1]
         for path in support.changed_paths(env.repo, sha2):
             print(f"  {path}")
@@ -99,28 +97,25 @@ def main() -> int:
                                                       generator.REGISTRY_RELPATH))
         print(f"\n  {generator.REGISTRY_RELPATH}, regenerated in that same commit:")
         for entity_id, entry in sorted(registry["entities"].items()):
-            mark = "PROPOSED — waiting on a steward" if entry["proposed"] else "registered"
-            print(f"    {entity_id:<18} {entry['name']:<18} {entry['type']:<13} {mark}")
+            approver = entry["approved_by"] or "(before approvals were recorded)"
+            print(f"    {entity_id:<18} {entry['name']:<18} {entry['type']:<13} "
+                  f"introduced by {approver}")
 
-        step("what a steward has to decide, out of a clone of the remote it was pushed to")
-        steward = os.path.join(tmp, "steward")
-        gitcmd.run("clone", "--quiet", env.bare, steward)
-        pending = entities_cli.pending_in(steward)
-        for proposal in pending["entities"]:
-            page = os.path.join(steward, *proposal["page"].split("/"))
-            with open(page, encoding="utf-8") as f:
-                mark = next(line for line in f
-                            if line.startswith(f"{generator.APPROVED_BY_KEY}:"))
-            print(f"  identity  {proposal['id']:<18} {proposal['name']:<18} {proposal['page']}")
-            print(f"            {mark.strip()}   <- empty: nobody has confirmed this name yet")
-        for spelling in pending["aliases"]:
-            print(f"  spelling  {spelling['alias']!r} for {spelling['entity_name']}")
-        print("\n  stigmergy-entities approve <id> | merge <id> --into <id> | decline <id>")
-        assert [p["id"] for p in pending["entities"]] == ["nebula-systems", "project-kestrel"], (
-            f"expected both identities proposed, got {pending['entities']}")
+        step("the identities, read out of a clone of the remote it was pushed to")
+        clone = os.path.join(tmp, "clone")
+        gitcmd.run("clone", "--quiet", env.bare, clone)
+        born = [e for e in generator.read_entity_pages(clone)
+                if e.canonical_id in ("nebula-systems", "project-kestrel")]
+        for entity in born:
+            print(f"  identity  {entity.canonical_id:<18} {entity.name:<18} {entity.relpath}")
+            print(f"            approved_by: {entity.approved_by!r}   "
+                  f"<- the capture is the approval; nobody was asked")
+        assert sorted(e.canonical_id for e in born) == ["nebula-systems", "project-kestrel"], (
+            f"expected both identities born, got {[e.canonical_id for e in born]}")
+        assert all(e.approved_by for e in born), "an identity was born confirmed by nobody"
 
         print(f"\n{'=' * 78}\nMeeting-distiller walk complete — {STEP} step(s): both sets filed, "
-              f"{len(pending['entities'])} identities proposed, nothing parked.\n{'=' * 78}")
+              f"{len(born)} identities introduced, nothing waiting on anybody.\n{'=' * 78}")
     return 0
 
 

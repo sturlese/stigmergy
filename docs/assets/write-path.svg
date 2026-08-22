@@ -58,22 +58,24 @@
   <text x="504" y="128" class="tagA">bounded turns · tools · time</text>
   <line class="edge" x1="368" y1="105" x2="396" y2="105" marker-end="url(#arr)"/>
 
-  <!-- ── the human loop ────────────────────────────────────────────────────── -->
+  <!-- ── the identity a capture introduces (ADR 044: the capture is the approval) ──────────── -->
   <rect class="agent" x="644" y="62" width="176" height="86" rx="10" filter="url(#glow)"/>
-  <text x="732" y="90" class="title">proposes</text>
+  <text x="732" y="90" class="title">introduces</text>
   <text x="732" y="110" class="tagA">a name the registry</text>
   <text x="732" y="128" class="tagA">does not know</text>
   <line class="edge" x1="608" y1="105" x2="640" y2="105" marker-end="url(#arr)"/>
 
-  <rect class="human" x="856" y="62" width="180" height="86" rx="10"/>
-  <text x="946" y="90" class="title">inbox</text>
-  <text x="946" y="110" class="tagH">a steward approves,</text>
-  <text x="946" y="128" class="tagH">merges or declines</text>
-  <line class="edgeH" x1="820" y1="105" x2="852" y2="105" marker-end="url(#arrh)"/>
+  <rect class="node" x="856" y="62" width="180" height="86" rx="10"/>
+  <text x="946" y="90" class="title">born confirmed</text>
+  <text x="946" y="110" class="tag">approved_by: whoever</text>
+  <text x="946" y="128" class="tag">captured it</text>
+  <line class="edge" x1="820" y1="105" x2="852" y2="105" marker-end="url(#arr)"/>
 
-  <!-- the decision is one governed commit; the capture itself never waited -->
-  <path class="edgeH" d="M 946 62 L 946 40 L 290 40 L 290 70" marker-end="url(#arrh)"/>
-  <text x="618" y="34" class="elabH" text-anchor="middle">the capture files at once; the proposal waits, and the decision is one governed commit</text>
+  <!-- the identity is not a second act: it falls into the same diff the gates judge -->
+  <line class="edge" x1="946" y1="148" x2="946" y2="256" marker-end="url(#arr)"/>
+  <text x="934" y="205" class="elab" text-anchor="end">into the</text>
+  <text x="934" y="219" class="elab" text-anchor="end">same diff</text>
+  <text x="530" y="34" class="elab" text-anchor="middle">the capture IS the approval — the page, the identity it anchors to and the regenerated registry are ONE commit</text>
 
   <!-- ── the gates ─────────────────────────────────────────────────────────── -->
   <line class="edge" x1="504" y1="148" x2="504" y2="256" marker-end="url(#arr)"/>
@@ -117,7 +119,7 @@
 
   <rect class="chip" x="924" y="308" width="102" height="52" rx="9"/>
   <text x="975" y="332" class="chipT">identity</text>
-  <text x="975" y="348" class="chipN">declared proposals</text>
+  <text x="975" y="348" class="chipN">declared births</text>
 
   <!-- ── outcomes ──────────────────────────────────────────────────────────── -->
   <line class="edge" x1="250" y1="382" x2="250" y2="424" marker-end="url(#arr)"/>

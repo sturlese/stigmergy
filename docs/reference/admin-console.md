@@ -1,31 +1,34 @@
 # The admin console (`/admin`)
 
-The web control room over what already runs — the inbox of everything waiting on a steward, the
-capture queue read-only beside the two levers over the whole of it, the identities and spellings
-the librarian proposed and the verdicts on them (each one an App-authored commit, ADR 030), the
-repair proposals derived from the gardener's findings (a governed Approve applies one, ADR 039),
-corpus health, the index and the ops files it serves, the worker, the four scheduled jobs, the
-digest, and who is using the brain — served by the SAME `app` process group that serves MCP,
-behind its own token. Design record:
-[ADR 029](../decisions/029-admin-console.md), [ADR 030](../decisions/030-server-side-entity-minting.md)
-and [ADR 039](../decisions/039-governed-repair-loop.md); code map:
+The web control room over what already runs — the capture queue read-only beside the two levers
+over the whole of it, the entity registry this stack serves and the one door for registering a name
+nobody has captured about yet, the repair proposals derived from the gardener's findings (a
+governed Approve applies one, ADR 039) and the Remove pages button beside them, corpus health, the
+index and the ops files it serves, the worker, the four scheduled jobs, the digest, and who is
+using the brain — served by the SAME `app` process group that serves MCP, behind its own token.
+Design record: [ADR 029](../decisions/029-admin-console.md),
+[ADR 039](../decisions/039-governed-repair-loop.md),
+[ADR 043](../decisions/043-a-sweep-is-written.md) and
+[ADR 044](../decisions/044-the-capture-is-the-approval.md); code map:
 [`src/stigmergy/admin/index.md`](../../src/stigmergy/admin/index.md), which carries the full route
 table.
 
+**Nothing here decides an identity, because nothing is proposed.** A capture that meets a name the
+registry does not know writes that entity's page in the same commit that files it, confirmed by
+whoever captured (ADR 044) — so the Entities page reads the vocabulary and commissions the one
+entity no capture has introduced, and it holds no verdict at all.
+
 What it deliberately is NOT: a brain client. No search, no page rendering, no `ask` — the
-architecture tests enforce that boundary on the package. It reads page *paths* in four places
-(the substrate check, the gardener's findings, a repair proposal's target paths, and a proposed
-identity's own entity page beside the pages already filed against it), it reads the **entity
-registry** (an `ops/` control file — the vocabulary, which every MCP identity already reads
-through `list_entities`), and it fetches no page: everything it renders comes from rows in this
-database, never from the knowledge repo. Two things on it read as page prose, and each is there
-because deciding without reading it would be deciding blind. An identity proposal carries
-the entity page's own What / Who paragraph, taken off the page index by
-`server.review.items_for_doorbell` — the same read the Slack doorbell makes, which asks
-`acl.visible()` of every page it lists (the console reads it unrestricted, like the doorbell, so
-what bounds it is the operator token). An `entity-body` repair proposal carries the drafted body
-in full: text a model wrote, sitting in `repair_proposals`, which is not a page yet and was never
-a page this console fetched.
+architecture tests enforce that boundary on the package. It reads page *paths* in three places
+(the substrate check, the gardener's findings, and a repair proposal's target paths), it reads the
+**entity registry** (an `ops/` control file — the vocabulary, which every MCP identity already
+reads through `list_entities`), and it fetches no page: everything it renders comes from rows in
+this database, never from the knowledge repo. Two things on it read as page PROSE, and each is
+there because acting without reading it would be acting blind. An `entity-body` repair proposal
+carries the drafted body in full: text a model wrote, sitting in `repair_proposals`, which is not a
+page yet and was never a page this console fetched. A removal hands back a unified diff per
+rewritten page — page bytes, but bytes the removal it just performed produced, and the reading that
+ADR 043 D5 moved to after the push rather than before it.
 
 **The one thing that boundary does not cover, said plainly:** the Activity page renders the `ask`
 QUESTIONS in `audit_log`. No answer, no page, no snippet — but a question is user content, and it
@@ -78,7 +81,7 @@ running yesterday's `app.js` against today's imports; the API carries `no-store`
 | Jobs: Run now, Enable/Disable, run history | `STIGMERGY_ADMIN_GITHUB_TOKEN` (fine-grained PAT: **Actions read+write on the repository the crons RUN IN — the knowledge repo, see the runbook — and on that one only**) + `STIGMERGY_ADMIN_GITHUB_REPO` (`<owner>/<repo>`; there is no default) | the Jobs page shows the database truth (`job_runs`, `index_meta.built_at`) read-only and says so in a banner; the levers are not rendered at all, and the Run-now buttons on the Gardener and Index pages are disabled with the reason beside them |
 | Digest: Post now | `SLACK_BOT_TOKEN` (already an app-wide Fly secret) + `STIGMERGY_DIGEST_CHANNEL_ID` | the post button refuses naming the missing piece; Preview still works |
 | Digest: audience scoping | `STIGMERGY_ADMIN_CHANNELS_PATH` → the baked `/app/slack-channels.json` (set in `fly.toml`, written by `scripts/deploy_staging.sh`) | every audience falls back to the safe empty default — same behavior as a repo with no channels file |
-| The proposal inbox, the registry check on a name, the registry browser | a registry this server can read: the index's `ops/entity-registry.json` snapshot (refreshed by the push webhook and the nightly rebuild), or the `--entity-registry` file where there is no snapshot | the Inbox and the Entities desk list no identity or spelling proposal at all — a proposal IS a registry entry, and that list is read off the SNAPSHOT alone, so a stack answering from the `--entity-registry` file shows none either (repair proposals are a table of their own and still list). Every name check answers `unchecked` and the page says no registry is readable here; the birth gate still runs when the librarian files, inside that capture's own worktree, against the knowledge repo as it stands |
+| The registry browser, and the registry check on a name | a registry this server can read: the index's `ops/entity-registry.json` snapshot (refreshed by the push webhook and the nightly rebuild), or the `--entity-registry` file where there is no snapshot | the Entities page lists no entity and says no registry is readable here, and every name check answers `unchecked`. Register an entity still works — it queues a capture, and the birth gate runs when the librarian files, inside that capture's own worktree, against the knowledge repo as it stands |
 | Actor prefill on mutation forms | `STIGMERGY_ADMIN_ACTOR` (default `admin-console`) | forms prefill the default; every form field is editable |
 
 PAT rotation is the standard drill: revoke on GitHub, `fly secrets set
@@ -109,9 +112,8 @@ the console:
   "Being filed now", `filed` as "Landed in git", the legacy `resolved` as "Handled by hand";
   hovering the pill shows the raw word and its one-line meaning. The closed vocabularies ship from
   `/admin/api/meta` — the statuses (with their terminal subset, and `resolved` named as the one
-  legacy word), the repair kinds, the severities, the review item kinds, the verdicts each kind
-  takes, the decision doors and the entity types — so the page never hardcodes a second copy that
-  could drift; only the wording is the frontend's (`copy.js`).
+  legacy word), the repair kinds, the gardener's severities and the entity types — so the page
+  never hardcodes a second copy that could drift; only the wording is the frontend's (`copy.js`).
 
 Every page opens with a "How to read this page" explainer, collapsible and remembered per page in
 the browser. Pages with a time axis (Dashboard, Captures, Repairs, Gardener, Index, Worker,
@@ -121,41 +123,30 @@ toggle away, and nothing on a chart is reachable only by hovering.
 
 ## What each page does
 
-- **Dashboard** — the inbox count as the number that means work (everything owing a steward a
-  decision, broken down into proposed entities, proposed spellings and repair proposals, each
-  link opening the inbox already filtered to that kind), beside **the write path, live**: the
-  window's captures flowing through the model's draft and code's gates into landed-in-git,
-  refused and could-not-finish, with what is still moving named underneath and the legacy
-  handled-by-hand outcome kept for as long as old rows carry it. Then captures per day by what
-  became of them, questions per day by answer shape (answered with a citation, answered without
-  one, honest refusal, errored), health tiles (index freshness with the incremental upserts
-  sparkline, filings per day, the worker's lease, unresolved ingest errors, the gardener's latest
-  findings), the capture→filed distribution beside the percentiles, the last known truth per
-  scheduled job, and the two ledgers merged into one feed. The only page that polls: every 30 s,
-  and only while the browser tab is visible.
-- **Inbox** — everything waiting on a steward as ONE list across the three kinds (proposed
-  entities, proposed spellings, repair proposals) — `server.review.items_for_doorbell`, the same
-  read the Slack doorbell rings from, so the console and the doorbell cannot disagree about what
-  is waiting on a person. The order is that read's own: the pending repairs first, oldest first,
-  then the proposals in registry-id order. Chips filter by kind and carry its count; each item
-  carries the ledger's latest decision when one exists, which is how a steward learns a second
-  door got there first; a banner says so when more is waiting than the list can carry. Opening an
-  item lands where it is decided — a proposed entity on its own detail, a proposed spelling on the
-  Entities desk, a repair on its proposal. The sidebar badge is this list's count. **Nothing here
-  waits on a submitter**: a capture never parks, so everything in this list is something the
-  librarian PROPOSED after filing.
+- **Dashboard** — the window's **captures filed** as the number that means work: a capture that
+  landed is a page, and the identities it introduced were born in the same commit, so the number
+  beside it is not a backlog but what did NOT land (refused by a gate, could not finish, still
+  moving), with in-flight, queued and the repairs waiting on a decision on the statline. Beside it,
+  **the write path, live**: the window's captures flowing through the model's draft and code's
+  gates into landed-in-git, refused and could-not-finish, with the legacy handled-by-hand outcome
+  kept for as long as old rows carry it. Then captures per day by what became of them, questions
+  per day by answer shape (answered with a citation, answered without one, honest refusal,
+  errored), health tiles (index freshness with the incremental upserts sparkline, filings per day,
+  the worker's lease, unresolved ingest errors, the gardener's latest findings), the capture→filed
+  distribution beside the percentiles, the last known truth per scheduled job, and this console's
+  own action log. The only page that polls: every 30 s, and only while the browser tab is visible.
 - **Captures** — **read-only**: nothing on this page acts on a single row, and that is the
-  redesign rather than an omission. A capture files, is refused or fails on its own, and what a
-  steward governs is the proposals it left behind. Every capture ever as a part-to-whole bar
+  redesign rather than an omission. A capture files, is refused or fails on its own, and nothing it
+  leaves behind is a decision. Every capture ever as a part-to-whole bar
   (click a segment to filter), arrivals per day by outcome, and the queue: status chips grouped as
   Moving (queued, being filed) and Done (landed in git, declined, could not finish, and the legacy
   handled-by-hand), a submitter filter, human labels on every state. Reclaim and Retention purge
   are the only levers, and both act on the WHOLE queue. The detail reads as a story — what arrived
   (the material, the placement hints, what was flagged), what the librarian says (its report with
-  page, commit, anchor, links, the entities and spellings it proposed while filing, the agent's
-  reading), and the row's own history, which holds operator acts from before captures stopped
-  parking and nothing since. A row that proposed something says so at the top and links each
-  proposal to the Entities desk, where it is decided.
+  page, commit, anchor, links, the identities it introduced and the spellings it taught the
+  registry while filing, the agent's reading), and the row's own history, which holds operator acts
+  from before captures stopped parking and nothing since. A row that introduced an identity says so
+  at the top, names who it is confirmed by, and says that all of it landed in the same commit.
   Reclaim sweeps against **the worker's own derived lease**,
   not the queue's 300 s and not the librarian's class default: the console resolves
   `$STIGMERGY_LIBRARIAN_TIMEOUT_S` through the same derivation the worker does (2× the agent
@@ -164,64 +155,33 @@ toggle away, and nothing on a chart is reachable only by hovering.
   the console's environment IS the worker's, and an operator who splits them by hand fools the
   meter. The form's "release everything now" checkbox is what sends a horizon of 0, and it is only
   safe with no live worker mid-item.
-- **Entities** — the identity desk, and the only door on this console where an identity is
-  decided. Each identity the librarian PROPOSED while filing is a card: its name and type, the
-  spellings it carried, the entity page's own What / Who paragraph, the pages already filed
-  against it, and a **registry check** computed server-side against the registry this server
-  serves (the index's snapshot, or the `--entity-registry` file where there is none) with the
-  birth gate's own folds — `registered` (this spelling already resolves to a registered entity, so
-  the proposal IS that entity under another name: merge it), `collides` (the collision fold would
-  refuse the name), `similar` (an ADVISORY listing of registered entities sharing a distinctive
-  word or containing the name — nothing acts on it), `clear`, or `unchecked` when no registry is
-  readable. The check runs against the REST of the registry, never the whole of it: a proposal
-  always resolves to itself, and that says nothing. Three verdicts sit on the card and on its
-  detail. **Approve** confirms the identity — `approved_by` becomes the actor and the registry
-  stops calling it proposed; the page and everything filed against it are untouched. **Merge
-  into…** says the proposal IS a registered entity: its name and every spelling it carried become
-  that entity's aliases, its page goes, and every page anchored to it is re-anchored to the
-  survivor; the picker offers the lane's `merge_candidates` first and checks a typed registry id
-  live against the served registry, saying so when the id is unknown or is itself a proposal —
-  `entities.decide` refuses both against the repo as it stands. **Decline** deletes the proposed
-  page and leaves the pages that anchored to it holding everything but that anchor — and the ledger
-  remembers, which is exactly what stops the librarian proposing the same identity again.
-  Proposed SPELLINGS are the same desk one size down (Approve moves the spelling onto the
-  entity's `aliases`; Decline drops it from `proposed_aliases`). Every verdict is ONE commit
-  through `server.review.decide_and_record` — the same ordering function MCP and Slack run:
-  `entities.remote.decide_via_clone` → `entities.decide` in a throwaway clone, authored by the
-  librarian App with a `Decided-by:` trailer naming the actor, the push first and the ledger row
-  after — and it lands in BOTH ledgers, `admin_actions` and the append-only `review_decisions`
-  (ADR 030). Beside the proposals: the registry by type, and a searchable browser over every entry
-  with its aliases, a proposed one marked as such and its proposed spellings listed.
-  **Register an entity** is the door for a name nobody has captured about yet, and it writes no
-  page: the form's required **What is it?** field — everything the steward knows about the thing,
-  in their own words — becomes the MATERIAL of a capture carrying the registration
+- **Entities** — the vocabulary the brain has grown, and the door for a name nobody has captured
+  about yet. There is no verdict on this page and nothing waiting on one: the registry by type, and
+  a searchable browser over every entry with the spellings it answers to — each one there because a
+  capture introduced it, or because somebody registered it here. Both read the registry this server
+  serves (the index's snapshot, or the `--entity-registry` file where there is none).
+  **Register an entity** is the one door, and it writes no page: the form's required
+  **What is it?** field — everything the person knows about the thing, in their own words — becomes
+  the MATERIAL of a capture carrying the registration
   (`server.review.commission_registration`), and the librarian writes the page from that material
-  and from what the brain already holds, anchors the note to it, and births the identity CONFIRMED
-  by the steward. The response is the queued row (`id`, `status: queued`, `entity_id`, `name` and a
-  message saying what will happen), and the console goes straight to `captures/<id>` — the entity
-  appears on this desk when the capture files, a few minutes later, not on the click. A name the
-  SERVED registry already resolves is refused here before anything is queued: the entity exists, so
-  the thing to do is capture about it. The door needs the evidence store the queue archives material
-  into (`AdminService(..., evidence=)`, threaded from the HTTP transport through
+  and from what the brain already holds, anchors the note to it, and the identity is born CONFIRMED
+  by the actor on the form. The response is the queued row (`id`, `status: queued`, `entity_id`,
+  `name` and a message saying what will happen), and the console goes straight to `captures/<id>` —
+  the entity appears in the registry when the capture files, a few minutes later, not on the click.
+  A name the SERVED registry already resolves is refused here before anything is queued: the entity
+  exists, so the thing to do is capture about it. The door needs the evidence store the queue
+  archives material into (`AdminService(..., evidence=)`, threaded from the HTTP transport through
   `admin.routes.compose`); a console composed without one refuses by saying so rather than queueing
-  a row with no archive behind it. The form still checks the Name and every Alias live as the
-  steward types, through the `entities/resolve` call, and says so under the field — the birth gate
-  runs again when the librarian files, so this is a warning that is right whenever the snapshot is
-  fresh, never a permission. Type is the closed list shipped from `/admin/api/meta`; aliases are
-  optional. The console decides and registers under the admin token with the actor as ATTRIBUTION,
-  exactly like every other console mutation — MCP and Slack instead enforce a resolved identity's
-  steward status; the console does not, because the shared admin credential cannot back a
-  second-human rule.
-- **Repairs** — and the one BUTTON on this console that is not a verdict on somebody else's
-  proposal: **Remove pages**. A person names the pages and says why, and it lands in that call —
-  the pages go, every page that referred to them is rewritten (its frontmatter by code, its body
-  by a model), the nine gates judge it, and one App-authored commit is pushed. There is no
-  proposal and no second click, because the judgment was the operator's when they typed it
-  ([ADR 043](../decisions/043-a-sweep-is-written.md)); what the console's token buys here is the
-  whole authorization, so this is its most consequential control and its confirm says so. The
-  per-page diffs come back in a dialog: nobody read that prose before it landed, and a revert in
-  the knowledge repo is the undo.
-
+  a row with no archive behind it. The form checks the Name and every Alias live as it is typed,
+  through the `entities/resolve` call, with the birth gate's own folds — `registered` (this
+  spelling already resolves to a registered entity), `collides` (the collision fold would refuse
+  the name), `similar` (an ADVISORY listing of registered entities sharing a distinctive word or
+  containing the name — nothing acts on it), `clear`, or `unchecked` when no registry is readable —
+  and says so under the field. The birth gate runs again when the librarian files, so this is a
+  warning that is right whenever the snapshot is fresh, never a permission. Type is the closed list
+  shipped from `/admin/api/meta`; aliases are optional. The console registers under the admin token
+  with the actor as ATTRIBUTION, exactly like every other console mutation — and that actor is the
+  name `approved_by:` carries on the page the librarian writes.
 - **Repairs** — what the `repair-propose` cron made of the gardener's findings
   ([repair.md](./repair.md), ADR 039): proposals by outcome over the whole table, the proposer's
   run strip, a bounded page of the pending proposals (oldest first, filterable by kind, and it
@@ -235,12 +195,24 @@ toggle away, and nothing on a chart is reachable only by hovering.
   and the pages rewritten so they no longer link to them; for an `entity-alias` merge, which
   identity survives and which is retired — with Approve and Decline. Decline demands a non-blank
   reason, because the reason is the whole of what stops the same repair being re-derived tomorrow.
-  Approve runs `server.review.apply_repair_and_record`, the SAME ordering MCP's review lane runs,
-  for the reason the Entities desk shares `decide_and_record`: it applies exactly the approved ops
-  through the librarian's own validator and its gates, as ONE App-authored commit with an
-  `Approved-by:` trailer. `review_decide`'s per-target-path steward check is deliberately not
-  reached here, exactly as the Entities desk does not reach its own steward check — that guard is
-  for a resolved identity, and the console's authorization IS the token.
+  Approve runs `server.review.apply_repair_and_record`, which owns the ordering: it marks the row
+  decided first (a conditional UPDATE on `status = 'pending'`, so a second Approve loses rather
+  than clones), then applies exactly the approved ops through the librarian's own validator and its
+  gates, as ONE App-authored commit with an `Approved-by:` trailer. There is no per-path check to
+  reach: the console's authorization IS its token, and the actor on the form is attribution
+  recorded beside the verdict.
+
+  **Remove pages** is the one button here that is not a verdict on a proposal. A person names the
+  pages and says why, and it lands in that call —
+  the pages go, every page that referred to them is rewritten (its frontmatter by code, its body
+  by a model), the nine gates judge it, and one App-authored commit is pushed. There is no
+  proposal and no second click, because the judgment was the operator's when they typed it
+  ([ADR 043](../decisions/043-a-sweep-is-written.md)); what the console's token buys here is the
+  whole authorization — the MCP door asks for an UNRESTRICTED identity instead, and this token
+  stands for the whole deployment — so this is its most consequential control and its confirm says
+  so. The per-page diffs come back in a dialog: nobody read that prose before it landed, and a
+  revert in the knowledge repo is the undo.
+
 - **Gardener** — findings per run over the last runs by severity (from each run's own
   `findings_by_severity`), the latest completed run with its findings, pages walked and model
   spend, the run strip, findings by check (click a bar to filter), what each check looks for, and
@@ -268,7 +240,7 @@ toggle away, and nothing on a chart is reachable only by hovering.
   Its Run-now form starts with Dry run ticked, so the default path lists what would go and
   touches nothing. The truth column names its source: a `job_runs` row for retention, the gardener
   and the repair proposer, `index_meta.built_at` for the rebuild, which writes none. Other
-  recorded work (the digest, the webhook, reclaims, the doorbell) is listed below the four.
+  recorded work (the digest, the webhook, reclaims) is listed below the four.
 - **Digest** — the configured-pieces checklist, Preview (the byte-identical dry-run body), Post
   now (disabled until both Slack pieces are configured, with the checklist saying which is
   missing; it names the duplicate-window risk before it posts), the run strip and history. Still
@@ -276,8 +248,8 @@ toggle away, and nothing on a chart is reachable only by hovering.
 - **Activity** — calls in the window and questions asked, the answer shape (answered with a
   citation, without one, honest refusal — from the verifier's verdict, never the text), capture
   → searchable and capture → filed, calls per day by tool, who asks, per-tool calls/errors/latency,
-  the real `ask` questions (golden-set quarry), rate-limit refusals, the latest governance
-  decision per item whichever door took it, and the console's own action log.
+  the real `ask` questions (golden-set quarry), rate-limit refusals, and the console's own action
+  log — every attempted mutation, succeeded or not.
 
 ## One control that is empty by construction
 
@@ -292,44 +264,27 @@ an `sla` finding.
 
 Every act that *changes state* goes through one wrapper and writes one `admin_actions` row —
 actor, action, arguments, outcome, and the exception class on a failure — whether it succeeded or
-not. That row is attribution, not authorization: the actor name is recorded and never checked,
-exactly like `--by` on the steward CLIs. If the bookkeeping write itself fails it is logged
-loudly and the work still lands; bookkeeping must never fail the work it records.
+not. That row is attribution, not authorization: the actor name is recorded and never checked, and
+what authorizes the act is the token that opened the console. If the bookkeeping write itself fails
+it is logged loudly and the work still lands; bookkeeping must never fail the work it records.
 
-**Every governed verdict writes a SECOND row.** Three routes take one — `entities/decide` (an
-identity's Approve, Merge or Decline, and a spelling's Approve or Decline) and the two Repairs
-verdicts — and each writes into `review_decisions` beside its `admin_actions`
-row. That is the same append-only governance ledger MCP's `review_decide` and Slack's review card
-write into, so "who decided this identity" answers from one table regardless of which SERVER-SIDE
-door it came through (ADR 030) — and, since issue #51, regardless of which door at all:
-`stigmergy-entities approve`/`merge`/`decline` decides from the steward's own clone and still
-writes the same row, because the writer moved down to `capture.decisions`, below the
-`stigmergy.entities` -> `stigmergy.server` edge that would otherwise forbid it. A DECLINE is not
-bookkeeping there: the librarian reads that ledger and refuses to propose an identity a steward
-has already declined, so the row is the memory that stops the loop. Which door wrote a row is on
-the row itself: `extra->>'source'` is one of `mcp`/`slack`/`admin`/`cli`, required on every write.
-The `review_decisions` write and the git push it follows happen inside the SAME `_mutate`-wrapped
-attempt as the `admin_actions` row, not before it: a refusal anywhere in the clone leaves neither
-ledger touched.
+**`admin_actions` is the only ledger this console writes, and there is no second one anywhere.**
+Nothing keeps a governance table: an identity is born in the commit that files the capture that
+introduced it, so the page and the registry ARE the record of who stands behind it
+([ADR 044](../decisions/044-the-capture-is-the-approval.md)), and a repair's verdict lives on its
+own `repair_proposals` row — `status`, `decided_by`, `notes`, and `applied_commit` once a commit
+lands. "Who approved this edit to the corpus" is answered by that row and by `git log`'s
+`Approved-by:` trailer, which are the same two facts a ledger would have copied.
 
-**`entities/create` is the one mutation whose ledger row is not the console's to write.** It
-touches no git and decides nothing here: it writes its `admin_actions` row and a `capture_queue`
-row, and that is all this process does. The `review_decisions` row for the entity — recorded as
-the steward's own APPROVE, so "entities born" still counts every door alike — is written by the
-LIBRARIAN worker (`librarian.processing`) after the commit that births the entity has been pushed,
-carrying the commit sha, the door (`admin`) and the capture id in `extra`. A ledger fault there is
-logged and never turns a landed commit into a failed capture; the page and the registry are what
-say the identity is confirmed.
+One asymmetry is deliberate: a gate refusing an apply leaves the proposal `failed` carrying the
+sentence that refused it, and the approved status is NOT restored — the `admin_actions` row for the
+attempt is there already, with the refusing class name on it, and a silent revert to pending would
+hide that a gate spoke.
 
-Repairs writes into that same ledger through the same shared functions the review lane runs —
-`server.review.apply_repair_and_record` and `reject_repair_and_record`, an approve's row carrying
-the commit sha and the edited paths in `extra` — so "who approved this edit to the corpus" answers
-from the table "who approved this identity" already answers from, whichever of the two doors made
-the decision. One asymmetry is deliberate there: a gate refusing the apply leaves the proposal
-`failed` carrying the sentence that refused it and writes no `review_decisions` row at all — the
-`admin_actions` row for the attempt is there already, with the refusing class name on it — because
-a governance ledger claiming a decision whose commit never landed is worse than a missing one, and
-a silent revert to pending would hide that a gate spoke.
+**`entities/create` decides nothing and touches no git.** It writes its `admin_actions` row and a
+`capture_queue` row, and that is all this process does; the entity page, its `approved_by:` naming
+the actor on the form, and the regenerated registry are the librarian worker's commit, minutes
+later. The page and the registry are what say who introduced the identity.
 
 Four POSTs write no such row, because none of them mutates anything:
 
@@ -338,7 +293,7 @@ Four POSTs write no such row, because none of them mutates anything:
 | Retention purge with **Dry run** | a preview, by construction the same row set the real purge would take | nothing |
 | Digest **Preview** | dry-run render only; nothing is posted to Slack | a `digest-dry-run` row in `job_runs` — which is why the Digest page's history fills with them |
 | **Substrate check** | an in-process lint over the live index | nothing |
-| **Registry check** (`entities/resolve`) | a read of the served registry with the birth gate's own folds; it runs as a steward types into Register an entity, and stops the moment the dialog closes | nothing |
+| **Registry check** (`entities/resolve`) | a read of the served registry with the birth gate's own folds; it runs as somebody types into Register an entity, and stops the moment the dialog closes | nothing |
 
 ## Security posture, in six lines
 

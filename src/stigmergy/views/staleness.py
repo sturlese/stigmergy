@@ -205,7 +205,8 @@ def list_sweep_entities(repo: str, *, rows=None) -> list[str]:
     `existing_view_ids` is deliberate. That half is a directory listing, where a foreign stem was
     never written by this system and means nothing. This half is `entity:` read off a page a human
     can hand edit, where an unusable id is somebody's typo for a real anchor: dropping it silently
-    would converge the pass and leave that steward waiting forever for a rollup nobody is building.
+    would converge the pass and leave whoever wrote it waiting forever for a rollup nobody is
+    building.
     It travels into the population so `regenerate_entity` can refuse it BY NAME, once per pass.
     """
     rows = corpus.load_pages(repo) if rows is None else rows

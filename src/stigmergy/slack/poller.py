@@ -29,9 +29,9 @@ def _blocks_for(status: str, report: dict, result_ref: str) -> tuple[list[dict],
         blocks = render.render_filed(page_path=page_path, commit=commit, anchor=anchor,
                                      source_page=source_page,
                                      anchor_reason=report.get("anchor_reason", ""),
-                                     proposed=[str(e.get("name") or e.get("id") or "")
-                                               for e in (report.get("entities_proposed") or ())
-                                               if isinstance(e, dict)])
+                                     born=[str(e.get("name") or e.get("id") or "")
+                                           for e in (report.get("entities_born") or ())
+                                           if isinstance(e, dict)])
         return blocks, copy.filed_fallback(page_path=page_path)
     # rejected / resolved / failed: reuse the report's own sentence, bold-prefixed.
     blocks = render.render_generic_report(status, report.get("summary", ""))

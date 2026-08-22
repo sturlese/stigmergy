@@ -4,12 +4,10 @@ lane use, so what these prove is parity, not a parallel implementation."""
 import asyncio
 import json
 import os
-import subprocess
 
 import pytest
 
 from stigmergy.admin import schema as admin_schema
-from stigmergy.admin import service as admin_service
 from stigmergy.admin.service import (
     CRON_WORKFLOWS,
     AdminBadRequest,
@@ -26,24 +24,18 @@ from stigmergy.gardener.schema import ensure_gardener_schema
 from stigmergy.gardener.store import insert_findings
 from stigmergy.index import store as index_store
 from stigmergy.librarian import config as librarian_config
-from stigmergy.librarian import gitcmd
 from stigmergy.repair import remote as repair_remote
 from stigmergy.repair import schema as repair_schema
 from stigmergy.repair import store as repair_store
 from stigmergy.repair.errors import RepairError
-from stigmergy.review_kinds import KIND_IDENTITY_PROPOSAL
 from stigmergy.server import review as server_review
 from stigmergy.server.settings import Settings
 from tests.admin.conftest import (
     finish_one,
     propose_delete,
     propose_entity_body,
-    propose_identity,
     propose_repair,
-    publish_registry,
     register_entity,
-    remote_files,
-    remote_registry,
     submit_one,
 )
 
@@ -480,7 +472,7 @@ def test_a_registry_the_loader_refuses_reads_as_a_refusal_not_a_500(conn, admin_
 
 
 # ── entities: read ────────────────────────────────────────────────────────────────────────────
-# ── the proposals: list, detail and the three decisions, through the governed door ───────────
+# ── registering an entity: the console commissions a capture, the librarian writes the page ──
 @pytest.fixture()
 def entity_service(conn, admin_settings, entity_mint_repo):
     """`AdminService` pointed at a real, throwaway bare knowledge repo — for the tests that land a
@@ -488,175 +480,6 @@ def entity_service(conn, admin_settings, entity_mint_repo):
     configured): they never reach git at all, and proving that is part of what they pin."""
     return AdminService(conn, server_settings=Settings(librarian_repo_url=entity_mint_repo),
                         admin_settings=admin_settings)
-
-
-def test_entities_list_carries_the_proposals_and_their_registry_verdict(conn, entity_service,
-                                                                        entity_mint_repo):
-    """The list is the inbox's own read of the two proposal kinds, each identity checked against
-    the REST of the registry — a proposal always resolves to itself, which says nothing, so the
-    check leaves it out. `Acme Corporation`, a spelling `Acme Corp` already lists, comes back
-    REGISTERED: the Merge picker's strongest hint."""
-    register_entity(entity_mint_repo, conn, "Acme Corp", aliases=["Acme Corporation"])
-    propose_identity(entity_mint_repo, conn, "Acme Corporation")
-    propose_identity(entity_mint_repo, conn, "Vandelay Imports")
-    register_entity(entity_mint_repo, conn, "Initech", proposed_aliases=["Initech Ltd"])
-
-    listed = entity_service.entities_list()
-
-    by_id = {p["id"]: p for p in listed["proposals"]}
-    assert set(by_id) == {"acme-corporation", "vandelay-imports"}
-    assert by_id["acme-corporation"]["check"]["verdict"] == admin_service.VERDICT_REGISTERED
-    assert by_id["acme-corporation"]["check"]["match"]["id"] == "acme-corp"
-    assert by_id["acme-corporation"]["merge_candidates"] == [{"id": "acme-corp", "name": "Acme Corp"}]
-    assert by_id["vandelay-imports"]["check"]["verdict"] == admin_service.VERDICT_CLEAR
-    assert [(a["entity_id"], a["alias"]) for a in listed["aliases"]] == [("initech", "Initech Ltd")]
-    assert listed["registry_check"]["road"] == "snapshot"
-
-
-def test_the_inbox_reads_the_registry_file_when_the_index_holds_no_snapshot(conn, admin_settings,
-                                                                           entity_mint_repo, tmp_path):
-    """The console's inbox derives its proposals from the registry the console SERVES — the
-    snapshot where the index has one, the `--entity-registry` file where it does not (the local
-    recipe, and any stack before its first webhook). Before this test the inbox read the snapshot
-    alone while the Entities desk read either: on a stack with no snapshot the browser listed every
-    entity and the inbox listed no proposal, and the two pages disagreed about what was waiting."""
-    propose_identity(entity_mint_repo, conn, "Vandelay Imports")
-    index_store.clear_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH)
-    registry_file = tmp_path / "entity-registry.json"
-    registry_file.write_text(subprocess.run(["git", "show", "main:ops/entity-registry.json"],
-                                            cwd=entity_mint_repo, capture_output=True, text=True,
-                                            check=True).stdout, encoding="utf-8")
-    file_road = AdminService(conn, server_settings=Settings(entity_registry_path=str(registry_file)),
-                             admin_settings=admin_settings)
-
-    inbox = file_road.inbox()
-    listed = file_road.entities_list()
-
-    assert [i["name"] for i in inbox["items"] if i["kind"] == KIND_IDENTITY_PROPOSAL] == ["Vandelay Imports"]
-    assert [p["name"] for p in listed["proposals"]] == ["Vandelay Imports"]
-    assert listed["registry_check"]["road"] == "file"
-
-
-def test_entities_show_returns_the_proposal_and_404s_on_a_name_nobody_proposed(conn, entity_service,
-                                                                              entity_mint_repo):
-    propose_identity(entity_mint_repo, conn, "Globex Robotics")
-    shown = entity_service.entities_show("globex-robotics")
-    assert shown["name"] == "Globex Robotics" and shown["kind"] == "identity-proposal"
-    with pytest.raises(AdminNotFound):
-        entity_service.entities_show("ghost")
-
-
-def test_entity_decide_approve_lands_for_real_and_records_both_ledgers(
-        conn, entity_service, entity_mint_repo, require_gitleaks):
-    """The end-to-end proof, admin's own: ONE commit lands on the real bare remote, the append-only
-    `review_decisions` ledger records the decision under the SAME kind and id the librarian reads,
-    and `admin_actions` records the attempt under the actor's name. `extra.source` names this
-    door; the App authors the commit and the `Decided-by:` trailer carries the console's free-text
-    actor — attribution, not a resolved identity (ADR 030 D2)."""
-    entity_id = propose_identity(entity_mint_repo, conn, "Globex Robotics")
-
-    result = entity_service.entity_decide("identity-proposal", entity_id,
-                                         actor="steward@example.com", verdict="approve")
-
-    assert result["recorded"] == "approve" and len(result["commit"]) == 40
-    entry = remote_registry(entity_mint_repo)[entity_id]
-    assert entry["proposed"] is False and entry["approved_by"] == "steward@example.com"
-    with conn.cursor() as cur:
-        cur.execute("SELECT item_kind, item_id, verdict, actor, extra FROM review_decisions")
-        [(kind, item_id, verdict, actor, extra)] = cur.fetchall()
-    assert (kind, item_id, verdict, actor) == ("identity-proposal", entity_id, "approve",
-                                              "steward@example.com")
-    assert extra == {"source": "admin", "commit": result["commit"]}
-    author = gitcmd.run("log", "-1", "--format=%an <%ae>", result["commit"],
-                        cwd=entity_mint_repo).stdout.strip()
-    assert author == "stigmergy-librarian <stigmergy-librarian@users.noreply.github.com>"
-    message = gitcmd.run("log", "-1", "--format=%B", result["commit"], cwd=entity_mint_repo).stdout
-    assert "Decided-by: steward@example.com" in message
-    recorded = _actions(conn)[0]
-    assert (recorded["actor"], recorded["action"], recorded["outcome"]) == (
-        "steward@example.com", "entities.decide", "ok")
-
-
-def test_entity_decide_merge_folds_the_proposal_and_records_where_it_went(
-        conn, entity_service, entity_mint_repo, require_gitleaks):
-    register_entity(entity_mint_repo, conn, "Acme Corp")
-    entity_id = propose_identity(entity_mint_repo, conn, "Acme Corporation", aliases=["ACME Co"])
-
-    result = entity_service.entity_decide("identity-proposal", entity_id, actor="marc",
-                                         verdict="merge", into="acme-corp")
-
-    assert result["recorded"] == "merge" and result["into"] == "acme-corp"
-    assert result["reanchored"] == ["wiki/notes/Acme Corporation kickoff.md"]
-    registry = remote_registry(entity_mint_repo)
-    assert entity_id not in registry
-    assert {"Acme Corporation", "ACME Co"} <= set(registry["acme-corp"]["aliases"])
-    with conn.cursor() as cur:
-        cur.execute("SELECT verdict, extra FROM review_decisions WHERE item_id = %s", (entity_id,))
-        verdict, extra = cur.fetchone()
-    assert verdict == "merge" and extra["into"] == "acme-corp"
-
-
-def test_entity_decide_decline_removes_the_page_and_records_the_reject_the_librarian_reads(
-        conn, entity_service, entity_mint_repo, require_gitleaks):
-    entity_id = propose_identity(entity_mint_repo, conn, "Globex Robotics")
-
-    result = entity_service.entity_decide("identity-proposal", entity_id, actor="marc",
-                                         verdict="decline", notes="a typo\x1b[31m for Globex")
-
-    assert result["recorded"] == "reject"
-    assert "wiki/entities/Globex Robotics.md" not in remote_files(entity_mint_repo)
-    assert entity_id not in remote_registry(entity_mint_repo)
-    with conn.cursor() as cur:
-        cur.execute("SELECT verdict, notes FROM review_decisions WHERE item_id = %s", (entity_id,))
-        verdict, notes = cur.fetchone()
-    assert verdict == "reject"
-    assert "\x1b" not in notes and "for Globex" in notes, "the note is cleaned below the console"
-
-
-def test_entity_decide_on_a_proposed_spelling(conn, entity_service, entity_mint_repo,
-                                              require_gitleaks):
-    register_entity(entity_mint_repo, conn, "Initech", proposed_aliases=["Initech Ltd", "ITC"])
-
-    approved = entity_service.entity_decide("alias-proposal", "initech:Initech Ltd", actor="marc",
-                                            verdict="approve")
-    publish_registry(entity_mint_repo, conn)
-    declined = entity_service.entity_decide("alias-proposal", "initech:ITC", actor="marc",
-                                            verdict="decline")
-
-    assert approved["recorded"] == "approve" and declined["recorded"] == "reject"
-    entry = remote_registry(entity_mint_repo)["initech"]
-    assert entry["aliases"] == ["Initech Ltd"] and entry["proposed_aliases"] == []
-
-
-def test_entity_decide_bad_requests_are_refused_before_anything_is_attempted(conn, service):
-    with pytest.raises(AdminBadRequest, match="item_kind"):
-        service.entity_decide("parked-capture", "7", actor="marc", verdict="requeue")
-    with pytest.raises(AdminBadRequest, match="verdict for identity-proposal"):
-        service.entity_decide("identity-proposal", "x", actor="marc", verdict="requeue")
-    with pytest.raises(AdminBadRequest, match="merge needs `into`"):
-        service.entity_decide("identity-proposal", "x", actor="marc", verdict="merge")
-    assert _actions(conn) == [], "a bad request is refused before the action is even recorded"
-
-
-def test_entity_decide_without_a_repo_url_is_refused_with_the_capability_sentence(conn, service):
-    """`service` carries a default `Settings()` — no `librarian_repo_url` — so the door refuses
-    by name, after recording the attempt, and no ledger row is written."""
-    with pytest.raises(AdminRefused, match="STIGMERGY_LIBRARIAN_REPO_URL"):
-        service.entity_decide("identity-proposal", "globex-robotics", actor="marc",
-                              verdict="approve")
-    recorded = _actions(conn)[0]
-    assert recorded["outcome"] == "error"
-    assert recorded["error_class"] == "CapabilityUnavailableError"
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM review_decisions")
-        assert cur.fetchone()[0] == 0
-
-
-def test_entity_decide_on_an_unknown_proposal_is_the_librarys_own_refusal(
-        conn, entity_service, entity_mint_repo, require_gitleaks):
-    with pytest.raises(AdminRefused, match="no entity 'ghost'"):
-        entity_service.entity_decide("identity-proposal", "ghost", actor="marc", verdict="approve")
-    assert _actions(conn)[0]["error_class"] == "EntityError"
 
 
 def test_entity_create_commissions_a_capture_the_librarian_writes_the_page_from(conn, admin_settings):
@@ -678,12 +501,10 @@ def test_entity_create_commissions_a_capture_the_librarian_writes_the_page_from(
         cur.execute("SELECT submitted_by, hints, payload FROM capture_queue WHERE id = %s",
                     (result["id"],))
         by, hints, payload = cur.fetchone()
-        cur.execute("SELECT count(*) FROM review_decisions")
-        assert cur.fetchone()[0] == 0, "the ledger row is the worker's to write, after the push"
     assert by == "steward@example.com"
     registration = capture_schema.registration_from_hints(hints)
     assert registration.name == "Stark Industries" and set(registration.aliases) == {"Stark", "SI"}
-    assert registration.source == server_review.SOURCE_ADMIN
+    assert registration.source == "admin"
     assert payload["text"].startswith("Stark Industries is the client")
     action = _actions(conn)[0]
     assert action["action"] == "entities.create" and action["args"]["about_chars"] > 0
@@ -939,9 +760,8 @@ def test_an_additive_op_keeps_exactly_the_fields_it_had(conn, service):
 
 
 def test_repair_approve_applies_and_records_both_ledgers(conn, repair_service, monkeypatch):
-    """The console's own half: an `admin_actions` row naming this door, and — through the shared
-    sequence — the `review_decisions` row that answers "who approved this change to the corpus"
-    identically whichever door was used."""
+    """The console's own half: an `admin_actions` row naming this door, and the proposal row
+    carrying the verdict, who decided it and the commit it landed as."""
     calls = _apply_records(monkeypatch)
     proposal_id = propose_repair(conn)
 
@@ -952,9 +772,7 @@ def test_repair_approve_applies_and_records_both_ledgers(conn, repair_service, m
     assert [c["approved_by"] for c in calls] == ["steward@example.com"]
     row = repair_store.proposal(conn, proposal_id)
     assert (row["status"], row["applied_commit"]) == (repair_schema.STATUS_APPLIED, FAKE_COMMIT)
-    decision = server_review.latest_decisions(conn)[
-        (server_review.KIND_REPAIR_PROPOSAL, str(proposal_id))]
-    assert (decision["verdict"], decision["source"]) == ("approve", server_review.SOURCE_ADMIN)
+    assert row["decided_by"] == "steward@example.com"
     recorded = _actions(conn)[0]
     assert (recorded["actor"], recorded["action"], recorded["outcome"]) == (
         "steward@example.com", "repairs.approve", "ok")
@@ -982,9 +800,7 @@ def test_pages_delete_runs_the_shared_sequence_and_records_the_console_as_the_do
 
     assert result["commit"] == FAKE_COMMIT
     assert seen["paths"] == ["wiki/notes/Old Memo.md"]
-    assert (seen["actor"], seen["source"]) == ("ops@example.com", server_review.SOURCE_ADMIN)
-    assert seen["authorize"] is None, (
-        "the console passes no steward guard — its token is the authorization (ADR 029/030 D2)")
+    assert (seen["actor"], seen["source"]) == ("ops@example.com", "admin")
     recorded = _actions(conn)[0]
     assert (recorded["actor"], recorded["action"], recorded["outcome"]) == (
         "ops@example.com", "pages.delete", "ok")
@@ -1058,9 +874,6 @@ def test_repair_reject_records_the_dismissal_on_the_row_and_in_the_ledger(conn, 
                                                   "steward@example.com")
     assert row["notes"] == "the two pages describe different quarters"
     assert row["content_key"] in repair_store.known_content_keys(conn)
-    decision = server_review.latest_decisions(conn)[
-        (server_review.KIND_REPAIR_PROPOSAL, str(proposal_id))]
-    assert (decision["verdict"], decision["source"]) == ("reject", server_review.SOURCE_ADMIN)
     assert _actions(conn)[0]["action"] == "repairs.reject"
 
 

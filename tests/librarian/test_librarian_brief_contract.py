@@ -265,19 +265,22 @@ RULE_TABLE = [
     #    the difference between an ownerless page and a declared company-wide one.
     ("2. **COMPANY-WIDE, with a written reason** — when the material genuinely is about the "
      "company as", "declared company-wide scope with no written reason"),
-    # 3. PROPOSE: the outcome that replaced the park. The brief tells the agent an unknown name is
-    #    proposed and FILED; the marker is the ordinary flow's call into the one module that
-    #    creates the proposed pages before the diff is judged. A brief promising that a proposal
-    #    lands in the same commit is only true because this call precedes the gates.
-    ("3. **PROPOSE the entity** — when the material really is about a specific thing that is "
-     "**not in the", "identity.write_proposals("),
-    #    ...and it is a correct outcome the SUBMITTER is told about: `proposals_clause` is the
-    #    sentence in the filed report that says the entity was created unconfirmed. A brief that
-    #    called proposing correct while the report hid it would make governance invisible again.
-    ("**Proposing is a correct", "proposals_clause"),
-    #    A declined identity stays declined: the brief promises a re-proposal is refused, and
-    #    `_declined_identity_ids` is the ledger read that makes the refusal real.
-    ("**A name a steward has already declined is not proposed again.**", "_declined_identity_ids"),
+    # 3. INTRODUCE: the outcome that replaced the park, and then the proposal (ADR 044). The
+    #    brief tells the agent an unknown name is introduced and FILED; the marker is the ordinary
+    #    flow's call into the one module that writes those pages before the diff is judged. A brief
+    #    promising the identity lands in the same commit is only true because this call precedes
+    #    the gates.
+    ("3. **INTRODUCE the entity** — when the material really is about a specific thing that is "
+     "**not in the", "identity.write_births("),
+    #    ...and it is a correct outcome the SUBMITTER is told about: `births_clause` is the
+    #    sentence in the filed report naming what their capture introduced. A brief that called
+    #    introducing correct while the report hid it would make the registry grow invisibly.
+    ("**Introducing is a correct", "births_clause"),
+    #    And it is born confirmed by them: the brief says so, and the marker is the line where the
+    #    flow hands the birth writer WHO that is — the capture's own `submitted_by`, resolved by
+    #    the server, never anything the account said (`gate_identity` proves the page names them).
+    ("registers it CONFIRMED by the person whose capture this is",
+     'approver=str(item.get("submitted_by")'),
     # The server-owned field list the agent must never write, and the function that writes them.
     ("`owner`, `submitted_by`, `verification`, `acl`, `status`, `as_of`, `content_hash`, `id`, "
      "`entity`.", "stamp_server_fields"),
@@ -298,7 +301,7 @@ RULE_TABLE = [
     # Edits are DECLARED and performed by code — the split ADR 015 §3 made and this flow kept.
     ("You never write to them. You declare the edit and the worker performs it.", "apply_declared"),
     # ...and an entity page is not editable, whatever it was anchored to.
-    ("declare an edit on the entity page you anchored to, nor on one you are proposing.", "outside-lane"),
+    ("declare an edit on the entity page you anchored to, nor on one you are introducing.", "outside-lane"),
     # ── the ONE decision, and the shape of a proposal ─────────────────────────────────────────
     # The park rows that stood here (`TRIAGE_UNRESOLVED_ENTITY`, `def _ask_or_park(`, the two
     # park kinds, `_unresolved_names`, the legacy `name` fold) are GONE with the parks: the brief
@@ -325,8 +328,8 @@ RULE_TABLE = [
     # The `## Never` bullet — every unregistered name, one entry each — pinned to the parser that
     # reads the list: a brief promising every name while the parser read one would be the old
     # issue #32 under a new field name.
-    ("- Propose only SOME of a capture's unregistered names, or fold several into one entity — "
-     "one entry", "_parse_new_entities"),
+    ("- Introduce only SOME of a capture's unregistered names, or fold several into one entity — "
+     "one", "_parse_new_entities"),
 
     # ── what the worker HANDS the agent: four fields, four producers ──────────────────────────
     # The brief promises a context the agent no longer has a tool to go and get. Each promise is

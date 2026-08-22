@@ -3,7 +3,7 @@ idempotence/drift proof.
 
 Reads real files off a real (throwaway) git checkout — the generator itself never touches git, so
 these tests build the ON-DISK shape directly (`tests/entities/conftest.py`'s `build_repo`) rather
-than pushing through a remote, which is `test_clone.py`'s concern.
+than pushing anything through the remote the fixture also sets up.
 """
 import json
 import os
@@ -287,54 +287,52 @@ def test_the_real_repo_has_no_duplicate_match_keys():
     assert len(entities) >= 1
 
 
-# ── the lifecycle, page side: `approved_by` present-and-empty is a proposal, absent is not ───────
-def test_an_empty_approved_by_is_a_proposal_and_a_missing_one_is_an_approved_legacy_page(repo):
-    """The two seeded pages carry no `approved_by` at all — they predate the field and were born
-    through a steward's door, so they read as approved. A page the librarian writes says
-    `approved_by: ""` and reads as proposed, and a page a steward approved names them."""
+# ── the lifecycle, page side: `approved_by` names who introduced an identity ─────────────────────
+def test_approved_by_is_read_off_the_page_and_absent_reads_as_nobody(repo):
+    """OLD BEHAVIOUR: `approved_by: ""` present-and-empty meant a PROPOSAL waiting on a steward,
+    and a page's extra spellings could sit on `proposed_aliases` until one confirmed them. ADR 044:
+    the capture is the approval, so there is no waiting state and no second alias list — the field
+    is read as one fact, "who introduced this identity", and a page written before it existed names
+    nobody in particular.
+    """
     _remote, clone = repo
-    _write_page(clone, "Scircle", "organization")
+    _write_page(clone, "Scircle", "organization", aliases=["S-Circle"])
     path = os.path.join(clone, "wiki", "entities", "Scircle.md")
     with open(path, encoding="utf-8") as f:
         text = f.read()
     with open(path, "w", encoding="utf-8") as f:
-        f.write(text.replace('role: ""', f'role: ""\n{generator.APPROVED_BY_KEY}: ""'
-                                         f'\n{generator.PROPOSED_ALIASES_KEY}: ["S-Circle"]'))
+        f.write(text.replace('role: ""', f'role: ""\n{generator.APPROVED_BY_KEY}: "marc"'))
     _write_page(clone, "Globex", "organization")
     path = os.path.join(clone, "wiki", "entities", "Globex.md")
     with open(path, encoding="utf-8") as f:
         text = f.read()
     with open(path, "w", encoding="utf-8") as f:
-        f.write(text.replace('role: ""', f'role: ""\n{generator.APPROVED_BY_KEY}: "Test Steward"'))
+        f.write(text.replace('role: ""', f'role: ""\n{generator.APPROVED_BY_KEY}: ""'))
 
     by_id = {e.canonical_id: e for e in generator.read_entity_pages(clone)}
-    assert by_id["scircle"].proposed is True and by_id["scircle"].approved_by == ""
-    assert by_id["scircle"].proposed_aliases == ("S-Circle",)
-    assert by_id["globex"].proposed is False and by_id["globex"].approved_by == "Test Steward"
-    assert by_id["jordan-reyes"].proposed is False and by_id["jordan-reyes"].approved_by == ""
+    assert by_id["scircle"].approved_by == "marc"
+    assert by_id["scircle"].aliases == ("S-Circle",)
+    assert by_id["globex"].approved_by == ""            # present and empty: nobody in particular
+    assert by_id["jordan-reyes"].approved_by == ""      # absent entirely: the same thing
 
     reg = generator.derive_registry(clone)
-    assert reg.is_proposed("scircle") and not reg.is_proposed("globex")
-    assert reg.canonical_id("S-Circle") == "scircle"          # the proposed spelling resolves
-    assert reg.proposed_ids() == ["scircle"]
-    assert reg.proposed_alias_pairs() == [("scircle", "S-Circle")]
+    assert reg.entities["scircle"]["approved_by"] == "marc"
+    assert reg.entities["globex"]["approved_by"] == ""
+    assert reg.canonical_id("S-Circle") == "scircle"    # a spelling resolves, born or inherited
 
 
 def test_check_reports_a_lifecycle_the_registry_has_not_followed(repo):
-    """An approval the page records and the registry does not is an entity the inbox keeps asking
-    about; the reverse is an identity nobody confirmed that every reader treats as confirmed. Both
-    are drift, and both name the fix."""
+    """The page and the registry disagreeing about who introduced an identity means one of the two
+    was written by hand — a registry fact like the type, and drift that names whose the fix is."""
     _remote, clone = repo
     page = os.path.join(clone, "wiki", "entities", "Stigmergy.md")
     with open(page, encoding="utf-8") as f:
         text = f.read()
     with open(page, "w", encoding="utf-8") as f:
-        f.write(text.replace('role: ""', f'role: ""\n{generator.APPROVED_BY_KEY}: ""'
-                                         f'\n{generator.PROPOSED_ALIASES_KEY}: ["Stig"]'))
+        f.write(text.replace('role: ""', f'role: ""\n{generator.APPROVED_BY_KEY}: "marc"'))
     messages = [d.message for d in generator.check(clone).divergences]
-    assert any("proposed (nobody has approved it yet)" in m and generator.FIX_COMMAND in m
-               for m in messages), messages
-    assert any("proposed alias" in m and "'Stig'" in m for m in messages), messages
+    assert any("introduced by marc" in m and "introduced before approvals were recorded" in m
+               and generator.FIX_COMMAND in m for m in messages), messages
     # ...and regenerating clears it, which is what makes the check falsifiable
     generator.regenerate(clone)
     assert generator.check(clone).divergences == []

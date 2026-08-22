@@ -202,11 +202,12 @@ def test_an_ordinary_capture_claiming_meeting_type_is_refused_as_the_librarians_
     assert item["kind"] != schema.MEETING
 
 
-# ── several unregistered names are PROPOSED together, and the whole set files ──────────────────
-def test_several_unregistered_names_are_proposed_together_and_the_set_files(rig, clean_queue):
+# ── several unregistered names are BORN together, and the whole set files ─────────────────────
+def test_several_unregistered_names_are_born_together_and_the_set_files(rig, clean_queue):
     """OLD BEHAVIOUR: one ask naming both, the whole set parked until a person answered. The
-    distiller proposes both entities in its account; code creates both pages beside the set, each
-    decision anchored to its own newborn, one commit."""
+    distiller declares both entities in its account; code creates both pages beside the set,
+    confirmed by whoever submitted the meeting (ADR 044), each decision anchored to its own
+    newborn, one commit."""
     env, deps = rig
     item, result = _file_meeting(
         clean_queue, deps,
@@ -216,10 +217,10 @@ def test_several_unregistered_names_are_proposed_together_and_the_set_files(rig,
     _, sha = result.result_ref.rsplit("@", 1)
     changed = support.changed_paths(env.bare, sha)
     assert "wiki/entities/Nebula Systems.md" in changed and "wiki/entities/Quantum Labs.md" in changed
-    assert [e["id"] for e in result.report["entities_proposed"]] == ["nebula-systems", "quantum-labs"]
+    assert [e["id"] for e in result.report["entities_born"]] == ["nebula-systems", "quantum-labs"]
     anchors = [row["anchored_to"] for row in result.report["filed_meeting"]["decisions"]]
     assert anchors == ["Nebula Systems (`nebula-systems`)", "Quantum Labs (`quantum-labs`)"]
-    assert "It proposes 2 new entities" in result.report["summary"]
+    assert "It introduces 2 new entities" in result.report["summary"]
 
 
 

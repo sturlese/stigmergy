@@ -73,7 +73,7 @@ class RegenOutcome:
 @dataclass(frozen=True)
 class _RemovalCause:
     """Why a view was removed, in the two lengths its two readers need: `tail` closes the commit
-    subject somebody skims in `git log`, `message` is the sentence a steward reads on the terminal
+    subject somebody skims in `git log`, `message` is the sentence an operator reads on the terminal
     and in `--json`. ONE object per cause, so the log and the report can never name different
     causes for the same write — which is what happened while the CLI had to guess: it knew a
     removal had occurred and not which road led there, so it stated one of the two as fact for
@@ -114,7 +114,7 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
                             force: bool = False, guarded: bool = True,
                             rows=None) -> RegenOutcome:
     """One entity, one call, one commit (or none, on a no-op/refusal). `guarded=True` (the CLI's
-    steward-clone path) runs the dirty-tree/wrong-branch checks before writing anything;
+    operator-clone path) runs the dirty-tree/wrong-branch checks before writing anything;
     `guarded=False` (the librarian worker, whose ephemeral worktree is always a fresh checkout)
     skips them, since neither condition is reachable there.
 
@@ -153,7 +153,7 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
     # choke point nothing may escape `views/` through), and a raise inside a batch loop that
     # catches only `KeyboardInterrupt` costs the WHOLE pass, every interval, forever. Refused by
     # name instead — never filtered out of the population, which would converge the pass and leave
-    # the steward who typed the id waiting for a rollup nobody is building.
+    # the person who typed the id waiting for a rollup nobody is building.
     if not is_usable_view_id(entity_id):
         return RegenOutcome(
             entity_id=entity_id, entity_name=entity_id, action="refused-unusable-id",

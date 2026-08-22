@@ -16,7 +16,7 @@ files under `src/stigmergy`, never a mock of the import system. Three shapes rec
     A grant nobody exercises is a door held open "just in case", so every allowlist has a
     pruning test as well as an enforcing one.
 
-The bottom of the stack is `stigmergy.kernel`, beside `stigmergy.text` and `stigmergy.review_kinds`:
+The bottom of the stack is `stigmergy.kernel`, beside `stigmergy.text`:
 libraries every package may depend on precisely because they depend on none of them. Anything
 that needs a stigmergy import has stopped being the bottom of the stack, and whatever it wanted
 belongs somewhere else.
@@ -130,66 +130,14 @@ def test_server_sources_found():
 
 @pytest.mark.parametrize("path", SERVER_SOURCES, ids=lambda p: p.name)
 def test_server_never_imports_the_pipeline(path):
-    """DIRECT imports only (one module's own `import`/`from` statements) — see
-    `test_review_transitive_kernel_reach_is_a_named_declared_exception` below for the TRANSITIVE
-    half of this same question, which this AST-level check cannot see at all."""
+    """DIRECT imports only: one module's own `import`/`from` statements. An AST-level ban says
+    nothing about what those imports drag in transitively — `review.py` reaches
+    `stigmergy.kernel` through `librarian.gates`/`base_inputs` and always has."""
     offenders = [f"{path.name}:{line} -> {mod}"
                  for mod, line in _all_module_imports(path)
                  if mod.startswith("stigmergy.pipeline")]
     assert not offenders, ("the server reached into the pipeline (it talks to other packages "
                            "files, never through imports):\n  " + "\n  ".join(offenders))
-
-
-# An AST-level ban can be TRUE and USELESS for the same module at the same time: it checks
-# `review.py`'s own `import` statements, and once upon a time importing that module transitively
-# pulled ELEVEN further modules in through its declared `stigmergy.librarian` exception, none of
-# them visible here. `review.py` still reaches `stigmergy.kernel` through `librarian.gates`/
-# `base_inputs` (the ACL resolver and the entity registry the review lane reuses rather than
-# re-implementing), and that reach is what this test pins.
-#
-# A subprocess (not `sys.modules` diffing in-process, which any earlier test's own imports would
-# silently pollute) names exactly which kernel modules load, and pins them to a small, explicitly
-# reviewed set. A NEW dependency appearing here — a future librarian/gates change reaching further
-# down — fails this test by name instead of staying invisible forever.
-_REVIEW_DECLARED_TRANSITIVE_KERNEL_MODULES = frozenset({
-    "stigmergy.kernel",
-    "stigmergy.kernel.acl",
-    "stigmergy.kernel.frontmatter",
-    # `kernel.registry.save_registry` writes through `fsutil.write_text_atomic` (and
-    # `entities.decide` rolls back through `clone.restore_tracked`), so an interrupted write cannot
-    # leave a truncated `ops/entity-registry.json`.
-    "stigmergy.kernel.fsutil",
-    "stigmergy.kernel.normalize",
-    "stigmergy.kernel.registry",
-})
-
-
-def test_review_transitive_kernel_reach_is_a_named_declared_exception():
-    review_path = SERVER / "review.py"
-    if not review_path.is_file():
-        pytest.skip("server/review.py not present yet")
-    script = (
-        "import sys\n"
-        "before = set(sys.modules)\n"
-        "import stigmergy.server.review\n"
-        "after = set(sys.modules)\n"
-        "for m in sorted(after - before):\n"
-        "    if m.startswith('stigmergy.kernel'):\n"
-        "        print(m)\n"
-    )
-    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
-                            check=True, cwd=str(SERVER.parents[2]))
-    actual = frozenset(line for line in result.stdout.splitlines() if line)
-    new = actual - _REVIEW_DECLARED_TRANSITIVE_KERNEL_MODULES
-    gone = _REVIEW_DECLARED_TRANSITIVE_KERNEL_MODULES - actual
-    assert not new, (
-        "importing stigmergy.server.review now transitively pulls in NEW stigmergy.kernel modules "
-        f"beyond the declared, reviewed set: {sorted(new)} — review the new reach and add it here "
-        "by name, or remove whatever librarian primitive introduced it")
-    assert not gone, (
-        "importing stigmergy.server.review no longer pulls in these previously-declared "
-        f"stigmergy.kernel modules: {sorted(gone)} — the declared set is stale; narrow it so a "
-        "future re-widening is visible again")
 
 
 def test_server_imports_the_index_as_a_library():
@@ -713,14 +661,11 @@ _WEBHOOK_ALLOWED_LIBRARIAN_SYMBOLS = (
 )
 
 
-# A SECOND declared exception, mirroring the webhook.py one above. `stigmergy.server.review` is
-# `review_queue`/`review_decide`'s implementation — the SYNCHRONOUS, human-triggered half of the
-# write path. It needs four librarian primitives the async worker already owns, and reusing them
-# is the whole point: `gitcmd.base_ref` to read `ops/stewards.json` at the base commit (the same
-# governed-input discipline every other config gets), `base_inputs.load_stewards`/`load_stewards_file` to parse it,
-# `gates.scan_secrets` over a steward's free-text note, and — the fourth, for the same reason
-# `webhook.py` needs it — `errors.LibrarianError`, the base class those first two RAISE, so
-# `is_steward` can keep its "never an exception" promise by catching what its own inputs throw.
+# A SECOND declared exception, mirroring the webhook.py one above. `stigmergy.server.review` holds
+# the SYNCHRONOUS, human-triggered half of the write path — the repair verdict and the deletion
+# act. It needs ONE librarian primitive the async worker already owns, and reusing it is the whole
+# point: `gates.scan_secrets`, over the caller's own free-text reason, so a credential typed into
+# a deletion's `why` never reaches a commit message.
 # Importing `stigmergy.librarian.worker`/
 # `processing`/`agent` (the ASYNC queue-drain loop) would still be the layering violation this
 # test exists to catch — a slow agent run inside an MCP call — and
@@ -730,11 +675,7 @@ _WEBHOOK_ALLOWED_LIBRARIAN_SYMBOLS = (
 # The tuple is deliberately short, and it shrinks when the code does: a declared door nothing
 # walks through is exactly what the positive test below refuses to let stand.
 _REVIEW_ALLOWED_LIBRARIAN_SYMBOLS = (
-    "stigmergy.librarian.gitcmd",       # base_ref: read ops/stewards.json at the base commit
-    "stigmergy.librarian.gates",        # scan_secrets over a steward's own free-text note
-    "stigmergy.librarian.base_inputs",  # load_stewards, the governed-input reader
-    "stigmergy.librarian.errors.LibrarianError",   # what the two above raise; is_steward fails
-                                                   # closed on it instead of letting it out
+    "stigmergy.librarian.gates",        # scan_secrets over the caller's own free-text reason
 )
 
 # The prose rule the exception's own comment states but nothing used to assert: importing the
@@ -824,24 +765,18 @@ def test_server_review_never_imports_the_async_librarian_loop(path):
         + "\n  ".join(offenders))
 
 
-# The `stigmergy.entities` symbols the review lane reuses rather than reimplements: `decide` (the
-# WHOLE module — the one place a proposal is approved, merged or declined, so the lane and
-# `stigmergy-entities` agree byte for byte about what a verdict does to the repo), `remote` (the
-# WHOLE module, imported and called as `entities_remote.decide_via_clone(...)` rather than a bound
-# import, so a test can monkeypatch the ATTRIBUTE exactly as `entities.cli`'s own tests patch
-# `stigmergy.entities.clone.*`), and the two error names `review.py` maps into its own vocabulary
-# (`errors.EntityError` -> `ReviewError`, `errors.CapabilityUnavailableError` ->
-# `server.errors.CapabilityUnavailableError` of the identical posture). `stigmergy.entities` is
-# the steward's CLI beside the API (its own boundary tests, below); the server importing it
-# wholesale would make the API depend on a human-driven tool, so the exception stays scoped to
-# these names — none of which opens a database connection, and the ones that write `ops/`/git are
-# reached only from the governed verdicts that are allowed to.
+# The two `stigmergy.entities` symbols the registration door reuses rather than reimplements: the
+# closed entity-type list a registration is validated against, and the id its acknowledgement
+# names. Both are pure: neither opens a connection, touches `ops/` or writes to git.
+#
+# The grant is this narrow because `stigmergy.entities` is the RULES an identity is born under, and
+# the librarian is what writes through them (ADR 044). A server that imported the package wholesale
+# would be a second birth path beside the worker's — which is the shape this file exists to refuse.
+# The list was longer when a proposal could be approved, merged or declined from here; those
+# verdicts are gone, not moved.
 _REVIEW_ALLOWED_ENTITIES_SYMBOLS = (
-    "stigmergy.entities.decide",     # the five decisions, handed to the door as `action`
-    "stigmergy.entities.remote",     # the door itself: decide_via_clone
-    "stigmergy.entities.generator.canonical_id_for",   # the id a registration will bear, for its ack
-    "stigmergy.entities.errors.EntityError",
-    "stigmergy.entities.errors.CapabilityUnavailableError",
+    "stigmergy.entities.generator.ENTITY_TYPES",
+    "stigmergy.entities.generator.canonical_id_for",
 )
 
 
@@ -860,8 +795,8 @@ def test_server_never_imports_entities_beyond_the_one_declared_review_lane_excep
                  for mod, line in _all_module_imports(path)
                  if mod.startswith("stigmergy.entities")]
     assert not offenders, (
-        "the server imported stigmergy.entities — it is the steward's CLI, never a layer of the "
-        "API:\n  " + "\n  ".join(offenders))
+        "the server imported stigmergy.entities — those are the rules the LIBRARIAN births "
+        "through, never a layer of the API:\n  " + "\n  ".join(offenders))
 
 
 # The `stigmergy.repair` symbols the review lane reaches, mirroring the entities exception above
@@ -1089,54 +1024,26 @@ def test_slack_imports_only_server_and_answer(path):
     is reached one hop down, through `stigmergy.server.service.open_scoped_resources`, precisely so
     this package's own import list never has to include it.
 
-    **`stigmergy.review_kinds` is allowed everywhere in this package** — a dependency-free module,
+    **The dependency-free root modules are allowed everywhere in this package** —
     the bottom of the stack beside `stigmergy.text`: a module below all of them can be imported by
     all of them without any package having to reach sideways into another's internals. It exists
     so `render.py` — a pure Block Kit function — does not have to import `stigmergy.server.review`
     (which drags in `stigmergy.librarian.*`, `stigmergy.entities.*`, `subprocess`, PyYAML) for four
     string constants; see that module's own docstring.
     """
-    allowed_prefixes = ("stigmergy.server", "stigmergy.answer", "stigmergy.slack", "stigmergy.review_kinds")
+    allowed_prefixes = ("stigmergy.server", "stigmergy.answer", "stigmergy.slack")
     if path == SLACK_STORE:
         allowed_prefixes += ("stigmergy.capture",)
     offenders = [f"{path.name}:{line} -> {mod}"
                  for mod, line in _all_module_imports(path)
                  if mod.startswith("stigmergy.") and not mod.startswith(allowed_prefixes)]
     assert not offenders, (
-        "stigmergy.slack imported something other than server/answer/capture.schema/review_kinds:"
+        "stigmergy.slack imported something other than server/answer/capture.schema:"
         "\n  " + "\n  ".join(offenders))
 
 
-def test_stigmergy_review_kinds_is_the_bottom_of_the_stack():
-    """Same guarantee as `stigmergy.text`, for the same reason: `stigmergy.review_kinds` is safe for
-    BOTH `stigmergy.server.review` and `stigmergy.slack` to depend on only because it depends on
-    neither — the moment it needs a stigmergy import, it has stopped being the bottom of the stack
-    and whatever it wanted belongs somewhere else."""
-    review_kinds_path = CAPTURE.parent / "review_kinds.py"
-    assert review_kinds_path.is_file(), "stigmergy/review_kinds.py went missing or moved"
-    offenders = [f"review_kinds.py:{line} -> {mod}"
-                 for mod, line in _all_module_imports(review_kinds_path)
-                 if mod.startswith("stigmergy")]
-    assert not offenders, (
-        "stigmergy.review_kinds imported from this project — it exists precisely so both "
-        "stigmergy.server.review and stigmergy.slack can depend on it with no import-graph cost, which "
-        "requires it to depend on neither:\n  " + "\n  ".join(offenders))
 
 
-def test_review_kinds_entity_types_matches_the_generators_closed_list():
-    """`stigmergy.review_kinds.ENTITY_TYPES` is a RESTATEMENT of `entities.generator.ENTITY_TYPES`
-    (never an import — `review_kinds` may depend on nothing, see the test above), so a Slack
-    `static_select` built from the restatement can silently drift from the types
-    `entities.birth` will actually accept. This is the drift guard `review_kinds.py`'s own docstring
-    promises: if this ever fails, the fix is editing `review_kinds.ENTITY_TYPES` to match, never
-    loosening this assertion."""
-    from stigmergy import review_kinds
-    from stigmergy.entities import generator
-    assert review_kinds.ENTITY_TYPES == generator.ENTITY_TYPES, (
-        f"stigmergy.review_kinds.ENTITY_TYPES {review_kinds.ENTITY_TYPES!r} no longer matches "
-        f"stigmergy.entities.generator.ENTITY_TYPES {generator.ENTITY_TYPES!r} — the Slack "
-        f"entity-mint modal's static_select would offer a type entities.birth does not accept, or "
-        f"withhold one it does")
 
 
 def test_slack_store_imports_only_capture_schema():
@@ -1402,17 +1309,6 @@ _ENTITIES_LIBRARY_ALLOWED_PREFIXES = (
     "stigmergy.librarian.page",      # decide.py's frontmatter edits — the ONE set of primitives
                                      # every writer of a page's `entity:`/`aliases:` line uses
 )
-# cli.py's additional, documented reach beyond the shared library set above: the one DB-connection
-# seam, mirroring `capture.cli`'s own exception.
-_ENTITIES_CLI_EXTRA_ALLOWED_PREFIXES = _ENTITIES_LIBRARY_ALLOWED_PREFIXES + (
-    "stigmergy.index",
-    # `KIND_ENTITY_PROPOSAL`, for the `review_decisions` row `approve`/`reject` now write through
-    # `capture.decisions`. The root module exists so packages that may not import each other can
-    # still agree on these strings, and this is exactly that case: the CLI writes the same ledger
-    # `server.review` does without importing it.
-    "stigmergy.review_kinds",
-)
-
 
 def test_entities_sources_found():
     assert ENTITIES_SOURCES, "no stigmergy.entities modules found — the layout moved and this went blind"
@@ -1452,35 +1348,8 @@ def test_entities_library_modules_stay_within_the_documented_edge(path):
         "kernel, librarian.{gitcmd,errors,config}):\n  " + "\n  ".join(offenders))
 
 
-def test_entities_cli_stays_within_the_documented_edge_plus_its_own_db_connection():
-    """`cli.py` is `entities/index.md`'s one declared exception BEYOND the shared library set
-    (`_ENTITIES_LIBRARY_ALLOWED_PREFIXES`, which `mint.py`/`remote.py` now also draw on): it opens
-    the database connection, mirroring `capture.cli`'s own exception. Nothing outside that set —
-    server/answer are already refused above."""
-    path = ENTITIES / "cli.py"
-    offenders = [f"{path.name}:{line} -> {sym}"
-                 for sym, line in _imported_symbols(path)
-                 if sym.startswith("stigmergy.")
-                 and not sym.startswith(_ENTITIES_CLI_EXTRA_ALLOWED_PREFIXES)]
-    assert not offenders, (
-        "stigmergy.entities.cli imported outside its documented edge:\n  " + "\n  ".join(offenders))
 
 
-def test_only_entities_cli_imports_the_index():
-    """Mirrors `test_only_capture_cli_may_import_the_index`: library code in this package takes
-    `conn` as a plain argument (`entities/index.md`: "only cli.py opens a database connection,
-    exactly as in capture"). A second module opening its own connection is a second, undeclared
-    door into Postgres."""
-    offenders = [f"{p.name}:{line} -> {mod}"
-                 for p in ENTITIES_SOURCES if p.name != "cli.py"
-                 for mod, line in _all_module_imports(p)
-                 if mod.startswith("stigmergy.index")]
-    assert not offenders, (
-        "a stigmergy.entities module OTHER than cli.py imported stigmergy.index:\n  "
-        + "\n  ".join(offenders))
-    used = {mod for mod, _ in _all_module_imports(ENTITIES / "cli.py")
-            if mod.startswith("stigmergy.index")}
-    assert used, "entities.cli no longer imports stigmergy.index — the connection seam drifted"
 
 
 # ── what an `entities` refusal may SAY, not only which types it may raise ─────────────────────
@@ -2095,10 +1964,6 @@ _GARDENER_CLI_EXTRA_ALLOWED_PREFIXES = _GARDENER_ALLOWED_PREFIXES + (
     "stigmergy.index.store",
     "stigmergy.slack.bolt_gateway",
     "stigmergy.librarian.config",
-    # `ensure_decisions_schema`. This was `stigmergy.server.review` until the ledger moved down to
-    # `capture.decisions`: a cron CLI reached into the SERVER for one DDL call, which is a
-    # dependency no scheduled job should have had.
-    "stigmergy.capture.decisions",
 )
 
 
@@ -2300,9 +2165,9 @@ def test_gardener_threshold_literals_stay_in_settings(path):
 
 # ── the digest's own layering edges ────────────────────────────────────────────────────────────
 # Mirrors `gardener`'s allowlist style. The load-bearing DIFFERENCE from `gardener`'s own list:
-# the digest BROADCASTS (package docstring), so it is granted `server.acl`/`slack.channels` (a
-# real ACL predicate at the destination channel's audiences) and a read edge into the
-# governed-birth ledger (`capture.decisions`) that `gardener` deliberately is not ──────────────
+# the digest BROADCASTS (package docstring), so it is granted `server.acl`/`slack.channels` — a
+# real ACL predicate at the destination channel's audiences — which `gardener` deliberately is
+# not ───────────────────────────────────────────────────────────────────────────────────────────
 DIGEST = pathlib.Path(__file__).resolve().parents[1] / "src" / "stigmergy" / "digest"
 DIGEST_SOURCES = sorted(p for p in DIGEST.rglob("*.py") if p.name != "__init__.py")
 
@@ -2323,15 +2188,6 @@ _DIGEST_ALLOWED_PREFIXES = (
     "stigmergy.server.acl",              # visible() — the broadcast predicate (package docstring):
                                        # every page title/path this package renders is scoped to
                                        # the destination channel's own audiences
-    "stigmergy.capture.decisions",       # APPROVE + ensure_decisions_schema — the governed-birth
-                                       # ledger this package COUNTS. Was `stigmergy.server.review`
-                                       # until the table moved below both writers: the digest read
-                                       # the server for two literals and one DDL call, and the
-                                       # edge disappeared with the move rather than being argued
-                                       # for
-    "stigmergy.review_kinds",            # KIND_ENTITY_PROPOSAL — the root module that exists so
-                                       # packages barred from importing each other still agree on
-                                       # these strings
     "stigmergy.server.errors",           # StartupError — the shared settings-validation vocabulary
                                        # SlackSettings/server.settings.Settings/GardenerSettings
                                        # already use, one package over
@@ -2353,8 +2209,7 @@ _DIGEST_CLI_EXTRA_ALLOWED_PREFIXES = _DIGEST_ALLOWED_PREFIXES + (
     "stigmergy.index.store",
     "stigmergy.slack.bolt_gateway",
     "stigmergy.librarian.config",
-)   # `ensure_decisions_schema` needs no entry here: `capture.decisions` is granted to the whole
-    # package below, for `sections.py`'s own read of the same table.
+)
 
 
 def test_digest_sources_found():
@@ -2456,18 +2311,16 @@ def test_digest_threshold_literals_stay_in_settings(path):
 # The digest's own transitive-git-stack pin — now a pin on the ABSENCE of the reach.
 #
 # `stigmergy.digest` used to import `stigmergy.server.review` for two literals and one DDL call,
-# and `server.review` module-level-imports `librarian.gitcmd`/`.gates`/`.base_inputs` (the
-# read-only half of the git stack, for steward resolution and a note's secrets scan) plus, since
-# ADR 030, `librarian.githubapp` transitively through `entities.remote`. So every digest process
-# loaded the git WRITE stack to count rows in one table — invisible to
-# `test_digest_never_touches_git_plumbing`, whose AST-level check only sees `digest/*.py`'s own
-# import statements and never a transitive reach through an approved edge.
+# and `server.review` module-level-imports `librarian.gitcmd`/`.gates`/`.base_inputs` — the
+# read-only half of the git stack. So every digest process loaded the git WRITE stack to count rows
+# in one table, invisible to `test_digest_never_touches_git_plumbing`, whose AST-level check only
+# sees `digest/*.py`'s own import statements and never a transitive reach through an approved edge.
 #
-# Moving `review_decisions` down to `capture.decisions` (issue #51) removed the edge instead of
-# ratifying it: the digest now reads the ledger it counts and the root `review_kinds` module, and
-# reaches no librarian module at all. The declared set is EMPTY on purpose rather than deleted —
-# an empty frozenset with a live test is what makes a future re-widening turn this red on the
-# first module, where a deleted test would let the whole stack back in silently.
+# That edge was removed rather than ratified (issue #51), and ADR 044 removed the counted ledger
+# itself: the digest now counts births off the filings' own reports. The declared set is EMPTY on
+# purpose rather than deleted — an empty frozenset with a live test is what makes a future
+# re-widening turn this red on the first module, where a deleted test would let the whole stack
+# back in silently.
 _DIGEST_DECLARED_TRANSITIVE_LIBRARIAN_MODULES = frozenset()
 
 
@@ -2668,7 +2521,7 @@ def test_the_repair_prefix_pruning_check_can_go_red():
 
 def test_the_repair_op_vocabulary_is_exactly_the_librarians_edit_kinds():
     """The additive road's whole safety argument: every op the `edits` kind can carry is a shape
-    `edits.apply_declared` performs and the eight gates already judge. A fourth ADDITIVE kind is a
+    `edits.apply_declared` performs and the nine gates already judge. A fourth ADDITIVE kind is a
     new gate question, not a bigger tuple — the pin is here rather than in the package's own suite
     because it is a CROSS-package promise.
 
@@ -2770,14 +2623,12 @@ def test_the_index_and_the_server_spell_the_entity_registry_path_the_same_way():
 # reach into the librarian is `config` alone (the worker's lease numbers), the same declared
 # shape as `webhook.py`'s githubapp-only exception.
 #
-# The entities edge is not read-only: a steward's decision on a proposal (and a `create` for an
-# entity nobody proposed) lands under the admin token with the actor as ATTRIBUTION rather than
-# authorization (ADR 030 D2). The console never reaches `entities.remote` itself: the sequence
-# (land the commit through the governed door -> `review_decisions` row) is
-# `server.review.decide_and_record` / `commission_registration`, ONE function each that every door
-# calls, so `stigmergy.entities.remote` is absent from the set below. `stigmergy.entities.decide`
-# IS in it: the console builds the `action` the door runs (approve / merge / decline, alias
-# approve / decline), exactly as the review lane does one package over.
+# The entities edge is not read-only: **Register an entity** queues a capture under the admin
+# token, with the actor as ATTRIBUTION rather than authorization (ADR 029 D3) — and it is the
+# librarian, not this console, that writes the page (ADR 044). So the grant below is narrow by
+# construction: the console needs the closed entity-type list and the pre-flight registry check,
+# and it needs no write door at all. `stigmergy.entities.remote` and `stigmergy.entities.decide`
+# are absent because they no longer exist.
 ADMIN = STIGMERGY_ROOT / "admin"
 ADMIN_SOURCES = sorted(p for p in ADMIN.rglob("*.py") if p.name != "__init__.py")
 
@@ -2792,7 +2643,6 @@ _ADMIN_ALLOWED_IMPORT_PREFIXES = (
     "stigmergy.gardener.schema",      # JOB_NAME + ensure (compose-time DDL)
     "stigmergy.digest.run",           # the digest itself — preview and post
     "stigmergy.digest.settings",      # the ONE spelling of the digest env names, never a second
-    "stigmergy.entities.decide",      # the five decisions, handed to the governed door as `action`
     "stigmergy.entities.generator",   # ENTITY_TYPES (the closed list) + canonical_id_for (the slug
                                      # default a `create` fills in)
     "stigmergy.entities.errors",      # EntityError — every door refusal maps to AdminRefused through it
@@ -2809,8 +2659,6 @@ _ADMIN_ALLOWED_IMPORT_PREFIXES = (
                                      # ordering both approving doors run (ADR 039), so the console
                                      # never reaches the governed door directly — the same reason
                                      # `stigmergy.entities.remote` is not in this set
-    "stigmergy.review_kinds",         # the item kinds and the alias item-id spelling — the same
-                                     # dependency-free bottom module stigmergy.slack reads them from
     "stigmergy.kernel.registry",      # `registry_from_text` + `Registry.collision_id`/`canonical_id`
                                      # — the console's registry check asks the BIRTH GATE'S OWN
                                      # fold over the served snapshot, never a second "collides"
@@ -2818,10 +2666,9 @@ _ADMIN_ALLOWED_IMPORT_PREFIXES = (
                                      # with the same fold the collision key is built from
     "stigmergy.server.identity",      # hash_token — one hashing scheme, never a second
     "stigmergy.server.errors",
-    "stigmergy.server.review",        # ensure_review_schema (compose-time DDL) + record_decision (the
-                                     # ONE review_decisions ledger writer — entity_approve's own
-                                     # reject decision lands through it) + decide_and_record
-                                     # (the ONE mint sequence both minting doors run, ADR 030)
+    "stigmergy.server.review",        # the three governed sequences a console button runs:
+                                     # apply/reject_repair_and_record, delete_and_record and
+                                     # commission_registration (ADR 044)
     "stigmergy.server.pilot_report",  # the measurement table, reused whole
     "stigmergy.server.webhook",       # JOB_NAME — the webhook's own job spelling, never re-typed
     "stigmergy.slack.bolt_gateway",   # the Slack SDK's ONE door — lazy-only, see the test below
@@ -2973,79 +2820,27 @@ def test_only_the_http_transport_composes_the_admin_branch():
         "stigmergy.admin is imported outside server/transport_http.py:\n  " + "\n  ".join(offenders))
 
 
-# ── ADR 030: the server-driven mint is entered from ONE place ──────────────────────────────────
-# Both minting doors (MCP/Slack through `review_decide`, the console through
-# `admin.service.entity_approve`) run the same three steps in the same order — mint, ledger row,
-# requeue strictly after the push. They used to run two COPIES of that sequence, and the ordering
-# rule is invisible from either door's end state, so a copy could be reordered and stay green.
-# There is one copy now, which is why this file's admin section no longer grants
-# `stigmergy.entities.remote`: the guard against a second copy is that a second CALL SITE of the
-# governed door has to appear somewhere, and this is what sees it.
-_GOVERNED_MINT_DOOR = "decide_via_clone"
-
-
-def _names_the_governed_mint_door(path: pathlib.Path) -> bool:
-    """True when the module CALLS or imports the door by name. Comments and docstrings are opaque
-    to `ast.parse`, which matters here: modules describe the door in prose (`admin/service.py`,
-    `entities/errors.py`) and none of them reaches it."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    return any(
-        (isinstance(node, ast.Attribute) and node.attr == _GOVERNED_MINT_DOOR)
-        or (isinstance(node, ast.Name) and node.id == _GOVERNED_MINT_DOOR)
-        or (isinstance(node, ast.ImportFrom)
-            and any(alias.name == _GOVERNED_MINT_DOOR for alias in node.names))
-        for node in ast.walk(tree))
-
-
-def test_the_governed_door_has_exactly_one_call_site():
-    """`entities.remote.decide_via_clone` is reached from `server/review.py` and nowhere else.
-
-    This is the structural claim that makes a cross-door PARITY test unnecessary: parity is for a
-    contract implemented twice (`tests/test_contract_parity.py`'s own subject), and the ledger row
-    and the ordering are written by one function now — a parity assertion would compare the
-    shared function against itself and read as coverage for a drift that cannot happen while this
-    test holds. If a second door ever decides on its own again, the two doors' end states will
-    still agree and THIS is what goes red. (There is no server-side MINT door any more — ADR 042:
-    an entity is born through the librarian, from a capture, and a steward's registration is such
-    a capture.)
-
-    Equality against a one-element list, not a `<= 1` count: renaming the door would otherwise
-    empty the scan and leave a permanently-green test behind."""
-    callers = sorted(_rel(p) for p in ALL_STIGMERGY_SOURCES
-                     if _names_the_governed_mint_door(p))
-    assert callers == ["server/review.py"], (
-        f"the governed door is called from {callers}, not from server/review.py alone — "
-        "either a second copy of the decision sequence is back (put it in "
-        "`server.review.decide_and_record`, which both doors call), or the door was "
-        "renamed and this scan has gone blind")
-
-
 # ── ADR 030 D2: who may ENTER the shared mint sequence ─────────────────────────────────────────
-# The test above sees a SECOND COPY of the mint. It cannot see a second CALLER of the one copy,
-# and that is the other half of the same guarantee.
+# No door decides an identity any more (ADR 044), so there is no server-driven mint and no second
+# COPY of one to look for. What survives is the other half of that guarantee, and it survives
+# because the sequence it guards does: `commission_registration` still queues a capture that
+# births an entity in somebody's name.
 #
-# `decide_and_record` and `commission_registration` are PUBLIC and take NO authorization argument
-# of any kind — the first clones with the librarian App's credential, commits, pushes and writes
-# the governance ledger, the second queues a capture that births an entity CONFIRMED by whoever it
-# names, on behalf of whoever calls it. That is correct (ADR 030 D2: authorization is
-# per-surface, because the console decides under one shared admin token) and it is exactly why
-# the CALLER SET has to be closed: every entry below is a surface that has ALREADY decided
-# authorization for itself — the review lane by resolving a steward (`_guard_steward_decision`),
-# the console by sitting behind the operator token. A Slack handler calling either with
-# `actor=<the requester's own email>` would keep every other test green and silently retire the
-# steward guard on that surface.
-#
-# **This replaces a guarantee that used to be structural.** Deciding from outside
-# `server/review.py` would otherwise mean importing `stigmergy.entities.remote` — which
-# `stigmergy.slack` is mechanically barred from and `stigmergy.admin` could only do through a
-# declared entry in `_ADMIN_ALLOWED_IMPORT_PREFIXES`, which has none.
-_MINT_SEQUENCES = ("decide_and_record", "commission_registration")
+# `commission_registration` is PUBLIC and takes NO authorization argument of any kind: it queues a
+# capture that births an entity CONFIRMED by whoever it names, on behalf of whoever calls it. That
+# is correct (ADR 030 D2: authorization is per-surface, because the console decides under one
+# shared admin token) and it is exactly why the CALLER SET has to be closed: every entry below is a
+# surface that has ALREADY decided authorization for itself — the MCP lane by resolving an identity
+# from a bearer token, the console by sitting behind the operator token. A Slack handler calling it
+# with `submitted_by=<whatever the requester typed>` would keep every other test green and put a
+# stranger's name in an entity page's `approved_by:`.
+_MINT_SEQUENCES = ("commission_registration",)
 
-# `server/review.py` DEFINES both and calls the first from its decide paths; `admin/service.py`
-# calls them as `server_review.decide_and_record` / `commission_registration`. Slack is deliberately
-# absent and must stay absent: it reaches the review lane through `review_decide_safe`, which
-# walks the steward guard first.
-_MINT_SEQUENCE_CALLERS = ("admin/service.py", "server/review.py")
+# `server/review.py` DEFINES it and the console CALLS it — and a definition is not a reference
+# (`_names_the_mint_sequence`), so the defining module is deliberately NOT in this set: a review
+# lane that started calling its own sequence would be a new door, and would show up here as one.
+# Slack is absent and must stay absent: it has no identity of its own to attribute a birth to.
+_MINT_SEQUENCE_CALLERS = ("admin/service.py",)
 
 
 def _names_the_mint_sequence(path: pathlib.Path) -> bool:
@@ -3067,10 +2862,9 @@ def _mint_sequence_callers(sources) -> list[pathlib.Path]:
     return [p for p in sources if _names_the_mint_sequence(p)]
 
 
-def test_the_shared_mint_sequence_is_entered_from_exactly_the_two_authorizing_surfaces():
-    """`server.review.decide_and_record` / `commission_registration` are reached from `server/review.py`
-    and `admin/service.py`, and from nowhere else — see the section comment above for why the set
-    is closed and for the absent `stigmergy.entities.remote` allowlist entry this stands in for.
+def test_the_shared_mint_sequence_is_entered_from_exactly_the_authorizing_surfaces():
+    """`server.review.commission_registration` is reached from `admin/service.py` and from nowhere
+    else — see the section comment above for why the set is closed.
 
     Set EQUALITY, both directions, which is this file's house rule for every allowlist: a NEW
     caller is a surface minting with the App credential without having decided who may
@@ -3081,11 +2875,11 @@ def test_the_shared_mint_sequence_is_entered_from_exactly_the_two_authorizing_su
     callers = sorted(_rel(p) for p in _mint_sequence_callers(ALL_STIGMERGY_SOURCES))
     assert callers == sorted(_MINT_SEQUENCE_CALLERS), (
         f"the shared mint sequence is reached from {callers}, not from "
-        f"{sorted(_MINT_SEQUENCE_CALLERS)}. A NEW entry mints with the librarian App's credential "
-        "through a function that takes no authorization argument (ADR 030 D2) — route it through "
-        "`review_decide`, which resolves a steward, or state here why "
-        "that surface decides authorization for itself. A MISSING entry means a declared minting "
-        "door stopped calling the shared sequence: check it did not grow its own copy")
+        f"{sorted(_MINT_SEQUENCE_CALLERS)}. A NEW entry commissions a birth in somebody's name "
+        "through a function that takes no authorization argument (ADR 030 D2) — resolve an "
+        "identity before calling in, or state here why that surface decides authorization for "
+        "itself. A MISSING entry means a declared door stopped calling the shared sequence: check "
+        "it did not grow its own copy")
 
 
 def test_the_mint_sequence_caller_pin_can_go_red_in_both_directions(tmp_path):
@@ -3095,41 +2889,42 @@ def test_the_mint_sequence_caller_pin_can_go_red_in_both_directions(tmp_path):
     The third file is the case a raw-text grep gets wrong and the case that actually matters here:
     a Slack module that only MENTIONS the sequence in prose is not a caller, and must not be
     reported as one — otherwise the pin gets relaxed the first time documentation names it."""
-    caller_a = tmp_path / "review.py"
-    caller_b = tmp_path / "service.py"
+    caller = tmp_path / "service.py"
+    definer = tmp_path / "review.py"
     slack_like = tmp_path / "handlers.py"
-    caller_a.write_text("def _mint(service, **kw):\n"
-                        "    return decide_and_record(service.conn, **kw)\n",
-                        encoding="utf-8")
-    caller_b.write_text("from stigmergy.server import review as server_review\n\n"
-                        "def approve(conn, **kw):\n"
-                        "    return server_review.decide_and_record(conn, **kw)\n",
-                        encoding="utf-8")
+    caller.write_text("from stigmergy.server import review as server_review\n\n"
+                      "def register(conn, **kw):\n"
+                      "    return server_review.commission_registration(conn, **kw)\n",
+                      encoding="utf-8")
+    definer.write_text("def commission_registration(conn, **kw):\n"
+                       "    return {'status': 'queued'}\n",
+                       encoding="utf-8")
     slack_like.write_text(
-        '"""Buttons only. The mint itself is `review.decide_and_record`, which this\n'
-        'module never calls — it goes through `review_decide_safe`."""\n\n'
-        "def on_approve(ctx, item_id):\n"
-        "    return ctx.service.review_decide_safe(item_id)   # decide_and_record is not ours\n",
+        '"""Buttons only. Registering is `review.commission_registration`, which this\n'
+        'module never calls — it has no identity of its own to attribute a birth to."""\n\n'
+        "def on_register(ctx, name):\n"
+        "    return ctx.service.submit(name)   # commission_registration is not ours\n",
         encoding="utf-8")
-    declared = ["review.py", "service.py"]
-    sources = [caller_a, caller_b, slack_like]
+    declared = ["service.py"]
+    sources = [caller, definer, slack_like]
 
     def observed():
         return sorted(p.name for p in _mint_sequence_callers(sources))
 
-    assert observed() == declared, "the green baseline: prose about the sequence is not a call"
+    assert observed() == declared, (
+        "the green baseline: prose about the sequence is not a call, and neither is the `def`")
 
-    # Direction 1 — a new surface starts minting on its own.
+    # Direction 1 — a new surface starts commissioning births on its own.
     slack_like.write_text("from stigmergy.server import review\n\n"
-                          "def on_approve(conn, **kw):\n"
-                          "    return review.decide_and_record(conn, **kw)\n",
+                          "def on_register(conn, **kw):\n"
+                          "    return review.commission_registration(conn, **kw)\n",
                           encoding="utf-8")
-    assert observed() == ["handlers.py", "review.py", "service.py"] != declared
+    assert observed() == ["handlers.py", "service.py"] != declared
 
     # Direction 2 — a declared caller stops calling it (the pruning half).
-    caller_b.write_text("def approve(conn, **kw):\n    raise NotImplementedError\n",
-                        encoding="utf-8")
-    assert observed() == ["handlers.py", "review.py"] != declared
+    caller.write_text("def register(conn, **kw):\n    raise NotImplementedError\n",
+                      encoding="utf-8")
+    assert observed() == ["handlers.py"] != declared
 
 
 # ── ADR 039: the governed repair apply, and who may enter it ───────────────────────────────────
@@ -3155,11 +2950,11 @@ _REPAIR_APPLY_PRIMITIVE = "apply_via_clone"
 # a plain string, so a definition is not a reference); `server/review.py` calls it as
 # `repair_remote.apply_approved(...)` from the shared sequence.
 _REPAIR_APPLY_DOOR_CALLERS = ("server/review.py",)
-# `server/review.py` defines the sequence and calls it from `_decide_repair`; `admin/service.py`
-# calls it as `server_review.apply_repair_and_record` from `repair_approve`. Slack is deliberately
-# absent and must stay absent: it reaches the review lane through `review_decide_safe`, which walks
-# the per-path steward guard first.
-_REPAIR_APPLY_SEQUENCE_CALLERS = ("admin/service.py", "server/review.py")
+# `server/review.py` DEFINES the sequence and no longer calls it: ADR 044 retired the review lane,
+# so the console is the one surface that approves a repair (`repair_approve`) until phase 3 of #134
+# moves the apply into the worker. A definition is not a reference (`ast.FunctionDef` carries its
+# name as a plain string), which is why the defining module is absent from this list.
+_REPAIR_APPLY_SEQUENCE_CALLERS = ("admin/service.py",)
 # `repair/remote.py` defines the primitive AND calls it, from `apply_approved` — the ONE place that
 # is allowed to, because that function is what records `applied`/`failed` around it.
 _REPAIR_APPLY_PRIMITIVE_CALLERS = ("repair/remote.py",)
@@ -3264,7 +3059,7 @@ def test_the_repair_apply_caller_pin_can_go_red_in_both_directions(tmp_path):
 # proposal covers. The librarian's own flows tell TWO of these — for one thing, and it is the
 # claim: a capture that proposes an identity writes the regenerated registry beside its page, so
 # `derived_files` names that one JSON file and `expected_bytes` carries the bytes the generator
-# produced (`processing._declare_proposals`, over `identity.write_proposals`' outcome). A capture
+# produced (`processing._declare_births`, over `identity.write_births`' outcome). A capture
 # still permits no body rewrite and no deletion: "the librarian never deletes a file" stays
 # literally true, and the additive proof still faces every page.
 _TOLD_PERMISSIONS = {
@@ -3425,7 +3220,6 @@ def test_the_repair_apply_primitive_pin_tells_defining_it_from_calling_it(tmp_pa
 _ALLOW_LISTS = {
     "_DIGEST_ALLOWED_PREFIXES": _DIGEST_ALLOWED_PREFIXES,
     "_DIGEST_CLI_EXTRA_ALLOWED_PREFIXES": _DIGEST_CLI_EXTRA_ALLOWED_PREFIXES,
-    "_ENTITIES_CLI_EXTRA_ALLOWED_PREFIXES": _ENTITIES_CLI_EXTRA_ALLOWED_PREFIXES,
     "_ENTITIES_LIBRARY_ALLOWED_PREFIXES": _ENTITIES_LIBRARY_ALLOWED_PREFIXES,
     "_GARDENER_ALLOWED_PREFIXES": _GARDENER_ALLOWED_PREFIXES,
     "_GARDENER_CLI_EXTRA_ALLOWED_PREFIXES": _GARDENER_CLI_EXTRA_ALLOWED_PREFIXES,
@@ -3436,21 +3230,36 @@ _ALLOW_LISTS = {
 }
 
 
-def _names_a_real_module(dotted: str) -> bool:
-    """True when `dotted`, or any prefix of it, resolves to a module or package under `src/`.
-    A prefix is enough because some entries name a SYMBOL inside a module.
+def _module_kind(parts) -> str:
+    """`"module"` for a `.py` file, `"package"` for a directory with an `__init__.py`, `""` for
+    neither. A bare directory does NOT count: a deleted package leaves its `__pycache__` behind,
+    so `is_dir()` alone stays true for a package with no source at all — which is exactly the
+    entry this whole check exists to catch."""
+    rel = STIGMERGY_ROOT / pathlib.Path(*parts)
+    if rel.with_suffix(".py").is_file():
+        return "module"
+    return "package" if (rel / "__init__.py").is_file() else ""
 
-    A bare directory does NOT count — it must carry an `__init__.py`. A deleted package leaves its
-    `__pycache__` behind, so `is_dir()` alone stays true for a package with no source at all, and
-    this check would pass for exactly the entries it exists to catch."""
+
+def _names_a_real_module(dotted: str) -> bool:
+    """True when `dotted` names something that still exists: a module, a package, or a symbol
+    inside a module.
+
+    The PARENT decides which. A grant whose parent is a MODULE file names a symbol in it, and this
+    check cannot verify symbols — it accepts. A grant whose parent is a PACKAGE names a submodule,
+    and that submodule must exist.
+
+    The distinction is the whole point, and it was learnt the hard way: the older rule accepted any
+    resolvable PREFIX, so `stigmergy.capture.decisions` passed on `stigmergy.capture` alone and the
+    grant outlived the module it named by a whole branch. A permission slip for a file that does
+    not exist pre-authorizes the next file to take that name.
+    """
     parts = dotted.split(".")
     if parts[0] != "stigmergy":
         return True                       # third-party grants are not ours to verify
-    for cut in range(len(parts), 1, -1):
-        rel = STIGMERGY_ROOT / pathlib.Path(*parts[1:cut])
-        if rel.with_suffix(".py").is_file() or (rel / "__init__.py").is_file():
-            return True
-    return False
+    if _module_kind(parts[1:]):
+        return True
+    return len(parts) > 2 and _module_kind(parts[1:-1]) == "module"
 
 
 @pytest.mark.parametrize("name", sorted(_ALLOW_LISTS))
@@ -3458,6 +3267,28 @@ def test_no_import_allowlist_entry_names_a_module_that_no_longer_exists(name):
     stale = sorted({e for e in _ALLOW_LISTS[name] if not _names_a_real_module(e)})
     assert not stale, (
         f"{name} grants imports of modules that do not exist — delete the entries: {stale}")
+
+
+def test_the_pruning_rule_can_go_red_on_a_deleted_submodule_and_stays_green_on_a_symbol():
+    """**The benign twin and the intruder, over the real predicate.**
+
+    A grant naming a symbol inside a live module must keep passing — that is most of these lists,
+    and a rule that failed them would be turned off within a day. A grant naming a submodule that
+    no longer exists must fail, even while its package is alive and importable: that is the case
+    the previous rule let through.
+    """
+    # symbols inside real modules — accepted, because nothing here can check an attribute
+    assert _names_a_real_module("stigmergy.capture.schema.FILED")
+    assert _names_a_real_module("stigmergy.server.errors.StartupError")
+    # real modules and packages
+    assert _names_a_real_module("stigmergy.text")
+    assert _names_a_real_module("stigmergy.capture")
+    # the case that got through: a package that exists, naming a module that does not
+    assert not _names_a_real_module("stigmergy.capture.decisions")
+    assert not _names_a_real_module("stigmergy.review_kinds")
+    assert not _names_a_real_module("stigmergy.entities.cli")
+    # and a symbol inside a module that is itself gone
+    assert not _names_a_real_module("stigmergy.entities.remote.decide_via_clone")
 
 
 # ── one module, one binding per top-level name ─────────────────────────────────────────────────

@@ -320,7 +320,7 @@ def check_dead_vocabulary(repo: str, registry: Registry) -> list[dict]:
             check=CHECK_DEAD_VOCABULARY, severity=SEVERITY_INFO, subject=entity_id,
             detail="registered in the entity registry, zero pages anchored to it",
             suggested_action=(
-                "no command retires an entity — `stigmergy-entities` only mints (no un-birth/"
+                "no command retires an entity — a birth has no inverse (no un-birth/"
                 "retire/merge verb exists in `stigmergy.entities.cli`); decide by hand whether this "
                 "was created too early or should be merged/retired by editing the registry "
                 "directly"),

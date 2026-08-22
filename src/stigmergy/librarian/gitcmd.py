@@ -101,7 +101,7 @@ def base_ref(repo: str, branch: str, *, timeout_s: float | None = None) -> BaseR
     not fatal — the push path handles the race.
 
     `timeout_s` bounds every leg, and is `None` for the worker (a lease, and all night). It is not
-    optional for a caller inside an HTTP request: `server.review.load_stewards` runs this fetch
+    optional for a caller inside an HTTP request: a server-side reader runs this fetch
     inside an AUTHORIZATION check, where an unreachable remote must fail rather than stall.
     """
     if run("remote", cwd=repo, check=False, timeout=timeout_s).stdout.strip():

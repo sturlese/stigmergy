@@ -30,7 +30,7 @@ Two calls the flows will not make for you:
 
 - **The auditor is opt-in.** `squad:fix` spawns it only when told the diff touches sensitive
   territory. Here that means: anything under `server/acl.py` or a read path, the answer
-  verifier, the librarian's gates, the capture queue's leases and attempts, token or steward
+  verifier, the librarian's gates, the capture queue's leases and attempts, identity and token
   resolution, and the evidence plane. When in doubt on those, spawn it.
 - **The documentator is conditional in the flow and unconditional here.** This repo's rule is
   that a change making a sentence false corrects that sentence in the same commit — so if the
@@ -41,7 +41,7 @@ Two calls the flows will not make for you:
 
 This platform's changes often have a half that lives in the **knowledge repo** (`$STIGMERGY_REPO`):
 the librarian's and the meeting distiller's skills, the contract linter, the entity registry,
-the ACL and steward maps. That repo has its own CI — a strict linter, gitleaks, and an
+the ACL and identity maps. That repo has its own CI — a strict linter, gitleaks, and an
 authorship check over zones and trust fields.
 
 Consequences, both of which have bitten:
@@ -72,7 +72,7 @@ Every `stigmergy-*` binary defaults to the local composition. To exercise one ag
 deployment, export `STIGMERGY_INDEX_DSN` (the deployment's own DSN — `.env` keeps it under a
 deliberately different name so a test run cannot reach it) and the four `STIGMERGY_EVIDENCE_*`
 variables, which `.env` stores under `R2_*` names for the smoke check. Getting the second half
-wrong used to be silent and fatal — the row landed in the deployment's queue while the bytes
-went to a local store, and the capture failed seconds later. `stigmergy-entities create`, the one
-CLI left that enqueues, refuses that exact combination before anything is uploaded (exit 3,
-`--allow-split-stores` to override), so the mistake costs a refusal instead of a capture.
+wrong is silent and fatal — the row lands in the deployment's queue while the bytes go to a
+local store, and the capture fails seconds later inside the worker. No CLI enqueues any more (a
+capture is `brain_submit` or the console), so nothing refuses that combination on your behalf:
+check both halves point at the same deployment before you drop anything.

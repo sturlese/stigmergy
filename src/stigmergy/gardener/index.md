@@ -99,7 +99,7 @@ both or neither.
 - Never put a threshold literal outside `settings.py` (grep-asserted).
 - Never compose the notice's wording in `stigmergy.slack.copy`; `report.py` writes terminal
   markdown, `notice.py` writes Slack mrkdwn — two dialects, never mixed. The notice emoji is `⚠️`
-  + the word "SLA", never the bell (the bell means "a decision waits in `review_queue`").
+  + the word "SLA", never the bell.
 
 ## Contracts
 

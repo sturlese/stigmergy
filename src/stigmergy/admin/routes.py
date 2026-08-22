@@ -9,10 +9,10 @@ else (lifespan included) flows to the inner app untouched.
 Gate order on the admin side: foreign `Host` -> 421, `/admin/api/*` without the admin bearer
 token -> generic 401, security headers on every response, static assets included.
 
-**The two Approve handlers and `metrics` run their service call in a worker thread**
-(`run_in_threadpool`), and they are the only ones that do. The approves reach code that clones the
-knowledge repo, runs the eight gates — `git` and `gitleaks` subprocesses — and pushes: seconds of
-blocking work, on the event loop of a process that is also serving the MCP tools; `metrics` is a
+**The handlers that touch the knowledge repo and `metrics` run their service call in a worker
+thread** (`run_in_threadpool`), and they are the only ones that do. A repair approve and a page
+removal clone the repo, run the nine gates — `git` and `gitleaks` subprocesses — and push: seconds
+of blocking work, on the event loop of a process that is also serving the MCP tools; `metrics` is a
 dozen aggregate queries the dashboard polls. The rejects stay inline because each is one
 statement. `AdminService`'s "no cursor across an `await`" invariant is untouched: the whole
 synchronous call happens inside the one thread, and the connection is the same autocommit one
@@ -42,7 +42,6 @@ from stigmergy.admin.service import (
 from stigmergy.admin.settings import AdminSettings
 from stigmergy.gardener.schema import ensure_gardener_schema
 from stigmergy.repair.schema import ensure_repair_schema
-from stigmergy.server import review
 
 log = logging.getLogger(__name__)
 
@@ -76,7 +75,6 @@ def compose(inner, *, conn, server_settings, admin_settings: AdminSettings | Non
     ensure_admin_schema(conn)
     ensure_gardener_schema(conn)
     ensure_repair_schema(conn)
-    review.ensure_review_schema(conn)
 
     if gateway is None and settings.github_configured():
         gateway = ActionsGateway(settings.github_token, settings.github_repo)
@@ -296,10 +294,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
         return service.index_substrate_check()
 
     @_json_endpoint
-    async def inbox(_request):
-        return service.inbox()
-
-    @_json_endpoint
     async def metrics(request):
         try:
             days = int(request.query_params.get("days", str(DEFAULT_METRICS_DAYS)))
@@ -311,10 +305,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
         return await run_in_threadpool(service.metrics, days=days)
 
     @_json_endpoint
-    async def entities_list(_request):
-        return service.entities_list()
-
-    @_json_endpoint
     async def entities_registry(_request):
         return service.entities_registry()
 
@@ -322,20 +312,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
     async def entities_resolve(request):
         data = await _body(request)
         return service.entities_resolve(data.get("names"))
-
-    @_json_endpoint
-    async def entities_show(request):
-        return service.entities_show(request.path_params["id"])
-
-    @_json_endpoint
-    async def entities_decide(request):
-        # Off the event loop: a decision clones the knowledge repo and pushes — the MCP tools
-        # share this process.
-        data = await _body(request)
-        return await run_in_threadpool(
-            service.entity_decide, _str(data, "item_kind"), _str(data, "item_id"),
-            actor=_str(data, "actor"), verdict=_str(data, "verdict"), into=_str(data, "into"),
-            notes=_str(data, "notes"))
 
     @_json_endpoint
     async def entities_create(request):
@@ -379,7 +355,7 @@ def _build_admin_app(service: AdminService) -> Starlette:
             # permanent "somebody said no" with nothing about why.
             raise AdminBadRequest("'reason' is required — a rejected proposal is what stops the "
                                   "proposer suggesting this repair again, and the reason is all a "
-                                  "later steward will have")
+                                  "later reader will have")
         return service.repair_reject(request.path_params["id"], actor=_str(data, "actor"),
                                      reason=reason)
 
@@ -432,14 +408,10 @@ def _build_admin_app(service: AdminService) -> Starlette:
         Route(API_PREFIX + "digest/post", digest_post, methods=["POST"]),
         Route(API_PREFIX + "index", index_state, methods=["GET"]),
         Route(API_PREFIX + "index/check", index_check, methods=["POST"]),
-        Route(API_PREFIX + "inbox", inbox, methods=["GET"]),
         Route(API_PREFIX + "metrics", metrics, methods=["GET"]),
-        Route(API_PREFIX + "entities", entities_list, methods=["GET"]),
         Route(API_PREFIX + "entities/registry", entities_registry, methods=["GET"]),
         Route(API_PREFIX + "entities/resolve", entities_resolve, methods=["POST"]),
-        Route(API_PREFIX + "entities/decide", entities_decide, methods=["POST"]),
         Route(API_PREFIX + "entities/create", entities_create, methods=["POST"]),
-        Route(API_PREFIX + "entities/{id}", entities_show, methods=["GET"]),
         Route(API_PREFIX + "repairs", repairs_list, methods=["GET"]),
         Route(API_PREFIX + "repairs/{id:int}", repairs_show, methods=["GET"]),
         Route(API_PREFIX + "repairs/{id:int}/approve", repairs_approve, methods=["POST"]),

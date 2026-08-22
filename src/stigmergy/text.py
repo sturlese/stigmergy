@@ -26,8 +26,8 @@ def parse_result_ref(ref: str | None) -> tuple[str, str] | None:
 
 
 # C0/C1 control characters (newline/tab excluded — whitespace collapsing removes them): a hostile
-# page title, capture body or steward note must not smuggle ANSI escape sequences into whoever
-# renders it.
+# page title, capture body or model-written report line must not smuggle ANSI escape sequences into
+# whoever renders it.
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
 # The UNTRUSTED-DATA fence. Without neutralization, a hostile body containing the literal closing

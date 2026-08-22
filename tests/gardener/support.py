@@ -32,7 +32,7 @@ def connect_or_skip():
     conn = testdb.connect_or_skip("gardener")
     capture_schema.ensure_capture_schema(conn)   # capture_queue, job_runs — the filing-window
                                                  # checks + every run's own job_runs row
-    review.ensure_review_schema(conn)              # review_decisions
+    review.ensure_repair_schema(conn)
     ensure_gardener_schema(conn)                 # gardener_findings
     return conn
 
@@ -44,7 +44,6 @@ def clean(conn) -> None:
     it calls `rebuild_index` fresh rather than relying on this to have cleared a previous one."""
     with conn.cursor() as cur:
         cur.execute("DELETE FROM gardener_findings")
-        cur.execute("DELETE FROM review_decisions")
         cur.execute("DELETE FROM capture_queue")
         cur.execute("DELETE FROM job_runs")
 

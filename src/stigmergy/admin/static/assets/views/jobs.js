@@ -18,7 +18,7 @@ export async function jobsView(host) {
     }
     if (data.github_error) children.push(banner("error", `GitHub degraded: ${data.github_error}`));
     children.push(el("div", { class: "grid halves" }, ...data.workflows.map((w) => jobCard(w, data.configured && !data.github_error, metrics))));
-    const other = ["digest", "webhook-index-upsert", "capture-reclaim", "steward-doorbell"].filter((j) => (metrics.job_history[j] || []).length);
+    const other = ["digest", "webhook-index-upsert", "capture-reclaim"].filter((j) => (metrics.job_history[j] || []).length);
     if (other.length) {
       children.push(el("section", { class: "card" },
         el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "Other recorded work"), el("div", { class: "sub" }, "jobs that run on demand or on a push, not on a schedule"))),

@@ -236,13 +236,13 @@ RULE_TABLE = [
     ("computed by the worker from the archived material and this run's own facts.",
      'digest = hashlib.sha256((ctx.material or "").encode("utf-8")).hexdigest()'),
     # **The park row that stood here is gone with the parks.** A meeting no longer parks on an
-    # unregistered name: the brief's third anchoring outcome PROPOSES the entity, and the marker is
-    # the meeting flow's own call into `identity.write_proposals` — the one line that makes it a
-    # MEETING proposal rather than a capture's (`related=` names the decision pages, or the meeting
-    # page when there are none, so the newborn entity page links back to what proposed it). A bare
-    # `write_proposals` marker would be satisfied by the ordinary flow's call; this keyword line
+    # unregistered name: the brief's third anchoring outcome INTRODUCES the entity, and the marker
+    # is the meeting flow's own call into `identity.write_births` — the one line that makes it a
+    # MEETING birth rather than a capture's (`related=` names the decision pages, or the meeting
+    # page when there are none, so the newborn entity page links back to what introduced it). A
+    # bare `write_births` marker would be satisfied by the ordinary flow's call; this keyword line
     # occurs in the meeting pass only.
-    ("3. **PROPOSE the entity it is about** — the decision is about a specific thing that is "
+    ("3. **INTRODUCE the entity it is about** — the decision is about a specific thing that is "
      "**not in",
      'related=decision_stems or [written["meeting_stem"]])'),
     # REMOVED: ("there is no edit mechanism in this flow.",

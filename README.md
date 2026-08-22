@@ -31,10 +31,13 @@ section is the whole answer.
 
 **The vocabulary has to be agreed, not coined.** A solo wiki can let the model invent a page for
 every name it meets. With several writers that yields three pages for one customer under three
-spellings, and every link pointing at the wrong one. Here an entity is **born through a human**: the
-agent proposes, a steward approves — in Slack, the console, the CLI or over MCP — and one governed
-writer turns the proposal into a confirmed entity. A capture naming something unknown still files at
-once: the librarian proposes the entity and anchors the page to it, and nobody waits on anybody.
+spellings, and every link pointing at the wrong one. Here an entity is **born through a human act**:
+the capture IS the approval ([ADR 044](./docs/decisions/044-the-capture-is-the-approval.md)).
+Somebody read the material and decided the brain should hold it, so the identity that material
+introduces is created under the name the material uses and confirmed by them — `approved_by:` on the
+entity page names the submitter and is never empty. A spelling the material uses for an entity the
+registry already knows joins that entity's `aliases:` instead of becoming a twin. Nothing is
+proposed, nothing waits, and one writer still owns the registry.
 
 **Not everyone may read everything.** A team wiki holds salaries, board material and a customer's
 confidential figures. Visibility is enforced at one point (`acl.visible()`), on every read surface,
@@ -67,15 +70,16 @@ boundary instead; `SECURITY.md` states exactly which, and where that is not yet 
 ## Architecture
 
 Three pictures, under one convention that is the argument of the system rather than decoration:
-**colour is who decides.** Purple is a model — it drafts, gathers and proposes, and is never the last
-word on anything. Grey is code, which decides. Amber is a human, for the cases code should not decide
-alone. Green is git, the one thing here that is not rebuildable. Each diagram carries the key for
+**colour is who decides.** Purple is a model — it drafts, gathers and declares, and is never the last
+word on anything. Grey is code, which decides. Amber is a human, at the ends where an act begins:
+somebody captures, somebody removes, somebody asks. Green is git, the one thing here that is not
+rebuildable. Each diagram carries the key for
 the colours it uses — the read path has no green, because it touches no git.
 
 ### The shape
 
 <p align="center">
-  <img src="docs/assets/architecture.svg" alt="the shape: Slack, operator CLIs and MCP clients all submit into one durable capture queue (raw bytes to an evidence store); the librarian is the ONE writer and commits to the knowledge repo (git, markdown, yours — the only thing not rebuildable); the repo rebuilds pages_index in Postgres+pgvector, which the MCP server — the only API, filtering through acl.visible() — serves back to the same people — alongside it, on the same process group but behind its own token and its own ASGI branch, the /admin operations console, which never reads pages" width="100%">
+  <img src="docs/assets/architecture.svg" alt="the shape: Slack, the admin console and MCP clients all submit into one durable capture queue (raw bytes to an evidence store); the librarian is the ONE writer and commits to the knowledge repo (git, markdown, yours — the only thing not rebuildable); the repo rebuilds pages_index in Postgres+pgvector, which the MCP server — the only API, filtering through acl.visible() — serves back to the same people — alongside it, on the same process group but behind its own token and its own ASGI branch, the /admin operations console, which never reads pages" width="100%">
 </p>
 
 **Read that diagram by asking what survives deleting this software.** The knowledge repo does: it
@@ -86,19 +90,19 @@ claim can always be walked back to what actually arrived.
 
 Two narrow seams do all the work: **one writer** into git, and **one API** out of it.
 
-The dashed box on the right is the part people are usually surprised by: **there is a web console**, at `/admin`, for the operations you would otherwise do from a terminal — an inbox of everything waiting on a steward, deciding a proposed entity with its name checked against the rest of the registry, registering one by hand, running or disabling the four crons, reading the gardener's findings and approving the repairs proposed for them, previewing the digest, watching the worker — with the write path drawn live from the same rows, in the colours of this README's own key. It rides the same process group as MCP but is an ASGI branch in *front* of the bearer middleware, so it never borrows MCP's auth: it has its own token, it is a **404 until that token's hash is configured**, and an architecture test keeps it from ever becoming a reader of pages. Full tour: [`docs/reference/admin-console.md`](./docs/reference/admin-console.md).
+The dashed box on the right is the part people are usually surprised by: **there is a web console**, at `/admin`, for the operations you would otherwise do from a terminal — browsing the vocabulary the brain has grown and registering the one entity nobody has captured about yet (its name checked against the rest of the registry as you type), running or disabling the four crons, reading the gardener's findings and approving the repairs drafted for them, removing pages, previewing the digest, watching the worker — with the write path drawn live from the same rows, in the colours of this README's own key. It rides the same process group as MCP but is an ASGI branch in *front* of the bearer middleware, so it never borrows MCP's auth: it has its own token, it is a **404 until that token's hash is configured**, and an architecture test keeps it from ever becoming a reader of pages. Full tour: [`docs/reference/admin-console.md`](./docs/reference/admin-console.md).
 
 ### The write path
 
 <p align="center">
-  <img src="docs/assets/write-path.svg" alt="the write path: material enters the capture queue, the server attributes it, the agent drafts a page in a throwaway worktree; a name the registry does not know becomes a PROPOSED entity the page anchors to, and the capture files anyway; a steward approves, merges or declines the proposal later, in one commit; the draft is a diff, and 9 deterministic gates — zone, binary-page, body-rewrite, secrets, pii, frontmatter, contract, anchoring, identity — either bounce it back with the reason or commit exactly the diff they approved" width="100%">
+  <img src="docs/assets/write-path.svg" alt="the write path: material enters the capture queue, the server attributes it, the agent drafts a page in a throwaway worktree; a name the registry does not know is introduced as an entity page born confirmed by the person who captured, in the very same commit, so nothing waits on anybody; the draft is a diff, and 9 deterministic gates — zone, binary-page, body-rewrite, secrets, pii, frontmatter, contract, anchoring, identity — either bounce it back with the reason or commit exactly the diff they approved" width="100%">
 </p>
 
 The purple box is the only place a model decides anything, and everything downstream of it is a
-gate it cannot argue with. **The loop back through orange is the point of the whole design**: when
-the agent meets a name the registry does not know, it does not invent a confirmed entity — it
-proposes one, files against it, and a steward decides later. An inbox whose proposal count is
-permanently zero would mean nobody is capturing anything.
+gate it cannot argue with. **The one amber box is where the design starts**: a capture is a human
+act — somebody read a thread, a transcript, a document and decided the brain should hold it — and
+everything the agent does next is bookkeeping over that decision, judged by nine deterministic gates
+before it lands. There is no second click and no queue behind it.
 
 `brain_submit` queues a capture, archives its raw material content-addressed (MinIO locally, any
 S3-compatible store in production) and attributes it to the identity the **server** resolved — never
@@ -110,13 +114,12 @@ body-rewrite · secrets · pii · frontmatter · contract · anchoring · identi
 gates approved is provably the diff that lands (`gitcmd.commit(gated_entries=…)`).
 
 Nothing dead-ends and nothing waits. A librarian that meets an entity the registry does not know
-**proposes** it — a page under `wiki/entities/` with `approved_by: ""` and a `proposed` registry
-entry — and files the capture against it in the same commit; the ninth gate proves every write in the
-identity zone is a declared proposal, a name the registry already knows becomes a proposed spelling
-rather than a twin, and a name a steward has declined is never proposed twice. A
-steward later approves, merges or declines from Slack, the console, `stigmergy-entities` or
-`review_decide`, and `stigmergy.entities` is the only writer of the registry however the decision
-arrives.
+**introduces** it — a page under `wiki/entities/` whose `approved_by:` names the person whose capture
+introduced it — and files the capture against it in the same commit; the ninth gate proves every
+write in the identity zone is one this run birthed and that each new entity page names exactly its
+submitter, and a name the registry already knows becomes a new spelling on that entity's `aliases:`
+rather than a twin. The registry is regenerated from the entity pages in that same commit, so the
+two sides can never be edited apart.
 
 Two flows sit on top: the **meeting distiller** (a submitted transcript becomes a source page, a
 meeting page and one decision page per decision, each anchored) and **views** (per-entity rollups
@@ -158,9 +161,10 @@ vocabulary and a layered "everything anchored to X" view. Entity-first resolutio
 service layer, so every client gets it, not only `ask`. Full narrative:
 [`docs/reference/navigation.md`](./docs/reference/navigation.md).
 
-**Ten MCP tools**, and the list is pinned by a test: read — `search_brain`, `read_page`,
+**Eight MCP tools**, and the list is pinned by a test: read — `search_brain`, `read_page`,
 `list_entities`, `describe_entity`, `ask`; write — `brain_submit`, `brain_submissions`,
-`brain_delete`; review — `review_queue`, `review_decide`.
+`brain_delete`. There is no review pair: the capture is the approval
+([ADR 044](./docs/decisions/044-the-capture-is-the-approval.md)).
 
 ### The layering, and why it is a test
 
@@ -209,14 +213,14 @@ build their own throwaway one and tell you what each step proved.
 
 ```bash
 make db-up
-.venv/bin/python scripts/walk_meeting_distiller.py   # a transcript becomes a page SET, and a second one PROPOSES
+.venv/bin/python scripts/walk_meeting_distiller.py   # a transcript becomes a page SET, and a second one INTRODUCES
 .venv/bin/python scripts/walk_views.py               # the filing regenerates the entity's view, then the honest no-op
 .venv/bin/python scripts/walk_navigation.py          # links/backlinks, and the existence rule shown live on two identities
 ```
 
-Run the meeting-distiller one first: its second transcript names an entity the registry does not
-know, so it proposes them and files anyway — the loop through orange in the write-path diagram
-above, happening for real, with the proposals a steward would decide printed at the end.
+Run the meeting-distiller one first: its second transcript names two entities the registry does not
+know, so it introduces them and files the whole set in ONE commit — with the entity pages read back
+out of a clone of the remote it just pushed to, each already confirmed by the person who captured.
 
 ### Point it at your own knowledge repo
 
@@ -251,27 +255,26 @@ real models or real cloud resources are opt-in, need the env file, and are docum
 ## What is here
 
 One package, its tests under `tests/`. Every **package** row below has a code map (`index.md`)
-beside it in the source; the two bare modules at the top are small enough to be their own map.
+beside it in the source; the bare module at the top is small enough to be its own map.
 
 #### `src/stigmergy/`
 
 | Module | What it is |
 |---|---|
 | `text.py` | the bottom of the stack: the hardened UNTRUSTED-DATA fence, sanitize, clamp, and the one parser for a capture's `<path>@<sha>` result ref |
-| `review_kinds.py` | the review inbox's THREE kind constants (identity-proposal, alias-proposal, repair-proposal) and the two legacy names the ledger still holds — dependency-free, so a Block Kit renderer can name them without importing the server |
 | `kernel/` | a LIBRARY that imports nothing from this project: the model dispatch, the page contract's cap + scalar emitter, frontmatter parsing, the ACL resolver, and the entity registry |
 | `index/` | the hybrid derived index: postgres+pgvector, reciprocal rank fusion, contract ranking |
-| `server/` | the single MCP server — the ONLY API over the brain; HTTP transport with per-request bearer auth, audit log, rate limits, the capture surface, the incremental-index webhook, entity navigation and the review lane |
+| `server/` | the single MCP server — the ONLY API over the brain; HTTP transport with per-request bearer auth, audit log, rate limits, the capture surface, the incremental-index webhook, entity navigation, and the two doors that write: a person's own page removal and the repair loop's verdict |
 | `answer/` | the answering agent + deterministic verifier: powers the `ask` tool |
 | `capture/` | the durable capture queue: submit, claim, the evidence plane, retention — ONE vocabulary of four kinds (`raw`, `page`, `meeting`, `document`) for every door; and `stigmergy-queue`, the operator's view of the write path without a SQL client |
-| `librarian/` | the filing engine: the worker, the agent, the nine gates, the commit; the entity proposals it writes, the deployed worker, the meeting flow |
-| `entities/` | the rules of entity birth (the name gate, the collision fold, the page render the librarian runs) and the governance after it: a proposal → a steward's approve / merge / decline → registry regenerate. `stigmergy-entities create` introduces an entity by commissioning a capture, never by writing a page |
-| `slack/` | the Slack transport: 🧠 capture, Q&A, the steward doorbell |
+| `librarian/` | the filing engine: the worker, the agent, the nine gates, the commit; the identities it writes into the same commit as the page, the deployed worker, the meeting flow |
+| `entities/` | a LIBRARY, and nothing else: the rules of entity birth (the name gate, the collision fold, the page render the librarian runs) and the registry generator that derives `ops/entity-registry.json` from `wiki/entities/`. It has no CLI and no decision door — an entity is introduced by a capture, and the librarian is the one caller |
+| `slack/` | the Slack transport: 🧠 capture, `@brain` Q&A, and the push-channel poller that files what a channel publishes |
 | `views/` | per-entity rollups: a deterministic skeleton + a bounded synthesis |
 | `gardener/` | corpus health on demand: ten deterministic checks + three bounded model passes (an editorial sweep over changed-plus-sampled pages, every entity page judged for a body that says nothing, and every registered entity judged against the others for a second identity of the same thing), findings persisted and reported — fixes nothing, writes nothing, vetoes nothing |
-| `repair/` | the governed repair loop: an agent PROPOSES a repair for a finding — an additive edit, a drafted body for an entity page whose own body says nothing about it, or a merge of two registry entries that are one entity (the agent picks which name survives; code computes every page that moves) — and a person REMOVES pages at `brain_delete` — decided and applied in the same call, since the judgment was theirs, with the pages that referred to them rewritten by a model and the diff handed back. Code validates each at propose time and again at apply time through the same nine gates, a steward approves the model-initiated ones at a time, and code applies exactly that as one App-authored commit |
+| `repair/` | the governed repair loop: an agent PROPOSES a repair for a gardener finding — an additive edit, a drafted body for an entity page whose own body says nothing about it, or a merge of two registry entries that are one entity (the agent picks which name survives; code computes every page that moves) — and a person REMOVES pages at `brain_delete` — decided and applied in the same call, since the judgment was theirs, with the pages that referred to them rewritten by a model and the diff handed back. Code validates each at propose time and again at apply time through the same nine gates, an operator approves the model-initiated ones one at a time from the console's Repairs page, and code applies exactly that as one App-authored commit |
 | `digest/` | the week's activity in one Slack post |
-| `admin/` | the ops console: `/admin` on the same app process group — the inbox, the read-only queue, the entities desk where proposals are decided and an entity can be registered by saying what it is (the name checked against the registry as you type), repair review, cron remote-control, gardener/digest/index/worker pages with their charts, activity. INERT until its token hash is configured, and never a read surface over pages — though its Activity page does show the QUESTIONS people asked, which is user content behind one shared credential |
+| `admin/` | the ops console: `/admin` on the same app process group — ten pages: the dashboard, the read-only capture queue, the entities desk where the registry is browsed and an entity can be registered by saying what it is (the name checked against the registry as you type), repair review and page removal, cron remote-control, gardener/digest/index/worker pages with their charts, activity. INERT until its token hash is configured, and never a read surface over pages — though its Activity page does show the QUESTIONS people asked, which is user content behind one shared credential |
 
 #### Around it
 
@@ -299,6 +302,10 @@ Scope discipline, not a roadmap. These are ruled out rather than pending:
 - **Ingest-time figure verification.** Figures are verified at *answer* time, against what the tools
   returned, which is the only moment the claim is actually being made.
 - **SQL over certified datasets.** This is a knowledge system, not a data warehouse.
+- **A review queue over what the librarian wrote.** Nine gates judge the bytes before they land, so a
+  human clicking afterwards is confirming what code already decided — a backlog with a person's name
+  on it. The undo is `git revert` in a repository they own
+  ([ADR 044](./docs/decisions/044-the-capture-is-the-approval.md)).
 
 ## Documentation
 

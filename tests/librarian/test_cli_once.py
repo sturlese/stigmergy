@@ -357,30 +357,3 @@ def test_the_configured_lease_would_not_have_released_it_which_is_why_the_comman
     assert rc == 0
     assert result == {"released": 0, "failed": 0}
     assert _status_of(conn, ack["id"]) == schema.CLAIMED
-
-
-def test_connect_creates_the_governance_ledger_the_worker_reads_on_every_item(clean_queue):
-    """The worker reads `review_decisions` before every filing (a declined identity is never
-    proposed twice), so `_connect` must create that table along with the queue's. Old behaviour,
-    found by `scripts/e2e_librarian.py` on genuinely empty volumes: `_connect` ensured the capture
-    schema alone, and on a database where the worker started before the server — the table is the
-    server's, the gardener's and `stigmergy-entities`' to create — EVERY capture failed with
-    `UndefinedTable`, a fault no suite saw because every fixture had already built the table."""
-    import argparse
-
-    from stigmergy.capture import decisions
-    from stigmergy.librarian import processing
-
-    setup = store.connect(testdb.dsn())
-    try:
-        with setup.cursor() as cur:
-            cur.execute("DROP TABLE IF EXISTS review_decisions")
-        setup.commit()
-        conn = cli._connect(argparse.Namespace(dsn=testdb.dsn(), ensure_schema=True))
-        try:
-            assert processing._declined_identity_ids(conn) == set()
-        finally:
-            conn.close()
-    finally:
-        decisions.ensure_decisions_schema(setup)   # leave the shared database as the suites expect
-        setup.close()

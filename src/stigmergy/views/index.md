@@ -35,7 +35,7 @@ agent's budget (`UsageLimitExceeded`).
 | `skeleton.py` | The deterministic half: `members_of`, `member_hash`, `backlinks_of`/`backlink_hash`, timeline and backlinks rendering, `entity_own_page` |
 | `synthesis.py` | The bounded agent: `build_view_agent`, `write_synthesis` (count-bounded by `VIEW_LIMITS` AND wall-clocked by `SYNTHESIS_TIMEOUT_S` — a hung provider call becomes a withheld synthesis, never a hung worker loop), `FakeViewWriter`, `ViewContext` and its `read_page` tool |
 | `render.py` | Assembles skeleton + synthesis into one page; owns the frontmatter shape, `WITHHELD_BLOCK`, `SYNTHESIS_CAPTION` |
-| `writer.py` | The one commit path: `commit_and_push` (App-bot authored), the steward-clone guards `ensure_on_branch`/`ensure_clean`. The origin's `owner/name` comes from `librarian.githubapp.repo_slug`, the ONE parser, never a copy here |
+| `writer.py` | The one commit path: `commit_and_push` (App-bot authored), the operator-clone guards `ensure_on_branch`/`ensure_clean`. The origin's `owner/name` comes from `librarian.githubapp.repo_slug`, the ONE parser, never a copy here |
 | `errors.py` | `ViewError`. `writer.ViewWriteError` is a `librarian.errors.GitError` subclass, caught via `LibrarianError` |
 
 Downstream: `librarian.processing` imports `views.regenerate` (the post-meeting hook) and so does
@@ -85,7 +85,7 @@ Downstream: `librarian.processing` imports `views.regenerate` (the post-meeting 
 
 - Never let `views/` count as its own member zone (`MEMBER_ZONES`) — the staleness hash would
   change on every write and never converge.
-- Never import `stigmergy.entities` (the worker would transitively depend on the steward's CLI
+- Never import `stigmergy.entities` (the worker would transitively depend on the identity rules
   package), nor `stigmergy.server`/`answer`/`capture` beyond `capture.ops` — pinned in
   `tests/test_architecture.py`.
 - Never put a write path into `staleness.py` — the gardener imports it and must never load the
@@ -94,8 +94,8 @@ Downstream: `librarian.processing` imports `views.regenerate` (the post-meeting 
   (`WITHHELD_BLOCK`), never a frontmatter value.
 - Never treat a view-regeneration fault as a meeting-filing fault: the worker's hook is
   best-effort, caught and recorded, never re-raised.
-- Never run the steward guards on the worker path (`guarded=False` — its ephemeral worktree is
-  always detached and clean) or skip them on the steward path.
+- Never run the clone guards on the worker path (`guarded=False` — its ephemeral worktree is
+  always detached and clean) or skip them on an operator's own clone.
 
 ## Contracts
 

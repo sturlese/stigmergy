@@ -45,7 +45,7 @@ def test_classify_page_type_of_empty_or_none_is_unknown():
 
 # ── ensure_creatable / folder_for: the write guard the zone gate calls ─────────────────────────
 def test_ensure_creatable_raises_value_error_naming_the_reason_for_a_governed_type():
-    with pytest.raises(ValueError, match="steward"):
+    with pytest.raises(ValueError, match="birth fold"):
         page_policy.ensure_creatable("entity")
 
 

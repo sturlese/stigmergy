@@ -4,10 +4,9 @@ Two operator commands over the corpus: `stigmergy-gardener` finds what needs a h
 says so; `stigmergy-digest` posts what happened to Slack.
 Design record: [ADR 024](../decisions/024-gardener-digest.md) — it holds the decisions this
 document only shows the results of.
-The review inbox is covered in [`server.md`](./server.md#the-review-tools)
-and its Slack surface in [`slack.md`](./slack.md#the-steward-doorbell-and-the-review-surface);
-view staleness is covered in [`views.md`](./views.md). This document describes what these two
-commands add on top of them. Code maps, one per command:
+What a finding's path to zero looks like is [`repair.md`](./repair.md); view staleness is covered
+in [`views.md`](./views.md). This document describes what these two commands add on top of them.
+Code maps, one per command:
 [`src/stigmergy/gardener/index.md`](../../src/stigmergy/gardener/index.md) and
 [`src/stigmergy/digest/index.md`](../../src/stigmergy/digest/index.md).
 
@@ -17,8 +16,8 @@ stigmergy-gardener                                  stigmergy-digest
   │    pages_index / capture_queue / the registry /  │    completed gardener run's findings —
   │    the repo checkout                             │    reused, never re-derived)
   ├─ model editorial sweep    (sweep.py)             └─ corpus deltas          (capture_queue
-  │    changed-since-watermark pages +                    pages filed, review_decisions
-  │    a rotating sample of unchanged ones,               identity approvals)
+  │    changed-since-watermark pages +                    pages filed, and the identities
+  │    a rotating sample of unchanged ones,               those filings introduced)
   │    PydanticAI, no checkout, no tools
   ├─ model empty-body pass    (sweep.py)
   │    EVERY entity page in the checkout,
@@ -37,18 +36,17 @@ stigmergy-gardener                                  stigmergy-digest
         └──────────────────────── gardener.yml (daily cron; gardener only) ─────────────────────────┘
 ```
 
-Both commands are **findings-only**: neither fixes, writes, opens a PR or issue, edits the
-registry, or touches an inbox. `stigmergy-gardener` reports; `stigmergy-digest` broadcasts what was
-already reported plus the corpus's own deltas. Every existing lane — the review
-inbox (`review_queue`/`review_decide`), an entity-registry edit, `stigmergy-views regenerate`, an
-ordinary correction filed through the 🧠 gesture — is still how anything a finding names actually
-gets fixed.
+Both commands are **findings-only**: neither fixes, writes, opens a PR or issue, or edits the
+registry. `stigmergy-gardener` reports; `stigmergy-digest` broadcasts what was already reported
+plus the corpus's own deltas. Every other lane — the repair loop, `stigmergy-views regenerate`, a
+person's own `brain_delete`, an ordinary correction filed through the 🧠 gesture — is how anything
+a finding names actually gets fixed.
 
-**A finding now has one more road to zero, and it starts in a different package.**
+**A finding's road to zero starts in a different package.**
 `stigmergy-repair propose` reads the latest completed gardener run and, for the three findings a
 link or a callout can answer (`model-unlinked-mention`, `model-contradiction`, `orphan-page`), has
-a model draft a concrete strictly-additive edit that a steward approves ONE at a time — over MCP or
-in the console's Repairs tab — before any code applies it. None of that reaches back here: this
+a model draft a concrete strictly-additive edit that a person approves ONE at a time, on the
+console's Repairs page, before any code applies it. None of that reaches back here: this
 package still detects and fixes nothing, and it neither imports nor calls the one that proposes.
 The narrative is [repair.md](./repair.md), decided in
 [ADR 039](../decisions/039-governed-repair-loop.md).
@@ -95,13 +93,16 @@ the irreversible, the gardener flags conventions.**
 
 **`anchored-to-superseded-entity` is the residual of an applied merge, counted where it accrues.** A merge moves the absorbed entity's aliases and never its name, so the absorbed id stays registered and a capture filed later spelling that name anchors to the retired identity — and the repair loop can never re-propose the pair (its `content_key` is a permanent decision). The population excludes the entity zone and the machine zones on purpose: the absorbed page's own self-anchor and its member-set-of-one view are BY DESIGN and would otherwise be two permanent, unfixable findings per merge. The count is exactly zero the moment a merge lands; what it measures afterwards is the accumulation the filing-time fix (issue #77's other half) exists to end.
 
-**`entity-placeholder-body` is one of the two checks with a repair kind of its own.** Entity birth
-is identity-only by design (ADR 016): `stigmergy-entities create` copies `ops/templates/entity.md`
-verbatim, so a minted page carries the template's angle-marked placeholders until somebody writes
-it. Nothing counted those pages before — the orphan check exempts entity pages by type, and no
-other check reads a body — so an identity with no content was invisible to every health pass. The
-finding is `info` and its repair is `entity-body` ([repair.md](./repair.md)): the proposer drafts
-that page's body from the pages anchored to the entity, and a steward approves the draft. The rule
+**`entity-placeholder-body` is one of the two checks with a repair kind of its own.** An entity
+page written today is born with a body — `entities.birth.render_page` refuses one that says nothing
+about the entity and strips the template's stubs
+([ADR 042](../decisions/042-an-entity-is-born-written.md)) — so what this check finds is a page
+born under the older contract, carrying `ops/templates/entity.md`'s angle-marked placeholders
+verbatim, or one whose body is blank below its title. Nothing counted those pages before this
+check — the orphan check exempts entity pages by type, and no other check reads a body — so an
+identity with no content was invisible to every health pass. The finding is `info` and its repair
+is `entity-body` ([repair.md](./repair.md)): the proposer drafts that page's body from the pages
+anchored to the entity, and a person approves the draft. The rule
 is deliberately literal — a body line that is wholly wrapped in angle brackets — so a one-line HTML
 element (`<details>`) reads as a placeholder. That false positive is accepted: the finding is
 `info`, and the repair it invites is a draft a human reads before it lands.
@@ -130,10 +131,12 @@ distribution any filing-time gate could see; the company-wide escape hatch was t
 with nothing standing behind it but "the gardener will detect it." These two checks are that
 detection.
 
-**Dead vocabulary can never be silenced by running anything.** `stigmergy-entities` only mints — no
-retire, merge or un-birth verb exists — so this finding recurs on every run until either a page
-anchors to the entity or someone hand-edits the registry outside any governed lane. That is a real
-property of the check, not a gap in its copy.
+**Dead vocabulary can never be silenced by running anything.** Nothing in this platform retires an
+identity: `wiki/entities/` is outside what a deletion may touch, by construction, and an
+`entity-alias` merge keeps the absorbed page (marked `superseded_by:`) and therefore its registry
+entry. So this finding recurs on every run until either a page anchors to the entity, or its page
+leaves `wiki/entities/` in the knowledge repo by hand. That is a real property of the check, not a
+gap in its copy.
 
 ## The model passes — "only what the tool can't see"
 
@@ -294,7 +297,7 @@ report and `--json` carry the identical string), a plain sentence otherwise. Not
 repair tool; the preamble says so once, up front, rather than leaving a reader to discover it
 finding by finding. `stigmergy-repair propose` reading these same findings afterwards does not
 soften that: an `action:` line still names what to go look at, and what the proposer produces is a
-question for a steward, never a fix this report performed. `--json` emits one object per finding
+question for a person, never a fix this report performed. `--json` emits one object per finding
 with the same fields plus
 `id`/`run_id`/`created_at`/`model_id`, `suggested_action` always populated (never `null` for a
 sentence-only check — an absent field would read as "nothing to do," which is false).
@@ -322,11 +325,10 @@ to rebuild the notice path — but as things stand, no gardener run posts one.
 A run that produces at least one `sla` finding posts exactly **one** Slack message, however many
 `sla` findings fired, to the same channel the digest broadcasts to (`STIGMERGY_DIGEST_CHANNEL_ID`,
 reused rather than a second channel setting). It says what broke, since when, and the command that
-shows it — never `🔔`, which means "a decision is waiting in `review_queue`" everywhere else in
-this codebase and no `review_decide` verdict ever closes an SLA finding; `⚠️ SLA:` instead, always
+shows it — never `🔔`, which is a bell nothing in this system rings; `⚠️ SLA:` instead, always
 paired with the plain word so the fact survives a client that renders no emoji at all. A run with
-only `info`/`warn` findings posts nothing — the absence of a Slack event, not an empty state
-needing a sentence, exactly like the doorbell posting nothing when no item is open.
+only `info`/`warn` findings posts nothing at all — the absence of a Slack event, not an empty state
+needing a sentence.
 
 The notice is ACL-scoped exactly like the digest's own sections (ADR 024 D5): a finding whose
 wording names more than one page has its notice wording redacted unless EVERY one of those pages is
@@ -349,25 +351,23 @@ overrides it; 7 days on a genuine first run), two sections, in this order:
    a bare count with a pointer to the full report. Two honest alternatives when there is nothing to
    show: no gardener run has EVER completed, or the latest one predates this window (both name what
    to run next, never silence).
-2. **Corpus deltas** — pages filed in-window (count + titles) and entity approvals in-window
-   (a count of `review_decisions` approvals under `identity-proposal`, plus the legacy
-   `entity-proposal` kind so a window straddling ADR 041 does not silently under-count — the
-   approval event, which is what
-   this system can actually timestamp; the commit itself carries no ledger row of its own, so
-   the section counts approvals, not writes. All four deciding doors write that row, the
-   `stigmergy-entities` CLI included, so the count is complete (issue #51) — it was not before, and
-   under-reported by exactly the CLI's share with nothing saying so. The rendered line says "approved" rather
-   than "born" for exactly that reason: an approved-never-minted proposal would otherwise count as
-   a birth forever).
+2. **Corpus deltas** — pages filed in-window (count + titles) and entities born in-window (a
+   COUNT only). A birth is a filing: the librarian's report names the identities its own capture
+   introduced (`report.entities_born`), so the number is the sum of
+   `jsonb_array_length(report -> 'entities_born')` over the window's FILED captures
+   ([ADR 044](../decisions/044-the-capture-is-the-approval.md)). There is no ledger to read and no
+   second table that could disagree with the commits. The identities are not NAMED, deliberately:
+   a page a channel may not see would be named through its entity here, and the count is the honest
+   half — the rendered line reads `N entity birth(s) approved`, and the approval is the capture.
 
 **Every page the digest NAMES passes `server.acl.visible()` at the posting channel's own resolved
 audiences** (`sections._visible_pages`, the one place this package calls it) — never the
 operator's unscoped view. In practice that is section 2's filed-page list: a page the channel
 cannot see is absent from both the count and the titles, because a count and a list that disagree
 are their own kind of dishonest report. Section 1 needs no filter because it names no page at all
-— only counts by severity and check slug — and the entity-approval number is a count of decision
-rows, not of pages. The digest is the one gardener-adjacent surface that broadcasts, so it is the
-one that needed this from birth (ADR 024 D5); until the first labelled page exists the filter is
+— only counts by severity and check slug — and the entities-born number is a count taken off the
+filings' own reports, not of pages. The digest is the one gardener-adjacent surface that
+broadcasts, so it is the one that needed this from birth (ADR 024 D5); until the first labelled page exists the filter is
 indistinguishable from no scoping at all, and it becomes load-bearing the moment one exists.
 
 **The digest is Slack mrkdwn, composed as such from the start — never CommonMark, never

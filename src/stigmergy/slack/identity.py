@@ -104,28 +104,22 @@ class _TtlMap:
 
 
 class UsersInfoCache:
-    """THREE separate TTL maps, each keyed on a workspace-scoped pair — never the user id or the
+    """TWO separate TTL maps, each keyed on a workspace-scoped pair — never the user id or the
     email alone, so a person can never resolve under the wrong workspace's cached value:
 
     - `_entries` — `(team_id, slack_user_id)` -> EMAIL, the lookup the ACL depends on;
-    - `_by_email` — `(team_id, email)` -> slack_user_id, the doorbell's reverse direction;
     - `_display_names` — `(team_id, slack_user_id)` -> display name, decorative copy only.
 
     The separation IS the security property: nothing writes a display name through the email
     accessors, so a user-settable display name can never reach an identity — and therefore an
-    ACL — decision. All three hold ONLY positive results, so an unmapped user who gets mapped
+    ACL — decision. Both hold ONLY positive results, so an unmapped user who gets mapped
     works on their next question. `clock` is injectable so a test drives expiry without a real
     sleep."""
 
     def __init__(self, ttl_seconds: int = DEFAULT_TTL_SECONDS, clock=time.monotonic,
                 max_entries: int = DEFAULT_MAX_ENTRIES):
         self._entries = _TtlMap(ttl_seconds, clock, max_entries)
-        # The doorbell's REVERSE lookup shares this same object rather than a second store —
-        # `users.lookupByEmail` is Tier-3 (~50/min), and uncached per-(item, steward)-per-pass
-        # calls turn a transient 429 into a sustained one that reads every steward as having no
-        # Slack identity. Same TTL/eviction shape, positive results only.
-        self._by_email = _TtlMap(ttl_seconds, clock, max_entries)
-        # The 🧠 gesture's display names — a THIRD map, not a bigger value on `_entries`, so the
+        # The 🧠 gesture's display names — a SECOND map, not a bigger value on `_entries`, so the
         # email lookup stays uncoupled from a decorative feature. Populated free of charge from
         # `resolve_slack_identity`'s own `users.info` response, and lazily by
         # `capture._display_name` for the other thread participants.
@@ -136,14 +130,6 @@ class UsersInfoCache:
 
     def put(self, team_id: str, slack_user_id: str, email: str) -> None:
         self._entries.put((team_id, slack_user_id), email)
-
-    def get_id_by_email(self, team_id: str, email: str) -> str | None:
-        """`None` on a miss OR an expired entry, like `get` — a miss means "ask the API", never
-        "this person has no Slack identity" (not this cache's fact to assert)."""
-        return self._by_email.get((team_id, email))
-
-    def put_id_by_email(self, team_id: str, email: str, slack_user_id: str) -> None:
-        self._by_email.put((team_id, email), slack_user_id)
 
     def get_display_name(self, team_id: str, slack_user_id: str) -> str | None:
         """The display-name sibling of `get` — same key shape, same TTL, same positive-only

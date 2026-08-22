@@ -57,7 +57,7 @@ def test_unreachable_database_prints_a_clean_message_and_exits_config(capsys):
 # OTHER test in this file, which already proves the mature-database case works. ─────────────────
 def test_connect_ensures_every_schema_a_fresh_database_is_missing(conn, capsys, repo):
     with conn.cursor() as cur:
-        cur.execute("DROP TABLE IF EXISTS review_decisions CASCADE")
+        cur.execute("DROP TABLE IF EXISTS gardener_findings CASCADE")
     support.write_registry(repo, {})
     support.write_page(repo, "wiki", "notes/orphan.md",
                        frontmatter={"type": "note", "title": "Orphan", "entity": [],
@@ -71,8 +71,8 @@ def test_connect_ensures_every_schema_a_fresh_database_is_missing(conn, capsys, 
     assert captured.err == ""
     assert "orphan-page" in captured.out
     with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('review_decisions')")
-        assert cur.fetchone()[0] == "review_decisions"
+        cur.execute("SELECT to_regclass('gardener_findings')")
+        assert cur.fetchone()[0] == "gardener_findings"
 
 
 # ── the twin both CLIs declare in prose (`gardener/cli.py::_connect`: "Same shape and order as
@@ -95,7 +95,7 @@ def test_the_two_cli_connect_twins_ensure_the_same_schemas():
     ensured = _ensure_calls(cli)
     # Pinned before it is compared: two empty sets are equal, so an extractor that silently stopped
     # seeing calls would otherwise read as agreement.
-    assert ensured == {"ensure_capture_schema", "ensure_decisions_schema", "ensure_gardener_schema"}
+    assert ensured == {"ensure_capture_schema", "ensure_gardener_schema"}
     assert ensured == _ensure_calls(digest_cli)
 
 

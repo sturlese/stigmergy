@@ -11,7 +11,6 @@ import asyncio
 import os
 import sys
 
-from stigmergy.capture import decisions
 from stigmergy.capture import schema as capture_schema
 from stigmergy.gardener import report, run
 from stigmergy.gardener.errors import GardenerError
@@ -36,7 +35,6 @@ def _connect(args):
     # All three schemas, so a FRESH database is never a table short (`UndefinedTable`) — a gap a
     # mature database, and every test fixture, hides. Same shape and order as `digest/cli.py`.
     capture_schema.ensure_capture_schema(conn)   # capture_queue/job_runs
-    decisions.ensure_decisions_schema(conn)      # review_decisions — read by stigmergy-digest
     ensure_gardener_schema(conn)                 # gardener_findings — this package's own table
     return conn
 

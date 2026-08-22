@@ -1,7 +1,7 @@
 // The theme, stamped on <html> BEFORE the first paint.
 //
 // A classic script in <head> rather than part of the module graph, and that is the whole reason
-// this file exists: a module is deferred until after the document is parsed, so a steward who
+// this file exists: a module is deferred until after the document is parsed, so an operator who
 // chose Dark would get a flash of the light console on every load. The console ships under
 // `script-src 'self'`, which refuses an inline script — so the early work has to be a file.
 //

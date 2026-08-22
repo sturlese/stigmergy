@@ -20,20 +20,20 @@ option that was already rejected.
 |---|---|
 | [`reference/knowledge-repo.md`](./reference/knowledge-repo.md) | the repository this platform reads and writes: the three zones, the fast lane's three creatable types, the optional `ops/` files, and what the platform will never do to it. **Start here if you are setting one up** |
 | [`reference/hybrid-index.md`](./reference/hybrid-index.md) | `stigmergy.index` — the hybrid derived index, the ranking batch, and the `stigmergy-index --check` substrate lint |
-| [`reference/server.md`](./reference/server.md) | `stigmergy.server` — the single MCP server and its **ten** tools: stdio + streamable HTTP, auth, audit, rate limiting |
+| [`reference/server.md`](./reference/server.md) | `stigmergy.server` — the single MCP server and its **eight** tools: stdio + streamable HTTP, auth, audit, rate limiting |
 | [`reference/answer.md`](./reference/answer.md) | `stigmergy.answer` — the answering agent + strict verifier; three agent tools |
-| [`reference/capture.md`](./reference/capture.md) | `stigmergy.capture` — the durable capture queue, attribution, the evidence plane, retention, the human loop |
-| [`reference/librarian.md`](./reference/librarian.md) | `stigmergy.librarian` — the filing engine: the worker, the agent, the nine gates, the commit, the entity proposals it writes |
+| [`reference/capture.md`](./reference/capture.md) | `stigmergy.capture` — the durable capture queue, attribution, the evidence plane, retention, and the `register_*` hints that make a capture an entity's birth |
+| [`reference/librarian.md`](./reference/librarian.md) | `stigmergy.librarian` — the filing engine: the worker, the agent, the nine gates, the commit, and the identities it writes into that same commit |
 | [`reference/meeting-distiller.md`](./reference/meeting-distiller.md) | the librarian's meeting flow: a transcript submitted at `brain_submit(kind="meeting", …)` becomes a page SET (source + meeting + N decisions), filed atomically with per-page anchoring |
 | [`reference/views.md`](./reference/views.md) | `stigmergy-views` + `stigmergy.views`: a derived, per-entity rollup — a deterministic skeleton (timeline, backlinks) plus an agent-written synthesis, `acl` the intersection of its members' audiences, regenerated after a meeting files or on demand |
-| [`reference/slack.md`](./reference/slack.md) | `stigmergy.slack` — the third transport: identity resolution, the `@brain`/DM ask, the 🧠 capture gesture, the push-channel poller, the steward doorbell and the Block Kit review surface |
+| [`reference/slack.md`](./reference/slack.md) | `stigmergy.slack` — the third transport: identity resolution, the `@brain`/DM ask, the 🧠 capture gesture and the push-channel poller. It asks nobody for a verdict: there is none to give |
 | [`reference/navigation.md`](./reference/navigation.md) | `stigmergy.server` — the graph served (`read_page`'s `links`/`backlinks`), `list_entities`/`describe_entity`, entity-first resolution in the service layer so every client inherits it |
 | [`reference/gardener-digest.md`](./reference/gardener-digest.md) | `stigmergy.gardener` + `stigmergy.digest` — `stigmergy-gardener`'s **ten** deterministic corpus-health checks plus a bounded model editorial sweep, findings persisted and reported, plus an SLA Slack notice that cannot fire today (nothing produces an `sla` finding); `stigmergy-digest`'s two-section Slack post, ACL-scoped at the destination channel, `--dry-run` byte-identical. The digest is a command, not a cron; the daily cron runs the gardener alone |
-| [`reference/repair.md`](./reference/repair.md) | `stigmergy.repair` — the governed repair loop: `stigmergy-repair propose` turns the four answerable gardener findings into additive edits and drafted entity bodies, `brain_delete` (MCP, and the console's own button) is where a PERSON removes pages — decided and applied in the same call, since the judgment was theirs, with the pages that referred to them rewritten by a model and the diff handed back; a steward approves the model-initiated proposals one at a time over MCP or in the console, and code applies exactly those ops through the librarian's own gates as one App-authored commit. A rejected proposal is the dismissal memory; there is no `apply` command and no `delete` one |
-| [`reference/admin-console.md`](./reference/admin-console.md) | `stigmergy.admin` — the ops console at `/admin`, mounted on the SAME app process group rather than a fourth service: the steward drain, remote control of the four crons, gardener/repairs/digest/index panels and an activity view. One bearer credential, minted by `stigmergy-admin-token`, stored only as a hash; INERT until `STIGMERGY_ADMIN_TOKEN_HASH` is configured |
+| [`reference/repair.md`](./reference/repair.md) | `stigmergy.repair` — the governed repair loop: `stigmergy-repair propose` turns the six answerable gardener findings into additive edits, drafted entity bodies and entity merges; a person approves one at a time on the console's Repairs page, and code applies exactly those ops through the librarian's own gates as one App-authored commit. `brain_delete` (MCP for an unrestricted identity, and the console's Remove pages button) is where a PERSON removes pages — decided and applied in the same call, since the judgment was theirs, with the pages that referred to them rewritten by a model and the diff handed back. A rejected proposal is the dismissal memory; there is no `apply` command and no `delete` one |
+| [`reference/admin-console.md`](./reference/admin-console.md) | `stigmergy.admin` — the ops console at `/admin`, mounted on the SAME app process group rather than a fourth service: ten pages — a dashboard, the capture queue read-only, the registry browser and its Register form, repair review and page removal, remote control of the four crons, gardener/index/worker/digest panels and an activity view. It decides no identity: nothing is proposed to a person. One bearer credential, minted by `stigmergy-admin-token`, stored only as a hash; INERT until `STIGMERGY_ADMIN_TOKEN_HASH` is configured |
 | [`reference/page-contract.md`](./reference/page-contract.md) | the FAST-LANE anchor rule: what `entity:` means, who writes it, how it is read |
 | [`reference/brain-page-contract.md`](./reference/brain-page-contract.md) | the wider frontmatter dialect of pages already in the repo — a READ contract, since nothing writes it any more |
-| [`reference/operator-runbook.md`](./reference/operator-runbook.md) | operator runbook: deploy, tokens, audit trail, object-store smoke check, the two databases, the librarian + its GitHub App, the Slack transport, the steward doorbell, the gardener cron and the digest command |
+| [`reference/operator-runbook.md`](./reference/operator-runbook.md) | operator runbook: deploy, tokens, audit trail, object-store smoke check, the two databases, the librarian + its GitHub App, the Slack transport, removing pages, the gardener cron and the digest command |
 
 ## Code maps (where things live)
 
@@ -55,16 +55,17 @@ Purpose / Key entry points / Use these / Avoid / Data & contracts / Tests / Comm
 [`admin`](../src/stigmergy/admin/index.md) ·
 plus [`evals/index.md`](../evals/index.md) for the measurement rig.
 
-Two packages have a code map and **no** `reference/` page of their own. `stigmergy.kernel` has none
-deliberately: it is a library other packages import — the model dispatch, the page contract's
-constants and emitter, the ACL resolver, and the entity registry — with no operator surface and no
-narrative to tell. `stigmergy.entities` does have an operator surface, and its narrative lives
-under other titles: the runbook's
-[governing what the librarian proposed](./reference/operator-runbook.md#governing-what-the-librarian-proposed)
-section is where governed entity birth is operated from, the proposing half of
-[`reference/librarian.md`](./reference/librarian.md) is where it is triggered, and
-[ADR 016](./decisions/016-human-loop-and-entity-governance.md) with
-[ADR 041](./decisions/041-file-first-govern-after.md) are the design record.
+Two packages have a code map and **no** `reference/` page of their own, for the same reason: both
+are libraries with no operator surface. `stigmergy.kernel` is what every package imports — the model
+dispatch, the page contract's constants and emitter, the ACL resolver, and the entity registry.
+`stigmergy.entities` is the rules of entity birth plus the registry generator, and since
+[ADR 044](./decisions/044-the-capture-is-the-approval.md) it has no command and no decision door:
+an entity is introduced by a capture, so its narrative is the identity half of
+[`reference/librarian.md`](./reference/librarian.md), the `register_*` hints in
+[`reference/capture.md`](./reference/capture.md), and the registry shape in
+[`reference/knowledge-repo.md`](./reference/knowledge-repo.md).
+[ADR 042](./decisions/042-an-entity-is-born-written.md) and
+[ADR 044](./decisions/044-the-capture-is-the-approval.md) are the design record.
 
 ## Decisions
 

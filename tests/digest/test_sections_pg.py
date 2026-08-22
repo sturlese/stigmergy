@@ -317,44 +317,31 @@ def test_both_broadcast_acl_seams_omit_an_unindexed_and_a_mislabelled_path(conn,
     assert open_page in visible
 
 
-# ── entities born — the governed-birth log ──────────────────────────────────────────────────────
-def test_entities_born_counts_approved_entity_proposal_decisions_in_window(conn):
-    support.seed_entity_approval(conn, created_days_ago=1)
-    support.seed_entity_approval(conn, created_days_ago=2)
-    # a REJECTED entity proposal is not a birth.
-    support.seed_entity_approval(conn, created_days_ago=1, verdict="reject")
+# ── entities born — counted off the filings that introduced them ────────────────────────────────
+def test_entities_born_counts_the_identities_the_windows_filings_introduced(conn):
+    """OLD BEHAVIOUR: the count read `review_decisions` for approved identity proposals. Nothing
+    approves an identity any more (ADR 044) — a capture introduces it — so the count comes off the
+    filed reports, where the commits themselves are recorded."""
+    support.seed_entity_births(conn, count=2, finished_days_ago=1)
+    support.seed_entity_births(conn, count=1, finished_days_ago=2)
+    # a filing that introduced nothing contributes nothing, and does not fail the sum.
+    support.seed_filed_capture(conn, result_ref="wiki/notes/plain.md@dead123", finished_days_ago=1)
     # outside the window.
-    support.seed_entity_approval(conn, created_days_ago=30)
+    support.seed_entity_births(conn, count=5, finished_days_ago=30)
 
     deltas = sections.gather_corpus_deltas(conn, since=SINCE_7D, until=UNTIL_NOW, audiences=set())
 
-    assert deltas["entities_born_count"] == 2
+    assert deltas["entities_born_count"] == 3
 
 
-def test_entities_born_counts_an_approval_the_parked_capture_door_wrote_before_adr_041(conn):
-    """The ledger keeps the approvals the retired mint door recorded under `entity-proposal`; a
-    digest window straddling the change must count them as the births they were. (Before this
-    test the count named one kind only, and a week's digest would have dropped every birth from
-    before the deploy.)"""
-    from stigmergy.review_kinds import LEGACY_KIND_ENTITY_PROPOSAL, LEGACY_KIND_PARKED_CAPTURE
-    support.seed_entity_approval(conn, created_days_ago=1)
-    support.seed_entity_approval(conn, created_days_ago=2, item_kind=LEGACY_KIND_ENTITY_PROPOSAL)
-    # a parked capture's disposition was never a birth, whatever its verdict said.
-    support.seed_entity_approval(conn, created_days_ago=1, item_kind=LEGACY_KIND_PARKED_CAPTURE)
-
-    deltas = sections.gather_corpus_deltas(conn, since=SINCE_7D, until=UNTIL_NOW, audiences=set())
-
-    assert deltas["entities_born_count"] == 2
-
-
-def test_entities_born_zero_when_nothing_approved(conn):
+def test_entities_born_zero_when_no_filing_introduced_one(conn):
     deltas = sections.gather_corpus_deltas(conn, since=SINCE_7D, until=UNTIL_NOW, audiences=set())
     assert deltas["entities_born_count"] == 0
 
 
-def test_entities_born_excludes_an_approval_at_or_after_until(conn):
+def test_entities_born_excludes_a_filing_at_or_after_until(conn):
     """The same upper-bound proof, for the entities-born query."""
-    support.seed_entity_approval(conn)   # created "now" — after UNTIL_NOW
+    support.seed_entity_births(conn)   # finished "now" — after UNTIL_NOW
 
     deltas = sections.gather_corpus_deltas(conn, since=SINCE_7D, until=UNTIL_NOW, audiences=set())
 

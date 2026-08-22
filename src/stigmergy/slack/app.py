@@ -7,14 +7,13 @@ coroutine — Socket Mode dispatches each event as its own asyncio task. Only th
 import argparse
 import asyncio
 import logging
-import re
 import sys
 
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
 from stigmergy.server.errors import StartupError, StigmergyServerError
 from stigmergy.server.ratelimit import RateLimiter
 from stigmergy.server.service import EmptyIndexError, evidence_plane, open_scoped_resources
-from stigmergy.slack import capture, doorbell, mention, poller, render, review, show_it_here
+from stigmergy.slack import capture, mention, poller, show_it_here
 from stigmergy.slack.context import SlackContext, short_ref
 from stigmergy.slack.gateway import SlackApiError
 from stigmergy.slack.identity import is_configured_workspace, is_ignorable_event
@@ -231,36 +230,6 @@ def build_bolt_app(ctx: SlackContext):
         except Exception:
             _log_listener_failure("on_show_it_here")
 
-    # Every button on a doorbell card (`review:<kind>:<verdict>` / `review-modal:<kind>:<verdict>`,
-    # `render.py`'s convention) — one regex matcher.
-    @app.action(re.compile("^(" + "|".join(
-        re.escape(p) for p in (render.DIRECT_ACTION_PREFIX, render.MODAL_ACTION_PREFIX)) + ")"))
-    async def on_review_action(ack, body, action):
-        await ack()
-        try:
-            channel_id, user_id, event_team_id = _interaction_actor(body)
-            trigger_id = body.get("trigger_id", "")
-            await review.handle_block_action(
-                ctx, action_id=action.get("action_id", ""), value=action.get("value", ""),
-                trigger_id=trigger_id, channel_id=channel_id, slack_user_id=user_id,
-                event_team_id=event_team_id)
-        except Exception:
-            _log_listener_failure("on_review_action")
-
-    @app.view(render.MERGE_MODAL_CALLBACK_ID)
-    async def on_merge_modal_submission(ack, body, view):
-        await ack()
-        try:
-            state_values = ((view or {}).get("state") or {}).get("values") or {}
-            # WHO is submitting comes from this event's OWN authoritative `body` — never from the
-            # modal's `private_metadata`, a value this package itself wrote when the modal opened.
-            _, user_id, event_team_id = _interaction_actor(body)
-            await review.handle_merge_modal_submission(
-                ctx, private_metadata=(view or {}).get("private_metadata", ""),
-                state_values=state_values, slack_user_id=user_id, event_team_id=event_team_id)
-        except Exception:
-            _log_listener_failure("on_merge_modal_submission")
-
     return app
 
 
@@ -294,14 +263,10 @@ async def _async_main(settings: SlackSettings) -> None:
     app = build_bolt_app(ctx)
     handler = AsyncSocketModeHandler(app, settings.app_token)
     poller_task = asyncio.create_task(poller.run_poller(ctx))
-    # The steward doorbell rides the SAME process as a second background task beside the poller —
-    # never a second machine or process group.
-    doorbell_task = asyncio.create_task(doorbell.run_doorbell(ctx))
     try:
         await handler.start_async()
     finally:
         poller_task.cancel()
-        doorbell_task.cancel()
 
 
 def main(argv=None) -> int:
@@ -322,12 +287,6 @@ def main(argv=None) -> int:
     parser.add_argument("--entity-registry", dest="entity_registry", default=None,
                         help="path to entity-registry.json for ask's entity-first resolution "
                             "(default: <repo>/ops/entity-registry.json)")
-    parser.add_argument("--stewards", dest="stewards", default=None,
-                        help="path to a baked stewards.json for a process with NO knowledge-repo "
-                            "checkout (the deployed app/slack groups). The repo read at the base "
-                            "commit wins wherever a checkout exists; this is the fallback that "
-                            "keeps the doorbell ringing and review decisions decidable without "
-                            "one (default: $STIGMERGY_STEWARDS_PATH)")
     parser.add_argument("--dsn", default=None, help="Postgres DSN (default: $STIGMERGY_INDEX_DSN)")
     parser.add_argument("--embedder", choices=["openai", "fake"], default=None)
     parser.add_argument("--answer-llm", dest="answer_llm", choices=["openai", "fake"], default=None)

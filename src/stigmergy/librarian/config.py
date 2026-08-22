@@ -98,8 +98,6 @@ _TRUTHY = ("1", "true", "yes")
 ACL_RELPATH = "ops/acl.json"
 REGISTRY_RELPATH = "ops/entity-registry.json"
 LINTER_RELPATH = ".claude/tools/stigmergy_lint.py"
-# The doorbell's scope->steward-emails map, read at the base commit like the three above.
-STEWARDS_RELPATH = "ops/stewards.json"
 
 
 def _in_repo(repo: str, relpath: str) -> str:
@@ -130,18 +128,18 @@ def is_repo_checkout(path: str) -> bool:
 
     `.git` is a DIRECTORY in an ordinary clone but a FILE (a `gitdir:` pointer) in a
     `git worktree add` checkout, so `isdir` alone is the bug: it refuses a genuine worktree. That
-    was a real disagreement, not a hypothetical — `stigmergy-entities` refused a worktree
+    was a real disagreement, not a hypothetical — an operator CLI refused a worktree
     `stigmergy-views` accepted, for the same directory.
 
     Bare `exists` is the OTHER bug: it accepts a stray file named `.git` — a leftover, a note, a
-    binary — and the caller then commits with the steward's own identity into a directory git does
+    binary — and the caller then commits with the operator's own identity into a directory git does
     not manage. So the FILE case has to look like what git writes: a `gitdir:` pointer. Unreadable
     or binary answers `False`, never raises.
 
     A PREDICATE, deliberately, rather than a resolver that raises: a caller in `entities` may not
     interpolate a foreign exception's text into its refusal (`tests/test_architecture.py`'s
     `test_an_entities_refusal_never_splices_a_caught_exceptions_text`, because `server.review`
-    echoes those refusals to a steward verbatim). Each CLI therefore writes its own sentence
+    echoes those refusals to a caller verbatim). Each CLI therefore writes its own sentence
     around the path it already holds, and only the JUDGEMENT is shared.
     """
     dot_git = os.path.join(path, ".git")
@@ -372,7 +370,7 @@ class Settings:
 
     # ── the three repo-sourced inputs: where they live IN A CHECKOUT ──────────────────────────
     # Locations, not reads — the fast lane opens none of them, reading all three at `base.sha`.
-    # These exist for the steward tooling and operator messages, off the same RELPATHs.
+    # These exist for the operator tooling and its messages, off the same RELPATHs.
     @property
     def acl_path(self) -> str:
         return _in_repo(self.repo, ACL_RELPATH)

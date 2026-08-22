@@ -18,7 +18,7 @@ Sharing one Postgres connection and one embedder across identities rests on two 
 helper holds a cursor open across an `await` (see `audit.AuditWriter`), and no sync tool body may
 perform blocking network or subprocess I/O — sync bodies run directly on the event loop, so a slow
 socket freezes the whole process for every identity (`brain_submit`'s object-store write bounds
-itself; `review_decide`'s entity mint clones a repo and shells out to gitleaks and does NOT yet).
+itself; `brain_delete` clones a repo, runs a model and shells out to gitleaks).
 Anything adding a pool, a concurrent write path or a new outbound call must preserve both.
 `RateLimiter`/`AuditWriter` are constructed once and shared, so the 30/10 req/min budgets are
 per-identity across the whole process, not per connection.
@@ -33,7 +33,7 @@ from stigmergy.admin import routes as admin_routes
 from stigmergy.capture import evidence as evidence_plane
 from stigmergy.capture.schema import MAX_MATERIAL_BYTES, ensure_capture_schema
 from stigmergy.index import store
-from stigmergy.server import ops_files, review, webhook
+from stigmergy.server import ops_files, webhook
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
 from stigmergy.server.errors import IdentityError
 from stigmergy.server.identity import load_token_store, resolve_email_for_token
@@ -241,7 +241,6 @@ def build_http_app(settings, *, token_store: dict[str, str]):
     conn, embedder = open_scoped_resources(settings)
     ensure_audit_table(conn)
     ensure_capture_schema(conn)   # the durable write-path tables, same startup as the audit one
-    review.ensure_review_schema(conn)   # the review lane's table, same startup pattern
     # Created here rather than only on the webhook's write path: `CREATE TABLE IF NOT EXISTS` is
     # not race-free, and losing that race INSIDE phase 2 rolls the pushed pages back with it.
     store.ensure_ops_file_table(conn)

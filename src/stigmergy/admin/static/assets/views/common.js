@@ -121,11 +121,16 @@ export function reportPanel(row) {
   if (Array.isArray(report.overlaps_flagged) && report.overlaps_flagged.length) {
     facts.push(["overlaps flagged", el("ul", { class: "names" }, report.overlaps_flagged.map((l) => el("li", {}, String(typeof l === "object" ? (l.path || JSON.stringify(l)) : l))))]);
   }
-  if (Array.isArray(report.entities_proposed) && report.entities_proposed.length) {
-    facts.push(["entities proposed", el("ul", { class: "names" }, report.entities_proposed.map((e) => el("li", {}, `${e.name || e.id} (${e.type || "entity"}) — `, mono(String(e.id)))))]);
+  if (Array.isArray(report.entities_born) && report.entities_born.length) {
+    facts.push(["identities introduced", el("ul", { class: "names" }, report.entities_born.map((e) => el("li", {}, `${e.name || e.id} (${e.type || "entity"}) — `, mono(String(e.id)),
+      e.confirmed_by ? ` · confirmed by ${e.confirmed_by}` : "")))]);
   }
-  if (Array.isArray(report.aliases_proposed) && report.aliases_proposed.length) {
-    facts.push(["spellings proposed", el("ul", { class: "names" }, report.aliases_proposed.map((a) => el("li", {}, `«${a.alias}» for `, mono(String(a.entity)))))]);
+  if (Array.isArray(report.aliases_added) && report.aliases_added.length) {
+    facts.push(["spellings taught", el("ul", { class: "names" }, report.aliases_added.map((a) => el("li", {}, `«${a.alias}» for `, mono(String(a.entity)))))]);
+  }
+  if (Array.isArray(report.entities_updated) && report.entities_updated.length) {
+    facts.push(["entity pages grown", el("ul", { class: "names" }, report.entities_updated.map((u) => el("li", {}, mono(String(u.entity)),
+      ` · ${u.facts || 0} fact(s), ${u.connections || 0} connection(s)`)))]);
   }
   if (report.reason_code) facts.push(["refusal code", mono(report.reason_code)]);
   if (report.judged_type) facts.push(["judged type", mono(report.judged_type)]);

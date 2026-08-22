@@ -707,15 +707,22 @@ def test_the_submit_ack_names_no_bucket_and_no_endpoint(indexed):
         assert forbidden not in body
 
 
-def test_submit_rejects_registration_hints_from_every_door():
-    """ADR 042: a `register_*` hint makes the librarian bear an entity CONFIRMED by the submitter.
-    Its two legitimate asserters (the console, `stigmergy-entities create`) never pass through this
-    service, so there is no door exception — Slack's own service refuses them too."""
-    svc = _bare_service(identity=None, evidence=None)
-    with pytest.raises(SubmissionRejected, match="register_name"):
-        svc.submit("raw", "Scircle sells perfume.", hints={"register_name": "Scircle"})
-    settings = Settings(identity=STEWARD, identities_path="x")
-    slack_svc = BrainService(settings, conn=None, embedder=None, audiences=None, identity=STEWARD,
-                             evidence=None, door=capture_schema.SLACK_DOOR)
-    with pytest.raises(SubmissionRejected, match="register_type"):
-        slack_svc.submit("raw", "Scircle sells perfume.", hints={"register_type": "organization"})
+def test_submit_accepts_registration_hints_from_every_door(indexed):
+    """OLD BEHAVIOUR: a `register_*` hint was refused at this seam from every client door, because
+    registering was an act of authority only two steward doors could perform. ADR 044 D1: an
+    identity is born confirmed by whoever captured either way, so a registration pins the name and
+    type the librarian would otherwise infer and carries no authority at all — every door may send
+    one, and the hints are stored for the worker to read."""
+    conn, fx = indexed
+    svc = make_service(fx, conn, fx.STEWARD, evidence=MemoryEvidenceStore())
+    hints = capture_schema.registration_hints(name="Scircle", entity_type="organization",
+                                              aliases=["SC"], source="mcp")
+
+    ack = svc.submit("raw", "Scircle sells perfume.", hints=hints)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT hints FROM capture_queue WHERE id = %s", (ack["id"],))
+        stored = cur.fetchone()[0]
+    registration = capture_schema.registration_from_hints(stored)
+    assert (registration.name, registration.entity_type) == ("Scircle", "organization")
+    assert registration.aliases == ("SC",)

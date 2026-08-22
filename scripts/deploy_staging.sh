@@ -6,7 +6,7 @@
 # What this script does NOT do: create a Fly app, set Fly secrets, or create/touch the Supabase
 # project or the R2 bucket. Those are one-time operator setup steps, documented in the runbook —
 # this script only bakes the versioned ops files (identities, entity registry, slack channels,
-# stewards) from your knowledge-repo checkout into the `deploy/` staging directory, then runs
+# from your knowledge-repo checkout into the `deploy/` staging directory, then runs
 # `fly deploy` against an
 # ALREADY-created app.
 set -euo pipefail
@@ -34,7 +34,6 @@ BAKED=(
   'identities.json:{}'
   'entity-registry.json:{"entities": {}}'
   'slack-channels.json:{}'
-  'stewards.json:{}'
 )
 
 restore_deploy_defaults() {
@@ -85,20 +84,6 @@ else
        "the safe empty default (not a failure)" >&2
 fi
 
-# the `app` and `slack` groups hold NO checkout, so `review.load_stewards`' read at
-# `origin/main` had nothing to read — the doorbell never rang and every entity-proposal decision
-# failed closed on a deployment whose steward was correctly configured. Baked like the three files
-# above, and the trade is the one `identities.json` already accepted: a redeploy to change it. The
-# worker, which HAS a checkout, still reads the repo at each item's base commit.
-if [ -f "$STIGMERGY_REPO/ops/stewards.json" ]; then
-  cp "$STIGMERGY_REPO/ops/stewards.json" "$DEPLOY_DIR/stewards.json"
-  echo "deploy: baked $STIGMERGY_REPO/ops/stewards.json -> deploy/stewards.json"
-else
-  echo '{}' > "$DEPLOY_DIR/stewards.json"
-  echo "deploy: no $STIGMERGY_REPO/ops/stewards.json yet — no scope resolves to a steward, so the" \
-       "doorbell records an undeliverable and every review decision fails closed (not a failure," \
-       "but nothing will be decidable until the map exists)" >&2
-fi
 
 cd "$HERE"
 fly deploy

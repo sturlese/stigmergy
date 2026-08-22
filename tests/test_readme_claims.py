@@ -22,7 +22,6 @@ import pytest
 from stigmergy.gardener.checks import ALL_CHECK_SLUGS
 from stigmergy.librarian.gates import ALL_GATES
 from stigmergy.librarian.page import FAST_LANE_TYPES
-from stigmergy.review_kinds import ITEM_KINDS
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 README = ROOT / "README.md"
@@ -104,15 +103,12 @@ def test_every_package_that_exists_is_listed_in_the_readme(readme):
     assert not sorted(real - listed), f"packages missing from the README table: {sorted(real - listed)}"
 
 
-def test_the_fast_lane_and_item_kind_vocabularies_are_small_and_stated_once():
-    """Not a README claim — a guard on the two counts that drifted the most widely in prose
-    (eleven sites said "six fast-lane types" while there were three). Pinning them here means the
-    next change to either has one obvious place that turns red."""
+def test_the_fast_lane_vocabulary_is_small_and_stated_once():
+    """Not a README claim — a guard on the count that drifted the most widely in prose (eleven
+    sites said "six fast-lane types" while there were three). Pinning it here means the next change
+    has one obvious place that turns red. (The review lane's item kinds stood beside it until
+    ADR 044 retired the lane whole.)"""
     assert len(FAST_LANE_TYPES) == 3
-    # Three since ADR 039 added `repair-proposal`. The number moving is the POINT of this pin: it
-    # is what sends somebody to re-read the prose that states it — `docs/reference/server.md`, the
-    # two MCP tool docstrings (the client contract), and this suite's own module docstring.
-    assert len(ITEM_KINDS) == 3
 
 
 # ── the architecture diagrams ─────────────────────────────────────────────────────────────────

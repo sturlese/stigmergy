@@ -1,53 +1,54 @@
 # The governed repair loop — `stigmergy.repair`
 
 A finding's path to zero. `stigmergy-repair propose` turns the gardener's findings into concrete
-changes a steward can approve one at a time — additive edits to pages that already exist, a
-drafted BODY for an entity page whose own body says nothing about it, and a MERGE of two registry
-entries that turn out to be the same entity. The review lane and the admin console are where one
-is approved; and only then does code perform exactly the approved ops, through the librarian's own
-validator, its nine gates and its governed commit.
+changes a person approves one at a time — additive edits to pages that already exist, a drafted
+BODY for an entity page whose own body says nothing about it, and a MERGE of two registry entries
+that turn out to be the same entity. The console's Repairs page is where one is approved; and only
+then does code perform exactly the approved ops, through the librarian's own validator, its nine
+gates and its governed commit.
 
-**A person's own deletion is not one of those.** It enters at an authenticated door — `brain_delete`
-over MCP, or the console's Repairs page — and lands in that same call: the judgment was already
-theirs, so what the second click supplied was an authentication, and it now runs in the act
-([ADR 043](../decisions/043-a-sweep-is-written.md)).
+**A person's own deletion is not one of those.** It enters at an authenticated door —
+`brain_delete` over MCP, or the console's own Remove pages button — and lands in that same call:
+the judgment was already theirs, so what a second click would supply is an authentication, and it
+runs in the act ([ADR 043](../decisions/043-a-sweep-is-written.md)).
 
 Design record: [ADR 039](../decisions/039-governed-repair-loop.md), amended by
-[ADR 043](../decisions/043-a-sweep-is-written.md) — they hold the decisions this document only
-shows the results of.
-The findings themselves are covered in [`gardener-digest.md`](./gardener-digest.md), the review lane
-in [`server.md`](./server.md#the-review-tools) and the console's panel in
+[ADR 043](../decisions/043-a-sweep-is-written.md) and
+[ADR 044](../decisions/044-the-capture-is-the-approval.md) — they hold the decisions this document
+only shows the results of.
+The findings themselves are covered in [`gardener-digest.md`](./gardener-digest.md),
+`brain_delete`'s own tool contract in
+[`server.md`](./server.md#the-capture-tools-the-write-path), and the console's panel in
 [`admin-console.md`](./admin-console.md). Code map:
 [`src/stigmergy/repair/index.md`](../../src/stigmergy/repair/index.md).
 
-**The covenant, in one sentence: a MODEL proposes, CODE validates twice, a HUMAN decides, and code
-applies exactly what was decided.** Nothing reaches the knowledge repo without having passed all
-four. Deletion is the one kind that reads differently on two of them, and deliberately:
+**The covenant, in one sentence: a MODEL proposes, CODE validates twice, a PERSON approves, and
+code applies exactly what was approved.** Nothing reaches the knowledge repo without having passed
+all four. Deletion is the one kind that reads differently on two of them, and deliberately:
 
 - **a model may never propose one, in any spelling** — the proposer is a person at an
   authenticated door, or, for exact-duplicate `sources/` pages where the decision is a lookup
   rather than a judgment, code itself;
-- **the human decides at the command when they gave it, and in the inbox when a model did**
-  (ADR 043 D2). A person's deletion applies in the same call: they already judged it, and asking
-  them to approve their own request supplied an authentication, not a second opinion. What a model
-  initiated overnight still waits for somebody.
+- **a person's own deletion is decided by the call that asked for it** (ADR 043 D2): they already
+  judged it, and asking them to approve their own request supplied an authentication, not a second
+  opinion. What CODE derived overnight still waits for somebody on the console's Repairs page.
 
 And its pages are WRITTEN. Code drops the frontmatter entries that named a removed page — a lookup
 — and a model writes the bodies of the pages that referred to it, so a sentence that cited one
 still reads and a callout that only existed because of one is gone (ADR 043 D1).
 
 ```
-  gardener findings                stigmergy-repair propose            a steward, one at a time
-  (the latest COMPLETED run)         ├─ split by check into THREE model     ├─ review_queue / review_decide
-   model-unlinked-mention            │    roads, plus one that asks none    │    (MCP, item_kind
-   model-contradiction               │   edits:  batch → 1 call/batch       │     "repair-proposal")
-   orphan-page                       │   entity-body: 1 page → 1 call,      └─ the console's Repairs tab
-   entity-placeholder-body           │     and only with >= 2 anchored              │
-   model-empty-entity-body           │   entity-alias: 1 PAIR → 1 call,             │
-   model-duplicate-entity            │     the model picks the survivor,            │  approve
-        │                            │     code computes the sweep                  v
-        │                            │   delete: duplicate sources/ pages,          │
-        └────────── read ───────────>│     derived by CODE, no model                │
+  gardener findings                stigmergy-repair propose            a person, one at a time
+  (the latest COMPLETED run)         ├─ split by check into THREE model     └─ the console's
+   model-unlinked-mention            │    roads, plus one that asks none         Repairs page
+   model-contradiction               │   edits:  batch → 1 call/batch             │
+   orphan-page                       │   entity-body: 1 page → 1 call,            │
+   entity-placeholder-body           │     and only with >= 2 anchored            │
+   model-empty-entity-body           │   entity-alias: 1 PAIR → 1 call,           │
+   model-duplicate-entity            │     the model picks the survivor,          │  approve
+        │                            │     code computes the sweep                v
+        │                            │   delete: duplicate sources/ pages,        │
+        └────────── read ───────────>│     derived by CODE, no model              │
                                      ├─ drop keys already reviewed        server.review.apply_repair_and_record
                                      ├─ the model, 2 READ tools             ├─ mark_decided (WHERE pending)
                                      ├─ validate the answer, one retry      ├─ clone → the kind's applier
@@ -58,16 +59,17 @@ still reads and a callout that only existed because of one is gone (ADR 043 D1).
                                           content_key = kind + what it      │    lane and what it may suspend
                                           would do                          ├─ gitcmd.commit(gated_entries=…)
                                                                             │    + push, App-authored
-                                                                            └─ mark_applied + review_decisions
+                                                                            └─ mark_applied, the verdict on
+                                                                                 the row, admin_actions
 
   a person, at an authenticated door — and there is nobody left to ask, so it lands in this call
-   brain_delete(paths, why)  ──>  steward guard on what they named  ──>  clone
-   (MCP / the console)             ──>  deletion.plan: the referring set, the frontmatter
-                                   ──>  steward guard on the FULL touched set
-                                   ──>  sweep.write: a model writes their bodies, one retry
-                                   ──>  the bounds, run_gates(ALL_GATES), commit + push
-                                   ──>  the row is born `approved`, then `applied`
-                                   ──>  back to the caller: the commit, and the DIFF per page
+   brain_delete(paths, why)  ──>  an UNRESTRICTED identity, or the lane's refusal
+   (MCP / the console)       ──>  clone
+                             ──>  deletion.plan: the referring set, the frontmatter
+                             ──>  sweep.write: a model writes their bodies, one retry
+                             ──>  the bounds, run_gates(ALL_GATES), commit + push
+                             ──>  the row is born `approved`, then `applied`
+                             ──>  back to the caller: the commit, and the DIFF per page
 ```
 
 ## The six checks a repair can answer
@@ -179,11 +181,11 @@ a file, so it carries two op shapes:
   document filed twice, and the nightly propose run derives a deletion for the copy that goes: the
   page the corpus CITES survives, on a tie the OLDER filing survives, on a tie in both the
   lexicographically first path survives. All three rules are total lookups, so no model is asked —
-  the one deliberate exception to "a model proposes", and the rationale a steward reads is composed
-  by code from the two facts that decided it.
+  the one deliberate exception to "a model proposes", and the rationale a person reads on the
+  console is composed by code from the two facts that decided it.
 - **What may be deleted.** `wiki/notes/`, `wiki/decisions/`, `wiki/concepts/`, `sources/`,
-  `views/`. Never `wiki/entities/` — an identity is retired through governance (ADR 016), and it is
-  absent by CONSTRUCTION rather than by rule: the entity type carries no folder, so it is not in the
+  `views/`. Never `wiki/entities/` — nothing in this system retires an identity, and the exclusion
+  is by CONSTRUCTION rather than by rule: the entity type carries no folder, so it is not in the
   lane the deletable set extends. Never `ops/` or `.claude/`, and never anything outside the three
   content zones. A whitelist, so tomorrow's zone is undeletable by default.
 - **What the sweep does to everything else**, and it is split down the middle (ADR 043 D1). CODE
@@ -206,10 +208,10 @@ a file, so it carries two op shapes:
   wrote may still refer to a going page. One retry carrying the reasons, then a refusal naming the
   page — **there is no deterministic fallback**, because two writers of one page are two
   implementations that can disagree about it.
-- **What a steward is authorizing.** `target_paths` carries the FULL touched set, deleted and
-  scrubbed alike, so the review lane's per-path steward guard covers the whole blast radius: the
-  steward of the page being removed is not automatically the steward of every page the sweep would
-  rewrite. `STIGMERGY_REPAIR_MAX_PLAN_BYTES` bounds how much one approval may be, shared with the
+- **What the row records.** `target_paths` carries the FULL touched set, deleted and scrubbed
+  alike, so the ledger row, the console's history and the returned diff all name the whole blast
+  radius — the pages someone asked to remove are never the whole of what changed.
+  `STIGMERGY_REPAIR_MAX_PLAN_BYTES` bounds how much one approval may be, shared with the
   entity-alias kind because both store whole pages.
 - **How the apply proves it.** A written sweep cannot be recomputed, so the recomputation ADR 039
   B4 ran is replaced by three questions asked of the clone (ADR 043 D3): the two bounds above,
@@ -242,7 +244,7 @@ carries four op shapes and every one of them holds the whole file it would write
 - **What the model decides, and it is one thing.** Which of the two entity pages SURVIVES, and a
   sentence saying what makes them one entity and why that name is canonical. Which name is
   canonical is a judgment — the legal name is often the less-used one, a former name usually loses
-  to a current one — and it is not a backlink count. The rationale it writes is what a steward reads
+  to a current one — and it is not a backlink count. The rationale it writes is what a person reads
   beside Approve, unlike the `entity-body` road where code composes the rationale because the draft
   itself is the thing being judged.
 - **What code decides, and it is everything else.** Which pages carry the absorbed entity in their
@@ -250,9 +252,9 @@ carries four op shapes and every one of them holds the whole file it would write
   `superseded_by:` on the absorbed page, and the regenerated registry. **A model never computes a
   file list** — that is the deletion sweep's lesson, and an error here moves a page's whole history
   onto the wrong company.
-- **The absorbed page is never deleted.** An identity is retired through governance, not `rm`
-  (ADR 016). The page stays, marked `superseded_by:` the survivor, demoted by the index's ranking
-  exactly as any superseded page is, and still answering to its own name — knowing that these two
+- **The absorbed page is never deleted.** Nothing in this system retires an identity, and no
+  deletion may reach the entity zone. The page stays, marked `superseded_by:` the survivor,
+  demoted by the index's ranking exactly as any superseded page is, and still answering to its own name — knowing that these two
   names were once two entities is the record of the decision.
 - **The survivor gains the absorbed entity's ALIASES and never its own name, and that is a
   constraint rather than a choice.** The knowledge repo's contract linter refuses an alias that
@@ -270,19 +272,20 @@ carries four op shapes and every one of them holds the whole file it would write
   the absorbed page is then absent from the diff. The residual therefore accumulates monotonically
   with no remedy inside this loop. The filing-time half of issue #77 is the only closure — a page
   carrying `superseded_by:` is exactly the signal a resolution skill can act on.
-- **What a steward is authorizing.** `target_paths` carries the full touched set — both entity
-  pages, every re-anchored page and the registry when it changes — so the review lane's per-path
-  steward guard covers the whole blast radius. An op whose planned bytes equal the bytes it was
-  computed from names no page the diff will touch and is excluded, which is the ordinary case for
-  the registry (an absorbed entity with no aliases changes nothing about it).
+- **What one approval covers.** `target_paths` carries the full touched set — both entity pages,
+  every re-anchored page and the registry when it changes — so what the console shows beside
+  Approve is the whole blast radius, not the pair that named it. An op whose planned bytes equal
+  the bytes it was computed from names no page the diff will touch and is excluded, which is the
+  ordinary case for the registry (an absorbed entity with no aliases changes nothing about it).
   `STIGMERGY_REPAIR_MAX_PLAN_BYTES` bounds how much one approval may be, shared with the delete
   kind because both store whole pages for the same reason.
 - **How the apply proves it.** The plan is RECOMPUTED from the fresh clone and refused unless it is
   identical to the stored one, op for op and byte for byte — a page that gained the absorbed
   entity's anchor since the proposal was made is a different merge. The pages are written, then
-  `stigmergy-entities regenerate` — the mint door's own writer, and the only writer of
-  `ops/entity-registry.json` in this codebase — rebuilds the registry, and the result is refused
-  unless it is byte-identical to what the plan predicted. Then the gates are told
+  `entities.generator.regenerate` — the library the librarian's own birth fold runs, and the only
+  writer of `ops/entity-registry.json` in this codebase — rebuilds the registry from the entity
+  pages, and the result is refused unless it is byte-identical to what the plan predicted. Then the
+  gates are told
   `expected_bytes={path: the planned file}` and `derived_files={ops/entity-registry.json}`, the
   fourth caller-declared exception: `gate_zone` otherwise refuses any in-lane write that is not a
   `.md` page, and it still requires a derived file's bytes to have been computed. No deletion and no
@@ -306,15 +309,15 @@ stigmergy-repair [--dsn DSN] [--repo PATH] [--json] show <id>
   records what it left for the next pass. Records a `job_runs` row under the job `repair-propose`
   with `findings_seen` / `proposed` / `skipped_known` / `skipped_invalid`. Exits 0 when it proposes
   nothing — an ordinary outcome, not a failure.
-- **`list`** — what waits on a steward, plus what was recently decided.
+- **`list`** — what waits on a decision, plus what was recently decided.
 - **`show <id>`** — what one proposal would change, rendered from the ops without touching git. For
-  an `entity-body` proposal that is the drafted body in full: the draft is the whole of what a
-  steward judges, so a preview that summarised it would hide the only thing worth reading. A
+  an `entity-body` proposal that is the drafted body in full: the draft is the whole of what is
+  being judged, so a preview that summarised it would hide the only thing worth reading. A
   `delete` proposal shows which pages stop existing and, for each page it rewrites, the page it
   would BECOME in full — for the same reason, since ADR 043 made those bytes a model's prose and a
   person deciding a pending deletion is the only reader they get before they land. An
   `entity-alias` proposal shows which identity absorbs which and how many pages move with it,
-  never its planned bytes: what a steward judges there is the merge, and four whole files would
+  never its planned bytes: what is judged there is the merge, and four whole files would
   bury it.
 **There is no `apply`, and there will not be one. There is no `delete` either, since ADR 043.** A
 terminal knows who is typing and not what they are allowed to approve, so neither verb can be
@@ -329,23 +332,33 @@ against the pages that are actually committed there.
 brain_delete(paths=["wiki/notes/Old Memo.md"], why="what makes it stale")
 ```
 
-One call, and everything happens inside it. The identity is the caller's resolved one, so the
-per-path steward guard runs here rather than at a second click — over the pages that GO **and** the
-pages that refer to them, which are computed from a fresh clone and may be somebody else's zone.
+One call, and everything happens inside it. **The authorization is one question, asked before
+anything is cloned: is the caller an UNRESTRICTED identity** — no audience restriction in
+`ops/identities.json` (ADR 044 D3). It is the one fact the server can settle at the door, and the
+right one: a removal touches the pages named AND every page that refers to them, a set nothing
+knows until the clone exists, so only a caller who can already see the whole corpus may ask for it.
+A scoped caller gets the lane's own anonymous refusal — *there is nothing for you to decide at that
+id* — which is therefore no oracle about a referrer either. The console's Remove pages button runs
+the same sequence under the console's own token.
+
 Then: `deletion.plan` for the frontmatter and the referring set, `sweep.write` for the bodies, the
 nine gates, one App-authored commit with the caller in an `Approved-by:` trailer, and a push that
 never rebases.
 
-- **What comes back** is the commit, the pages removed, and a unified DIFF per rewritten page.
-  Nobody read that prose before it landed — that is the trade ADR 043 D5 states rather than softens
-  — so the diff is the reading, and `git revert` in the knowledge repo is the undo.
+- **What comes back** is the commit, the pages removed, and a unified DIFF per rewritten page,
+  fenced as untrusted data because it carries both page bytes and fresh model output. Every diff
+  still passes `acl.visible()` for the caller — one place decides read access, whatever the caller
+  was allowed to remove — and a page this server's index does not carry is NAMED as withheld rather
+  than dropped, so nobody reads "nothing happened to it" into a silence. Nobody read that prose
+  before it landed — that is the trade ADR 043 D5 states rather than softens — so the diff is the
+  reading, and `git revert` in the knowledge repo is the undo.
 - **The row is born `approved`** in the caller's name and applied at once, so the console's
-  Repairs history, the metrics and the governance ledger keep one source of truth and the inbox
-  never lists it. `model_id` names the model that wrote the pages that stay, and is empty when
-  nothing referred to the removed ones — no model decides WHICH page goes, ever.
-- **What it refuses, before anything is cloned**: no page, no reason, more than
-  `MAX_DELETED_PAGES` (10) pages in one call, a reason matching a likely secret, a caller who is
-  not a steward for what they named. And after the clone: an entity page, a path outside the
+  Repairs history and the metrics read one ledger whichever door removed the pages, and nothing is
+  ever listed as pending. `model_id` names the model that wrote the pages that stay, and is empty
+  when nothing referred to the removed ones — no model decides WHICH page goes, ever.
+- **What it refuses, before anything is cloned**: an audience-restricted caller, no page, no
+  reason, more than `MAX_DELETED_PAGES` (10) pages in one call, a reason matching a likely
+  secret. And after the clone: an entity page, a path outside the
   corpus, a plan over `STIGMERGY_REPAIR_MAX_PLAN_BYTES`, a frontmatter reference the sweep cannot
   rewrite, and a body the writer could not reconcile in one retry. Every one of those lands
   nothing at all.
@@ -409,33 +422,30 @@ become the system prompt.
 
 ## Deciding one
 
-A pending proposal appears in the review inbox as `repair-proposal`, alongside `identity-proposal` and
-`alias-proposal`, and in the console's Repairs tab. It carries its rationale, the pages it would
-touch, and a count of its ops with their kinds — never the ops themselves, because a list is a scan;
-the ops, a body draft in full, and a deletion's two lists are one click or one
-`stigmergy-repair show` away. For a deletion the op kinds are what tell a steward, from the scan
-alone, that a page would be REMOVED rather than edited.
+A pending proposal appears on the console's Repairs page, and nowhere else — there is one door.
+It carries its rationale, the pages it would touch, and a count of its ops with their kinds — never
+the ops themselves, because a list is a scan; the ops, a body draft in full, and a deletion's two
+lists are one click or one `stigmergy-repair show` away. For a deletion the op kinds are what say,
+from the scan alone, that a page would be REMOVED rather than edited.
 
 - **Verdicts are `approve` and `reject` only.** A proposal IS its edits, so the thing to change
   about one is which edits it contains, which is a different proposal.
-- **Approving needs a steward for EVERY page the proposal would touch.** `ops/stewards.json` exists
-  to delegate zones, and this is the first verdict in the lane that can land inside one, so the
-  question is asked per path rather than universally. A proposal spanning two zones needs somebody
-  who stewards both — either steward may still reject it, and the pair can be proposed as two
-  one-sided repairs.
-- **Rejecting requires a reason**, and the reason lands on the proposal as well as in the ledger.
-  A note on an APPROVE is optional and lands in both places too — it is the only record of why a
-  repair was worth applying.
-- **A repair proposal is listed for an unrestricted identity only.** It has no submitter, so there
-  is no "own" for an ownership-scoped caller — and a proposal names page PATHS, which is
-  `acl.visible()`'s question and not the inbox's.
-- **The Slack doorbell does not ring for it.** There is no Block Kit card: a repair's ops and
-  rationale are not something a DM can honestly compress into two buttons. It is reviewed in the
-  console and over MCP.
+- **The console's token IS the authorization.** There is no per-path guard and no second identity
+  to resolve: the credential that opens `/admin` stands for the whole deployment, and the actor
+  name on the form is attribution recorded beside the verdict, never checked.
+- **Rejecting requires a reason**, and the reason lands on the proposal row (`notes`), which is
+  what the proposer reads. A note on an APPROVE is optional and lands in the same column — it is
+  the only record of why a repair was worth applying.
+- **The verdict lives on the proposal.** `status`, `decided_by`, `notes` and, on a successful
+  apply, `applied_commit` are the record, beside the console's own `admin_actions` row for the
+  attempt. Nothing writes a separate governance ledger
+  ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D2).
 
-Both approving doors run one function, `server.review.apply_repair_and_record` — the MCP/Slack
-review lane and the admin console alike — so "the ledger row is written, and written after the
-push" is a property of the code rather than of each surface remembering.
+The console runs one function for it, `server.review.apply_repair_and_record`, which owns the
+ordering — mark decided first, as a conditional UPDATE on `status = 'pending'`, so a second Approve
+loses rather than clones; then clone, apply, gate, commit and push. ADR 044 D2 retires the approval
+itself and moves derive-validate-apply into the worker; until that lands, this is where the
+ordering lives, once.
 
 ## What has to agree before anything is pushed
 
@@ -446,7 +456,7 @@ Three independent checks, each chosen because the other two cannot see what it s
    is the two bounds re-run against the clone, plus a base hash per rewritten page and a walk of
    the corpus for a latecomer that now refers to a going page (ADR 043 D3).
 2. **`run_gates(ALL_GATES)`** judges the resulting diff exactly as it judges the librarian's own —
-   all eight, not a subset. A `delete` apply additionally runs the knowledge repo's own linter over
+   all nine, not a subset. A `delete` apply additionally runs the knowledge repo's own linter over
    the WHOLE clone, because that kind's blast radius is the graph rather than the diff.
 3. **The cross-check**: the diff's paths must EQUAL the proposal's stored `target_paths`, and its
    SHAPE must be the one this kind produces — every entry a modification for the two editing kinds;
@@ -473,14 +483,14 @@ additive kinds keep `gitcmd.push`'s ordinary rebase-and-retry: their gates judge
 position against a base, so a backlink replayed onto the moved tip is exactly what was approved.
 
 **A failed apply stays failed.** The status becomes `failed`, the `error` column says why in a
-sentence written to be read by a steward, and the approved status is not restored. A silent revert
+sentence written to be read by an operator, and the approved status is not restored. A silent revert
 to pending would hide that a gate refused, which is the outcome an operator most needs to see.
 
 ## The dismissal memory
 
 A proposal is identified by WHAT IT WOULD DO — its kind plus its sorted `op:path:link` lines, hashed
 into `content_key` — and the proposer skips a key held by a pending, approved, rejected or applied
-row. "Reviewed and declined" is a durable fact, and a steward who says no once is not asked the
+row. "Reviewed and declined" is a durable fact, and somebody who says no once is not asked the
 same question by the next night's run.
 
 **A `failed` row is not a dismissal.** It is the one status the memory does not hold: a rejection is
@@ -492,9 +502,10 @@ repair again — which is the only way back for a repair somebody actually wante
 with differently-worded sentences are the same question asked twice, and a rephrasing of a declined
 repair is not a new one. A deletion's SCRUB set is excluded for a sharper version of the same
 reason — a page that gained a link to the doomed page overnight changes the plan and changes
-nothing a steward was asked, so a deletion is keyed on the pages that GO and nothing else. The
-drafted body is excluded for the identical reason — **a re-drafted body is the same question**, and a steward who decided a page needs writing by a person should not meet
-another draft of it tomorrow. The UNIQUE index is narrower than the skip rule — one PENDING row per key,
+nothing about the question that was asked, so a deletion is keyed on the pages that GO and nothing
+else. The drafted body is excluded for the identical reason — **a re-drafted body is the same
+question**, and somebody who decided a page needs writing by a person should not meet another draft
+of it tomorrow. The UNIQUE index is narrower than the skip rule — one PENDING row per key,
 not one row ever — so re-proposing after a rejection stays a human decision rather than a database
 error.
 

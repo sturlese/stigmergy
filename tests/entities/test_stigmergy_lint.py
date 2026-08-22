@@ -70,9 +70,16 @@ def test_frozen_linter_is_green_on_a_registry_consistent_repo(tmp_path):
     assert registry_findings == []
 
 
-def test_frozen_linter_goes_red_on_aliases_that_diverge_and_names_the_fix_command(tmp_path):
+def test_frozen_linter_goes_red_on_aliases_that_diverge_and_says_whose_the_fix_is(tmp_path):
     """The registry-consistency rule's own reproduction: a page's declared aliases and the
-    registry's disagree. The message must NAME THE FIX, as a runnable command."""
+    registry's disagree.
+
+    OLD BEHAVIOUR: the message ended in a runnable command, `stigmergy-entities regenerate`.
+    ADR 044 deleted that command, so the message names WHOSE the fix is instead — and it names the
+    right person: the worker regenerates the registry in a commit that touches the identity zone,
+    but it REFUSES to write an identity while the two sides disagree, so the pass that would heal
+    the drift is the pass the drift prevents. A message containing a command is an executable
+    promise; so is a message promising something will fix itself."""
     _entity_page(tmp_path, "Acme Corp", aliases=["Acme", "Acme Corporation"])
     _registry(tmp_path, {"acme-corp": {"name": "Acme Corp", "type": "organization",
                                        "aliases": ["Acme"]}})    # missing "Acme Corporation"
@@ -80,7 +87,8 @@ def test_frozen_linter_goes_red_on_aliases_that_diverge_and_names_the_fix_comman
     registry_findings = [f for f in result["findings"] if f["check"] == "registry"]
     assert registry_findings, "the linter must go RED on diverging aliases"
     assert any("declares alias" in f["message"] for f in registry_findings)
-    assert all("stigmergy-entities regenerate" in f["message"] for f in registry_findings)
+    assert all("an operator puts the pages and the registry back in step" in f["message"]
+               for f in registry_findings), registry_findings
     assert result["summary"]["errors"] >= 1
 
 

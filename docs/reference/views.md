@@ -108,7 +108,7 @@ reader encounters two solid, code-generated sections before reaching anything th
   a new `superseded_by`) changes what the view should say without changing `content_hash` — the
   strengthened hash closes that false negative.
 - `skeleton.backlink_hash` — (path, title) per backlink the section actually RENDERS, stored as
-  `backlink_hash:`. The rows are the post-gate set, so a source a steward narrows out of the
+  `backlink_hash:`. The rows are the post-gate set, so a source a person narrows out of the
   view's audience, or deletes outright, drops out of the list and moves the hash. Nothing
   body-shaped is in this key on purpose: a view is itself an indexed backlink source and its body
   carries its own regeneration date, so a content-sensitive key would make two views that cite
@@ -245,8 +245,8 @@ stigmergy-views regenerate --entity <id> --force   # bypass staleness; re-attemp
 ```
 
 One required, mutually exclusive target — a bare `regenerate` never silently picks `--all` for
-you. The targets check **different populations**, named explicitly in every report line so a
-steward comparing two runs can tell whether they even looked at the same entities. `--force`
+you. The targets check **different populations**, named explicitly in every report line so an
+operator comparing two runs can tell whether they even looked at the same entities. `--force`
 widens `--stale`'s population to every entity with an existing view (not just the stale ones);
 `--all`'s own population already covers everything, so `--force` there changes only whether a
 fresh view's synthesis is re-attempted, not which entities are visited.
@@ -289,7 +289,7 @@ earlier in the SAME pass is noticed on the NEXT pass, one interval later.
 
 ## One writer, one commit per entity
 
-Every view commit is authored by the App bot (`librarian.githubapp.identity()`). On the steward's
+Every view commit is authored by the App bot (`librarian.githubapp.identity()`). On an operator's
 own clone (`guarded=True`, the CLI's default) `writer.py` first proves that checkout is on the
 right branch and clean; both of the worker's paths pass `guarded=False`, because each runs in an
 ephemeral, always-detached worktree where both guards would misfire on conditions that are not
@@ -317,7 +317,7 @@ knowledge repo's own CI, over every commit including this one; running it here w
 the same signal arrive sooner.
 
 **The trigger that expires this ruling is written down**: *a view reads something that is not a
-filed page* — an external source, a fetched figure, a steward's free text. That is a change to
+filed page* — an external source, a fetched figure, a person's free text. That is a change to
 `skeleton.py`'s or `synthesis.py`'s inputs, which is where whoever needs to re-open it will be
 standing.
 

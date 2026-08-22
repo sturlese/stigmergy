@@ -178,58 +178,6 @@ def test_a_commit_with_no_registry_file_is_an_empty_registry(tmp_path):
     assert registry.entities == {}
 
 
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-# `ops/stewards.json`, read at the base commit like the three inputs above.
-# ══════════════════════════════════════════════════════════════════════════════════════════════
-def _committed_repo(tmp_path, relpath: str | None, content: str | None) -> tuple[str, str]:
-    repo = str(tmp_path / "repo")
-    os.makedirs(repo)
-    _git("init", "--quiet", "-b", "main", repo, cwd=str(tmp_path))
-    _git("config", "user.name", "fixture", cwd=repo)
-    _git("config", "user.email", "fixture@example.com", cwd=repo)
-    _write(repo, "README.md", "x\n")
-    if relpath is not None:
-        _write(repo, relpath, content)
-    _git("add", "-A", cwd=repo)
-    _git("commit", "--quiet", "-m", "seed", cwd=repo)
-    sha = _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
-    return repo, sha
-
-
-def test_a_commit_with_no_stewards_file_resolves_to_an_empty_map(tmp_path):
-    repo, sha = _committed_repo(tmp_path, None, None)
-    assert base_inputs.load_stewards(repo, _base(sha)) == {}
-
-
-def test_load_stewards_reads_the_scope_to_emails_map(tmp_path):
-    content = '{"*": ["steward@example.com"], "wiki/finance/": ["ana@example.com"]}'
-    repo, sha = _committed_repo(tmp_path, config.STEWARDS_RELPATH, content)
-    stewards = base_inputs.load_stewards(repo, _base(sha))
-    assert stewards["*"] == ["steward@example.com"]
-    assert stewards["wiki/finance/"] == ["ana@example.com"]
-
-
-def test_load_stewards_raises_on_malformed_json(tmp_path):
-    repo, sha = _committed_repo(tmp_path, config.STEWARDS_RELPATH, "{not json")
-    with pytest.raises(LibrarianConfigError, match="not valid JSON"):
-        base_inputs.load_stewards(repo, _base(sha))
-
-
-def test_load_stewards_raises_when_not_an_object(tmp_path):
-    repo, sha = _committed_repo(tmp_path, config.STEWARDS_RELPATH, '["not", "a", "map"]')
-    with pytest.raises(LibrarianConfigError, match="must be an object"):
-        base_inputs.load_stewards(repo, _base(sha))
-
-
-def test_an_uncommitted_stewards_edit_does_not_change_what_load_stewards_reads(tmp_path):
-    content_v1 = '{"*": ["steward@example.com"]}'
-    repo, sha1 = _committed_repo(tmp_path, config.STEWARDS_RELPATH, content_v1)
-    _write(repo, config.STEWARDS_RELPATH, '{"*": ["someone-else@example.com"]}')  # UNCOMMITTED
-
-    stewards = base_inputs.load_stewards(repo, _base(sha1))
-    assert stewards["*"] == ["steward@example.com"]
-
-
 def test_a_commit_with_no_linter_refuses_loudly_naming_the_locator(two_commit_repo):
     repo, sha1, _sha2 = two_commit_repo
     _git("rm", "--quiet", config.LINTER_RELPATH, cwd=repo)
@@ -257,14 +205,3 @@ def test_a_malformed_acl_at_base_is_refused_with_the_locator_naming_the_commit(t
         base_inputs.load_acl(repo, _base(sha_broken))
     # benign twin: sha1's own (valid) ACL is unaffected
     base_inputs.load_acl(repo, _base(sha1))   # must not raise
-
-
-def test_a_stewards_file_that_is_not_utf8_is_unreadable_not_a_raw_decode_error(tmp_path):
-    """An unreadable stewards map is a NAMED config refusal, whatever makes it unreadable.
-    OLD BEHAVIOUR: non-UTF-8 bytes raised `UnicodeDecodeError` — a `ValueError`, not an
-    `OSError` — so it escaped this loader's own promise and, downstream, escaped
-    `server.review.is_steward`'s fail-closed catch, swallowing a steward's click in silence."""
-    path = tmp_path / "stewards.json"
-    path.write_bytes(b'{"*": ["ana@example.com"]}\xff\xfe')
-    with pytest.raises(LibrarianConfigError, match="could not be read"):
-        base_inputs.load_stewards_file(str(path))

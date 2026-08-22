@@ -551,18 +551,6 @@ def test_clean_note_strips_control_characters_flattens_newlines_and_clips_word_s
 
 
 # ── a steward's registration rides the hints, and only a steward door may set it (ADR 042) ──────
-def test_reject_registration_hints_refuses_every_register_key_and_names_the_doors():
-    """The trusted-subset pattern, fourth application: the four `register_*` keys make the
-    librarian bear an entity CONFIRMED by the submitter, so a client setting them would be a
-    client granting itself a steward's act. Refused loudly, naming where a registration comes
-    from; the ordinary `entity` hint beside them stays a suggestion."""
-    with pytest.raises(SubmissionRejected, match="register_name, register_type") as caught:
-        schema.reject_registration_hints({"register_name": "X", "register_type": "organization"})
-    assert "Register an entity" in str(caught.value) and "stigmergy-entities create" in str(caught.value)
-    schema.reject_registration_hints({"entity": "X", "title": "about X"})
-    schema.reject_registration_hints(None)
-
-
 def test_registration_hints_round_trip_through_the_stored_shape():
     """The two doors build the hints with `registration_hints`, the queue stores them through
     `normalize_hints` like every other hint, and the worker reads them back with

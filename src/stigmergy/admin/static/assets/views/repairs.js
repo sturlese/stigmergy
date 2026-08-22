@@ -1,10 +1,10 @@
 // Repairs: the gardener's findings, one approvable edit at a time (ADR 039). The list is a SCAN
 // and the detail is the read: nothing here renders the ops as prose, because the applier's own
-// callout wording lives in `librarian.page` and a second copy of it here would show a steward a
+// callout wording lives in `librarian.page` and a second copy of it here would show a reader a
 // change that is not quite the one they are authorizing. The ops list IS the stored ops.
 //
 // FOUR kinds, four renderers. An `entity-body` op carries a page's whole drafted body, and the
-// steward reading that draft IS the check for that kind — squeezed into a table cell it is
+// person reading that draft IS the check for that kind — squeezed into a table cell it is
 // unreadable, and dropped from the table it is invisible. A `delete` proposal carries two
 // different op shapes, and the one thing that must be legible before Approve is which pages STOP
 // EXISTING. An `entity-alias` merge names which identity absorbs which.
@@ -38,7 +38,7 @@ export async function repairsView(host) {
     render(host,
       el("div", { class: "grid halves" },
         chartCard({
-          title: "Proposals by outcome", sub: "every proposal ever drafted, and what stewards did with it",
+          title: "Proposals by outcome", sub: "every proposal ever drafted, and what was decided about it",
           chart: partToWhole({ segments: [
             { key: "pending", label: "waiting", value: byStatus.pending || 0, color: "human" },
             { key: "applied", label: "applied", value: byStatus.applied || 0, color: "git" },
@@ -54,7 +54,7 @@ export async function repairsView(host) {
         })),
       el("section", { class: "card" },
         el("div", { class: "card-head" },
-          el("div", { class: "card-title" }, el("h2", {}, `${data.pending.length} proposal(s) waiting on a steward`),
+          el("div", { class: "card-title" }, el("h2", {}, `${data.pending.length} proposal(s) waiting on you`),
             el("div", { class: "sub" }, "each one is approved or declined on its own — an approve applies exactly its edits as one commit through the librarian's own gates")),
           el("div", { class: "spacer" }),
           el("button", { class: "btn small", type: "button", onclick: () => deleteFlow() }, icon("x", 14), "Remove pages")),
@@ -98,7 +98,7 @@ function opsList(ops) {
 }
 
 // The drafted body, whole and unrendered — plain text in a <pre>, never markdown turned into DOM:
-// what lands in the repo is these bytes, so these bytes are what a steward should be judging.
+// what lands in the repo is these bytes, so these bytes are what you should be judging.
 function bodyDraft(ops) {
   return el("div", { class: "stack" },
     ...(ops || []).map((o) => el("div", {},
@@ -108,7 +108,7 @@ function bodyDraft(ops) {
 
 // The pages that go, and the pages that change because they go. Two lists rather than one table,
 // because they are two different things to agree to: one is irreversible from this console, and
-// the other is a rewrite of pages a steward may not have opened.
+// the other is a rewrite of pages you may not have opened.
 function deletionPlan(ops) {
   const removed = (ops || []).filter((o) => o.op === OP_DELETE_PAGE).map((o) => o.path);
   const scrubbed = (ops || []).filter((o) => o.op !== OP_DELETE_PAGE).map((o) => o.path);
@@ -119,7 +119,7 @@ function deletionPlan(ops) {
     el("div", { class: "sub", style: { marginTop: "12px" } }, `${scrubbed.length} page(s) rewritten so they no longer refer to them — a model wrote these bodies, and this is the only place anybody reads them before they land`),
     scrubbed.length
       // Whole and unrendered, exactly as `bodyDraft` shows a drafted entity body: what lands in
-      // the repo is these bytes, so these bytes are what a steward should be judging.
+      // the repo is these bytes, so these bytes are what you should be judging.
       ? el("div", { class: "stack" }, ...(ops || []).filter((o) => o.op !== OP_DELETE_PAGE).map((o) => el("div", {},
           el("div", { class: "quote-label" }, mono(o.path)),
           el("pre", { class: "pre" }, o.planned_after || "(no planned bytes — this proposal cannot be applied)"))))
@@ -184,7 +184,7 @@ export async function repairDetailView(host, id) {
         el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "What it would change"), el("div", { class: "sub" }, changeSummary(row.kind)))),
         repairChange(row)),
       pending
-        ? banner("info", "approving pushes ONE commit to the knowledge repo, authored by the librarian App with your name in an Approved-by trailer (attribution, not a second authorization check — the token is this console's). The edits are re-validated and re-gated against the repo as it stands, so the apply can still be refused; the MCP review lane additionally requires you to be a steward for every page listed above.")
+        ? banner("info", "approving pushes ONE commit to the knowledge repo, authored by the librarian App with your name in an Approved-by trailer (attribution, not a second authorization check — the token is this console's). The edits are re-validated and re-gated against the repo as it stands, so the apply can still be refused.")
         : decidedBanner(row),
     );
   });
@@ -194,7 +194,7 @@ export async function repairDetailView(host, id) {
 // forever, a failed apply is not, an applied one lives in git now.
 function decidedBanner(row) {
   if (row.status === "rejected") {
-    return banner("plain", `declined by ${row.decided_by || "a steward"}, and the proposer remembers: this exact repair will not be proposed again. To revisit it, the finding has to change in the knowledge repo, or a steward makes the edit by hand.`);
+    return banner("plain", `declined by ${row.decided_by || "somebody"}, and the proposer remembers: this exact repair will not be proposed again. To revisit it, the finding has to change in the knowledge repo, or somebody makes the edit by hand.`);
   }
   if (row.status === "failed") {
     return banner("plain", "a gate refused this apply and nothing was written. The proposer does not remember failures, so the next nightly run can derive this repair again.");
@@ -274,7 +274,7 @@ async function repairRejectFlow(row) {
   const answer = await confirmForm({
     title: `Decline #${row.id}`,
     consequence: "records the decision and, because a declined proposal is the proposer's memory of having asked, stops this exact repair being suggested again. Nothing is written to the knowledge repo.",
-    fields: [actorField(), { name: "reason", label: "Reason", kind: "textarea", required: true, hint: "the whole of what a later steward will know about why this was declined" }],
+    fields: [actorField(), { name: "reason", label: "Reason", kind: "textarea", required: true, hint: "the whole of what a later reader will know about why this was declined" }],
     confirmLabel: "Decline", danger: true,
   });
   if (answer && await mutate(`repairs/${row.id}/reject`, answer.values, `declined #${row.id}`)) go("repairs");

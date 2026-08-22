@@ -1,5 +1,5 @@
 """Apply ONE approved proposal: clone the knowledge repo with the librarian App's credential,
-perform exactly the approved ops, prove the result through the eight gates, commit and push.
+perform exactly the approved ops, prove the result through the nine gates, commit and push.
 
 A throwaway clone per approval, never a standing checkout — the same posture (and the same
 `TemporaryDirectory` guarantee) `entities.remote` takes for a server-driven mint, and for the same
@@ -58,7 +58,7 @@ log = logging.getLogger(__name__)
 # situation.
 REPAIR_GIT_TIMEOUT_S = 60
 
-# The other subprocess budget: the eight gates shell out to the contract linter and to gitleaks,
+# The other subprocess budget: the nine gates shell out to the contract linter and to gitleaks,
 # and both run HERE on the thread a steward's Approve arrived on. Longer than the git one because
 # it is not a network leg — it is a whole-repo lint and a whole-scratch-directory scan — and short
 # enough that neither can pin an HTTP worker until the process is restarted.

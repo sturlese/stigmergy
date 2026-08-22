@@ -9,14 +9,14 @@ created: <YYYY-MM-DD>
 updated: <YYYY-MM-DD>
 tags: [entity]
 entity: []  # THIS PAGE'S OWN registry id, once minted (M8a) — e.g. entity: ["<own-id>"]
-approved_by: ""  # who confirmed this identity; EMPTY = proposed by the librarian, waiting on a steward
+approved_by: ""  # the person whose capture introduced this identity — the librarian fills it, never empty
 related: []
 sources: []
 ---
 
 <!-- Placeholders here are PLAIN TEXT, unlike the agent-facing templates which
      write `[[<Page>]]` to teach the librarian where a wikilink goes. This one is COPIED
-     VERBATIM into a committed page by `stigmergy-entities create`, so a placeholder that looks
+     VERBATIM into a committed page by the librarian's birth fold, so a placeholder that looks
      like a wikilink IS a dead link the moment the page lands — the contract linter said so on
      the first cold-start mint at P2. Different consumer, different rule. -->
 

@@ -6,15 +6,15 @@ The model is the only double, `CLEAN_LLM=fake` through the package's own writer.
 
 The four properties, and each is a thing the second click used to supply or was said to:
 
-  · the per-path steward guard runs IN THE ACT, over the pages that go AND the pages that refer to
-    them — and an unauthorized caller is refused before anything is cloned;
+  · authorization runs IN THE ACT and before anything is cloned: an UNRESTRICTED identity may
+    remove pages (ADR 044 D3 — the only kind that can see every page a removal touches, including
+    the ones the sweep rewrites), and a scoped one is refused with the lane's anonymous sentence;
   · the row is born `approved` in the caller's name, applied in the same call, and never listed as
     pending — nobody is asked a question the caller already answered;
   · the diff comes back, because nobody read the written prose before it landed (D5);
   · a sweep that cannot be written lands nothing at all.
 """
 import json
-import os
 
 import pytest
 
@@ -24,12 +24,11 @@ from stigmergy.repair import schema as repair_schema
 from stigmergy.repair import store as repair_store
 from stigmergy.server import review
 from tests.repair import support as repair_support
-from tests.server.conftest import ALICE, STEWARD, seed_stewards
+from tests.server.conftest import ALICE, STEWARD
 from tests.server.conftest import make_review_service as make_service
 
 pytestmark = pytest.mark.usefixtures("require_gitleaks")
 
-DECISIONS_STEWARD = "decisions-steward@example.com"
 WHY = "the memo was superseded and nothing needs it any more"
 
 
@@ -84,11 +83,11 @@ def _remote_page(bare: str, path: str, ref: str = "main") -> str:
 def _delete(env, conn, paths, *, identity=STEWARD, why=WHY, audiences=None):
     return review.delete_pages(
         make_service(env, conn, identity_name=identity, audiences=audiences),
-        paths=paths, why=why, source=review.SOURCE_MCP)
+        paths=paths, why=why, source="mcp")
 
 
 # ── the act ───────────────────────────────────────────────────────────────────────────────────
-def test_a_stewards_deletion_lands_as_one_commit_in_the_same_call(env, conn, corpus):
+def test_an_unrestricted_callers_deletion_lands_as_one_commit_in_the_same_call(env, conn, corpus):
     """The whole door in one assertion set: the page is gone from the remote, the three pages that
     referred to it no longer do, and it took ONE call — no row waited on anybody, and the person
     who typed it was never asked to agree with themselves."""
@@ -127,23 +126,6 @@ def test_the_row_is_born_approved_in_the_callers_name_and_is_never_pending(env, 
     assert repair_store.pending_proposals(conn) == [], "it was never a question for anybody"
 
 
-def test_the_ledger_row_names_the_door_the_actor_and_what_was_removed(env, conn, corpus):
-    """A deletion is the least reversible thing this system does, so the governance ledger is
-    where it is answered for months later — when the page itself is gone and `git log` is the only
-    other place it is written down."""
-    result = _delete(env, conn, [corpus["doomed"]])
-
-    with conn.cursor() as cur:
-        cur.execute("SELECT actor, extra->>'source', notes, extra FROM review_decisions "
-                    "WHERE item_kind = %s AND item_id = %s",
-                    (review.KIND_REPAIR_PROPOSAL, str(result["proposal_id"])))
-        actor, source, notes, extra = cur.fetchone()
-    assert (actor, source, notes) == (STEWARD, review.SOURCE_MCP, WHY)
-    assert extra["deleted"] == [corpus["doomed"]]
-    assert extra["scrubbed_pages"] == 3
-    assert extra["commit"] == result["commit"]
-
-
 def test_the_response_carries_the_diff_because_nobody_read_the_prose_first(env, conn, corpus,
                                                                            indexed_pages):
     """ADR 043 D5, and the reason it is a decision rather than an omission: the fidelity of a
@@ -166,19 +148,18 @@ def test_the_response_carries_the_diff_because_nobody_read_the_prose_first(env, 
     assert "git revert" in result["message"]
 
 
-def test_a_diff_the_caller_may_not_read_is_withheld_and_named(env, conn, corpus, indexed_pages):
-    """**The reading is still `acl.visible()`'s question.** Being a STEWARD of a folder is not
-    being in the audience of every page in it, and these diffs are page bytes — so a page outside
-    the caller's audience has its diff withheld. It is NAMED rather than dropped: it changed, the
-    commit says so, and a reader who cannot see why must not be left thinking nothing happened to
-    it."""
-    indexed_pages(corpus["in_prose"], entity=[], acl=["finance"])
+def test_a_diff_this_server_cannot_place_is_withheld_and_named(env, conn, corpus,
+                                                              indexed_pages):
+    """**The reading is still `acl.visible()`'s question, and it fails CLOSED.** The diffs are page
+    bytes, so each one is asked of the caller's own audiences through the index — and a page this
+    server's index does not carry answers "no", the same reading `read_page` gives. It is NAMED
+    rather than dropped: it changed, the commit says so, and a reader who cannot see why must not
+    be left thinking nothing happened to it."""
+    # Two of the three rewritten pages are indexed; the third is not, so its diff cannot be placed.
     for path in (corpus["keeps_a_link"], corpus["only_related"]):
         indexed_pages(path, entity=[])
 
-    # A steward with a NARROW audience: the two maps are independent, which is the whole point —
-    # `ops/stewards.json` says who may decide, `identities.json` says who may read.
-    result = _delete(env, conn, [corpus["doomed"]], audiences={"sales"})
+    result = _delete(env, conn, [corpus["doomed"]])
 
     assert result["withheld"] == [corpus["in_prose"]]
     assert corpus["in_prose"] not in result["rewritten"]
@@ -188,52 +169,22 @@ def test_a_diff_the_caller_may_not_read_is_withheld_and_named(env, conn, corpus,
 
 
 # ── authorization, in the act ─────────────────────────────────────────────────────────────────
-def test_a_caller_who_is_not_a_steward_is_refused_before_anything_is_cloned(env, conn, corpus,
-                                                                            monkeypatch):
-    """The sentence is the lane's own `NOT_YOURS_TO_DECIDE`, so "not authorized" and "no such
-    page" stay indistinguishable — and the refusal costs no network leg, which is what keeps an
-    unauthorized caller from spending this server's time by asking."""
+def test_a_scoped_caller_is_refused_before_anything_is_cloned(env, conn, corpus, monkeypatch):
+    """OLD BEHAVIOUR: the per-path steward guard, run twice. ADR 044 D3 asks the one question the
+    server can answer before it clones — is this identity unrestricted — because the pages a
+    removal touches include every page that refers to them, which nothing knows until the clone.
+    The sentence is the lane's own `NOT_YOURS_TO_DECIDE`, so "not authorized" and "no such page"
+    stay indistinguishable, and the refusal costs no network leg."""
     def never(*_a, **_k):
         raise AssertionError("the repo was cloned for a caller who may not delete anything")
 
     monkeypatch.setattr(review.repair_remote, "cloned", never)
 
     with pytest.raises(review.ReviewError) as caught:
-        _delete(env, conn, [corpus["doomed"]], identity=ALICE)
+        _delete(env, conn, [corpus["doomed"]], identity=ALICE, audiences={"sales"})
 
     assert str(caught.value) == review.NOT_YOURS_TO_DECIDE
     assert repair_store.pending_proposals(conn) == []
-
-
-def test_a_steward_of_the_doomed_page_is_still_refused_when_the_sweep_reaches_another_zone(
-        env, conn, corpus):
-    """**The guard the second click used to run, running in the act — and over the FULL touched
-    set.** `ops/stewards.json` exists to delegate zones: the steward of the page being removed is
-    not automatically the steward of every page the sweep would rewrite, and that rewrite is a
-    real change to somebody else's zone made in their absence.
-
-    Observed RED with the guard asked only of the doomed paths: STEWARD owns `"*"` minus the
-    delegated folder, the deletion is inside their scope, and the sweep rewrites a decision page
-    whose steward never saw it."""
-    seed_stewards(env, {"*": [STEWARD], "wiki/decisions/": [DECISIONS_STEWARD]})
-    path = os.path.join(env.repo, "wiki", "decisions", "Cites The Memo.md")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write('---\ntype: decision\ntitle: "Cites The Memo"\nstatus: developing\n'
-                'created: 2026-02-01\nupdated: 2026-02-01\ntags: [decision]\nrelated: []\n'
-                'sources: []\n---\n\n# Cites The Memo\n\n'
-                f'It followed [[{repair_support.DOOMED_STEM}]].\n'
-                + "\n".join(f"- padding line {n}." for n in range(1, 26)) + "\n")
-    from tests.librarian import support as librarian_support
-    librarian_support.commit_and_push(env.repo, "test: a decision page that cites the memo")
-    before = gitcmd.run("rev-parse", "main", cwd=env.bare).stdout.strip()
-
-    with pytest.raises(review.ReviewError) as caught:
-        _delete(env, conn, [corpus["doomed"]])
-
-    assert str(caught.value) == review.NOT_YOURS_TO_DECIDE
-    assert gitcmd.run("rev-parse", "main", cwd=env.bare).stdout.strip() == before
-    assert corpus["doomed"] in _remote_paths(env.bare)
 
 
 def test_an_unattributed_call_is_refused(env, conn, corpus):
@@ -243,7 +194,7 @@ def test_an_unattributed_call_is_refused(env, conn, corpus):
 
     with pytest.raises(review.ReviewError, match="unattributed"):
         review.delete_pages(service, paths=[corpus["doomed"]], why=WHY,
-                            source=review.SOURCE_MCP)
+                            source="mcp")
 
 
 # ── what the door refuses, and it refuses before it clones ────────────────────────────────────
@@ -306,12 +257,10 @@ def test_a_sweep_the_writer_cannot_finish_lands_nothing_at_all(env, conn, corpus
         "a refusal before the row is inserted leaves no row at all")
 
 
-def test_the_refusals_this_door_publishes_are_written_for_a_steward(env, conn, corpus,
-                                                                    monkeypatch):
+def test_the_refusals_this_door_publishes_are_written_for_a_person(env, conn, corpus,
+                                                                   monkeypatch):
     """Every sentence crosses to a person over MCP, so none may name this host's throwaway clone
     or hand out a command to run."""
-    from tests.entities.conftest import assert_steward_facing
-
     monkeypatch.setenv("CLEAN_LLM", "fake-flawed")
     said = []
     for paths, identity in (([corpus["doomed"]], STEWARD),
@@ -322,7 +271,7 @@ def test_the_refusals_this_door_publishes_are_written_for_a_steward(env, conn, c
 
     assert len(said) == 2
     for message in said:
-        assert_steward_facing(message)
+        repair_support.assert_person_facing(message)
 
 
 # ── the audit row ─────────────────────────────────────────────────────────────────────────────
@@ -340,7 +289,7 @@ def test_the_audit_row_keeps_the_shape_and_never_the_reason(env, conn, corpus):
     service = make_service(env, conn, identity_name=STEWARD)
     service.audit = audit
 
-    service.delete_pages([corpus["doomed"]], WHY, source=review.SOURCE_MCP)
+    service.delete_pages([corpus["doomed"]], WHY, source="mcp")
 
     (row,) = [r for r in audit.rows if r["tool"] == "brain_delete"]
     assert row["identity"] == STEWARD

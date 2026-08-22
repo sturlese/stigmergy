@@ -43,8 +43,8 @@
   <text x="90" y="121" class="tagH">🧠 react · @mention</text>
 
   <rect class="human" x="24" y="150" width="132" height="52" rx="10"/>
-  <text x="90" y="172" class="title">operator CLIs</text>
-  <text x="90" y="189" class="tagH">queue · entities</text>
+  <text x="90" y="172" class="title">admin console</text>
+  <text x="90" y="189" class="tagH">register an entity</text>
 
   <rect class="human" x="24" y="218" width="132" height="52" rx="10"/>
   <text x="90" y="240" class="title">MCP client</text>
@@ -70,7 +70,7 @@
   <text x="470" y="140" class="title">librarian</text>
   <text x="470" y="158" class="tagA">the ONE writer</text>
   <text x="470" y="176" class="tagA">agent drafts,</text>
-  <text x="470" y="192" class="tagA">8 gates decide</text>
+  <text x="470" y="192" class="tagA">9 gates decide</text>
   <line class="edge" x1="344" y1="160" x2="388" y2="160" marker-end="url(#arr)"/>
 
   <!-- ── the substrate ────────────────────────────────────────────────────── -->

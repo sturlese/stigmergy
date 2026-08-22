@@ -593,7 +593,7 @@ def apply_declared(worktree: str, ops) -> tuple[list[str], list[gates.Finding]]:
         # regenerate. The byte-compare is what turns that from a silently wrong registry into a
         # refusal a steward can read.
         return [], [_finding(REGISTRY_DRIFT_CODE,
-                             f"the registry {generator.FIX_COMMAND} produced is not the registry "
-                             f"this merge planned, so the approval does not describe what would "
-                             f"land", REGISTRY_RELPATH)]
+                             "the registry this regeneration produced is not the registry "
+                             "this merge planned, so the approval does not describe what would "
+                             "land", REGISTRY_RELPATH)]
     return schema.target_paths(ops), []

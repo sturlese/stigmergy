@@ -129,8 +129,7 @@ def test_list_entities_serves_exactly_the_scoped_entities_id_set_enriched(entity
     by_id = {e["id"]: e for e in out["entities"]}
     assert set(by_id) == set(svc.scoped_entities())
     assert by_id["acme"] == {"id": "acme", "name": "Acme Corp", "type": "organization",
-                             "aliases": ["Acme"], "proposed": False, "approved_by": "",
-                             "proposed_aliases": []}
+                             "aliases": ["Acme"], "approved_by": ""}
     assert out["count"] == len(out["entities"]) == len(by_id)
 
 
@@ -185,7 +184,7 @@ def test_describe_entity_entity_layer_registry_meta_plus_own_page(entity_docs_in
     out = _service(conn, fx, fx.STEWARD).describe_entity("acme")
     assert out["entity"] == {
         "id": "acme", "name": "Acme Corp", "type": "organization", "aliases": ["Acme"],
-        "proposed": False, "approved_by": "", "proposed_aliases": [],
+        "approved_by": "",
         "page": {"path": ACME_ENTITY_PAGE, "title": "Acme Corp"},
     }
 
@@ -270,7 +269,7 @@ def test_describe_entity_an_anchored_but_unregistered_id_now_resolves_for_an_ide
     out = svc.describe_entity("ghostco")
     assert "error" not in out
     assert out["entity"] == {"id": "ghostco", "name": "", "type": "", "aliases": [],
-                             "proposed": False, "approved_by": "", "proposed_aliases": [],
+                             "approved_by": "",
                              "page": None}
     assert out["view"] is None
 

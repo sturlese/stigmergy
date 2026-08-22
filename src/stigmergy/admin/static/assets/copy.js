@@ -8,7 +8,7 @@
 // The README's own convention, carried into every status, chart and timeline here.
 export const KEY = {
   human: { label: "a human",
-    explain: "a person is waited on, or a person decided — stewards, submitters, you" },
+    explain: "a person decided this — whoever captured, whoever approved, you" },
   model: { label: "the model",
     explain: "an agent drafted, gathered or proposed; it is never the last word on anything" },
   code: { label: "code",
@@ -19,16 +19,12 @@ export const KEY = {
     explain: "something could not finish — the librarian, a job, a push" },
 };
 
-// Every other closed word the console renders as a pill — verdicts in the ledger, proposal and
-// job outcomes, GitHub's workflow states — with its human label and who decided it. Keyed on the
-// raw word; an unknown word renders as itself.
+// Every other closed word the console renders as a pill — a repair's outcome, a job's, GitHub's
+// workflow states — with its human label and who decided it. Keyed on the raw word; an unknown
+// word renders as itself.
 export const WORD = {
-  approve: { label: "approved", who: "git" }, approved: { label: "approved", who: "model" },
-  reject: { label: "declined", who: "code" }, rejected: { label: "declined", who: "code" },
-  request_changes: { label: "changes requested", who: "human" },
-  merge: { label: "merged", who: "git" },
-  // legacy verdicts, on ledger rows from before captures stopped parking
-  requeue: { label: "requeued", who: "model" }, resolve: { label: "resolved by hand", who: "human" },
+  approved: { label: "approved", who: "model" },
+  rejected: { label: "declined", who: "code" },
   applied: { label: "applied", who: "git" }, pending: { label: "waiting", who: "human" },
   failed: { label: "failed", who: "fail" }, failure: { label: "failed", who: "fail" },
   ok: { label: "ok", who: "git" }, success: { label: "succeeded", who: "git" },
@@ -45,16 +41,6 @@ export function word(raw) {
   return WORD[raw] || { label: String(raw).replaceAll("_", " "), who: "code" };
 }
 
-// A decision as a past-tense verb in a sentence ("marc declined identity decision #41").
-const DECISION_VERB = {
-  approve: "approved", reject: "declined", merge: "merged", request_changes: "asked for changes to",
-  requeue: "requeued", resolve: "resolved by hand",
-};
-
-export function decisionVerb(verdict) {
-  return DECISION_VERB[verdict] || `${verdict}d`.replaceAll("_", " ");
-}
-
 // ── capture statuses (the queue's own machine) ───────────────────────────────────────────────
 export const STATUS = {
   queued: { label: "Waiting for the librarian", short: "queued", who: "code",
@@ -62,11 +48,11 @@ export const STATUS = {
   claimed: { label: "Being filed now", short: "filing", who: "model",
     explain: "a worker holds the lease; the agent is drafting a page" },
   filed: { label: "Landed in git", short: "filed", who: "git",
-    explain: "a page exists; the nine gates approved exactly this diff — and any entity it proposed exists too, waiting on a steward" },
+    explain: "a page exists; the nine gates approved exactly this diff — and any identity it introduced was born with it, confirmed by whoever captured" },
   resolved: { label: "Handled by hand", short: "resolved", who: "human",
-    explain: "a steward closed it by hand, back when captures could park — nothing writes this any more" },
-  rejected: { label: "Declined", short: "declined", who: "code",
-    explain: "a gate refused it, or a steward declined it; the reason reached the submitter" },
+    explain: "somebody closed it by hand, back when captures could park — nothing writes this any more" },
+  rejected: { label: "Refused", short: "refused", who: "code",
+    explain: "one of the nine gates refused it; the reason reached the submitter" },
   failed: { label: "Could not finish", short: "failed", who: "fail",
     explain: "the librarian ran out of attempts; an ingest error records the stage" },
 };
@@ -77,21 +63,6 @@ export function status(word) {
 
 // Which statuses a chart stacks, in the order that keeps red and green apart (CVD).
 export const OUTCOME_ORDER = ["filed", "resolved", "queued", "claimed", "rejected", "failed"];
-
-// ── review-queue item kinds ──────────────────────────────────────────────────────────────────
-export const ITEM_KIND = {
-  "identity-proposal": { label: "Proposed entity", who: "model",
-    explain: "the librarian met a name the registry did not know and created the entity page itself, unconfirmed — approve it, merge it into the entity it really is, or decline it" },
-  "alias-proposal": { label: "Proposed spelling", who: "model",
-    explain: "a name the material used for a registered entity, which the registry did not list — approve it as one of its names, or decline it" },
-  "repair-proposal": { label: "Repair proposal", who: "model",
-    explain: "the nightly proposer read the gardener's findings and drafted a fix; approving "
-      + "applies exactly that as one commit" },
-};
-
-export function itemKind(raw) {
-  return ITEM_KIND[raw] || { label: raw, who: "human", explain: "" };
-}
 
 // ── repair kinds ─────────────────────────────────────────────────────────────────────────────
 export const REPAIR_KIND = {
@@ -116,15 +87,16 @@ export function repairKind(word) {
 // ── the registry check: the birth gate's own verdict on a name ──────────────────────────────
 export const VERDICT = {
   registered: { label: "Already registered", tone: "git",
-    explain: "this spelling already resolves to a registered entity — a proposal with this verdict "
-      + "is that entity under another name: merge it." },
+    explain: "this spelling already resolves to a registered entity — there is nothing to "
+      + "register; capture about it and the page grows." },
   collides: { label: "Would collide", tone: "fail",
     explain: "the birth gate refuses this name: it would be confused with an entity that already "
-      + "exists. If it is the same thing, merge (or add the spelling as an alias); if it is "
-      + "different, it needs a name that cannot be confused." },
+      + "exists. If it is that entity under another spelling, capture about it instead — the "
+      + "filing teaches the registry the spelling; if it is a different thing, it needs a name "
+      + "that cannot be confused." },
   similar: { label: "Looks similar", tone: "human",
     explain: "nothing blocks it, but these registered entities share a distinctive word — "
-      + "check they are not the same thing under another name before confirming a second one." },
+      + "check they are not the same thing under another name before registering a second one." },
   clear: { label: "Nothing like it registered", tone: "accent",
     explain: "no registered entity resolves to it or would be confused with it — the gate still "
       + "checks again against the repo as it stands when the commit lands" },
@@ -162,7 +134,7 @@ export function check(slug) {
 
 export const SEVERITY = {
   sla: { label: "urgent", explain: "triggers the Slack notice — nothing produces one yet" },
-  warn: { label: "warning", explain: "worth a steward's look this week" },
+  warn: { label: "warning", explain: "worth a look this week" },
   info: { label: "note", explain: "good to know; nothing is wrong" },
   error: { label: "error", explain: "the substrate is inconsistent — fix before trusting answers" },
 };
@@ -213,19 +185,10 @@ export const JOB_NAME = {
   digest: "Weekly digest",
   "digest-dry-run": "Digest preview",
   "capture-reclaim": "Lease reclaim",
-  "steward-doorbell": "Steward doorbell",
 };
 
 export function jobName(word) {
   return JOB_NAME[word] || word;
-}
-
-export const DOOR = {
-  admin: "this console", mcp: "MCP", slack: "Slack", cli: "the CLI", "": "an unrecorded door",
-};
-
-export function door(word) {
-  return DOOR[word] ?? word;
 }
 
 // ── how each page is read ────────────────────────────────────────────────────────────────────
@@ -233,46 +196,36 @@ export function door(word) {
 // read this". Written for somebody opening the console for the first time.
 export const PAGE = {
   dashboard: {
-    title: "Dashboard", purpose: "the state of the brain, and what is waiting on a person",
+    title: "Dashboard", purpose: "what the brain took in, and what it did with it",
     read: [
-      "The big number is the inbox: everything a human owes a decision on. A permanent zero would "
-      + "mean nobody is capturing anything.",
-      "The pipeline shows what happened to what arrived in the selected window: the model drafts, "
-      + "code gates, and each capture lands in git, parks on a person, or is refused.",
+      "The big number is what landed in git in the selected window — the captures that became "
+      + "pages. A permanent zero means nobody is capturing anything.",
+      "The pipeline shows what happened to everything that arrived in the same window: the model "
+      + "drafts, code gates, and each capture lands in git, is refused, or could not finish.",
       "Colour is who decides — amber a human, violet the model, grey code, green git, red broke.",
-    ],
-  },
-  inbox: {
-    title: "Inbox", purpose: "everything waiting on a steward",
-    read: [
-      "Three kinds of item end up here: an entity the librarian proposed (a name the registry did "
-      + "not know — the page already exists), a spelling it proposed for a registered entity, and a "
-      + "repair proposal.",
-      "This is the same list the Slack doorbell rings from — a decision taken on any door closes "
-      + "the item everywhere, and the ledger's latest verdict shows here when one exists.",
-      "Nothing here waits on a submitter: every capture is filed, refused or failed on its own.",
     ],
   },
   captures: {
     title: "Captures", purpose: "what people sent, and what the librarian did with it",
     read: [
       "A capture is archived the moment it arrives, then claimed by the librarian, drafted by the "
-      + "agent, and gated by code. It ends filed (landed in git), declined or failed — never parked "
-      + "on a person.",
-      "A filed row says which page it became and which entities the librarian proposed while "
-      + "filing it; a refused or failed row carries the librarian's own sentence.",
+      + "agent, and gated by code. It ends filed (landed in git), refused by a gate, or failed — "
+      + "nothing waits on a person.",
+      "A filed row says which page it became and which identities the filing introduced; a "
+      + "refused or failed row carries the librarian's own sentence.",
       "Reclaim and Retention purge act on the whole queue and say exactly what they will touch.",
     ],
   },
   entities: {
-    title: "Entities", purpose: "the identities the librarian proposed, and the vocabulary they grow",
+    title: "Entities", purpose: "the vocabulary the brain has grown, and the door for a name nobody has captured about yet",
     read: [
-      "The librarian files first and governs after: a name the registry does not know becomes an "
-      + "entity page at once, marked unconfirmed, with the capture anchored to it. You approve it, "
-      + "merge it into the entity it really is, or decline it — one commit each, Decided-by you.",
-      "Each proposal is checked against the rest of the registry with the birth gate's own rule: "
-      + "already registered, would collide, looks similar, or clear — a strong hint for Merge.",
-      "Register an entity is for a name nobody has captured about yet; it is born confirmed.",
+      "The capture is the approval: a name the registry does not know becomes an entity page in "
+      + "the same commit that files the capture, confirmed by whoever captured. Nothing is "
+      + "proposed and nothing waits.",
+      "The registry is that vocabulary — every entity captures anchor to, with the spellings it "
+      + "answers to and, where the page records one, the person whose capture introduced it.",
+      "Register an entity is for a name nobody has captured about yet: what you write is queued "
+      + "as a capture and the librarian writes the page from it.",
     ],
   },
   repairs: {

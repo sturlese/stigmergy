@@ -55,7 +55,8 @@ def record_job_run(conn, job: str, *, status: str = "ok", stats: dict | None = N
 def record_ingest_error(conn, *, source_doc_id: str, stage: str, error: str, attempts: int,
                         source: str = SOURCE_CAPTURE_QUEUE) -> int | None:
     """One `ingest_errors` row for a failed item: which item, which stage, how many attempts it
-    burned. `resolved` defaults to false — a steward flips it when the item is dealt with."""
+    burned. `resolved` defaults to false — nothing in this system flips it; an operator does,
+    once the item is dealt with."""
     try:
         with conn.cursor() as cur:
             cur.execute(_INSERT_INGEST_ERROR, (source, source_doc_id, stage, error, attempts))

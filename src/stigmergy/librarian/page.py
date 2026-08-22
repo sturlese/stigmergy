@@ -30,7 +30,7 @@ class PageType:
 # Mirrors the contract linter's own `VALID_TYPES`. Only types carrying a `folder` may be created
 # here; everything else lands in `triage` rather than being downgraded. Every label carries its
 # article and the word `page`, because `report.triage_type` drops it in whole.
-_IDENTITY_REASON = "identity pages are created through a steward's review, not the fast lane"
+_IDENTITY_REASON = "identity pages are written by the birth fold, not by the filing agent"
 # Named because three separate rules ask "is this an identity page?" and must not drift:
 # `gates.gate_body_rewrite`'s permitted-rewrite branch, `repair.entity_body`'s validator, and this
 # table itself.

@@ -36,7 +36,7 @@ export async function gardenerView(host) {
     render(host,
       el("div", { class: "grid two-one" },
         chartCard({
-          title: `Findings per run, last ${days} days`, sub: "by severity — a rising line is a corpus drifting, a falling one a steward keeping up",
+          title: `Findings per run, last ${days} days`, sub: "by severity — a rising line is a corpus drifting, a falling one somebody keeping up",
           chart: historyChart(history, severityOrder),
           tableSpec: { headers: ["run", "status", ...severityOrder], rows: history.map((r) => ({ cells: [fmtWhen(r.started_at), r.status, ...severityOrder.map((s) => String(((r.stats || {}).findings_by_severity || {})[s] || 0))] })) },
         }),

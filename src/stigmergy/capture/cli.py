@@ -1,10 +1,10 @@
-"""`stigmergy-queue` — the steward's view of the write path, without a SQL client.
+"""`stigmergy-queue` — the operator's view of the write path, without a SQL client.
 
 Five subcommands (`list`, `show`, `claim`, `reclaim`, `purge`), each a thin skin over the library —
-the same seams the server and the librarian call. Nothing here decides a capture's fate: a capture
-files on its own, and what the librarian proposed is decided through `stigmergy-entities`. `claim`
-deliberately processes nothing (draining is the librarian's job) and holding a claim is how a dead
-worker is simulated.
+the same seams the server and the librarian call. Nothing here decides a capture's fate, and
+nothing here is waiting to: a capture files on its own, and the identity it introduces is born
+confirmed by whoever captured. `claim` deliberately processes nothing (draining is the librarian's
+job) and holding a claim is how a dead worker is simulated.
 
 Errors here are LOCAL and may be specific — generic over HTTP, specific in a local CLI. This
 module is the ONLY place in `stigmergy.capture` that opens a database connection or reads the
@@ -18,7 +18,7 @@ import time
 import psycopg
 
 from stigmergy import text as textutil
-from stigmergy.capture import evidence, queue, retention, schema
+from stigmergy.capture import queue, retention, schema
 from stigmergy.capture.errors import CaptureError
 from stigmergy.capture.render import (
     RECLAIM_NOW,
@@ -45,41 +45,6 @@ _KIND_WIDTH = max(len(k) for k in schema.KINDS)
 # Ctrl-C exits 130 (128 + SIGINT) — what CPython already returns uncaught, minus the traceback.
 # Not 0: an interrupted `claim --hold` leaves a real orphaned lease behind.
 EXIT_INTERRUPTED = 130
-
-# ── the enqueueing CLI's configuration guard ─────────────────────────────────────────────────
-# Below the one CLI that still enqueues (`stigmergy-entities create`), so no future door can skip
-# it. Distinct from `main`'s catch-all 2: a wrapper must be able to tell "refused by policy,
-# nothing happened" from "infrastructure down".
-EXIT_SPLIT_STORES = 3
-
-
-def add_split_stores_flag(parser) -> None:
-    """The escape hatch, spelled once. The predicate is a heuristic — a tailnet-reachable store is
-    conceivable — so an override exists; it is loud, never silent."""
-    parser.add_argument("--allow-split-stores", action="store_true",
-                        help="proceed even when the queue is remote and the evidence store is on "
-                             "this machine — the combination that files a row whose bytes the "
-                             "worker can never read")
-
-
-def refuse_split_stores(args, prog: str, ev) -> int:
-    """`0` to proceed, `EXIT_SPLIT_STORES` when the queue and the evidence plane provably belong
-    to different deployments and the operator has not said they mean it. Called FIRST in a drop,
-    before anything is read, fetched, uploaded or inserted; building the store does no I/O, so
-    asking it where it points is free."""
-    reason = evidence.split_stores_reason(
-        db_host=store.host_of_dsn(getattr(args, "dsn", None) or store.dsn()),
-        endpoint_url=ev.endpoint_url)
-    if not reason:
-        return 0
-    if not getattr(args, "allow_split_stores", False):
-        print(f"{prog}: {reason}", file=sys.stderr)
-        return EXIT_SPLIT_STORES
-    print(f"{prog}: --allow-split-stores: {reason.splitlines()[0]} Proceeding anyway — expect "
-          f"`stigmergy-queue show <id>` to report an evidence failure once it is claimed.",
-          file=sys.stderr)
-    return 0
-
 
 def connect(dsn: str | None):
     """The connection every operator CLI in this package opens, schema included: each of them may

@@ -76,7 +76,6 @@ export function icon(name, size = 17) {
 const ICONS = {
   dot: ["M12 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2"],
   dashboard: ["M3 3h8v8H3z", "M13 3h8v5h-8z", "M13 10h8v11h-8z", "M3 13h8v8H3z"],
-  inbox: ["M22 12h-6l-2 3h-4l-2-3H2", "M5.5 5.1L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.7 4H7.3a2 2 0 0 0-1.8 1.1z"],
   captures: ["M4 6h16", "M4 12h16", "M4 18h10"],
   entities: ["M20 12l-8 8-9-9V4h7z", "M7.5 7.5h.01"],
   repairs: ["M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"],
@@ -226,8 +225,8 @@ export function statusPill(word, opts = {}) {
     { title: `${word} — ${s.explain}`, small: opts.small });
 }
 
-// Every other closed word — a ledger verdict, a proposal or job outcome, a GitHub workflow
-// state — as its human label, coloured by who decided it, the raw word on hover (`copy.WORD`).
+// Every other closed word — a repair's outcome, a job's, a GitHub workflow state — as its human
+// label, coloured by who decided it, the raw word on hover (`copy.WORD`).
 export function wordPill(raw, opts = {}) {
   const w = wordCopy(raw);
   return pill(w.label, TONE_BY_WHO[w.who] || "neutral", { title: String(raw), small: opts.small });
@@ -391,7 +390,7 @@ export function applyTheme(theme) {
   } catch { /* the choice holds for this page even when it cannot be remembered */ }
 }
 
-// Three buttons rather than a cycling one: a steward can see which state is on, and reach the
+// Three buttons rather than a cycling one: the operator can see which state is on, and reach the
 // one they want in a single click instead of guessing how many presses it takes.
 export function themePicker() {
   const wrap = el("div", { class: "segmented themes", role: "group", "aria-label": "appearance" });

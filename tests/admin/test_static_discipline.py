@@ -446,15 +446,17 @@ def test_the_theme_states_are_the_three_the_picker_offers():
         "no fallback: a browser without light-dark() would render every token invalid")
 
 
-def test_each_detail_route_parses_its_own_id_and_the_entity_route_keeps_the_slug():
-    """A proposal's id is a registry slug (`acme-corp`), a capture's and a repair's a row number.
-    The router once coerced EVERY detail segment with `Number(...)`, so the first click on a
-    proposal in the inbox asked the API for `entities/NaN` and met a 404 — the one defect a
-    Python test over the routes could never see. Each route now names its own parser, and the
-    entity one must not be numeric."""
+def test_each_detail_route_parses_its_own_id():
+    """The router once coerced EVERY detail segment with `Number(...)`. That was invisible while
+    every id happened to be a row number and a 404 the moment one was not: the entity detail
+    page's segment was a registry slug (`acme-corp`), so the first click on a proposal asked the
+    API for `entities/NaN` — the one defect a Python test over the routes could never see. That
+    page is gone with the proposals it existed to show (ADR 044); the rule it bought is what keeps
+    the next non-numeric segment from repeating it, so each route still names its OWN parser and
+    the shared coercion must not come back."""
     app = (STATIC / "assets" / "app.js").read_text(encoding="utf-8")
     routes = re.findall(r"\{ pattern: /\^(\w+)\\/.*?, id: (\w+) \}", app)
-    assert dict(routes) == {"captures": "Number", "entities": "decodeURIComponent", "repairs": "Number"}, routes
+    assert dict(routes) == {"captures": "Number", "repairs": "Number"}, routes
     assert "Number(match[1])" not in app
     assert "d.id(match[1])" in app
 

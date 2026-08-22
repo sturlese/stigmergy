@@ -16,7 +16,7 @@ first amendment). `delete` is the one kind that REMOVES anything, and the one th
 twice. **No model may propose it in any spelling**: a person acts at `brain_delete` (MCP, or the
 console), or code derives it for exact-duplicate `sources/` pages, where the decision is a lookup
 rather than a judgment (ADR 039's second amendment). And **a person's own deletion is decided by
-the call that asked for it** — the steward guard runs in the act, the row is born `approved` and
+the call that asked for it** — authorization runs in the act, the row is born `approved` and
 applied in the same pass, and the diff goes back to them, because the reading of a written sweep
 moves after the push (ADR 043). Its pages are WRITTEN: `deletion` owns the frontmatter and the
 bounds, `sweep` owns the bodies. `entity-alias` is the one
@@ -47,7 +47,7 @@ repo, read at run time from the checkout; a missing skill is a named refusal, ne
 | `settings.py` | `RepairSettings.from_env` — the model and the four bounds. The ONE place this package reads the environment for configuration |
 | `errors.py` | `RepairError`, and `ProposalStateError` for "somebody got there first / there is nothing to do" |
 
-**Two doors decide who may approve, and neither is here.** `server/review.py` reaches `store`,
+**The door that decides who may approve is not here.** `server/review.py` reaches `store`,
 `schema`, `errors` and `remote.apply_approved` (a declared, reasoned import edge); `stigmergy.admin`
 reaches `store`, `schema` and `errors` and enters the apply through
 `server.review.apply_repair_and_record`, the ONE ordering both doors run. Neither may reach
@@ -128,12 +128,12 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   or not the linter counts it; that surplus is named here rather than discovered as drift. `index.corpus.link_targets` answers a deliberately DIFFERENT question — the index's edge
   graph — and is the wrong one to copy.
 - Never apply without the cross-check: `run_gates` would happily pass a well-formed additive diff
-  that is not the one a steward approved, and only the stored `target_paths` can say so. Its SHAPE
+  that is not the one the operator approved, and only the stored `target_paths` can say so. Its SHAPE
   half is per kind — a sweep that quietly stopped deleting satisfies the path comparison exactly.
 - Never restore `approved` after a failed apply. `failed` + the `error` column is the record; a
   silent revert hides that a gate refused.
 - Never compose a refusal from a caught exception's text. Every sentence raised from `remote.py`
-  reaches a steward verbatim through the review lane; git names this host's throwaway clone.
+  reaches the person who approved verbatim; git names this host's throwaway clone.
 - Never read the environment at module scope, and never open a connection outside `cli.py`.
 
 ## Contracts
@@ -219,15 +219,15 @@ package's `test_only_the_proposer_loads_a_model_stack`, and the server's declare
   it — `build_system_prompt`, `build_entity_body_system_prompt`, `build_entity_alias_system_prompt`
   — one procedure, three questions.
 
-- The review lane's own kind is `repair-proposal` (`stigmergy.review_kinds`), decided with
-  `approve`/`reject` only, authorized by a steward for EVERY page in `target_paths`, and listed in
-  the inbox's MANAGEMENT read only — a proposal has no submitter, and it names page paths. The
-  Slack doorbell deliberately does not ring for it: a kind with no card is skipped rather than
-  rendered as another kind's.
+- A proposal is decided from the admin console's Repairs page and nowhere else (ADR 044 retired
+  the MCP review lane and the Slack doorbell with it): `approve` or `reject`, authorized by the
+  operator token the console sits behind, over every page in `target_paths` at once. There is no
+  second door and no per-path guard left to walk — the console's own authorization is the whole of
+  it.
 
 Tests live in `tests/repair/` (real git, real Postgres, real gates, the offline double for the
 agent; `test_deletion.py` is the sweep's plan computation as pure functions, with no database and
-no git at all) and, for the two doors, in `tests/server/test_review.py` and `tests/admin/`; the
+no git at all) and, for the console door, in `tests/admin/`; the
 layering, the module-scope, the connection-seam, the closed apply-caller pins and the three
 granting-surface pins in `tests/test_architecture.py`. Narrative:
 [`docs/reference/repair.md`](../../../docs/reference/repair.md), decisions:

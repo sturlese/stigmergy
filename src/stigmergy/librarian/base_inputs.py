@@ -6,7 +6,6 @@ page is anchored to an entity nobody approved and stamped with labels its own co
 with. Missing keeps its meaning in every case — no ACL config is an open corpus, no registry is an
 empty one, a missing linter is a loud fail-closed refusal.
 """
-import json
 import os
 import tempfile
 from contextlib import contextmanager
@@ -113,56 +112,6 @@ def registry_present_at(repo: str, base: gitcmd.BaseRef) -> bool:
     not be read" are one answer, and this is the check that keeps that answer from being silent.
     """
     return gitcmd.blob_size(repo, base.sha, config.REGISTRY_RELPATH) >= 0
-
-
-def load_stewards(repo: str, base: gitcmd.BaseRef) -> dict:
-    """`ops/stewards.json` at `base`: the doorbell's scope -> steward-emails map, read at the base
-    commit like `load_acl`/`load_registry` above. See `_parse_stewards` for the shape rules."""
-    relpath = config.STEWARDS_RELPATH
-    return _parse_stewards(read_at(repo, base, relpath), where(base, relpath))
-
-
-def load_stewards_file(path: str) -> dict:
-    """The same map from a PLAIN FILE — the deploy-time snapshot a process with no checkout reads.
-
-    A separate entry point rather than a `repo=""` branch of the reader above: the two answer
-    different questions, and one reader silently answering "what the image shipped with" when
-    asked "what the governing commit says" is how a base-commit guarantee stops holding."""
-    try:
-        with open(path, encoding="utf-8") as f:
-            text = f.read()
-    except FileNotFoundError:
-        return {}
-    # `UnicodeDecodeError` is a `ValueError`, not an `OSError`: without it here, non-UTF-8 bytes
-    # escape as a raw decode error past every caller that fails closed on `LibrarianError`.
-    except (OSError, UnicodeDecodeError) as ex:
-        raise LibrarianConfigError(
-            f"{path} could not be read ({ex.__class__.__name__}) — it is the deployed doorbell's "
-            f"own scope -> steward map, and an unreadable one must not be mistaken for 'nobody is "
-            f"on call'") from ex
-    return _parse_stewards(text, path)
-
-
-def _parse_stewards(text: str | None, label: str) -> dict:
-    """The stewards map's shape rules, shared by both readers.
-
-    Missing -> an empty map: no scope resolves to anyone, which `record_undeliverable` makes
-    visible. Malformed JSON stays LOUD — an unparseable file must not look identical to that
-    honest "nobody is on call yet" case.
-    """
-    if text is None:
-        return {}
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as ex:
-        raise LibrarianConfigError(
-            f"{label} is not valid JSON ({ex}) — it is the doorbell's own scope -> steward map, "
-            f"and a broken one must not be mistaken for 'nobody is on call'") from ex
-    if not isinstance(data, dict):
-        raise LibrarianConfigError(
-            f"{label} must be an object mapping a zone path prefix (or \"*\") to a steward email "
-            f"or a list of steward emails")
-    return data
 
 
 def check_linter_at(repo: str, base: gitcmd.BaseRef) -> None:

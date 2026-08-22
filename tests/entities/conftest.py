@@ -1,16 +1,13 @@
-"""Fixtures for the entity-birth suite (`stigmergy.entities`): a throwaway knowledge repo — a
-bare remote plus a steward's clone — seeded with the same shape `birth`/`generator`/`clone` expect
-to find in the real knowledge repo: `ops/templates/entity.md`, a registered entity, and its page.
+"""Fixtures for the entity suite (`stigmergy.entities`): a throwaway knowledge repo — a bare
+remote plus a working clone — seeded with the same shape `birth` and `generator` expect to find in
+the real knowledge repo: `ops/templates/entity.md`, a registered entity, and its page.
 
-**Real git, always** (the same posture as `tests/librarian/support.py`): every test that
-exercises `clone.py`'s preflight/commit/push works against an actual `git init --bare` remote and
-an actual clone, never a faked diff — the properties this package exists for (a wrong-HEAD push
-publishing the wrong branch, a force-push, a rebase-then-retry race) are properties of real git,
-and a double would prove nothing about them.
+**Real git, always** (the same posture as `tests/librarian/support.py`): the checkout is an actual
+`git init --bare` remote and an actual clone rather than a directory tree pretending to be one, so
+what these tests read off disk is what a librarian worktree reads off disk.
 """
 import json
 import os
-import re
 import subprocess
 
 import pytest
@@ -36,16 +33,16 @@ sources: []
 <One clear paragraph: what this entity is and why it's in the brain.>
 """
 
-# The registry's full on-disk shape, lifecycle keys included (`kernel.registry.registry_text`
+# The registry's full on-disk shape, `approved_by` included (`kernel.registry.registry_text`
 # writes every key on every entry), so a fresh regeneration of the seeded repo is byte-identical.
 # The two seeded PAGES carry no `approved_by` at all — they predate the field — and read as
-# approved, which is exactly what `proposed: false` with an empty approver says.
+# introduced by nobody in particular, which is not a waiting state: there is none (ADR 044).
 REGISTRY = {
     "entities": {
-        "jordan-reyes": {"aliases": ["Jordan Reyes Gaya"], "approved_by": "", "name": "Jordan Reyes",
-                          "proposed": False, "proposed_aliases": [], "type": "person"},
+        "jordan-reyes": {"aliases": ["Jordan Reyes Gaya"], "approved_by": "",
+                         "name": "Jordan Reyes", "type": "person"},
         "stigmergy": {"aliases": ["The Company Brain"], "approved_by": "", "name": "Stigmergy",
-                      "proposed": False, "proposed_aliases": [], "type": "product"},
+                      "type": "product"},
     }
 }
 
@@ -113,75 +110,7 @@ def build_repo(root: str, *, extra_pages=()):
     return remote, clone
 
 
-def clone_of(remote: str, dest: str, *, name: str = "Steward B", email: str = "b@example.com"):
-    """A second, independent clone of the same remote — a second steward's laptop."""
-    git("clone", "--quiet", remote, dest, cwd=os.path.dirname(dest) or ".")
-    git("config", "user.name", name, cwd=dest)
-    git("config", "user.email", email, cwd=dest)
-    return dest
-
-
-def remote_log(remote: str, ref: str = "main") -> str:
-    return git("log", "--oneline", ref, cwd=remote).stdout
-
-
-def remote_files(remote: str, ref: str = "main") -> list[str]:
-    return git("ls-tree", "-r", "--name-only", ref, cwd=remote).stdout.splitlines()
-
-
-def remote_registry(remote: str, ref: str = "main") -> dict:
-    text = git("show", f"{ref}:ops/entity-registry.json", cwd=remote).stdout
-    return json.loads(text)
-
-
-# ── what a SERVER-door refusal may say (issue #57, ADR 030's two-door amendment) ────────────────
-# `server.review` echoes an `EntityError`'s text to a steward over MCP verbatim. A steward holds no
-# clone, so a sentence naming an absolute path or a `git -C` command tells them about the server's
-# throwaway temp directory and hands them an instruction nobody on that side of the wire can run.
-#
-# The predicate lives HERE rather than beside either test because BOTH suites assert it —
-# `tests/entities/test_remote.py` sweeps the mapped constants, `tests/server/test_review.py` asserts
-# what actually reaches the wire — and a second copy of a safety predicate is a second place for it
-# to be quietly weakened. It is strictly stronger than the `/tmp` · `/private/` · `/Users/` roots the
-# issue named: any token STARTING with `/` is an absolute path on some host. A repo-relative path
-# (`ops/templates/entity.md`) and a spaced-out alternative (`list_entities / describe_entity`) are
-# both deliberately outside it — they name nothing about the host.
-_ABSOLUTE_PATH = re.compile(r"(?:^|[\s(\[\"'`])/\S")
-
-
-def assert_steward_facing(message: str) -> None:
-    """Raise unless `message` is safe to publish to a steward over MCP."""
-    leak = _ABSOLUTE_PATH.search(message)
-    assert not leak, (
-        f"a server-door refusal named an absolute path ({message[leak.start():leak.start() + 60]!r} "
-        f"…) — the steward reading this over MCP has no filesystem to find it on, and it is the "
-        f"server host's temp directory. Log it with `exc_info=True` and map the type to a written "
-        f"sentence:\n  {message}")
-    assert "git -C" not in message, (
-        f"a server-door refusal told a steward to run a git command — `git -C` names a clone that "
-        f"exists only inside the server process and is deleted before anyone reads this:\n  "
-        f"{message}")
-
-
 @pytest.fixture()
 def repo(tmp_path):
     """`(remote, clone)` — see `build_repo`. Fresh per test."""
     return build_repo(str(tmp_path / "git"))
-
-
-@pytest.fixture()
-def require_gitleaks():
-    """Skip on a laptop with no gitleaks; FAIL in CI — same posture as
-    `tests/librarian/conftest.py::require_gitleaks` (a secrets gate must not be silently
-    absent from a green run)."""
-    from tests import testdb
-    from tests.librarian import support
-
-    if support.gitleaks_available():
-        return
-    if testdb.required():
-        pytest.fail("$STIGMERGY_TEST_DSN is set (CI mode) but gitleaks is not on PATH — refusing to "
-                    "skip the entities secrets-gate suite silently. Install gitleaks BEFORE the "
-                    "test step (see .github/workflows/ci.yml).")
-    pytest.skip("gitleaks not on PATH (brew install gitleaks) — the secrets gate cannot "
-               "be exercised without it")

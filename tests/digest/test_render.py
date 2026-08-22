@@ -170,19 +170,18 @@ def test_health_the_benign_twin_a_completed_sweep_prints_no_note():
 
 
 # ── corpus deltas ───────────────────────────────────────────────────────────────────────────────
-# "N entities born" would overclaim: `entities_born_count` counts `review_decisions` APPROVALS.
-# Every minting door writes that ledger, but they do not all fill `extra`
-# (`sections.gather_corpus_deltas`'s own docstring), so the row set is a count and never a list of
-# names. The wording is "N entity birth(s) approved" instead — the count is the best available
-# data either way; only the label changed.
+# "N entities born" is exact (ADR 044): `entities_born_count` sums what the window's FILINGS
+# wrote, and the librarian is the only writer of an entity page — so every counted birth is a page
+# that exists. It is still a COUNT and never a list of names: the report carries the names, but a
+# digest that named them would be publishing identities past the destination channel's audiences.
 def test_deltas_populated():
     deltas = _deltas(pages_count=3, titles=["Q3 Pricing Floor", "Renewal Terms", "Beta Pilot"],
                      entities=1)
     body = build_body(since=SINCE, until=UNTIL, health=_health_never_run(),
                       deltas=deltas)
     assert ('• 3 pages filed — "Q3 Pricing Floor", "Renewal Terms", "Beta Pilot"') in body
-    assert "• 1 entity birth approved" in body
-    assert "born" not in body
+    assert "• 1 entity born" in body
+    assert "approved" not in body
 
 
 def test_deltas_singular_page_for_exactly_one():
@@ -193,20 +192,20 @@ def test_deltas_singular_page_for_exactly_one():
     body = build_body(since=SINCE, until=UNTIL, health=_health_never_run(),
                       deltas=_deltas(pages_count=1, titles=["Q3 Pricing Floor"], entities=1))
     assert '• 1 page filed — "Q3 Pricing Floor"' in body
-    assert "• 1 entity birth approved" in body
+    assert "• 1 entity born" in body
 
 
 def test_deltas_zero_activity():
     body = build_body(since=SINCE, until=UNTIL, health=_health_never_run(),
                       deltas=_deltas())
     assert "• 0 pages filed" in body
-    assert "• 0 entity births approved" in body
+    assert "• 0 entities born" in body
 
 
 def test_deltas_plural_entities_for_more_than_one():
     body = build_body(since=SINCE, until=UNTIL, health=_health_never_run(),
                       deltas=_deltas(entities=2))
-    assert "• 2 entity births approved" in body
+    assert "• 2 entities born" in body
 
 
 # ── Slack mrkdwn discipline ─────────────────────────────────────────────────────────────────────

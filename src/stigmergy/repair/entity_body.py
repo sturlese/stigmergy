@@ -1,7 +1,7 @@
 """The `entity-body` op: the one repair that REPLACES text, and the narrow shape that makes it
 judgeable.
 
-Every other op in this loop is additive, and that is what let the eight gates judge it unchanged.
+Every other op in this loop is additive, and that is what let the nine gates judge it unchanged.
 This one is not, so it buys its safety somewhere else — by being **structurally unable to touch
 anything but one page's prose**:
 

@@ -3,7 +3,6 @@
 
 import { api } from "../api.js";
 import { chartCard, fillDays, hbars, partToWhole, stackedColumns } from "../charts.js";
-import { door, itemKind } from "../copy.js";
 import { windowDays } from "../state.js";
 import { banner, el, fmtDay, fmtMs, fmtNum, fmtPct, fmtWhen, mono, render, table, tile, wordPill } from "../ui.js";
 import { loading } from "./common.js";
@@ -40,7 +39,7 @@ export async function activityView(host) {
         tile("Capture → filed", filed.enough_data ? fmtMs(filed.p50_ms) : "—", latencySub(filed), { who: "git" })),
       el("div", { class: "grid halves" },
         chartCard({
-          title: `Calls per day, last ${days} days`, sub: "by tool — reads, writes and the review lane",
+          title: `Calls per day, last ${days} days`, sub: "by tool — what the brain was asked, and what it was told",
           chart: stackedColumns({ series, rows, height: 190 }),
           tableSpec: { headers: ["day", ...series.map((s) => s.label)], rows: rows.filter((r) => series.some((s) => r.values[s.key])).map((r) => ({ cells: [r.label, ...series.map((s) => String(r.values[s.key] || 0))] })) },
         }),
@@ -69,27 +68,21 @@ export async function activityView(host) {
           data.ask_questions.length
             ? el("ul", { class: "names" }, data.ask_questions.map((q) => el("li", {}, q)))
             : el("div", { class: "empty" }, el("div", { class: "empty-title" }, "no successful ask calls recorded yet"), el("div", { class: "empty-hint" }, "the first question answered over MCP or Slack shows up here"))),
-        el("div", {},
-          el("section", { class: "card" },
-            el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "Rate-limit refusals"), el("div", { class: "sub" }, "the budgets protect spend behind a public url"))),
-            table(["when", "identity", "tool"], data.rate_limited.map((r) => ({ cells: [fmtWhen(r.ts), r.identity, mono(r.tool)] })), { dense: true, empty: "no rate-limit trips recorded", emptyHint: "a trip would mean somebody hit a per-identity budget — nobody has" })),
-          el("section", { class: "card" },
-            el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "Governance decisions"), el("div", { class: "sub" }, "the latest verdict per item, whichever door took it"))),
-            table(["when", "item", "verdict", "by", "door"], metrics.decisions.slice(0, 15).map((d) => ({
-              cells: [fmtWhen(d.created_at), `${itemKind(d.kind).label} #${d.id}`, wordPill(d.verdict), d.actor, door(d.source)],
-            })), { dense: true, empty: "no decisions recorded yet", emptyHint: "the first approve or decline on an identity or a repair lands here" })))),
+        el("section", { class: "card" },
+          el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "Rate-limit refusals"), el("div", { class: "sub" }, "the budgets protect spend behind a public url"))),
+          table(["when", "identity", "tool"], data.rate_limited.map((r) => ({ cells: [fmtWhen(r.ts), r.identity, mono(r.tool)] })), { dense: true, empty: "no rate-limit trips recorded", emptyHint: "a trip would mean somebody hit a per-identity budget — nobody has" }))),
       el("section", { class: "card" },
         el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "Console actions"), el("div", { class: "sub" }, "this console's own ledger — every attempted mutation, succeeded or not"))),
         table(["when", "actor", "action", "arguments", "outcome"], (data.admin_actions || []).map((r) => ({
           cells: [fmtWhen(r.ts), r.actor, mono(r.action), argsCell(r.args), el("span", { class: "row" }, wordPill(r.outcome), r.error_class ? mono(r.error_class) : null)],
-        })), { dense: true, empty: "no console actions yet", emptyHint: "every requeue, mint, approve, dispatch or post from this console lands here, succeeded or not" })),
+        })), { dense: true, empty: "no console actions yet", emptyHint: "every reclaim, purge, registration, approve, removal, dispatch or post from this console lands here, succeeded or not" })),
       banner("info", "every number here comes from a column something else already wrote — audit rows and job rows; no new measurement channel."),
     );
   });
 }
 
-// The action's arguments, as short chips — ids and names, never a JSON dump: a decline reason
-// or a resolve note is in there verbatim, and a table cell is not where a steward reads it.
+// The action's arguments, as short chips — ids and names, never a JSON dump: a decline reason or
+// a removal's `why` is in there verbatim, and a table cell is not where a person reads it.
 function argsCell(args) {
   const entries = Object.entries(args || {}).filter(([, v]) => typeof v !== "object");
   if (!entries.length) return el("span", { class: "muted" }, "—");

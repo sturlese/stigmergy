@@ -14,10 +14,7 @@ from stigmergy.server.settings import Settings
 from tests.admin.conftest import (
     ADMIN_TOKEN,
     finish_one,
-    propose_identity,
     propose_repair,
-    register_entity,
-    remote_registry,
     submit_one,
 )
 
@@ -153,18 +150,17 @@ def test_queue_flow_over_http_is_read_only(conn, app):
 
 def test_the_error_mapping_carries_the_librarys_sentences(conn, app):
     assert _request(app, "GET", "/admin/api/queue/424242").status_code == 404
-    assert _request(app, "GET", "/admin/api/entities/ghost").status_code == 404
+    assert _request(app, "GET", "/admin/api/repairs/424242").status_code == 404
     bad = _request(app, "GET", "/admin/api/queue?status=bogus")
     assert bad.status_code == 400 and "unknown status" in bad.json()["error"]
-    # `app` carries no knowledge-repo URL: a decision is refused by name as a 409, nothing written
-    refused = _request(app, "POST", "/admin/api/entities/decide",
-                       json_body={"actor": "steward", "item_kind": "identity-proposal",
-                                  "item_id": "globex", "verdict": "approve"})
+    # `app` carries no knowledge-repo URL: a removal is refused by name as a 409, nothing written
+    refused = _request(app, "POST", "/admin/api/pages/delete",
+                       json_body={"actor": "steward", "paths": ["wiki/notes/Old.md"],
+                                  "why": "superseded"})
     assert refused.status_code == 409 and "STIGMERGY_LIBRARIAN_REPO_URL" in refused.json()["error"]
-    bad_verdict = _request(app, "POST", "/admin/api/entities/decide",
-                           json_body={"actor": "steward", "item_kind": "identity-proposal",
-                                      "item_id": "globex", "verdict": "requeue"})
-    assert bad_verdict.status_code == 400
+    no_paths = _request(app, "POST", "/admin/api/pages/delete",
+                        json_body={"actor": "steward", "paths": [], "why": "superseded"})
+    assert no_paths.status_code == 400
 
 
 def test_a_malformed_body_is_a_400_not_a_traceback(conn, app):
@@ -172,53 +168,12 @@ def test_a_malformed_body_is_a_400_not_a_traceback(conn, app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                      base_url="http://localhost") as client:
             return await client.post(
-                "/admin/api/entities/decide", content=b"not json",
+                "/admin/api/pages/delete", content=b"not json",
                 headers={"Authorization": f"Bearer {ADMIN_TOKEN}",
                          "Content-Type": "application/json"})
     response = asyncio.run(go())
     assert response.status_code == 400
     assert response.json() == {"error": "request body must be valid JSON"}
-
-
-# ── the entities surface over HTTP ───────────────────────────────────────────────────────────
-def test_entities_list_and_show_over_http(conn, app, entity_mint_repo):
-    """The list carries the two proposal kinds and the registry's verdict on each identity; the
-    detail route takes the entity's registry id — a string, never a capture number."""
-    register_entity(entity_mint_repo, conn, "Acme Corp", aliases=["Acme Corporation"])
-    propose_identity(entity_mint_repo, conn, "Acme Corporation")
-
-    listed = _request(app, "GET", "/admin/api/entities").json()
-    assert [p["id"] for p in listed["proposals"]] == ["acme-corporation"]
-    assert listed["proposals"][0]["check"]["verdict"] == "registered"
-    assert listed["aliases"] == []
-    shown = _request(app, "GET", "/admin/api/entities/acme-corporation").json()
-    assert shown["name"] == "Acme Corporation"
-    assert shown["merge_candidates"] == [{"id": "acme-corp", "name": "Acme Corp"}]
-
-
-def test_entities_decide_lands_over_http(conn, admin_settings, fake_gateway, entity_mint_repo,
-                                         require_gitleaks):
-    """The wire-level end-to-end proof: POSTing the desk's own field shape through the REAL
-    `compose` product lands a merge for real and reports the commit, over HTTP."""
-    app = compose(_inner, conn=conn, server_settings=Settings(librarian_repo_url=entity_mint_repo),
-                  admin_settings=admin_settings, gateway=fake_gateway)
-    register_entity(entity_mint_repo, conn, "Acme Corp")
-    propose_identity(entity_mint_repo, conn, "Acme Corporation")
-
-    response = _request(app, "POST", "/admin/api/entities/decide", json_body={
-        "actor": "steward@example.com", "item_kind": "identity-proposal",
-        "item_id": "acme-corporation", "verdict": "merge", "into": "acme-corp",
-    })
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["recorded"] == "merge" and len(body["commit"]) == 40
-    assert "Acme Corporation" in remote_registry(entity_mint_repo)["acme-corp"]["aliases"]
-    with conn.cursor() as cur:
-        cur.execute("SELECT verdict, extra FROM review_decisions WHERE item_id = %s",
-                    ("acme-corporation",))
-        verdict, extra = cur.fetchone()
-    assert verdict == "merge" and extra["into"] == "acme-corp"
 
 
 def test_entities_create_commissions_over_http(conn, admin_settings, fake_gateway):
@@ -243,16 +198,13 @@ def test_entities_create_commissions_over_http(conn, admin_settings, fake_gatewa
     assert capture_schema.registration_from_hints(hints).name == "Stark Industries"
 
 
-def test_entities_decide_and_create_require_the_token(conn, app):
-    for path, body in (("/admin/api/entities/decide",
-                        {"actor": "x", "item_kind": "identity-proposal", "item_id": "globex",
-                         "verdict": "approve"}),
-                       ("/admin/api/entities/create",
-                        {"actor": "x", "name": "Acme Corp", "entity_type": "organization"})):
-        refused = _request(app, "POST", path, token=None, json_body=body)
-        assert refused.status_code == 401, path
+def test_entities_create_requires_the_token(conn, app):
+    refused = _request(app, "POST", "/admin/api/entities/create", token=None,
+                       json_body={"actor": "x", "name": "Acme Corp",
+                                  "entity_type": "organization"})
+    assert refused.status_code == 401
     with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM review_decisions")
+        cur.execute("SELECT count(*) FROM capture_queue")
         assert cur.fetchone()[0] == 0, "an unauthorized request must never reach the door"
 
 
@@ -350,13 +302,11 @@ def test_repairs_approve_requires_the_token_and_never_reaches_the_apply_without_
     with conn.cursor() as cur:
         cur.execute("SELECT status FROM repair_proposals WHERE id = %s", (proposal_id,))
         assert cur.fetchone()[0] == "pending"
-        cur.execute("SELECT count(*) FROM review_decisions")
-        assert cur.fetchone()[0] == 0
 
 
-# ── the two approvals that clone, and where they run ──────────────────────────────────────────
-# Both Approve handlers reach code that clones a repo, runs the eight gates and pushes — seconds of
-# blocking work, and `gitleaks`/`git` are subprocesses. On the event loop that stalls EVERY other
+# ── the two handlers that clone, and where they run ───────────────────────────────────────────
+# Approving a repair and removing pages both reach code that clones a repo, runs the nine gates and
+# pushes — seconds of blocking work, and `gitleaks`/`git` are subprocesses. On the event loop that stalls EVERY other
 # request the process is serving, the MCP tools included, for as long as the push takes.
 def _on_the_event_loop_probe(monkeypatch, method: str):
     """Replace one `AdminService` method with a probe that reports whether it was called ON the
@@ -375,10 +325,9 @@ def _on_the_event_loop_probe(monkeypatch, method: str):
 
 
 @pytest.mark.parametrize("method, path, body", [
-    ("repair_approve", "/admin/api/repairs/{id}/approve", {"actor": "steward@example.com"}),
-    ("entity_decide", "/admin/api/entities/decide",
-     {"actor": "steward@example.com", "item_kind": "identity-proposal", "item_id": "globex",
-      "verdict": "approve"}),
+    ("repair_approve", "/admin/api/repairs/{id}/approve", {"actor": "marc@example.com"}),
+    ("pages_delete", "/admin/api/pages/delete",
+     {"actor": "marc@example.com", "paths": ["wiki/notes/Old.md"], "why": "stale"}),
 ])
 def test_an_approve_that_clones_never_runs_on_the_event_loop(conn, app, monkeypatch, method, path,
                                                              body):

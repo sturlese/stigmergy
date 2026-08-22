@@ -1,5 +1,5 @@
 """Identity → audiences resolution, in two halves: the file seam (`ops/identities.json`,
-`{"steward": "*", "ana": ["finance"]}` — `"*"` = unrestricted, returns None) and the per-request
+`{"marc": "*", "ana": ["finance"]}` — `"*"` = unrestricted, returns None) and the per-request
 half (bearer token → sha256 → token store → email → the SAME `resolve_audiences`). Fail-closed on
 EVERY path: any failure raises `IdentityError`; the server never starts open.
 
@@ -39,7 +39,7 @@ def resolve_audiences(identities_path: str, identity: str | None) -> tuple[str, 
     if not os.path.exists(identities_path):
         raise IdentityError(
             f"identities file not found: {identities_path} "
-            '(create it, e.g. {"steward": "*", "ana": ["finance"]})')
+            '(create it, e.g. {"marc": "*", "ana": ["finance"]})')
     try:
         with open(identities_path, encoding="utf-8") as f:
             text = f.read()

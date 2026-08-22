@@ -5,7 +5,7 @@ The output is serialized through `kernel.registry.save_registry` and read back t
 one writer sorts and pins separators). Scanned: `wiki/entities/` and nothing else — this module
 governs entity BIRTH; a MERGE is a different decision. The canonical id is `slugify(title)`, a
 contract: the pages carry no id field, so a free-form id would be a fact no regeneration could
-recover — `birth.prepare` verifies the steward's `--id` against it and refuses a mismatch. A page
+recover — `birth.prepare` verifies the id it is handed against it and refuses a mismatch. A page
 this cannot read is an ERROR, never a skip: a silently dropped page is a registry that quietly
 stops resolving a name the graph anchored on.
 """
@@ -28,24 +28,27 @@ REGISTRY_RELPATH = "ops/entity-registry.json"
 # page's shape, read from the checkout and never reproduced on this side.
 TEMPLATE_RELPATH = "ops/templates/entity.md"
 
-# The PAGE-side spelling of the two lifecycle facts; `kernel.registry` carries the registry side,
-# and `registry_of` is where the two meet. `approved_by` PRESENT AND EMPTY is a proposal — the
-# librarian wrote the page and nobody has confirmed the identity; a page with no such key at all
-# predates the field and was born through a steward's door, so it reads as approved. Absent is
-# not proposed, or every entity minted before this field existed would land in the inbox.
+# The PAGE-side spelling of the one lifecycle fact; `kernel.registry` carries the registry side,
+# and `registry_of` is where the two meet. `approved_by` names the person whose capture introduced
+# the identity — born confirmed, never waiting on anybody (ADR 044). A page with no such key at
+# all predates the field and reads the same way.
 APPROVED_BY_KEY = "approved_by"
-PROPOSED_ALIASES_KEY = "proposed_aliases"
 
-# The only command this subsystem tells anyone to run — a message containing a command is an
-# executable promise. This exact string is also written by hand in the knowledge repo's own
-# `stigmergy_lint.py` (stdlib-only, cannot import it); the duplication is declared at both ends.
-FIX_COMMAND = "stigmergy-entities regenerate"
+# What a drift between the entity pages and the derived registry costs a reader. There is no
+# command any more (ADR 044 retired the CLI that had one), and a message containing a command is an
+# executable promise — so this sentence names whose the fix is instead, and it must not promise the
+# worker will heal it: `librarian.identity` REFUSES a capture that would write an identity while
+# the two sides disagree, so the pass that would regenerate the file is the pass that never runs.
+# The knowledge repo's own `stigmergy_lint.py` (stdlib-only, cannot import this) carries the same
+# words by hand.
+FIX_COMMAND = ("an operator puts the pages and the registry back in step in the knowledge repo, "
+               "and the librarian refuses to write an identity until they do")
 
 # `entity_type` on the page -> `type` in the registry. The vocabulary is `ops/templates/entity.md`'s
 # own comment (the human-facing source of truth); the linter does not enum-check the field, so this
 # is the only enforcement. `birth.prepare` refuses anything outside it; the generator is LENIENT on
 # read — one bad pre-existing page must not make the whole registry unregenerable. `project` is a
-# governed identity like the rest (ADR 037 D3): an ongoing initiative earns birth-by-steward and a
+# governed identity like the rest (ADR 037 D3): an ongoing initiative earns a page of its own and a
 # regenerated view, which is why it is an entity here and NOT a page type.
 ENTITY_TYPES = ("person", "organization", "product", "tool", "repository", "place", "project")
 
@@ -66,16 +69,13 @@ def canonical_id_for(name: str) -> str:
 
 @dataclass(frozen=True)
 class PageEntity:
-    """One entity page's identity claim, as the generator read it — and its lifecycle: whether
-    a person has confirmed it yet, who, and which spellings still wait for one."""
+    """One entity page's identity claim, as the generator read it, and who introduced it."""
     canonical_id: str
     name: str
     entity_type: str
     aliases: tuple[str, ...]
     relpath: str
-    proposed: bool = False
     approved_by: str = ""
-    proposed_aliases: tuple[str, ...] = ()
 
 
 def entities_dir(repo: str) -> str:
@@ -144,9 +144,7 @@ def read_entity_pages(repo: str) -> list[PageEntity]:
             entity_type=str(front.get("entity_type") or DEFAULT_ENTITY_TYPE).strip()
             or DEFAULT_ENTITY_TYPE,
             aliases=_list_of(front, "aliases"), relpath=relpath,
-            proposed=approved_by is not None and not str(approved_by).strip(),
-            approved_by=str(approved_by or "").strip(),
-            proposed_aliases=_list_of(front, PROPOSED_ALIASES_KEY)))
+            approved_by=str(approved_by or "").strip()))
 
     duplicates = _duplicate_ids(out)
     if duplicates:
@@ -163,8 +161,8 @@ def read_entity_pages(repo: str) -> list[PageEntity]:
             "happened to index last: " + "; ".join(ambiguous)
             + f". Ids are distinct (they are slugs) but `by_alias` is keyed by the MATCHER, which "
               f"folds case, accents, punctuation and legal suffixes — 'Acme' and 'Acme Corp.' are "
-              f"one key. Rename one, or make it an alias of the other and delete its page, then "
-              f"run `{FIX_COMMAND}`")
+              f"one key. Rename one, or make it an alias of the other and delete its page — "
+              f"{FIX_COMMAND}")
     return sorted(out, key=lambda e: e.canonical_id)
 
 
@@ -216,8 +214,7 @@ def registry_of(entities) -> Registry:
     registry = Registry()
     for entity in entities:
         registry.entities[entity.canonical_id] = registry_module.entry(
-            entity.name, entity.entity_type, entity.aliases, proposed=entity.proposed,
-            approved_by=entity.approved_by, proposed_aliases=entity.proposed_aliases)
+            entity.name, entity.entity_type, entity.aliases, approved_by=entity.approved_by)
     _index(registry)
     return registry
 
@@ -267,16 +264,14 @@ def _describe(entity: dict) -> str:
 
 
 def _lifecycle(entity: dict) -> str:
-    """One entry's lifecycle in the words a steward acts in."""
-    if entity.get(registry_module.PROPOSED_KEY):
-        return "proposed (nobody has approved it yet)"
+    """Who introduced this identity, in the words a reader acts in."""
     approver = entity.get(registry_module.APPROVED_BY_KEY) or ""
-    return f"approved by {approver}" if approver else "approved (before approvals were recorded)"
+    return f"introduced by {approver}" if approver else "introduced before approvals were recorded"
 
 
 def compare(derived: Registry, committed: Registry, *,
             page_of: dict[str, str] | None = None) -> list[Divergence]:
-    """Every way the two disagree, each named in the vocabulary a steward acts in. Ordered by
+    """Every way the two disagree, each named in the vocabulary an operator acts in. Ordered by
     entity id — a check whose output reorders between runs is one nobody can diff in CI."""
     page_of = page_of or {}
     out: list[Divergence] = []
@@ -286,48 +281,39 @@ def compare(derived: Registry, committed: Registry, *,
         if theirs is None:
             out.append(Divergence(canonical_id, (
                 f"{mine['name']!r} ({page}) is an entity page that {REGISTRY_RELPATH} does not "
-                f"register at all — run `{FIX_COMMAND}` to fix it")))
+                f"register at all — {FIX_COMMAND}")))
             continue
         if mine is None:
             out.append(Divergence(canonical_id, (
                 f"{theirs['name']!r} is registered in {REGISTRY_RELPATH} ({_describe(theirs)}) but "
                 f"no page in {ENTITIES_RELDIR}/ declares it — either the page was deleted or the "
-                f"entry was hand-written; run `{FIX_COMMAND}` to fix it")))
+                f"entry was hand-written; {FIX_COMMAND}")))
             continue
         if mine["name"] != theirs["name"]:
             out.append(Divergence(canonical_id, (
                 f"{page} is titled {mine['name']!r} but {REGISTRY_RELPATH} registers "
-                f"{canonical_id!r} as {theirs['name']!r} — run `{FIX_COMMAND}` to fix it")))
+                f"{canonical_id!r} as {theirs['name']!r} — {FIX_COMMAND}")))
         if mine["type"] != theirs["type"]:
             out.append(Divergence(canonical_id, (
                 f"{mine['name']!r} ({page}) declares entity_type {mine['type']!r} but "
-                f"{REGISTRY_RELPATH} has type {theirs['type']!r} — run `{FIX_COMMAND}` to fix it")))
+                f"{REGISTRY_RELPATH} has type {theirs['type']!r} — {FIX_COMMAND}")))
         extra = sorted(set(mine["aliases"]) - set(theirs["aliases"]))
         missing = sorted(set(theirs["aliases"]) - set(mine["aliases"]))
         if extra:
             out.append(Divergence(canonical_id, (
                 f"{mine['name']!r} ({page}) declares alias(es) {', '.join(repr(a) for a in extra)} "
-                f"that {REGISTRY_RELPATH} does not have — run `{FIX_COMMAND}` to fix it")))
+                f"that {REGISTRY_RELPATH} does not have — {FIX_COMMAND}")))
         if missing:
             out.append(Divergence(canonical_id, (
                 f"{REGISTRY_RELPATH} carries alias(es) "
                 f"{', '.join(repr(a) for a in missing)} for {mine['name']!r} that {page} no longer "
-                f"declares — run `{FIX_COMMAND}` to fix it")))
-        # The lifecycle is a registry FACT like the type: an approval the page records and the
-        # registry does not is an entity the inbox keeps asking about, and the reverse is an
-        # identity nobody confirmed that every reader treats as confirmed.
+                f"declares — {FIX_COMMAND}")))
+        # Who introduced an identity is a registry FACT like the type: the page and the registry
+        # disagreeing about it means one of the two was written by hand.
         if _lifecycle(mine) != _lifecycle(theirs):
             out.append(Divergence(canonical_id, (
                 f"{mine['name']!r} ({page}) is {_lifecycle(mine)} but {REGISTRY_RELPATH} says "
-                f"{_lifecycle(theirs)} — run `{FIX_COMMAND}` to fix it")))
-        proposed_key = registry_module.PROPOSED_ALIASES_KEY
-        mine_proposed = sorted(set(mine.get(proposed_key) or ()))
-        theirs_proposed = sorted(set(theirs.get(proposed_key) or ()))
-        if mine_proposed != theirs_proposed:
-            out.append(Divergence(canonical_id, (
-                f"{mine['name']!r} ({page}) has the proposed alias(es) "
-                f"{_fmt_list(mine_proposed)} but {REGISTRY_RELPATH} has {_fmt_list(theirs_proposed)} "
-                f"— run `{FIX_COMMAND}` to fix it")))
+                f"{_lifecycle(theirs)} — {FIX_COMMAND}")))
     return out
 
 
@@ -351,7 +337,7 @@ def regenerate(repo: str) -> RegenerateOutcome:
 
     Byte-level on purpose: it differs from the semantic answer exactly once — a semantically-right
     but differently-formatted hand-written registry — and reporting that as a change lets a
-    steward make the one canonicalization commit instead of the tool lying about what it wrote.
+    operator make the one canonicalization commit instead of the tool lying about what it wrote.
     Writes through `save_registry` (tmp + `os.replace`), so an interruption leaves the previous
     registry intact — this file is what every anchoring decision resolves against.
     """

@@ -4,7 +4,7 @@ The proposer is structurally incapable of writing: its two tools read, and no th
 What it produces is a declaration — a set of additive edits, one page's drafted body, or which of
 two identities survives a merge — and CODE decides twice whether that declaration is admissible:
 here, at propose time, ending in the kind's real validator against the real checkout; and again in
-`remote.apply_via_clone`, against the fresh clone, through the same eight gates. Neither
+`remote.apply_via_clone`, against the fresh clone, through the same nine gates. Neither
 validation trusts the other, because they are answering the same question about two different
 trees.
 

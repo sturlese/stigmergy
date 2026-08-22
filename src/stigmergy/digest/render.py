@@ -80,10 +80,11 @@ def _render_deltas(deltas: dict) -> list[str]:
         lines.append(f"• {n_pages} {_plural(n_pages, 'page')} filed — {titles}")
 
     n_entities = deltas["entities_born_count"]
-    # "approved", not "born": this counts `review_decisions` APPROVALS, and an approved proposal
-    # can exist without a mint — the label has to be exact even where the count cannot be.
-    noun = "birth" if n_entities == 1 else "births"
-    lines.append(f"• {n_entities} entity {noun} approved")
+    # "born" is exact now (ADR 044): this sums what the window's FILINGS actually wrote, so every
+    # counted birth is a page in the repo. It said "approved" while the count came off a ledger of
+    # verdicts, where an approval could exist without a page.
+    noun = "entity" if n_entities == 1 else "entities"
+    lines.append(f"• {n_entities} {noun} born")
     return lines
 
 

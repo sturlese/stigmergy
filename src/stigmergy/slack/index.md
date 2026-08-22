@@ -10,19 +10,17 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 
 | Module | What it is |
 |---|---|
-| `app.py` | `stigmergy-slack`'s entry point: Bolt async app, Socket Mode, event registration, `acquire_singleton_lock`, and the poller and doorbell as two background tasks. Read it first when tracing an event; only it and `bolt_gateway.py` may import `slack_bolt`/`slack_sdk` |
+| `app.py` | `stigmergy-slack`'s entry point: Bolt async app, Socket Mode, event registration, `acquire_singleton_lock`, and the poller as its one background task. Read it first when tracing an event; only it and `bolt_gateway.py` may import `slack_bolt`/`slack_sdk` |
 | `identity.py` | Slack profile email -> `ops/identities.json` via `resolve_audiences`; `is_ignorable_event`; `is_configured_workspace`; `UsersInfoCache`; the five-way `IdentityResult` |
 | `channels.py` | `ops/slack-channels.json` — a channel's audience scope, empty-set default for anything unlisted; `channel_audiences_live` prefers the index's snapshot over the baked file (`server.ops_files`' order), so a scoping edit lands without a deploy |
 | `context.py` | `SlackContext` (process-wide conn, embedder, rate limiter, audit, evidence, cache, link resolver, "Show it here" tokens), `resolve_slack_identity`, `build_service`, and the two seams `decline` and `post_or_log` |
 | `mention.py` | `@brain <question>` and DMs: placeholder, channel/DM scope split, retrieval-set comparison, edit-retry-then-fallback |
 | `capture.py` | the 🧠 gesture: public channels only, verbatim thread material, provenance hints, reserve-then-fill dedup, progress-reaction lifecycle (`mark_in_progress`/`finish_progress`, driven from `app.py`) |
 | `show_it_here.py` | the "Show it here" click: a cited page re-read under the clicker's own identity, server-side scoped |
-| `poller.py` | the push channel back into the thread, over `store.REPORTABLE_STATUSES` (the terminal statuses), read-only against `capture_queue`; a filed card names the entities the librarian proposed |
-| `doorbell.py` | the steward doorbell: read-only over `review.items_for_doorbell` (the registry the index snapshot carries), one DM per (item, steward) for each identity or spelling the librarian proposed, scoped by the proposal's own entity page, the card a replacement supersedes edited shut first, undeliverable outcomes recorded, and `close_decided_cards` — the end of every pass, which edits a decided item's newest DM into a buttonless closed card off `review.latest_decisions`. `TERMINAL_EDIT_CODES` is what separates an edit worth retrying from a message that is gone |
-| `review.py` | the Block Kit review surface: Approve / Decline buttons calling `review.review_decide_safe` directly, and the merge modal — the one verdict that needs a second fact, which registered entity the proposal really is |
-| `render.py` | the pure `(answer_dict, link_resolver) -> blocks` renderer plus every other message's blocks, the two doorbell cards (identity, spelling) and the merge modal |
+| `poller.py` | the push channel back into the thread, over `store.REPORTABLE_STATUSES` (the terminal statuses), read-only against `capture_queue`; a filed card names the entities that capture introduced |
+| `render.py` | the pure `(answer_dict, link_resolver) -> blocks` renderer plus every other message's blocks |
 | `mrkdwn.py` | CommonMark -> Slack `mrkdwn`, code spans protected |
-| `store.py` | this package's own two tables and their DDL: `slack_submissions` and `steward_notifications`. Also the package's only door into `stigmergy.capture` (`.schema` alone) |
+| `store.py` | this package's own table and its DDL: `slack_submissions`. Also the package's only door into `stigmergy.capture` (`.schema` alone) |
 | `copy.py` | every user-facing string, so a wording change is one diff |
 | `gateway.py` | `SlackGateway` (the Protocol every Web API call crosses), `SlackApiError`, and `FakeSlackGateway` |
 | `bolt_gateway.py` | the real gateway over `slack_sdk`'s `AsyncWebClient` |
@@ -44,16 +42,8 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 - `service.call_async` (via `mention._run_ask`) — the seam that writes `audit_log` and spends the
   `ask` bucket. Every `ask` goes through it; never `AnswerService(...).ask(...)` directly.
 - `render.render_answer` — the one answer renderer, pure.
-- `store` — the only reader/writer of both tables; a new Slack-originated write reuses `reserve`'s
-  dedup pattern. `last_notification` is the one read of a (item, steward) row — state AND card
-  pointer together; `last_notified_state` is its state-only wrapper, and `is_live_card` the
-  row-level twin of `open_notifications`' own filter.
-- `review.review_decide_safe` — the only call `review.py` makes to change anything; every
-  button and the merge modal funnel through `_decide_and_confirm`, which stamps `source="slack"`.
-  The merge modal gates nothing on its own: its candidates are registry names `list_entities`
-  serves to every identity, and `review_decide`'s steward guard runs on submit.
-- `doorbell._load_stewards_cached` — the notifier's 300s cache. A decision path calls
-  `review.load_stewards` fresh instead, so a revoked steward cannot approve off a stale cache.
+- `store` — the only reader/writer of this package's table; a new Slack-originated write reuses
+  `reserve`'s dedup pattern.
 - `gateway.SlackGateway` / `FakeSlackGateway` — every handler takes a gateway as an argument.
 
 ## Avoid
@@ -76,15 +66,9 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
   `capture.schema.SOURCE_HINT_KEYS`.
 - Letting `identity.UsersInfoCache` or the "Show it here" token store grow unbounded — both need a
   size cap with oldest-first eviction, not just a TTL.
-- Recording WHO decides in a modal's `private_metadata`. It carries only WHAT the decision is
-  about; the decider is re-resolved from the submission event's own body.
-- Deciding anything about a proposal HERE. The merge modal collects one fact — which registered
-  entity the proposal really is — and hands it to `review_decide` as `into`; whether that entity
-  exists, is confirmed, or collides is `server.review` and `entities.decide`'s to refuse, on every
-  door alike.
-- Importing `stigmergy.server.review`'s `KIND_*` from a renderer — use `stigmergy.review_kinds`,
-  which keeps `render.py` free of `librarian`/`entities`/PyYAML.
-- Caching `ops/stewards.json` on the authorization path.
+- Deciding anything about an identity HERE. There is nothing to decide: a capture introduces the
+  entity it is about, born confirmed by whoever captured
+  ([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md)).
 
 ## Data & contracts
 
@@ -110,50 +94,17 @@ Narrative: [`docs/reference/slack.md`](../../../docs/reference/slack.md).
 - `slack_submissions` — UNIQUE on `(team_id, channel_id, thread_ts, slack_user_id)`: the dedup grain
   is per (thread, reactor), so one person 🧠-ing two messages of a thread is one capture and two
   people are two.
-- `steward_notifications` — one row per (item_kind, item_id, steward_email) with the `state` last
-  notified at, plus `channel_id`/`message_ts`, the card's own Slack coordinates. ONE row means one
-  pair of coordinates: a second card for the same item overwrites the first's, which is why
-  `_notify_item` supersedes the old message before posting the new one. `state` carries three
-  namespaces separated by prefixes owned in `store.py`: a real item state (unprefixed), an
-  `undeliverable:<class>` outcome that never became a message, and a `closed:*` card the doorbell
-  has already finished with — `closed:<verdict>` edited shut, or `CLOSED_UNREACHABLE` for one Slack
-  will never let it edit again. `mark_notified` PRESERVES the coordinates on a state-only re-mark;
-  `open_notifications` is the reader that skips both prefixed namespaces and every row missing
-  either coordinate (a pre-change row — nothing can recover where its message went).
-- `stigmergy.review_kinds.ITEM_KINDS` — `identity-proposal`, `alias-proposal` and
-  `repair-proposal`, the three kinds a steward decides; the doorbell deliberately rings for only
-  the first two (ADR-039's no-ring decision for repairs). An item's `id` is the entity's registry
-  id, or `<entity id>:<alias>` for a spelling — the same ids `review_decide` takes.
-- `doorbell._state_signature` — the per-(item, steward) fingerprint. A proposal has one open state,
-  so a card is sent once; a decision closes it through the ledger, and the card's scope is the
-  proposal's own entity page (`item["page"]`), so a zone delegated in `ops/stewards.json` rings its
-  own steward.
-- `doorbell.LOOKUP_FOUND` / `LOOKUP_NOT_FOUND` / `LOOKUP_FAILED` — a transient API failure must
-  never be recorded as the permanent fact "no such person in this workspace".
-- `review._MODAL_VERDICTS` — the `(item_kind, verdict_token)` pairs that open a modal first: only
-  `(identity-proposal, merge)`. Every other button fires directly, with no note — friction only
-  where a second fact is actually required.
-
 ## Behaviour worth knowing before editing
 
 - **The channel scopes the thread; the asker gets the rest by DM.** A public-channel answer is
   computed at the CHANNEL's audience scope, never the asker's wider one — a channel is many
   readers, and the ACL model scopes a reader. Whether to also DM a fuller answer is decided by two
   cheap `search()` calls, never two `ask()` runs and never a raw-hit comparison.
-- **Nothing is ever asked of a submitter.** A threaded message is ordinary conversation to this
-  bot; the one thing a submitter hears back is the poller's report of what the librarian did — a
-  filed card names the entities it proposed and says nothing waits on them.
-- `store.py` is the only module that may import `stigmergy.capture`, and only `.schema`. The
-  doorbell's closing pass therefore reads the `review_decisions` ledger through
-  `server.review.latest_decisions`, never `capture.decisions` directly.
-- **A doorbell card is a control surface with a lifetime.** Once the item is decided — through any
-  door that writes the ledger — the card is edited shut rather than left clickable, and a card a
-  newer one replaces is edited shut before the replacement goes out. The trigger for closing is the
-  LEDGER, not the registry: every door that decides a proposal (the console, MCP,
-  `stigmergy-entities`) writes a ledger row, and the registry snapshot the doorbell reads catches
-  up later.
-- Every decision this package records names its door: `_decide_and_confirm` passes
-  `review.SOURCE_SLACK` once, and every button and the merge modal funnel through it.
+- **Nothing is ever asked of a submitter, before or after.** A threaded message is ordinary
+  conversation to this bot; the one thing a submitter hears back is the poller's report of what the
+  librarian did — a filed card names the entities their capture introduced and says the identity is
+  confirmed by them ([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md)).
+- `store.py` is the only module that may import `stigmergy.capture`, and only `.schema`.
 
 ## Tests
 
@@ -163,7 +114,7 @@ primitives and the dedup-key migration against real Postgres) and `test_app_wiri
 the singleton lock, event-team-id wiring, the progress-reaction lifecycle). No test here exercises
 a real workspace: rate limits, real payload quirks and Socket Mode reconnects are outside what a
 green run says anything about. `tests/test_architecture.py` pins the import allowlist
-(`{server, answer, capture.schema, review_kinds}`, `capture.schema` scoped to `store.py`), the raw
+(`{server, answer, capture.schema}`, `capture.schema` scoped to `store.py`), the raw
 SQL column names against `capture_queue`, that nothing imports `stigmergy.slack` back, that no
 Slack identifier appears below this package, and the event-team-id rule.
 `tests/test_deployment_config.py` pins the `slack` process group.

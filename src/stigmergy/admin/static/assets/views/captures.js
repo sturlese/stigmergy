@@ -1,6 +1,7 @@
 // Captures: what people sent and what the librarian did with it. The list is a scan, the detail
-// is the read. Nothing here acts on one row: every capture files, is refused or fails on its own,
-// and what a steward governs is the proposals it left behind (the Entities desk).
+// is the read. Nothing here acts on one row and nothing here is a decision: a capture files, is
+// refused by a gate, or fails, and the identities it introduces are born in the same commit
+// (ADR 044) — the Entities desk lists them, it does not govern them.
 
 import { api } from "../api.js";
 import { chartCard, fillDays, partToWhole, stackedColumns } from "../charts.js";
@@ -92,14 +93,14 @@ function arrivalsChart(metrics, days) {
   });
 }
 
-// What became of the row, in a few words: the page it became and what it proposed, or the
-// report's own headline for a refusal or a failure.
+// What became of the row, in a few words: the page it became and the identities it introduced,
+// or the report's own headline for a refusal or a failure.
 function outcomeCell(row) {
   const report = row.report || {};
   if (row.status === "filed") {
-    const proposed = (report.entities_proposed || []).map((e) => e.name || e.id).filter(Boolean);
+    const born = (report.entities_born || []).map((e) => e.name || e.id).filter(Boolean);
     return el("span", { class: "row" }, mono((report.page_path || row.result_ref || "").split("@")[0].split("/").pop() || "—", "nowrap"),
-      proposed.length ? pill(`proposed ${proposed.join(", ")}`, "model", { small: true }) : null);
+      born.length ? pill(`introduced ${born.join(", ")}`, "human", { small: true }) : null);
   }
   if (row.status === "rejected" || row.status === "failed" || row.status === "resolved") {
     const text = String(report.summary || row.error || "").replace(/^\w+ — /, "");
@@ -124,8 +125,8 @@ export async function captureDetailView(host, id) {
   await loading(host, async () => {
     const row = await api.get(`queue/${id}`);
     const report = row.report || {};
-    const proposed = report.entities_proposed || [];
-    const proposedAliases = report.aliases_proposed || [];
+    const born = report.entities_born || [];
+    const aliasesAdded = report.aliases_added || [];
     render(host,
       el("div", { class: "crumbs" }, link("captures", "Captures"), icon("chevron"), el("span", {}, `#${row.id}`)),
       el("section", { class: "card" },
@@ -134,12 +135,13 @@ export async function captureDetailView(host, id) {
             el("h2", {}, `Capture #${row.id}`, " ", el("span", { class: "sub" }, `${row.kind} · sent by ${row.submitted_by}`)),
             statusSentence(row)),
           el("div", { class: "spacer" })),
-        proposed.length || proposedAliases.length ? banner("info",
-          el("p", {}, el("strong", {}, "The librarian proposed while filing this: "),
-            ...proposed.flatMap((e, i) => [i ? ", " : "", link(`entities/${e.id}`, `${e.name || e.id} (${e.type || "entity"})`)]),
-            proposed.length && proposedAliases.length ? "; " : "",
-            ...proposedAliases.flatMap((a, i) => [i ? ", " : "", `«${a.alias}» as a spelling of ${a.entity}`])),
-          el("p", {}, "The page is filed and anchored already; a steward confirms, merges or declines the identity from the ", link("entities", "Entities desk"), ". Nothing waits on the submitter.")) : null,
+        born.length || aliasesAdded.length ? banner("info",
+          born.length ? el("p", {}, el("strong", {}, "Identities this capture introduced: "),
+            ...born.flatMap((e, i) => [i ? ", " : "", `${e.name || e.id} (${e.type || "entity"})`,
+              e.confirmed_by ? `, confirmed by ${e.confirmed_by}` : ""])) : null,
+          aliasesAdded.length ? el("p", {}, el("strong", {}, "Spellings it taught the registry: "),
+            ...aliasesAdded.flatMap((a, i) => [i ? ", " : "", `«${a.alias}» for ${a.entity}`])) : null,
+          el("p", {}, "All of it landed in the same commit that filed the page — nothing was proposed and nothing waits on a decision. The ", link("entities", "Entities desk"), " lists the whole vocabulary.")) : null,
         el("div", { class: "hr" }),
         kv([
           ["arrived", `${fmtWhen(row.created_at)} (${fmtAge(Date.now() - new Date(row.created_at).getTime())} ago)`],

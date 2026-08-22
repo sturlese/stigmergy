@@ -134,8 +134,8 @@ def test_a_document_capture_tells_the_agent_the_source_half_is_handled(rig, clea
     assert recording.agent.flow_notes[-1] == ""
 
 
-# ── proposals and the outcome contract compose unchanged: it IS the fast lane ──────────────────
-def test_a_document_about_a_new_name_files_the_document_the_note_and_the_proposed_entity(
+# ── births and the outcome contract compose unchanged: it IS the fast lane ─────────────────────
+def test_a_document_about_a_new_name_files_the_document_the_note_and_the_newborn_entity(
         rig, clean_queue):
     """A document about a name the registry does not know lands whole, in one commit: the source
     part, the synthesis anchored to the newborn entity, and the entity's own page."""
@@ -147,4 +147,4 @@ def test_a_document_about_a_new_name_files_the_document_the_note_and_the_propose
     changed = support.changed_paths(env.bare, sha)
     assert any(p.startswith("sources/documents/") for p in changed)
     assert "wiki/entities/Umbrella Corp.md" in changed
-    assert result.report["entities_proposed"][0]["id"] == "umbrella-corp"
+    assert result.report["entities_born"][0]["id"] == "umbrella-corp"

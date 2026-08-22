@@ -25,8 +25,8 @@ whole of the live provenance dialect; nothing emits `representation`, `extractio
 `source_file_id`, `source_name` or the folder-derived `entity_kind`/`entity_aliases`/
 `entity_status`/`unit`/`period`/`seq`/`stage` any more. They are documented below because pages
 carrying them are still in the corpus and still get read. (`entity_type` is a different field and
-is very much live: `stigmergy-entities` writes it on every entity page, and it becomes that entity's
-`type` in the registry.)
+is very much live: the librarian writes it on every entity page it creates, and it becomes that
+entity's `type` in `ops/entity-registry.json`.)
 
 **`entity:`'s own rule — what it means, who may write it, and the fast lane's use of it — is
 documented in full at [`page-contract.md`](page-contract.md).** This file keeps the field in
