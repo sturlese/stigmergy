@@ -166,6 +166,25 @@ def test_an_authored_page_and_a_view_in_one_sweep_split_between_the_two_halves(t
         assert not deletion.references(_after(ops, path), {"Doomed"})
 
 
+@pytest.mark.parametrize("body, sep", [("# T\n\nSee [[Doomed]].\n", ""),
+                                       ("\n# T\n\nSee [[Doomed]].\n", "\n")],
+                         ids=["no-blank-line", "blank-line"])
+def test_a_rewritten_page_keeps_its_own_separator_after_the_frontmatter(tmp_path, body, sep):
+    """**Observed on the deployment**, on `wiki/entities/Hermes AI Labs.md`: a page written without
+    a blank line after its `---` gained one, because `compose` normalised the separator. A page
+    that gained a byte is a page in the sweep's blast radius for a change nobody made — the rule
+    `deletion.scrubbed` states about the closing fence, applied to the line under it."""
+    root = str(tmp_path)
+    _write(root, "wiki/notes/Doomed.md", _page("Doomed"))
+    _write(root, "wiki/notes/T.md", "---\ntype: note\nrelated: []\nsources: []\n---\n" + body)
+
+    ops = _written(root, ["wiki/notes/Doomed.md"])
+
+    after = _after(ops, "wiki/notes/T.md")
+    assert after.startswith("---\ntype: note\nrelated: []\nsources: []\n---\n" + sep + "# T")
+    assert not deletion.references(after, {"Doomed"})
+
+
 def test_a_plan_that_rewrites_no_page_asks_no_model_at_all(tmp_path, monkeypatch):
     """Nothing refers to the going page, so there is nothing to write: the plan returns as it
     came, and a writer that would have raised proves no call was made."""

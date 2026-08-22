@@ -178,11 +178,13 @@ def compose(head: str, original_body: str, body_markdown: str) -> str:
     the frontmatter, a single trailing newline."""
     if body_markdown.strip("\n") == original_body.strip("\n"):
         return head + original_body
-    # The blank line belongs BETWEEN a frontmatter block and a body, and only there: a page with
-    # no readable head would otherwise gain a leading blank line on every sweep, which is a byte
-    # the sweep's blast radius has to account for and nobody asked for.
-    separator = "\n" if head else ""
-    return head + separator + body_markdown.strip("\n") + "\n"
+    # The separator is the page's OWN, never one this normalises to: the contract's usual shape is
+    # a blank line after the frontmatter, and a page written without one gained a byte on every
+    # sweep — observed on the deployment, on `wiki/entities/Hermes AI Labs.md`. A page that gained
+    # a byte is a page in the sweep's blast radius for a change nobody made, which is the rule
+    # `scrubbed` states about the closing fence one function over.
+    lead = original_body[:len(original_body) - len(original_body.lstrip("\n"))]
+    return head + lead + body_markdown.strip("\n") + "\n"
 
 
 # ── the prompt: the index, the marker, the fenced halves ─────────────────────────────────────
