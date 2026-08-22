@@ -75,14 +75,14 @@ export async function activityView(host) {
         el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "Console actions"), el("div", { class: "sub" }, "this console's own ledger — every attempted mutation, succeeded or not"))),
         table(["when", "actor", "action", "arguments", "outcome"], (data.admin_actions || []).map((r) => ({
           cells: [fmtWhen(r.ts), r.actor, mono(r.action), argsCell(r.args), el("span", { class: "row" }, wordPill(r.outcome), r.error_class ? mono(r.error_class) : null)],
-        })), { dense: true, empty: "no console actions yet", emptyHint: "every reclaim, purge, registration, approve, removal, dispatch or post from this console lands here, succeeded or not" })),
+        })), { dense: true, empty: "no console actions yet", emptyHint: "every reclaim, purge, registration, removal, dispatch or post from this console lands here, succeeded or not" })),
       banner("info", "every number here comes from a column something else already wrote — audit rows and job rows; no new measurement channel."),
     );
   });
 }
 
-// The action's arguments, as short chips — ids and names, never a JSON dump: a decline reason or
-// a removal's `why` is in there verbatim, and a table cell is not where a person reads it.
+// The action's arguments, as short chips — ids and names, never a JSON dump: a removal's `why`
+// is in there verbatim, and a table cell is not where a person reads it.
 function argsCell(args) {
   const entries = Object.entries(args || {}).filter(([, v]) => typeof v !== "object");
   if (!entries.length) return el("span", { class: "muted" }, "—");

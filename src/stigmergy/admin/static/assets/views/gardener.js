@@ -12,7 +12,7 @@ import { loading, runShape, runTable } from "./common.js";
 import { dispatchFlow } from "./jobs.js";
 
 const filter = { severity: "", check: "" };
-const SEVERITY_TONE = { sla: "fail", warn: "human", info: "code" };
+const SEVERITY_TONE = { warn: "human", info: "code" };
 
 export async function gardenerView(host) {
   await loading(host, async () => {
@@ -32,7 +32,7 @@ export async function gardenerView(host) {
     const gardenerWorkflow = (getMeta().workflows || []).find((w) => w.file === "gardener.yml");
     const history = metrics.job_history.gardener || [];
     const runs = history.map((r) => runShape(r, (run) => `${run.status}${(run.stats || {}).findings_total !== undefined ? ` · ${run.stats.findings_total} findings` : ""}`));
-    const severityOrder = (getMeta().gardener_severities && getMeta().gardener_severities.length ? getMeta().gardener_severities : ["info", "warn", "sla"]).slice().reverse();
+    const severityOrder = (getMeta().gardener_severities && getMeta().gardener_severities.length ? getMeta().gardener_severities : ["info", "warn"]).slice().reverse();
     render(host,
       el("div", { class: "grid two-one" },
         chartCard({

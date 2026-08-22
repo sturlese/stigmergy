@@ -20,11 +20,22 @@ write_page = gardener_support.write_page
 rebuild_index = gardener_support.rebuild_index
 seed_filed_capture = gardener_support.seed_filed_capture
 unique_claim = gardener_support.unique_claim
-# These three live in `tests.gardener.support` — the SLA notice's own channel-scoping tests need
-# them too, one package over — and are re-exported here unchanged for this package's call sites.
-write_labelled_page = gardener_support.write_labelled_page
-unlabelled_page = gardener_support.unlabelled_page
-write_channels_file = gardener_support.write_channels_file
+
+
+# ── pages_index rows with and without an ACL label — the pair the broadcast-scoping tests need.
+# Both go through the SAME real-file + `rebuild_index` path every other fixture page uses, never a
+# hand-crafted row a parsing bug could silently disagree with ───────────────────────────────────
+def write_labelled_page(root: str, relpath: str, *, title: str, acl: list) -> str:
+    return write_page(root, "wiki", relpath,
+                      frontmatter={"type": "note", "title": title, "entity": [],
+                                  "status": "developing",
+                                  "updated": "2026-07-01", "acl": acl})
+
+
+def unlabelled_page(root: str, relpath: str, *, title: str) -> str:
+    return write_page(root, "wiki", relpath,
+                      frontmatter={"type": "note", "title": title, "entity": [],
+                                  "status": "developing", "updated": "2026-07-01"})
 
 
 # ── entities born — counted off the filings that introduced them (ADR 044) ─────────────────────
@@ -77,3 +88,31 @@ def seed_gardener_run(conn, *, findings: list[dict] | None = None,
                      "suggested_action": f.get("suggested_action", ""),
                      "model_id": f.get("model_id", "")})
     return run_id
+
+
+# ── repairs applied — the third corpus delta (ADR 044) ────────────────────────────────────────
+def seed_applied_repair(conn, *, kind: str = "edits", created_days_ago: int = 1,
+                        content_key: str = "") -> int:
+    """One `applied` row in the repair ledger, aged like every other fixture here.
+
+    Written through `repair.store` rather than by hand: the digest counts a column that store owns,
+    and a hand-built INSERT would keep passing after the column moved. `content_key` is unique per
+    row by default because the ledger's index says it must be.
+
+    Backdated by a day by DEFAULT, and that is not decoration: every window in this suite is
+    captured at import time, so a row stamped `now()` lands after the upper bound and reads as a
+    row outside the window — which is indistinguishable from a broken query."""
+    import uuid
+
+    from stigmergy.repair import store as repair_store
+
+    repair_id = repair_store.record_applied(
+        conn, run_id=0, finding_ids=[], target_paths=["wiki/notes/x.md"],
+        ops=[{"op": "backlink", "path": "wiki/notes/x.md", "link": "Y", "note": ""}],
+        rationale="a fixture repair", content_key=content_key or f"key-{uuid.uuid4().hex}",
+        commit="cafebabe", diff="--- a\n+++ b\n", kind=kind)
+    if created_days_ago:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE repairs SET created_at = now() - make_interval(days => %s) "
+                        "WHERE id = %s", (created_days_ago, repair_id))
+    return repair_id

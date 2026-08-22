@@ -35,7 +35,6 @@ from stigmergy.kernel import registry as kernel_registry
 from stigmergy.kernel.normalize import normalize
 from stigmergy.librarian import config as librarian_config
 from stigmergy.repair import store as repair_store
-from stigmergy.repair.errors import RepairError
 from stigmergy.repair.schema import (
     ALIAS_OP_NAMES,
     DELETE_OP_NAMES,
@@ -60,9 +59,9 @@ ADMIN_DOOR = "admin"
 DEFAULT_METRICS_DAYS, MAX_METRICS_DAYS = 30, 365
 # How many capture->filed samples a histogram gets; the percentiles come from the same window.
 LATENCY_SAMPLE_LIMIT = 200
-# A request-scoped page of pending proposals, never the whole table (`repair.store` says the bound
-# is the caller's): a nightly proposer can produce a thousand overnight, each carrying its ops.
-REPAIR_PENDING_LIMIT = 200
+# A request-scoped page of the repair ledger, never the whole table (`repair.store` says the bound
+# is the caller's): the table only grows, and every applied row carries a whole diff.
+REPAIR_RECENT_LIMIT = 50
 # `entities/resolve` is called as somebody types; one call checks the whole form, never a
 # registry-sized list of names.
 MAX_RESOLVE_NAMES = 50
@@ -87,6 +86,10 @@ _SIMILARITY_LIMIT = 5
 # The crons tab's table: file, title, schedule, and WHERE the database truth for "did it run"
 # lives — `job_runs` for the two that write one, `index_meta.built_at` for the rebuild, which
 # writes none. `schedule_utc` is pinned against the parsed workflow YAML by test.
+#
+# THREE, not four: the repair pass is not a cron any more (ADR 044). It runs on the worker's idle
+# branch, so there is no workflow file to dispatch and nothing here to control — the Repairs page
+# reads what it did instead.
 CRON_WORKFLOWS = (
     {"file": "index-rebuild.yml", "title": "Index rebuild", "schedule_utc": "17 4 * * *",
      "truth": "index_meta.built_at", "dispatch_inputs": ()},
@@ -94,8 +97,6 @@ CRON_WORKFLOWS = (
      "truth": f"job_runs:{PURGE_JOB}", "dispatch_inputs": ("dry_run",)},
     {"file": "gardener.yml", "title": "Gardener", "schedule_utc": "7 5 * * *",
      "truth": f"job_runs:{GARDENER_JOB}", "dispatch_inputs": ()},
-    {"file": "repair-propose.yml", "title": "Repair proposer", "schedule_utc": "7 6 * * *",
-     "truth": f"job_runs:{REPAIR_JOB}", "dispatch_inputs": ()},
 )
 DISPATCHABLE = tuple(w["file"] for w in CRON_WORKFLOWS)
 
@@ -399,17 +400,17 @@ class AdminService:
 
     def _repair_counts(self) -> dict:
         """`by_status` is the store's own aggregate over the WHOLE table; `recent` is a bounded
-        page of decided rows for a timeline. The two are not the same population and are not
-        summed together."""
+        page of rows for a timeline. The two are not the same population and are not summed
+        together."""
         by_status = repair_store.counts_by_status(self._conn)
-        decided = repair_store.recent_decided(self._conn, limit=200)
-        by_kind = Counter(row.get("kind", "") for row in decided)
-        return {"pending": by_status.get("pending", 0), "by_status": by_status,
+        recent = repair_store.recent(self._conn, limit=200)
+        by_kind = Counter(row.get("kind", "") for row in recent)
+        return {"applied": by_status.get("applied", 0), "by_status": by_status,
                 "recent_by_kind": dict(by_kind),
                 "recent": [{"id": row["id"], "kind": row.get("kind", ""),
-                            "status": row["status"], "decided_at": _iso(row.get("decided_at")),
+                            "status": row["status"],
                             "created_at": _iso(row.get("created_at"))}
-                           for row in decided]}
+                           for row in recent]}
 
     def overview(self) -> dict:
         counts = queue.counts_by_status(self._conn)
@@ -612,57 +613,30 @@ class AdminService:
         except (EntityError, CaptureError) as ex:
             raise AdminRefused(str(ex)) from ex
 
-    # ── repair proposals (read, and the second governed Approve — ADR 039) ────────────────────
+    # ── the repair ledger: what the worker did, read-only (ADR 044) ──────────────────────────
     def repairs_list(self) -> dict:
-        """Everything waiting on an operator, plus what was recently decided.
+        """The last repairs, whatever their outcome, plus the whole table's counts and the worker's
+        own pass history.
 
-        Both halves, and the second is not decoration: a REJECTED row is the dismissal memory the
-        proposer skips against, so "why does the nightly run not propose this any more" is only
-        answerable from the decided list. A `failed` row lives there too — an apply that a gate
-        refused stays visible with its reason instead of quietly returning to the queue."""
-        pending = repair_store.pending_proposals(self._conn, limit=REPAIR_PENDING_LIMIT)
-        return {"pending": [self._proposal(row) for row in pending],
-                "pending_truncated": len(pending) >= REPAIR_PENDING_LIMIT,
-                "pending_limit": REPAIR_PENDING_LIMIT,
+        Read-only, and that is the change ADR 044 made here: nothing on this page decides anything
+        any more. What it is FOR is the reading nobody gave a repair before it landed — every
+        applied row carries the diff that actually landed, and every failed one carries the sentence
+        that refused it.
+
+        `counts` is the whole table and `recent` is a bounded page of it: a part-to-whole drawn from
+        a page silently understates history the moment the page fills.
+        """
+        return {"recent": [self._repair(row) for row in
+                           repair_store.recent(self._conn, limit=REPAIR_RECENT_LIMIT)],
+                "recent_limit": REPAIR_RECENT_LIMIT,
                 "counts": repair_store.counts_by_status(self._conn),
-                "recent": [self._proposal(row) for row in
-                           repair_store.recent_decided(self._conn, limit=20)],
                 "history": self._job_runs((REPAIR_JOB,), limit=10)}
 
-    def repair_show(self, proposal_id: int) -> dict:
-        row = repair_store.proposal(self._conn, proposal_id)
+    def repair_show(self, repair_id: int) -> dict:
+        row = repair_store.repair(self._conn, repair_id)
         if row is None:
-            raise AdminNotFound(f"proposal {proposal_id} does not exist")
-        return self._proposal(row)
-
-    def repair_approve(self, proposal_id: int, *, actor: str) -> dict:
-        """Apply the proposal through `server.review.apply_repair_and_record` (ADR 039) — the
-        shared sequence rather than a copy of it, because two copies of an irreversible ordering
-        are two places for it to be reordered.
-
-        This is the ONLY door that decides a repair (ADR 044 retired the MCP review lane), and it
-        carries no per-path guard: `actor` is free text behind the operator token, and **the
-        console's authorization IS that token** (ADR 029 D3).
-
-        Nothing is caught inside `_do`, so `_mutate` records the library's own class name in
-        `admin_actions` before `RepairError` becomes `AdminRefused` for the caller.
-        """
-        proposal = repair_store.proposal(self._conn, proposal_id)
-        if proposal is None:
-            raise AdminNotFound(f"proposal {proposal_id} does not exist")
-
-        def _do(by: str) -> dict:
-            return server_review.apply_repair_and_record(
-                self._conn, repo_url=self._server.librarian_repo_url, proposal=proposal, actor=by,
-                source=ADMIN_DOOR)
-
-        try:
-            return self._mutate("repairs.approve", actor, {"id": proposal_id}, _do)
-        except RepairError as ex:
-            # Caught HERE, outside `_mutate`, so the row has already captured the ORIGINAL class
-            # name. Every sentence `repair.remote` raises is written to be published, so it crosses
-            # as the refusal's own text.
-            raise AdminRefused(str(ex)) from ex
+            raise AdminNotFound(f"repair {repair_id} does not exist")
+        return self._repair(row)
 
     def pages_delete(self, *, actor: str, paths, why: str) -> dict:
         """Remove pages and rewrite every page that referred to them, through
@@ -686,20 +660,6 @@ class AdminService:
                             {"paths": [str(p) for p in (paths or ())], "why_chars": len(why or "")},
                             _do)
 
-    def repair_reject(self, proposal_id: int, *, actor: str, reason: str) -> dict:
-        """Decline it, through the same shared writer the review lane rejects with — the reason
-        lands on the PROPOSAL and in the ledger, which is what stops the proposer re-deriving the
-        same repair tomorrow."""
-        proposal = repair_store.proposal(self._conn, proposal_id)
-        if proposal is None:
-            raise AdminNotFound(f"proposal {proposal_id} does not exist")
-        return self._mutate(
-            "repairs.reject", actor, {"id": proposal_id},
-            lambda by: server_review.reject_repair_and_record(
-                self._conn, proposal=proposal, actor=by, source=ADMIN_DOOR,
-                reason=reason))
-
-    # ── activity ──────────────────────────────────────────────────────────────────────────────
     def activity(self) -> dict:
         return {
             "report": pilot_report.build_report(self._conn),
@@ -917,23 +877,24 @@ class AdminService:
                 "suggested_action": _clean(finding["suggested_action"]),
                 "created_at": _iso(finding.get("created_at"))}
 
-    def _proposal(self, row: dict) -> dict:
-        """A `repair_proposals` row, cleaned for the web. **Everything here is untrusted**, and by a
-        longer road than most: `rationale` and every `note` were written by a model that had just
-        read pages somebody else wrote, and `path`/`link` are filenames.
+    def _repair(self, row: dict) -> dict:
+        """A `repairs` row, cleaned for the web. **Everything here is untrusted**, and by a longer
+        road than most: `rationale` and every `note` were written by a model that had just read
+        pages somebody else wrote, `path`/`link` are filenames, and `diff` is page bytes.
 
         `**row` carries every column forward and the free-text ones are then named and cleaned over
         the top. The columns NOT named here ride through unsanitized on purpose — `kind`, `status`
         and `content_key` are constrained or derived, and `model_id` is operator configuration —
         so a new free-text column is a new line in the override list, not a silent pass-through.
 
-        `error` is the sentence `repair.remote` raised, which is written to be published; it is
-        cleaned anyway, on the same reasoning every other operator-facing string here is."""
+        `diff` is the one that matters most on this page and the one most obviously untrusted: it
+        is the bytes a model wrote into the corpus, and it is here BECAUSE nobody read them first
+        (ADR 044). Cleaned like everything else, and `_clean` keeps newlines — a diff flattened to
+        one line is not a diff anybody can read."""
         return {**row,
                 "id": row["id"], "created_at": _iso(row.get("created_at")),
-                "decided_at": _iso(row.get("decided_at")),
-                "rationale": _clean(row.get("rationale")), "notes": _clean(row.get("notes")),
-                "error": _clean(row.get("error")), "decided_by": _clean(row.get("decided_by")),
+                "rationale": _clean(row.get("rationale")), "diff": _clean(row.get("diff")),
+                "reason": _clean(row.get("reason")), "error": _clean(row.get("error")),
                 "target_paths": [_clean(p) for p in (row.get("target_paths") or ())],
                 "ops": [self._op(o) for o in (row.get("ops") or ())]}
 
@@ -953,11 +914,9 @@ class AdminService:
         absorbs which, not four regenerated files.
 
         A `delete` SCRUB carries its planned bytes through, and that is ADR 043's doing: those
-        bytes are a MODEL's prose now, not a bracket scrub, and this is the one road where a person
-        approves them before they land — the act road's reading happens after the push, on the diff
-        it hands back, and there is no equivalent here. Hiding them would be `entity-body`'s
-        mistake made twice: the only thing worth reading, dropped silently, since a missing key
-        renders as an empty cell.
+        bytes are a MODEL's prose, and the ledger's stored `diff` is what somebody reads afterwards.
+        Hiding them here would be `entity-body`'s mistake made twice: the only thing worth reading,
+        dropped silently, since a missing key renders as an empty cell.
 
         Both are matched as GROUPS, imported from `repair.schema` rather than rebuilt from the
         individual names here: matching one name at a time is how one op of a kind gets a link

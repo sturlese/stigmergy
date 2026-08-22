@@ -2,10 +2,10 @@
 
 The web control room over what already runs — the capture queue read-only beside the two levers
 over the whole of it, the entity registry this stack serves and the one door for registering a name
-nobody has captured about yet, the repair proposals derived from the gardener's findings (a
-governed Approve applies one, ADR 039) and the Remove pages button beside them, corpus health, the
-index and the ops files it serves, the worker, the four scheduled jobs, the digest, and who is
-using the brain — served by the SAME `app` process group that serves MCP, behind its own token.
+nobody has captured about yet, the ledger of repairs the worker made of the gardener's findings —
+each with the diff it pushed — and the Remove pages button beside it, corpus health, the index and
+the ops files it serves, the worker, the three scheduled jobs, the digest, and who is using the
+brain — served by the SAME `app` process group that serves MCP, behind its own token.
 Design record: [ADR 029](../decisions/029-admin-console.md),
 [ADR 039](../decisions/039-governed-repair-loop.md),
 [ADR 043](../decisions/043-a-sweep-is-written.md) and
@@ -20,15 +20,15 @@ entity no capture has introduced, and it holds no verdict at all.
 
 What it deliberately is NOT: a brain client. No search, no page rendering, no `ask` — the
 architecture tests enforce that boundary on the package. It reads page *paths* in three places
-(the substrate check, the gardener's findings, and a repair proposal's target paths), it reads the
+(the substrate check, the gardener's findings, and a repair's target paths), it reads the
 **entity registry** (an `ops/` control file — the vocabulary, which every MCP identity already
 reads through `list_entities`), and it fetches no page: everything it renders comes from rows in
 this database, never from the knowledge repo. Two things on it read as page PROSE, and each is
-there because acting without reading it would be acting blind. An `entity-body` repair proposal
-carries the drafted body in full: text a model wrote, sitting in `repair_proposals`, which is not a
-page yet and was never a page this console fetched. A removal hands back a unified diff per
-rewritten page — page bytes, but bytes the removal it just performed produced, and the reading that
-ADR 043 D5 moved to after the push rather than before it.
+there because nobody read those bytes before they landed. An applied repair carries the unified
+DIFF it pushed, out of the `repairs` row that recorded it — page bytes, but bytes this console's
+own subject produced, and the whole reason the page exists (ADR 044). A removal hands back the same
+thing per rewritten page, in a dialog, at the moment it performs it — the reading ADR 043 D5 moved
+to after the push rather than before it.
 
 **The one thing that boundary does not cover, said plainly:** the Activity page renders the `ask`
 QUESTIONS in `audit_log`. No answer, no page, no snippet — but a question is user content, and it
@@ -182,31 +182,26 @@ toggle away, and nothing on a chart is reachable only by hovering.
   shipped from `/admin/api/meta`; aliases are optional. The console registers under the admin token
   with the actor as ATTRIBUTION, exactly like every other console mutation — and that actor is the
   name `approved_by:` carries on the page the librarian writes.
-- **Repairs** — what the `repair-propose` cron made of the gardener's findings
-  ([repair.md](./repair.md), ADR 039): proposals by outcome over the whole table, the proposer's
-  run strip, a bounded page of the pending proposals (oldest first, filterable by kind, and it
-  says when it filled), and the recently decided ones. The decided list is not decoration
-  — a **rejected** row is the dismissal memory the proposer skips against, so "why has the nightly
-  run stopped proposing this" is only answerable there, and a **failed** row is an apply a gate
-  refused, kept visible with its reason rather than quietly returning to the queue. A proposal's
-  detail shows what that KIND would change — one line per declared edit for the additive kinds;
-  the drafted body in full, as plain text, for an `entity-body` proposal, because for that kind
-  reading the draft IS the check; for a `delete` proposal two lists, the pages that STOP EXISTING
-  and the pages rewritten so they no longer link to them; for an `entity-alias` merge, which
-  identity survives and which is retired — with Approve and Decline. Decline demands a non-blank
-  reason, because the reason is the whole of what stops the same repair being re-derived tomorrow.
-  Approve runs `server.review.apply_repair_and_record`, which owns the ordering: it marks the row
-  decided first (a conditional UPDATE on `status = 'pending'`, so a second Approve loses rather
-  than clones), then applies exactly the approved ops through the librarian's own validator and its
-  gates, as ONE App-authored commit with an `Approved-by:` trailer. There is no per-path check to
-  reach: the console's authorization IS its token, and the actor on the form is attribution
-  recorded beside the verdict.
+- **Repairs** — what the worker's repair pass made of the gardener's findings
+  ([repair.md](./repair.md), ADR 044). **This page decides nothing**; it is the reading nobody gave
+  a repair before it landed. Repairs by outcome over the whole table, the pass's run strip, and a
+  bounded page of the ledger newest first — every outcome together, because the three are one
+  history and separating them would invite reading only the good half.
+  An **applied** row's detail carries the unified DIFF that was pushed, which is the point of the
+  page: it is the only place those bytes are ever read. A **failed** row carries the sentence that
+  refused it — a gate, a validator, or a fault — and it matters more than it looks: a failed
+  repair's key is remembered, so that finding has stopped being answered and this row is where an
+  operator finds out why. A **skipped** row says what the pass could not express, and is remembered
+  by nothing. Every row also shows what its KIND changed — one line per declared edit for the
+  additive kinds; the drafted body in full for an `entity-body` repair; for a `delete`, the pages
+  that stopped existing and the pages rewritten so they no longer link to them; for an
+  `entity-alias` merge, which identity survived and which was retired.
 
-  **Remove pages** is the one button here that is not a verdict on a proposal. A person names the
+  **Remove pages** is the one button here that writes anything. A person names the
   pages and says why, and it lands in that call —
   the pages go, every page that referred to them is rewritten (its frontmatter by code, its body
   by a model), the nine gates judge it, and one App-authored commit is pushed. There is no
-  proposal and no second click, because the judgment was the operator's when they typed it
+  second click, because the judgment was the operator's when they typed it
   ([ADR 043](../decisions/043-a-sweep-is-written.md)); what the console's token buys here is the
   whole authorization — the MCP door asks for an UNRESTRICTED identity instead, and this token
   stands for the whole deployment — so this is its most consequential control and its confirm says
@@ -229,7 +224,7 @@ toggle away, and nothing on a chart is reachable only by hovering.
   capture→filed percentiles, each item in flight with its lease meter and the three-verdict
   reading, what the librarian finished per day, the latency distribution, and the unresolved
   ingest errors. Read-only; draining and Fly scaling stay in the terminal.
-- **Jobs** — the four workflows, each with its purpose in a sentence, its schedule as "daily at
+- **Jobs** — the three workflows, each with its purpose in a sentence, its schedule as "daily at
   HH:MM UTC · next in …", its enabled state in plain words (scheduled, paused by a person,
   auto-paused by GitHub), the last known database truth with that run's stats, the run strip
   (height is duration, colour the outcome), the recent Actions runs (linking out to the logs —
@@ -238,9 +233,10 @@ toggle away, and nothing on a chart is reachable only by hovering.
   dispatch input (`dry_run`), and it is the only input any dispatch will accept — an undeclared
   key is refused by name before the GitHub gateway is touched, as is an unlisted workflow file.
   Its Run-now form starts with Dry run ticked, so the default path lists what would go and
-  touches nothing. The truth column names its source: a `job_runs` row for retention, the gardener
-  and the repair proposer, `index_meta.built_at` for the rebuild, which writes none. Other
-  recorded work (the digest, the webhook, reclaims) is listed below the four.
+  touches nothing. The truth column names its source: a `job_runs` row for retention and the
+  gardener, `index_meta.built_at` for the rebuild, which writes none. Other recorded work — the
+  digest, the webhook, reclaims, and the worker's own repair pass, which is not a workflow and has
+  no lever here at all — is listed below the three.
 - **Digest** — the configured-pieces checklist, Preview (the byte-identical dry-run body), Post
   now (disabled until both Slack pieces are configured, with the checklist saying which is
   missing; it names the duplicate-window risk before it posts), the run strip and history. Still
@@ -250,15 +246,6 @@ toggle away, and nothing on a chart is reachable only by hovering.
   → searchable and capture → filed, calls per day by tool, who asks, per-tool calls/errors/latency,
   the real `ask` questions (golden-set quarry), rate-limit refusals, and the console's own action
   log — every attempted mutation, succeeded or not.
-
-## One control that is empty by construction
-
-The Gardener page's severity chips include `urgent` (`sla`). `sla` is a real member of
-`gardener.schema.SEVERITIES`, but nothing in that package produces one — every deterministic check
-emits `info` or `warn`, and all the model-sweep slugs map to `warn` (see
-[gardener-digest](gardener-digest.md)). The chip mirrors a vocabulary with no producer, so it is
-permanently empty by construction rather than by accident, and it goes live the day a check emits
-an `sla` finding.
 
 ## What leaves a trace, and what does not
 
@@ -271,15 +258,16 @@ it is logged loudly and the work still lands; bookkeeping must never fail the wo
 **`admin_actions` is the only ledger this console writes, and there is no second one anywhere.**
 Nothing keeps a governance table: an identity is born in the commit that files the capture that
 introduced it, so the page and the registry ARE the record of who stands behind it
-([ADR 044](../decisions/044-the-capture-is-the-approval.md)), and a repair's verdict lives on its
-own `repair_proposals` row — `status`, `decided_by`, `notes`, and `applied_commit` once a commit
-lands. "Who approved this edit to the corpus" is answered by that row and by `git log`'s
-`Approved-by:` trailer, which are the same two facts a ledger would have copied.
+([ADR 044](../decisions/044-the-capture-is-the-approval.md)), and a repair's whole record lives on
+its own `repairs` row — `status`, `applied_commit`, and the `diff` it pushed. "What changed the
+corpus, and why" is answered by that row and by `git log`, whose trailer says which kind of act it
+was: `Approved-by:` when a person asked for it, `Repair: <check> #<finding>` when the worker
+derived it.
 
-One asymmetry is deliberate: a gate refusing an apply leaves the proposal `failed` carrying the
-sentence that refused it, and the approved status is NOT restored — the `admin_actions` row for the
-attempt is there already, with the refusing class name on it, and a silent revert to pending would
-hide that a gate spoke.
+One asymmetry is deliberate: a removal a gate refuses leaves a `failed` row carrying the sentence
+that refused it, and the `admin_actions` row for the attempt is there already with the refusing
+class name on it. Nothing is retried and nothing is put back — the operator reads both and decides
+whether to ask again.
 
 **`entities/create` decides nothing and touches no git.** It writes its `admin_actions` row and a
 `capture_queue` row, and that is all this process does; the entity page, its `approved_by:` naming

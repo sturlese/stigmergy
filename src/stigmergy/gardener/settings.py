@@ -32,6 +32,9 @@ DEFAULT_COMPANY_SHARE = 0.3
 
 
 # ── the digest channel — `digest.settings` imports THIS name, never a second literal ──────────
+# Declared here, read nowhere in this package: the gardener posts nothing and holds no Slack
+# credential. It is the shared spelling `digest.settings` funnels every digest module through,
+# alongside `int_setting` below.
 DIGEST_CHANNEL_ID_ENV = "STIGMERGY_DIGEST_CHANNEL_ID"
 
 # ── the model sweep's own configuration ───────────────────────────────────────────────────────
@@ -84,6 +87,8 @@ DEFAULT_DUPLICATE_ENTITY_CEILING = 120
 
 # Hand-mirrored from `stigmergy.slack.settings.BOT_TOKEN_ENV`, not imported — importing it would
 # pull the whole `server.settings` surface in; if that value ever moves, move this with it.
+# Read nowhere in this package, for the reason `DIGEST_CHANNEL_ID_ENV` above states: it sits here
+# because `digest.settings` is the one funnel into this module and re-exports it.
 SLACK_BOT_TOKEN_ENV = "SLACK_BOT_TOKEN"
 
 
@@ -156,9 +161,6 @@ class GardenerSettings:
     concentration_share: float = DEFAULT_CONCENTRATION_SHARE
     company_window: int = DEFAULT_COMPANY_WINDOW
     company_share: float = DEFAULT_COMPANY_SHARE
-    # Empty is a real, honest state: most runs have no `sla` finding and never touch Slack.
-    # Required only when a notice actually posts (`notice.require_channel`).
-    digest_channel_id: str = ""
     model: str = DEFAULT_GARDENER_MODEL
     sweep_sample: int = DEFAULT_SWEEP_SAMPLE
     sweep_changed_ceiling: int = DEFAULT_SWEEP_CHANGED_CEILING
@@ -178,7 +180,6 @@ class GardenerSettings:
                                                DEFAULT_CONCENTRATION_SHARE),
             company_window=int_setting(COMPANY_WINDOW_ENV, DEFAULT_COMPANY_WINDOW),
             company_share=_share_setting(COMPANY_SHARE_ENV, DEFAULT_COMPANY_SHARE),
-            digest_channel_id=os.environ.get(DIGEST_CHANNEL_ID_ENV, ""),
             model=os.environ.get(MODEL_ENV) or DEFAULT_GARDENER_MODEL,
             sweep_sample=int_setting(SWEEP_SAMPLE_ENV, DEFAULT_SWEEP_SAMPLE),
             sweep_changed_ceiling=int_setting(SWEEP_CHANGED_CEILING_ENV,

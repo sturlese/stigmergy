@@ -8,6 +8,7 @@ import os
 import pytest
 
 from stigmergy.admin import schema as admin_schema
+from stigmergy.admin import service as admin_service
 from stigmergy.admin.service import (
     CRON_WORKFLOWS,
     AdminBadRequest,
@@ -24,17 +25,17 @@ from stigmergy.gardener.schema import ensure_gardener_schema
 from stigmergy.gardener.store import insert_findings
 from stigmergy.index import store as index_store
 from stigmergy.librarian import config as librarian_config
-from stigmergy.repair import remote as repair_remote
 from stigmergy.repair import schema as repair_schema
 from stigmergy.repair import store as repair_store
-from stigmergy.repair.errors import RepairError
 from stigmergy.server import review as server_review
 from stigmergy.server.settings import Settings
 from tests.admin.conftest import (
+    LANDED_COMMIT,
     finish_one,
-    propose_delete,
-    propose_entity_body,
-    propose_repair,
+    landed_delete,
+    landed_entity_body,
+    landed_repair,
+    refused_repair,
     register_entity,
     submit_one,
 )
@@ -355,13 +356,13 @@ def test_gardener_state_reads_the_latest_completed_run_and_finds_partial_honest(
     insert_findings(conn, run_id, [
         {"check": "anchor-concentration", "severity": "warn", "subject": "acme-corp",
          "detail": "14/18 pages anchor here", "suggested_action": "consider splitting"},
-        {"check": "view-staleness", "severity": "sla", "subject": "views/acme.md",
-         "detail": "stale past the SLA window", "suggested_action": ""},
+        {"check": "orphan-page", "severity": "info", "subject": "wiki/notes/loose.md",
+         "detail": "nothing links here", "suggested_action": ""},
     ])
     state = service.gardener_state()
     assert state["run"]["id"] == run_id
     severities = {f["severity"] for f in state["findings"]}
-    assert severities == {"warn", "sla"}, "the gardener's own vocabulary: info/warn/sla"
+    assert severities == {"warn", "info"}, "the gardener's own vocabulary: info/warn"
     assert state["history"][0]["status"] == "partial"
 
 
@@ -660,70 +661,88 @@ def test_a_malformed_agent_budget_leaves_the_console_serving_its_own_boot_call(
         librarian_config.DEFAULT_VISIBILITY_TIMEOUT_S)
 
 
-# ── repairs: read, approve, decline (ADR 039) ─────────────────────────────────────────────────
-# The console is the SECOND door onto the same governed apply the review lane drives. What these
-# pin is the half that is this package's own — the `admin_actions` bookkeeping, the error mapping,
-# the sanitizing — while the ordering itself belongs to `server.review.apply_repair_and_record`
-# and is proven there against real state.
+# ── repairs: what the worker did, read-only (ADR 044) ─────────────────────────────────────────
+# Nothing on this page decides anything any more. What it is FOR is the reading nobody gave a
+# repair before it landed: every applied row carries the diff that reached `main`, and every failed
+# one carries the sentence that refused it. So what these pin is this package's own half — the
+# sanitizing, the per-kind op shapes, and the counts a chart may draw a part-to-whole from.
+#
+# The console's ONE surviving mutation is `pages.delete`, and it is the console's most consequential
+# button: the ordering it drives belongs to `server.review.delete_and_record` and is proven there
+# against real state (`tests/server/test_delete_pages_pg.py`), so what is asserted here is the
+# wiring, the `admin_actions` bookkeeping and the error mapping.
 FAKE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 
 
-def _apply_records(monkeypatch, paths=("wiki/notes/Renewals.md",)):
-    """`apply_via_clone` replaced by a recorder, patched as a MODULE ATTRIBUTE — the seam
-    `repair.remote.apply_approved` keeps by calling it under that name. Everything around it
-    (`mark_decided`, `mark_applied`, the ledger row) is the real thing."""
-    calls = []
-
-    def fake(repo_url, branch, credential, *, proposal, approved_by, on_output=None,
-             prepared=None):
-        calls.append({"repo_url": repo_url, "approved_by": approved_by, "proposal": proposal})
-        return {"commit": FAKE_COMMIT, "paths": list(paths)}
-
-    monkeypatch.setattr(repair_remote, "apply_via_clone", fake)
-    return calls
-
-
 @pytest.fixture()
-def repair_service(conn, admin_settings):
+def deletion_service(conn, admin_settings):
     """`AdminService` with a knowledge-repo URL configured. The URL is never dialled in these
-    tests — `apply_via_clone` is the recorder above — but it has to be non-empty, because the
-    shared sequence refuses an unconfigured deployment BEFORE the proposal moves out of pending."""
+    tests — `delete_and_record` is replaced below — but it has to be non-empty, because the
+    sequence refuses an unconfigured deployment before anything is cloned."""
     return AdminService(conn, server_settings=Settings(librarian_repo_url="/tmp/not-dialled.git"),
                         admin_settings=admin_settings)
 
 
-def test_repairs_list_carries_the_pending_and_the_decided_halves(conn, service, monkeypatch):
-    """Both halves, and the second is not decoration: a rejected row is the dismissal memory the
-    proposer skips against, so "why does the nightly run not propose this any more" is only
-    answerable from the decided list."""
-    pending_id = propose_repair(conn, path="wiki/notes/Renewals.md")
-    declined_id = propose_repair(conn, path="wiki/decisions/Refunds.md")
-    assert repair_store.mark_decided(conn, declined_id, status=repair_schema.STATUS_REJECTED,
-                                     decided_by="steward@example.com", notes="already linked")
+def test_repairs_list_carries_every_outcome_and_the_whole_tables_counts(conn, service):
+    """Both halves, and the second is not decoration: `recent` is a bounded PAGE of a table that
+    only grows, and `counts` is the whole of it. A surface drawing a part-to-whole from the page
+    would understate history the moment the page fills — which is exactly what an operator asking
+    "how much has this loop done" would be reading."""
+    applied_id = landed_repair(conn, path="wiki/notes/Renewals.md")
+    failed_id = refused_repair(conn)
 
     listed = service.repairs_list()
 
-    assert [row["id"] for row in listed["pending"]] == [pending_id]
-    assert listed["pending"][0]["target_paths"] == ["wiki/notes/Renewals.md"]
-    assert listed["pending"][0]["ops"][0]["op"] == "backlink"
-    decided = listed["recent"][0]
-    assert (decided["id"], decided["status"], decided["notes"]) == (
-        declined_id, repair_schema.STATUS_REJECTED, "already linked")
-    assert isinstance(decided["decided_at"], str), "datetimes cross the wire as ISO strings"
+    assert [row["id"] for row in listed["recent"]] == [failed_id, applied_id], "newest first"
+    assert listed["recent"][1]["target_paths"] == ["wiki/notes/Renewals.md"]
+    assert listed["recent"][1]["ops"][0]["op"] == "backlink"
+    assert listed["counts"] == {repair_schema.STATUS_APPLIED: 1, repair_schema.STATUS_FAILED: 1,
+                                repair_schema.STATUS_SKIPPED: 0}
+    assert listed["recent_limit"] == admin_service.REPAIR_RECENT_LIMIT
+    assert isinstance(listed["recent"][0]["created_at"], str), (
+        "datetimes cross the wire as ISO strings")
+
+
+def test_an_applied_repair_reaches_the_console_carrying_the_diff_nobody_read_first(conn, service):
+    """The column this page exists for. Nobody read the change before it was pushed, so the stored
+    diff IS the reading — a console that listed paths alone would be offering a summary of prose a
+    model wrote, which is `entity-body`'s own mistake made at the level of the whole table."""
+    repair_id = landed_repair(conn)
+
+    row = service.repair_show(repair_id)
+
+    assert row["status"] == repair_schema.STATUS_APPLIED
+    assert row["applied_commit"] == LANDED_COMMIT
+    assert row["diff"].startswith("diff --git")
+    assert "\n" in row["diff"], (
+        "a diff flattened to one line is not a diff anybody can read")
+
+
+def test_a_failed_repair_reaches_the_console_carrying_the_sentence_that_refused_it(conn, service):
+    """The other outcome, and the only place it is ever explained: a `failed` row is never retried,
+    so `error` is the whole of what anybody will ever know about why that finding stopped being
+    answered."""
+    repair_id = refused_repair(conn)
+
+    row = service.repair_show(repair_id)
+
+    assert row["status"] == repair_schema.STATUS_FAILED
+    assert "the gates refused this repair" in row["error"]
+    assert (row["applied_commit"], row["diff"]) == ("", "")
 
 
 def test_repair_show_sanitizes_every_untrusted_string_and_404s_on_nothing(conn, service):
     """A rationale and a note were written by a model that had just read pages somebody else wrote,
-    and a path is a filename somebody chose. Control characters die at the server; HTML inertness
-    is the client's half.
+    a path is a filename somebody chose, and a DIFF is page bytes. Control characters die at the
+    server; HTML inertness is the client's half.
 
     `\\x07`/`\\x1b`, not `\\x00`: Postgres refuses a NUL in a text column outright, so the byte this
     console has to strip is the one that CAN be stored — an escape sequence a terminal would act on
     and a browser would render as nothing."""
-    proposal_id = propose_repair(conn, kind="overlap", note="covers the same\x07 ground",
-                                 rationale="the two pages\x1b[2J overlap")
+    repair_id = landed_repair(conn, kind="overlap", note="covers the same\x07 ground",
+                              rationale="the two pages\x1b[2J overlap")
 
-    row = service.repair_show(proposal_id)
+    row = service.repair_show(repair_id)
 
     assert row["rationale"] == "the two pages[2J overlap"
     assert row["ops"][0]["note"] == "covers the same ground"
@@ -731,18 +750,28 @@ def test_repair_show_sanitizes_every_untrusted_string_and_404s_on_nothing(conn, 
         service.repair_show(999_999)
 
 
+def test_a_failed_repairs_sentence_is_sanitized_like_everything_else(conn, service):
+    """`error` is composed from gate codes and repo-relative paths and then STORED, so it reaches
+    this page by exactly the same road as a model's rationale: it is text nobody vetted, rendered
+    in a browser."""
+    repair_id = refused_repair(conn, error="the gates refused it\x1b[2J (zone/outside-lane)")
+
+    assert service.repair_show(repair_id)["error"] == (
+        "the gates refused it[2J (zone/outside-lane)")
+
+
 def test_a_body_draft_reaches_the_console_readable_and_whole(conn, service):
-    """OLD BEHAVIOUR: `_proposal` reshaped every op into `{op, path, link, note}`, so an
+    """OLD BEHAVIOUR: `_repair` reshaped every op into `{op, path, link, note}`, so an
     `entity-body` op arrived at the console with its `body_markdown` and `role` DROPPED — the
-    steward reading the draft is the check for this kind, and the console showed them a row with
-    an empty `link` where the draft should have been.
+    drafted prose is the only thing there is to read for this kind, and the console showed a row
+    with an empty `link` where the draft should have been.
 
     Newlines survive `_clean` by design (control characters die, structure does not): a body
-    flattened to one line is a body nobody can read as the page it would become."""
-    proposal_id = propose_entity_body(conn, body="## What / Who\n\nA freight\x07 broker.\n",
-                                      role="A freight broker in the north-west.")
+    flattened to one line is a body nobody can read as the page it became."""
+    repair_id = landed_entity_body(conn, body="## What / Who\n\nA freight\x07 broker.\n",
+                                   role="A freight broker in the north-west.")
 
-    row = service.repair_show(proposal_id)
+    row = service.repair_show(repair_id)
 
     assert row["kind"] == repair_schema.KIND_ENTITY_BODY
     assert row["ops"][0]["body_markdown"] == "## What / Who\n\nA freight broker.\n"
@@ -752,51 +781,54 @@ def test_a_body_draft_reaches_the_console_readable_and_whole(conn, service):
 def test_an_additive_op_keeps_exactly_the_fields_it_had(conn, service):
     """The benign twin for the reshaping change: a second kind's fields must not appear on the
     first kind's ops, where a console table would render an empty column for every repair."""
-    proposal_id = propose_repair(conn, kind="overlap", note="the same ground")
+    repair_id = landed_repair(conn, kind="overlap", note="the same ground")
 
-    (op,) = service.repair_show(proposal_id)["ops"]
+    (op,) = service.repair_show(repair_id)["ops"]
 
     assert sorted(op) == ["link", "note", "op", "path"]
 
 
-def test_repair_approve_applies_and_records_both_ledgers(conn, repair_service, monkeypatch):
-    """The console's own half: an `admin_actions` row naming this door, and the proposal row
-    carrying the verdict, who decided it and the commit it landed as."""
-    calls = _apply_records(monkeypatch)
-    proposal_id = propose_repair(conn)
+def test_a_deletion_reaches_the_console_with_the_prose_that_landed(conn, service):
+    """The third kind's shape. A DELETE op is a path and nothing else — which page stopped existing
+    is the whole of it — and a SCRUB op carries its `planned_after` through, because those bytes are
+    a MODEL's prose (ADR 043) and this page is the only reading they get.
 
-    result = repair_service.repair_approve(proposal_id, actor="steward@example.com")
+    Red before that: the console showed two path lists, so model-written bodies were invisible —
+    `entity-body`'s own mistake, which that kind's renderer exists to avoid."""
+    repair_id = landed_delete(conn)
 
-    assert result == {"applied": True, "commit": FAKE_COMMIT,
-                      "paths": ["wiki/notes/Renewals.md"]}
-    assert [c["approved_by"] for c in calls] == ["steward@example.com"]
-    row = repair_store.proposal(conn, proposal_id)
-    assert (row["status"], row["applied_commit"]) == (repair_schema.STATUS_APPLIED, FAKE_COMMIT)
-    assert row["decided_by"] == "steward@example.com"
-    recorded = _actions(conn)[0]
-    assert (recorded["actor"], recorded["action"], recorded["outcome"]) == (
-        "steward@example.com", "repairs.approve", "ok")
+    row = service.repair_show(repair_id)
+
+    assert row["kind"] == repair_schema.KIND_DELETE
+    assert [op["op"] for op in row["ops"]] == [repair_schema.DELETE_OP_NAME,
+                                               repair_schema.SCRUB_OP_NAME]
+    assert sorted(row["ops"][0]) == ["op", "path"]
+    assert sorted(row["ops"][1]) == ["op", "path", "planned_after"]
+    assert "No link any more" in row["ops"][1]["planned_after"]
+    assert "\n" in row["ops"][1]["planned_after"], (
+        "a page flattened to one line is a page nobody can read as the page it became")
 
 
+# ── the console's one surviving mutation: a person's own deletion ─────────────────────────────
 def test_pages_delete_runs_the_shared_sequence_and_records_the_console_as_the_door(
-        conn, repair_service, monkeypatch):
+        conn, deletion_service, monkeypatch):
     """The console's deletion door (ADR 043 D2). It reaches `server.review.delete_and_record` — the
     SAME sequence MCP's `brain_delete` runs — and hands in NO authorization: its token is the
-    authorization, exactly as `repair_approve` and `entity_approve` do. So what this asserts is the
-    wiring and the two bookkeeping rows, not a second copy of the sequence's own behaviour
-    (`tests/server/test_delete_pages_pg.py` proves that against a real remote)."""
+    authorization. So what this asserts is the wiring and the two bookkeeping rows, not a second
+    copy of the sequence's own behaviour (`tests/server/test_delete_pages_pg.py` proves that
+    against a real remote)."""
     seen = {}
 
     def fake(conn_arg, *, repo_url, paths, why, actor, source, authorize=None):
         seen.update({"repo_url": repo_url, "paths": list(paths), "why": why, "actor": actor,
                      "source": source, "authorize": authorize})
         return {"deleted": list(paths), "rewritten": {}, "commit": FAKE_COMMIT,
-                "proposal_id": 7, "model_calls": 0, "message": "done"}
+                "repair_id": 7, "model_calls": 0, "message": "done"}
 
     monkeypatch.setattr(server_review, "delete_and_record", fake)
 
-    result = repair_service.pages_delete(actor="ops@example.com",
-                                         paths=["wiki/notes/Old Memo.md"], why="superseded")
+    result = deletion_service.pages_delete(actor="ops@example.com",
+                                           paths=["wiki/notes/Old Memo.md"], why="superseded")
 
     assert result["commit"] == FAKE_COMMIT
     assert seen["paths"] == ["wiki/notes/Old Memo.md"]
@@ -809,7 +841,7 @@ def test_pages_delete_runs_the_shared_sequence_and_records_the_console_as_the_do
 
 
 def test_a_refused_deletion_records_the_real_class_before_it_becomes_AdminRefused(
-        conn, repair_service, monkeypatch):
+        conn, deletion_service, monkeypatch):
     """`_mutate`'s ordering, on this door too: the console's own log keeps the library's exception
     class, and the caller gets the sentence as a refusal rather than a 500."""
     def refuse(*_a, **_k):
@@ -818,102 +850,29 @@ def test_a_refused_deletion_records_the_real_class_before_it_becomes_AdminRefuse
     monkeypatch.setattr(server_review, "delete_and_record", refuse)
 
     with pytest.raises(AdminRefused, match="entity page"):
-        repair_service.pages_delete(actor="ops@example.com",
-                                    paths=["wiki/entities/Acme Corp.md"], why="stale")
+        deletion_service.pages_delete(actor="ops@example.com",
+                                      paths=["wiki/entities/Acme Corp.md"], why="stale")
 
     recorded = _actions(conn)[0]
     assert (recorded["action"], recorded["outcome"], recorded["error_class"]) == (
         "pages.delete", "error", "ReviewError")
 
 
-def test_repair_approve_maps_a_refusal_to_AdminRefused_after_recording_the_real_class(
-        conn, repair_service, monkeypatch):
-    """The mapping order `entity_approve` established: `_mutate` sees the LIBRARY's exception and
-    records its class name, and only then does the caller get `AdminRefused` with the library's own
-    sentence. Renaming it inside `_do` would rename what the row already captured."""
-    def refuse(*_a, **_k):
-        raise RepairError("the gates refused this repair, so nothing was committed or pushed")
-
-    monkeypatch.setattr(repair_remote, "apply_via_clone", refuse)
-    proposal_id = propose_repair(conn)
-
-    with pytest.raises(AdminRefused, match="the gates refused this repair"):
-        repair_service.repair_approve(proposal_id, actor="steward@example.com")
-
-    assert _actions(conn)[0]["error_class"] == "RepairError"
-    row = repair_store.proposal(conn, proposal_id)
-    assert row["status"] == repair_schema.STATUS_FAILED, "a failed apply stays visible as failed"
-    assert "the gates refused" in row["error"]
-
-
-def test_repair_approve_without_a_configured_repo_refuses_before_the_proposal_moves(
-        conn, service, monkeypatch):
+def test_pages_delete_without_a_configured_repo_refuses_before_anything_is_cloned(conn, service):
     """The plain `service` fixture has no `librarian_repo_url`. The refusal is a `ReviewError`, so
-    `_mutate`'s own `CaptureError` branch maps it — and the proposal is untouched, because the
-    check runs before `mark_decided`."""
+    `_mutate`'s own `CaptureError` branch maps it — and it is raised before the clone, because a
+    network leg and a model call spent to arrive at the same answer are a network leg and a model
+    call wasted."""
     def never(*_a, **_k):
-        raise AssertionError("apply_via_clone ran on a deployment with no knowledge-repo URL")
+        raise AssertionError("the repo was cloned on a deployment with no knowledge-repo URL")
 
-    monkeypatch.setattr(repair_remote, "apply_via_clone", never)
-    proposal_id = propose_repair(conn)
+    monkeypatch_target = server_review.repair_apply
+    assert hasattr(monkeypatch_target, "cloned"), "the clone seam moved; this guard is now blind"
 
-    with pytest.raises(AdminRefused, match="STIGMERGY_LIBRARIAN_REPO_URL"):
-        service.repair_approve(proposal_id, actor="steward@example.com")
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(monkeypatch_target, "cloned", never)
+        with pytest.raises(AdminRefused, match="STIGMERGY_LIBRARIAN_REPO_URL"):
+            service.pages_delete(actor="ops@example.com", paths=["wiki/notes/Old Memo.md"],
+                                 why="superseded")
 
-    assert repair_store.proposal(conn, proposal_id)["status"] == repair_schema.STATUS_PENDING
-
-
-def test_repair_reject_records_the_dismissal_on_the_row_and_in_the_ledger(conn, service):
-    proposal_id = propose_repair(conn)
-
-    assert service.repair_reject(proposal_id, actor="steward@example.com",
-                                 reason="the two pages describe different quarters")
-
-    row = repair_store.proposal(conn, proposal_id)
-    assert (row["status"], row["decided_by"]) == (repair_schema.STATUS_REJECTED,
-                                                  "steward@example.com")
-    assert row["notes"] == "the two pages describe different quarters"
-    assert row["content_key"] in repair_store.known_content_keys(conn)
-    assert _actions(conn)[0]["action"] == "repairs.reject"
-
-
-def test_deciding_a_proposal_twice_is_refused_and_the_first_decision_stands(conn, service):
-    """`mark_decided`'s conditional UPDATE, seen from this door: the second decline loses and is
-    told so, rather than overwriting the reason the first steward gave."""
-    proposal_id = propose_repair(conn)
-    service.repair_reject(proposal_id, actor="first@example.com", reason="already linked")
-
-    with pytest.raises(AdminRefused, match="no longer pending"):
-        service.repair_reject(proposal_id, actor="second@example.com", reason="disagree")
-
-    assert repair_store.proposal(conn, proposal_id)["decided_by"] == "first@example.com"
-
-
-def test_repair_approve_and_reject_404_on_a_proposal_that_does_not_exist(conn, repair_service):
-    for call in (lambda: repair_service.repair_approve(999_999, actor="x"),
-                 lambda: repair_service.repair_reject(999_999, actor="x", reason="no")):
-        with pytest.raises(AdminNotFound):
-            call()
-    assert _actions(conn) == [], "a 404 is not an attempted mutation — no admin_actions row"
-
-
-def test_a_deletion_reaches_the_console_with_the_prose_a_steward_has_to_read(conn, service):
-    """The third kind's shape. A DELETE op is a path and nothing else — which page stops existing
-    is the whole of it — and a SCRUB op carries its `planned_after` through, because since ADR 043
-    those bytes are a MODEL's prose and this is the only reading they get before they land.
-
-    Red before that: the console showed two path lists, so a steward approved model-written bodies
-    they could not see anywhere — `entity-body`'s own mistake, which that kind's renderer exists to
-    avoid."""
-    proposal_id = propose_delete(conn)
-
-    row = service.repair_show(proposal_id)
-
-    assert row["kind"] == repair_schema.KIND_DELETE
-    assert [op["op"] for op in row["ops"]] == [repair_schema.DELETE_OP_NAME,
-                                               repair_schema.SCRUB_OP_NAME]
-    assert sorted(row["ops"][0]) == ["op", "path"]
-    assert sorted(row["ops"][1]) == ["op", "path", "planned_after"]
-    assert "No link any more" in row["ops"][1]["planned_after"]
-    assert "\n" in row["ops"][1]["planned_after"], (
-        "a page flattened to one line is a page nobody can read as the page it would become")
+    assert repair_store.recent(conn) == [], "a refusal before the clone leaves no row at all"

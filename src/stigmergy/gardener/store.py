@@ -15,9 +15,10 @@ VALUES (%(run_id)s, %(check)s, %(severity)s, %(source)s, %(subject)s, %(detail)s
 
 
 def insert_findings(conn, run_id: int, findings: list[dict]) -> None:
-    """Persist one run's findings — exactly eight keys per dict; the `_notice_*` keys are
-    deliberately not among them, so they never survive a round trip. `model_id` defaults to `''`
-    and `subjects` to `[]`, the same value the column's own DEFAULT gives a pre-existing row."""
+    """Persist one run's findings — the named keys and nothing else, so a key a check hangs off
+    `build_finding`'s `**extra` for its own use never survives a round trip. `model_id` defaults
+    to `''` and `subjects` to `[]`, the same value the column's own DEFAULT gives a pre-existing
+    row."""
     with conn.cursor() as cur:
         for f in findings:
             cur.execute(_INSERT_FINDING, {

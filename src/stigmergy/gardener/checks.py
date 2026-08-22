@@ -72,8 +72,9 @@ def build_finding(*, check: str, severity: str, subject: str, detail: str,
             suggested_action: str, source: str = SOURCE_DETERMINISTIC,
             subjects: list[str] | None = None, **extra) -> dict:
     """The one place a finding dict is assembled — shared by every check here and by
-    `gardener.sweep.to_finding` (`model_id` and the `_notice_*` keys ride through `**extra`).
-    `store.py` persists the seven named keys plus `model_id` and nothing else.
+    `gardener.sweep.to_finding` (`model_id` rides through `**extra`). `store.py` persists the
+    seven named keys plus `model_id` and nothing else, so anything else `**extra` carries stays
+    in memory for the run that put it there.
 
     `subject` is the DISPLAY string and `subjects` the same fact as data. Omitted, it derives from
     `subject` — one page, named once — and an EMPTY subject derives to `[]` rather than `[""]`:

@@ -16,9 +16,9 @@ stigmergy-gardener                                  stigmergy-digest
   │    pages_index / capture_queue / the registry /  │    completed gardener run's findings —
   │    the repo checkout                             │    reused, never re-derived)
   ├─ model editorial sweep    (sweep.py)             └─ corpus deltas          (capture_queue
-  │    changed-since-watermark pages +                    pages filed, and the identities
-  │    a rotating sample of unchanged ones,               those filings introduced)
-  │    PydanticAI, no checkout, no tools
+  │    changed-since-watermark pages +                    + repairs: pages filed, the
+  │    a rotating sample of unchanged ones,               identities those filings introduced,
+  │    PydanticAI, no checkout, no tools                  and the repairs that landed)
   ├─ model empty-body pass    (sweep.py)
   │    EVERY entity page in the checkout,
   │    batched, minus the ones already
@@ -28,10 +28,9 @@ stigmergy-gardener                                  stigmergy-digest
   │    same zone, in ONE call — a pair split
   │    across batches is invisible; no tools
   ├─ persist: gardener_findings + job_runs          every page NAMED is ACL-scoped to the posting
-  ├─ print: severity-grouped report, or --json      channel (server.acl.visible, slack.channels.
-  └─ sla-severity findings → ONE Slack notice       channel_audiences) — the digest broadcasts
-       (same channel as the digest, ACL-scoped;     --dry-run: byte-identical preview, posts nothing
-        NO check produces one today — see below)          │
+  └─ print: severity-grouped report, or --json      channel (server.acl.visible, slack.channels.
+        │                                           channel_audiences) — the digest broadcasts
+        │                                           --dry-run: byte-identical preview, posts nothing
         │                                                  │
         └──────────────────────── gardener.yml (daily cron; gardener only) ─────────────────────────┘
 ```
@@ -112,11 +111,6 @@ Its literal-ness is also its gap, and the gap is wide: a body somebody WROTE tha
 other deterministic one. That half is the model pass's, `model-empty-entity-body`, described under
 "The model passes" below; the two are disjoint by construction and share one repair.
 
-**None of the ten checks is `sla` severity.** The `sla` severity band itself exists — the schema
-carries it (`SEVERITIES`), the report prints an `sla` section and the notice-composing code is
-live — but nothing produces one, so in practice the SLA notice has **no producer**: see "The SLA
-notice", below.
-
 Checks 4 (anchor concentration) and 6 (company-wide fraction) read the queue's real `finished_at`
 timestamp, never a page's own `updated`/`as_of` — those describe when a page was last authored, not
 when it was filed. Checks 4, 6 and 7 (company page naming an entity) exclude provenance-type pages
@@ -157,8 +151,8 @@ about a pair.
 
 **The editorial sweep** judges four things a mechanical check cannot, each its own check slug
 (`sweep.ALL_MODEL_CHECK_SLUGS`: `model-contradiction`,
-`model-anchor-fit`, `model-unlinked-mention`, `model-superseded-canon`), all `warn` — none carries
-a real time-bound clock, so none is `sla`. Its input is bounded
+`model-anchor-fit`, `model-unlinked-mention`, `model-superseded-canon`), all `warn`. Its input is
+bounded
 on purpose, on every axis: the NEWEST `STIGMERGY_GARDENER_SWEEP_CHANGED_CEILING` (default 30)
 pages filed since the last run's watermark, plus a rotating sample of
 `STIGMERGY_GARDENER_SWEEP_SAMPLE` (default 10) unchanged pages, each body clamped to
@@ -269,13 +263,11 @@ checked 412 pages, 38 entities — 10 deterministic checks, plus a model sweep o
 and 10 sampled unchanged page(s), and a body sweep over 24 entity page(s), and an identity sweep
 over 38 registered entity(ies)
 
-19 finding(s): 0 sla, 5 warn, 14 info
+19 finding(s): 5 warn, 14 info
 
 most of what follows is a judgment call, not a one-paste fix: only `stale-view` names a runnable
 command below. Everything else names what to go look at.
 
-## SLA (0)
-none this run
 ## WARN (5)
 [WARN] anchor-concentration        acme-corp — 14 of the last 18 filings (78%) anchored here, above the 60% threshold  [deterministic]
   action: no command — read a few of the recent filings anchored to Acme Corp and judge whether that's genuinely how lopsided the work has been, or whether unrelated material is defaulting here because picking the right anchor felt like more effort
@@ -286,7 +278,7 @@ none this run
 ...
 ```
 
-Sections print **SLA first, then WARN, then INFO** — worst news first — and a severity with zero
+Sections print **WARN first, then INFO** — worst news first — and a severity with zero
 findings this run still prints its header (with its count) and an explicit "none this run", never
 a silently absent section. Within a group, findings sort by check slug then subject, so two runs
 over an unchanged corpus produce byte-identical output. Each finding is two lines: the finding
@@ -312,33 +304,19 @@ the entity zone — would be the same silent miss these checks exist to end, one
 `#`/`##` markdown headers are correct here: the reader is a terminal, never Slack. That is the
 opposite convention from the digest, below.
 
-## The SLA notice
+## Two severities, and nothing that pages anybody
 
-**Stated plainly: this mechanism has no producer.** Every one of the ten
-deterministic checks is `info` or `warn`, and so is every one of the six model
-slugs. Nothing in this codebase constructs a finding with `SEVERITY_SLA`. The machinery below is
-therefore live code with a dead input — and not by accident: the
-severity band, the notice-composing code and `stigmergy-gardener`'s own loud-failure-on-post-error
-posture all stay, on purpose, so a future check can be given `sla` severity without anyone having
-to rebuild the notice path — but as things stand, no gardener run posts one.
+The vocabulary is `info` and `warn` (`gardener.schema.SEVERITIES`), printed in
+`SEVERITY_ORDER` and spelled off those two names by every reader — the terminal report, the
+digest's corpus-health section, the console's severity chips. Every deterministic check and every
+model slug picks one of the two explicitly, at its own definition, rather than inheriting a default.
 
-A run that produces at least one `sla` finding posts exactly **one** Slack message, however many
-`sla` findings fired, to the same channel the digest broadcasts to (`STIGMERGY_DIGEST_CHANNEL_ID`,
-reused rather than a second channel setting). It says what broke, since when, and the command that
-shows it — never `🔔`, which is a bell nothing in this system rings; `⚠️ SLA:` instead, always
-paired with the plain word so the fact survives a client that renders no emoji at all. A run with
-only `info`/`warn` findings posts nothing at all — the absence of a Slack event, not an empty state
-needing a sentence.
-
-The notice is ACL-scoped exactly like the digest's own sections (ADR 024 D5): a finding whose
-wording names more than one page has its notice wording redacted unless EVERY one of those pages is
-visible to the posting channel's audiences (never per-page), a fixed sentence taking the place of
-the page path while its severity and its place in the count stay exactly where they were.
-`stigmergy-gardener` fails loudly (nonzero exit) if an `sla` finding fires and the notice itself
-cannot be posted (no bot token, no channel configured, a malformed `ops/slack-channels.json`, a real
-`SlackApiError`) — the findings are already saved either way; only the notice is at risk. A run
-with no `sla` finding at all never resolves the channels file, or anything else Slack-shaped, in
-the first place — a malformed one cannot fail a run that was never going to post.
+**`stigmergy-gardener` notifies nobody, and holds nothing to notify with.** There is no severity
+that pages a person and no Slack credential in a gardener process: the package imports no Slack
+gateway, no channels file and no ACL predicate, and `tests/test_architecture.py` pins that as its
+import edge. A finding reaches a person two ways — `stigmergy-digest`'s corpus-health section, and
+the console's Gardener page — and what answers one is the worker's repair pass
+([ADR 044](../decisions/044-the-capture-is-the-approval.md)), not a human woken up by a message.
 
 ## The digest's two sections
 
@@ -347,26 +325,37 @@ overrides it; 7 days on a genuine first run), two sections, in this order:
 
 1. **Corpus health** — the latest COMPLETED gardener run (`status IN ('ok', 'partial')` — a run
    whose sweep failed still has complete, trustworthy deterministic findings) whose `finished_at`
-   falls inside the window: its finding counts by severity, SLA/WARN broken down by check, INFO as
+   falls inside the window: its finding counts by severity, WARN broken down by check, INFO as
    a bare count with a pointer to the full report. Two honest alternatives when there is nothing to
    show: no gardener run has EVER completed, or the latest one predates this window (both name what
    to run next, never silence).
-2. **Corpus deltas** — pages filed in-window (count + titles) and entities born in-window (a
-   COUNT only). A birth is a filing: the librarian's report names the identities its own capture
-   introduced (`report.entities_born`), so the number is the sum of
+2. **Corpus deltas** — three facts: pages filed in-window (count + titles), entities born
+   in-window, and repairs applied in-window. The last two are COUNTS only.
+
+   A birth is a filing: the librarian's report names the identities its own capture introduced
+   (`report.entities_born`), so the number is the sum of
    `jsonb_array_length(report -> 'entities_born')` over the window's FILED captures
    ([ADR 044](../decisions/044-the-capture-is-the-approval.md)). There is no ledger to read and no
-   second table that could disagree with the commits. The identities are not NAMED, deliberately:
-   a page a channel may not see would be named through its entity here, and the count is the honest
-   half — the rendered line reads `N entity birth(s) approved`, and the approval is the capture.
+   second table that could disagree with the commits, and the line reads `N entities born` because
+   that is now exact — every counted birth is a page in the repo.
+
+   A repair is counted off the ledger the worker writes, `applied` rows ONLY, grouped by KIND
+   (`edits`, `entity-body`, `delete`, `entity-alias`, sorted so two weeks can be compared). A
+   `failed` row belongs on the console beside the sentence that refused it, where somebody can act
+   on it — not in a weekly post to a channel that cannot.
+
+   Neither the identities nor the repaired pages are NAMED, and that is the same decision twice: a
+   page a channel may not see would be named through its entity, or through the repair that edited
+   it, and the count is the honest half.
 
 **Every page the digest NAMES passes `server.acl.visible()` at the posting channel's own resolved
 audiences** (`sections._visible_pages`, the one place this package calls it) — never the
 operator's unscoped view. In practice that is section 2's filed-page list: a page the channel
 cannot see is absent from both the count and the titles, because a count and a list that disagree
 are their own kind of dishonest report. Section 1 needs no filter because it names no page at all
-— only counts by severity and check slug — and the entities-born number is a count taken off the
-filings' own reports, not of pages. The digest is the one gardener-adjacent surface that
+— only counts by severity and check slug — and neither does the rest of section 2: the
+entities-born number is a count taken off the filings' own reports, and the repairs number a count
+off the ledger, by kind. Which is exactly why they are counts. The digest is the one gardener-adjacent surface that
 broadcasts, so it is the one that needed this from birth (ADR 024 D5); until the first labelled page exists the filter is
 indistinguishable from no scoping at all, and it becomes load-bearing the moment one exists.
 
@@ -400,8 +389,8 @@ and **run from the knowledge repo**, whose Actions logs are private (this report
 and page paths; see the runbook). It runs
 daily at ~05:07 UTC, after `index-rebuild` (04:17) and `retention-purge` (04:42), so the corpus
 view the gardener reads is the morning's, not last night's. It checks out the knowledge repo
-read-only and runs one command — `stigmergy-gardener --repo stigmergy-knowledge` — persisting findings
-and posting the SLA notice (today, never — see above) in the same run. The whole job is guarded by
+read-only and runs one command — `stigmergy-gardener --repo stigmergy-knowledge` — which persists
+findings and prints the report, and needs no Slack credential to do it. The whole job is guarded by
 `if: vars.STIGMERGY_CRONS_ENABLED == 'true'`, so a fork that inherits the file but not the deployment
 behind it skips cleanly instead of failing a scheduled run every night. A `concurrency` group
 queues a second run rather than cancelling one in flight: cancelling mid-write would discard real,

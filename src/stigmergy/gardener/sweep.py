@@ -95,11 +95,9 @@ ALL_SWEEP_SLUGS = ALL_MODEL_CHECK_SLUGS + EMPTY_BODY_CHECK_SLUGS + DUPLICATE_ENT
 
 # Spelled out per slug rather than derived by a blanket comprehension: the fifth entry is `info`
 # and the four are `warn`, so a severity here is a decision somebody made about that check rather
-# than something a new slug inherits by being added to a tuple. None of the five is `sla`: none
-# carries a time-bound clock, so manufactured urgency would be dishonest. `model-empty-entity-body`
-# is `info` because it is the judgment twin of an `info` deterministic check and what it invites is
-# a drafted body a steward reads before approving — `warn` would inflate the digest for a page
-# nobody is at risk from.
+# than something a new slug inherits by being added to a tuple. `model-empty-entity-body` is `info`
+# because it is the judgment twin of an `info` deterministic check and what it invites is a drafted
+# body — `warn` would inflate the digest for a page nobody is at risk from.
 MODEL_CHECK_SEVERITY = {
     CHECK_MODEL_CONTRADICTION: schema.SEVERITY_WARN,
     CHECK_MODEL_ANCHOR_FIT: schema.SEVERITY_WARN,
@@ -109,7 +107,7 @@ MODEL_CHECK_SEVERITY = {
     # `warn`, unlike its neighbour above, and the difference is what the finding costs to ignore:
     # an empty body is a page that says nothing, while two identities for one company SPLIT the
     # anchoring — each timeline is a fraction of the truth and entity-first retrieval degrades with
-    # nothing anywhere reporting that it has. Not `sla`: no clock is running on it.
+    # nothing anywhere reporting that it has.
     CHECK_MODEL_DUPLICATE_ENTITY: schema.SEVERITY_WARN,
 }
 

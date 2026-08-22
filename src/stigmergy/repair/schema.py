@@ -1,26 +1,27 @@
-"""The proposal store's contract: the DDL and the vocabularies.
+"""The repair ledger's contract: the DDL and the vocabularies.
 
 Idempotent DDL behind `capture.schema.startup_ddl_lock`, the shared advisory lock — the same
 posture `gardener/schema.py` takes, and for the same reason: two processes may start at once.
 
-The one design decision worth stating here rather than in prose elsewhere: **a REJECTED row is
-the dismissal memory.** `content_key` identifies a proposal by what it would DO, not by which
-finding suggested it, and the proposer skips a key held by a pending, approved, rejected or
-applied row. "Reviewed and declined" therefore finally exists as a durable fact, and a steward who
-says no once is not asked the same question again the next night. The UNIQUE index is narrower on
-purpose (pending only): re-proposing after a rejection is a decision a human makes, and the index
-must not turn it into a database error.
+**A repair is applied or it is not; nothing waits** — ADR 044,
+`docs/decisions/044-the-capture-is-the-approval.md`.
+The worker derives a repair from a gardener finding, validates it against a real checkout, applies
+it through the nine gates and records what happened here. There is no pending state, no verdict
+and nobody to ask — the three outcomes are `applied`, `failed` and `skipped`.
 
-`failed` is the one status the memory does NOT hold, and the asymmetry is the point: a rejection is
-a human saying no, while a failed apply is a human having said YES to something that then hit a
-gate, a race or a fault. The row stays as the operator-visible record; the SKIP does not, or the
-one repair a steward actively wanted would be the one the loop can never offer again.
+The one design decision worth stating here rather than in prose elsewhere: **`content_key` is
+permanent, and it is what stops the loop repeating itself.** It identifies a repair by what it
+would DO, not by which finding suggested it, so an applied repair a person later reverted in git
+is never re-derived, and a repair a gate refused is not retried every night. That is a deliberate
+trade: the loop forgets nothing, so a `failed` row is where an operator looks when a finding stops
+being answered. A `skipped` row carries no key (nothing was derived to key on) and carries its
+reason instead.
 """
 import hashlib
 
 from stigmergy.capture.schema import startup_ddl_lock
 
-JOB_NAME = "repair-propose"
+JOB_NAME = "repair"
 
 # ── kind — what a proposal WOULD DO ──────────────────────────────────────────────────────────
 # `edits` is the librarian's three additive declared-edit shapes, applied by `edits.apply_declared`
@@ -30,21 +31,21 @@ JOB_NAME = "repair-propose"
 # with the apply telling `GateContext.body_rewrite_allowed` which path was authorized (ADR 039,
 # "entity-body: the second kind").
 #
-# The string doubles as the OP name inside such a proposal's single op, deliberately: one
-# vocabulary word for one shape means `ops_preview.kinds` in the review lane names the thing a
-# steward is being asked about without a second lookup table.
+# The string doubles as the OP name inside such a repair's single op, deliberately: one
+# vocabulary word for one shape means a surface listing a repair's ops names what happened
+# without a second lookup table.
 #
-# `delete` is the ONE kind that breaks that doubling, and deliberately: one approval performs two
+# `delete` is the ONE kind that breaks that doubling, and deliberately: one repair performs two
 # different actions — pages removed, pages rewritten to stop pointing at them — so its ops carry
-# `delete-page`/`scrub-page` (`repair.deletion.OP_NAMES`) and `ops_preview.kinds` tells a steward
-# which is which. A single word there would hide the half of the blast radius that is not the
-# pages they named (ADR 039, "delete: the third kind").
+# `delete-page`/`scrub-page` (`repair.deletion.OP_NAMES`) and a reader can tell which is which.
+# A single word there would hide the half of the blast radius that is not the pages anybody
+# named (ADR 039, "delete: the third kind").
 #
 # `entity-alias` is the fourth, and it breaks the doubling for the same reason `delete` does: one
-# approval performs four different actions — the survivor's page gains the absorbed entity's
+# repair performs four different actions — the survivor's page gains the absorbed entity's
 # spellings, the absorbed page is marked superseded, every page anchored to it is re-anchored, and
 # the derived registry is rebuilt — so its ops carry their own names
-# (`repair.entity_alias.OP_NAMES`) and `ops_preview.kinds` tells a steward which is which
+# (`repair.entity_alias.OP_NAMES`) and a reader can tell which is which
 # (ADR 039, "entity-alias: the fourth kind").
 KIND_EDITS = "edits"
 KIND_ENTITY_BODY = "entity-body"
@@ -52,19 +53,15 @@ KIND_DELETE = "delete"
 KIND_ENTITY_ALIAS = "entity-alias"
 KINDS = (KIND_EDITS, KIND_ENTITY_BODY, KIND_DELETE, KIND_ENTITY_ALIAS)
 
-# ── status — the lifecycle. `failed` is terminal for the ROW, never for the finding: a steward
-# may propose again, and the `error` column says what went wrong. An approved proposal whose
-# apply failed does NOT revert to pending; a silent revert would hide that a gate refused. ─────
-STATUS_PENDING = "pending"
-STATUS_APPROVED = "approved"
-STATUS_REJECTED = "rejected"
+# ── status — what happened to a derived repair, and the whole vocabulary of it ────────────────
+# `applied` landed a commit. `failed` was derived and refused — by its own validator, by a gate,
+# or by a fault — and the `error` column says which; the row is the operator-facing record, and
+# its key is not retried. `skipped` never became a repair at all: a finding no kind can express, a
+# ceiling that bound, a model that declined. Only `skipped` carries a `reason`.
 STATUS_APPLIED = "applied"
 STATUS_FAILED = "failed"
-STATUSES = (STATUS_PENDING, STATUS_APPROVED, STATUS_REJECTED, STATUS_APPLIED, STATUS_FAILED)
-
-# The two verdicts a steward may return. `applied`/`failed` are outcomes code writes, never
-# something a human hands in.
-DECIDABLE = (STATUS_APPROVED, STATUS_REJECTED)
+STATUS_SKIPPED = "skipped"
+STATUSES = (STATUS_APPLIED, STATUS_FAILED, STATUS_SKIPPED)
 
 # The CHECK constraints are the vocabularies above, spelled for SQL. `repr`, not
 # `capture.schema.sql_literals`: that helper SORTS, and a CHECK's definition string is committed
@@ -73,97 +70,139 @@ DECIDABLE = (STATUS_APPROVED, STATUS_REJECTED)
 _KIND_SQL_LIST = ", ".join(repr(k) for k in KINDS)
 _STATUS_SQL_LIST = ", ".join(repr(s) for s in STATUSES)
 
-_REPAIR_PROPOSALS_DDL = f"""
-CREATE TABLE IF NOT EXISTS repair_proposals (
+_REPAIRS_DDL = f"""
+CREATE TABLE IF NOT EXISTS repairs (
     id BIGSERIAL PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     run_id BIGINT NOT NULL DEFAULT 0,
     finding_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    finding_subjects JSONB NOT NULL DEFAULT '[]'::jsonb,
     kind TEXT NOT NULL DEFAULT '{KIND_EDITS}' CHECK (kind IN ({_KIND_SQL_LIST})),
-    target_paths JSONB NOT NULL,
-    ops JSONB NOT NULL,
+    target_paths JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ops JSONB NOT NULL DEFAULT '[]'::jsonb,
     rationale TEXT NOT NULL DEFAULT '',
-    content_key TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT '{STATUS_PENDING}' CHECK (status IN ({_STATUS_SQL_LIST})),
-    decided_by TEXT NOT NULL DEFAULT '',
-    decided_at TIMESTAMPTZ,
-    notes TEXT NOT NULL DEFAULT '',
+    content_key TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK (status IN ({_STATUS_SQL_LIST})),
     applied_commit TEXT NOT NULL DEFAULT '',
+    diff TEXT NOT NULL DEFAULT '',
+    reason TEXT NOT NULL DEFAULT '',
     error TEXT NOT NULL DEFAULT '',
-    model_id TEXT NOT NULL DEFAULT '',
-    finding_subjects JSONB NOT NULL DEFAULT '[]'::jsonb
+    model_id TEXT NOT NULL DEFAULT ''
 )
 """
 
-# WHAT THE FINDINGS NAMED, as against `target_paths` (what the answer would EDIT). The two are
-# routinely different — an `orphan-page` finding names the page nothing links to, and the repair
-# edits the page that ought to link to it — so a dismissal memory keyed only on `target_paths`
-# recognised neither that shape nor a one-sided answer to a two-page finding, and sent the same
-# declined repair to the model every night under each new finding id.
-#
-# A LIST OF LISTS, one entry per finding answered, and never their union: a proposal answering two
-# findings has to dismiss BOTH, while a union would dismiss only a hypothetical third finding
-# naming all of those pages at once, which is not a finding anything produces.
-#
-# `ADD COLUMN IF NOT EXISTS` for the reason `gardener/schema.py` states: `CREATE TABLE IF NOT
-# EXISTS` never adds a column to a table that already exists, and the `'[]'` default fills every
-# pre-existing row — a proposal stored before this column reads as "named no subject", which falls
-# back to the `target_paths` half exactly as it did before.
-_REPAIR_PROPOSALS_FINDING_SUBJECTS_COLUMN = (
-    "ALTER TABLE repair_proposals ADD COLUMN IF NOT EXISTS finding_subjects JSONB NOT NULL "
-    "DEFAULT '[]'::jsonb"
-)
-
-# One PENDING proposal per content key — a second propose run that re-derives the same edit is a
-# no-op, not a second question. Deliberately NOT unique across every status: the dismissal memory
-# is enforced in `proposer.py` (which skips a key with any prior row) so a human who decides to
-# re-propose after a rejection meets a decision, never a constraint violation.
-_REPAIR_PROPOSALS_PENDING_KEY_INDEX = (
-    f"CREATE UNIQUE INDEX IF NOT EXISTS repair_proposals_pending_key_idx "
-    f"ON repair_proposals (content_key) WHERE status IN ('{STATUS_PENDING}')"
-)
-_REPAIR_PROPOSALS_STATUS_INDEX = (
-    "CREATE INDEX IF NOT EXISTS repair_proposals_status_idx ON repair_proposals (status, id)"
-)
-
-# The name Postgres itself gives the inline column CHECK above, spelled out so the swap below can
-# reach the constraint on a table created before this constant existed.
-KIND_CHECK_NAME = "repair_proposals_kind_check"
-
-# The one non-additive migration, and `capture.schema`'s `_CAPTURE_QUEUE_STATUS_CHECK` verbatim in
-# shape because the problem is identical: `CREATE TABLE IF NOT EXISTS` never touches a table that
-# already exists, so a KIND added to `KINDS` and to nothing else would be refused by every deployed
-# database — an IntegrityError on the first proposal of the new kind, in production, at night.
-#
-# ONE `DO` statement, never a DROP-then-ADD pair: as two statements the table is briefly
-# unconstrained, every process start takes an ACCESS EXCLUSIVE lock, and two concurrent starters
-# race into `DuplicateObject`. The guard skips the swap once the existing definition already names
-# every kind (`quote_literal`, so one name cannot match inside another).
-_REPAIR_PROPOSALS_KIND_CHECK = f"""
+# The rename, and the reason it is a rename rather than a fresh table beside the old one: the rows
+# in `repair_proposals` are the record of every repair this deployment ever landed, and a new table
+# would leave that history in a table nothing reads. Runs BEFORE the `CREATE TABLE IF NOT EXISTS`
+# above, so a database that has the old name arrives at the new one with its rows, and a fresh
+# database skips it entirely.
+_RENAME_FROM_PROPOSALS = """
 DO $$
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint c
-        WHERE c.conrelid = 'repair_proposals'::regclass
-          AND c.conname = '{KIND_CHECK_NAME}'
-          AND (SELECT bool_and(pg_get_constraintdef(c.oid) LIKE '%' || quote_literal(k) || '%')
-               FROM unnest(ARRAY[{_KIND_SQL_LIST}]) AS k)
-    ) THEN
-        ALTER TABLE repair_proposals DROP CONSTRAINT IF EXISTS {KIND_CHECK_NAME};
-        ALTER TABLE repair_proposals ADD CONSTRAINT {KIND_CHECK_NAME}
-            CHECK (kind IN ({_KIND_SQL_LIST}));
+    IF EXISTS (SELECT 1 FROM pg_class WHERE relname = 'repair_proposals' AND relkind = 'r')
+       AND NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'repairs' AND relkind = 'r') THEN
+        ALTER TABLE repair_proposals RENAME TO repairs;
     END IF;
 END $$
 """
 
-_ALL_DDL = (_REPAIR_PROPOSALS_DDL, _REPAIR_PROPOSALS_FINDING_SUBJECTS_COLUMN,
-            _REPAIR_PROPOSALS_KIND_CHECK, _REPAIR_PROPOSALS_PENDING_KEY_INDEX,
-            _REPAIR_PROPOSALS_STATUS_INDEX)
+# `CREATE TABLE IF NOT EXISTS` never adds a column to a table that already exists, so every column
+# this version introduced is added explicitly — a renamed `repair_proposals` has none of them.
+_REPAIRS_COLUMNS = (
+    "ALTER TABLE repairs ADD COLUMN IF NOT EXISTS finding_subjects JSONB NOT NULL "
+    "DEFAULT '[]'::jsonb",
+    "ALTER TABLE repairs ADD COLUMN IF NOT EXISTS diff TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE repairs ADD COLUMN IF NOT EXISTS reason TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE repairs ALTER COLUMN content_key SET DEFAULT ''",
+)
+
+# What the three retired statuses become. A row that was waiting on somebody when this shipped was
+# never applied and never refused: it is a repair that did not happen, which is what `skipped`
+# means. The reason says so rather than leaving a status a reader has to remember the history of.
+# Idempotent by construction — after the first run no row matches.
+_MIGRATE_RETIRED_STATUSES = f"""
+UPDATE repairs
+   SET status = '{STATUS_SKIPPED}',
+       reason = CASE WHEN reason <> '' THEN reason
+                     ELSE 'this repair was waiting on a person when repairs began applying '
+                          'themselves (ADR 044); it was never applied' END
+ WHERE status IN ('pending', 'approved', 'rejected')
+"""
+
+# The columns of the decision that no longer happens. Dropped rather than left empty: a column
+# nothing writes is a column a reader assumes something writes.
+_DROP_DECISION_COLUMNS = (
+    "ALTER TABLE repairs DROP COLUMN IF EXISTS decided_by",
+    "ALTER TABLE repairs DROP COLUMN IF EXISTS decided_at",
+    "ALTER TABLE repairs DROP COLUMN IF EXISTS notes",
+)
+
+# ONE row per content key, over every status that has one — the permanent memory the module
+# docstring describes. Partial, because a `skipped` row has no ops to key on and several of them
+# would otherwise collide on the empty string.
+_REPAIRS_CONTENT_KEY_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS repairs_content_key_idx "
+    "ON repairs (content_key) WHERE content_key <> ''"
+)
+# The old partial index, whose predicate names a status that no longer exists. Dropped by name:
+# left in place it would keep enforcing uniqueness over rows nothing can create, and a reader
+# would find an index for a lifecycle the code has forgotten.
+_DROP_PENDING_KEY_INDEX = "DROP INDEX IF EXISTS repair_proposals_pending_key_idx"
+_REPAIRS_STATUS_INDEX = (
+    "CREATE INDEX IF NOT EXISTS repairs_status_idx ON repairs (status, id)"
+)
+
+# The name Postgres itself gives the inline column CHECKs above, spelled out so the swaps below can
+# reach a constraint on a table created — or renamed — before this version.
+KIND_CHECK_NAME = "repairs_kind_check"
+STATUS_CHECK_NAME = "repairs_status_check"
+
+# The two non-additive migrations, and `capture.schema`'s `_CAPTURE_QUEUE_STATUS_CHECK` verbatim in
+# shape because the problem is identical: `CREATE TABLE IF NOT EXISTS` never touches a table that
+# already exists, so a vocabulary changed here and nowhere else would be refused by every deployed
+# database — an IntegrityError on the first row of the new shape, in production, at night.
+#
+# ONE `DO` statement each, never a DROP-then-ADD pair: as two statements the table is briefly
+# unconstrained, every process start takes an ACCESS EXCLUSIVE lock, and two concurrent starters
+# race into `DuplicateObject`. The guard skips the swap once the existing definition already names
+# every value (`quote_literal`, so one name cannot match inside another).
+#
+# The renamed table brings `repair_proposals_kind_check`/`_status_check` with it, so each swap also
+# drops the old name — otherwise a row would have to satisfy both the old vocabulary and the new.
+def _check_swap(column: str, name: str, old_name: str, values: str) -> str:
+    return f"""
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint c
+        WHERE c.conrelid = 'repairs'::regclass
+          AND c.conname = '{name}'
+          AND (SELECT bool_and(pg_get_constraintdef(c.oid) LIKE '%' || quote_literal(v) || '%')
+               FROM unnest(ARRAY[{values}]) AS v)
+    ) THEN
+        ALTER TABLE repairs DROP CONSTRAINT IF EXISTS {old_name};
+        ALTER TABLE repairs DROP CONSTRAINT IF EXISTS {name};
+        ALTER TABLE repairs ADD CONSTRAINT {name} CHECK ({column} IN ({values}));
+    END IF;
+END $$
+"""
+
+
+_REPAIRS_KIND_CHECK = _check_swap("kind", KIND_CHECK_NAME, "repair_proposals_kind_check",
+                                  _KIND_SQL_LIST)
+_REPAIRS_STATUS_CHECK = _check_swap("status", STATUS_CHECK_NAME, "repair_proposals_status_check",
+                                    _STATUS_SQL_LIST)
+
+# Order is load-bearing: rename, then create, then columns, then the status migration, THEN the
+# CHECK swaps — a swap run before the migration would refuse the rows the migration exists to fix.
+_ALL_DDL = (_RENAME_FROM_PROPOSALS, _REPAIRS_DDL, *_REPAIRS_COLUMNS, _MIGRATE_RETIRED_STATUSES,
+            *_DROP_DECISION_COLUMNS, _REPAIRS_KIND_CHECK, _REPAIRS_STATUS_CHECK,
+            _DROP_PENDING_KEY_INDEX, _REPAIRS_CONTENT_KEY_INDEX, _REPAIRS_STATUS_INDEX)
 
 
 def ensure_repair_schema(conn) -> None:
-    """Idempotent DDL for `repair_proposals` — safe on every startup and from two processes at
-    once (the shared `startup_ddl_lock`)."""
+    """Idempotent DDL for `repairs` — safe on every startup and from two processes at once (the
+    shared `startup_ddl_lock`), and safe on a database that still has `repair_proposals`."""
     with startup_ddl_lock(conn) as cur:
         for statement in _ALL_DDL:
             cur.execute(statement)
@@ -180,11 +219,11 @@ def ensure_repair_schema(conn) -> None:
 # between the two vocabularies, and both validations run on its output, so propose time and apply
 # time cannot come to judge different things.
 OP_KIND_KEY = "op"
-# The stored op shape, PER KIND — every reader of an op (the CLI preview, the console's cleaner,
-# the review lane's `ops_preview`) is shaped by which of these it is looking at, so the two are
-# named rather than left implicit in four separate reshapes. `entity-body` carries PROSE where the
-# additive kinds carry a link and a note, and a reader that assumed one shape for both showed a
-# steward an empty cell where the draft should have been.
+# The stored op shape, PER KIND — every reader of an op (the console's cleaner, the applier) is
+# shaped by which of these it is looking at, so the shapes are named rather than left implicit in
+# separate reshapes. `entity-body` carries PROSE where the additive kinds carry a link and a note,
+# and a reader that assumed one shape for both rendered an empty cell where the draft should have
+# been.
 EDIT_OP_FIELDS = (OP_KIND_KEY, "path", "link", "note")
 ENTITY_BODY_OP_FIELDS = (OP_KIND_KEY, "path", "body_markdown", "role")
 # The `delete` kind's two op names and two shapes. A removal names only the page; a scrub carries
@@ -198,10 +237,9 @@ SCRUB_OP_NAME = "scrub-page"
 DELETE_OP_FIELDS = (OP_KIND_KEY, "path")
 SCRUB_OP_FIELDS = (OP_KIND_KEY, "path", "expected_before_hash", "planned_after")
 # The GROUP, beside the names, `ALIAS_IDENTITY_OP_NAMES` below being the precedent: four surfaces
-# have to know "every op this kind performs" — the kind's own validator, the CLI preview, the
-# console's op cleaner and the applier — and each rebuilding the tuple is how a fifth op reaches a
-# steward rendered as something else. `tests/test_architecture.py` pins both preview tables against
-# these two.
+# have to know "every op this kind performs" — the kind's own validator, the console's op cleaner
+# and the applier — and each rebuilding the tuple is how a fifth op reaches a reader rendered as
+# something else. `tests/test_architecture.py` pins the console's tables against these two.
 DELETE_OP_NAMES = (DELETE_OP_NAME, SCRUB_OP_NAME)
 
 # The `entity-alias` kind's four op names, and its ONE op shape. Every op in a merge carries the
@@ -217,8 +255,7 @@ REGISTRY_OP_NAME = "regenerate-registry"
 ALIAS_OP_FIELDS = (OP_KIND_KEY, "path", "expected_before_hash", "planned_after")
 # All four as one group, `DELETE_OP_NAMES` above and for the same reason.
 ALIAS_OP_NAMES = (ALIAS_OP_NAME, RETIRE_OP_NAME, REANCHOR_OP_NAME, REGISTRY_OP_NAME)
-# The two ops that say WHICH pair this merge is about — the question a steward answers, as against
-# the pages the answer would also touch.
+# The two ops that say WHICH pair this merge is about, as against the pages it also touches.
 ALIAS_IDENTITY_OP_NAMES = (ALIAS_OP_NAME, RETIRE_OP_NAME)
 
 
@@ -226,13 +263,12 @@ def merge_direction(ops) -> dict:
     """`{"survivor", "absorbed", "reanchored"}` for an `entity-alias` proposal — `{}` for any other
     kind, since no other proposal has a direction.
 
-    **Why a reader exists at all, rather than a review surface reading `ops` itself.** For every
+    **Why a reader exists at all, rather than each surface reading `ops` itself.** For every
     other kind the paths say what happens to them: a `backlink` names the page that gains a link, a
     `delete` names the page that goes. A merge names two entity pages and the whole decision is
-    WHICH ONE SURVIVES — and in `target_paths`, a sorted list, that is invisible. A steward
-    approving from the review lane would otherwise read only the model-authored `rationale`, whose
-    text is derived from two page bodies somebody else wrote; the direction is the half code owns
-    and it has to be on the same screen.
+    WHICH ONE SURVIVES — and in `target_paths`, a sorted list, that is invisible. A reader would
+    otherwise have only the model-authored `rationale`, whose text is derived from two page bodies
+    somebody else wrote; the direction is the half code owns, and it has to be on the same screen.
 
     Derived from `ops` and never from `target_paths`: the cross-check judges one of those against
     the other, and a display built from the thing being judged would let one stored column vouch
@@ -277,33 +313,45 @@ def _unchanged(op) -> bool:
     return hashlib.sha256(str(op.get("planned_after", "")).encode("utf-8")).hexdigest() == before
 
 
+def page_set_key(paths) -> str:
+    """The comparable spelling of a SET OF PAGES — sorted, deduplicated, hashed.
+
+    Here rather than in either caller because both ends of the memory have to spell it the same
+    way: the ledger writes what a repair stood for, and the derivation asks whether a finding is
+    already answered. A key built two ways is two keys, and the failure it produces is silent —
+    the loop re-answering something it answered last night.
+    """
+    return hashlib.sha256("|".join(sorted({str(p) for p in (paths or ()) if p}))
+                          .encode()).hexdigest()
+
+
 def content_key(ops, *, kind: str = KIND_EDITS) -> str:
-    """What identifies a proposal: WHAT IT WOULD DO, never which finding suggested it.
+    """What identifies a repair: WHAT IT DOES, never which finding suggested it.
 
     Order-independent (the op lines are sorted) so two runs that derive the same repair in a
-    different order collide as they should, and `note` is deliberately EXCLUDED: two proposals
-    that add the same callout to the same page with differently-worded sentences are the same
-    question asked twice, and a steward who declined it once should not meet a rephrasing of it
-    tomorrow.
+    different order collide as they should, and `note` is deliberately EXCLUDED: two repairs that
+    add the same callout to the same page with differently-worded sentences are the same
+    question answered twice, and a repair already applied must not land again tomorrow with the
+    sentence reworded.
 
     The same exclusion does the same work for the other kinds, and it matters more there: an
     `entity-body` op has no `link`, so its key is `kind + path` and the DRAFTED BODY is not part of
-    it. **A re-drafted body is the same question** — a steward who read a draft for a page and
-    decided it needs writing by a person is not asked again tomorrow with the prose rearranged.
+    it. **A re-drafted body is the same repair** — a page whose body this loop already wrote is not
+    rewritten tomorrow with the prose rearranged.
 
     `delete` needs one step more than an exclusion, and `entity-alias` needs the same step for the
     same reason: their keys are built from the ops that ARE the question. A deletion's key is its
     DELETIONS alone — the scrubs are a fact about the rest of the corpus rather than about the
-    question, so keying on them would re-ask a declined deletion every time somebody linked to the
-    doomed page. A merge's key is its two IDENTITY ops alone, and which pages are anchored to the
+    question, so keying on them would re-derive a settled deletion every time somebody linked to
+    the doomed page. A merge's key is its two IDENTITY ops alone, and which pages are anchored to the
     absorbed entity moves the same way.
 
     `entity-alias` goes one step further still, and it is the only kind that does: its key drops
     the OP NAME as well, so the two paths are keyed as an unordered PAIR. Which of two entities
     survives is the model's judgment and it may legitimately come out the other way tomorrow — but
-    a steward who declined the merge declined the PAIR, and a key that carried the direction would
-    ask them again the moment the answer flipped (#69's `finding_subjects` for the pre-model half
-    of the same memory).
+    a merge that happened — or was refused — settled the PAIR, and a key that carried the direction
+    would let the loop merge them back the other way the moment the answer flipped (#69's
+    `finding_subjects` is the pre-model half of the same memory).
     """
     if kind == KIND_ENTITY_ALIAS:
         pair = sorted({str(o.get("path", "")) for o in (ops or ())

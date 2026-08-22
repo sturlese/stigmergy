@@ -28,7 +28,10 @@ Layering (`tests/test_architecture.py` enforces it): `librarian` imports `captur
 through the durable queue row. `stigmergy.index.corpus` is a declared LIBRARY reach (a pure
 repo parser — nothing here touches `pages_index`); `stigmergy.index.store` is reached by
 `cli.py` alone; `processing.py` and `worker.py` may import exactly one `stigmergy.views` symbol
-(`views.regenerate`) — the post-meeting hook and the periodic sweep, nothing wider.
+(`views.regenerate`) — the post-meeting hook and the periodic sweep, nothing wider. `worker.py`
+also reaches `stigmergy.repair` for its second maintenance pass, and only from INSIDE
+`run_repairs`: that package loads a model stack, and the filing path must not pay for it at import
+time.
 
 **`stigmergy.entities` is reachable from `identity.py` and from nowhere else**, and only for
 `entities.birth`, `entities.generator` and `entities.errors`: this is the ONE writer of an entity
@@ -43,7 +46,7 @@ deletes the entry if `identity.py` ever stops using it.
 | Module | What it is |
 |---|---|
 | `processing.py` | `process_item` — one capture end to end (`Result`, `Deps`, the refused-diff digest); `process_meeting_item` — the sibling for `kind="meeting"` rows, filing a page SET, and the only kind routed away from `process_item` (a `document` row runs the ordinary flow with `_source_attachment` ON). The two flows share one spine, and a new one joins it rather than copying it: `_resolve_filing_base` (this item's base commit, plus the `Deps` re-read at it), `_commit_and_push` (gated commit → lease re-check → push), `_declare_births` (what the gates are TOLD about the identities this run wrote) and `_route_refusal` (which terminal state a surviving veto earns — `rejected` or `failed`, and nothing else). Read it first when tracing a capture's path; everything else is reached from it |
-| `worker.py` | the loop: `startup_checks` (every fail-closed startup refusal), `sweep` (stranded claims), `Worker` (signal handling, and the idle branch's maintenance schedule), `process_next` — the only caller of the whole processing path — plus `run_view_sweep`/`view_sweep_clause`, the periodic view convergence pass and its one operator line |
+| `worker.py` | the loop: `startup_checks` (every fail-closed startup refusal), `sweep` (stranded claims), `Worker` (signal handling, and the idle branch's TWO maintenance schedules), `process_next` — the only caller of the whole processing path — plus `run_view_sweep`/`view_sweep_clause` (the periodic view convergence pass) and `run_repairs`/`repair_clause` (the periodic repair pass, ADR 044), each with its own clock and its one operator line |
 | `gates.py` | the one veto surface: `Finding`, `GateContext`, `run_gates`, `ALL_GATES` (nine gates: zone, binary, body-rewrite, secrets, pii, frontmatter, contract, anchoring, identity). A new check is a `(ctx) -> list[Finding]` added to `ALL_GATES`, never a special case in `processing.py` |
 | `identity.py` | the identity WRITER, and the ONE module here that may reach `stigmergy.entities`: `write_births` turns an account's `new_entities`/`new_aliases`/`entity_updates` into a created entity page per identity (rendered from the knowledge repo's own template through `entities.birth`, with `approved_by` naming the capture's own submitter — the capture is the approval, ADR 044), a new `aliases:` entry on a registered entity's page, appended `## Facts`/`## Connections` lines on the pages the account adds to (`_append_to_sections`: in place under the heading, or a new section at the end; never a line the page already carries; `updated:` moved to today), and the regenerated registry — or into `Finding`s having written NOTHING. Its own refusals: the two honesty checks on a declared identity (named in the material, not colliding with a registered spelling), `registration-missing` when the account ignores a registration the capture carries, `update-unknown-entity` and `update-of-new-entity` on an update. `Births` carries what the gates must be told: the registry the commit will PUBLISH, the created / `confirmed` / edited / `updated_pages` paths, the byte proofs, and the lists the report names |
 | `agent.py` | the agent seam's shared half: `build_agent`, `BACKENDS`, `parse_outcome` / `parse_meeting_outcome` (the trust boundary both backends' accounts cross), `confined_write` (the write allow-list), the prompt builders and the fence |
@@ -124,13 +127,13 @@ deletes the entry if `identity.py` ever stops using it.
   declares any more: the meeting flow set it `False` until it gained the same declared-edit
   mechanism (ADR 038).
   Several SUSPEND a proof rather than narrowing a lane, and each has its granting surface
-  pinned both directions in `tests/test_architecture.py`. Three are `repair/remote.py`'s alone (ADR
+  pinned both directions in `tests/test_architecture.py`. Three are `repair/apply.py`'s alone (ADR
   039's two amendments): `body_rewrite_allowed` names the single page whose body a governed repair
   may replace, `deletions_allowed` the paths a governed sweep may remove, and `expected_bytes` the
   exact file a caller computed for a page it rewrites. Empty, each changes nothing — every capture
   still meets `gate_body_rewrite`'s additive proof unchanged, and `gate_zone`'s "the librarian never
   deletes a file" stays literally true. `provenance_pages` has two granters making the
-  same claim: `processing.py` for the source pages one capture just wrote, and `repair/remote.py`
+  same claim: `processing.py` for the source pages one capture just wrote, and `repair/apply.py`
   for the machine-zone pages a sweep rewrites — those stamps are the librarian's own, and neither
   flow is the thing that asserted one. `born_entity_pages` / `alias_edited_pages` are
   `_declare_births`' alone — with `confirmed_entity_pages`, the `{path: approver}` map that says who
@@ -194,6 +197,16 @@ deletes the entry if `identity.py` ever stops using it.
   ceiling's worth of syntheses. A fault is logged and swallowed, because filing must never depend
   on a rollup. Both knobs and the clock are injectable (`Worker(view_sweep=…, now=…)`) — the
   interval is a timing contract, not something to sleep out in a test.
+- **The periodic repair pass is the second maintenance loop, on the same idle branch and its own
+  clock** (ADR 044 D2, `repair_interval_s`). It answers the gardener's findings by deriving repairs
+  and applying them — one commit per repair, one worktree per repair, at a base fetched for each —
+  and it is skipped entirely unless a completed gardener run is NEWER than the last pass
+  (`ops.latest_run` is the watermark). Everything the view sweep's paragraph says about skipping
+  rather than blocking, scheduling the due-time before the pass and swallowing a fault holds here
+  too. What differs is the cost of a fault: a view sweep that dies has regenerated nothing, while
+  this one may already have PUSHED — which is why every repair records its own outcome in the
+  ledger before the next is derived, and why the ledger, not this pass's return value, is where an
+  operator reads what happened.
 
 ## Tests
 

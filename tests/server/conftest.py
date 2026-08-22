@@ -367,7 +367,7 @@ def conn():
     c = review_connect_or_skip()
     with c.cursor() as cur:
         cur.execute("DELETE FROM capture_queue")
-        cur.execute("DELETE FROM repair_proposals")
+        cur.execute("DELETE FROM repairs")
     yield c
     c.close()
 

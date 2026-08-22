@@ -41,6 +41,23 @@ kind of material enters at the same door.
 - the knowledge repo changes with it: `ops/stewards.json` deleted, the contract linter refuses an
   empty `approved_by:`, and the entity template's own comment no longer describes a waiting state
 
+- **A repair is not proposed to anybody: the worker derives it, applies it and records what
+  happened.** `repair_proposals` becomes `repairs` (a rename, so a deployment keeps its history),
+  the statuses are `applied` · `failed` · `skipped`, and every applied row carries the unified
+  `diff` that landed — because nobody read it first. What stands where the approval stood: the
+  ledger's permanent `content_key` memory (an applied or refused repair is never derived again),
+  two ceilings per pass (`STIGMERGY_REPAIR_CEILING`, default 20, and `STIGMERGY_REPAIR_MERGE_CEILING`,
+  default 3), and the nine gates
+- **`stigmergy-repair` is gone**, and so is the `repair-propose` cron — three cron templates where
+  there were four. The pass runs on the librarian worker's idle branch
+  (`STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S`, default 3600, `0` turns it off), only when a completed
+  gardener run is newer than the last pass, one commit and one worktree per repair
+- the console's Repairs page is READ-ONLY: `POST /admin/api/repairs/{id}/approve` and `/reject` are
+  gone, and what the page is for now is the reading nobody gave a repair beforehand
+- a repair's commit carries `Repair: <check> #<finding>`; `Approved-by:` is reserved for the one
+  repair a person performs — a deletion they asked for
+- the gardener's `sla` severity band and its Slack notice are gone: nothing produced one, and the
+  findings it would have paged somebody about are answered by the worker
 ### Changed
 - `brain_submit` takes `kind` in `raw` · `page` · `meeting` · `document`; a `document` also takes
   `source_url`, and its text is filed as a synthesis page beside a verbatim `sources/documents/`

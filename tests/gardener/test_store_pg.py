@@ -136,13 +136,13 @@ def test_latest_completed_run_picks_the_most_recent_among_ok_and_partial(conn):
     assert run["id"] == newer_id
 
 
-def test_insert_findings_never_persists_the_underscore_notice_only_keys(conn):
-    """`_notice_detail`/`_notice_action` (`checks.py`'s SLA-notice-only fields) are never written
-    to `gardener_findings` — only the columns the table actually has. `subjects` joined that set
-    when the repair proposer needed the subject pages as DATA rather than as a comma-joined
-    report line; the `_notice_*` keys still do not survive the round trip."""
-    f = _finding(check="contradiction-sla-open", severity="sla",
-                _notice_detail="notice wording", _notice_action="notice action")
+def test_insert_findings_persists_the_named_columns_only(conn):
+    """`checks.build_finding`'s `**extra` lets a pass hang its own working keys off a finding, and
+    the table has no column for them — so they must never survive the round trip and be mistaken
+    for stored facts. `subjects` joined the persisted set when the repair loop needed the subject
+    pages as DATA rather than as a comma-joined report line; an unnamed key still does not."""
+    f = _finding(check="model-contradiction", severity="warn",
+                _working_wording="a pass's own copy", _working_paths=["wiki/x.md"])
     store.insert_findings(conn, 400, [f])
 
     row = store.findings_for_run(conn, 400)[0]

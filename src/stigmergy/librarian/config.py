@@ -68,6 +68,18 @@ VIEW_SWEEP_OFF = 0.0
 VIEW_SWEEP_CEILING_ENV = "STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING"
 DEFAULT_VIEW_SWEEP_CEILING = 10
 
+# The worker's SECOND maintenance pass (ADR 044): it answers the gardener's findings by deriving
+# repairs and applying them. Same idle branch, same "on its own clock" reasoning, and a longer
+# default because what it answers arrives once a night — a pass costs model calls, and there is
+# nothing new to answer between two gardener runs. The pass has its own watermark on top of this
+# interval, so a shorter one does not mean re-answering the same findings; it means noticing a new
+# gardener run sooner.
+REPAIR_INTERVAL_ENV = "STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S"
+DEFAULT_REPAIR_INTERVAL_S = 3600.0
+# `0` turns the pass off, exactly as `VIEW_SWEEP_OFF` does — and it is the setting a deployment
+# uses to stop the corpus repairing itself while somebody investigates something.
+REPAIR_PASS_OFF = 0.0
+
 # The retry-collapse window (`dedup`'s level 1): identical content from the same submitter
 # inside this many seconds is a RETRY of one capture, not a second one.
 DEFAULT_DEDUP_WINDOW_S = 600
@@ -259,6 +271,10 @@ class Settings:
     view_sweep_interval_s: float = DEFAULT_VIEW_SWEEP_INTERVAL_S
     view_sweep_ceiling: int = DEFAULT_VIEW_SWEEP_CEILING
 
+    # the periodic repair pass (see the constants above); its own ceilings live in
+    # `repair.settings`, which the pass reads from the environment when it runs
+    repair_interval_s: float = DEFAULT_REPAIR_INTERVAL_S
+
     # the gates
     gitleaks_bin: str = "gitleaks"      # resolved on PATH; existence checked ONCE at startup
     worktree_root: str = ""             # "" -> a per-run temp dir under the system temp
@@ -311,6 +327,8 @@ class Settings:
                                                        cls.view_sweep_interval_s)),
             view_sweep_ceiling=int(os.environ.get(VIEW_SWEEP_CEILING_ENV,
                                                   cls.view_sweep_ceiling)),
+            repair_interval_s=float(os.environ.get(REPAIR_INTERVAL_ENV,
+                                                   cls.repair_interval_s)),
             gitleaks_bin=os.environ.get("STIGMERGY_GITLEAKS_BIN", cls.gitleaks_bin),
             worktree_root=os.environ.get("STIGMERGY_LIBRARIAN_WORKTREE_ROOT", cls.worktree_root),
             refused_diff_root=os.environ.get(REFUSED_DIFF_ROOT_ENV, cls.refused_diff_root),
@@ -367,6 +385,23 @@ class Settings:
                 f"Set ${VIEW_SWEEP_CEILING_ENV} to 1 or more (default "
                 f"{DEFAULT_VIEW_SWEEP_CEILING}), or turn the sweep off with "
                 f"${VIEW_SWEEP_INTERVAL_ENV}={VIEW_SWEEP_OFF:g}")
+        # The repair pass's own domain, and BOTH halves of the sweep's argument apply to it
+        # unchanged — a negative interval makes every idle tick due, and one below the poll
+        # interval means every idle tick anyway. What it costs here is not a corpus parse but a
+        # gardener read per poll, and, on any tick where a new gardener run exists, model calls.
+        if float(self.repair_interval_s) < REPAIR_PASS_OFF:
+            raise LibrarianConfigError(
+                f"repair_interval_s is {self.repair_interval_s}, which would run the periodic "
+                f"repair pass on every idle poll. Set ${REPAIR_INTERVAL_ENV} to a positive number "
+                f"of seconds (default {DEFAULT_REPAIR_INTERVAL_S}), or to {REPAIR_PASS_OFF:g} to "
+                f"turn the pass off")
+        if REPAIR_PASS_OFF < float(self.repair_interval_s) < float(self.poll_interval_s):
+            raise LibrarianConfigError(
+                f"repair_interval_s is {self.repair_interval_s}, which is below the "
+                f"{self.poll_interval_s}s poll interval — the pass is due at most once per idle "
+                f"poll, so anything under that asks the gardener's tables on EVERY one. Set "
+                f"${REPAIR_INTERVAL_ENV} to at least {self.poll_interval_s:g} (default "
+                f"{DEFAULT_REPAIR_INTERVAL_S}), or to {REPAIR_PASS_OFF:g} to turn the pass off")
 
     # ── the three repo-sourced inputs: where they live IN A CHECKOUT ──────────────────────────
     # Locations, not reads — the fast lane opens none of them, reading all three at `base.sha`.

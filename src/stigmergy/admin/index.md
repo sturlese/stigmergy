@@ -1,7 +1,7 @@
 # admin — code map
 
 The operations console: one web surface over what already runs — the entity registry and the door
-for registering one, the captures (read-only), the repair proposals, page removal, the four
+for registering one, the captures (read-only), the repair ledger, page removal, the four
 scheduled workflows, the gardener's findings, the digest, the index and the ops files it serves,
 activity and the worker's lease. Mounted as an ASGI branch in front of the MCP
 transport, inside the `app` process group, behind its own single credential.
@@ -10,9 +10,9 @@ Narrative: [`docs/reference/admin-console.md`](../../../docs/reference/admin-con
 **It is a skin, not a subsystem.** Every act lands on a seam another package owns and tests:
 `capture.retention`, `capture.queue` (reads, plus `release_expired`), `capture.latency`,
 `gardener.store`, `digest.run`, `index.check`, `index.store`, `repair.store`,
-`server.review.commission_registration`, `server.review.apply_repair_and_record` /
-`reject_repair_and_record`, `server.review.delete_and_record`, `server.pilot_report` (the report
-and its per-day classifier), `kernel.registry`. The only state it owns is `admin_actions`.
+`server.review.commission_registration`, `server.review.delete_and_record`,
+`server.pilot_report` (the report and its per-day classifier), `kernel.registry`. The only state
+it owns is `admin_actions`.
 
 **Captures are READ-ONLY here.** Nothing drains a queue row: the two write buttons on that page
 (Reclaim, Purge) act on the queue as a WHOLE, and a capture reaches its terminal state through the
@@ -25,18 +25,18 @@ introduces the entity it is about, confirmed by whoever captured
 `stigmergy.answer`, `stigmergy.server.mcp_server`, `.service` and `.transport_http` from every
 module here, so the rule is a property of the import graph. (The Activity page does show `ask`
 questions — user content, not corpus content — and the Entities page reads the entity REGISTRY,
-an `ops/` control file every MCP identity already reads through `list_entities`. An
-`entity-body` repair proposal carries the drafted body in full — text a model wrote, sitting in
-`repair_proposals`, which is not a page yet and was never one this console fetched. And a page
-removal hands back a unified diff per rewritten page: page bytes, but bytes the removal this
-console just performed produced, read AFTER the push because nothing read them before it.)
+an `ops/` control file every MCP identity already reads through `list_entities`. The Repairs
+page does carry page bytes: the `diff` an applied repair pushed, and on a failed one the body it
+never wrote — bytes the repair pass produced and recorded in `repairs`, never a page this console
+fetched, and read AFTER the push because nothing read them before it. A page removal hands back
+the same thing, a unified diff per rewritten page.)
 
 ## Modules
 
 | Module | What it is |
 |---|---|
 | `routes.py` | `compose(inner, *, conn, server_settings, admin_settings=None, gateway=None, evidence=None)` — the only door into this package, `evidence` being the process's one evidence store, without which Register an entity has nothing to archive a capture's material into, called by `server.transport_http.build_http_app`. Also `_Branch` (outermost ASGI router), `_AdminGate` (host → token → security headers), `_json_endpoint` (domain-exception → status map) and the route table |
-| `service.py` | `AdminService`, one method per route; `ADMIN_DOOR` (the `source` every governed call names); `CRON_WORKFLOWS`/`DISPATCHABLE` (the drivable-workflow allowlist); `worker_visibility_timeout_s()`/`WORKER_MAX_ATTEMPTS`; the registry check's verdict constants (`VERDICT_*`) and its advisory similarity (folded once per request); the read ceilings (`REPAIR_PENDING_LIMIT`, `MAX_RESOLVE_NAMES`, `LATENCY_SAMPLE_LIMIT`, `MAX_METRICS_DAYS`); `_clean`, the one sanitizing seam every untrusted string leaves through; the domain errors `AdminBadRequest`/`AdminNotFound`/`AdminRefused` |
+| `service.py` | `AdminService`, one method per route; `ADMIN_DOOR` (the `source` every governed call names); `CRON_WORKFLOWS`/`DISPATCHABLE` (the drivable-workflow allowlist); `worker_visibility_timeout_s()`/`WORKER_MAX_ATTEMPTS`; the registry check's verdict constants (`VERDICT_*`) and its advisory similarity (folded once per request); the read ceilings (`REPAIR_RECENT_LIMIT`, `MAX_RESOLVE_NAMES`, `LATENCY_SAMPLE_LIMIT`, `MAX_METRICS_DAYS`); `_clean`, the one sanitizing seam every untrusted string leaves through; the domain errors `AdminBadRequest`/`AdminNotFound`/`AdminRefused` |
 | `settings.py` | `AdminSettings` + `from_env`, the five `*_ENV` constants, `DEFAULT_ACTOR`, `DEFAULT_WORKFLOWS_REPO`, and the sha256-shape refusal that turns a malformed hash into a `StartupError` |
 | `auth.py` | `token_matches` (sha256 + `hmac.compare_digest`), `bearer_token` (two `Authorization` headers → `None`), `host_allowed` |
 | `github.py` | `ActionsGateway` — the Jobs page's only reach out of this process (`workflows`/`runs`/`dispatch`/`set_enabled`), `urllib` with an injectable opener, a 60 s read cache that mutations clear, and `ActionsError` carrying the status and never the token |
@@ -60,7 +60,7 @@ cannot need a token to render).
 | GET | `/admin/assets/…` | `StaticFiles(static/assets)` | no |
 | GET | `/admin/api/meta` | `meta()` — configuration facts plus every closed vocabulary the frontend renders | yes |
 | GET | `/admin/api/overview` | `overview()` | yes |
-| GET | `/admin/api/metrics` | `metrics()`, in a worker thread — `?days=` (default 30, clamped to 1–365; non-integer is a 400): captures by arrival day and current status, capture→filed samples, `ask` outcomes per day (`pilot_report.answer_shape_by_day`, grouped in SQL), calls per day/tool/identity, each job's run history, and the repair table's status counts beside a bounded page of decided rows (`repair.store.counts_by_status` / `recent_decided`) | yes |
+| GET | `/admin/api/metrics` | `metrics()`, in a worker thread — `?days=` (default 30, clamped to 1–365; non-integer is a 400): captures by arrival day and current status, capture→filed samples, `ask` outcomes per day (`pilot_report.answer_shape_by_day`, grouped in SQL), calls per day/tool/identity, each job's run history, and the repair table's status counts beside a bounded page of its newest rows (`repair.store.counts_by_status` / `recent`) | yes |
 | GET | `/admin/api/queue` | `queue_list()` — repeatable `?status=`, `?submitter=`, `?limit=` (default 50; non-integer is a 400) | yes |
 | POST | `/admin/api/queue/reclaim` | `queue_reclaim()` — optional int `visibility_timeout_s`; omitted means the worker's derived lease, resolved per call; the horizon is clamped at 0 | yes |
 | POST | `/admin/api/queue/purge` | `queue_purge()` — optional int `older_than_days`, `dry_run` | yes |
@@ -74,10 +74,8 @@ cannot need a token to render).
 | GET | `/admin/api/entities/registry` | `entities_registry()` — the served registry, sorted by name, with `by_type` and freshness | yes |
 | POST | `/admin/api/entities/resolve` | `entities_resolve()` — `names` must be a JSON list of strings (≤ `MAX_RESOLVE_NAMES`); one verdict per non-blank name. Writes no `admin_actions` row | yes |
 | POST | `/admin/api/entities/create` | `entity_create()` — `name`/`entity_type`/`about` required, `entity_id`/`aliases` optional; commissions the entity by queueing a capture and answers the queued row (`id`, `status`, `entity_id`, `name`, `message`). Off the event loop, for the archive write. The page is the librarian's to write, and the identity is born confirmed by the actor | yes |
-| GET | `/admin/api/repairs` | `repairs_list()` — a bounded page of pending (`pending_truncated` says when it filled), the whole table's `counts` by status, recently decided, and the proposer's `job_runs` history | yes |
+| GET | `/admin/api/repairs` | `repairs_list()` — the newest `REPAIR_RECENT_LIMIT` repairs whatever their outcome, each carrying the diff it pushed, the whole table's `counts` by status, and the repair pass's `job_runs` history. Read-only: a repair is applied by the pass, and this page is the reading afterwards ([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md)) | yes |
 | GET | `/admin/api/repairs/{id:int}` | `repair_show()` | yes |
-| POST | `/admin/api/repairs/{id:int}/approve` | `repair_approve()` — applies the proposal's ops as ONE commit through `server.review.apply_repair_and_record`; off the event loop, since it clones and pushes | yes |
-| POST | `/admin/api/repairs/{id:int}/reject` | `repair_reject()` — non-blank `reason` required | yes |
 | POST | `/admin/api/pages/delete` | `pages_delete()` — a PERSON removes pages: `paths` (non-empty) + `why`, applied in the same call through `server.review.delete_and_record`, the same sequence MCP's `brain_delete` runs. It passes NO per-path guard and no `can_read`: the operator token is the authorization and the console is not a read surface over pages, which makes this its most consequential button. Off the event loop | yes |
 | GET | `/admin/api/activity` | `activity()` | yes |
 | GET | `/admin/api/worker` | `worker_status()` | yes |
@@ -92,7 +90,7 @@ must not depend on a converter, so an unlisted file is a 400 naming the allowed 
 free segment in the table, and therefore the only place a path could be read as data. No route
 under `entities/` takes a converter any more — the three there are literal segments — so no
 declaration order here is load-bearing, and the two id routes are `{id:int}`, which cannot swallow
-`reclaim`, `purge`, `approve` or `reject`. Adding a catch-all under an existing prefix brings the
+`reclaim` or `purge`. Adding a catch-all under an existing prefix brings the
 ordering hazard back with it.
 
 ## Reuse
@@ -130,11 +128,10 @@ ordering hazard back with it.
   nothing is caught inside `_do`, so `_mutate` records the library's OWN class name in
   `admin_actions` before the `except (EntityError, CaptureError)` outside it raises `AdminRefused`
   with the library's sentence.
-- `server.review.apply_repair_and_record` / `reject_repair_and_record` / `delete_and_record` —
-  `repair_approve`, `repair_reject` and `pages_delete`'s whole seams, and the same functions the
-  MCP deletion door runs, so which door a person acted from changes the recorded `source` and
-  nothing else. Each lands the commit through the governed door, then the row. `repair.remote` is
-  reached by that sequence, never from this package — its import allowlist grants `repair.store`,
+- `server.review.delete_and_record` — `pages_delete`'s whole seam, and the same function the MCP
+  deletion door runs, so which door a person acted from changes the recorded `source` and nothing
+  else. It lands the commit through the governed door, then the row. `repair.apply` is reached by
+  that sequence, never from this package — its import allowlist grants `repair.store`,
   `repair.schema` and `repair.errors` only, and `stigmergy.entities.remote` is absent for the same
   reason. The exception mapping stays HERE for `commission_registration`'s reason: nothing is
   caught inside `_do`, so `_mutate` records `RepairError` in `admin_actions` before the `except`
@@ -145,7 +142,7 @@ ordering hazard back with it.
   module because it is the same fact with a time axis; the console never carries its own query
   over `capture_queue`. `pilot_report.answer_shape_by_day` is the `ask` series: the report's own
   classifier (`shape_of`) as SQL, pinned against the Python original by test, so a chart and the
-  report cannot disagree about what an answer was. `repair.store.counts_by_status` is the proposal
+  report cannot disagree about what an answer was. `repair.store.counts_by_status` is the repair ledger's
   histogram — aggregated in the database, because that table only grows.
 - `auth.token_matches` / `bearer_token` / `host_allowed` — pure; never re-derive a header parse.
 - `service._clean` (= `stigmergy.text.sanitize`) — the one cleaning seam for untrusted strings on
@@ -198,11 +195,12 @@ ordering hazard back with it.
 - Raising a message that could carry captured content across the HTTP boundary. The catch-all in
   `_json_endpoint` returns `the operation failed (<ClassName>)`; only the three domain errors and
   `ActionsError` cross with their sentence.
-- Deriving a decision in the frontend. `views/repairs.js` sends Approve, Decline and Remove pages
-  and computes no verdict of its own; `views/entities.js` renders the registry check's verdict
-  beside the field it belongs to and acts on none of it. Whether a name may be born is the birth
-  gate's answer inside the commit, and whether a repair may land is `server.review`'s and the nine
-  gates' — on every door alike. The frontend renders a decision and never derives one.
+- Deriving a decision in the frontend. `views/repairs.js` sends Remove pages and nothing else —
+  it renders a ledger of what the repair pass already did and computes no verdict of its own;
+  `views/entities.js` renders the registry check's verdict beside the field it belongs to and acts
+  on none of it. Whether a name may be born is the birth gate's answer inside the commit, and
+  whether a repair lands is the nine gates' answer inside the pass — on every door alike. The
+  frontend renders a decision and never derives one.
 - Turning the `similar` verdict into a refusal, anywhere. It is a listing for a person's eyes;
   the only "collides" is `Registry.collision_id`, and the gate runs again after the clone.
 - Offering a way to move a capture out of its state. The Captures page reads; a queue row is the
@@ -304,8 +302,8 @@ token so a view that resolves after the next navigation started has its cleanup 
 - **Not every POST is a mutation.** `queue/purge --dry-run`, `digest/preview`, `index/check` and
   `entities/resolve` write no `admin_actions` row. `digest/preview` still records a
   `digest-dry-run` row in `job_runs`, which is why the Digest page's history fills with them.
-- **Every read of a table that only grows has a ceiling**, applied in SQL: the pending proposals
-  (`REPAIR_PENDING_LIMIT`, with `pending_truncated`) and the decided page beside them, the
+- **Every read of a table that only grows has a ceiling**, applied in SQL: the repair ledger's
+  page (`REPAIR_RECENT_LIMIT`, and every applied row on it carries a whole diff), the
   capture→filed sample the percentiles are cut from (`LATENCY_SAMPLE_LIMIT`), the metrics window
   (`MAX_METRICS_DAYS`), and the two `audit_log` ROW reads (`_ask_questions`, `_rate_limited`, each
   clamped again inside the method) — the per-identity/tool figures need none, being an aggregate
@@ -325,9 +323,6 @@ token so a view that resolves after the next navigation started has its cleanup 
   process's environment is the worker's.
 - `_mutate` records `outcome='error'` and re-raises, including for a domain refusal, so the action
   log answers "what was attempted", not only "what succeeded".
-- **The Gardener page's `urgent` (`sla`) chip is permanently empty** and that is not a console
-  defect: `sla` is a real member of `gardener.schema.SEVERITIES` that no check in that package
-  produces. The chip becomes live the day one emits it.
 - **The registry check is a warning, never a permission.** It reads the snapshot this server
   serves; the birth gate re-checks against the registry the commit will publish, inside the
   capture's own worktree when the librarian files the registration. When the snapshot is fresh the
@@ -335,25 +330,23 @@ token so a view that resolves after the next navigation started has its cleanup 
   capture's refusal on the row it navigated to.
 - **The console's authorization IS its token** ([ADR 029](../../../docs/decisions/029-admin-console.md)
   D3: one dedicated credential, revoked by one secret change), and `actor` is free text behind it —
-  attribution, never checked. That is why `pages_delete` and `repair_approve` reach the shared
-  sequences with no authorization argument: authorization is per-surface, decided before the call,
+  attribution, never checked. That is why `pages_delete` reaches the shared
+  sequence with no authorization argument: authorization is per-surface, decided before the call,
   and the caller sets are pinned both ways in `tests/test_architecture.py`. A second surface added
   here without deciding who may is exactly what those pins exist to catch.
-- **A read is cheap and a write to git is not.** `repairs/{id}/approve` and `pages/delete` run in a
-  worker thread (`run_in_threadpool`) because each clones the knowledge repo, runs the nine gates
-  — `git` and `gitleaks` subprocesses — and pushes, and the MCP tools share this process;
+- **A read is cheap and a write to git is not.** `pages/delete` runs in a worker thread
+  (`run_in_threadpool`) because it clones the knowledge repo, runs the nine gates — `git` and
+  `gitleaks` subprocesses — and pushes, and the MCP tools share this process;
   `entities/create` rides the same thread for the archive write its capture pays for, and `metrics`
   does the same for its dozen aggregate queries. The service holds no cursor across the call
   boundary, so the autocommit connection is safe to use from the thread.
-- **`repair_approve` applies server-side, and what it does NOT skip is anything the apply itself
-  proves**: the clone's own re-validation, the nine gates, and the cross-check that the produced
-  diff is exactly the proposal's stored `target_paths`. A failed apply comes back as a 409 with the
-  gate's own sentence, and the row stays `failed` with its reason rather than returning to pending.
-- **A removal's reading happens after the push.** `pages_delete` returns the unified diff of every
-  page the sweep rewrote, and the console shows them in a fieldless `confirmForm` UNRENDERED: what
-  landed in the repo is those bytes, nobody read the model's prose before it landed, and `git
-  revert` in the knowledge repo is the undo
-  ([ADR 043](../../../docs/decisions/043-a-sweep-is-written.md) D5).
+- **A removal's reading happens after the push, and so does a repair's.** `pages_delete` returns
+  the unified diff of every page the sweep rewrote and the console shows them in a fieldless
+  `confirmForm` UNRENDERED; an applied repair's diff is stored in `repairs` and read the same way
+  on the Repairs page. What landed in the repo is those bytes, nobody read the model's prose before
+  it landed, and `git revert` in the knowledge repo is the undo
+  ([ADR 043](../../../docs/decisions/043-a-sweep-is-written.md) D5, generalised to every repair by
+  [ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md)).
 
 ## Common tasks
 
@@ -374,17 +367,17 @@ token so a view that resolves after the next navigation started has its cleanup 
 
 `tests/admin/` runs against real Postgres through `tests.testdb` and real git wherever a claim
 needs it (`conftest.build_bare_knowledge_repo` — the bare remote the registry fixtures publish an
-entity page into, and the one an approve or a removal clones); only the two network edges — GitHub
+entity page into, and the one a removal clones); only the two network edges — GitHub
 Actions and Slack — are faked. `test_settings_and_auth.py` and `test_cli.py` are keyless;
 `test_github_gateway.py` drives an injected opener; `test_service_pg.py` is the largest suite
 (queue reads, reclaim on both edges of the worker's lease, purge dry-run vs real, cron paths, a
-registry the loader refuses, `entity_create` against a throwaway bare remote, and the repair
-approve/decline pair beside `pages_delete` through the shared sequence);
+registry the loader refuses, `entity_create` against a throwaway bare remote, and `pages_delete`
+through the shared sequence);
 `test_console_reads_pg.py` covers the served registry, the registry check (every verdict beside its
 benign twin, the gate's fold against a looser one) and the metrics window, through the service and
 over the wire; `test_routes_pg.py` exercises the real `compose` product over
 `httpx.ASGITransport` (inert 404s, the tokenless shell vs the 401 API, the security and cache
-headers, the status mapping, and the two handlers that clone proving they never run on the event
+headers, the status mapping, and the handler that clones proving it never runs on the event
 loop); `test_static_discipline.py` greps the shipped frontend files. Auth refusals are tested
 beside their benign twins throughout.
 
@@ -400,6 +393,6 @@ floor), `test_admin_imports_only_its_declared_set`,
 `test_admin_loads_the_slack_sdk_door_lazily`,
 `test_admin_never_imports_the_read_path_or_the_mcp_adapter`,
 `test_only_the_http_transport_composes_the_admin_branch`, the ACL-reachability parametrization
-naming `admin/service.py`, and the two caller pins that name this package as the surface deciding
-its own authorization — `test_the_shared_mint_sequence_is_entered_from_exactly_the_authorizing_surfaces`
-and `test_the_governed_repair_apply_is_entered_from_exactly_the_declared_surfaces`.
+naming `admin/service.py`, and the caller pin that names this package as the surface deciding its
+own authorization — `test_the_shared_mint_sequence_is_entered_from_exactly_the_authorizing_surfaces`.
+The repair apply's own pin no longer names this package: no console route applies a repair.

@@ -232,11 +232,11 @@ export function wordPill(raw, opts = {}) {
   return pill(w.label, TONE_BY_WHO[w.who] || "neutral", { title: String(raw), small: opts.small });
 }
 
-// Two severity vocabularies share this pill: the substrate check's error/warn and the
-// gardener's info/warn/sla (sla = the urgent one — it is what triggers the Slack notice). The
-// human label, the raw word and its meaning on hover — the same deal every status gets.
+// Two severity vocabularies share this pill: the substrate check's error/warn and the gardener's
+// info/warn. The human label, the raw word and its meaning on hover — the same deal every status
+// gets.
 export function severityPill(raw) {
-  const tone = raw === "error" || raw === "sla" ? "fail" : raw === "warn" ? "human" : "neutral";
+  const tone = raw === "error" ? "fail" : raw === "warn" ? "human" : "neutral";
   const sev = severityCopy(raw);
   return pill(sev.label, tone, { title: `${raw} — ${sev.explain}` });
 }

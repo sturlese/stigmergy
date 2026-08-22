@@ -16,29 +16,29 @@ pins every import edge and the threshold-literal ban.
 
 | Module | What it is |
 |---|---|
-| `cli.py` | `stigmergy-gardener [--repo] [--dsn] [--channels] [--json]` — one command. The only module here that imports `stigmergy.index.store`, `stigmergy.librarian.config` or `stigmergy.slack.bolt_gateway` |
-| `run.py` | `run_gardener` — the one function the CLI calls: run everything, persist findings + a `job_runs` row in ONE transaction, re-fetch, post the SLA notice. Owns `RunResult` |
+| `cli.py` | `stigmergy-gardener [--repo] [--dsn] [--json]` — one command. The only module here that imports `stigmergy.index.store` or `stigmergy.librarian.config` |
+| `run.py` | `run_gardener` — the one function the CLI calls: run everything, persist findings + a `job_runs` row in ONE transaction, re-fetch. Owns `RunResult` |
 | `checks.py` | Every deterministic check and `ALL_CHECK_SLUGS`, the one list of their slugs — how many there are is pinned against that tuple by `tests/test_readme_claims.py` and `tests/test_docs_claims.py`, so a new check moves the documents that COUNT them and needs no number here. Also `build_finding` (the one finding-dict assembler, shared with all three model passes), `count_indexed_pages`, `_recent_filed_pages`, and `entity_zone_pages`/`placeholder_lines` — the confinement-checked walk of the entity zone (run ONCE per run by `run.py`) and the one spelling of "still its template". `check_entity_placeholder_bodies` and `sweep.select_empty_body_pages` are pure functions of that walk's list |
 | `sweep.py` | ALL THREE model passes: the shared schema, `_validate` (its `allowed_slugs` and `min_subject_pages` are what keep the three vocabularies and shapes apart), `_run_batch`, `to_finding`. The editorial four — `SWEEP_SYS`, `build_prompt`, `run_sweep`, `build_judge`, `FakeGardenerSweep`, page selection (`previous_run_watermark`, `select_pages`). The empty-body fifth — `EMPTY_BODY_SYS`, `build_empty_body_prompt`, `run_empty_body_sweep`, `build_empty_body_judge`, `FakeEmptyBodySweep`, `select_empty_body_pages`/`in_batches`. The duplicate-identity sixth — `DUPLICATE_ENTITY_SYS`, `build_duplicate_entity_prompt`, `run_duplicate_entity_sweep`, `build_duplicate_entity_judge`, `FakeDuplicateEntitySweep`, `entity_id_for`/`select_duplicate_entity_pages`. That pass is NEVER batched: it asks about a PAIR, and a pair whose halves fell in different batches is invisible to every batch |
 | `store.py` | `gardener_findings` persistence: `insert_findings`, `findings_for_run`, `latest_completed_run` |
 | `report.py` | The terminal report: `render_report`, `render_json`, `sweep_summary_text`. Pure text from plain data. Every model pass names its own failure there, and each ceiling names what it deferred |
-| `notice.py` | The SLA Slack notice: `sla_findings`, `scope_findings_to_channel`, `compose_notice`, `require_channel`, `post_sla_notice` |
 | `schema.py` | The DDL behind `startup_ddl_lock`, `JOB_NAME`, the severity/source vocabularies, `MAX_DETAIL_CHARS`, `MAX_MODEL_DETAIL_CHARS` |
-| `settings.py` | `GardenerSettings.from_args` — the thresholds, the digest channel, the model, the sweep's sample size, the empty-body pass's batch (bounded above by `MAX_EMPTY_BODY_BATCH`, the only thing between the population and a single call) and run ceiling, and the duplicate-identity pass's single ceiling (no batch: that pass is one call by construction). Owns `DIGEST_CHANNEL_ID_ENV` and `SLACK_BOT_TOKEN_ENV`, which `digest.settings` re-exports, and `int_setting`, the shared count-shaped env validator |
+| `settings.py` | `GardenerSettings.from_args` — the thresholds, the model, the sweep's sample size, the empty-body pass's batch (bounded above by `MAX_EMPTY_BODY_BATCH`, the only thing between the population and a single call) and run ceiling, and the duplicate-identity pass's single ceiling (no batch: that pass is one call by construction). Also declares `DIGEST_CHANNEL_ID_ENV`, `SLACK_BOT_TOKEN_ENV` and `int_setting` — the shared spellings and the shared count-shaped validator `digest.settings` funnels every digest module through; nothing in THIS package reads the first two |
 | `errors.py` | `GardenerError` (a precondition on running the tool) and `SweepGarbage` (a run-level outcome — a sibling, not a subclass) |
 
 Downstream: `digest` imports `schema`/`store`/`settings` (`int_setting` included — a declared
 consumer, importing it rather than hand-mirroring it); `admin` imports `store`/`schema`.
 Nothing else imports this package.
 
-`cli.py`'s `_connect`/`_gateway`/`_repo`/`main` are a deliberate twin of `digest/cli.py` — change
-both or neither.
+`cli.py`'s `_connect`/`_repo`/`main` are a deliberate twin of `digest/cli.py` — change both or
+neither. The twin is not total: only the digest posts, so only it builds a Slack gateway.
 
 ## Reuse
 
-- `checks.build_finding` — the one finding assembler; `**extra` carries keys the table lacks
-  (the `_notice_*` family). `subjects` is derived from `subject` unless a caller passes the list
-  it already has (`sweep.to_finding` does).
+- `checks.build_finding` — the one finding assembler; `**extra` carries `model_id` and anything
+  else a pass hangs off a finding for its own use, and `store.py` persists the named columns only.
+  `subjects` is derived from `subject` unless a caller passes the list it already has
+  (`sweep.to_finding` does).
 - `store.latest_completed_run` and `sweep.previous_run_watermark` — both
   `status IN ('ok','partial')`, and the watermark then filters on `stats.sweep.error` being empty.
   The status is an AGGREGATE over three passes, so `'partial'` says nothing about the SWEEP itself;
@@ -97,9 +97,10 @@ both or neither.
   identity pass, where a sampled population silently answers "no duplicates" for every pair whose
   two halves were not both drawn.
 - Never put a threshold literal outside `settings.py` (grep-asserted).
-- Never compose the notice's wording in `stigmergy.slack.copy`; `report.py` writes terminal
-  markdown, `notice.py` writes Slack mrkdwn — two dialects, never mixed. The notice emoji is `⚠️`
-  + the word "SLA", never the bell.
+- Never post anything from here. This package holds no Slack edge and no caller identity: findings
+  reach a person through `digest` (which broadcasts, and ACL-scopes every page it names) and
+  through the admin console. `report.py` writes terminal markdown, and that is the only dialect
+  this package speaks.
 
 ## Contracts
 
@@ -122,9 +123,9 @@ both or neither.
   as paths — and the only one whose repair is a merge. (An editorial finding may name two as well;
   `MAX_SWEEP_SUBJECT_PAGES` is 5. What is unique here is the requirement, not the pair.) This package
   still fixes nothing — it does not import the repair loop, and the repair loop reads findings from
-  `store` and nothing else. No check currently emits `sla`, so the notice machinery has no
-  producer — a check that adds one must also set `_notice_page_paths` (the ACL scoping key, a
-  LIST) and `_notice_detail`/`_notice_action`.
+  `store` and nothing else. The severity vocabulary is `schema.SEVERITIES` — `info` and `warn`, in
+  `schema.SEVERITY_ORDER` for the report — and every reader of it (`report.py`, `digest`, the
+  console's chips) spells it off those names.
 - `job_runs.status`: `'ok'`, `'partial'` (ANY model pass failed, deterministic findings intact),
   `'error'`. `stats['sweep']['selected_at']` is the editorial sweep's watermark; neither of the
   other two keeps one, because both cover their population every run — and no watermark is read off

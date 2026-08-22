@@ -23,6 +23,7 @@ from stigmergy.admin.service import AdminBadRequest, AdminRefused, AdminService
 from stigmergy.capture import queue
 from stigmergy.capture import schema as capture_schema
 from stigmergy.index import store as index_store
+from stigmergy.repair import schema as repair_schema
 from tests.admin.conftest import (
     ADMIN_TOKEN,
     introduce_entity,
@@ -222,9 +223,11 @@ def test_metrics_clamps_the_window_and_answers_an_empty_world_with_empty_series(
     empty = service.metrics()
     assert empty["captures_by_day"] == [] and empty["asks_by_day"] == []
     assert empty["calls_by_tool"] == [] and empty["filed_latency_ms"] == []
-    assert empty["repairs"] == {"pending": 0,
-                                "by_status": {s: 0 for s in ("pending", "approved", "rejected",
-                                                             "applied", "failed")},
+    # The status vocabulary is READ from `repair.schema` rather than typed: it is the repair
+    # package's to declare, and a list spelled here would go on asserting a lifecycle that package
+    # had already retired (it did — `pending`/`approved`/`rejected` are gone with ADR 044).
+    assert empty["repairs"] == {"applied": 0,
+                                "by_status": {s: 0 for s in repair_schema.STATUSES},
                                 "recent_by_kind": {}, "recent": []}
     assert set(empty["job_history"]) >= {"gardener", "capture-purge", "digest"}
 

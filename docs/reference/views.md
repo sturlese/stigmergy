@@ -204,11 +204,12 @@ interval it calls `worker.run_view_sweep`, which materializes a fresh `gitcmd.ep
 off a freshly-fetched `origin/<branch>` and runs `regenerate.sweep(guarded=False, max_changes=…)`
 inside it. Three details are load-bearing:
 
-- **It runs in the worker, not in a fifth cron.** A view regeneration COMMITS AND PUSHES, so a
-  GitHub Actions cron would be the first one needing the librarian App's private key —
-  `repair-propose.yml` was built with no write credential at all, on purpose. The worker already
-  holds that credential and already runs continuously with `job_runs` bookkeeping, so this adds no
-  credential surface. **The four crons stay four.**
+- **It runs in the worker, not in a cron.** A view regeneration COMMITS AND PUSHES, and a GitHub
+  Actions cron holding the librarian App's private key is a push credential sitting in a runner's
+  environment. The worker already holds that credential and already runs continuously with
+  `job_runs` bookkeeping, so this adds no credential surface — the same argument that moved the
+  repair loop here (ADR 044) and the reason the remaining crons are the three that need no
+  credential at all.
 - **It builds its OWN worktree.** The post-meeting hook BORROWS the capture's, and that is where
   `guarded=False`'s justification comes from ("the librarian worker, whose ephemeral worktree is
   always a fresh checkout"). An idle pass has none to borrow, so it makes one — the justification

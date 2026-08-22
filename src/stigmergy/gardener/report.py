@@ -136,8 +136,8 @@ def render_report(*, run_id: int, completed_at: str, pages_checked: int, entitie
         return "\n".join(lines).rstrip() + "\n"
 
     counts = _severity_counts(findings)
-    count_line = (f"{len(findings)} finding(s): {counts[schema.SEVERITY_SLA]} sla, "
-                 f"{counts[schema.SEVERITY_WARN]} warn, {counts[schema.SEVERITY_INFO]} info")
+    count_line = (f"{len(findings)} finding(s): {counts[schema.SEVERITY_WARN]} warn, "
+                 f"{counts[schema.SEVERITY_INFO]} info")
     if sweep_failed or empty_body_failed or duplicate_entity_failed:
         # "deterministic checks only" is a claim about the findings, not about the passes: another
         # model pass may have completed and contributed some.

@@ -1,28 +1,31 @@
-"""The write lane's two governed doors: a repair a person approves, and a page removal a person
-performs.
+"""The one thing a person still writes to the knowledge repo from the serving process: a page
+removal, decided and applied in the same call (ADR 043 D2).
 
-Nothing is PROPOSED to a person here any more (ADR 044): an identity a capture introduces is born
-confirmed by whoever captured it, and this module keeps only the two sequences that touch the
-knowledge repo from the serving process — `apply_repair_and_record`/`reject_repair_and_record`
-(the repair loop's verdict, ADR 039) and `delete_pages`/`delete_and_record` (a person's own
-deletion, applied in the act, ADR 043).
+Everything else that used to live here is gone with the waiting (ADR 044): an identity a capture
+introduces is born confirmed by whoever captured it, and a repair is derived and applied by the
+worker without anybody being asked. What is left is the deletion — a judgment only a person can
+make, made at the command they gave it — plus `commission_registration`, which queues a capture
+and touches no git at all.
 
-Both sequences take NO authorization argument: authorization is per-surface, so each door decides
-who may before it calls in — the MCP tool by requiring an unrestricted identity, the console by
-sitting behind its operator token.
+The deletion goes through the SAME `repair.apply` door the worker's repairs go through, and lands
+in the same ledger under the same three outcomes. What differs is one field: `actor` names the
+person, which puts their name in the commit's `Approved-by:` trailer where a worker-derived repair
+carries a `Repair:` line instead.
+
+`delete_and_record` takes NO authorization argument: authorization is per-surface, so each door
+decides who may before it calls in — the MCP tool by requiring an unrestricted identity, the
+console by sitting behind its operator token.
 """
 import logging
 import os
-from datetime import datetime
 
 from stigmergy.capture import queue
 from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.errors import CaptureError
 from stigmergy.entities.generator import ENTITY_TYPES, canonical_id_for
 from stigmergy.librarian import gates
-from stigmergy.repair import remote as repair_remote
+from stigmergy.repair import apply as repair_apply
 from stigmergy.repair import schema as repair_schema
-from stigmergy.repair import store as repair_store
 from stigmergy.repair.errors import RepairError
 from stigmergy.text import fence, one_line
 
@@ -49,32 +52,6 @@ class ReviewError(CaptureError):
     """A refusal a caller may read — the vocabulary both doors below raise in."""
 
 
-def _parse_id(item_id: str) -> int | None:
-    """`int(item_id)`, or `None` — a malformed id is as "not found" as a nonexistent one."""
-    try:
-        return int(item_id)
-    except (TypeError, ValueError):
-        return None
-
-
-def _neutralize_leaves(value, depth: int = 0):
-    """`neutralize_fence` over every STRING LEAF — one rule at the boundary instead of per-field
-    calls, which reliably miss a field. Past the depth bound the subtree is DROPPED: a recursion
-    limit that hands back what it declined to check is a fail-open bound.
-
-    The walker itself is `service._neutralize_report`, the ONE implementation — a second copy of a
-    boundary rule is a second place for it to drift, and this one had. Lazy for `_check_len`'s
-    cycle reason."""
-    from stigmergy.server.service import _neutralize_report
-    return _neutralize_report(value, depth)
-
-
-def _iso(value) -> str | None:
-    """`capture.queue._iso`'s rule, spelled here rather than imported: it is private to that module
-    and this is a two-line predicate, not a shared decision."""
-    return value.isoformat() if isinstance(value, datetime) else None
-
-
 NOTE_SCAN_TIMEOUT_S = 30
 
 
@@ -98,70 +75,12 @@ def _refuse_secret_note(notes: str) -> None:
 _KNOWLEDGE_BRANCH = "main"
 
 # What a door is told when this deployment cannot write to the knowledge repo at all. Asked BEFORE
-# the proposal leaves `pending`, which is the whole point: `remote.apply_approved` records a
-# refusal as `failed`, and a deployment that was never configured would burn a proposal per
-# approval for a reason that has nothing to do with the proposal. The entity door refuses the same
-# condition by name for the same reason (`entities.remote`'s own capability refusal).
+# anything is cloned or planned: a deployment that was never configured would otherwise spend a
+# network leg and a model call to arrive at the same refusal.
 REPAIR_REPO_UNCONFIGURED = (
-    "no knowledge-repo URL is configured for a server-driven repair — set "
-    "$STIGMERGY_LIBRARIAN_REPO_URL to the same repo the librarian worker writes to. The proposal "
-    "is untouched and still pending")
-
-
-# The sentence the loser of two simultaneous decisions gets. Composed once: both verdicts can lose
-# the same race, and a reader given two different explanations of one condition would reasonably
-# conclude they are two conditions.
-_LOST_THE_RACE = ("this proposal is no longer pending — somebody decided it between your reading "
-                  "of the queue and this decision. Re-read the queue; nothing was changed by your "
-                  "call")
-
-
-def _repair_proposal_or_refuse(conn, item_id) -> dict:
-    """The pending proposal at `item_id`, or the anonymous refusal. A malformed id, a nonexistent
-    one and an already-decided one are ONE sentence, exactly as they are for the other two kinds:
-    "there is nothing for you to decide at that id" is true of all three."""
-    proposal_id = _parse_id(str(item_id))
-    row = repair_store.proposal(conn, proposal_id) if proposal_id is not None else None
-    if row is None or row["status"] != repair_schema.STATUS_PENDING:
-        raise ReviewError(NOT_YOURS_TO_DECIDE)
-    return row
-
-
-def apply_repair_and_record(conn, *, repo_url: str, proposal: dict, actor: str, source: str,
-                            notes: str = "") -> dict:
-    """Approve ONE repair proposal and apply it, in the one order that is correct.
-
-    The console is the door that runs this today; ADR 044 D2 retires the approval itself, and the
-    worker will derive-validate-apply in one pass (phase 3 of #134). Until then the ordering rule
-    lives here, once, so no door can reorder it.
-
-    The order, and why each step is where it is:
-
-    1. `mark_decided(approved)` FIRST, and it is a conditional UPDATE (`WHERE status = 'pending'`).
-       That is what makes a second Approve lose rather than clone: the loser sees zero rows and is
-       told so, and the winner holds a row nothing else can act on for the whole of the clone. No
-       lease is needed anywhere below because of this one line.
-    2. `remote.apply_approved` — clone, re-validate, gate, cross-check, commit, push, and record
-       the outcome (`applied` with the sha, or `failed` with the sentence). A `RepairError` out of
-       it has ALREADY been recorded as failed, and the approved status is deliberately NOT
-       restored: a silent revert to pending would hide that a gate refused.
-    It takes NO authorization argument, on purpose: authorization is per-surface (the operator
-    token, at the console), so the CALLER SET is closed and pinned in `tests/test_architecture.py`.
-
-    `apply_approved` is reached as a MODULE ATTRIBUTE so it stays monkeypatchable.
-
-    `notes` is the only record of why a repair was worth applying, stored on the proposal row
-    beside the verdict.
-    """
-    if not repo_url:
-        raise ReviewError(REPAIR_REPO_UNCONFIGURED)
-    if not repair_store.mark_decided(conn, proposal["id"], status=repair_schema.STATUS_APPROVED,
-                                     decided_by=actor, notes=notes):
-        raise ReviewError(_LOST_THE_RACE)
-    del source          # the door is recorded on the proposal row and in `admin_actions`
-    result = repair_remote.apply_approved(
-        conn, repo_url, _KNOWLEDGE_BRANCH, os.environ, proposal=proposal, approved_by=actor)
-    return {"applied": True, "commit": result["commit"], "paths": result["paths"]}
+    "no knowledge-repo URL is configured for this deployment — set "
+    "$STIGMERGY_LIBRARIAN_REPO_URL to the same repo the librarian worker writes to. Nothing was "
+    "changed")
 
 
 # What a deletion may be, at the door. `MAX_DELETED_PAGES` is not a technical bound — the plan's
@@ -262,7 +181,7 @@ def delete_and_record(conn, *, repo_url: str, paths, why: str, actor: str, sourc
 
     settings = RepairSettings.from_env()
     try:
-        with repair_remote.cloned(repo_url, _KNOWLEDGE_BRANCH, os.environ) as ready:
+        with repair_apply.cloned(repo_url, _KNOWLEDGE_BRANCH, os.environ) as ready:
             ops = repair_deletion.plan(ready.path, targets)
             oversize = repair_deletion.oversize_reason(ops, settings.max_plan_bytes)
             if oversize:
@@ -272,23 +191,26 @@ def delete_and_record(conn, *, repo_url: str, paths, why: str, actor: str, sourc
                                           skill_text=repair_brief.read_skill(ready.path),
                                           model_name=settings.model, spend=spend)
             diffs = repair_deletion.unified_diffs(ready.path, ops)
-            proposal_id = repair_store.insert_proposal(
-                conn=conn, run_id=0, finding_ids=[], kind=repair_schema.KIND_DELETE,
-                target_paths=repair_schema.target_paths(ops), ops=ops, rationale=reason,
-                content_key=repair_schema.content_key(ops, kind=repair_schema.KIND_DELETE),
+            repair = {
+                "kind": repair_schema.KIND_DELETE, "ops": ops,
+                "target_paths": repair_schema.target_paths(ops), "rationale": reason,
+                "content_key": repair_schema.content_key(ops, kind=repair_schema.KIND_DELETE),
+                "run_id": 0, "finding_ids": [], "finding_subjects": [list(targets)],
                 # A model wrote the pages that stay, never which pages go — and this column is
                 # where that stays true after the session is gone.
-                model_id=settings.model if repair_deletion.scrubbed_paths(ops) else "",
-                finding_subjects=[list(targets)],
-                status=repair_schema.STATUS_APPROVED, decided_by=actor)
-            proposal = repair_store.proposal(conn, proposal_id)
-            result = repair_remote.apply_approved(
-                conn, repo_url, _KNOWLEDGE_BRANCH, os.environ, proposal=proposal,
-                approved_by=actor, prepared=ready)
+                "model_id": settings.model if repair_deletion.scrubbed_paths(ops) else "",
+            }
+            # The SAME door the worker's repairs go through, so a deletion is in the ledger under
+            # the same three outcomes as everything else — with `actor` filled in, which is what
+            # puts a person's name in the commit's `Approved-by:` trailer instead of a `Repair:`
+            # line. It is the one repair a human decides (ADR 043 D2).
+            result = repair_apply.apply_and_record(
+                conn, ready.path, _KNOWLEDGE_BRANCH, os.environ, repair=repair,
+                author=ready.author, actor=actor)
     except RepairError as ex:
-        # Every sentence `repair.remote`, `repair.deletion` and `repair.sweep` raise is written to
-        # be published (their own module docstrings), so `str(ex)` crosses verbatim — and a row
-        # that reached the apply is already recorded as `failed`.
+        # Every sentence `repair.apply`, `repair.deletion` and `repair.sweep` raise is written to
+        # be published (their own module docstrings), so `str(ex)` crosses verbatim — and an
+        # attempt that reached the apply is already recorded as `failed`.
         raise ReviewError(str(ex)) from ex
     # The reading (D5), and it is page CONTENT going back over the wire, so it obeys the two rules
     # every other surface that echoes a page obeys: `visible()` decides who may read one — the ONE
@@ -304,7 +226,7 @@ def delete_and_record(conn, *, repo_url: str, paths, why: str, actor: str, sourc
     withheld = sorted(set(diffs) - set(readable))
     return {
         "deleted": result.get("deleted", []), "rewritten": readable,
-        "withheld": withheld, "commit": result["commit"], "proposal_id": proposal["id"],
+        "withheld": withheld, "commit": result["commit"], "repair_id": result["id"],
         "model_calls": len(spend),
         "message": (
             f"deleted {len(result.get('deleted', []))} page(s) and rewrote {len(diffs)} that "
@@ -313,21 +235,6 @@ def delete_and_record(conn, *, repo_url: str, paths, why: str, actor: str, sourc
             f"knowledge repo is the undo."
             + (f" {len(withheld)} diff(s) are withheld: those pages are outside what you may read "
                f"here, or this server's index does not carry them." if withheld else ""))}
-
-
-def reject_repair_and_record(conn, *, proposal: dict, actor: str, source: str,
-                             reason: str) -> dict:
-    """Decline ONE repair proposal.
-
-    A REJECTED row is the dismissal memory (`repair.schema`): the proposer skips a content key that
-    has any prior row, so "reviewed and declined" is a durable fact and nobody is asked the same
-    question tomorrow. The reason is stored on the proposal, which is what the proposer reads.
-    """
-    del source          # the door is recorded in `admin_actions`
-    if not repair_store.mark_decided(conn, proposal["id"], status=repair_schema.STATUS_REJECTED,
-                                     decided_by=actor, notes=reason):
-        raise ReviewError(_LOST_THE_RACE)
-    return {"rejected": True}
 
 
 def commission_registration(conn, evidence, *, name: str, entity_type: str, aliases: list[str],

@@ -26,7 +26,6 @@ def _render(findings, **overrides):
 def test_no_findings_is_one_honest_line_never_silence():
     text = _render([])
     assert report.NO_FINDINGS_LINE in text
-    assert "## SLA" not in text
     assert "## WARN" not in text
     assert "## INFO" not in text
     assert "finding(s):" not in text
@@ -77,10 +76,10 @@ def test_sweep_summary_text_says_nothing_about_a_pass_with_nothing_to_judge():
 
 # ── severity counts and the judgment-call preamble ──────────────────────────────────────────────
 def test_severity_counts_and_judgment_preamble_present_when_findings_exist():
-    findings = [_finding(severity=schema.SEVERITY_SLA), _finding(severity=schema.SEVERITY_WARN),
-               _finding(severity=schema.SEVERITY_WARN), _finding(severity=schema.SEVERITY_INFO)]
+    findings = [_finding(severity=schema.SEVERITY_WARN), _finding(severity=schema.SEVERITY_WARN),
+               _finding(severity=schema.SEVERITY_INFO)]
     text = _render(findings)
-    assert "4 finding(s): 1 sla, 2 warn, 1 info" in text
+    assert "3 finding(s): 2 warn, 1 info" in text
     assert report.JUDGMENT_CALL_PREAMBLE in text
 
 
@@ -88,9 +87,7 @@ def test_severity_counts_and_judgment_preamble_present_when_findings_exist():
 def test_zero_severity_sections_still_print_their_header_and_none_this_run():
     findings = [_finding(severity=schema.SEVERITY_WARN)]
     text = _render(findings)
-    sla_block = text.split("## SLA (0)")[1].split("## WARN")[0]
     info_block = text.split("## INFO (0)")[1]
-    assert "none this run" in sla_block
     assert "none this run" in info_block
 
 

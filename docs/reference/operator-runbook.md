@@ -5,7 +5,7 @@ Everything below is for the operator running the system. The live world this run
 **9 gates**, **8 MCP tools** (`search_brain`/`read_page`/`list_entities`/`describe_entity`,
 `ask`, `brain_submit`/`brain_submissions`/`brain_delete`),
 **one Fly app** with three process groups (`app` · `slack` · `worker`), four GitHub Actions
-crons (`index-rebuild` · `retention-purge` · `gardener` · `repair-propose`), the optional `/admin`
+crons (`index-rebuild` · `retention-purge` · `gardener`), the optional `/admin`
 console on the `app` group, and the golden evals under `evals/` with the release gates
 (`make gates`) over them.
 
@@ -85,28 +85,30 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
 3. **Supabase Postgres** must already have the index built at least once
    (`.venv/bin/stigmergy-index --rebuild --repo $STIGMERGY_REPO` against `STIGMERGY_INDEX_DSN`) — the
    server refuses to serve an empty index.
-4. **GitHub Actions secrets and variables** (for the four crons), on the **knowledge repo**:
+4. **GitHub Actions secrets and variables** (for the three crons), on the **knowledge repo**:
 
    **The crons run from the knowledge repo, not from this one, for privacy.** Actions logs on a
    PUBLIC repository are world-readable, and these jobs describe the corpus out loud —
-   `stigmergy-gardener` prints its whole report, entity ids and page paths included, and
-   `stigmergy-repair propose` names every page it proposed an edit against. Repository *variables*
-   are not masked either (only secrets are). This repo carries the four workflow files as adopter
-   templates, **disabled**; copy them into your private knowledge repo and run them there.
+   `stigmergy-gardener` prints its whole report, entity ids and page paths included. Repository
+   *variables* are not masked either (only secrets are). This repo carries the three workflow files
+   as adopter templates, **disabled**; copy them into your private knowledge repo and run them
+   there.
 
    | Settings → Secrets → Actions | Used by |
    |---|---|
-   | `INDEX_DSN` | all four workflows |
-   | `OPENAI_API_KEY` | `index-rebuild`, `gardener`, `repair-propose` |
-   | `SLACK_BOT_TOKEN` | `gardener`, for the SLA notice — and nothing else: the proposer posts nowhere, and it holds no GitHub App credential either, because it proposes and cannot apply |
+   | `INDEX_DSN` | all three workflows |
+   | `OPENAI_API_KEY` | `index-rebuild`, `gardener` |
+
+   No Slack token here, and no GitHub App credential: none of the three crons posts or pushes. The
+   one scheduled job that DOES push — the worker's repair pass — is not a cron at all: it runs
+   inside the librarian, which already holds that credential (ADR 044).
 
    | Settings → Variables → Actions | Used by |
    |---|---|
-   | `STIGMERGY_CRONS_ENABLED` (`true`) | all four — **and it is the on/off switch** |
-   | `STIGMERGY_PLATFORM_REF` (a release tag; default `main`) | all four — which platform version `pip` installs |
-   | `STIGMERGY_DIGEST_CHANNEL_ID`, `STIGMERGY_GARDENER_MODEL` | `gardener` (a channel id and a model name are not credentials) |
-   | `STIGMERGY_REPAIR_MODEL` | `repair-propose` (a model name, for the same reason: not a credential, and not masked — a second argument for a private repo) |
-   | `STIGMERGY_PLATFORM_REPO` (default `sturlese/stigmergy`) | all four — **set it if you forked.** Leave it unset on a fork and every cron silently `pip install`s the UPSTREAM CLI, so your crons run somebody else's code against your knowledge |
+   | `STIGMERGY_CRONS_ENABLED` (`true`) | all three — **and it is the on/off switch** |
+   | `STIGMERGY_PLATFORM_REF` (a release tag; default `main`) | all three — which platform version `pip` installs |
+   | `STIGMERGY_GARDENER_MODEL` | `gardener` (a model name is not a credential) |
+   | `STIGMERGY_PLATFORM_REPO` (default `sturlese/stigmergy`) | all three — **set it if you forked.** Leave it unset on a fork and every cron silently `pip install`s the UPSTREAM CLI, so your crons run somebody else's code against your knowledge |
 
    **No cross-repo PAT is involved.** The knowledge repo is the workflow's own repository, so the
    job's read-only `GITHUB_TOKEN` covers the checkout; the CLI arrives by
@@ -273,30 +275,32 @@ fly deploy --image <that image ref>   # redeploy it directly
 
 (Fly also has `fly apps rollback` on recent CLI versions — either is a single command.)
 
-### Scheduled jobs — the four crons
+### Scheduled jobs — the three crons
 
 | Workflow | When (UTC) | What |
 |---|---|---|
 | `index-rebuild.yml` | nightly ~04:17 | full staging index rebuild from `@main` |
 | `retention-purge.yml` | nightly ~04:42 | `stigmergy-queue purge` (30-day terminal rows) |
 | `gardener.yml` | daily ~05:07 | `stigmergy-gardener` corpus-health run |
-| `repair-propose.yml` | daily ~06:07 | `stigmergy-repair propose` — the gardener's findings turned into repair proposals |
 
-The last one runs an hour behind the gardener so the findings it reads are that morning's. It
-**proposes and cannot apply**: it holds no Slack token and no GitHub App credential, and every
-proposal lands PENDING until it is approved one at a time in the admin console's Repairs tab, which
-is the only door that decides one ([repair.md](./repair.md)).
+**What answers the gardener's findings is not here.** The librarian worker derives repairs from
+them and applies them on its own idle branch — a job that pushes, which is exactly why it is not a
+scheduled Actions run: a push credential in a public runner's environment is what this whole
+arrangement avoids ([repair.md](./repair.md)). Its interval is
+`STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S` in the worker's environment, and what it did is on the
+console's Repairs page.
 
 They run from the **knowledge repo's** own `.github/workflows/`; this repository ships them as
 templates in [`deploy/workflows/`](../../deploy/workflows/README.md), outside `.github/` so that
 GitHub does not register them here.
 
-All four have `workflow_dispatch` for a manual run (`gh workflow run index-rebuild.yml`, etc.;
+All three have `workflow_dispatch` for a manual run (`gh workflow run index-rebuild.yml`, etc.;
 `retention-purge.yml` is the only one taking an input, `dry_run`) — and the admin console's Crons
 tab drives the same dispatch/enable/disable with buttons when its GitHub PAT and repo are
 configured ([admin-console.md](./admin-console.md)).
-`retention-purge`, `gardener` and `repair-propose` each write a `job_runs` row; `index-rebuild`
-writes none and its truth is `index_meta.built_at` instead. The Actions tab cannot tell you a
+`retention-purge` and `gardener` each write a `job_runs` row (so does the worker's repair pass,
+under the job name `repair`); `index-rebuild` writes none and its truth is `index_meta.built_at`
+instead. The Actions tab cannot tell you a
 scheduled job stopped (a job skipped for an unset `vars.STIGMERGY_CRONS_ENABLED` is *green*). The
 database can:
 
@@ -608,42 +612,38 @@ the librarian its own environment block and no console runs beside it.
 
 This is drill 2 of "Release gates & drills" below.
 
-### A repair proposal stuck in `approved`
+### A repair that did not land
 
-Every ordinary apply outcome writes itself down: it lands as `applied` with a commit, or as
-`failed` with the reason. One residual cannot be written down from inside — the server process
-dying between the `pending → approved` transition and the failure bookkeeping. The symptom is a row
-that is `approved` with **both** `applied_commit` and `error` empty, and it is stuck: the console
-cannot decide it (it is no longer pending) and the proposer will not re-derive it (its key is
-remembered while it is not `failed`).
+Every outcome writes itself down. A repair the gates refused, or that faulted partway, is a
+`failed` row carrying the sentence that refused it:
 
 ```sql
-SELECT id, decided_by, decided_at, target_paths
-FROM repair_proposals
-WHERE status='approved' AND applied_commit='' AND error='';
+SELECT id, created_at, kind, target_paths, error
+FROM repairs WHERE status='failed' ORDER BY id DESC LIMIT 20;
 ```
 
-**Verify nothing landed before touching the row.** The apply may have pushed and died on the way to
-recording it, in which case the corpus already carries the edit and marking the row `failed` would
-be a lie an operator later acts on. In the knowledge repo:
+**Read the `error` before doing anything.** It names the gate and its codes, or the validator's
+own refusal, and it is the whole of what anyone will know about why that finding stopped being
+answered — because it DID stop: a failed repair's `content_key` is remembered exactly like an
+applied one's, so the loop will not derive it again. That is deliberate (a repair the gates refuse
+would otherwise cost a model call every night forever), and it is why this row is the only place
+the problem surfaces.
 
-```sh
-git -C <knowledge repo> log --oneline -5 -- <the row's target_paths>
-```
+What to do with one depends on what the sentence says:
 
-No commit naming that proposal id means nothing landed. Then mark it failed — the `WHERE` clause is
-the guard, not decoration: it refuses a row that has moved on since you read it, so running this
-twice, or against a proposal that landed while you were looking, cannot overwrite an applied commit.
+- **A gate refused the diff** — the repair was wrong, and the finding is still in the gardener's
+  report. Fix the underlying page by hand, or leave it: the corpus is untouched either way.
+- **"this repair changes nothing"** — the corpus already carries the answer. Nothing to do.
+- **A fault (a git or configuration sentence)** — this is the deployment's problem, not the
+  repair's. Fix it, and if you want that finding answered afterwards, delete the row so its key
+  stops being remembered:
 
 ```sql
-UPDATE repair_proposals
-SET status='failed', error='operator: process died mid-apply'
-WHERE id=<id> AND status='approved' AND applied_commit='';
+DELETE FROM repairs WHERE id=<id> AND status='failed';
 ```
 
-`0 rows` means the guard did its job — re-read the row before doing anything else. Once it is
-`failed`, the next `stigmergy-repair propose` may derive the same repair again, because a failed
-apply is not a dismissal.
+That is the ONLY row anybody should ever delete from this table, and only for this reason: every
+other row is a record of something that actually happened in the corpus.
 
 ### A view that did not catch up
 
@@ -831,8 +831,8 @@ moved with the redesign. Full account: `evals/README.md`.
 
 Proves the durable tables survive a round trip: the four `capture.schema` names it (`capture_queue`,
 `audit_log`, `job_runs`, `ingest_errors`) plus every other table nothing can rebuild —
-`repair_proposals`, whose `content_key` column is the permanent memory that keeps a rejected repair
-from being re-derived, `slack_submissions`, `gardener_findings` and `admin_actions`. Against the
+`repairs`, whose `content_key` column is the permanent memory that keeps an applied or refused
+repair from being derived again, `slack_submissions`, `gardener_findings` and `admin_actions`. Against the
 docker compose Postgres (`make db-up` first):
 
 ```sh
@@ -1058,7 +1058,7 @@ never a lost capture. Add the scope and reinstall the app to fix the feedback.
 
 ```sql
 SELECT job, status, finished_at, stats FROM job_runs
-WHERE job IN ('gardener', 'repair-propose', 'digest', 'digest-dry-run', 'capture-purge',
+WHERE job IN ('gardener', 'repair', 'digest', 'digest-dry-run', 'capture-purge',
               'capture-purge-dry-run', 'webhook-index-upsert')
 ORDER BY started_at DESC LIMIT 10;
 ```

@@ -61,7 +61,7 @@ def clean_tables(conn):
     with conn.cursor() as cur:
         cur.execute(
             "TRUNCATE capture_queue, job_runs, ingest_errors, audit_log, admin_actions,"
-            " gardener_findings, repair_proposals RESTART IDENTITY")
+            " gardener_findings, repairs RESTART IDENTITY")
     # The registry snapshot is what the inbox and the Entities desk read: a test that published
     # one must not hand its proposals to the next.
     index_store.clear_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH)
@@ -197,44 +197,73 @@ def build_bare_knowledge_repo(root: str) -> str:
     return bare
 
 
-def propose_repair(conn, *, path="wiki/notes/Renewals.md", link="Existing Note", kind="backlink",
-                   note="", rationale="neither page links the other") -> int:
-    """One PENDING `repair_proposals` row, through the package's own writers — `target_paths` and
-    `content_key` are DERIVED exactly as `repair.proposer` derives them, so no fixture here can
-    seed a row whose two stored facts disagree (the disagreement `remote._cross_check` exists to
-    catch is worth reaching by tampering, never by a careless fixture)."""
+# The diff every landed fixture row carries. Short, and deliberately a real unified diff: the
+# console's Repairs page exists to show the reading nobody gave the change before it was pushed
+# (ADR 044), so a fixture row with an empty `diff` would let that page look right while showing
+# nothing.
+LANDED_DIFF = ("diff --git a/wiki/notes/Renewals.md b/wiki/notes/Renewals.md\n"
+               "--- a/wiki/notes/Renewals.md\n+++ b/wiki/notes/Renewals.md\n"
+               "@@ -7,1 +7,1 @@\n-related: []\n+related: [\"[[Existing Note]]\"]\n")
+LANDED_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+
+def landed_repair(conn, *, path="wiki/notes/Renewals.md", link="Existing Note", kind="backlink",
+                  note="", rationale="neither page links the other", key="") -> int:
+    """One APPLIED `repairs` row, through the package's own writer — `target_paths` and
+    `content_key` are DERIVED exactly as `repair.run` derives them, so no fixture here can seed a
+    row whose two stored facts disagree (the disagreement `apply._cross_check` exists to catch is
+    worth reaching by tampering, never by a careless fixture).
+
+    APPLIED rather than pending, because there is no pending any more (ADR 044): the console reads
+    what the worker already did, and every row it lists is an attempt that is over.
+    """
     ops = [{"op": kind, "path": path, "link": link, "note": note}]
-    return repair_store.insert_proposal(
+    return repair_store.record_applied(
         conn, run_id=0, finding_ids=[1], target_paths=repair_schema.target_paths(ops), ops=ops,
-        rationale=rationale, content_key=repair_schema.content_key(ops), model_id="fake")
+        rationale=rationale, content_key=key or repair_schema.content_key(ops),
+        commit=LANDED_COMMIT, diff=LANDED_DIFF, model_id="fake")
 
 
-def propose_entity_body(conn, *, path="wiki/entities/Meridian Partners.md",
-                        body="## What / Who\n\nA freight broker.\n", role="",
-                        rationale="the page is still its template") -> int:
-    """One PENDING `entity-body` row — the second kind, whose op carries PROSE rather than a link.
-    Derived through the same writers for the same reason as its sibling above."""
+def landed_entity_body(conn, *, path="wiki/entities/Meridian Partners.md",
+                       body="## What / Who\n\nA freight broker.\n", role="",
+                       rationale="the page's body said nothing about the entity") -> int:
+    """One APPLIED `entity-body` row — the second kind, whose op carries PROSE rather than a link.
+    Written through the same writer for the same reason as its sibling above."""
     ops = [{"op": repair_schema.KIND_ENTITY_BODY, "path": path, "body_markdown": body,
             "role": role}]
-    return repair_store.insert_proposal(
+    return repair_store.record_applied(
         conn, run_id=0, finding_ids=[1], target_paths=repair_schema.target_paths(ops), ops=ops,
         rationale=rationale, kind=repair_schema.KIND_ENTITY_BODY,
         content_key=repair_schema.content_key(ops, kind=repair_schema.KIND_ENTITY_BODY),
-        model_id="fake")
+        commit=LANDED_COMMIT, diff=LANDED_DIFF, model_id="fake")
 
 
-def propose_delete(conn, *, doomed="wiki/notes/Old Memo.md",
-                   scrubbed="wiki/decisions/Refunds.md",
-                   rationale="the memo was superseded") -> int:
-    """One PENDING `delete` row — the third kind, whose ops carry whole PAGES. Derived through the
-    same writers for the same reason as its two siblings above."""
+def landed_delete(conn, *, doomed="wiki/notes/Old Memo.md",
+                  scrubbed="wiki/decisions/Refunds.md",
+                  rationale="the memo was superseded") -> int:
+    """One APPLIED `delete` row — the third kind, whose ops carry whole PAGES. Written through the
+    same writer for the same reason as its two siblings above."""
     ops = [{"op": repair_schema.DELETE_OP_NAME, "path": doomed},
            {"op": repair_schema.SCRUB_OP_NAME, "path": scrubbed, "expected_before_hash": "0" * 64,
             "planned_after": "---\ntype: decision\n---\n\n# Refunds\n\nNo link any more.\n"}]
-    return repair_store.insert_proposal(
+    return repair_store.record_applied(
         conn, run_id=0, finding_ids=[], target_paths=repair_schema.target_paths(ops), ops=ops,
         rationale=rationale, kind=repair_schema.KIND_DELETE,
-        content_key=repair_schema.content_key(ops, kind=repair_schema.KIND_DELETE), model_id="")
+        content_key=repair_schema.content_key(ops, kind=repair_schema.KIND_DELETE),
+        commit=LANDED_COMMIT, diff=LANDED_DIFF, model_id="")
+
+
+def refused_repair(conn, *, path="wiki/decisions/Refunds.md", link="Existing Note",
+                   error="the gates refused this repair (secrets/generic-api-key). Nothing was "
+                         "pushed.") -> int:
+    """One FAILED `repairs` row — the outcome the console's Repairs page exists to make findable.
+    Its `error` is the whole of what anybody will ever know about why that finding stopped being
+    answered, because the row is never retried."""
+    ops = [{"op": "backlink", "path": path, "link": link, "note": ""}]
+    return repair_store.record_failed(
+        conn, run_id=0, finding_ids=[2], target_paths=repair_schema.target_paths(ops), ops=ops,
+        rationale="the two pages cover the same ground", error=error,
+        content_key=repair_schema.content_key(ops), model_id="fake")
 
 
 @pytest.fixture()

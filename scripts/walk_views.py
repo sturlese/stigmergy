@@ -99,7 +99,7 @@ def main() -> int:
         assert outcome.action == "unchanged", f"expected unchanged, got {outcome.action}"
 
         step("a page lands with NO hook of any kind — the shape every door except a meeting has "
-            "(an ordinary capture, a Slack or Drive drop, an applied repair, a hand edit). "
+            "(an ordinary capture, a Slack drop, an applied repair, a hand edit). "
             "Nothing regenerates anything, and the entity has no view at all")
         second_id = "globex"
         with open(os.path.join(env.repo, "ops", "entity-registry.json"), "w") as f:

@@ -418,7 +418,7 @@ async def sweep(repo: str, conn, *, registry: Registry, branch: str = "main", fo
     row, the ceiling) is `run`'s, unchanged.
 
     It is state-based rather than triggered: it asks the corpus what is divergent NOW, so it covers
-    every door that ever wrote a page — an ordinary capture, a Slack or Drive drop, an applied
+    every door that ever wrote a page — an ordinary capture, a Slack drop, an applied
     repair, an entity mint, a hand edit — without any of them having to remember to call it.
 
     **The advisory lock is here rather than at the call sites** because two sweepers is a supported

@@ -20,7 +20,9 @@ from stigmergy.gardener import checks as gardener_checks
 from stigmergy.gardener import schema as gardener_schema
 from stigmergy.gardener import store as gardener_store
 from stigmergy.gardener import sweep as gardener_sweep
-from stigmergy.repair import deletion, proposer, sweep
+from stigmergy.librarian import gitcmd
+from stigmergy.repair import brief, deletion, sweep
+from stigmergy.repair import run as repair_run
 from stigmergy.repair.schema import ensure_repair_schema
 from tests import testdb
 from tests.librarian import support as librarian_support
@@ -35,7 +37,8 @@ DECISION = "wiki/decisions/a-decision-from-a-previous-meeting.md"
 STEWARD = "steward@example.com"
 
 # The repair-proposer skill, as a FIXTURE. The real one is versioned in the knowledge repo and
-# read at run time (`proposer.SKILL_RELPATH`), which is the whole point of the design — so the
+# read at the base commit the pass runs against (`brief.SKILL_RELPATH`), which is the whole point
+# of the design — so the
 # suite carries its own, deliberately short, and never a frozen copy of the real one: what the
 # code owes is the READ path and the refusal when it is absent, and pinning the brain repo's prose
 # here would be pinning somebody else's editorial decisions.
@@ -54,8 +57,8 @@ propose anything about them. A finding is a hint, not a verdict.
 def connect_or_skip():
     conn = testdb.connect_or_skip("repair")
     capture_schema.ensure_capture_schema(conn)      # capture_queue, job_runs
-    gardener_schema.ensure_gardener_schema(conn)    # gardener_findings — the proposer's input
-    ensure_repair_schema(conn)                      # repair_proposals — this package's own table
+    gardener_schema.ensure_gardener_schema(conn)    # gardener_findings — the pass's input
+    ensure_repair_schema(conn)                      # repairs — this package's own ledger
     return conn
 
 
@@ -63,15 +66,15 @@ def clean(conn) -> None:
     """Empty every table this suite's own writes could have touched — test isolation only, the
     same posture every sibling suite takes."""
     with conn.cursor() as cur:
-        cur.execute("DELETE FROM repair_proposals")
+        cur.execute("DELETE FROM repairs")
         cur.execute("DELETE FROM gardener_findings")
         cur.execute("DELETE FROM capture_queue")
         cur.execute("DELETE FROM job_runs")
 
 
 def build_repo(tmp_path, *, with_skill: bool = True):
-    """A bare remote plus a clone of the fixture knowledge repo, with the proposer's skill
-    committed into it. `with_skill=False` is the fixture for the named config refusal."""
+    """A bare remote plus a clone of the fixture knowledge repo, with the repair skill committed
+    into it. `with_skill=False` is the fixture for the named config refusal."""
     env = librarian_support.build_repo(str(tmp_path / "git"))
     if with_skill:
         write_skill(env.repo)
@@ -80,14 +83,65 @@ def build_repo(tmp_path, *, with_skill: bool = True):
 
 
 def write_skill(repo: str, text: str = FIXTURE_SKILL) -> str:
-    path = proposer.skill_path(repo)
+    path = brief.skill_path(repo)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     return path
 
 
-# ── the proposer's input: a completed gardener run and its findings ───────────────────────────
+# ── one pass, run the way the worker runs it ─────────────────────────────────────────────────
+# EVERY `test_*_pg.py` in this suite drives the loop through here rather than spelling the argument
+# list itself, and the reason is the branch: `run_repairs` derives against `origin/main` and pushes
+# every repair to it, so a test that passed the wrong `repo` would derive from one tree and assert
+# against another — silently, since both are real checkouts of the same fixture.
+BRANCH = "main"
+
+
+def run_pass(conn, repo_env, settings, *, worktree_root: str = "", should_stop=None):
+    """One repair pass over `repo_env`: derive from the latest completed gardener run, apply each
+    repair in its own worktree, push to the bare remote. Returns the `RepairRunResult`.
+
+    `repo_env.repo` is the worker's CHECKOUT and `repo_env.bare` stands in for GitHub, exactly as
+    the deployed pair does — so what a test asserts on afterwards is a commit that really landed on
+    a remote, read back out of git.
+    """
+    return asyncio.run(repair_run.run_repairs(
+        conn, settings=settings, repo=repo_env.repo, branch=BRANCH,
+        worktree_root=worktree_root, should_stop=should_stop))
+
+
+# ── what actually landed: the bare remote, read as git ───────────────────────────────────────
+# Never the working checkout. `run_repairs` writes in a detached worktree and pushes; the checkout
+# `repo_env.repo` names is left on whatever commit the fixture last committed, so a test asserting
+# against it would be reading the corpus BEFORE the repair rather than after it.
+def remote_head(bare: str, ref: str = BRANCH) -> str:
+    return librarian_support.branch_sha(bare, ref)
+
+
+def remote_page(bare: str, path: str, ref: str = BRANCH) -> str:
+    return librarian_support.read_filed_page(bare, ref, path)
+
+
+def remote_paths(bare: str, ref: str = BRANCH) -> list[str]:
+    """Every path the remote's tree holds — `-z`, because a page name carries spaces routinely."""
+    out = gitcmd.run("ls-tree", "-r", "-z", "--name-only", ref, cwd=bare).stdout
+    return [path for path in out.split("\0") if path]
+
+
+def commit_message(bare: str, ref: str = BRANCH) -> str:
+    return gitcmd.run("log", "-1", "--format=%B", ref, cwd=bare).stdout
+
+
+def commit_author(bare: str, ref: str = BRANCH) -> str:
+    return gitcmd.run("log", "-1", "--format=%an <%ae>", ref, cwd=bare).stdout.strip()
+
+
+def commit_count(bare: str, ref: str = BRANCH) -> int:
+    return len(gitcmd.run("log", "--format=%H", ref, cwd=bare).stdout.split())
+
+
+# ── the pass's input: a completed gardener run and its findings ───────────────────────────────
 def seed_gardener_run(conn, *, status: str = "ok") -> int:
     """A `job_runs` row for `job='gardener'` — what `store.latest_completed_run` reads. Seeded
     directly rather than by running a whole gardener pass, exactly as `tests.gardener.support`
@@ -410,9 +464,11 @@ def page_text(repo: str, path: str) -> str:
 
 
 # ── what a refusal published to a PERSON may say ──────────────────────────────────────────────
-# The rule the server doors' own refusals are held to, shared by every suite that publishes one
-# (`tests/repair/test_remote_pg.py`, `tests/server/test_delete_pages_pg.py`). It moved here when
-# `tests/entities/` lost its decision half (ADR 044): the property outlived the package that
+# The rule every refusal this package composes is held to, shared by the suites that publish one
+# (`tests/repair/test_apply_pg.py`, `tests/server/test_delete_pages_pg.py`). Under ADR 044 it binds
+# more than it used to: a refusal is no longer only wire copy on the deletion road — it is STORED
+# in `repairs.error` and rendered on the console for every repair the worker could not land. It
+# moved here when `tests/entities/` lost its decision half: the property outlived the package that
 # happened to hold it first.
 #
 # Strictly stronger than the `/tmp` · `/private/` · `/Users/` roots the issue named: any token
@@ -423,7 +479,7 @@ _ABSOLUTE_PATH = re.compile(r"(?:^|[\s(\[\"'`])/\S")
 
 
 def assert_person_facing(message: str) -> None:
-    """Raise unless `message` is safe to publish to the person who asked, over MCP or the console."""
+    """Raise unless `message` is safe to publish — over MCP, on the console, or in a stored row."""
     leak = _ABSOLUTE_PATH.search(message)
     assert not leak, (
         f"a server-door refusal named an absolute path ({message[leak.start():leak.start() + 60]!r} "

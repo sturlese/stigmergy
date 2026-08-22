@@ -1,17 +1,15 @@
 """Orchestration: run every check, run the sweep, persist findings + a `job_runs` row in one
-transaction, post the SLA notice — the one function `cli.py` calls.
+transaction — the one function `cli.py` calls.
 
 Calls `ops.record_job_run` directly, not the `job_run` context manager: that manager writes its
 row on exit, and every finding needs `run_id` at insert time. The try/except below replicates its
 shape so a failed run still gets an honest `status='error'` row.
 
-Four passes can never make this function raise, for one reason — work already done must not be
-lost to a later, optional step. The three MODEL passes: an outage of any one must not cost the
-operator the deterministic checks that already ran, nor the other passes' findings, so
-`_run_sweep_pass`, `_run_empty_body_pass` and `_run_duplicate_entity_pass` each catch everything
-and report through their returned stats. The notice: it runs AFTER the findings are committed, so
-every failure it can have — including the database errors its own ACL scoping query raises — is
-absorbed into `RunResult.notice_error`. Every OTHER failure aborts the run entirely.
+The three MODEL passes can never make this function raise, for one reason — work already done must
+not be lost to a later, optional step. An outage of any one must not cost the operator the
+deterministic checks that already ran, nor the other passes' findings, so `_run_sweep_pass`,
+`_run_empty_body_pass` and `_run_duplicate_entity_pass` each catch everything and report through
+their returned stats. Every OTHER failure aborts the run entirely.
 
 A failure of ANY model pass commits `'partial'`, never `'ok'` — a run's status is the one place an
 operator learns a whole model pass did not happen. That status is therefore an aggregate over
@@ -34,7 +32,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from stigmergy.capture import ops
-from stigmergy.gardener import checks, notice, store, sweep
+from stigmergy.gardener import checks, store, sweep
 from stigmergy.gardener.errors import GardenerError
 from stigmergy.gardener.schema import JOB_NAME
 from stigmergy.gardener.settings import (
@@ -44,9 +42,6 @@ from stigmergy.gardener.settings import (
     GardenerSettings,
 )
 from stigmergy.kernel.registry import Registry, load_registry
-from stigmergy.server.errors import IdentityError
-from stigmergy.slack import channels
-from stigmergy.slack.gateway import SlackApiError
 
 log = logging.getLogger(__name__)
 
@@ -60,10 +55,6 @@ class RunResult:
     pages_checked: int
     entities_checked: int
     completed_at: str
-    notice_posted: bool = False
-    # Set only when an `sla` finding fired but the notice could not post; the findings are
-    # already persisted.
-    notice_error: str = ""
     # Set only when the sweep failed (class name only, never `str(ex)`); `""` means it succeeded
     # or had nothing to do.
     sweep_error: str = ""
@@ -304,17 +295,10 @@ def _run_completed_at(conn, run_id: int) -> str:
     return finished_at.isoformat() if finished_at is not None else ""
 
 
-async def run_gardener(conn, *, repo: str, settings: GardenerSettings, channels_path: str,
-                       gateway=None) -> RunResult:
-    """Run every check and the sweep, persist findings + a `job_runs` row in ONE transaction,
-    post the SLA notice if one fired, and return the durable result. `RunResult.findings` is the
-    RE-FETCHED, persisted list, never the in-memory one — the notice is the one exception
-    (below). `gateway=None` is legitimate and only a problem if an `sla` finding fires.
-
-    `channels_path` is resolved to audiences only when an `sla` finding exists — resolving it
-    unconditionally would let a malformed channels file abort an info/warn-only run that was
-    never going to post anything.
-    """
+async def run_gardener(conn, *, repo: str, settings: GardenerSettings) -> RunResult:
+    """Run every check and the three model passes, persist findings + a `job_runs` row in ONE
+    transaction, and return the durable result. `RunResult.findings` is the RE-FETCHED, persisted
+    list, never the in-memory one, so the report renders what is durably true."""
     repo = _require_repo(repo)
 
     run_stats: dict = {}
@@ -379,49 +363,14 @@ async def run_gardener(conn, *, repo: str, settings: GardenerSettings, channels_
     persisted = store.findings_for_run(conn, run_id)
     completed_at = _run_completed_at(conn, run_id)
 
-    result = RunResult(run_id=run_id, findings=persisted, pages_checked=pages_checked,
-                       entities_checked=entities_checked, completed_at=completed_at,
-                       stats=run_stats, sweep_error=sweep_stats["error"],
-                       sweep_changed_count=sweep_stats["changed"],
-                       sweep_sampled_count=sweep_stats["sampled"],
-                       empty_body_error=empty_body_stats["error"],
-                       empty_body_judged_count=empty_body_stats["judged"],
-                       empty_body_deferred_count=empty_body_stats["deferred"],
-                       duplicate_entity_error=duplicate_stats["error"],
-                       duplicate_entity_judged_count=duplicate_stats["judged"],
-                       duplicate_entity_deferred_count=duplicate_stats["deferred"])
-
-    try:
-        # The PRE-INSERT, in-memory `findings`, never `persisted`: the round trip through the
-        # table drops every `_notice_*` key, so the notice wording and its ACL scoping only exist
-        # on this list. Audiences are resolved only when an `sla` finding exists (docstring).
-        if notice.sla_findings(findings):
-            audiences = channels.channel_audiences(channels_path, settings.digest_channel_id)
-            findings_to_post = notice.scope_findings_to_channel(conn, findings, audiences=audiences)
-        else:
-            findings_to_post = findings
-        posted = await notice.post_sla_notice(
-            gateway, channel=settings.digest_channel_id, findings=findings_to_post,
-            run_date=completed_at[:10] if completed_at else "")
-        result.notice_posted = posted is not None
-    except (GardenerError, SlackApiError, IdentityError) as ex:
-        # The findings are already committed — a notice failure must never withhold the report.
-        # These three are this stack's own vocabulary (a missing token/channel, a Slack API
-        # refusal, and — `IdentityError` — a malformed channels file the posting channel's
-        # audiences could not be resolved from), so their SENTENCE is written for an operator and
-        # is what gets recorded.
-        result.notice_error = str(ex)
-    except Exception as ex:  # noqa: BLE001 — see above: the report is already persisted, so NO
-        # failure in this block may withhold it. The narrow arms above cannot see everything this
-        # block raises: `scope_findings_to_channel` queries the pages index to scope the notice,
-        # so a psycopg error is reachable here and used to escape the whole run.
-        # Class name only, never `str(ex)` — the same rule and the same reason as
-        # `_run_sweep_pass`'s `stats["error"]`: a database error quotes the statement that failed,
-        # and that statement carries page paths and ACL labels an operator's terminal must not
-        # learn them from. So the class name is the OPERATOR's copy and the log below holds the
-        # DIAGNOSIS: without it this arm destroyed the only account of what went wrong, and the
-        # narrow arms above cannot see the faults this one exists for.
-        log.error("gardener: the notice block failed after the findings were committed",
-                  exc_info=True)
-        result.notice_error = ex.__class__.__name__
-    return result
+    return RunResult(run_id=run_id, findings=persisted, pages_checked=pages_checked,
+                     entities_checked=entities_checked, completed_at=completed_at,
+                     stats=run_stats, sweep_error=sweep_stats["error"],
+                     sweep_changed_count=sweep_stats["changed"],
+                     sweep_sampled_count=sweep_stats["sampled"],
+                     empty_body_error=empty_body_stats["error"],
+                     empty_body_judged_count=empty_body_stats["judged"],
+                     empty_body_deferred_count=empty_body_stats["deferred"],
+                     duplicate_entity_error=duplicate_stats["error"],
+                     duplicate_entity_judged_count=duplicate_stats["judged"],
+                     duplicate_entity_deferred_count=duplicate_stats["deferred"])

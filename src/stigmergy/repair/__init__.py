@@ -1,16 +1,21 @@
-"""`stigmergy.repair` — the governed repair loop: a finding's path to zero.
+"""`stigmergy.repair` — the repair loop: a finding's path to zero, without anybody being asked.
 
 The gardener DETECTS and fixes nothing. This package gives a finding somewhere to go without
-handing a model a write path: an agent PROPOSES a concrete, additive change; CODE validates it
-twice — at propose time and again at apply time, through the SAME gates the librarian's own
-declared edits pass; a steward approves one proposal at a time; and code applies EXACTLY the
-approved ops as one App-authored commit in a throwaway clone.
+handing a model a write path: an agent DECLARES a concrete change; CODE validates it twice — when
+it is derived and again in the tree it will be committed from, through the SAME gates the
+librarian's own declared edits pass; and code applies EXACTLY those ops as one App-authored commit.
+Nobody approves it (ADR 044). What stands in the way of a bad repair is the validator, the nine
+gates, the ceilings and the ledger's permanent memory — not a person reading a queue.
+
+What replaces the reading is that the diff is STORED: every applied repair carries the unified diff
+it landed, because nobody saw it beforehand.
 
 The agent's judgment lives in a skill in the KNOWLEDGE repo, never in Python here, and the op
 vocabulary is the librarian's declared-edit kinds only (`page.EDIT_KINDS`) — three strictly
-additive shapes every gate already knows how to judge.
+additive shapes every gate already knows how to judge — plus the three non-additive kinds each
+guarded by its own validator and its own told-permission.
 
-`cli.py` is the only module that reads the environment or opens a connection; every other module
-takes `conn` and settings as plain arguments. Per-module import edges are pinned by
-`tests/test_architecture.py`. See `index.md` in this directory for the code map.
+No module here reads the environment except `settings.py`, and none opens a connection: `conn` and
+settings arrive as plain arguments, from `librarian.worker`'s idle pass. Per-module import edges
+are pinned by `tests/test_architecture.py`. See `index.md` for the code map.
 """

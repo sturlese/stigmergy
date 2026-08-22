@@ -17,7 +17,6 @@ from stigmergy.capture import ops as capture_ops
 from stigmergy.capture import queue as capture_queue
 from stigmergy.capture import schema as capture_schema
 from stigmergy.capture.evidence import MemoryEvidenceStore
-from stigmergy.gardener import schema as gardener_schema
 from stigmergy.gardener.schema import JOB_NAME, ensure_gardener_schema
 from stigmergy.index import build as index_build
 from stigmergy.index import store as index_store
@@ -46,6 +45,7 @@ def clean(conn) -> None:
         cur.execute("DELETE FROM gardener_findings")
         cur.execute("DELETE FROM capture_queue")
         cur.execute("DELETE FROM job_runs")
+        cur.execute("DELETE FROM repairs")
 
 
 def unique_material(label: str = "gardener") -> str:
@@ -147,49 +147,6 @@ def write_view(root: str, entity_id: str, *, member_hash: str, backlink_hash: st
                       body=f"# {entity_id}\n")
 
 
-# ── pages_index rows carrying an ACL label. These live here, not in `tests.digest.support`,
-# because the SLA notice's own channel-scoping tests need them too, one package over;
-# `tests.digest.support` re-exports both names unchanged for its own call sites ─────────────────
-def write_labelled_page(root: str, relpath: str, *, title: str, acl: list) -> str:
-    """A `zone='wiki'` page with a real `acl:` frontmatter label. Written through the SAME
-    real-file + `rebuild_index` path every other gardener/digest fixture page uses — never a
-    hand-crafted row a parsing bug could silently disagree with."""
-    return write_page(root, "wiki", relpath,
-                      frontmatter={"type": "note", "title": title, "entity": [],
-                                  "status": "developing",
-                                  "updated": "2026-07-01", "acl": acl})
-
-
-def unlabelled_page(root: str, relpath: str, *, title: str) -> str:
-    return write_page(root, "wiki", relpath,
-                      frontmatter={"type": "note", "title": title, "entity": [],
-                                  "status": "developing", "updated": "2026-07-01"})
-
-
-# ── ops/slack-channels.json — here rather than in `tests.digest.support` for the identical
-# reason as the two functions immediately above ─────────────────────────────────────────────────
-def write_channels_file(root: str, mapping: dict) -> str:
-    """`ops/slack-channels.json` — `{channel_id: [audience labels]}`, `slack.channels.
-    channel_audiences`'s own contract."""
-    path = os.path.join(root, "ops", "slack-channels.json")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(mapping, f)
-    return path
-
-
-def write_malformed_channels_file(root: str) -> str:
-    """`ops/slack-channels.json` that fails to parse at all — `slack.channels.channel_audiences`'s
-    own `IdentityError` case: the fixture the gardener's own tests need to prove a run survives
-    this file when it has nothing to post, and fails cleanly (report intact, `notice_error` set)
-    when it does."""
-    path = os.path.join(root, "ops", "slack-channels.json")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("not json at all")
-    return path
-
-
 def rebuild_index(conn, repo: str):
     """`pages_index`, for real, from `repo`'s own files — `index.build.rebuild` drops and
     recreates the table, so this IS the isolation between tests that need it. Exercise the real
@@ -230,27 +187,3 @@ def seed_filed_capture(conn, *, result_ref: str, finished_days_ago: int = 0,
                 "UPDATE capture_queue SET finished_at = now() - make_interval(days => %s) "
                 "WHERE id = %s", (finished_days_ago, ack["id"]))
     return ack["id"]
-
-
-# ── an `sla`-severity finding, injected ───────────────────────────────────────────────────────
-def force_one_sla_finding(monkeypatch, *, subject="wiki/notes/x.md"):
-    """Make the next `run_gardener` pass produce exactly one `sla` finding, by appending it to
-    `check_orphans`' own return.
-
-    **Stated plainly, because a check that stops running must be impossible to miss: NO live
-    check produces an `sla` finding.** Both arms of the contradiction SLA — the only producers
-    there have ever been — went with the canon lane. The NOTICE mechanism is severity-driven and
-    generic, so it survives and is still worth testing; what these tests cannot do is reach it
-    through a real check. They inject one instead, and say so, rather than quietly asserting
-    nothing. The first check that genuinely needs to escalate wakes this path.
-    """
-    from stigmergy.gardener import checks as checks_module
-    real = checks_module.check_orphans
-
-    def _with_sla(conn):
-        return [*real(conn), checks_module.build_finding(
-            check="injected-sla", severity=gardener_schema.SEVERITY_SLA, subject=subject,
-            detail=f"an injected escalation about {subject} — see support.force_one_sla_finding",
-            suggested_action="nothing; this finding exists to exercise the notice path")]
-
-    monkeypatch.setattr(checks_module, "check_orphans", _with_sla)

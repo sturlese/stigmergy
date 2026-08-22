@@ -330,12 +330,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
         return service.repair_show(request.path_params["id"])
 
     @_json_endpoint
-    async def repairs_approve(request):
-        data = await _body(request)
-        return await run_in_threadpool(service.repair_approve, request.path_params["id"],
-                                       actor=_str(data, "actor"))
-
-    @_json_endpoint
     async def pages_delete(request):
         data = await _body(request)
         paths = [p for p in (data.get("paths") or []) if str(p).strip()]
@@ -344,20 +338,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
         return await run_in_threadpool(service.pages_delete, actor=_str(data, "actor"),
                                        paths=[str(p).strip() for p in paths],
                                        why=_str(data, "why"))
-
-    @_json_endpoint
-    async def repairs_reject(request):
-        data = await _body(request)
-        reason = _str(data, "reason")
-        if not reason.strip():
-            # The same shape `queue_reject` holds, and a stronger reason for it: a rejected row is
-            # the dismissal memory the proposer skips against, so a reason-less decline is a
-            # permanent "somebody said no" with nothing about why.
-            raise AdminBadRequest("'reason' is required — a rejected proposal is what stops the "
-                                  "proposer suggesting this repair again, and the reason is all a "
-                                  "later reader will have")
-        return service.repair_reject(request.path_params["id"], actor=_str(data, "actor"),
-                                     reason=reason)
 
     @_json_endpoint
     async def activity(_request):
@@ -414,8 +394,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
         Route(API_PREFIX + "entities/create", entities_create, methods=["POST"]),
         Route(API_PREFIX + "repairs", repairs_list, methods=["GET"]),
         Route(API_PREFIX + "repairs/{id:int}", repairs_show, methods=["GET"]),
-        Route(API_PREFIX + "repairs/{id:int}/approve", repairs_approve, methods=["POST"]),
-        Route(API_PREFIX + "repairs/{id:int}/reject", repairs_reject, methods=["POST"]),
         Route(API_PREFIX + "pages/delete", pages_delete, methods=["POST"]),
         Route(API_PREFIX + "activity", activity, methods=["GET"]),
         Route(API_PREFIX + "worker", worker, methods=["GET"]),

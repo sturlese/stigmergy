@@ -14,7 +14,7 @@ from stigmergy.server.settings import Settings
 from tests.admin.conftest import (
     ADMIN_TOKEN,
     finish_one,
-    propose_repair,
+    landed_repair,
     submit_one,
 )
 
@@ -253,60 +253,44 @@ def test_an_unexpected_failure_names_the_class_only(conn, app, monkeypatch):
     assert response.json() == {"error": "the operation failed (RuntimeError)"}
 
 
-# ── repairs over HTTP (ADR 039) ───────────────────────────────────────────────────────────────
+# ── repairs over HTTP: a read-only page (ADR 044) ─────────────────────────────────────────────
 def test_repairs_list_and_show_over_http(conn, app):
-    proposal_id = propose_repair(conn)
+    """The two routes that survive, and there are no others: nothing on this page decides anything
+    any more, so the console reads what the worker already did."""
+    repair_id = landed_repair(conn)
 
     listed = _request(app, "GET", "/admin/api/repairs")
-    shown = _request(app, "GET", f"/admin/api/repairs/{proposal_id}")
+    shown = _request(app, "GET", f"/admin/api/repairs/{repair_id}")
 
     assert listed.status_code == 200
-    assert [row["id"] for row in listed.json()["pending"]] == [proposal_id]
+    assert [row["id"] for row in listed.json()["recent"]] == [repair_id]
     assert shown.status_code == 200
     assert shown.json()["ops"][0]["path"] == "wiki/notes/Renewals.md"
+    assert shown.json()["diff"].startswith("diff --git"), (
+        "the diff is the whole reason this route exists — nobody read the change before it landed")
     assert _request(app, "GET", "/admin/api/repairs/999999").status_code == 404
 
 
-def test_repairs_reject_requires_a_reason_and_records_it(conn, app):
-    proposal_id = propose_repair(conn)
+@pytest.mark.parametrize("verb, path", [
+    ("POST", "/admin/api/repairs/{id}/approve"),
+    ("POST", "/admin/api/repairs/{id}/reject"),
+])
+def test_the_doors_that_decided_a_repair_are_gone_from_the_router(conn, app, verb, path):
+    """Asked of the ROUTER rather than of the code that used to be behind it. A repair is applied
+    by the worker without anybody being asked (ADR 044), so a console still offering Approve and
+    Decline would be offering a decision that changes nothing — and a route left mapped to a
+    handler nobody calls is how one comes back."""
+    repair_id = landed_repair(conn)
 
-    blank = _request(app, "POST", f"/admin/api/repairs/{proposal_id}/reject",
-                     json_body={"actor": "steward@example.com", "reason": "   "})
-    given = _request(app, "POST", f"/admin/api/repairs/{proposal_id}/reject",
-                     json_body={"actor": "steward@example.com", "reason": "already linked"})
+    response = _request(app, verb, path.format(id=repair_id),
+                        json_body={"actor": "steward@example.com", "reason": "no"})
 
-    assert blank.status_code == 400
-    assert given.status_code == 200
-    with conn.cursor() as cur:
-        cur.execute("SELECT status, notes FROM repair_proposals WHERE id = %s", (proposal_id,))
-        assert cur.fetchone() == ("rejected", "already linked")
-
-
-def test_repairs_approve_requires_the_token_and_never_reaches_the_apply_without_it(conn, app,
-                                                                                   monkeypatch):
-    """The benign twin lives at the service level (`test_repair_approve_applies_and_records_both_
-    ledgers`); what THIS pins is that an unauthorized POST is refused by the gate, before any of it
-    — no clone, no decision, no ledger row."""
-    from stigmergy.repair import remote as repair_remote
-
-    def never(*_a, **_k):
-        raise AssertionError("apply_via_clone ran on an unauthorized request")
-
-    monkeypatch.setattr(repair_remote, "apply_via_clone", never)
-    proposal_id = propose_repair(conn)
-
-    refused = _request(app, "POST", f"/admin/api/repairs/{proposal_id}/approve", token=None,
-                       json_body={"actor": "mallory"})
-
-    assert refused.status_code == 401
-    with conn.cursor() as cur:
-        cur.execute("SELECT status FROM repair_proposals WHERE id = %s", (proposal_id,))
-        assert cur.fetchone()[0] == "pending"
+    assert response.status_code == 404
 
 
-# ── the two handlers that clone, and where they run ───────────────────────────────────────────
-# Approving a repair and removing pages both reach code that clones a repo, runs the nine gates and
-# pushes — seconds of blocking work, and `gitleaks`/`git` are subprocesses. On the event loop that stalls EVERY other
+# ── the handler that clones, and where it runs ────────────────────────────────────────────────
+# Removing pages reaches code that clones a repo, runs the nine gates and pushes — seconds of
+# blocking work, and `gitleaks`/`git` are subprocesses. On the event loop that stalls EVERY other
 # request the process is serving, the MCP tools included, for as long as the push takes.
 def _on_the_event_loop_probe(monkeypatch, method: str):
     """Replace one `AdminService` method with a probe that reports whether it was called ON the
@@ -324,22 +308,17 @@ def _on_the_event_loop_probe(monkeypatch, method: str):
     monkeypatch.setattr(AdminService, method, probe)
 
 
-@pytest.mark.parametrize("method, path, body", [
-    ("repair_approve", "/admin/api/repairs/{id}/approve", {"actor": "marc@example.com"}),
-    ("pages_delete", "/admin/api/pages/delete",
-     {"actor": "marc@example.com", "paths": ["wiki/notes/Old.md"], "why": "stale"}),
-])
-def test_an_approve_that_clones_never_runs_on_the_event_loop(conn, app, monkeypatch, method, path,
-                                                             body):
-    """Red before the fix: both handlers awaited nothing and called the blocking service method
+def test_the_deletion_that_clones_never_runs_on_the_event_loop(conn, app, monkeypatch):
+    """Red before the fix: the handler awaited nothing and called the blocking service method
     inline, so the whole clone-gate-push sat on the loop and every concurrent request waited on it.
 
     The response SHAPE is asserted too: moving the call to a worker thread must not change what the
     route returns, or the console's own JavaScript stops reading it."""
-    proposal_id = propose_repair(conn)
-    _on_the_event_loop_probe(monkeypatch, method)
+    _on_the_event_loop_probe(monkeypatch, "pages_delete")
 
-    response = _request(app, "POST", path.format(id=proposal_id), json_body=body)
+    response = _request(app, "POST", "/admin/api/pages/delete",
+                        json_body={"actor": "marc@example.com", "paths": ["wiki/notes/Old.md"],
+                                   "why": "stale"})
 
     assert response.status_code == 200
     assert response.json() == {"on_the_event_loop": False}
@@ -373,19 +352,6 @@ def test_pages_delete_on_an_unconfigured_deployment_is_the_409(conn, app):
     response = _request(app, "POST", "/admin/api/pages/delete",
                         json_body={"actor": "ops@example.com", "paths": ["wiki/notes/X.md"],
                                    "why": "stale"})
-
-    assert response.status_code == 409
-    assert "STIGMERGY_LIBRARIAN_REPO_URL" in response.json()["error"]
-
-
-def test_repairs_approve_on_an_unconfigured_deployment_is_the_409(conn, app):
-    """`app` carries a default `Settings()` — no `librarian_repo_url` — so this is the deployment
-    shape an operator meets before configuring one, and it must read as a refusal with the reason
-    rather than a 500 naming a class."""
-    proposal_id = propose_repair(conn)
-
-    response = _request(app, "POST", f"/admin/api/repairs/{proposal_id}/approve",
-                        json_body={"actor": "steward@example.com"})
 
     assert response.status_code == 409
     assert "STIGMERGY_LIBRARIAN_REPO_URL" in response.json()["error"]

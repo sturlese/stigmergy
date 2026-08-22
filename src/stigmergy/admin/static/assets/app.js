@@ -26,7 +26,7 @@ const GROUPS = [
   { label: "work", routes: [
     { hash: "captures", icon: "captures", render: capturesView, window: true },
     { hash: "entities", icon: "entities", render: entitiesView },
-    { hash: "repairs", icon: "repairs", render: repairsView, window: true },
+    { hash: "repairs", icon: "repairs", render: repairsView },
   ] },
   { label: "health", routes: [
     { hash: "gardener", icon: "gardener", render: gardenerView, window: true },

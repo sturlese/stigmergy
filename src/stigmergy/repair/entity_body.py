@@ -7,7 +7,7 @@ anything but one page's prose**:
 
   · the page is in the entity zone and declares `type: entity`, both checked;
   · everything down to and including the page's own `# Title` survives BYTE FOR BYTE — the
-    frontmatter block, the template's comment, the H1 — so a steward approving a draft is not
+    frontmatter block, the template's comment, the H1 — so a body draft is not
     also approving a change to `entity:`, `acl:` or `status:`;
   · exactly two frontmatter lines may differ, and only in place: `updated:` (the apply date) and
     `role:` (only when the page declares an EMPTY one — a role somebody wrote is a statement of
@@ -45,7 +45,7 @@ ENTITY_ZONE_PREFIX = "wiki/entities/"
 
 # What `deletion.page_refusal` — the ONE confinement predicate this package has — says on this
 # kind's behalf. The checks are shared because they are a security predicate; the sentences are not,
-# because a steward reads them and they have to name what a BODY DRAFT would have done to the page.
+# because they are read afterwards and have to name what a BODY DRAFT did to the page.
 # `require_readable` is left off deliberately: the read below is a separate finding
 # (`unreadable-target`), since a page that exists but cannot be decoded is a different problem from
 # one that is not there.
@@ -132,7 +132,7 @@ _UNPARSEABLE_PAGE = {
         "the body starts"),
     "no-h1": (
         "{path} has no `# Title` line, so there is no point to cut the body at — and inventing a "
-        "title is the identity decision entity birth reserves for a steward"),
+        "title is the identity decision the birth fold reserves for the capture that made it"),
 }
 
 
@@ -165,13 +165,13 @@ def validate(worktree: str, ops, *, link_names: set[str] | None = None) -> list[
     The dead-link question is asked HERE rather than left to the gates because the knowledge
     repo's own contract linter treats an unresolvable `[[wikilink]]` as an ERROR, and
     `gate_contract` turns that into a veto — so a draft citing a page that does not exist would be
-    a proposal a steward can approve and code can never apply.
+    a repair that reads as valid and that code can never apply.
     """
     ops = list(ops or ())
     if len(ops) != 1:
         return [_finding("one-op",
                          f"an {OP_KIND} proposal carries exactly one draft for one page, not "
-                         f"{len(ops)}: a steward approving a body is reading THAT page's prose")]
+                         f"{len(ops)}: a body draft is one page's prose, and one page's only")]
     op = ops[0]
     path = str(op.get("path", ""))
     body = str(op.get("body_markdown", ""))
@@ -217,7 +217,7 @@ def validate(worktree: str, ops, *, link_names: set[str] | None = None) -> list[
         out.append(_finding("no-updated-line",
                             f"{path} declares no `updated:` line — this kind rewrites that line in "
                             f"place and never appends one, which would move frontmatter the "
-                            f"steward did not read", path))
+                            f"reader never saw", path))
 
     out += _role_findings(parsed, role, path=path)
     out += _body_findings(worktree, body, path=path, link_names=link_names)

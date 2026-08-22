@@ -50,7 +50,7 @@ function hero(sums, overview, metrics, days, pipelineNode) {
     [sums.failed || 0, "could not finish", "fail"],
     [(sums.queued || 0) + (sums.claimed || 0), "still moving", "model"],
   ];
-  const waiting = (metrics.repairs && metrics.repairs.pending) || 0;
+  const repaired = (metrics.repairs && metrics.repairs.applied) || 0;
   return el("div", { class: "hero-wrap" },
     el("div", { class: "hero-card" },
       el("div", { class: "eyebrow" }, "landed in git"),
@@ -65,7 +65,7 @@ function hero(sums, overview, metrics, days, pipelineNode) {
       el("div", { class: "statline" },
         el("span", {}, "in flight ", el("strong", {}, String(overview.in_flight.length))),
         el("span", {}, "queued ", el("strong", {}, String(overview.queue.counts.queued || 0))),
-        el("span", {}, "repairs waiting ", el("strong", {}, String(waiting)))),
+        el("span", {}, "repairs applied ", el("strong", {}, String(repaired)))),
       el("div", { class: "row", style: { marginTop: "14px" } },
         link("captures", el("span", { class: "btn primary small" }, "All captures")),
         link("repairs", el("span", { class: "btn small" }, "Repairs")))),
@@ -262,7 +262,7 @@ function ingestCard(overview) {
 
 function gardenerCard(overview) {
   const severity = overview.gardener.severity_counts || {};
-  const segments = ["sla", "warn", "info"].map((s) => ({ key: s, label: s, value: severity[s] || 0, color: s === "sla" ? "fail" : s === "warn" ? "human" : "code" }));
+  const segments = ["warn", "info"].map((s) => ({ key: s, label: s, value: severity[s] || 0, color: s === "warn" ? "human" : "code" }));
   return card({ title: "Corpus health", sub: overview.gardener.run ? `latest gardener run ${relTime(overview.gardener.run.finished_at)}` : "no completed gardener run yet", actions: [link("gardener", el("span", { class: "btn small ghost" }, "Gardener"))] },
     partToWhole({ segments }),
     el("div", { class: "row", style: { marginTop: "10px" } }, Object.entries(severity).map(([s, n]) => el("span", { class: "row" }, severityPill(s), el("span", { class: "sub" }, `${n}`)))));

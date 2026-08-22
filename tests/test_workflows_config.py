@@ -25,7 +25,6 @@ RETENTION = CRON_TEMPLATES / "retention-purge.yml"
 INDEX_REBUILD = CRON_TEMPLATES / "index-rebuild.yml"
 CI = WORKFLOWS / "ci.yml"
 GARDENER = CRON_TEMPLATES / "gardener.yml"
-REPAIR = CRON_TEMPLATES / "repair-propose.yml"
 
 
 def _workflow(path: pathlib.Path) -> dict:
@@ -160,7 +159,7 @@ def test_the_four_crons_are_scheduled_in_the_order_each_ones_inputs_require():
     `retention-purge` and the gardener both read; the gardener's findings are the repair
     proposer's only input, so a proposer running first would propose against yesterday's."""
     order = [("index-rebuild", INDEX_REBUILD), ("retention-purge", RETENTION),
-             ("gardener", GARDENER), ("repair-propose", REPAIR)]
+             ("gardener", GARDENER)]
     crons = [(name, _schedule_cron(_workflow(path))) for name, path in order]
     minutes = [_minute_of_day(cron) for _name, cron in crons]
 
@@ -241,79 +240,26 @@ def test_gardener_reuses_the_existing_dsn_and_openai_secrets_not_new_ones():
     assert "secrets.OPENAI_API_KEY" not in retention_text
 
 
-def test_gardener_carries_its_own_slack_and_channel_configuration():
-    """The two names the gardener/digest settings modules read
-    (`SLACK_BOT_TOKEN_ENV`/`DIGEST_CHANNEL_ID_ENV`) must actually reach the workflow's env block —
-    a real secret (a bot token) and a real repository VARIABLE (a channel id is not a credential),
-    matching the header comment's own stated distinction."""
+def test_gardener_carries_no_slack_credential_at_all():
+    """`stigmergy-gardener` posts nothing and holds nothing to post with — the package imports no
+    Slack gateway and no channels file. A bot token or a channel id reaching this workflow's env
+    block would mean somebody had wired a notification lane back into a job whose findings the
+    worker's repair pass already answers."""
     text = GARDENER.read_text(encoding="utf-8")
-    assert "secrets.SLACK_BOT_TOKEN" in text
-    assert "vars.STIGMERGY_DIGEST_CHANNEL_ID" in text
-
-
-# ── the repair proposer's cron ─────────────────────────────────────────────────────────────────
-# The sibling coverage `gardener.yml` earned above, applied to the fourth cron in the same change
-# that added it — this file's own header records what happens otherwise. What is DIFFERENT here and
-# worth tests of its own: this job proposes and cannot apply, so its secret surface must stay
-# strictly smaller than the gardener's, and a future edit that hands it a push credential is exactly
-# what `test_the_repair_proposer_carries_no_credential_that_could_write` is watching for.
-def test_repair_propose_workflow_exists_and_is_scheduled_with_workflow_dispatch():
-    assert REPAIR.is_file(), "repair-propose.yml is missing — the daily repair-proposal cron"
-    config = _workflow(REPAIR)
-    assert "jobs" in config
-    triggers = config.get("on") or config.get(True)
-    assert triggers["schedule"], "no cron entry under `schedule`"
-    assert "workflow_dispatch" in triggers, "no manual on-demand trigger — an operator cannot re-run it"
-
-
-def test_repair_propose_declares_read_only_contents_permission():
-    """Least privilege, and here it is not merely hygiene: this job's whole design is that it
-    proposes and cannot apply. Write permission on `contents` would be the first step towards a
-    workflow that fixes the corpus by itself, which is the thing ADR 039 exists to refuse."""
-    assert _workflow(REPAIR).get("permissions", {}).get("contents") == "read"
-
-
-def test_repair_propose_serializes_concurrent_runs_without_cancelling_an_in_flight_one():
-    """`gardener.yml`'s posture, for the same collision (schedule + a manual dispatch landing close
-    together) — and one extra consequence worth naming: two overlapping passes would re-derive the
-    same repairs and meet each other on the pending-key unique index, which is bounded but noisy."""
-    concurrency = _workflow(REPAIR).get("concurrency")
-    assert concurrency is not None, "no top-level concurrency: block"
-    assert concurrency.get("group") == "repair-propose"
-    assert concurrency.get("cancel-in-progress") is False
-
-
-def test_repair_propose_invokes_the_propose_command_and_never_an_apply():
-    """`stigmergy-repair` HAS no `apply`, and this asserts the workflow does not reach for one
-    anyway — a benign-looking `run:` line is how a scheduled job would quietly become the
-    autonomous fixer this loop is built not to be."""
-    text = REPAIR.read_text(encoding="utf-8")
-    assert "stigmergy-repair propose" in text
-    assert "stigmergy-repair apply" not in text
-
-
-def test_the_repair_proposer_carries_no_credential_that_could_write():
-    """The secret surface is strictly SMALLER than the gardener's, and that is a property of the
-    design rather than an accident of what it happened to need: the proposer reads pages and writes
-    rows in Postgres, so it needs the DSN and a model key and nothing else. No Slack token (it
-    notifies nobody) and, above all, no GitHub App credential — the apply happens in the server
-    process, behind a human, and a push credential on this job would put one in a machine's hands."""
-    text = REPAIR.read_text(encoding="utf-8")
+    assert "SLACK_BOT_TOKEN" not in text
+    assert "STIGMERGY_DIGEST_CHANNEL_ID" not in text
+    # The benign twin, in the same call: the two secrets it DOES carry are still there, so a
+    # workflow that had lost its whole env block could not pass the two assertions above.
     assert "secrets.INDEX_DSN" in text
     assert "secrets.OPENAI_API_KEY" in text
-    assert "SLACK_BOT_TOKEN" not in text
-    for app_credential in ("STIGMERGY_LIBRARIAN_APP_ID", "STIGMERGY_LIBRARIAN_PRIVATE_KEY",
-                           "STIGMERGY_LIBRARIAN_INSTALLATION_ID"):
-        assert app_credential not in text, (
-            f"{app_credential} reached the proposer's env — this job proposes and cannot apply")
 
 
 def test_every_cron_template_is_gated_on_the_same_crons_enabled_switch():
     """One switch for every cron template, so an operator adopting the platform turns them on
-    together rather than discovering a fourth one later. Globbed, not listed: a fifth template
-    added without the gate is a job that starts firing on a repo that never opted in."""
+    together rather than discovering another one later. Globbed, not listed: a template added
+    without the gate is a job that starts firing on a repo that never opted in."""
     templates = sorted(CRON_TEMPLATES.glob("*.yml"))
-    assert len(templates) == 4, f"expected four cron templates, found {[p.name for p in templates]}"
+    assert len(templates) == 3, f"expected three cron templates, found {[p.name for p in templates]}"
     for path in templates:
         assert "vars.STIGMERGY_CRONS_ENABLED == 'true'" in path.read_text(encoding="utf-8"), (
             f"{path.name} is not gated on STIGMERGY_CRONS_ENABLED")
@@ -345,11 +291,11 @@ def test_every_workflow_pins_its_actions_to_a_full_commit_sha(workflow):
 
 
 
-def test_ci_workflow_stays_keyless_and_untouched_by_the_gardener_secrets():
-    """The keyless rule, extended to this workflow's own two new names: `ci.yml` (tests/lint) must
-    carry neither the Slack bot token nor the digest channel variable — CI exercises the offline
-    `FakeGardenerSweep`/`FakeSlackGateway` (`CLEAN_LLM=fake`) instead, never a real key or a real
-    post."""
+def test_ci_workflow_stays_keyless_and_untouched_by_the_corpus_health_names():
+    """The keyless rule over the three names a corpus-health run could otherwise smuggle in:
+    `ci.yml` (tests/lint) carries neither the Slack bot token, nor the digest's channel variable,
+    nor a real gardener model — CI exercises the offline `FakeGardenerSweep`/`FakeSlackGateway`
+    (`CLEAN_LLM=fake`) instead, never a real key or a real post."""
     ci_text = CI.read_text(encoding="utf-8")
     assert "SLACK_BOT_TOKEN" not in ci_text
     assert "STIGMERGY_DIGEST_CHANNEL_ID" not in ci_text

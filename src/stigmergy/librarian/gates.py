@@ -77,7 +77,7 @@ class GateContext:
     linter_path: str = ""
     gitleaks_bin: str = "gitleaks"
     # How long ONE subprocess a gate runs may take. TOLD, never inferred: the worker holds a lease
-    # and has all night (`None`, today's behaviour), while `repair.remote` runs these same gates on
+    # and has all night (`None`, today's behaviour), while `repair.apply` runs these same gates on
     # the thread an HTTP request arrived on, where an unbounded `gitleaks` or contract linter pins
     # a server worker until somebody restarts the process.
     subprocess_timeout_s: float | None = None
@@ -255,7 +255,7 @@ def gate_zone(ctx: GateContext) -> list[Finding]:
             #
             # The per-type check below is skipped along with the page-shape one, and it has to be:
             # a derived file has no page TYPE and its folder implies none. What still bounds a
-            # CREATION here is the caller — `repair.remote`'s cross-check requires every entry in
+            # CREATION here is the caller — `repair.apply`'s cross-check requires every entry in
             # an `entity-alias` diff to be a modification, and its plan refuses a corpus with no
             # registry to regenerate.
             if path not in ctx.expected_bytes:
@@ -601,7 +601,7 @@ def _gitleaks_dir(scratch: str, gitleaks_bin: str, *, timeout_s: float | None = 
              "--report-format", "json", "--report-path", "-"],
             capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired as ex:
-        # A CONFIG error, like every other way this scanner can fail to run: `repair.remote`'s
+        # A CONFIG error, like every other way this scanner can fail to run: `repair.apply`'s
         # `except LibrarianError` seam turns it into a recorded failure on the proposal, and the
         # worker's own routing already knows this class.
         raise LibrarianConfigError(
@@ -898,7 +898,7 @@ def gate_contract(ctx: GateContext) -> list[Finding]:
 
     The FILTER is what a second caller needs the raw scan for: this gate answers "is the change
     this capture made contract-clean", which is the right question for every kind of write whose
-    blast radius is its own diff. `repair.remote`'s `delete` kind is the one whose is not, and it
+    blast radius is its own diff. `repair.apply`'s `delete` kind is the one whose is not, and it
     reads `lint_report` directly rather than asking this gate to stop filtering.
     """
     report = lint_report(ctx.worktree, ctx.linter_path, timeout_s=ctx.subprocess_timeout_s)

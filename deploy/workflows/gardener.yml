@@ -17,11 +17,11 @@ name: gardener
 # Placed after `index-rebuild` (04:17) and `retention-purge` (04:42) so the corpus view the
 # gardener reads is the morning's, not last night's.
 #
-# Secret surface: `INDEX_DSN`/`OPENAI_API_KEY` (shared with `index-rebuild.yml`) plus
-# `SLACK_BOT_TOKEN` for the SLA notice. `STIGMERGY_DIGEST_CHANNEL_ID` and
-# `STIGMERGY_GARDENER_MODEL` are repository VARIABLES, not secrets — a Slack channel id and a model
-# name are not credentials. They are also not masked in logs, which is a second reason this
-# workflow belongs in a private repository.
+# Secret surface: `INDEX_DSN`/`OPENAI_API_KEY`, both shared with `index-rebuild.yml` — and nothing
+# else. The gardener posts nowhere and holds no Slack credential; findings reach a person through
+# `stigmergy-digest` and the admin console. `STIGMERGY_GARDENER_MODEL` is a repository VARIABLE,
+# not a secret — a model name is not a credential. Variables are also not masked in logs, which is
+# a second reason this workflow belongs in a private repository.
 on:
   schedule:
     - cron: "7 5 * * *"   # daily, ~05:07 UTC — after index-rebuild's 17 4 and retention-purge's 42 4
@@ -32,8 +32,8 @@ permissions:
 
 # Concurrency: the realistic collision is cron + a manual `workflow_dispatch` (or a retry of one)
 # landing close together. Overlap is genuinely bounded (append-only findings, per-run ids,
-# forward-only watermarks; worst case is a duplicate post, a duplicate SLA notice and doubled model
-# spend), but closing the one realistic Actions-vs-Actions overlap is a single line.
+# forward-only watermarks; worst case is a duplicate run and doubled model spend), but closing the
+# one realistic Actions-vs-Actions overlap is a single line.
 # `cancel-in-progress: false`: a queued run WAITS rather than kills an in-flight one — cancelling a
 # gardener run mid-write would discard real, already-computed work for no benefit. A concurrent
 # LOCAL run is a DIFFERENT collision this group cannot see at all, and stays operator-owned.
@@ -62,14 +62,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install "git+https://github.com/${{ vars.STIGMERGY_PLATFORM_REPO || 'sturlese/stigmergy' }}.git@${{ vars.STIGMERGY_PLATFORM_REF || 'main' }}"
 
-      # Findings + job_runs persisted, the severity-grouped report printed, an SLA notice posted
-      # (SlackApiError/GardenerError on that ONE precondition are the only things that make this
-      # step itself fail — the deterministic checks and the sweep are otherwise independent).
+      # Findings + job_runs persisted and the severity-grouped report printed. A failed model pass
+      # exits nonzero without withholding the deterministic findings, which are committed first.
       - name: stigmergy-gardener — the deterministic checks + the model editorial sweep
         run: stigmergy-gardener --repo stigmergy-knowledge
         env:
           STIGMERGY_INDEX_DSN: ${{ secrets.INDEX_DSN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           STIGMERGY_GARDENER_MODEL: ${{ vars.STIGMERGY_GARDENER_MODEL }}
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          STIGMERGY_DIGEST_CHANNEL_ID: ${{ vars.STIGMERGY_DIGEST_CHANNEL_ID }}

@@ -3,23 +3,21 @@
     stigmergy-gardener [--repo PATH] [--dsn DSN] [--json]
 
 Findings present -> exit 0 (findings are data, not errors); a failed run -> nonzero. The only
-module in the package that imports `stigmergy.index.store` or `stigmergy.slack.bolt_gateway` —
-every other module takes `conn`/`gateway` as plain arguments.
+module in the package that imports `stigmergy.index.store` — every other module takes `conn` as a
+plain argument.
 """
 import argparse
 import asyncio
-import os
 import sys
 
 from stigmergy.capture import schema as capture_schema
 from stigmergy.gardener import report, run
 from stigmergy.gardener.errors import GardenerError
 from stigmergy.gardener.schema import ensure_gardener_schema
-from stigmergy.gardener.settings import SLACK_BOT_TOKEN_ENV, GardenerSettings
+from stigmergy.gardener.settings import GardenerSettings
 from stigmergy.index import store
 from stigmergy.librarian import config as librarian_config
 from stigmergy.server.errors import StartupError
-from stigmergy.slack import channels
 
 EXIT_ERROR = 1
 EXIT_CONFIG = 2
@@ -48,32 +46,17 @@ def _repo(args) -> str:
     return librarian_config.repo_path(args.repo)
 
 
-def _gateway():
-    """The real Slack gateway, or `None` when no bot token is configured — only a problem if this
-    run actually produces an `sla` finding. The SDK-reaching import stays lazy, inside this
-    function."""
-    token = os.environ.get(SLACK_BOT_TOKEN_ENV)
-    if not token:
-        return None
-    from stigmergy.slack.bolt_gateway import build_gateway
-    return build_gateway(token)
-
-
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="stigmergy-gardener",
-        description="Nine deterministic corpus-health checks, run on demand: findings persisted, "
-                    "a severity-grouped report printed, an SLA notice posted for anything urgent.")
+        description="Deterministic corpus-health checks plus a bounded model sweep, run on "
+                    "demand: findings persisted, a severity-grouped report printed.")
     ap.add_argument("--dsn", default=None,
                     help=f"Postgres DSN (default: ${store.DSN_ENV} or {store.DSN_DEFAULT})")
     ap.add_argument("--repo", default=None,
                     help=f"your clone of the knowledge repo, for the entity registry and view "
                          f"staleness (default: ${librarian_config.REPO_ENV} or "
                          f"{librarian_config.REPO_DEFAULT})")
-    ap.add_argument("--channels", default=None,
-                    help="path to slack-channels.json, for the SLA notice's own channel-scoping "
-                         "audiences (default: <repo>/ops/slack-channels.json — mirrors "
-                         "stigmergy-digest's identical flag)")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
     return ap
 
@@ -81,10 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _run(conn, args) -> int:
     settings = GardenerSettings.from_args(args)   # may raise StartupError — a bad threshold env
     repo = _repo(args)
-    channels_path = args.channels or channels.default_path(repo)
-    gateway = _gateway()
-    result = asyncio.run(run.run_gardener(conn, repo=repo, settings=settings,
-                                          channels_path=channels_path, gateway=gateway))
+    result = asyncio.run(run.run_gardener(conn, repo=repo, settings=settings))
 
     if args.json:
         print(report.render_json(result.findings))
@@ -106,8 +86,8 @@ def _run(conn, args) -> int:
             duplicate_entity_failed=bool(result.duplicate_entity_error),
             duplicate_entity_deferred=result.duplicate_entity_deferred_count), end="")
 
-    # A model-pass outage and a notice failure are independent, and so are the three model passes;
-    # every one of them leaves the already-committed report above intact.
+    # The three model passes fail independently; every one of them leaves the already-committed
+    # report above intact.
     failed = False
     if result.sweep_error:
         _err(f"the model sweep failed ({result.sweep_error}) — the {len(result.findings)} "
@@ -127,9 +107,6 @@ def _run(conn, args) -> int:
             f"entity was compared against another this run (that pass is one call over the whole "
             f"registry), and it will run again next time. See job_runs for this run's recorded "
             f"outcome.")
-        failed = True
-    if result.notice_error:
-        _err(f"the SLA notice could not be posted: {result.notice_error}")
         failed = True
     return EXIT_ERROR if failed else 0
 

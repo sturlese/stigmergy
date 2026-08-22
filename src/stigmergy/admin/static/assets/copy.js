@@ -23,9 +23,7 @@ export const KEY = {
 // workflow states — with its human label and who decided it. Keyed on the raw word; an unknown
 // word renders as itself.
 export const WORD = {
-  approved: { label: "approved", who: "model" },
-  rejected: { label: "declined", who: "code" },
-  applied: { label: "applied", who: "git" }, pending: { label: "waiting", who: "human" },
+  applied: { label: "applied", who: "git" }, skipped: { label: "skipped", who: "code" },
   failed: { label: "failed", who: "fail" }, failure: { label: "failed", who: "fail" },
   ok: { label: "ok", who: "git" }, success: { label: "succeeded", who: "git" },
   error: { label: "error", who: "fail" }, partial: { label: "partial", who: "human" },
@@ -64,14 +62,19 @@ export function status(word) {
 // Which statuses a chart stacks, in the order that keeps red and green apart (CVD).
 export const OUTCOME_ORDER = ["filed", "resolved", "queued", "claimed", "rejected", "failed"];
 
-// ── repair kinds ─────────────────────────────────────────────────────────────────────────────
+// ── repairs: the ledger's outcomes, and its kinds ────────────────────────────────────────────
+// The order a repair chart stacks its outcomes in, and it is not the server's: `applied` is green
+// and `failed` is red, so `skipped` (grey) sits between them — the same CVD rule `OUTCOME_ORDER`
+// keeps above. An outcome missing from this list is appended by the view, never dropped.
+export const REPAIR_OUTCOME_ORDER = ["applied", "skipped", "failed"];
+
 export const REPAIR_KIND = {
   edits: { label: "Additive edits",
     explain: "a link added to a page's related list, and for overlap or contradiction a "
       + "one-sentence callout — nothing is rewritten or deleted" },
   "entity-body": { label: "Drafted entity body",
-    explain: "replaces the page's body below its title with a draft the model wrote; reading "
-      + "the draft IS the review" },
+    explain: "replaces the page's body below its title with prose the model wrote — bytes that "
+      + "landed in the corpus before any person read them" },
   delete: { label: "Page removal",
     explain: "pages stop existing, and every page that linked to them is rewritten so the "
       + "link is gone — undoing it means a revert in the knowledge repo" },
@@ -133,7 +136,6 @@ export function check(slug) {
 }
 
 export const SEVERITY = {
-  sla: { label: "urgent", explain: "triggers the Slack notice — nothing produces one yet" },
   warn: { label: "warning", explain: "worth a look this week" },
   info: { label: "note", explain: "good to know; nothing is wrong" },
   error: { label: "error", explain: "the substrate is inconsistent — fix before trusting answers" },
@@ -158,15 +160,10 @@ export const JOB = {
     consequence: "strips the payload and the placement hints from every capture that has been terminal for {days} days — permanently, in GitHub Actions, against this database. Id, submitter, timestamps, state and result pointer survive; evidence blobs are untouched. Leave Dry run ticked to list what it would take without touching anything (Captures → Retention purge previews the exact rows).",
   },
   "gardener.yml": {
-    purpose: "runs the deterministic corpus-health checks and the model passes; findings persist "
-      + "and the Repairs proposer reads them next morning",
+    purpose: "runs the deterministic corpus-health checks and the model passes; findings persist, "
+      + "and the worker's repair pass answers them on its next run",
     truth: "the latest gardener job row",
-    consequence: "runs the deterministic checks AND the model passes in GitHub Actions — real model spend; findings persist to this database and feed tomorrow's repair proposals.",
-  },
-  "repair-propose.yml": {
-    purpose: "reads the gardener's findings and drafts repair proposals — it applies nothing",
-    truth: "the latest repair-propose job row",
-    consequence: "reads the latest gardener findings and proposes repairs in GitHub Actions — real model spend. It applies nothing: every proposal lands pending, for the Repairs page.",
+    consequence: "runs the deterministic checks AND the model passes in GitHub Actions — real model spend; findings persist to this database, and the librarian worker derives and applies repairs from them on its own schedule (Repairs shows what it did).",
   },
 };
 
@@ -178,7 +175,7 @@ export function jobConsequence(file, title, retentionDays) {
 
 export const JOB_NAME = {
   gardener: "Gardener run",
-  "repair-propose": "Repair proposer",
+  repair: "Repair pass",
   "capture-purge": "Retention purge",
   "capture-purge-dry-run": "Retention purge (dry run)",
   "webhook-index-upsert": "Incremental index upsert",
@@ -229,14 +226,14 @@ export const PAGE = {
     ],
   },
   repairs: {
-    title: "Repairs", purpose: "fixes the nightly proposer drafted from the gardener's findings",
+    title: "Repairs", purpose: "what the repair pass changed in the corpus, and the diff it pushed",
     read: [
-      "Every proposal is one approvable change. Approve applies exactly its edits through the "
-      + "librarian's nine gates as one commit; Decline records why, which stops it being proposed "
-      + "again.",
-      "Read what it would change — for a drafted body the draft IS the review; for a removal, "
-      + "which pages stop existing.",
-      "A failed row is an apply a gate refused, kept visible with its reason.",
+      "A repair is derived from a gardener finding, validated, gated and applied in ONE pass — "
+      + "nothing waits on a person, so this page is a ledger of what happened, not a queue.",
+      "An applied row landed a commit. Open it and read the diff: nobody read those bytes before "
+      + "they were pushed, and a revert in the knowledge repo is the only undo.",
+      "A failed row is a repair a gate or its own validator refused — nothing was written, and it "
+      + "is not retried. A skipped row never became a repair at all, and says why.",
     ],
   },
   gardener: {

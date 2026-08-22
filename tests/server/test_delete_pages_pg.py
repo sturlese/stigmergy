@@ -109,21 +109,26 @@ def test_an_unrestricted_callers_deletion_lands_as_one_commit_in_the_same_call(e
     assert before != _remote_page(env.bare, corpus["in_prose"])
 
 
-def test_the_row_is_born_approved_in_the_callers_name_and_is_never_pending(env, conn, corpus):
-    """ADR 043 D2's bookkeeping half. The console's history, the metrics and the ledger keep their
-    source of truth — one `repair_proposals` row — and the inbox never lists a question whose
-    answer was given in the same breath as the question."""
-    assert repair_store.pending_proposals(conn) == []
+def test_the_row_lands_applied_and_carries_the_diff_that_reached_main(env, conn, corpus):
+    """ADR 043 D2's bookkeeping half, and ADR 044's: a person's own deletion goes through the SAME
+    `repair.apply` door the worker's repairs go through and lands in the SAME ledger under the same
+    three outcomes, so the console's history and the metrics keep one source of truth.
+
+    What differs is one field. `actor` names the person, which is what puts their name in the
+    commit's `Approved-by:` trailer where a worker-derived repair carries a `Repair:` line — and it
+    is the reason this is the one repair in the system a human decides."""
+    assert repair_store.recent(conn) == []
 
     result = _delete(env, conn, [corpus["doomed"]])
 
-    row = repair_store.proposal(conn, result["proposal_id"])
+    row = repair_store.repair(conn, result["repair_id"])
     assert row["status"] == repair_schema.STATUS_APPLIED
-    assert row["decided_by"] == STEWARD
     assert row["applied_commit"] == result["commit"]
     assert row["kind"] == repair_schema.KIND_DELETE
     assert row["rationale"] == WHY
-    assert repair_store.pending_proposals(conn) == [], "it was never a question for anybody"
+    assert row["diff"].startswith("diff --git")
+    assert f"Approved-by: {STEWARD}" in gitcmd.run("log", "-1", "--format=%B", "main",
+                                                    cwd=env.bare).stdout
 
 
 def test_the_response_carries_the_diff_because_nobody_read_the_prose_first(env, conn, corpus,
@@ -178,13 +183,13 @@ def test_a_scoped_caller_is_refused_before_anything_is_cloned(env, conn, corpus,
     def never(*_a, **_k):
         raise AssertionError("the repo was cloned for a caller who may not delete anything")
 
-    monkeypatch.setattr(review.repair_remote, "cloned", never)
+    monkeypatch.setattr(review.repair_apply, "cloned", never)
 
     with pytest.raises(review.ReviewError) as caught:
         _delete(env, conn, [corpus["doomed"]], identity=ALICE, audiences={"sales"})
 
     assert str(caught.value) == review.NOT_YOURS_TO_DECIDE
-    assert repair_store.pending_proposals(conn) == []
+    assert repair_store.recent(conn) == []
 
 
 def test_an_unattributed_call_is_refused(env, conn, corpus):
@@ -208,7 +213,7 @@ def test_a_malformed_deletion_is_refused_and_nothing_is_cloned(env, conn, monkey
     def never(*_a, **_k):
         raise AssertionError("the repo was cloned for a call that should have been refused")
 
-    monkeypatch.setattr(review.repair_remote, "cloned", never)
+    monkeypatch.setattr(review.repair_apply, "cloned", never)
 
     with pytest.raises(review.ReviewError, match=phrase):
         _delete(env, conn, paths, why=why)
@@ -223,7 +228,7 @@ def test_an_entity_page_is_refused_by_name_and_nothing_is_pushed(env, conn, corp
         _delete(env, conn, ["wiki/entities/Acme Corp.md"])
 
     assert gitcmd.run("rev-parse", "main", cwd=env.bare).stdout.strip() == before
-    assert repair_store.pending_proposals(conn) == []
+    assert repair_store.recent(conn) == []
 
 
 def test_a_reason_carrying_a_credential_is_refused_before_it_reaches_a_commit_message(env, conn,
@@ -236,7 +241,7 @@ def test_a_reason_carrying_a_credential_is_refused_before_it_reaches_a_commit_me
         _delete(env, conn, [corpus["doomed"]],
                 why=f"stale, and the token was {adversarial_payloads.GITHUB_PAT}")
 
-    assert repair_store.pending_proposals(conn) == []
+    assert repair_store.recent(conn) == []
 
 
 def test_a_sweep_the_writer_cannot_finish_lands_nothing_at_all(env, conn, corpus, monkeypatch):
@@ -252,7 +257,7 @@ def test_a_sweep_the_writer_cannot_finish_lands_nothing_at_all(env, conn, corpus
     assert corpus["in_prose"] in str(caught.value)
     assert gitcmd.run("rev-parse", "main", cwd=env.bare).stdout.strip() == before
     assert corpus["doomed"] in _remote_paths(env.bare)
-    assert repair_store.pending_proposals(conn) == []
+    assert repair_store.recent(conn) == []
     assert sum(repair_store.counts_by_status(conn).values()) == 0, (
         "a refusal before the row is inserted leaves no row at all")
 

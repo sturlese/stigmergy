@@ -3,17 +3,13 @@ covers for the meeting blind spot. Every gather_* function is windowed on a real
 boundary (the `capture.retention` clock-injection pattern, several packages over: a fixture is
 backdated via SQL, never a wall-clock sleep).
 
-The `sla`-severity findings seeded below are synthetic. No live check produces one — both arms of
-the contradiction SLA went with the canon lane — but the digest's grouping and rendering are
-severity-driven and generic, so they stay worth proving over the shape a check would emit.
+The findings seeded below name real check slugs but are written straight into
+`gardener_findings`: this file proves the digest's own grouping and windowing, never a check's
+verdict.
 """
 import datetime
 
-import pytest
-
 from stigmergy.digest import sections
-from stigmergy.gardener import notice
-from stigmergy.gardener import schema as gardener_schema
 from tests.digest import support
 
 UTC = datetime.UTC
@@ -46,23 +42,21 @@ def test_corpus_health_stale_run_predates_the_window(conn):
 
 def test_corpus_health_ok_run_groups_findings_by_severity_and_check(conn):
     support.seed_gardener_run(conn, finished_days_ago=1, findings=[
-        {"check": "contradiction-sla-open", "severity": "sla"},
-        {"check": "contradiction-sla-orphaned", "severity": "sla"},
         {"check": "stale-view", "severity": "warn"},
         {"check": "stale-view", "severity": "warn"},
         {"check": "aging-seed", "severity": "warn"},
         {"check": "orphan-page", "severity": "info"},
+        {"check": "dead-vocabulary", "severity": "info"},
     ])
 
     health = sections.gather_corpus_health(conn, since=SINCE_7D)
 
     assert health["state"] == "ok"
     assert health["run_date"] == _days_ago(1).date()
-    assert health["total"] == 6
-    assert health["counts_by_severity"] == {"sla": 2, "warn": 3, "info": 1}
-    assert health["checks_by_severity"]["sla"] == {
-        "contradiction-sla-open": 1, "contradiction-sla-orphaned": 1}
+    assert health["total"] == 5
+    assert health["counts_by_severity"] == {"warn": 3, "info": 2}
     assert health["checks_by_severity"]["warn"] == {"stale-view": 2, "aging-seed": 1}
+    assert health["checks_by_severity"]["info"] == {"orphan-page": 1, "dead-vocabulary": 1}
 
 
 def test_corpus_health_uses_the_latest_run_never_an_older_one(conn):
@@ -213,7 +207,8 @@ def test_pages_filed_excludes_a_filing_older_than_the_window(conn, repo):
     deltas = sections.gather_corpus_deltas(conn, since=SINCE_7D, until=UNTIL_NOW, audiences=set())
 
     assert deltas == {"pages_filed_count": 0, "pages_filed_titles": [],
-                      "entities_born_count": 0}
+                      "entities_born_count": 0, "repairs_applied_count": 0,
+                      "repairs_by_kind": {}}
 
 
 def test_pages_filed_never_double_counts_a_path_filed_twice(conn, repo):
@@ -280,35 +275,21 @@ def test_an_unlabelled_page_is_visible_regardless_of_audiences(conn, repo):
     assert deltas["pages_filed_count"] == 1
 
 
-# ── the two fail-closed ACL seams, held to one rule ──────────────────────────────────────────────
-# Two packages resolve "which of these paths may this channel see" independently — this one for the
-# titles it prints, `gardener.notice` for the SLA wording it posts — and they broadcast to the SAME
-# channel. Neither may be provable only for itself: a path nothing indexed cannot be shown to be
-# visible, so both must omit it, and a label the audiences do not carry must exclude the page in
-# both. The pair is deliberate (each names the other in its own docstring) and this is where the
-# shared rule is stated once.
-def _digest_visible_paths(conn, paths, audiences):
-    return set(sections._visible_pages(conn, paths, audiences=audiences))
-
-
-def _notice_visible_paths(conn, paths, audiences):
-    findings = [{"check": "twin-probe", "severity": gardener_schema.SEVERITY_SLA, "subject": path,
-                 "detail": "d", "suggested_action": "a", "_notice_page_paths": [path]}
-                for path in paths]
-    return notice._visible_page_paths(conn, findings, audiences=audiences)
-
-
-@pytest.mark.parametrize("visible_paths", [_digest_visible_paths, _notice_visible_paths],
-                         ids=["digest.sections", "gardener.notice"])
-def test_both_broadcast_acl_seams_omit_an_unindexed_and_a_mislabelled_path(conn, repo,
-                                                                          visible_paths):
+# ── the fail-closed broadcast ACL seam ───────────────────────────────────────────────────────────
+# `sections._visible_pages` is the ONE place this package asks "which of these paths may this
+# channel see", and it fails closed in both directions: a path nothing indexed cannot be SHOWN to
+# be visible, so it is omitted, and a label the destination channel's audiences do not carry
+# excludes the page. The digest is the only surface here that broadcasts, so it is the only one
+# that needs this.
+def test_the_broadcast_acl_seam_omits_an_unindexed_and_a_mislabelled_path(conn, repo):
     labelled = support.write_labelled_page(repo, "leadership/scope.md", title="Scope",
                                            acl=["leadership"])
     open_page = support.unlabelled_page(repo, "notes/open.md", title="Open")
     support.rebuild_index(conn, repo)
     never_indexed = "wiki/notes/never-indexed.md"
 
-    visible = visible_paths(conn, [labelled, open_page, never_indexed], {"finance"})
+    visible = set(sections._visible_pages(conn, [labelled, open_page, never_indexed],
+                                          audiences={"finance"}))
 
     assert never_indexed not in visible
     assert labelled not in visible
@@ -346,3 +327,47 @@ def test_entities_born_excludes_a_filing_at_or_after_until(conn):
     deltas = sections.gather_corpus_deltas(conn, since=SINCE_7D, until=UNTIL_NOW, audiences=set())
 
     assert deltas["entities_born_count"] == 0
+
+
+# ── repairs applied: counted off the ledger, by kind, and only what LANDED ─────────────────────
+def test_repairs_applied_counts_the_window_by_kind(conn, repo):
+    """The third delta. By KIND rather than by page for the reason the birth count is a count: a
+    repair names the pages it edited, and this broadcast cannot scope those to the destination
+    channel's audiences. The kinds are a closed vocabulary code owns."""
+    support.seed_applied_repair(conn, kind="edits")
+    support.seed_applied_repair(conn, kind="edits")
+    support.seed_applied_repair(conn, kind="entity-body")
+
+    deltas = sections.gather_corpus_deltas(conn, since=SINCE_7D, until=UNTIL_NOW, audiences=set())
+
+    assert deltas["repairs_applied_count"] == 3
+    assert deltas["repairs_by_kind"] == {"edits": 2, "entity-body": 1}
+
+
+def test_a_failed_or_skipped_repair_is_not_a_corpus_delta(conn, repo):
+    """Nothing changed, so nothing is reported. A failed row belongs on the console beside its
+    refusing sentence, where somebody can act on it — not in a weekly post to a channel that
+    cannot."""
+    from stigmergy.repair import store as repair_store
+
+    repair_store.record_failed(conn, run_id=0, finding_ids=[], target_paths=["wiki/notes/x.md"],
+                               ops=[{"op": "backlink", "path": "wiki/notes/x.md", "link": "Y",
+                                     "note": ""}],
+                               rationale="r", content_key="failed-key",
+                               error="the gates refused this repair")
+    repair_store.record_skipped(conn, run_id=0, finding_ids=[7], reason="no kind expresses it")
+
+    deltas = sections.gather_corpus_deltas(conn, since=SINCE_7D, until=UNTIL_NOW, audiences=set())
+
+    assert deltas["repairs_applied_count"] == 0
+    assert deltas["repairs_by_kind"] == {}
+
+
+def test_a_repair_outside_the_window_is_not_counted(conn, repo):
+    """The window is the digest's whole subject: a post about last week that counted the week
+    before would be wrong in the direction nobody checks."""
+    support.seed_applied_repair(conn, kind="edits", created_days_ago=30)
+
+    deltas = sections.gather_corpus_deltas(conn, since=SINCE_7D, until=UNTIL_NOW, audiences=set())
+
+    assert deltas["repairs_applied_count"] == 0

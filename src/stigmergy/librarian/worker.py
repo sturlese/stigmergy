@@ -258,14 +258,15 @@ def swept_clause(result: dict, settings) -> str:
 
 # ── the periodic view sweep ───────────────────────────────────────────────────────────────────
 # A view is DERIVED, so it can go stale whenever anything writes a page — an ordinary capture, a
-# Slack or Drive drop, an applied repair, an entity mint, a hand edit in the knowledge repo. The
+# Slack drop, an applied repair, an identity born with a capture, a hand edit in the repo. The
 # fix is deliberately NOT a call at each of those doors: two of them run inside the HTTP server
 # process, and any new door would have to remember. It is a state-based convergence pass that asks
 # the corpus what is divergent NOW, which covers every writer that will ever exist.
 #
-# It lives HERE, in the worker, rather than in a fifth cron: this process already holds the GitHub
-# App credential the commit needs, and `repair-propose.yml` was deliberately built with no write
-# credential at all — a cron that pushed would be a new credential surface.
+# It lives HERE, in the worker, rather than in a cron: this process already holds the GitHub App
+# credential the commit needs, and a scheduled Actions run that pushed would put that credential in
+# a runner's environment. The same argument moved the repair pass here (ADR 044), and it is why the
+# crons that remain are the three that need no credential at all.
 
 
 # The two refusals below both fail CLOSED before a single view is touched, and both exist because
@@ -326,6 +327,59 @@ def run_view_sweep(conn, deps: processing.Deps, *, should_stop=None) -> views_re
         return asyncio.run(views_regenerate.sweep(
             worktree, conn, registry=registry, branch=settings.branch, guarded=False,
             max_changes=settings.view_sweep_ceiling, should_stop=should_stop))
+
+
+def run_repairs(conn, deps: processing.Deps, *, should_stop=None):
+    """One repair pass: the latest gardener findings, derived into repairs and applied (ADR 044).
+
+    Returns `repair.run.RepairRunResult`, or `None` when the pass had nothing to run against —
+    which is the ordinary state, not a fault: a deployment whose gardener has not completed a run
+    since the last pass has no findings to answer, and saying so every idle tick would bury the
+    passes that did something.
+
+    IMPORTED HERE, not at module scope, and that is load-bearing: `repair.run` loads a model stack
+    and pulls `pydantic_ai` in with it. The worker's filing path must not pay for that at import
+    time, and `tests/test_architecture.py` pins the edge as a function-level exception.
+
+    `should_stop` is threaded down and consulted BETWEEN repairs — never inside one, because a
+    repair is a model call, the gates and a push, and abandoning it half-way is what leaves the
+    corpus in a state nobody chose.
+    """
+    from stigmergy.gardener import store as gardener_store
+    from stigmergy.repair import run as repair_run
+    from stigmergy.repair.settings import RepairSettings
+
+    latest = gardener_store.latest_completed_run(conn)
+    if latest is None:
+        return None
+    # The watermark: this pass answers a gardener run, and a pass that ran since that run finished
+    # has already answered it. Without this the loop would re-derive the same findings every
+    # interval — cheap only because the ledger's memory catches each one afterwards, which is
+    # paying for a model call to be told what a timestamp already knew.
+    last = ops.latest_run(conn, repair_run.JOB_NAME)
+    if last is not None and last.get("finished_at") and latest.get("finished_at") \
+            and last["finished_at"] >= latest["finished_at"]:
+        return None
+    return asyncio.run(repair_run.run_repairs(
+        conn, settings=RepairSettings.from_env(), repo=deps.repo,
+        branch=deps.settings.branch, worktree_root=deps.settings.worktree_root,
+        should_stop=should_stop))
+
+
+def repair_clause(result) -> str:
+    """One line about a repair pass, or `""` when it did nothing — `view_sweep_clause`'s shape, for
+    the same reason: a maintenance pass that printed "nothing to do" every interval would bury the
+    passes that changed the corpus."""
+    if result is None:
+        return ""
+    stats = result.stats
+    if not (stats["applied"] or stats["failed"] or stats["skipped_invalid"]):
+        return ""
+    line = (f"repairs: {stats['findings_seen']} finding(s) seen — {stats['applied']} applied, "
+            f"{stats['failed']} failed, {stats['skipped_known']} already answered")
+    if stats["failures"]:
+        line += " — " + "; ".join(stats["failures"][:3])
+    return line
 
 
 def _refused_sweep(conn, reason: str, *, error: type[BaseException]) -> views_regenerate.RunResult:
@@ -484,7 +538,7 @@ class Worker:
     """The long-running loop. `once` uses `process_next` directly and never constructs this."""
 
     def __init__(self, conn, deps: processing.Deps, *, on_output=print,
-                 view_sweep=run_view_sweep, now=time.monotonic):
+                 view_sweep=run_view_sweep, repair_pass=run_repairs, now=time.monotonic):
         self.conn = conn
         self.deps = deps
         self.on_output = on_output
@@ -493,10 +547,12 @@ class Worker:
         # The maintenance pass and the clock that schedules it, both injected: the interval is a
         # timing contract, and a test that had to wait one out could only prove it by sleeping.
         self._view_sweep = view_sweep
+        self._repair_pass = repair_pass
         self._now = now
         # `None` means "due at the first idle tick" — a worker that has just started converges
         # `views/` before it waits an interval, the same posture `sweep()` above already takes.
         self._view_sweep_due_at: float | None = None
+        self._repair_due_at: float | None = None
 
     def _sweep_pause_reason(self) -> str:
         """Why the view sweep should yield between entities, or `""` — read at the moment it is
@@ -572,6 +628,7 @@ class Worker:
                     # every idle tick: an empty queue polls every few seconds and a corpus parse
                     # per tick is not free.
                     self.maybe_sweep_views()
+                    self.maybe_run_repairs()
                     self._sleep(self.deps.settings.poll_interval_s)
             stats["processed"] = processed
         return processed
@@ -607,6 +664,36 @@ class Worker:
             log.error("the periodic view sweep failed; the queue keeps draining", exc_info=True)
             return True
         clause = view_sweep_clause(result)
+        if clause:
+            self.on_output(clause)
+        return True
+
+    def maybe_run_repairs(self) -> bool:
+        """Run the repair pass if its interval has elapsed. Returns whether it ran.
+
+        `maybe_sweep_views`' shape, and every sentence of that docstring applies here: skipped
+        rather than blocked, due-time scheduled BEFORE the pass so a fault cannot re-attempt every
+        tick, and a fault logged and swallowed because filing must never depend on maintenance.
+
+        What differs is what a fault costs. A view sweep that dies has regenerated nothing; a
+        repair pass that dies may have PUSHED — each repair is committed and pushed on its own —
+        so the ledger, not this method's return value, is where an operator reads what happened.
+        That is why every repair records itself before the next one is derived.
+        """
+        interval = float(self.deps.settings.repair_interval_s)
+        if interval <= config.REPAIR_PASS_OFF or self.stopping or self.releasing:
+            return False
+        now = self._now()
+        if self._repair_due_at is not None and now < self._repair_due_at:
+            return False
+        self._repair_due_at = now + interval
+        try:
+            result = self._repair_pass(self.conn, self.deps,
+                                       should_stop=self._sweep_pause_reason)
+        except Exception:  # noqa: BLE001 — best-effort maintenance; see the docstring
+            log.error("the periodic repair pass failed; the queue keeps draining", exc_info=True)
+            return True
+        clause = repair_clause(result)
         if clause:
             self.on_output(clause)
         return True

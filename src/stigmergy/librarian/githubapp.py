@@ -92,7 +92,7 @@ def _private_key(env: dict) -> str:
             return f.read()
     except OSError as ex:
         # The path is where the App's PRIVATE KEY lives and stays out of the MESSAGE:
-        # `repair.remote` catches this exception on the server-side apply path and `server.review`
+        # `repair.apply` catches this exception on the server-side apply path and `server.review`
         # echoes it to the caller verbatim, so the path goes to the operator's log at ERROR and the
         # message names ${PRIVATE_KEY_FILE_ENV} instead.
         log.error("cannot read the librarian App private key file at %r", path, exc_info=True)
@@ -189,7 +189,7 @@ def authenticated_clone_url(repo_url: str, credential) -> str:
     discarded in this same process).
 
     The ONE resolver for every server-driven clone — `entities.remote` mints through it and
-    `repair.remote` applies an approved proposal through it, so the two doors cannot come to
+    `repair.apply` clones through it for a person's deletion, so the two roads cannot come to
     disagree about when a credential is needed. Each caller re-words the three refusals below for
     its own audience; only the JUDGEMENT is shared, the same bargain `config.is_repo_checkout`
     already strikes.

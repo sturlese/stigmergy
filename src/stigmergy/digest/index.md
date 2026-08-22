@@ -50,10 +50,10 @@ change both or neither.
 - Never move the dry-run marker lines into `build_body`'s returned string — they are `cli.py`'s,
   and the byte-identity is structural because of that split.
 - Slack mrkdwn only: `*bold*` and `•`, never `#`/`##` or `-` (the opposite of `gardener.report`).
-- Never "correct" the digest's body to the `finding(s)` spelling five sibling surfaces use
-  (`gardener.report`, `gardener.cli`, `gardener.notice`, `gardener.sweep`, `index.check`). The two
+- Never "correct" the digest's body to the `finding(s)` spelling four sibling surfaces use
+  (`gardener.report`, `gardener.cli`, `gardener.sweep`, `index.check`). The two
   registers are deliberate: the digest's body is PROSE in a Slack post read by people who did not
-  ask for it, so it pluralizes its counts; those five are operator output — a terminal table, a
+  ask for it, so it pluralizes its counts; those four are operator output — a terminal table, a
   refusal, an exception — where the parenthesized form is the compact, count-agnostic convention.
   Spreading either spelling to the other side is a copy change nobody asked for.
 
