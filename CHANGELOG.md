@@ -103,6 +103,43 @@ kind of material enters at the same door.
 - the admin console loses its Inbox tab; the dashboard leads with captures filed, Captures' detail
   names the identities a capture introduced, and Entities is the registry browser plus Register
 - the weekly digest counts births from the report's `entities_born`
+- the librarian worker's idle branch carries FOUR maintenance passes, in one place
+  (`librarian/schedule.py`): the view sweep and the repair pass on their intervals, the gardener
+  and the retention purge on daily UTC times. None of them starts while a capture is waiting, and
+  each yields between units — maintenance cannot delay a filing
+- the admin console's Jobs page reads `job_runs` and nothing else; its Gardener and Index pages
+  lose their Run-now buttons and name the command instead
+
+### Removed
+The surfaces below are gone with no replacement and no compatibility shim. Each is listed with
+what to do instead, because a deployment upgrading across this release will find them missing.
+
+| Gone | Instead |
+|---|---|
+| `review_queue`, `review_decide` (MCP) | nothing — what a capture establishes is written when it files |
+| `stigmergy-meeting`, `stigmergy-drive` | `brain_submit` with `kind="meeting"` / `kind="document"` |
+| `stigmergy-entities` | the console's **Register an entity**, or `brain_submit` |
+| `stigmergy-repair` | the worker's repair pass; read the console's Repairs page |
+| `stigmergy-views` | the worker's view sweep |
+| `POST /admin/api/repairs/{id}/approve` · `/reject` | nothing — a repair is applied and recorded, never proposed |
+| `POST /admin/api/crons/{workflow_file}/dispatch` · `/enable` · `/disable` | nothing — the passes schedule themselves |
+| `GET /admin/api/crons` | `GET /admin/api/jobs` |
+| `deploy/workflows/` (3 templates) | nothing to copy anywhere: the passes run in the worker |
+| `review_decisions`, `steward_notifications` (tables) | drop them; nothing reads them |
+| `repair_proposals` (table) | renamed `repairs` in place, so history survives |
+| `ops/stewards.json` (knowledge repo) | `brain_delete` authorizes on the caller's unrestricted reach |
+| `STIGMERGY_ADMIN_GITHUB_TOKEN`, `STIGMERGY_ADMIN_GITHUB_REPO` | nothing — the console reaches no other service |
+| `STIGMERGY_CRONS_ENABLED`, and `STIGMERGY_PLATFORM_REF`/`_REPO` as Actions variables | nothing — there is no Actions job left |
+| `STIGMERGY_LIBRARIAN_REPO_URL` in `server/settings.py` | still read by `stigmergy-librarian-boot`, and there only |
+| `STIGMERGY_STEWARDS_PATH` | nothing |
+| `CONVERSION_BUDGET_S`, `kernel/converters.py`, the Drive client | nothing — every kind arrives as text |
+
+### Added
+- `STIGMERGY_LIBRARIAN_GARDEN_AT` (default `05:07` UTC) and `STIGMERGY_LIBRARIAN_RETENTION_AT`
+  (default `04:42`) — when each daily pass runs; either takes `off`. `STIGMERGY_RETENTION_DAYS`
+  (default 30) is now named as a variable rather than only as a CLI flag
+- `STIGMERGY_REPAIR_CEILING` (20) and `STIGMERGY_REPAIR_MERGE_CEILING` (3) — what one repair pass
+  may change
 
 ## [0.8.0] - 2026-08-21
 

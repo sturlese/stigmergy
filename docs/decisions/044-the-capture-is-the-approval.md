@@ -141,6 +141,15 @@ all of them only when the queue is idle. The Actions templates, the admin GitHub
 the passes off `job_runs`. `stigmergy-gardener`, `stigmergy-index --rebuild` and
 `stigmergy-queue purge` stay as local commands.
 
+**Implementation note (added when D6 landed).** This decision listed the index rebuild as a worker
+pass AND as a local command, and only one of those could be built: `librarian.bootstrap` strips
+`OPENAI_API_KEY`/`EMBED_API_KEY` before exec'ing the worker — deliberately, so the write path
+cannot reach the read path's credential — so the worker cannot embed anything at all. The rebuild
+therefore stays an operator command, the admin console names that command instead of offering a
+button that could only ever fail, and the night shift is three passes plus the view sweep. Nothing
+rebuilds the index on a schedule any more; the push webhook keeps it current between rebuilds, and
+the console's Index page lints the live index on demand so drift is visible to whoever looks.
+
 ## What this deliberately does NOT do
 
 - **It does not make a model the last word on anything.** Every diff still passes the nine gates;
