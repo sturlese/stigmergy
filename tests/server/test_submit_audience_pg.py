@@ -155,3 +155,38 @@ def test_the_resolved_label_is_still_refused_as_an_argument(indexed):
     the resolved label would be asserting the server's own answer."""
     with pytest.raises(CaptureError, match="acl is set by the server"):
         _service(indexed, STEWARD).submit("raw", "Hi.", acl=["finance"])
+
+
+# ── `brain_submissions` names pages, and is safe by construction ──────────────────────────────
+def test_your_own_submissions_name_only_pages_you_could_read(indexed):
+    """**Why the queue read needs no per-page filter, asserted rather than assumed.**
+
+    `brain_submissions` returns `result_ref` and the librarian's report, which name page paths —
+    with no `visible()` over them. It is scoped by IDENTITY: you see your own rows, and an
+    unrestricted identity sees the whole queue.
+
+    That is safe by CONSTRUCTION, and the construction is the door's rule: a capture is filed only
+    at an audience its submitter could read afterwards, so every page their own rows name is one
+    they may open. Break the door check and this read becomes a disclosure — which is why the
+    property is pinned here, beside the door, and not merely argued in a comment."""
+    conn, _fx = indexed
+    ana = _service(indexed, ANA)
+    ack = ana.submit("raw", "A payroll note for the finance folder.", audience=["finance"])
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT acl FROM capture_queue WHERE id = %s", (ack["id"],))
+        row_acl = cur.fetchone()[0]
+
+    from stigmergy.server.acl import visible
+    assert visible(row_acl, ana.audiences), (
+        "a submitter's own row carries an audience they cannot read — `brain_submissions` would "
+        "then hand them a page path they may not open")
+
+
+def test_a_scoped_identity_sees_only_its_own_rows(indexed):
+    """The other half of the construction: the identity scope itself. Ana must not see Eng's row,
+    whatever either of them filed at."""
+    _service(indexed, ENG).submit("raw", "An engineering note nobody else asked for.")
+    mine = _service(indexed, ANA).submissions(limit=50)
+    assert mine["scope"] == "own"
+    assert all(row["submitted_by"] == ANA for row in mine["submissions"]), mine

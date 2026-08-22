@@ -1600,7 +1600,15 @@ def _rel(path: pathlib.Path) -> str:
 _ACL_STORE_READ = re.compile(
     r"(?is)\b(?:from|join)\s+(?:pages_index|observations)\b"      # SQL over the two tables
     r"|\bquery_facts\s*\("                                        # a facts store's read API...
-    r"|\bfactstore\s*\.\s*\w+\s*\(")                              # ...or any other call into one
+    r"|\bfactstore\s*\.\s*\w+\s*\("                              # ...or any other call into one
+    # The SECOND reader pattern, added with ADR 045 D3. `pages_index` is not the only place a
+    # page's body and title come from: the write path deliberately reads the CHECKOUT instead
+    # (ADR 033 — "no ACL exception is needed for a write-path worker"), and that argument stopped
+    # being true the moment a model reading the checkout could be writing a page at a narrower
+    # audience than what it read. A checkout read is now the same question as an index read, and
+    # the modules that do it must answer it in a reviewed diff like everybody else.
+    r"|\bload_pages\s*\("
+    r"|\bread_entity_pages\s*\(")
 
 # **AST-based, deliberately — not `re.search` over `path.read_text()`.** A raw-text search cannot
 # tell an actual call from a comment or a docstring MENTIONING the predicate, and this repo has
@@ -1644,7 +1652,13 @@ ACL_REACHABILITY_EXCEPTIONS = {
     # scope its corpus-health queries to. `digest` is the OPPOSITE case and is deliberately absent
     # from this list: it broadcasts to a Slack channel, so it must name a real predicate at that
     # channel's audiences.
-    "gardener/checks.py": "operator tool, terminal output only, no caller identity to scope to",
+    # NOT "terminal output only": findings are PERSISTED to `gardener_findings` and rendered by
+    # the admin console, which sits behind an operator token and has no audience concept. The
+    # honest reason is the consumer, not the medium — every surface that reads these findings is
+    # an operator surface, and an operator is inside the trust boundary by construction. The day
+    # a finding reaches a reader-facing surface, this entry stops being true.
+    "gardener/checks.py": "operator tool; findings reach operator surfaces only, which have no "
+                          "caller identity to scope to",
     # The model sweep's own page-selection query reads `pages_index` for the SAME reason
     # `checks.py` does, immediately above.
     "gardener/sweep.py": "operator tool, terminal output only, no caller identity to scope to",
@@ -1659,6 +1673,27 @@ ACL_REACHABILITY_EXCEPTIONS = {
     # title or path ever crosses; the moment it needs more than counts it names a predicate like
     # everything else.
     "admin/service.py": "operator console; aggregate zone counts only, no content columns",
+    # ── checkout readers (the second pattern) ─────────────────────────────────────────────────
+    # `index/corpus.py` is the PARSER every other checkout reader goes through, and it is the
+    # layer that stores `acl` without ever deciding on it — the same posture as `index/search.py`
+    # directly above, for the same reason.
+    "index/corpus.py": "the parser every checkout reader shares; parses acl, decides nothing",
+    "index/build.py": "the index build reads the whole checkout by design; it serves nobody",
+    # These three read the checkout and hand rows to `views.skeleton`, which is where the audience
+    # filter lives (`members_of`, `backlinks_of`). One filter, at the seam every view computation
+    # shares, rather than three that can disagree about what a member is.
+    "views/staleness.py": "hands its parse to views.skeleton, which applies the filter",
+    "views/regenerate.py": "hands its parse to views.skeleton, which applies the filter",
+    # The entity zone is OPEN by contract (ADR 045 D6): an entity page never carries an audience,
+    # because the registry is the brain's shared vocabulary. Both of these read exactly that zone
+    # — the registry generator to derive `ops/entity-registry.json` from the pages, the birth
+    # writer to grow a spine — and what a RESTRICTED capture may put on one is bounded inside
+    # `identity.write_births` rather than by filtering what it reads.
+    "entities/generator.py": "reads the open-by-contract entity zone to derive the registry",
+    "librarian/identity.py": "writes the open-by-contract entity zone; D6 bounds what it may add",
+    # The alias repair rewrites `aliases:` on entity pages and the registry derived from them —
+    # the same open-by-contract zone, and the proposer that FEEDS it is scoped (`repair/run.py`).
+    "repair/entity_alias.py": "the entity zone again, open by contract; the proposer is scoped",
 }
 
 
@@ -1672,7 +1707,7 @@ def test_the_acl_store_readers_are_found_at_all():
     impossible to miss. The number is a floor, not a census — it drops only when modules that read
     these stores are genuinely deleted, and lowering it is a reviewed edit rather than a
     convenience."""
-    assert len(_acl_store_readers()) >= 7
+    assert len(_acl_store_readers()) >= 14
 
 
 @pytest.mark.parametrize("path", _acl_store_readers(), ids=_rel)
@@ -1693,6 +1728,39 @@ def test_every_reader_of_an_acl_bearing_store_enforces_or_is_a_named_exception(p
         f"(a mention in a comment or a docstring does not count — see `_uses_acl_predicate`). "
         f"Either apply `visible()`/`flows_into()`, or add it to ACL_REACHABILITY_EXCEPTIONS "
         f"in this file WITH the reason — and if the reason is 'not yet', name who owns it.")
+
+
+def test_the_checkout_reader_pattern_sees_a_reader_that_touches_no_database(tmp_path):
+    """**The red proof for the SECOND pattern.** The enumeration was SQL-shaped for its whole
+    life, and the write path reads the checkout precisely so it needs no database — which is what
+    made it invisible here, and what made "no ACL exception is needed for a write-path worker"
+    (ADR 033) read as an argument rather than as a gap. A module that opens no connection at all
+    and still puts page bodies in front of a model must be seen by this."""
+    checkout_only = tmp_path / "checkout_reader.py"
+    checkout_only.write_text(
+        "from stigmergy.index import corpus\n\n"
+        "def everything(worktree):\n"
+        "    return [r.body for r in corpus.load_pages(worktree)]\n",
+        encoding="utf-8")
+    assert _ACL_STORE_READ.search(checkout_only.read_text()), (
+        "a module reading the whole checkout is not seen as an ACL-store reader — the second "
+        "pattern has gone blind, and the write path is invisible to this file again")
+    assert _uses_acl_predicate(checkout_only) is False
+
+
+def test_flows_into_counts_as_naming_a_predicate(tmp_path):
+    """Its benign twin: the predicate a checkout reader actually uses must SATISFY the check, or
+    every scoped module would have to be listed as an exception and the list would stop meaning
+    anything."""
+    scoped = tmp_path / "scoped_checkout_reader.py"
+    scoped.write_text(
+        "from stigmergy.index import corpus\n"
+        "from stigmergy.kernel.acl import flows_into\n\n"
+        "def scoped(worktree, acl):\n"
+        "    return [r for r in corpus.load_pages(worktree) if flows_into(r.acl, acl)]\n",
+        encoding="utf-8")
+    assert _ACL_STORE_READ.search(scoped.read_text())
+    assert _uses_acl_predicate(scoped) is True
 
 
 def test_the_acl_predicate_check_cannot_be_satisfied_by_a_comment_or_a_docstring(tmp_path):

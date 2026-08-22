@@ -12,6 +12,7 @@ from stigmergy.slack.capture import (
     handle_reaction_added,
     mark_in_progress,
 )
+from stigmergy.slack.channels import channel_audiences
 from stigmergy.slack.gateway import FakeSlackGateway, SlackApiError
 from stigmergy.slack.identity import NoAccess, Resolved, TransientFailure, resolve_slack_identity
 from tests.slack.conftest import (
@@ -651,3 +652,41 @@ def test_the_refusal_reaches_the_person_and_names_the_channel_not_the_groups(
     assert "finance-team" in text, text
     assert "finance" not in text.replace("finance-team", ""), (
         "the refusal must not name the groups it checked against")
+
+
+def test_the_filed_card_goes_back_to_the_channel_that_set_the_audience(indexed, clean_tables):
+    """**Why the filed card needs no ACL filter, asserted rather than assumed.**
+
+    `slack/poller.py` posts the page path, the source page, the anchor and the names of any
+    entities born, into the thread the capture came from — with no `visible()` anywhere. That is
+    safe by CONSTRUCTION and not by a filter: the capture was filed at the groups of that very
+    channel (ADR 045 D2), so every page it names is one the channel's members may read, and the
+    card is posted where they already are.
+
+    The construction is what this pins. Two facts have to hold together, and each of them is
+    somebody's to break: the row's audience IS the channel's groups, and the report goes back to
+    the SAME channel. Break either — file at a different audience, or report into another
+    thread — and the card starts naming pages its readers may not open."""
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    _seed_thread(gw, FINANCE_CHANNEL, "300.1")
+    ctx = build_context(fixture, conn, gateway=gw)
+    identity = Resolved(email="ana@example.com", audiences=frozenset({"finance"}))
+
+    _run(handle_reaction_added(
+        ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
+        message_ts="300.1", slack_user_id="U_ANA", identity_result=identity))
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, acl FROM capture_queue ORDER BY id DESC LIMIT 1")
+        submission_id, acl = cur.fetchone()
+        cur.execute("SELECT channel_id FROM slack_submissions WHERE submission_id = %s",
+                    (submission_id,))
+        reported_to = cur.fetchone()[0]
+
+    channel_groups = sorted(channel_audiences(fixture.channels_path, FINANCE_CHANNEL))
+    assert acl == channel_groups, (
+        "the row's audience is no longer the channel's groups — the filed card's safety rests on "
+        "these being the same fact")
+    assert reported_to == FINANCE_CHANNEL, (
+        "the report goes somewhere other than the channel that set the audience")
