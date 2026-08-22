@@ -9,6 +9,22 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
+## [0.9.1] - 2026-08-22
+
+### Fixed
+- **The `repairs` status migration aborted on any database carrying a retired row, and the app
+  crash-looped.** `ALTER TABLE ... RENAME` carries a table's CONSTRAINTS with it, so a database
+  upgraded to 0.9.0 still had `repair_proposals_status_check` — which permits
+  `pending|approved|rejected|applied|failed` and does NOT permit `skipped`. The migration's own
+  `UPDATE ... SET status = 'skipped'` violated the constraint that was still standing, before the
+  swap that replaces it ever ran; `stigmergy-server` exited 2 on every start with "cannot read the
+  index (CheckViolation)". The legacy constraint is now dropped BEFORE the migration writes a value
+  it does not permit — three steps, not two, because an UPDATE has to happen in between
+- the test covering that migration dropped the constraint first and its docstring claimed "that is
+  the state the old release left the column in". That sentence was false, and it is why 0.9.0
+  shipped green: the test constructed the one state in which the migration works. Its twin now
+  starts where a real upgrade starts
+
 ## [0.9.0] - 2026-08-22
 
 **The capture is the approval** ([ADR 044](./docs/decisions/044-the-capture-is-the-approval.md), #134).
