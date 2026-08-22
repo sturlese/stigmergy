@@ -1,17 +1,22 @@
 """AdminService over the real queue/tables (stigmergy_test), and over a real bare knowledge repo
 for the decisions: every mutation lands through the SAME library seams the CLIs and the review
 lane use, so what these prove is parity, not a parallel implementation."""
+import argparse
 import asyncio
 import json
 import os
+import shutil
 import subprocess
+import sys
 
 import pytest
 
 from stigmergy.admin import schema as admin_schema
 from stigmergy.admin import service as admin_service
 from stigmergy.admin.service import (
-    CRON_WORKFLOWS,
+    INDEX_REBUILD_COMMAND,
+    NIGHT_SHIFT,
+    PURGE_DRY_RUN_JOB,
     AdminBadRequest,
     AdminNotFound,
     AdminRefused,
@@ -26,24 +31,16 @@ from stigmergy.gardener.schema import ensure_gardener_schema
 from stigmergy.gardener.store import insert_findings
 from stigmergy.index import store as index_store
 from stigmergy.librarian import config as librarian_config
-from stigmergy.librarian import gitcmd
-from stigmergy.repair import remote as repair_remote
 from stigmergy.repair import schema as repair_schema
-from stigmergy.repair import store as repair_store
-from stigmergy.repair.errors import RepairError
-from stigmergy.review_kinds import KIND_IDENTITY_PROPOSAL
-from stigmergy.server import review as server_review
 from stigmergy.server.settings import Settings
 from tests.admin.conftest import (
+    LANDED_COMMIT,
     finish_one,
-    propose_delete,
-    propose_entity_body,
-    propose_identity,
-    propose_repair,
-    publish_registry,
+    landed_delete,
+    landed_entity_body,
+    landed_repair,
+    refused_repair,
     register_entity,
-    remote_files,
-    remote_registry,
     submit_one,
 )
 
@@ -54,9 +51,8 @@ def service(conn, server_settings, admin_settings):
 
 
 @pytest.fixture()
-def gh_service(conn, server_settings, admin_settings, fake_gateway):
-    return AdminService(conn, server_settings=server_settings, admin_settings=admin_settings,
-                        gateway=fake_gateway)
+def gh_service(conn, server_settings, admin_settings):
+    return AdminService(conn, server_settings=server_settings, admin_settings=admin_settings)
 
 
 def _actions(conn):
@@ -138,7 +134,7 @@ def test_the_flagless_reclaim_leaves_a_claim_that_is_still_inside_the_workers_le
 
     OLD BEHAVIOUR: `queue_reclaim` with no explicit horizon fell back to
     `queue.DEFAULT_VISIBILITY_TIMEOUT_S` (300) while the worker's real lease is
-    the worker's own derived lease (1290 at the class default). Every capture held between those
+    the worker's own derived lease (900 at the class default). Every capture held between those
     two numbers — the long
     agent items the derived lease exists for — was requeued out from under a RUNNING worker by the
     ordinary Reclaim button, or failed outright once its attempts were spent. The read path in the
@@ -153,7 +149,7 @@ def test_the_flagless_reclaim_leaves_a_claim_that_is_still_inside_the_workers_le
     monkeypatch.delenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", raising=False)
     ack = submit_one(conn)
     queue.claim_next(conn, visibility_timeout_s=worker_visibility_timeout_s())
-    # Age the claim past the queue CLI's 300s default but well inside the worker's 1290s lease.
+    # Age the claim past the queue CLI's 300s default but well inside the worker's 900s lease.
     with conn.cursor() as cur:
         cur.execute("UPDATE capture_queue SET claimed_at = now() - interval '400 seconds' "
                     "WHERE id = %s", (ack["id"],))
@@ -166,7 +162,7 @@ def test_the_flagless_reclaim_leaves_a_claim_that_is_still_inside_the_workers_le
 
 
 def test_reclaim_still_releases_a_claim_that_outlived_the_workers_lease(conn, service, monkeypatch):
-    """The other edge of the same boundary: past 1290s the worker really is presumed dead, and the
+    """The other edge of the same boundary: past 900s the worker really is presumed dead, and the
     flagless console action must still recover the row. Moving the horizon must not turn Reclaim
     into a no-op."""
     # A check must not depend on ambient state: this one compares against the DERIVED
@@ -187,16 +183,16 @@ def test_reclaim_still_releases_a_claim_that_outlived_the_workers_lease(conn, se
 
 # ── the flagless reclaim horizon must DERIVE from the env, like the worker's real lease ────────────
 # The console USED to read `librarian_config.DEFAULT_VISIBILITY_TIMEOUT_S` — the librarian's
-# CLASS default (1290s), frozen at import time. The deployed worker's real lease
+# CLASS default (900s), frozen at import time. The deployed worker's real lease
 # derives from `$STIGMERGY_LIBRARIAN_TIMEOUT_S` (`librarian.config.Settings.from_args`; staging's
 # 600s agent budget -> 1500s). The two tests above never set that env var, so they cannot tell the
-# two numbers apart — both pass whether the console reads 1290 or the derived value, as long as
+# two numbers apart — both pass whether the console reads 900 or the derived value, as long as
 # nobody has STIGMERGY_LIBRARIAN_TIMEOUT_S exported. These do set it, explicitly, to prove the
 # horizon moves with it.
 def test_reclaim_default_horizon_derives_from_the_env_var_and_does_not_release_a_capture_still_within_it(
         conn, service, monkeypatch):
-    """OLD BEHAVIOUR: the flagless reclaim swept against the CLASS default (1290s) regardless of
-    `$STIGMERGY_LIBRARIAN_TIMEOUT_S`, so a capture aged 1400s — inside the 1890s lease staging's
+    """OLD BEHAVIOUR: the flagless reclaim swept against the CLASS default (900s) regardless of
+    `$STIGMERGY_LIBRARIAN_TIMEOUT_S`, so a capture aged 1400s — inside the 1500s lease staging's
     worker actually holds — gets swept anyway. A wasteful redelivery of an item a healthy worker
     still holds."""
     monkeypatch.setenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", "600")
@@ -209,18 +205,18 @@ def test_reclaim_default_horizon_derives_from_the_env_var_and_does_not_release_a
     result = service.queue_reclaim(actor="steward")
 
     assert result == {"released": 0, "failed": 0}, (
-        "the flagless reclaim swept a capture still inside the worker's real, env-derived 1890s "
-        "lease — it used the 1290s class default instead")
+        "the flagless reclaim swept a capture still inside the worker's real, env-derived 1500s "
+        "lease — it used the 900s class default instead")
     assert queue.current_status(conn, ack["id"]) == capture_schema.CLAIMED
     recorded = _actions(conn)[0]
-    assert recorded["args"]["visibility_timeout_s"] == 1890, (
+    assert recorded["args"]["visibility_timeout_s"] == 1500, (
         "admin_actions must record the horizon actually swept against, not the class default")
 
 
 def test_reclaim_default_horizon_falls_back_to_the_class_default_with_no_env_var(
         conn, service, monkeypatch):
     """Benign twin: with no env var, the flagless reclaim must still release a capture that has
-    genuinely outlived the class-default 1290s lease — deriving the horizon must not turn Reclaim
+    genuinely outlived the class-default 900s lease — deriving the horizon must not turn Reclaim
     into a no-op for the ordinary, unconfigured case. Complements
     `test_reclaim_still_releases_a_claim_that_outlived_the_workers_lease` above (which relies on
     the ambient environment simply never having set the var) with an explicit `delenv` and a check
@@ -238,7 +234,7 @@ def test_reclaim_default_horizon_falls_back_to_the_class_default_with_no_env_var
     assert result == {"released": 1, "failed": 0}
     assert queue.current_status(conn, ack["id"]) == capture_schema.QUEUED
     recorded = _actions(conn)[0]
-    assert recorded["args"]["visibility_timeout_s"] == 1290
+    assert recorded["args"]["visibility_timeout_s"] == 900
 
 
 def test_purge_dry_run_changes_nothing_and_the_real_run_purges(conn, service):
@@ -290,28 +286,28 @@ def test_worker_status_reads_the_lease_against_the_workers_own_numbers(conn, ser
 # ── the console meter must DERIVE its lease, not default to the librarian's class
 # constant ─────────────────────────────────────────────────────────────────────────────────────
 # The console USED to resolve its lease ONCE, at import time, from the librarian's CLASS
-# default (1290s) — never from `$STIGMERGY_LIBRARIAN_TIMEOUT_S`. The deployed worker's REAL lease derives from that
-# env var (`librarian.config.Settings.from_args`: staging's 600s agent budget -> 1890s). An item
-# legitimately in flight between 1290s and 1890s therefore reads "lease expired" on every one of
+# default (900s) — never from `$STIGMERGY_LIBRARIAN_TIMEOUT_S`. The deployed worker's REAL lease derives from that
+# env var (`librarian.config.Settings.from_args`: staging's 600s agent budget -> 1500s). An item
+# legitimately in flight between 900s and 1500s therefore reads "lease expired" on every one of
 # these three readers, and `queue_reclaim`'s default horizon (tested separately, below the drain
 # section) sweeps it — a wasteful redelivery of an item a healthy worker still holds.
 def test_worker_status_visibility_timeout_derives_from_the_env_var(service, monkeypatch):
     monkeypatch.setenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", "600")
     status = service.worker_status()
-    assert status["visibility_timeout_s"] == 1890, (
-        "worker_status() still reports the CLASS default (1290) instead of the lease the deployed "
-        "worker actually holds under STIGMERGY_LIBRARIAN_TIMEOUT_S=600 (2*600 + 120 + 390 + 180 = 1890)")
+    assert status["visibility_timeout_s"] == 1500, (
+        "worker_status() still reports the CLASS default (900) instead of the lease the deployed "
+        "worker actually holds under STIGMERGY_LIBRARIAN_TIMEOUT_S=600 (2*600 + 120 + 180 = 1500)")
 
 
 def test_meta_worker_visibility_timeout_derives_from_the_env_var(service, monkeypatch):
     monkeypatch.setenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", "600")
-    assert service.meta()["worker"]["visibility_timeout_s"] == 1890
+    assert service.meta()["worker"]["visibility_timeout_s"] == 1500
 
 
 def test_in_flight_verdict_honors_the_derived_lease_not_the_class_default(conn, service,
                                                                           monkeypatch):
-    """The meter's THIRD reader: a capture claimed 1400s ago is inside the 1890s lease staging's
-    worker actually holds even though it has already outlived the 1290s class default — the exact
+    """The meter's THIRD reader: a capture claimed 1400s ago is inside the 1500s lease staging's
+    worker actually holds even though it has already outlived the 900s class default — the exact
     false "lease expired" the issue reports."""
     monkeypatch.setenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", "600")
     ack = submit_one(conn)
@@ -324,15 +320,15 @@ def test_in_flight_verdict_honors_the_derived_lease_not_the_class_default(conn, 
     row = service.worker_status()["in_flight"][0]
 
     assert row["lease_expired"] is False, (
-        "a 1400s-old claim reads as expired against the 1290s class default even though the "
-        "worker's real, env-derived lease is 1890s")
+        "a 1400s-old claim reads as expired against the 900s class default even though the "
+        "worker's real, env-derived lease is 1500s")
     assert "within its lease" in row["verdict"]
 
 
 def test_in_flight_verdict_still_reads_expired_at_the_class_default_with_no_env_var(
         conn, service, monkeypatch):
     """Benign twin: where the environment says nothing, the meter must still read a 1000s-old
-    claim as expired against the 1290s class default — deriving the number for staging must not
+    claim as expired against the 900s class default — deriving the number for staging must not
     weaken the verdict for the ordinary, unconfigured case."""
     monkeypatch.delenv("STIGMERGY_LIBRARIAN_TIMEOUT_S", raising=False)
     ack = submit_one(conn)
@@ -363,13 +359,13 @@ def test_gardener_state_reads_the_latest_completed_run_and_finds_partial_honest(
     insert_findings(conn, run_id, [
         {"check": "anchor-concentration", "severity": "warn", "subject": "acme-corp",
          "detail": "14/18 pages anchor here", "suggested_action": "consider splitting"},
-        {"check": "view-staleness", "severity": "sla", "subject": "views/acme.md",
-         "detail": "stale past the SLA window", "suggested_action": ""},
+        {"check": "orphan-page", "severity": "info", "subject": "wiki/notes/loose.md",
+         "detail": "nothing links here", "suggested_action": ""},
     ])
     state = service.gardener_state()
     assert state["run"]["id"] == run_id
     severities = {f["severity"] for f in state["findings"]}
-    assert severities == {"warn", "sla"}, "the gardener's own vocabulary: info/warn/sla"
+    assert severities == {"warn", "info"}, "the gardener's own vocabulary: info/warn"
     assert state["history"][0]["status"] == "partial"
 
 
@@ -480,185 +476,7 @@ def test_a_registry_the_loader_refuses_reads_as_a_refusal_not_a_500(conn, admin_
 
 
 # ── entities: read ────────────────────────────────────────────────────────────────────────────
-# ── the proposals: list, detail and the three decisions, through the governed door ───────────
-@pytest.fixture()
-def entity_service(conn, admin_settings, entity_mint_repo):
-    """`AdminService` pointed at a real, throwaway bare knowledge repo — for the tests that land a
-    decision for real. The validation-only tests use the plain `service` fixture instead (no repo
-    configured): they never reach git at all, and proving that is part of what they pin."""
-    return AdminService(conn, server_settings=Settings(librarian_repo_url=entity_mint_repo),
-                        admin_settings=admin_settings)
-
-
-def test_entities_list_carries_the_proposals_and_their_registry_verdict(conn, entity_service,
-                                                                        entity_mint_repo):
-    """The list is the inbox's own read of the two proposal kinds, each identity checked against
-    the REST of the registry — a proposal always resolves to itself, which says nothing, so the
-    check leaves it out. `Acme Corporation`, a spelling `Acme Corp` already lists, comes back
-    REGISTERED: the Merge picker's strongest hint."""
-    register_entity(entity_mint_repo, conn, "Acme Corp", aliases=["Acme Corporation"])
-    propose_identity(entity_mint_repo, conn, "Acme Corporation")
-    propose_identity(entity_mint_repo, conn, "Vandelay Imports")
-    register_entity(entity_mint_repo, conn, "Initech", proposed_aliases=["Initech Ltd"])
-
-    listed = entity_service.entities_list()
-
-    by_id = {p["id"]: p for p in listed["proposals"]}
-    assert set(by_id) == {"acme-corporation", "vandelay-imports"}
-    assert by_id["acme-corporation"]["check"]["verdict"] == admin_service.VERDICT_REGISTERED
-    assert by_id["acme-corporation"]["check"]["match"]["id"] == "acme-corp"
-    assert by_id["acme-corporation"]["merge_candidates"] == [{"id": "acme-corp", "name": "Acme Corp"}]
-    assert by_id["vandelay-imports"]["check"]["verdict"] == admin_service.VERDICT_CLEAR
-    assert [(a["entity_id"], a["alias"]) for a in listed["aliases"]] == [("initech", "Initech Ltd")]
-    assert listed["registry_check"]["road"] == "snapshot"
-
-
-def test_the_inbox_reads_the_registry_file_when_the_index_holds_no_snapshot(conn, admin_settings,
-                                                                           entity_mint_repo, tmp_path):
-    """The console's inbox derives its proposals from the registry the console SERVES — the
-    snapshot where the index has one, the `--entity-registry` file where it does not (the local
-    recipe, and any stack before its first webhook). Before this test the inbox read the snapshot
-    alone while the Entities desk read either: on a stack with no snapshot the browser listed every
-    entity and the inbox listed no proposal, and the two pages disagreed about what was waiting."""
-    propose_identity(entity_mint_repo, conn, "Vandelay Imports")
-    index_store.clear_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH)
-    registry_file = tmp_path / "entity-registry.json"
-    registry_file.write_text(subprocess.run(["git", "show", "main:ops/entity-registry.json"],
-                                            cwd=entity_mint_repo, capture_output=True, text=True,
-                                            check=True).stdout, encoding="utf-8")
-    file_road = AdminService(conn, server_settings=Settings(entity_registry_path=str(registry_file)),
-                             admin_settings=admin_settings)
-
-    inbox = file_road.inbox()
-    listed = file_road.entities_list()
-
-    assert [i["name"] for i in inbox["items"] if i["kind"] == KIND_IDENTITY_PROPOSAL] == ["Vandelay Imports"]
-    assert [p["name"] for p in listed["proposals"]] == ["Vandelay Imports"]
-    assert listed["registry_check"]["road"] == "file"
-
-
-def test_entities_show_returns_the_proposal_and_404s_on_a_name_nobody_proposed(conn, entity_service,
-                                                                              entity_mint_repo):
-    propose_identity(entity_mint_repo, conn, "Globex Robotics")
-    shown = entity_service.entities_show("globex-robotics")
-    assert shown["name"] == "Globex Robotics" and shown["kind"] == "identity-proposal"
-    with pytest.raises(AdminNotFound):
-        entity_service.entities_show("ghost")
-
-
-def test_entity_decide_approve_lands_for_real_and_records_both_ledgers(
-        conn, entity_service, entity_mint_repo, require_gitleaks):
-    """The end-to-end proof, admin's own: ONE commit lands on the real bare remote, the append-only
-    `review_decisions` ledger records the decision under the SAME kind and id the librarian reads,
-    and `admin_actions` records the attempt under the actor's name. `extra.source` names this
-    door; the App authors the commit and the `Decided-by:` trailer carries the console's free-text
-    actor — attribution, not a resolved identity (ADR 030 D2)."""
-    entity_id = propose_identity(entity_mint_repo, conn, "Globex Robotics")
-
-    result = entity_service.entity_decide("identity-proposal", entity_id,
-                                         actor="steward@example.com", verdict="approve")
-
-    assert result["recorded"] == "approve" and len(result["commit"]) == 40
-    entry = remote_registry(entity_mint_repo)[entity_id]
-    assert entry["proposed"] is False and entry["approved_by"] == "steward@example.com"
-    with conn.cursor() as cur:
-        cur.execute("SELECT item_kind, item_id, verdict, actor, extra FROM review_decisions")
-        [(kind, item_id, verdict, actor, extra)] = cur.fetchall()
-    assert (kind, item_id, verdict, actor) == ("identity-proposal", entity_id, "approve",
-                                              "steward@example.com")
-    assert extra == {"source": "admin", "commit": result["commit"]}
-    author = gitcmd.run("log", "-1", "--format=%an <%ae>", result["commit"],
-                        cwd=entity_mint_repo).stdout.strip()
-    assert author == "stigmergy-librarian <stigmergy-librarian@users.noreply.github.com>"
-    message = gitcmd.run("log", "-1", "--format=%B", result["commit"], cwd=entity_mint_repo).stdout
-    assert "Decided-by: steward@example.com" in message
-    recorded = _actions(conn)[0]
-    assert (recorded["actor"], recorded["action"], recorded["outcome"]) == (
-        "steward@example.com", "entities.decide", "ok")
-
-
-def test_entity_decide_merge_folds_the_proposal_and_records_where_it_went(
-        conn, entity_service, entity_mint_repo, require_gitleaks):
-    register_entity(entity_mint_repo, conn, "Acme Corp")
-    entity_id = propose_identity(entity_mint_repo, conn, "Acme Corporation", aliases=["ACME Co"])
-
-    result = entity_service.entity_decide("identity-proposal", entity_id, actor="marc",
-                                         verdict="merge", into="acme-corp")
-
-    assert result["recorded"] == "merge" and result["into"] == "acme-corp"
-    assert result["reanchored"] == ["wiki/notes/Acme Corporation kickoff.md"]
-    registry = remote_registry(entity_mint_repo)
-    assert entity_id not in registry
-    assert {"Acme Corporation", "ACME Co"} <= set(registry["acme-corp"]["aliases"])
-    with conn.cursor() as cur:
-        cur.execute("SELECT verdict, extra FROM review_decisions WHERE item_id = %s", (entity_id,))
-        verdict, extra = cur.fetchone()
-    assert verdict == "merge" and extra["into"] == "acme-corp"
-
-
-def test_entity_decide_decline_removes_the_page_and_records_the_reject_the_librarian_reads(
-        conn, entity_service, entity_mint_repo, require_gitleaks):
-    entity_id = propose_identity(entity_mint_repo, conn, "Globex Robotics")
-
-    result = entity_service.entity_decide("identity-proposal", entity_id, actor="marc",
-                                         verdict="decline", notes="a typo\x1b[31m for Globex")
-
-    assert result["recorded"] == "reject"
-    assert "wiki/entities/Globex Robotics.md" not in remote_files(entity_mint_repo)
-    assert entity_id not in remote_registry(entity_mint_repo)
-    with conn.cursor() as cur:
-        cur.execute("SELECT verdict, notes FROM review_decisions WHERE item_id = %s", (entity_id,))
-        verdict, notes = cur.fetchone()
-    assert verdict == "reject"
-    assert "\x1b" not in notes and "for Globex" in notes, "the note is cleaned below the console"
-
-
-def test_entity_decide_on_a_proposed_spelling(conn, entity_service, entity_mint_repo,
-                                              require_gitleaks):
-    register_entity(entity_mint_repo, conn, "Initech", proposed_aliases=["Initech Ltd", "ITC"])
-
-    approved = entity_service.entity_decide("alias-proposal", "initech:Initech Ltd", actor="marc",
-                                            verdict="approve")
-    publish_registry(entity_mint_repo, conn)
-    declined = entity_service.entity_decide("alias-proposal", "initech:ITC", actor="marc",
-                                            verdict="decline")
-
-    assert approved["recorded"] == "approve" and declined["recorded"] == "reject"
-    entry = remote_registry(entity_mint_repo)["initech"]
-    assert entry["aliases"] == ["Initech Ltd"] and entry["proposed_aliases"] == []
-
-
-def test_entity_decide_bad_requests_are_refused_before_anything_is_attempted(conn, service):
-    with pytest.raises(AdminBadRequest, match="item_kind"):
-        service.entity_decide("parked-capture", "7", actor="marc", verdict="requeue")
-    with pytest.raises(AdminBadRequest, match="verdict for identity-proposal"):
-        service.entity_decide("identity-proposal", "x", actor="marc", verdict="requeue")
-    with pytest.raises(AdminBadRequest, match="merge needs `into`"):
-        service.entity_decide("identity-proposal", "x", actor="marc", verdict="merge")
-    assert _actions(conn) == [], "a bad request is refused before the action is even recorded"
-
-
-def test_entity_decide_without_a_repo_url_is_refused_with_the_capability_sentence(conn, service):
-    """`service` carries a default `Settings()` — no `librarian_repo_url` — so the door refuses
-    by name, after recording the attempt, and no ledger row is written."""
-    with pytest.raises(AdminRefused, match="STIGMERGY_LIBRARIAN_REPO_URL"):
-        service.entity_decide("identity-proposal", "globex-robotics", actor="marc",
-                              verdict="approve")
-    recorded = _actions(conn)[0]
-    assert recorded["outcome"] == "error"
-    assert recorded["error_class"] == "CapabilityUnavailableError"
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM review_decisions")
-        assert cur.fetchone()[0] == 0
-
-
-def test_entity_decide_on_an_unknown_proposal_is_the_librarys_own_refusal(
-        conn, entity_service, entity_mint_repo, require_gitleaks):
-    with pytest.raises(AdminRefused, match="no entity 'ghost'"):
-        entity_service.entity_decide("identity-proposal", "ghost", actor="marc", verdict="approve")
-    assert _actions(conn)[0]["error_class"] == "EntityError"
-
-
+# ── registering an entity: the console commissions a capture, the librarian writes the page ──
 def test_entity_create_commissions_a_capture_the_librarian_writes_the_page_from(conn, admin_settings):
     """ADR 042. OLD BEHAVIOUR: the console's Register minted the template with the name filled in,
     pushed it and wrote the ledger row — an entity page with nothing said about the entity. Now it
@@ -678,12 +496,10 @@ def test_entity_create_commissions_a_capture_the_librarian_writes_the_page_from(
         cur.execute("SELECT submitted_by, hints, payload FROM capture_queue WHERE id = %s",
                     (result["id"],))
         by, hints, payload = cur.fetchone()
-        cur.execute("SELECT count(*) FROM review_decisions")
-        assert cur.fetchone()[0] == 0, "the ledger row is the worker's to write, after the push"
     assert by == "steward@example.com"
     registration = capture_schema.registration_from_hints(hints)
     assert registration.name == "Stark Industries" and set(registration.aliases) == {"Stark", "SI"}
-    assert registration.source == server_review.SOURCE_ADMIN
+    assert registration.source == "admin"
     assert payload["text"].startswith("Stark Industries is the client")
     action = _actions(conn)[0]
     assert action["action"] == "entities.create" and action["args"]["about_chars"] > 0
@@ -744,68 +560,62 @@ def test_activity_reads_the_audit_trail_and_never_a_submission_payload(conn, ser
 
 
 # ── crons ─────────────────────────────────────────────────────────────────────────────────────
-def test_crons_without_a_gateway_is_the_database_truth_only(conn, service):
-    ops.record_job_run(conn, GARDENER_JOB, status="ok", stats={})
-    state = service.crons_state()
-    assert state["configured"] is False
-    by_file = {w["file"]: w for w in state["workflows"]}
-    assert by_file["gardener.yml"]["latest_run"]["status"] == "ok"
-    assert by_file["index-rebuild.yml"]["latest_run"] is None
-    assert by_file["index-rebuild.yml"]["index_built_at"], "built_at is that cron's truth source"
+def test_the_jobs_page_reports_every_night_shift_pass_from_the_database(conn, service):
+    """The page is a pure database read: every row's truth is a `job_runs` row the pass wrote
+    itself, or the index's own `built_at`. Nothing is fetched from another service, which is why
+    this page has no degraded state to render."""
+    state = service.jobs_state()
+    by_file = {job["file"]: job for job in state["jobs"]}
+    assert set(by_file) == {"gardener", "retention-purge", "index-rebuild"}
+    assert by_file["gardener"]["latest_run"] is None      # nothing has run in this fresh database
+    assert by_file["index-rebuild"]["latest_run"] is None  # the rebuild writes no job row, ever
+    ops.record_job_run(conn, GARDENER_JOB, status="ok", stats={"findings": 3})
+    assert service.jobs_state()["jobs"][0]["latest_run"]["stats"] == {"findings": 3}
 
 
-def test_crons_with_a_gateway_carries_state_and_runs(gh_service):
-    state = gh_service.crons_state()
-    by_file = {w["file"]: w for w in state["workflows"]}
-    assert by_file["gardener.yml"]["state"] == "disabled_manually"
-    assert by_file["index-rebuild.yml"]["runs"][0]["conclusion"] == "success"
+def test_the_purge_row_reads_the_dry_run_job_too(conn, service):
+    """A dry run IS a run of the retention pass, and an operator who previewed at 04:42 and sees
+    "no run recorded" would reasonably conclude the night shift is dead. `_truth_jobs` folds the
+    two names, and this is the twin that keeps it folded."""
+    ops.record_job_run(conn, PURGE_DRY_RUN_JOB, status="ok", stats={"purged": 0, "dry_run": True})
+    row = {job["file"]: job for job in service.jobs_state()["jobs"]}["retention-purge"]
+    assert row["latest_run"]["job"] == PURGE_DRY_RUN_JOB
 
 
-def test_dispatch_enforces_the_allowlist_before_any_github_call(gh_service, fake_gateway):
-    with pytest.raises(AdminBadRequest, match="not a console-drivable workflow"):
-        gh_service.cron_dispatch("deploy-anything.yml", actor="steward")
-    assert fake_gateway.calls == []
+def test_the_console_names_the_setting_that_actually_schedules_each_worker_pass():
+    """The drift guard that replaced the cron-YAML one: the Jobs page tells an operator which
+    variable moves a pass, and a renamed variable would leave the page naming a setting that does
+    nothing. Pinned against `librarian.config`'s own constants, and against `Settings` actually
+    having a field the name resolves to — so a variable that stopped being read fails here."""
+    settings = librarian_config.Settings.from_args(argparse.Namespace())
+    for job in NIGHT_SHIFT:
+        if job["runs_in"] != "worker":
+            assert not job["at_setting"], f"{job['file']} is not a worker pass but names a setting"
+            continue
+        assert job["at_setting"].startswith("STIGMERGY_")
+        field = job["at_setting"].removeprefix("STIGMERGY_LIBRARIAN_").lower()
+        assert getattr(settings, field) == job["at_default"], (
+            f"the console says {job['file']} runs at {job['at_default']} via "
+            f"${job['at_setting']}, which the librarian's own settings do not agree with")
 
 
-def test_dispatch_converts_declared_inputs_and_records_the_action(conn, gh_service,
-                                                                  fake_gateway):
-    result = gh_service.cron_dispatch("retention-purge.yml", actor="steward",
-                                      inputs={"dry_run": True})
-    assert result["inputs"] == {"dry_run": "true"}
-    assert ("dispatch", "retention-purge.yml", "main", {"dry_run": "true"}) in fake_gateway.calls
-    assert _actions(conn)[0]["action"] == "cron.dispatch:retention-purge.yml"
-
-
-def test_an_undeclared_input_is_refused_by_name(gh_service, fake_gateway):
-    with pytest.raises(AdminBadRequest, match="declares no 'dry_run' input"):
-        gh_service.cron_dispatch("gardener.yml", actor="steward", inputs={"dry_run": True})
-    assert fake_gateway.calls == []
-
-
-def test_without_a_gateway_a_dispatch_is_refused_with_the_degradation_sentence(service):
-    with pytest.raises(AdminRefused, match="GitHub is not configured"):
-        service.cron_dispatch("gardener.yml", actor="steward")
-
-
-def test_the_console_schedule_table_matches_the_workflow_files():
-    """The pin: `CRON_WORKFLOWS` cannot drift from the YAML files it describes."""
-    import pathlib
-
-    import yaml
-
-    # The cron files are TEMPLATES an operator copies into their knowledge repo, so they
-    # live outside `.github/workflows/` (a file there is registered by GitHub whether enabled or
-    # not, and a column of "Disabled" rows on a public Actions tab reads as a broken project). The
-    # console still dispatches them by the same file NAME, in whichever repo they were copied to.
-    workflows_dir = pathlib.Path(__file__).resolve().parents[2] / "deploy" / "workflows"
-    for row in CRON_WORKFLOWS:
-        with open(workflows_dir / row["file"], encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-        triggers = config.get("on") or config.get(True)
-        crons = [entry["cron"] for entry in triggers["schedule"]]
-        assert row["schedule_utc"] in crons, (
-            f"{row['file']} schedules {crons} but the console table says "
-            f"{row['schedule_utc']!r} — update CRON_WORKFLOWS")
+def test_the_pass_the_console_cannot_run_names_a_command_that_exists():
+    """**A message containing a command is an executable promise.** The Jobs page tells an
+    operator to rebuild the index by hand — because the deployed worker has no embedding key by
+    design and cannot — so this runs the binary that sentence names. Its `--help` is enough: the
+    promise being kept is that the command EXISTS and takes the flag, not that a rebuild succeeds
+    without a key (it would not, which is the whole reason the pass is not in the night shift)."""
+    binary, flag = INDEX_REBUILD_COMMAND.split()[0], INDEX_REBUILD_COMMAND.split()[1]
+    # Beside this interpreter first, then PATH: an editable checkout's console scripts live in the
+    # venv's bin, which `python -m pytest` does not put on PATH.
+    beside = os.path.join(os.path.dirname(sys.executable), binary)
+    resolved = beside if os.path.exists(beside) else shutil.which(binary)
+    assert resolved, f"the console tells an operator to run {binary!r}, which is not installed"
+    completed = subprocess.run([resolved, "--help"], capture_output=True, text=True, timeout=60)
+    assert completed.returncode == 0, completed.stderr
+    assert flag in completed.stdout, (
+        f"{binary} --help does not mention {flag} — the console's rebuild sentence names a flag "
+        f"the command does not take")
 
 
 # ── the flagless horizon is clamped, whatever the env says ─────────────────────────────────────
@@ -839,70 +649,89 @@ def test_a_malformed_agent_budget_leaves_the_console_serving_its_own_boot_call(
         librarian_config.DEFAULT_VISIBILITY_TIMEOUT_S)
 
 
-# ── repairs: read, approve, decline (ADR 039) ─────────────────────────────────────────────────
-# The console is the SECOND door onto the same governed apply the review lane drives. What these
-# pin is the half that is this package's own — the `admin_actions` bookkeeping, the error mapping,
-# the sanitizing — while the ordering itself belongs to `server.review.apply_repair_and_record`
-# and is proven there against real state.
-FAKE_COMMIT = "0123456789abcdef0123456789abcdef01234567"
-
-
-def _apply_records(monkeypatch, paths=("wiki/notes/Renewals.md",)):
-    """`apply_via_clone` replaced by a recorder, patched as a MODULE ATTRIBUTE — the seam
-    `repair.remote.apply_approved` keeps by calling it under that name. Everything around it
-    (`mark_decided`, `mark_applied`, the ledger row) is the real thing."""
-    calls = []
-
-    def fake(repo_url, branch, credential, *, proposal, approved_by, on_output=None,
-             prepared=None):
-        calls.append({"repo_url": repo_url, "approved_by": approved_by, "proposal": proposal})
-        return {"commit": FAKE_COMMIT, "paths": list(paths)}
-
-    monkeypatch.setattr(repair_remote, "apply_via_clone", fake)
-    return calls
+# ── repairs: what the worker did, read-only (ADR 044) ─────────────────────────────────────────
+# Nothing on this page decides anything any more. What it is FOR is the reading nobody gave a
+# repair before it landed: every applied row carries the diff that reached `main`, and every failed
+# one carries the sentence that refused it. So what these pin is this package's own half — the
+# sanitizing, the per-kind op shapes, and the counts a chart may draw a part-to-whole from.
+#
+# The console's ONE surviving mutation is `pages.delete`, and it is the console's most consequential
+# button. Since ADR 044 D3 it QUEUES: this process writes nothing to the corpus and holds no git
+# credential, and the worker performs the removal (`tests/librarian/test_delete_processing_pg.py`
+# proves that half against a real remote). So what is asserted here is the row this door lands, the
+# `admin_actions` bookkeeping and the error mapping.
 
 
 @pytest.fixture()
-def repair_service(conn, admin_settings):
-    """`AdminService` with a knowledge-repo URL configured. The URL is never dialled in these
-    tests — `apply_via_clone` is the recorder above — but it has to be non-empty, because the
-    shared sequence refuses an unconfigured deployment BEFORE the proposal moves out of pending."""
-    return AdminService(conn, server_settings=Settings(librarian_repo_url="/tmp/not-dialled.git"),
-                        admin_settings=admin_settings)
+def deletion_service(conn, admin_settings):
+    """`AdminService` with the capture queue wired. An evidence store is the whole of what this
+    door needs now — a removal is a `delete` row, and the row's material is the reason. It used to
+    take a knowledge-repo URL, back when the console cloned and pushed for itself."""
+    from stigmergy.capture.evidence import MemoryEvidenceStore
+    return AdminService(conn, server_settings=Settings(), admin_settings=admin_settings,
+                        evidence=MemoryEvidenceStore())
 
 
-def test_repairs_list_carries_the_pending_and_the_decided_halves(conn, service, monkeypatch):
-    """Both halves, and the second is not decoration: a rejected row is the dismissal memory the
-    proposer skips against, so "why does the nightly run not propose this any more" is only
-    answerable from the decided list."""
-    pending_id = propose_repair(conn, path="wiki/notes/Renewals.md")
-    declined_id = propose_repair(conn, path="wiki/decisions/Refunds.md")
-    assert repair_store.mark_decided(conn, declined_id, status=repair_schema.STATUS_REJECTED,
-                                     decided_by="steward@example.com", notes="already linked")
+def test_repairs_list_carries_every_outcome_and_the_whole_tables_counts(conn, service):
+    """Both halves, and the second is not decoration: `recent` is a bounded PAGE of a table that
+    only grows, and `counts` is the whole of it. A surface drawing a part-to-whole from the page
+    would understate history the moment the page fills — which is exactly what an operator asking
+    "how much has this loop done" would be reading."""
+    applied_id = landed_repair(conn, path="wiki/notes/Renewals.md")
+    failed_id = refused_repair(conn)
 
     listed = service.repairs_list()
 
-    assert [row["id"] for row in listed["pending"]] == [pending_id]
-    assert listed["pending"][0]["target_paths"] == ["wiki/notes/Renewals.md"]
-    assert listed["pending"][0]["ops"][0]["op"] == "backlink"
-    decided = listed["recent"][0]
-    assert (decided["id"], decided["status"], decided["notes"]) == (
-        declined_id, repair_schema.STATUS_REJECTED, "already linked")
-    assert isinstance(decided["decided_at"], str), "datetimes cross the wire as ISO strings"
+    assert [row["id"] for row in listed["recent"]] == [failed_id, applied_id], "newest first"
+    assert listed["recent"][1]["target_paths"] == ["wiki/notes/Renewals.md"]
+    assert listed["recent"][1]["ops"][0]["op"] == "backlink"
+    assert listed["counts"] == {repair_schema.STATUS_APPLIED: 1, repair_schema.STATUS_FAILED: 1,
+                                repair_schema.STATUS_SKIPPED: 0}
+    assert listed["recent_limit"] == admin_service.REPAIR_RECENT_LIMIT
+    assert isinstance(listed["recent"][0]["created_at"], str), (
+        "datetimes cross the wire as ISO strings")
+
+
+def test_an_applied_repair_reaches_the_console_carrying_the_diff_nobody_read_first(conn, service):
+    """The column this page exists for. Nobody read the change before it was pushed, so the stored
+    diff IS the reading — a console that listed paths alone would be offering a summary of prose a
+    model wrote, which is `entity-body`'s own mistake made at the level of the whole table."""
+    repair_id = landed_repair(conn)
+
+    row = service.repair_show(repair_id)
+
+    assert row["status"] == repair_schema.STATUS_APPLIED
+    assert row["applied_commit"] == LANDED_COMMIT
+    assert row["diff"].startswith("diff --git")
+    assert "\n" in row["diff"], (
+        "a diff flattened to one line is not a diff anybody can read")
+
+
+def test_a_failed_repair_reaches_the_console_carrying_the_sentence_that_refused_it(conn, service):
+    """The other outcome, and the only place it is ever explained: a `failed` row is never retried,
+    so `error` is the whole of what anybody will ever know about why that finding stopped being
+    answered."""
+    repair_id = refused_repair(conn)
+
+    row = service.repair_show(repair_id)
+
+    assert row["status"] == repair_schema.STATUS_FAILED
+    assert "the gates refused this repair" in row["error"]
+    assert (row["applied_commit"], row["diff"]) == ("", "")
 
 
 def test_repair_show_sanitizes_every_untrusted_string_and_404s_on_nothing(conn, service):
     """A rationale and a note were written by a model that had just read pages somebody else wrote,
-    and a path is a filename somebody chose. Control characters die at the server; HTML inertness
-    is the client's half.
+    a path is a filename somebody chose, and a DIFF is page bytes. Control characters die at the
+    server; HTML inertness is the client's half.
 
     `\\x07`/`\\x1b`, not `\\x00`: Postgres refuses a NUL in a text column outright, so the byte this
     console has to strip is the one that CAN be stored — an escape sequence a terminal would act on
     and a browser would render as nothing."""
-    proposal_id = propose_repair(conn, kind="overlap", note="covers the same\x07 ground",
-                                 rationale="the two pages\x1b[2J overlap")
+    repair_id = landed_repair(conn, kind="overlap", note="covers the same\x07 ground",
+                              rationale="the two pages\x1b[2J overlap")
 
-    row = service.repair_show(proposal_id)
+    row = service.repair_show(repair_id)
 
     assert row["rationale"] == "the two pages[2J overlap"
     assert row["ops"][0]["note"] == "covers the same ground"
@@ -910,18 +739,28 @@ def test_repair_show_sanitizes_every_untrusted_string_and_404s_on_nothing(conn, 
         service.repair_show(999_999)
 
 
+def test_a_failed_repairs_sentence_is_sanitized_like_everything_else(conn, service):
+    """`error` is composed from gate codes and repo-relative paths and then STORED, so it reaches
+    this page by exactly the same road as a model's rationale: it is text nobody vetted, rendered
+    in a browser."""
+    repair_id = refused_repair(conn, error="the gates refused it\x1b[2J (zone/outside-lane)")
+
+    assert service.repair_show(repair_id)["error"] == (
+        "the gates refused it[2J (zone/outside-lane)")
+
+
 def test_a_body_draft_reaches_the_console_readable_and_whole(conn, service):
-    """OLD BEHAVIOUR: `_proposal` reshaped every op into `{op, path, link, note}`, so an
+    """OLD BEHAVIOUR: `_repair` reshaped every op into `{op, path, link, note}`, so an
     `entity-body` op arrived at the console with its `body_markdown` and `role` DROPPED — the
-    steward reading the draft is the check for this kind, and the console showed them a row with
-    an empty `link` where the draft should have been.
+    drafted prose is the only thing there is to read for this kind, and the console showed a row
+    with an empty `link` where the draft should have been.
 
     Newlines survive `_clean` by design (control characters die, structure does not): a body
-    flattened to one line is a body nobody can read as the page it would become."""
-    proposal_id = propose_entity_body(conn, body="## What / Who\n\nA freight\x07 broker.\n",
-                                      role="A freight broker in the north-west.")
+    flattened to one line is a body nobody can read as the page it became."""
+    repair_id = landed_entity_body(conn, body="## What / Who\n\nA freight\x07 broker.\n",
+                                   role="A freight broker in the north-west.")
 
-    row = service.repair_show(proposal_id)
+    row = service.repair_show(repair_id)
 
     assert row["kind"] == repair_schema.KIND_ENTITY_BODY
     assert row["ops"][0]["body_markdown"] == "## What / Who\n\nA freight broker.\n"
@@ -931,170 +770,23 @@ def test_a_body_draft_reaches_the_console_readable_and_whole(conn, service):
 def test_an_additive_op_keeps_exactly_the_fields_it_had(conn, service):
     """The benign twin for the reshaping change: a second kind's fields must not appear on the
     first kind's ops, where a console table would render an empty column for every repair."""
-    proposal_id = propose_repair(conn, kind="overlap", note="the same ground")
+    repair_id = landed_repair(conn, kind="overlap", note="the same ground")
 
-    (op,) = service.repair_show(proposal_id)["ops"]
+    (op,) = service.repair_show(repair_id)["ops"]
 
     assert sorted(op) == ["link", "note", "op", "path"]
 
 
-def test_repair_approve_applies_and_records_both_ledgers(conn, repair_service, monkeypatch):
-    """The console's own half: an `admin_actions` row naming this door, and — through the shared
-    sequence — the `review_decisions` row that answers "who approved this change to the corpus"
-    identically whichever door was used."""
-    calls = _apply_records(monkeypatch)
-    proposal_id = propose_repair(conn)
+def test_a_deletion_reaches_the_console_with_the_prose_that_landed(conn, service):
+    """The third kind's shape. A DELETE op is a path and nothing else — which page stopped existing
+    is the whole of it — and a SCRUB op carries its `planned_after` through, because those bytes are
+    a MODEL's prose (ADR 043) and this page is the only reading they get.
 
-    result = repair_service.repair_approve(proposal_id, actor="steward@example.com")
+    Red before that: the console showed two path lists, so model-written bodies were invisible —
+    `entity-body`'s own mistake, which that kind's renderer exists to avoid."""
+    repair_id = landed_delete(conn)
 
-    assert result == {"applied": True, "commit": FAKE_COMMIT,
-                      "paths": ["wiki/notes/Renewals.md"]}
-    assert [c["approved_by"] for c in calls] == ["steward@example.com"]
-    row = repair_store.proposal(conn, proposal_id)
-    assert (row["status"], row["applied_commit"]) == (repair_schema.STATUS_APPLIED, FAKE_COMMIT)
-    decision = server_review.latest_decisions(conn)[
-        (server_review.KIND_REPAIR_PROPOSAL, str(proposal_id))]
-    assert (decision["verdict"], decision["source"]) == ("approve", server_review.SOURCE_ADMIN)
-    recorded = _actions(conn)[0]
-    assert (recorded["actor"], recorded["action"], recorded["outcome"]) == (
-        "steward@example.com", "repairs.approve", "ok")
-
-
-def test_pages_delete_runs_the_shared_sequence_and_records_the_console_as_the_door(
-        conn, repair_service, monkeypatch):
-    """The console's deletion door (ADR 043 D2). It reaches `server.review.delete_and_record` — the
-    SAME sequence MCP's `brain_delete` runs — and hands in NO authorization: its token is the
-    authorization, exactly as `repair_approve` and `entity_approve` do. So what this asserts is the
-    wiring and the two bookkeeping rows, not a second copy of the sequence's own behaviour
-    (`tests/server/test_delete_pages_pg.py` proves that against a real remote)."""
-    seen = {}
-
-    def fake(conn_arg, *, repo_url, paths, why, actor, source, authorize=None):
-        seen.update({"repo_url": repo_url, "paths": list(paths), "why": why, "actor": actor,
-                     "source": source, "authorize": authorize})
-        return {"deleted": list(paths), "rewritten": {}, "commit": FAKE_COMMIT,
-                "proposal_id": 7, "model_calls": 0, "message": "done"}
-
-    monkeypatch.setattr(server_review, "delete_and_record", fake)
-
-    result = repair_service.pages_delete(actor="ops@example.com",
-                                         paths=["wiki/notes/Old Memo.md"], why="superseded")
-
-    assert result["commit"] == FAKE_COMMIT
-    assert seen["paths"] == ["wiki/notes/Old Memo.md"]
-    assert (seen["actor"], seen["source"]) == ("ops@example.com", server_review.SOURCE_ADMIN)
-    assert seen["authorize"] is None, (
-        "the console passes no steward guard — its token is the authorization (ADR 029/030 D2)")
-    recorded = _actions(conn)[0]
-    assert (recorded["actor"], recorded["action"], recorded["outcome"]) == (
-        "ops@example.com", "pages.delete", "ok")
-    assert "superseded" not in str(recorded["args"]), (
-        "the reason is free text a person wrote: `admin_actions` keeps its LENGTH, not the words")
-
-
-def test_a_refused_deletion_records_the_real_class_before_it_becomes_AdminRefused(
-        conn, repair_service, monkeypatch):
-    """`_mutate`'s ordering, on this door too: the console's own log keeps the library's exception
-    class, and the caller gets the sentence as a refusal rather than a 500."""
-    def refuse(*_a, **_k):
-        raise server_review.ReviewError("wiki/entities/Acme Corp.md is an entity page")
-
-    monkeypatch.setattr(server_review, "delete_and_record", refuse)
-
-    with pytest.raises(AdminRefused, match="entity page"):
-        repair_service.pages_delete(actor="ops@example.com",
-                                    paths=["wiki/entities/Acme Corp.md"], why="stale")
-
-    recorded = _actions(conn)[0]
-    assert (recorded["action"], recorded["outcome"], recorded["error_class"]) == (
-        "pages.delete", "error", "ReviewError")
-
-
-def test_repair_approve_maps_a_refusal_to_AdminRefused_after_recording_the_real_class(
-        conn, repair_service, monkeypatch):
-    """The mapping order `entity_approve` established: `_mutate` sees the LIBRARY's exception and
-    records its class name, and only then does the caller get `AdminRefused` with the library's own
-    sentence. Renaming it inside `_do` would rename what the row already captured."""
-    def refuse(*_a, **_k):
-        raise RepairError("the gates refused this repair, so nothing was committed or pushed")
-
-    monkeypatch.setattr(repair_remote, "apply_via_clone", refuse)
-    proposal_id = propose_repair(conn)
-
-    with pytest.raises(AdminRefused, match="the gates refused this repair"):
-        repair_service.repair_approve(proposal_id, actor="steward@example.com")
-
-    assert _actions(conn)[0]["error_class"] == "RepairError"
-    row = repair_store.proposal(conn, proposal_id)
-    assert row["status"] == repair_schema.STATUS_FAILED, "a failed apply stays visible as failed"
-    assert "the gates refused" in row["error"]
-
-
-def test_repair_approve_without_a_configured_repo_refuses_before_the_proposal_moves(
-        conn, service, monkeypatch):
-    """The plain `service` fixture has no `librarian_repo_url`. The refusal is a `ReviewError`, so
-    `_mutate`'s own `CaptureError` branch maps it — and the proposal is untouched, because the
-    check runs before `mark_decided`."""
-    def never(*_a, **_k):
-        raise AssertionError("apply_via_clone ran on a deployment with no knowledge-repo URL")
-
-    monkeypatch.setattr(repair_remote, "apply_via_clone", never)
-    proposal_id = propose_repair(conn)
-
-    with pytest.raises(AdminRefused, match="STIGMERGY_LIBRARIAN_REPO_URL"):
-        service.repair_approve(proposal_id, actor="steward@example.com")
-
-    assert repair_store.proposal(conn, proposal_id)["status"] == repair_schema.STATUS_PENDING
-
-
-def test_repair_reject_records_the_dismissal_on_the_row_and_in_the_ledger(conn, service):
-    proposal_id = propose_repair(conn)
-
-    assert service.repair_reject(proposal_id, actor="steward@example.com",
-                                 reason="the two pages describe different quarters")
-
-    row = repair_store.proposal(conn, proposal_id)
-    assert (row["status"], row["decided_by"]) == (repair_schema.STATUS_REJECTED,
-                                                  "steward@example.com")
-    assert row["notes"] == "the two pages describe different quarters"
-    assert row["content_key"] in repair_store.known_content_keys(conn)
-    decision = server_review.latest_decisions(conn)[
-        (server_review.KIND_REPAIR_PROPOSAL, str(proposal_id))]
-    assert (decision["verdict"], decision["source"]) == ("reject", server_review.SOURCE_ADMIN)
-    assert _actions(conn)[0]["action"] == "repairs.reject"
-
-
-def test_deciding_a_proposal_twice_is_refused_and_the_first_decision_stands(conn, service):
-    """`mark_decided`'s conditional UPDATE, seen from this door: the second decline loses and is
-    told so, rather than overwriting the reason the first steward gave."""
-    proposal_id = propose_repair(conn)
-    service.repair_reject(proposal_id, actor="first@example.com", reason="already linked")
-
-    with pytest.raises(AdminRefused, match="no longer pending"):
-        service.repair_reject(proposal_id, actor="second@example.com", reason="disagree")
-
-    assert repair_store.proposal(conn, proposal_id)["decided_by"] == "first@example.com"
-
-
-def test_repair_approve_and_reject_404_on_a_proposal_that_does_not_exist(conn, repair_service):
-    for call in (lambda: repair_service.repair_approve(999_999, actor="x"),
-                 lambda: repair_service.repair_reject(999_999, actor="x", reason="no")):
-        with pytest.raises(AdminNotFound):
-            call()
-    assert _actions(conn) == [], "a 404 is not an attempted mutation — no admin_actions row"
-
-
-def test_a_deletion_reaches_the_console_with_the_prose_a_steward_has_to_read(conn, service):
-    """The third kind's shape. A DELETE op is a path and nothing else — which page stops existing
-    is the whole of it — and a SCRUB op carries its `planned_after` through, because since ADR 043
-    those bytes are a MODEL's prose and this is the only reading they get before they land.
-
-    Red before that: the console showed two path lists, so a steward approved model-written bodies
-    they could not see anywhere — `entity-body`'s own mistake, which that kind's renderer exists to
-    avoid."""
-    proposal_id = propose_delete(conn)
-
-    row = service.repair_show(proposal_id)
+    row = service.repair_show(repair_id)
 
     assert row["kind"] == repair_schema.KIND_DELETE
     assert [op["op"] for op in row["ops"]] == [repair_schema.DELETE_OP_NAME,
@@ -1103,4 +795,65 @@ def test_a_deletion_reaches_the_console_with_the_prose_a_steward_has_to_read(con
     assert sorted(row["ops"][1]) == ["op", "path", "planned_after"]
     assert "No link any more" in row["ops"][1]["planned_after"]
     assert "\n" in row["ops"][1]["planned_after"], (
-        "a page flattened to one line is a page nobody can read as the page it would become")
+        "a page flattened to one line is a page nobody can read as the page it became")
+
+
+# ── the console's one surviving mutation: a person's own deletion ─────────────────────────────
+def test_pages_delete_queues_through_the_shared_seam_and_records_the_console_as_the_door(
+        conn, deletion_service):
+    """The console's deletion door (ADR 043 D2, ADR 044 D3). It calls
+    `server.review.queue_deletion` — the SAME seam MCP's `brain_delete` calls — and hands in NO
+    authorization: its token is the authorization, and this is the one door where that is the whole
+    of it. Asserted against the REAL queue rather than a replaced sequence: the row is what the
+    worker will act on, so a double here would prove nothing about what gets removed."""
+    result = deletion_service.pages_delete(actor="ops@example.com",
+                                           paths=["wiki/notes/Old Memo.md"], why="superseded")
+
+    assert result["status"] == capture_schema.QUEUED
+    with conn.cursor() as cur:
+        cur.execute("SELECT kind, submitted_by, hints, payload FROM capture_queue WHERE id = %s",
+                    (result["id"],))
+        kind, by, hints, payload = cur.fetchone()
+    assert kind == capture_schema.DELETE
+    assert by == "ops@example.com"
+    assert capture_schema.delete_paths(hints) == ["wiki/notes/Old Memo.md"]
+    assert hints["client"]["delete_source"] == "admin", (
+        "which door a person removed from changes this field and nothing else")
+    assert payload["text"] == "superseded"
+    recorded = _actions(conn)[0]
+    assert (recorded["actor"], recorded["action"], recorded["outcome"]) == (
+        "ops@example.com", "pages.delete", "ok")
+    assert "superseded" not in str(recorded["args"]), (
+        "the reason is free text a person wrote: `admin_actions` keeps its LENGTH, not the words")
+
+
+def test_a_refused_deletion_records_the_real_class_before_it_becomes_AdminRefused(
+        conn, deletion_service):
+    """`_mutate`'s ordering, on this door too: the console's own log keeps the library's exception
+    class, and the caller gets the sentence as a refusal rather than a 500. Driven by a REAL
+    refusal — an entity page, which the queueing seam refuses by name — so the class recorded is
+    the one a real operator's mistake would record."""
+    with pytest.raises(AdminRefused, match="identity is retired"):
+        deletion_service.pages_delete(actor="ops@example.com",
+                                      paths=["wiki/entities/Acme Corp.md"], why="stale")
+
+    recorded = _actions(conn)[0]
+    assert (recorded["action"], recorded["outcome"], recorded["error_class"]) == (
+        "pages.delete", "error", "SubmissionRejected")
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        assert cur.fetchone()[0] == 0, "refused at the seam means no row and no blob"
+
+
+def test_pages_delete_without_an_evidence_store_is_a_refusal_naming_it(conn, service):
+    """The plain `service` fixture has no evidence store, which is the deployment shape a console
+    served by a process whose object store is unreachable is in. The refusal is a `ReviewError`, so
+    `_mutate`'s own `CaptureError` branch maps it to the routes' 409 with the library's own
+    sentence — never a 500 naming a class."""
+    with pytest.raises(AdminRefused, match="evidence store"):
+        service.pages_delete(actor="ops@example.com", paths=["wiki/notes/Old Memo.md"],
+                             why="superseded")
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        assert cur.fetchone()[0] == 0

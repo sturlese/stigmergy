@@ -55,7 +55,8 @@ def record_job_run(conn, job: str, *, status: str = "ok", stats: dict | None = N
 def record_ingest_error(conn, *, source_doc_id: str, stage: str, error: str, attempts: int,
                         source: str = SOURCE_CAPTURE_QUEUE) -> int | None:
     """One `ingest_errors` row for a failed item: which item, which stage, how many attempts it
-    burned. `resolved` defaults to false — a steward flips it when the item is dealt with."""
+    burned. `resolved` defaults to false — nothing in this system flips it; an operator does,
+    once the item is dealt with."""
     try:
         with conn.cursor() as cur:
             cur.execute(_INSERT_INGEST_ERROR, (source, source_doc_id, stage, error, attempts))
@@ -64,6 +65,29 @@ def record_ingest_error(conn, *, source_doc_id: str, stage: str, error: str, att
         log.error("ingest_errors write failed (doc=%s stage=%s)", source_doc_id, stage,
                   exc_info=True)
         return None
+
+
+_LATEST_RUN = """
+SELECT id, status, started_at, finished_at, stats, error FROM job_runs
+WHERE job = %s ORDER BY started_at DESC LIMIT 1
+"""
+
+
+def latest_run(conn, job: str) -> dict | None:
+    """The most recent `job_runs` row for `job`, whatever its status — or `None`.
+
+    WHATEVER its status, deliberately: this answers "when did this job last run", which is the
+    question a watermark asks, and a job that ERRORED did run. Reading only successful runs would
+    make a failing pass re-attempt on every tick — the shape a repair pass cannot have, since each
+    attempt costs model calls.
+    """
+    with conn.cursor() as cur:
+        cur.execute(_LATEST_RUN, (job,))
+        row = cur.fetchone()
+    if row is None:
+        return None
+    return {"id": row[0], "status": row[1], "started_at": row[2], "finished_at": row[3],
+            "stats": row[4] or {}, "error": row[5] or ""}
 
 
 @contextlib.contextmanager

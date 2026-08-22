@@ -116,7 +116,7 @@ def test_identities_fixture_is_keyed_by_email(fixture):
 # `test_service_acl.py` proves ACL scoping by calling BrainService directly. Neither can catch a
 # regression in the real server's token -> identity -> per-tool wiring. These two can, and that is
 # this file's whole reason for existing (see its own docstring).
-def test_the_mounted_tool_set_over_real_http_is_exactly_the_ten_supported_tools(indexed):
+def test_the_mounted_tool_set_over_real_http_is_exactly_the_eight_supported_tools(indexed):
     """The tool list, asserted at the transport boundary rather than in-process: a tool that
     `build_mcp()` mounts but the real HTTP app does not serve — or the reverse — turns this red."""
     _, fx = indexed
@@ -135,7 +135,6 @@ def test_the_mounted_tool_set_over_real_http_is_exactly_the_ten_supported_tools(
                 assert names == {
                     "search_brain", "read_page", "list_entities", "describe_entity", "ask",
                     "brain_submit", "brain_submissions", "brain_delete",
-                    "review_queue", "review_decide",
                 }
 
                 search = await call_json(session, "search_brain", query="quarterly revenue")
@@ -395,6 +394,20 @@ def test_a_chunked_body_with_no_declared_length_is_capped_mid_stream_with_no_row
         cur.execute("SELECT count(*) FROM capture_queue WHERE submitted_by = %s", (fx.ENG,))
         after = cur.fetchone()[0]
     assert after == before               # the body was never fully read; no tool could have run
+
+
+def test_this_cap_sits_below_the_mcp_sdks_own_body_ceiling():
+    """The MCP SDK refuses a body over ITS ceiling (4 MiB by default) with its own 413, before this
+    middleware's streaming cap could report the disconnect. Two ceilings within a chunk of each
+    other made the chunked-body test above FLAKY — whichever read won decided the status. So
+    this cap is pinned strictly below the SDK's: the refusal has one owner and one shape."""
+    from mcp.server.streamable_http_manager import DEFAULT_MAX_REQUEST_BODY_SIZE
+
+    from stigmergy.server.transport_http import MAX_REQUEST_BODY_BYTES
+    assert MAX_REQUEST_BODY_BYTES < DEFAULT_MAX_REQUEST_BODY_SIZE
+    # and it still fits the largest material cap with JSON-escaping room to spare
+    from stigmergy.capture.schema import MAX_MATERIAL_BYTES
+    assert MAX_REQUEST_BODY_BYTES >= 3 * MAX_MATERIAL_BYTES
 
 
 def test_an_ordinary_small_submit_is_unaffected_by_the_body_cap(indexed):

@@ -17,10 +17,8 @@ bucket and access key id, none of which may reach the wire. `MemoryEvidenceStore
 offline double — a double that hand-rolled the key scheme would prove the double, not the store.
 """
 import hashlib
-import ipaddress
 import logging
 import os
-import socket
 
 from stigmergy.capture.errors import EvidenceError
 
@@ -55,83 +53,6 @@ WORST_CASE_STALL_S = (RETRIES + 1) * (CONNECT_TIMEOUT_S + READ_TIMEOUT_S)
 _NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound", "NoSuchBucket"}
 
 
-# ── the two halves have to belong to the same deployment ──────────────────────────────────────
-# The queue and the evidence plane are configured independently, and a drop with the evidence
-# group unset puts the row in the cloud and the bytes on the operator's laptop — the deployed
-# worker then dies on `NoSuchKey` after the material has been consumed (the repo's own `.env`
-# carries the bucket under `R2_*` names, so sourcing it looks like configuration and is not).
-# Deliberately ONE combination, not a general consistency check: a remote database with a
-# loopback evidence endpoint is never right, while the mirror case (local database, remote
-# bucket) is odd but works — a guard that fires on the merely unusual gets disabled.
-_LOOPBACK_HOSTS = ("localhost", "0.0.0.0", "[::1]", "::1")
-
-
-def host_of(endpoint_url: str) -> str:
-    """The host of an S3 ENDPOINT URL, lowercased, port and path stripped. Not for DSNs: those
-    are `index.store.host_of_dsn`'s job through libpq's parser, because the keyword form carries
-    a password that string surgery here would hand straight to a printed sentence."""
-    value = (endpoint_url or "").strip().lower()
-    if "://" in value:
-        value = value.split("://", 1)[1]
-    value = value.split("/", 1)[0].split("?", 1)[0]
-    if "@" in value:
-        value = value.rsplit("@", 1)[1]
-    if value.startswith("["):                       # bracketed IPv6, port outside the brackets
-        return value.split("]", 1)[0] + "]"
-    return value.rsplit(":", 1)[0] if ":" in value else value
-
-
-def is_loopback_host(host: str) -> bool:
-    """Does this host name the machine asking? Literal spellings first, then a real address test
-    (`ipaddress`) — a `startswith("127.")` string test misses the 127/8 and IPv6 spellings and
-    classifies `127.evil.com` as local."""
-    value = (host or "").strip().lower().rstrip(".")
-    if value in _LOOPBACK_HOSTS:
-        return True
-    literal = value.strip("[]")
-    try:
-        return ipaddress.ip_address(literal).is_loopback
-    except ValueError:
-        pass
-    # `ipaddress` refuses abbreviated IPv4 (`127.1`, decimal/octal/hex forms) that are WORKING
-    # local endpoints; reading them as remote would admit the cloud-queue/laptop-evidence pair.
-    # `inet_aton` accepts exactly that classic family and still rejects a hostname, so
-    # `127.evil.com` stays remote.
-    try:
-        return ipaddress.ip_address(socket.inet_ntoa(socket.inet_aton(literal))).is_loopback
-    except OSError:
-        return False
-
-
-def is_loopback(endpoint_url: str) -> bool:
-    """`is_loopback_host` over an endpoint URL."""
-    return is_loopback_host(host_of(endpoint_url))
-
-
-def split_stores_reason(*, db_host: str, endpoint_url: str) -> str:
-    """`""` when the queue and the evidence plane can belong to the same deployment, and the
-    sentence explaining the refusal when they provably cannot.
-
-    Takes a HOST, never a DSN — no parsing of a credential-bearing string this would then
-    interpolate into a message. Fails open in both directions: an empty `db_host` or a
-    unix-socket directory can only be local, and only a positively-remote host against a
-    positively-loopback endpoint is refused.
-    """
-    if not db_host or db_host.startswith("/") or is_loopback_host(db_host):
-        return ""
-    if not is_loopback(endpoint_url):
-        return ""
-    return (
-        f"the queue is at {db_host} but evidence would upload to {host_of(endpoint_url)} — a "
-        f"remote worker can never read a store on this machine, so this capture would fail with "
-        f"NoSuchKey seconds after it is claimed.\n"
-        f"  export the deployment's own evidence group before dropping:\n"
-        f"    {ENDPOINT_ENV} {BUCKET_ENV} {ACCESS_KEY_ENV} {SECRET_KEY_ENV}\n"
-        f"  (the repo's .env keeps these under R2_* names for `make r2-smoke`, so sourcing it "
-        f"does NOT set them)\n"
-        f"  or pass --allow-split-stores if you really mean to split them.")
-
-
 def content_key(data: bytes) -> str:
     """The content address of `data`. Pure: no store, no network — a caller can compute the key a
     submission WILL have (and a verifier can recompute it from the bytes it read back)."""
@@ -142,9 +63,9 @@ def content_key(data: bytes) -> str:
 class MemoryEvidenceStore:
     """The offline double: same surface, a dict instead of a bucket.
 
-    `bucket`/`endpoint_url` are part of that surface, not decoration: the drop doors NAME the
-    store they uploaded to and ask `refuse_split_stores` where it points, so a double without
-    them can only be driven through code paths that skip both.
+    `bucket`/`endpoint_url` are part of that surface, not decoration: a report names the store a
+    capture's bytes went to, so a double without them can only be driven through code paths that
+    never say where anything was stored.
     """
 
     bucket = "memory"

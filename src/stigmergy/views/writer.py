@@ -1,10 +1,11 @@
-"""views.writer — the one commit path for a view, authored by the App bot always, never a
-steward.
+"""views.writer — the one commit path for a view, authored by the App bot always, never by the
+operator whose clone the CLI runs in.
 
 Depends only on `stigmergy.librarian.gitcmd` / `.errors` / `.githubapp` — never on
-`stigmergy.entities`: the worker-triggered path would otherwise make the unattended worker
-transitively depend on the steward's CLI package. The two guard checks below are a declared,
-small duplication of `entities.clone`'s rather than an import in the wrong direction.
+`stigmergy.entities`: `stigmergy.librarian` calls INTO this package in the same run a meeting
+files, so an import here would hand the unattended worker a second, undeclared edge into a package
+it may reach from `librarian/identity.py` alone. The two guard checks below are written here for
+that reason, rather than reached for across that edge.
 
 A view write passes ZERO of the librarian's gates, by ruling: a view is a synthesis over pages
 that already passed them, its frontmatter and path are code-composed, and wholesale regeneration
@@ -28,11 +29,11 @@ from stigmergy.librarian.errors import GitError
 
 
 class ViewWriteError(GitError):
-    """A steward-facing refusal from the view writer (dirty tree, wrong branch)."""
+    """An operator-facing refusal from the view writer (dirty tree, wrong branch)."""
 
 
 def ensure_on_branch(repo: str, branch: str) -> None:
-    """Refuse unless HEAD is `branch` — a steward's clone only; the worker's ephemeral worktree
+    """Refuse unless HEAD is `branch` — an operator's clone only; the worker's ephemeral worktree
     is always a fresh, detached checkout and is never asked this."""
     head = gitcmd.run("rev-parse", "--abbrev-ref", "HEAD", cwd=repo, check=False).stdout.strip()
     if head != branch:
@@ -75,7 +76,7 @@ def commit_and_push(repo: str, *, branch: str, message: str) -> Landed:
     rewrites the commit, so an unchanged sha means nothing foreign entered the tree and a changed
     one means something did. Derived from the two shas rather than reported by `gitcmd.push`,
     whose `-> str` contract three packages depend on. The caller runs the two guards above where
-    they apply (the steward path).
+    they apply (the operator-clone path).
     """
     author_name, author_email = githubapp.identity()
     committed = gitcmd.commit(repo, message=message, author_name=author_name,

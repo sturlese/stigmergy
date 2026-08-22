@@ -14,6 +14,14 @@ from stigmergy.capture import ops, schema
 
 DEFAULT_RETENTION_DAYS = 30
 
+# The `job_runs` names this module writes under. Constants rather than literals at the call site
+# because the librarian's night shift asks "when did JOB_NAME last run" to decide whether today's
+# purge is due — so the name the pass records and the name the scheduler reads must be one string,
+# not two that happen to match.
+JOB_NAME = "capture-purge"
+DRY_RUN_JOB_NAME = "capture-purge-dry-run"
+IMMEDIATE_JOB_NAME = "capture-purge-immediate"
+
 # Literal, not a bind parameter: `WITHHELD_REASONS` is a fixed, importable set.
 _WITHHELD_REASON_LITERALS = schema.sql_literals(schema.WITHHELD_REASONS)
 
@@ -63,7 +71,7 @@ def purge_secret_capture_immediately(conn, submission_id: int, *, reason_code: s
     it happen" is answerable from the database. Returns `{"purged", "id", "reason_code"}`;
     `purged` is False when payload/hints were already NULL — nothing left to do, not an error.
     """
-    job = "capture-purge-immediate"
+    job = IMMEDIATE_JOB_NAME
     with ops.job_run(conn, job) as stats:
         with conn.cursor() as cur:
             cur.execute(_PURGE_ONE, (submission_id, schema.REJECTED))
@@ -82,7 +90,7 @@ def purge(conn, *, older_than_days: int = DEFAULT_RETENTION_DAYS, dry_run: bool 
     """
     days = max(0, int(older_than_days))
     terminal = sorted(schema.TERMINAL_STATUSES)
-    job = "capture-purge-dry-run" if dry_run else "capture-purge"
+    job = DRY_RUN_JOB_NAME if dry_run else JOB_NAME
     with ops.job_run(conn, job) as stats:
         with conn.cursor() as cur:
             cur.execute(_PREVIEW if dry_run else _PURGE, (terminal, days))

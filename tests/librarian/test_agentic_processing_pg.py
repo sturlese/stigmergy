@@ -82,7 +82,7 @@ def _page_text(*, title: str = TITLE, anchor: str = REGISTERED) -> str:
     is the author and code only stamps what the server owns.
 
     Deliberately the same shape the offline double writes (`double._write_page`): it is the shape
-    the eight gates and the frozen contract linter are known to accept, so a failure in a test below
+    the nine gates and the frozen contract linter are known to accept, so a failure in a test below
     is about the road being exercised rather than about this fixture's prose.
     """
     front = ["type: note", f'title: "{title}"', "status: developing",
@@ -211,7 +211,7 @@ def test_an_iterating_run_files_the_page_the_MODEL_wrote_and_the_row_says_what_i
 
     Four requests: one search, the page, the account, a final message nobody reads. Everything after
     that is production's — `read_outcome` parses the file, `discard_outcome_file` drains the channel
-    before the diff is taken, `_stamp` writes the server-owned frontmatter, the eight gates and the
+    before the diff is taken, `_stamp` writes the server-owned frontmatter, the nine gates and the
     contract linter judge the diff, and the commit is pushed.
 
     The three assertions that could each go wrong silently: the committed page is the one the MODEL
@@ -438,12 +438,12 @@ def test_a_run_that_writes_TWO_pages_is_refused_by_the_cross_check(
     _nothing_landed(env, before)
 
 
-def test_an_iterating_run_that_proposes_the_unknown_entity_files_it_beside_the_note(
+def test_an_iterating_run_that_introduces_the_unknown_entity_files_it_beside_the_note(
         tmp_path, clean_queue, require_gitleaks):
     """The case an operator meets constantly, on the road that ships: a capture about something the
     registry does not know. The model writes its note linking the new name, declares the entity in
     `new_entities`, and code creates the page beside the note — one commit, the note anchored to the
-    newborn id, the registry regenerated, a steward to confirm it afterwards."""
+    newborn id, the registry regenerated, the identity confirmed by the submitter (ADR 044)."""
     script = Script([_SEARCH_STEP,
                      _write_page_step(_page_text(anchor="Halcyon Grid")),
                      _write_account_step(_account(
@@ -464,7 +464,8 @@ def test_an_iterating_run_that_proposes_the_unknown_entity_files_it_beside_the_n
     changed = support.changed_paths(env.bare, sha)
     assert "wiki/entities/Halcyon Grid.md" in changed and "ops/entity-registry.json" in changed
     assert 'entity: ["halcyon-grid"]' in support.read_filed_page(env.bare, sha, PAGE_PATH)
-    assert result.report["entities_proposed"][0]["id"] == "halcyon-grid"
+    assert result.report["entities_born"][0]["id"] == "halcyon-grid"
+    assert result.report["entities_born"][0]["confirmed_by"] == support.DEFAULT_SUBMITTER
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════

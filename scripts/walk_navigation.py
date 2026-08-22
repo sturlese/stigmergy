@@ -139,9 +139,9 @@ def main() -> int:
     print("""
 THE LIVE HALF (hand steps, real corpus + real model):
   1. make index-rebuild                              # real embedder over ../stigmergy-brain
-  2. generate the real views (one per anchored entity):
-       .venv/bin/stigmergy-views regenerate --all   # commits+pushes as the App bot (normal op)
-     then make index-rebuild again so describe_entity's view layer sees them.
+  2. let the worker generate the real views: start `make librarian-run` and leave it idle for a
+     sweep interval — the convergence pass builds one per anchored entity and pushes as the App
+     bot. Then make index-rebuild again so describe_entity's view layer sees them.
   3. ask, through the entity door:
        connect a Claude session over MCP and ask "what do we know about Borealis Dynamics?"
      — record whether the trace uses describe_entity / entity-filtered search / read_page+links

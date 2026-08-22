@@ -2,15 +2,21 @@
 
 Everything below is for the operator running the system. The live world this runbook covers:
 **three zones** in the knowledge repo (`wiki/` · `sources/` · `views/`), the librarian's
-**9 gates**, **10 MCP tools** (`search_brain`/`read_page`/`list_entities`/`describe_entity`,
-`ask`, `brain_submit`/`brain_submissions`/`brain_delete`, `review_queue`/`review_decide`),
-**one Fly app** with three process groups (`app` · `slack` · `worker`), four GitHub Actions
-crons (`index-rebuild` · `retention-purge` · `gardener` · `repair-propose`), the optional `/admin`
+**9 gates**, **8 MCP tools** (`search_brain`/`read_page`/`list_entities`/`describe_entity`,
+`ask`, `brain_submit`/`brain_submissions`/`brain_delete`),
+**one Fly app** with three process groups (`app` · `slack` · `worker`), the **night shift** the
+worker runs on its own idle branch (the gardener and the retention purge), the optional `/admin`
 console on the `app` group, and the golden evals under `evals/` with the release gates
 (`make gates`) over them.
 
-Organized by OPERATION: Deploy · Wipe & re-seed · Capture from Drive · Index rebuild ·
-Govern · Remove pages · Recovery · Revocation · Release gates & drills · Troubleshooting.
+**Nothing here runs in GitHub Actions.** Every unattended pass runs inside the deployment, on the
+librarian worker's idle branch ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D6) —
+so there is no second place to configure, no schedule that can be silently skipped, and no
+credential for another service to keep. The one exception is the index REBUILD, which needs the
+embedding key the worker deliberately does not have; it stays a command an operator runs.
+
+Organized by OPERATION: Deploy · Wipe & re-seed · Capturing a meeting or a document ·
+Index rebuild · Removing pages · Recovery · Revocation · Release gates & drills · Troubleshooting.
 
 There is no read site: navigation happens through `read_page` and the entity tools
 ([ADR 022](../decisions/022-entity-navigation.md)).
@@ -41,13 +47,15 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    # EMBED_API_KEY instead, and a provider-prefixed ANSWER_MODEL takes that provider's own key
    # (`openrouter:` -> OPENROUTER_API_KEY).
    fly secrets set OPENAI_API_KEY="sk-..."
-   fly secrets set STIGMERGY_TOKEN_STORE='{"<sha256hex>": "steward@example.com"}'
+   fly secrets set STIGMERGY_TOKEN_STORE='{"<sha256hex>": "ana@example.com"}'
    # the evidence plane (R2 — server AND worker read it)
    fly secrets set STIGMERGY_EVIDENCE_ENDPOINT="https://<account-id>.r2.cloudflarestorage.com"
    fly secrets set STIGMERGY_EVIDENCE_BUCKET="stigmergy-evidence-staging"
    fly secrets set STIGMERGY_EVIDENCE_ACCESS_KEY_ID="..."
    fly secrets set STIGMERGY_EVIDENCE_SECRET_ACCESS_KEY="..."
-   # the librarian worker (`worker` group)
+   # the librarian GitHub App — the `worker` group PUSHES with it, and the `app` group's index
+   # webhook READS with it (Contents API, no clone). It is the only git credential in the
+   # deployment, and since ADR 044 D3 the `app` group has no write path of its own to spend it on.
    fly secrets set STIGMERGY_LIBRARIAN_APP_ID="123456"
    fly secrets set STIGMERGY_LIBRARIAN_INSTALLATION_ID="87654321"
    fly secrets set STIGMERGY_LIBRARIAN_PRIVATE_KEY="$(cat ~/.config/stigmergy/librarian.private-key.pem)"
@@ -57,11 +65,6 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    # (`anthropic:` -> ANTHROPIC_API_KEY, `openrouter:` -> OPENROUTER_API_KEY,
    # `google-gla:` -> GEMINI_API_KEY). A missing one is refused at startup, by name.
    fly secrets set ANTHROPIC_API_KEY="sk-ant-..."
-   # OPTIONAL, worker only: the Drive door's OCR fallback for a scanned PDF. Two forms: this key
-   # serves the bare Gemini VISION_MODEL; a provider-prefixed VISION_MODEL secret
-   # ("openrouter:qwen/qwen3-vl-8b-instruct", with OPENROUTER_API_KEY) OCRs rasterized pages
-   # instead. Neither set means a scanned deck refuses honestly (see "Capture from Drive").
-   fly secrets set GEMINI_API_KEY="..."
    # the Slack transport (`slack` group) — or `make slack-secrets` to stage all three from .env
    fly secrets set SLACK_APP_TOKEN="xapp-..."
    fly secrets set SLACK_BOT_TOKEN="xoxb-..."
@@ -70,16 +73,11 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
    fly secrets set STIGMERGY_GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"
    fly secrets set STIGMERGY_GITHUB_REPO="<owner>/stigmergy-brain"
    # the admin console (`app` group, ADR 029) — OPTIONAL; unset = the console does not exist.
-   # Hash from `stigmergy-admin-token`; PAT = fine-grained, Actions read+write, one repo only.
-   # STIGMERGY_ADMIN_GITHUB_REPO is WHEREVER THE CRON WORKFLOWS RUN, which is the knowledge repo
-   # (see step 4) — so in practice it holds the same value as STIGMERGY_GITHUB_REPO above, and
-   # the PAT must be scoped to THAT repo. They are still two settings because they answer two
-   # questions (which repo is pushed to vs which repo's Actions the console drives), and there is
-   # no default: without it the crons tab is read-only. The digest channel id is not sensitive;
-   # secrets are simply Fly's env mechanism.
+   # Hash from `stigmergy-admin-token`. That hash is the console's ENTIRE credential surface: it
+   # holds no token for any other service, because it drives none (ADR 044 — the passes it used
+   # to dispatch through a GitHub PAT now run in the worker). The digest channel id is not
+   # sensitive; secrets are simply Fly's env mechanism.
    fly secrets set STIGMERGY_ADMIN_TOKEN_HASH="<from stigmergy-admin-token>"
-   fly secrets set STIGMERGY_ADMIN_GITHUB_TOKEN="<fine-grained PAT>"
-   fly secrets set STIGMERGY_ADMIN_GITHUB_REPO="$STIGMERGY_GITHUB_REPO"   # same repo as above
    fly secrets set STIGMERGY_DIGEST_CHANNEL_ID="C..."
    ```
 
@@ -90,36 +88,28 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
 3. **Supabase Postgres** must already have the index built at least once
    (`.venv/bin/stigmergy-index --rebuild --repo $STIGMERGY_REPO` against `STIGMERGY_INDEX_DSN`) — the
    server refuses to serve an empty index.
-4. **GitHub Actions secrets and variables** (for the four crons), on the **knowledge repo**:
+4. **The night shift needs no setup at all.** The gardener and the retention purge run inside the
+   `worker` process group, on its idle branch, and read the same environment the worker already
+   has. Two optional variables move them; both default to a sensible UTC time and both take the
+   word `off`:
 
-   **The crons run from the knowledge repo, not from this one, for privacy.** Actions logs on a
-   PUBLIC repository are world-readable, and these jobs describe the corpus out loud —
-   `stigmergy-gardener` prints its whole report, entity ids and page paths included, and
-   `stigmergy-repair propose` names every page it proposed an edit against. Repository *variables*
-   are not masked either (only secrets are). This repo carries the four workflow files as adopter
-   templates, **disabled**; copy them into your private knowledge repo and run them there.
+   | Fly secret / env | Default | What it does |
+   |---|---|---|
+   | `STIGMERGY_LIBRARIAN_GARDEN_AT` | `05:07` | when the daily gardener pass runs, UTC `HH:MM`, or `off` |
+   | `STIGMERGY_LIBRARIAN_RETENTION_AT` | `04:42` | when the daily retention purge runs, UTC `HH:MM`, or `off` |
+   | `STIGMERGY_RETENTION_DAYS` | `30` | how long a terminal capture keeps its payload |
+   | `STIGMERGY_GARDENER_MODEL` | **must be set** | the gardener's model. Its own default is a bare id resolving through the OpenAI Responses API, and the worker has no `OPENAI_API_KEY` — the boot strips it. Use a provider-prefixed model whose key the worker holds (`fly.toml` ships `anthropic:claude-sonnet-5`). A garden pass whose model this worker cannot authenticate fails by name and records a `job_runs` error row, rather than stopping the worker — filing never depends on maintenance |
 
-   | Settings → Secrets → Actions | Used by |
-   |---|---|
-   | `INDEX_DSN` | all four workflows |
-   | `OPENAI_API_KEY` | `index-rebuild`, `gardener`, `repair-propose` |
-   | `SLACK_BOT_TOKEN` | `gardener`, for the SLA notice — and nothing else: the proposer posts nowhere, and it holds no GitHub App credential either, because it proposes and cannot apply |
+   A pass never starts while a capture is waiting in the queue, and yields between units, so
+   maintenance cannot delay a filing. "Did it run" is answered from `job_runs` — the same rows the
+   worker itself reads to decide whether today's pass is still due, which is what makes a restart
+   at 05:08 not garden twice.
 
-   | Settings → Variables → Actions | Used by |
-   |---|---|
-   | `STIGMERGY_CRONS_ENABLED` (`true`) | all four — **and it is the on/off switch** |
-   | `STIGMERGY_PLATFORM_REF` (a release tag; default `main`) | all four — which platform version `pip` installs |
-   | `STIGMERGY_DIGEST_CHANNEL_ID`, `STIGMERGY_GARDENER_MODEL` | `gardener` (a channel id and a model name are not credentials) |
-   | `STIGMERGY_REPAIR_MODEL` | `repair-propose` (a model name, for the same reason: not a credential, and not masked — a second argument for a private repo) |
-   | `STIGMERGY_PLATFORM_REPO` (default `sturlese/stigmergy`) | all four — **set it if you forked.** Leave it unset on a fork and every cron silently `pip install`s the UPSTREAM CLI, so your crons run somebody else's code against your knowledge |
+   **Nothing is skipped silently.** The failure mode this replaced was a cron guarded by a
+   repository variable: an unset variable made every job green-and-skipped, so "the crons stopped
+   running" looked identical to "the crons are fine". A pass that does not run now leaves its last
+   `job_runs` row where it was, and the console's Jobs page shows how long ago that was.
 
-   **No cross-repo PAT is involved.** The knowledge repo is the workflow's own repository, so the
-   job's read-only `GITHUB_TOKEN` covers the checkout; the CLI arrives by
-   `pip install git+https://github.com/<owner>/stigmergy.git@$STIGMERGY_PLATFORM_REF`.
-
-   **Every scheduled job is guarded by `if: vars.STIGMERGY_CRONS_ENABLED == 'true'` and skips
-   cleanly when it is unset.** That is also the failure mode to check first when "the crons stopped
-   running": a skipped job is green, so read `job_runs`, not the Actions tab (below).
 5. **R2 bucket** + scoped API token in the Cloudflare dashboard, and the lifecycle rule
    `evidence-retention-30d` (delete after 30 days — the physical floor behind the queue purge's
    own `DEFAULT_RETENTION_DAYS`). Verify credentials with the smoke check:
@@ -147,7 +137,7 @@ Nothing in this repo's scripts creates a cloud resource; all of them assume you 
 make deploy-staging          # = scripts/deploy_staging.sh, STIGMERGY_REPO defaults to ../stigmergy-brain
 ```
 
-Bakes **four** files out of `$STIGMERGY_REPO/ops/` into the `deploy/` directory, which the
+Bakes **three** files out of `$STIGMERGY_REPO/ops/` into the `deploy/` directory, which the
 Dockerfile then `COPY`s to `/app/`:
 
 | Baked from | To | Missing in the knowledge repo |
@@ -155,25 +145,23 @@ Dockerfile then `COPY`s to `/app/`:
 | `ops/identities.json` | `/app/identities.json` | **the script exits 2** — this is the one required file |
 | `ops/entity-registry.json` | `/app/entity-registry.json` | `{"entities": {}}` — `ask` searches without entity-first resolution. The baked copy is the FALLBACK: a server whose index carries a registry snapshot (the webhook refreshes it on every push that touches the file) answers from that instead |
 | `ops/slack-channels.json` | `/app/slack-channels.json` | `{}` — every audience falls back to the safe empty default |
-| `ops/stewards.json` | `/app/stewards.json` | `{}` — no scope resolves to a steward, so the doorbell records an undeliverable and every review decision fails closed (see Troubleshooting) |
 
-All four are always written, so the unconditional `COPY` can never fail on a missing source.
+All three are always written, so the unconditional `COPY` can never fail on a missing source.
 
 **`deploy/` is TRACKED, not gitignored.** The `COPY`s are unconditional, so a fresh clone has to
-build, so the four files are committed as EMPTY defaults (`{}` · `{"entities": {}}` · `{}` · `{}`).
+build, so the three files are committed as EMPTY defaults (`{}` · `{"entities": {}}` · `{}`).
 What the script bakes over them is a whole deployment's identity roster, one `git add -A` from being
 published, so it restores the committed defaults on the way out through an EXIT trap that fires on
 **every** path out, a failed `fly deploy` included. `tests/test_deploy_defaults.py` holds both
 halves: that `fly deploy` saw the real files, and that nothing but the defaults outlived the script.
 If you ever find real data under `deploy/`, restore the empty defaults before committing.
 
-The script touches **only those four names**, never the `deploy/` directory itself, because
-`deploy/` holds tracked files it does not bake — `workflows/` today, whatever is added next
-tomorrow. It used to clear the directory outright, and since the EXIT trap knew how to rebuild the
-four JSON files and nothing else, one `make deploy-staging` deleted the four files under
-`deploy/workflows/` from the working tree; a routine `git add -A` afterwards would have committed
-their removal. The delete set and the restore set are now derived from one list in the script, so
-they cannot drift apart again.
+The script touches **only those three names**, never the `deploy/` directory itself, because
+`deploy/` may hold tracked files it does not bake. It used to clear the directory outright, and
+since the EXIT trap knew how to rebuild the baked JSON files and nothing else, one
+`make deploy-staging` deleted every other tracked file under `deploy/` from the working tree; a
+routine `git add -A` afterwards would have committed their removal. The delete set and the restore
+set are now derived from one list in the script, so they cannot drift apart again.
 
 Then it runs `fly deploy` (one image, all three process groups) and pins both singleton groups:
 `fly scale count slack=1 --yes` — Socket Mode has no leader election and `fly deploy` creates two
@@ -186,11 +174,11 @@ redeploy (see Revocation).
 
 **A deploy is not complete without two verifications**:
 
-1. **A release carrying an index schema change rebuilds the index right after the deploy —
-   never wait for the nightly cron.** Until the index catches up, every `ask`/`search_brain`
+1. **A release carrying an index schema change rebuilds the index right after the deploy.**
+   Nothing rebuilds it for you — the rebuild needs an embedding key the worker does not have, so
+   it is always a command somebody runs. Until the index catches up, every `ask`/`search_brain`
    fails `UndefinedColumn`. After any deploy whose diff touches `index/store.py`'s DDL or the
-   columns `index/corpus.py` parses: `gh workflow run index-rebuild.yml` (or
-   `make rebuild-staging`), before calling the deploy done.
+   columns `index/corpus.py` parses: `make rebuild-staging`, before calling the deploy done.
 2. **The deploy check ends with ONE real `ask`, end to end.** `fly status` showing every
    process group healthy proves nothing about the read path a schema-skewed index breaks
    silently.
@@ -202,18 +190,17 @@ do to change this" differently enough that guessing costs a redeploy or a silent
 
 | Kind | Example | What changing it takes |
 |---|---|---|
-| Baked into the image at deploy time | `ops/stewards.json` — the copy `fly.toml` points the `app` group at (`--stewards`); the fallback copies of the three cached files below are baked too, but only answer where the index has no snapshot | a commit and a push in the knowledge repo, then `make deploy-staging` to re-bake `deploy/` and redeploy |
+| Baked into the image at deploy time | `ops/identities.json` — the copy `fly.toml` points the `app` and `slack` groups at (`--identities`); the fallback copy of `ops/entity-registry.json` is baked the same way, but only answers where the index has no snapshot | a commit and a push in the knowledge repo, then `make deploy-staging` to re-bake `deploy/` and redeploy |
 | Cached in the index, refreshed by the push webhook | `ops/entity-registry.json`, `ops/identities.json`, `ops/slack-channels.json` — `ops_file_snapshot` rows every process group reads through its database connection. The console's Index panel shows each file's freshness and source sha | a commit and a push — no deploy; the webhook writes each pushed file within seconds (fetched at the branch ref, so replays are inert), and the nightly index rebuild reconciles per file — it never clears the two access files over an absent checkout copy |
-| A Fly secret, read once at process startup | `STIGMERGY_TOKEN_STORE`, `OPENAI_API_KEY`, `STIGMERGY_INDEX_DSN`, the `STIGMERGY_EVIDENCE_*` group, the librarian App triple, `ANTHROPIC_API_KEY`, `STIGMERGY_ADMIN_TOKEN_HASH`/`STIGMERGY_ADMIN_GITHUB_TOKEN`, the three `SLACK_*` tokens, `STIGMERGY_GITHUB_WEBHOOK_SECRET` | `fly secrets set …` — triggers the redeploy that applies it; effective once the new machines are healthy, not before |
+| A Fly secret, read once at process startup | `STIGMERGY_TOKEN_STORE`, `OPENAI_API_KEY`, `STIGMERGY_INDEX_DSN`, the four `STIGMERGY_EVIDENCE_ENDPOINT`/`_BUCKET`/`_ACCESS_KEY_ID`/`_SECRET_ACCESS_KEY`, the librarian App triple, `ANTHROPIC_API_KEY`, `STIGMERGY_ADMIN_TOKEN_HASH`, the three `SLACK_*` tokens, `STIGMERGY_GITHUB_WEBHOOK_SECRET` | `fly secrets set …` — triggers the redeploy that applies it; effective once the new machines are healthy, not before |
 | A non-secret env var in `fly.toml`'s `[env]`, app-wide | `STIGMERGY_LIBRARIAN_TIMEOUT_S` — the worker's per-item agent budget, and what its lease (`config.resolved_visibility_timeout_s`) is derived from | edit `fly.toml`, then `make deploy-staging`/`fly deploy` — every process group's machines restart on the new value together. The admin console re-derives the DEPENDENT lease fresh on every request rather than caching a class default, so its meter and Reclaim horizon can never disagree with the worker's own once the new machines are up — see "A dead worker mid-item" below |
-| Committed to the knowledge repo, read at a base commit, wherever a checkout exists | `ops/acl.json`, `ops/entity-registry.json` and the contract linter (the WORKER's own reads — distinct from the `app`/`slack` groups' baked copies above), `ops/stewards.json` (same distinction, for the worker and any locally-run server passed `--repo`) | a commit and a push — no deploy; picked up at the very next item the worker claims, or the very next decision a checked-out server resolves |
+| Committed to the knowledge repo, read at a base commit, wherever a checkout exists | `ops/acl.json`, `ops/entity-registry.json` and the contract linter — the WORKER's own reads, at each item's own base commit, distinct from the `app`/`slack` groups' baked copies above | a commit and a push — no deploy; picked up at the very next item the worker claims |
 
-The rows that name `ops/stewards.json` are one file read two ways: on the deployed `app`/`slack`
-groups a steward's authority is a deploy-time snapshot, while the worker (and any process holding a
-checkout) sees a push immediately. See Revocation. `ops/entity-registry.json` used to work that way
-too and no longer does — a commit that pushed a new entity left `describe_entity` serving it with no
-name and no aliases until the next deploy, so the registry moved into the index where the webhook
-can refresh it for every group at once.
+`ops/identities.json` is the one access file that is still a deploy-time snapshot, which is why
+changing an audience scope is a redeploy (see Revocation). `ops/entity-registry.json` used to work
+that way too and no longer does — a commit that pushed a new entity left `describe_entity` serving
+it with no name and no aliases until the next deploy, so the registry moved into the index where the
+webhook can refresh it for every group at once.
 
 ### The three process groups
 
@@ -254,13 +241,11 @@ Four standing rules:
   the count includes it. Two workers actually draining is `worker=3`. Read the STATE column,
   never the count. On a pinned deployment the standby does not exist at all.
 - **The kill window is shorter than one item.** Fly caps `kill_timeout` at 300s; one item's
-  worst case on the deployed worker is 1710s (two agent attempts at the deployed
-  `STIGMERGY_LIBRARIAN_TIMEOUT_S=600`, plus 120s for the gates, the commit and the push, plus
-  390s for a drive conversion — a scanned deck rasterizes and OCRs before its first agent pass).
-  A deploy
+  worst case on the deployed worker is 1320s (two agent attempts at the deployed
+  `STIGMERGY_LIBRARIAN_TIMEOUT_S=600`, plus 120s for the gates, the commit and the push). A deploy
   or `fly machine stop` SIGTERMs (the worker stops claiming and exits at the next terminal
   state), but an item still running at 300s is SIGKILLed — the row returns after the derived
-  1890s visibility timeout with an attempt burned, and the next worker files it. Drain first if
+  1500s visibility timeout with an attempt burned, and the next worker files it. Drain first if
   you would rather not exercise that: `make librarian-status` shows what is in flight.
 
 The first worker line after a deploy is the one worth reading:
@@ -282,41 +267,52 @@ fly deploy --image <that image ref>   # redeploy it directly
 
 (Fly also has `fly apps rollback` on recent CLI versions — either is a single command.)
 
-### Scheduled jobs — the four crons
+### The night shift — what runs unattended
 
-| Workflow | When (UTC) | What |
-|---|---|---|
-| `index-rebuild.yml` | nightly ~04:17 | full staging index rebuild from `@main` |
-| `retention-purge.yml` | nightly ~04:42 | `stigmergy-queue purge` (30-day terminal rows) |
-| `gardener.yml` | daily ~05:07 | `stigmergy-gardener` corpus-health run |
-| `repair-propose.yml` | daily ~06:07 | `stigmergy-repair propose` — the gardener's findings turned into proposals a steward decides |
+| Pass | When (UTC) | Where | What |
+|---|---|---|---|
+| gardener | daily, `STIGMERGY_LIBRARIAN_GARDEN_AT` (default 05:07) | the worker's idle branch | `stigmergy-gardener`'s corpus-health run, findings persisted |
+| retention purge | daily, `STIGMERGY_LIBRARIAN_RETENTION_AT` (default 04:42) | the worker's idle branch | payload and hints of terminal rows past the window |
+| view sweep | every `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S`, and after anything this worker filed | the worker's idle branch | regenerates the `views/` rollups that went stale |
+| repair pass | every `STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S` | the worker's idle branch | derives repairs from the gardener's findings and APPLIES them |
+| index rebuild | **never automatically** | an operator's terminal | the full rebuild — see below |
 
-The last one runs an hour behind the gardener so the findings it reads are that morning's. It
-**proposes and cannot apply**: it holds no Slack token and no GitHub App credential, and every
-proposal lands PENDING until a steward approves it one at a time, in the console's Repairs tab or
-over MCP's `review_decide` ([repair.md](./repair.md)).
+All of it runs inside the `worker` process group. **No pass starts while a capture is waiting**,
+and each yields between units, so maintenance can never put itself between a capture and its
+filing ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D6).
 
-They run from the **knowledge repo's** own `.github/workflows/`; this repository ships them as
-templates in [`deploy/workflows/`](../../deploy/workflows/README.md), outside `.github/` so that
-GitHub does not register them here.
+The two DAILY passes decide "is today's run still owed" by reading their own last `job_runs` row,
+not an in-process timer — which is why a redeploy at 05:08 does not garden a second time, and why
+a worker that was down all night does not run a 05:07 pass at 23:00 (it would land twelve hours
+after the repair passes that were supposed to answer its findings).
 
-All four have `workflow_dispatch` for a manual run (`gh workflow run index-rebuild.yml`, etc.;
-`retention-purge.yml` is the only one taking an input, `dry_run`) — and the admin console's Crons
-tab drives the same dispatch/enable/disable with buttons when its GitHub PAT and repo are
-configured ([admin-console.md](./admin-console.md)).
-`retention-purge`, `gardener` and `repair-propose` each write a `job_runs` row; `index-rebuild`
-writes none and its truth is `index_meta.built_at` instead. The Actions tab cannot tell you a
-scheduled job stopped (a job skipped for an unset `vars.STIGMERGY_CRONS_ENABLED` is *green*). The
-database can:
+**The index rebuild is the one pass that cannot move into the worker.** It needs an embedding key,
+and the worker's environment deliberately has none: `librarian.bootstrap` strips `OPENAI_API_KEY`
+and `EMBED_API_KEY` before exec'ing the worker, so the write path cannot reach the read path's
+credential. Rebuild by hand, with the key exported:
+
+```sh
+.venv/bin/stigmergy-index --rebuild --repo $STIGMERGY_REPO      # or: make rebuild-staging
+```
+
+Between rebuilds the index is kept current by the push webhook (below), and the admin console's
+Index page lints the LIVE index on demand — duplicate page ids, orphan continuation parts,
+dangling supersessions, unregistered anchors — which is where drift shows up.
+
+**"Did it run" is a database question, and only a database question.** There is no Actions tab to
+read and no schedule to check:
 
 ```sql
 SELECT job, status, finished_at, stats FROM job_runs
 ORDER BY started_at DESC LIMIT 20;
-SELECT built_at FROM index_meta;                 -- index-rebuild's only trace
+SELECT built_at FROM index_meta;                 -- the rebuild's only trace; it writes no job row
 SELECT * FROM ingest_errors WHERE NOT resolved ORDER BY last_at DESC;
 ```
 
-`stigmergy-digest` is deliberately NOT on a cron ([ADR 026](../decisions/026-the-purge.md) D6): run
+The console's Jobs page is the same rows with the times spelled out, and its Repairs page is what
+the repair pass did with the gardener's findings ([repair.md](./repair.md)).
+
+`stigmergy-digest` is deliberately NOT on the night shift ([ADR 026](../decisions/026-the-purge.md) D6): run
 `.venv/bin/stigmergy-digest --repo $STIGMERGY_REPO` (or `--dry-run`) by hand; its watermark means each
 post covers exactly the window since the previous one.
 
@@ -326,7 +322,7 @@ post covers exactly the window since the previous one.
 middleware, by exact match, because it authenticates differently (HMAC over the raw body). Two Fly
 secrets (above: `STIGMERGY_GITHUB_WEBHOOK_SECRET`, `STIGMERGY_GITHUB_REPO`; optional
 `STIGMERGY_GITHUB_BRANCH`, default `main`, and `STIGMERGY_GITHUB_WEBHOOK_FILE_CAP`, default `50` — a
-push touching more files than the cap is left to the nightly rebuild), plus one webhook in the
+push touching more files than the cap is left to the next rebuild), plus one webhook in the
 **knowledge** repo's GitHub Settings → Webhooks:
 
 - **Payload URL**: `https://$FLY_APP.fly.dev/webhook/github`
@@ -350,8 +346,8 @@ ORDER BY started_at DESC LIMIT 5;
 
 ### The admin console
 
-`/admin` on the `app` process group (ADR 029) — the daily loop (queue drain, crons, gardener,
-repairs, digest, index, activity) in a browser instead of a terminal. Inert 404s until
+`/admin` on the `app` process group (ADR 029) — the daily loop (queue drain, the night shift,
+gardener, repairs, digest, index, activity) in a browser instead of a terminal. Inert 404s until
 `STIGMERGY_ADMIN_TOKEN_HASH` is set; everything it can do, each degraded mode and the rotation
 drills are in [admin-console.md](./admin-console.md). It is management-only: nothing on it reads
 the corpus.
@@ -410,63 +406,46 @@ anything in this repo. Every zone has a closed set of writers:
 | Zone | Written by |
 |---|---|
 | `wiki/notes,decisions,concepts/` | the librarian, filing a capture through the nine gates |
-| `wiki/meetings/` + `sources/meetings/` | the meeting flow, from a `stigmergy-meeting drop` |
-| `sources/slack/`, `sources/drive/` | the librarian's source attachment, from the 🧠 gesture and `stigmergy-drive drop` |
-| `wiki/entities/` (+ `ops/entity-registry.json`) | two writers, and no third: `librarian.identity` CREATES an entity page inside the capture's own commit — `approved_by: ""` for one it proposed, the steward's name for one they REGISTERED through that capture — and appends new facts and connections to a registered entity's page; `stigmergy.entities` DECIDES a proposal — a steward's own commit from the CLI, or a server-driven decision from MCP, Slack or the console ([ADR 030](../decisions/030-server-side-entity-minting.md)) |
-| `views/` | `stigmergy.views` **only** — either `stigmergy-views regenerate` by hand, or the librarian's best-effort trigger right after a meeting files |
+| `wiki/meetings/` + `sources/meetings/` | the meeting flow, from a `brain_submit(kind="meeting", …)` |
+| `sources/slack/`, `sources/documents/` | the librarian's source attachment, from the 🧠 gesture and a `brain_submit(kind="document", …)` |
+| `wiki/entities/` (+ `ops/entity-registry.json`) | one writer, and no second: `librarian.identity` CREATES an entity page inside the capture's own commit, `approved_by:` naming whoever captured ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D1), and appends new facts, connections and spellings to a registered entity's page. A repair the worker applies may later EDIT such a page (an alias merge, a body rewrite); nothing but the librarian creates one |
+| `views/` | `stigmergy.views` **only**, and only from the librarian worker: the convergence sweep on its idle branch (the guarantee) and the best-effort trigger right after a meeting files. There is no command, because there is no second writer |
 
 After any bulk re-seed: rebuild the index (next section) and run `make index-check`.
 
-## Capture from Drive
+## Capturing a meeting or a document
 
-### `stigmergy-drive drop` — the Drive door
+Both enter over `brain_submit`, from whatever client already holds the text. There is no operator
+command for either and no Google credential anywhere in the deployment: the CLIENT is the extractor
+— a Claude session with the Drive connector reads the document and submits it, a person with the
+file open sends what it says, a script sends what it already has
+([ADR 044](../decisions/044-the-capture-is-the-approval.md) D4).
 
-One command, from YOUR terminal, with YOUR Google auth ([ADR 028](../decisions/028-drive-door.md)
-— no Google credential exists server-side; the worker converts from the evidence blob and never
-talks to Drive):
+| What | The call |
+|---|---|
+| a transcript | `brain_submit(kind="meeting", material=<the transcript>, hints={"title": …, "meeting_date": "YYYY-MM-DD", "attendees": "a, b"})` — `title` and `meeting_date` are required |
+| a document | `brain_submit(kind="document", material=<the document's text>, hints={"title": …, "source_url": "https://…"})` — `title` is required, `source_url` is optional and must be an http(s) URL |
 
-    stigmergy-drive drop '<share-URL-or-file-id>' [--submitted-by you@example.com] \
-                       [--allow-split-stores]
+Material is capped at 1 MB for both (256 KB for `raw` and `page`), in UTF-8 bytes. A submission
+missing a required hint, or over its cap, is refused at the enqueue seam with no queue row and no
+evidence blob written.
 
-**The door refuses a queue and a store on different deployments** (exit 3, before any fetch or
-upload): a remote `STIGMERGY_INDEX_DSN` with a loopback evidence endpoint files a row whose bytes
-the deployed worker can never read. That is the shape `set -a; source .env` produces, because
-this repo's `.env` keeps the bucket under `R2_*` names while the code reads
-`STIGMERGY_EVIDENCE_*`. Export the deployment's own evidence group, or pass `--allow-split-stores`.
+A meeting files a page SET — the verbatim transcript under `sources/meetings/`, one `wiki/meetings/`
+page and one `wiki/decisions/` page per decision, atomically
+([meeting-distiller.md](./meeting-distiller.md)). A document files ONE synthesis page beside the
+verbatim `sources/documents/` part(s), anchored — to a registered entity, to one this capture
+introduces, or company-wide with a reason — like every capture; the `source_url` hint lands as `url:`
+on the source page, as the submitter's own claim of where the text came from.
 
-Requirements, all local: `gog` installed and authenticated (`brew install steipete/tap/gogcli`,
-`gog auth add` — check with `gog auth list`), and the same DSN/evidence environment every other
-operator CLI uses (`STIGMERGY_INDEX_DSN` + the `STIGMERGY_EVIDENCE_*` group for staging; compose
-defaults with none set). `--submitted-by` defaults to `$STIGMERGY_MEETING_OPERATOR_EMAIL`.
-
-**What it does — and nothing more**: resolves the file, refuses what the door does not convert,
-downloads (a native Google Doc/Slide/Sheet is exported to PDF by Drive itself), uploads the ORIGINAL
-BYTES to evidence, and enqueues exactly ONE `kind="drive"` row whose material is a deterministic
-manifest. No model, no conversion at the door. The worker extracts the text (pdftotext first; one
-bounded vision OCR pass for a scanned PDF when the worker has one configured — `GEMINI_API_KEY`
-for the bare Gemini model, or a provider-prefixed `VISION_MODEL` with its provider's key; the
-prefixed form transcribes at most the first 40 pages and says in-line where it cut; OPTIONAL,
-neither configured means scanned decks refuse honestly) and the librarian files ONE synthesis page plus the verbatim
-`sources/drive/` part(s), atomically, anchored — to a registered entity, to one this capture
-proposes, or company-wide with a reason — like every capture.
-
-**The format policy**: pdf · txt/md/json · xlsx/xls/csv/tsv · docx · any native Google file. An
-office binary (pptx/ppt/doc/odt/odp/ods/rtf) is refused naming its wake condition: the `office`
-conversion path works wherever `GOTENBERG_URL` points at a Gotenberg container, and
-`docker-compose.yml` runs none (the code's default `http://gotenberg:3000` resolves to nothing
-there), so such a document fails conversion until you stand one up. Files over 25 MB are refused at
-the door.
-
-**Reading the result**: `stigmergy-queue show <id>` — a `failed` row naming the `conversion`
-stage is the extraction refusing (scanned + no OCR, empty text, over the material cap, corrupt
-file); the operator's log has the detail the wire omits. The filed source page carries `url:` → the
-Drive link (the binary stays in Drive: door, never mirror) and its explicit chain `id:`.
+**Reading the result**: `stigmergy-queue show <id>`, or `brain_submissions` from the client that
+submitted it. A `failed` row names the stage the filing died at — there is no `conversion` stage,
+because nothing is fetched or converted server-side.
 
 **The agent budget for documents**: the deployed worker runs with
-`STIGMERGY_LIBRARIAN_TIMEOUT_S=600` (fly.toml), because a figure-dense deck overlapping an entity
-with existing pages exceeds the paste-sized 300s default. A `failed` row saying "the agent exceeded
-its NNNs budget" on a drive capture means the pass ran long, not that the capture is bad — re-drop
-it (identical bytes dedup only against FILED rows). The visibility timeout derives from this value.
+`STIGMERGY_LIBRARIAN_TIMEOUT_S=600` (fly.toml), because a figure-dense document overlapping an
+entity with existing pages exceeds the paste-sized 300s default. A `failed` row saying "the agent
+exceeded its NNNs budget" means the pass ran long, not that the capture is bad — submit it again
+(identical bytes dedup only against FILED rows). The visibility timeout derives from this value.
 
 ## Index rebuild
 
@@ -481,7 +460,6 @@ make index-rebuild                                     # $STIGMERGY_REPO (defaul
 
 ```sh
 make rebuild-staging                  # needs STAGING_DSN in .env (deliberately NOT STIGMERGY_INDEX_DSN)
-gh workflow run index-rebuild.yml     # ...or trigger the nightly workflow manually
 ```
 
 The running Fly machine picks up the new index on its next query — no restart, no redeploy (the
@@ -511,141 +489,76 @@ probe, any time:
 .venv/bin/stigmergy-search "what did we decide about Q3 pricing"
 ```
 
-## Governing what the librarian proposed
+**When the entity pages and `ops/entity-registry.json` disagree, there is no command to run.** The
+registry is DERIVED from the pages, and the librarian worker rewrites it inside every commit that
+touches the identity zone, so neither side is ever hand-edited — and a disagreement means one of
+them was. Two surfaces tell you:
 
-Nothing waits on a person before a capture is filed. When the librarian meets a name the registry
-does not know it **creates the entity page itself**, unconfirmed (`approved_by: ""`), anchors the
-capture to it and commits — and when it meets a new spelling for an entity that IS registered it
-appends that spelling to the entity's own `proposed_aliases:`. Governing those two is a decision
-about an IDENTITY, taken afterwards, with the page already in the brain and search already finding
-it. Nothing is stuck while you decide, and declining costs one commit rather than a lost capture.
+- `stigmergy-index --check` warns on the SYMPTOM that reaches readers, an `entity:` value with no
+  registry record (above);
+- the worker refuses the next capture that would introduce an identity, whole and unrepairably,
+  naming up to three divergences — rather than regenerating a registry that commit was not meant to
+  rewrite ([librarian.md](./librarian.md#writing-an-identity-what-a-filing-does-to-the-registry)).
+  Ordinary captures keep filing meanwhile; nothing is lost.
 
-**Two kinds, and the verbs each takes:**
-
-| Kind | `item_id` | Verbs |
-|---|---|---|
-| `identity-proposal` — an entity page created with `approved_by` empty | the entity's registry id (`acme-corp`) | **Approve** (it is real; the page is confirmed in your name) · **Merge into…** (it is a registered entity under another spelling: its name and spellings become that entity's aliases, its page goes, every page anchored to it is re-anchored) · **Decline** (its page goes, the pages anchored to it lose the anchor) |
-| `alias-proposal` — a spelling appended to a registered entity | `<entity id>:<alias>` (`acme-corp:ACME`) | **Approve** (it moves from `proposed_aliases:` to `aliases:`) · **Decline** (it is dropped) |
-
-**Four doors, one commit discipline.** Whichever you use, the change lands as ONE commit through
-`entities.decide.apply` — the branch/cleanliness/sync preflight, a registry-drift refusal, the
-decision itself, a gitleaks scan over the files the commit will carry, then the push with a bounded
-rebase-and-retry, never a force-push — and a `review_decisions` row is written AFTER the push:
-
-| Door | Right when | Needs |
-|---|---|---|
-| `stigmergy-entities`, below | you have a clone and no deployment has to be running, or you are scripting | your own clone + push identity, gitleaks, the queue database |
-| the console's **Entities** desk (and the Inbox) | you are already in the browser | the console enabled ([admin-console.md](./admin-console.md)) |
-| Slack's doorbell card | the doorbell already DMed you | the deployed Slack app, nothing extra |
-| MCP's `review_decide` | an agent session is already open | a caller token with steward status |
-
-The three server-side doors commit as the librarian App with a **`Decided-by: <you>` trailer**
-naming the human; `stigmergy-entities` commits with your own git identity. So "who decided this
-identity" is answerable from `git log` AND from Postgres, on every door.
-
-**The ledger is the librarian's memory of a decline.** `review_decisions` is append-only, and the
-librarian reads it before proposing: an identity whose latest decision under `identity-proposal` is
-a decline is never proposed again, however many later captures mention the name. That is why every
-door records its row under exactly that kind and that entity id, and why `stigmergy-entities`
-refuses to run without the queue database — a decline nobody recorded is one the librarian
-re-proposes on the next capture. A card the doorbell already DMed closes itself on the next poll
-pass for the same reason: the LEDGER is what closes it, not the registry.
-
-### `stigmergy-entities` — deciding from your own clone
-
-It needs no server at all — it commits from YOUR OWN clone with YOUR OWN git identity, and reaches
-the database only to write the ledger row:
-
-```sh
-.venv/bin/stigmergy-entities pending                    # every identity and spelling waiting on you
-.venv/bin/stigmergy-entities approve acme-corp          # it is real — confirm it
-.venv/bin/stigmergy-entities merge acme-corp --into acme-logistics   # it IS that registered entity
-.venv/bin/stigmergy-entities decline acme-corp --reason "a product line, not an entity"
-.venv/bin/stigmergy-entities approve acme-corp --alias "ACME"        # confirm one spelling
-.venv/bin/stigmergy-entities decline acme-corp --alias "ACME"        # ...or drop it
-```
-
-`pending` reads the clone's own entity pages — the registry is derived from them, so the checkout is
-the source of truth — and prints the exact command for each row. `--by` sets who the decision is
-attributed to (default: your clone's git email); it is **attribution, not authorization**.
-
-A steward can also register an entity nobody proposed. **`create` writes no page and makes no
-commit**: what you know about the entity is queued as a capture carrying the registration, and the
-LIBRARIAN writes the page — from your words and from what the brain already holds — anchors the
-note to it, and the identity is born confirmed by you:
-
-```sh
-.venv/bin/stigmergy-entities create --id acme-corp --name "Acme Corp" --type organization \
-    --about "A logistics customer since 2024; renewals run through Ana." --aliases "Acme, ACME"
-```
-
-`--about` is required and must not be blank: it is the material the page is written from, and a
-page with nothing said about the entity is not written at all. `--id` must be the slug of `--name`
-— the registry is derived from the page. Because it enqueues a capture, `create` needs the queue
-database (`--dsn`) **and** the evidence store, from the same environment the drop CLIs read
-(`stigmergy-meeting`, `stigmergy-drive` — see [capture.md](./capture.md)); `--allow-split-stores`
-is the same escape hatch they carry. It prints the capture to follow:
-
-```
-commissioned — capture #41: the librarian writes the page of Acme Corp from what you said and what
-the brain already holds, anchors the note to it, and the entity is born confirmed by ana@example.com.
-Nothing is in the brain until it files; `stigmergy-queue show 41` follows it.
-```
-
-Registry/pages drift is its own command, and it commits nothing:
-
-```sh
-.venv/bin/stigmergy-entities regenerate --check         # drift check: exits non-zero, names each divergence
-.venv/bin/stigmergy-entities regenerate                 # rewrite the registry from the pages (NOT committed)
-```
-
-Every DECISION requires gitleaks (`brew install gitleaks`), refuses a drifted registry, and never
-force-pushes; `create` touches git only to read your identity, since the commit it leads to is the
-librarian's and runs through the librarian's own nine gates. Exit codes: `0` it did what it said,
-`1` it refused (a collision, a dirty clone, an id that is not a proposal, an empty `--about`, an
-`--id` that is not the name's slug, drift under `--check`), `2` the tool could not run (no repo, no
-database).
-
-**The other three doors decide from the server process** instead of a steward's clone — a throwaway
-clone per request, pushed with the librarian App credential (`entities.remote.decide_via_clone`),
-never the operator's own identity. On the deployed `app` group that credential needs no extra setup:
-`STIGMERGY_LIBRARIAN_REPO_URL` is a plain `fly.toml` `[env]` value, and the librarian App triple set
-as Fly secrets for the `worker` group reaches `app` too, because Fly secrets are app-wide. A server
-missing either — a local stdio MCP server, most often — refuses by naming exactly what is absent
-(`no knowledge-repo URL is configured…`, or `… needs the librarian GitHub App credential`) rather
-than degrading.
-
-**When a second door got there first**, what you are told differs by door: MCP's `review_decide` and
-the Slack card name who decided, on which road and when (read out of the ledger, and only after you
-have cleared authorization); `stigmergy-entities` and the console report that the id is no longer a
-proposal, which tells you the decision is gone without telling you whose it was.
+The fix is a commit in the KNOWLEDGE repo putting the two sides back in step — correct the page, or
+delete the hand-written registry entry — after which the next identity-bearing filing rewrites the
+file itself.
 
 ## Removing pages
 
-**A deletion is decided by the person who asks for it, and it happens in that call** — there is no
-proposal to approve and no `stigmergy-repair delete` any more ([ADR 043](../decisions/043-a-sweep-is-written.md)).
-Two doors, and the same sequence behind both:
+**A removal is decided by the person who asks for it, and performed by the librarian** — there is
+nothing to approve afterwards, and nothing but the worker writes to the knowledge repo
+([ADR 043](../decisions/043-a-sweep-is-written.md),
+[ADR 044](../decisions/044-the-capture-is-the-approval.md) D3). Two doors, and the same seam behind
+both:
 
 - **MCP**: `brain_delete(paths=["wiki/notes/Old Memo.md"], why="what makes it stale")`. It requires
-  you to be a steward for every page it touches — the pages that go AND the pages that refer to
-  them, which it computes from a fresh clone and which may be somebody else's zone.
+  an **UNRESTRICTED identity** — one with no audience restriction in `ops/identities.json` — and
+  nothing else. That is the one question the server can answer at the door: a removal touches the
+  pages it names AND every page that refers to them, a set nobody knows until the corpus is read,
+  and only a caller who can see the whole corpus can be entitled to all of it. A scoped caller gets
+  the door's one anonymous refusal — *"there is nothing for you to remove at those paths"*, the same
+  sentence whether or not the paths exist — which is also why no refusal can reveal a referrer.
 - **The console**, Repairs → **Remove pages**. Its token is the whole authorization there, which
   makes it the most consequential button on that console.
 
-What happens in the call: the pages go; every page that referred to one has its `related:`/`sources:`
-entries dropped by code and its BODY rewritten by a model, so a sentence that cited a removed page
-still reads and a callout that only existed because of one is gone; the nine gates judge the result;
-one App-authored commit lands with your name in an `Approved-by:` trailer.
+**What comes back from either door is a queue acknowledgement, not a commit.** Both write one
+`capture_queue` row of kind `delete` — the reason as its material, the pages in its hints, your name
+as its submitter — and the worker takes it from there: the pages go; every page that referred to one
+has its `related:`/`sources:` entries dropped by code and its BODY rewritten by a model, so a
+sentence that cited a removed page still reads and a callout that only existed because of one is
+gone; the nine gates judge the result; the knowledge repo's own linter is run over the whole tree to
+prove no dead link survives; and one App-authored commit lands with your name in an `Approved-by:`
+trailer.
 
-**Read the diff it hands back.** Nobody read that prose before it landed — that is the trade the ADR
-states rather than softens — so the response (and the console's dialog) carries a unified diff per
-rewritten page, ACL-scoped and fenced. A diff you may not read is named rather than dropped.
+**Read the row back, and read the diff on it.** Nobody read that prose before it landed — that is
+the trade the ADR states rather than softens — so the report on the capture carries a unified diff
+per rewritten page alongside the paths that stopped existing. **`brain_submissions` is where that
+reading happens**: it renders each diff ACL-scoped per path and fenced, and NAMES any path it
+withholds, so a page you may not read still shows as changed. The console's Captures page carries
+the same row and the librarian's sentences about it; `stigmergy-queue show <id>` gives the row's
+trace and status but not the report.
 
-It refuses whole, changing nothing, on: an entity page (an identity is retired through governance,
-never deleted), a path outside the corpus, more than ten pages in one call, a reason matching a
-likely secret, a page whose frontmatter is not a shape this can read (CRLF, a BOM, an unterminated
-`---`), a reference in a frontmatter field the sweep does not rewrite, and a body the writer could
-not reconcile in one retry. Every refusal names the page.
+```sh
+.venv/bin/stigmergy-queue list --status queued --status claimed   # is the removal still waiting?
+.venv/bin/stigmergy-queue show <id>                               # its trace, attempts and latency
+```
+
+Refused **at the door**, with nothing queued: a scoped caller, an entity page (an identity is merged
+away by a repair, never deleted at this door), a path outside the corpus, more than ten pages in one
+request, an empty reason. The length bounds on `paths` and `why` are checked inside
+`BrainService.delete_pages`, within the audited seam, so a refusal is an audited call rather than a
+silent one.
+
+Refused **by the worker**, as a `rejected` capture whose report says why and whose `reason_code` is
+`unremovable`: a page that is not there, a page whose frontmatter is not a shape this can read
+(CRLF, a BOM, an unterminated `---`), a plan over `$STIGMERGY_REPAIR_MAX_PLAN_BYTES`, a reference in
+a frontmatter field the sweep does not rewrite, a body the writer could not reconcile in one retry,
+a gate's veto, and a dead link the sweep would have left behind. Every one of those lands nothing at
+all. A reason that matches a likely secret or a personal-data pattern is refused there too, under
+`secret`/`pii`, by the same scan every capture's material passes — the reason becomes a commit
+message, which is the one place no gate looks.
 
 **The undo is `git revert` in the knowledge repo**, by an operator with a checkout. When the sweep
 rewrote a `views/` or `sources/` page, that revert is an operator commit in a machine-owned zone —
@@ -678,8 +591,8 @@ python3 -c 'import json,os; json.load(open(os.environ["STIGMERGY_REPO"]+"/ops/en
 commit) and **push** — the webhook caches the corrected file within seconds, no deploy needed. If
 the webhook is not delivering, `make index-rebuild` from a checkout writes the same snapshot, and
 clearing it (a rebuild from a repo with no registry) drops the server back to its baked
-`--entity-registry` copy. `stigmergy-entities` is the only thing that writes this file; a hand edit
-is the usual way it got malformed.
+`--entity-registry` copy. The librarian worker is the only thing that writes this file, and it
+regenerates it from the entity pages; a hand edit is the usual way it got malformed.
 
 **Prevention**: `stigmergy-index --check --repo $STIGMERGY_REPO` warns on anchored-but-unregistered
 entities — run it after registry changes; it raises on malformed registry JSON too. It lints the
@@ -691,28 +604,28 @@ material and don't paste it into shared trackers.
 ### A dead worker mid-item — lease redelivery
 
 A dead worker costs one delivery, never a capture: the row returns to `queued` after the visibility
-timeout (1290s default) with `attempts` incremented, and the next worker files it. Observe and force:
+timeout (900s default) with `attempts` incremented, and the next worker files it. Observe and force:
 
 ```sh
 .venv/bin/stigmergy-queue list                              # depth per status + newest submissions
 .venv/bin/stigmergy-queue show 7                            # one submission's trace and latencies
 .venv/bin/stigmergy-queue reclaim --visibility-timeout 0    # release EVERY claimed row, right now
-.venv/bin/stigmergy-queue reclaim --visibility-timeout 1290  # ...only ones past a 1290s lease
+.venv/bin/stigmergy-queue reclaim --visibility-timeout 900   # ...only ones past a 900s lease
 ```
 
 `--visibility-timeout` is mandatory on `reclaim` and the command refuses without it: it decides
 how dead a worker must be before its work is taken away, and the CLI cannot see the lease that
 worker actually holds — a shorter horizon requeues captures out from under processes still filing
 them. Pass `0` when you know the worker is gone, or the worker's own lease otherwise. That lease is
-DERIVED from the per-item budget rather than fixed: 1290s at the default
-`STIGMERGY_LIBRARIAN_TIMEOUT_S`, **1890s on the deployed worker**, which runs at 600 (the extra
-390s in both is the drive conversion's bounded worst case — the kernel's three vision clocks).
+DERIVED from the per-item budget rather than fixed: 900s at the default
+`STIGMERGY_LIBRARIAN_TIMEOUT_S` (two agent attempts, 120s of gates, 180s of headroom), **1500s on
+the deployed worker**, which runs at 600.
 `stigmergy-librarian status --json` prints the resolved `visibility_timeout_s` for the environment
 it is run in — read it there rather than assuming the default.
 
 The admin console's Reclaim button states **the same derived lease**, resolving
 `STIGMERGY_LIBRARIAN_TIMEOUT_S` through the worker's own arithmetic per request, so the Worker tab's
-meter and the button agree with `status --json` (1890s on staging). Two conditions make that hold:
+meter and the button agree with `status --json` (1500s on staging). Two conditions make that hold:
 `fly.toml`'s `[env]` is app-wide, so the console process reads the variable the worker resolved; and
 the worker command passes no `--visibility-timeout`, which would beat the derivation and which the
 console cannot see. It does **not** hold in the local composition, where `docker-compose.yml` gives
@@ -720,80 +633,82 @@ the librarian its own environment block and no console runs beside it.
 
 This is drill 2 of "Release gates & drills" below.
 
-### A repair proposal stuck in `approved`
+### A repair that did not land
 
-Every ordinary apply outcome writes itself down: it lands as `applied` with a commit, or as
-`failed` with the reason. One residual cannot be written down from inside — the server process
-dying between the `pending → approved` transition and the failure bookkeeping. The symptom is a row
-that is `approved` with **both** `applied_commit` and `error` empty, and it is stuck: a steward
-cannot decide it (it is no longer pending) and the proposer will not re-derive it (its key is
-remembered while it is not `failed`).
+Every outcome writes itself down. A repair the gates refused, or that faulted partway, is a
+`failed` row carrying the sentence that refused it:
 
 ```sql
-SELECT id, decided_by, decided_at, target_paths
-FROM repair_proposals
-WHERE status='approved' AND applied_commit='' AND error='';
+SELECT id, created_at, kind, target_paths, error
+FROM repairs WHERE status='failed' ORDER BY id DESC LIMIT 20;
 ```
 
-**Verify nothing landed before touching the row.** The apply may have pushed and died on the way to
-recording it, in which case the corpus already carries the edit and marking the row `failed` would
-be a lie an operator later acts on. In the knowledge repo:
+**Read the `error` before doing anything.** It names the gate and its codes, or the validator's
+own refusal, and it is the whole of what anyone will know about why that finding stopped being
+answered — because it DID stop: a failed repair's `content_key` is remembered exactly like an
+applied one's, so the loop will not derive it again. That is deliberate (a repair the gates refuse
+would otherwise cost a model call every night forever), and it is why this row is the only place
+the problem surfaces.
 
-```sh
-git -C <knowledge repo> log --oneline -5 -- <the row's target_paths>
-```
+What to do with one depends on what the sentence says:
 
-No commit naming that proposal id means nothing landed. Then mark it failed — the `WHERE` clause is
-the guard, not decoration: it refuses a row that has moved on since you read it, so running this
-twice, or against a proposal that landed while you were looking, cannot overwrite an applied commit.
+- **A gate refused the diff** — the repair was wrong, and the finding is still in the gardener's
+  report. Fix the underlying page by hand, or leave it: the corpus is untouched either way.
+- **"this repair changes nothing"** — the corpus already carries the answer. Nothing to do.
+- **A fault (a git or configuration sentence)** — this is the deployment's problem, not the
+  repair's. Fix it, and if you want that finding answered afterwards, delete the row so its key
+  stops being remembered:
 
 ```sql
-UPDATE repair_proposals
-SET status='failed', error='operator: process died mid-apply'
-WHERE id=<id> AND status='approved' AND applied_commit='';
+DELETE FROM repairs WHERE id=<id> AND status='failed';
 ```
 
-`0 rows` means the guard did its job — re-read the row before doing anything else. Once it is
-`failed`, the next `stigmergy-repair propose` may derive the same repair again, because a failed
-apply is not a dismissal.
+That is the ONLY row anybody should ever delete from this table, and only for this reason: every
+other row is a record of something that actually happened in the corpus.
 
 ### A view that did not catch up
 
-**Usually you do not have to do anything.** The librarian worker converges `views/` to the corpus
-on its own interval, whenever its queue is idle — an ordinary capture, a Slack or Drive drop, an
-applied repair, an entity born and a hand edit are all covered, and so is an entity that has never
-had a view at all. `stigmergy-views` is for when you do not want to wait:
+**There is nothing for you to do, and no command to run.** The librarian worker converges `views/`
+to the corpus from its idle branch, and it is the only thing that can — nothing else in the
+deployment may write that zone ([ADR 044](../decisions/044-the-capture-is-the-approval.md) D3). An
+ordinary capture, a 🧠 gesture, a submitted meeting or document, a removal, an applied repair, an
+entity born and a hand edit are all covered, and so is an entity that has never had a view at all,
+because the pass asks the corpus what diverges rather than waiting to be told.
 
-```sh
-.venv/bin/stigmergy-views regenerate --entity acme-corp           # exactly this entity
-.venv/bin/stigmergy-views regenerate --stale                      # every entity whose view no longer matches its members or its backlinks
-.venv/bin/stigmergy-views regenerate --sweep                      # what the worker's periodic pass does, right now
-.venv/bin/stigmergy-views regenerate --entity acme-corp --force   # bypass staleness; re-attempt a withheld synthesis
-```
+**Two triggers, so "wait for the interval" is usually not what happens.** The pass is due when its
+interval has elapsed, and ALSO on the first idle tick after the worker took a queued item to a
+terminal state — a filing, a meeting, a document or a removal. That second trigger is why a
+`brain_delete` does not leave a rollup citing pages it deleted for up to fifteen minutes: the queue
+goes quiet, and the sweep runs. What a repair changed is picked up by the interval, or by the next
+queued item.
 
-`--sweep` is the UNION of `--stale` and `--all`, and neither of those alone converges the zone:
-`--stale` cannot create a view for an entity that never had one, and `--all` cannot remove one
-whose members have all disappeared. Prefer `--sweep` when you want the repo correct;
-[`views.md`](./views.md) has the table.
+A withheld synthesis is not a bug: the skeleton (timeline, backlinks) still ships and stays current.
+It is re-attempted when the entity's own inputs change — `member_hash` over the members,
+`backlink_hash` over the backlinks the page renders — and not before. There is no lever that
+re-attempts one on demand, and there is no longer a road that could offer you one.
 
-A withheld synthesis is not a bug: the skeleton (timeline, backlinks) still ships, and
-`--force` is the operator-triggered retry — the periodic pass will not retry one on its own,
-because neither staleness signal changed (`member_hash` over the members, `backlink_hash` over the
-backlinks the page renders). Re-running against an unchanged corpus is a no-op.
-
-**The two knobs on the periodic pass** (both on the librarian worker, both documented in full in
+**The knobs on the pass** (all on the librarian worker, all documented in full in
 [`librarian.md`](./librarian.md)'s environment table):
 
 | Var | Default | What it does |
 |---|---|---|
-| `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S` | `900` | how often the idle worker converges `views/`. `0` turns the pass off entirely; a negative value is refused at startup |
+| `STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S` | `900` | the BACKSTOP interval; the post-work trigger above fires regardless of it. `0` turns the pass off entirely, which leaves only the post-meeting hook; a negative value is refused at startup |
 | `STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING` | `10` | how many entities ONE pass may regenerate or remove — each is a model call. The surplus is picked up by the next pass |
-| `STIGMERGY_VIEWS_MODEL` | the librarian's DEFAULT (`anthropic:claude-sonnet-5`) | the model a view's synthesis is WRITTEN with. It defaults to the librarian's compile-time default rather than to `CLEAN_MODEL`, because every unattended caller runs inside the worker, whose boot strips `$OPENAI_API_KEY` on purpose — a view agent inheriting the read path's model can only raise there. Note the edge: setting `STIGMERGY_LIBRARIAN_MODEL` moves the FILING agent and not this one — views and repair each hold their own knob, one model per artifact. One knob moves the worker and an operator's own `stigmergy-views regenerate` together |
+| `STIGMERGY_VIEWS_MODEL` | the librarian's DEFAULT (`anthropic:claude-sonnet-5`) | the model a view's synthesis is WRITTEN with. It defaults to the librarian's compile-time default rather than to `CLEAN_MODEL`, because every caller runs inside the worker, whose boot strips `$OPENAI_API_KEY` on purpose — a view agent inheriting the read path's model can only raise there. Note the edge: setting `STIGMERGY_LIBRARIAN_MODEL` moves the FILING agent and not this one — views and repair each hold their own knob, one model per artifact |
 
-The pass records itself in `job_runs` under the job name `views-sweep` (distinct from `views`, an
-operator's own run, and `views-on-meeting`, the post-filing hook), and prints a `view sweep:` line
+The pass records itself in `job_runs` under the job name `views-sweep` (distinct from
+`views-on-meeting`, the post-filing hook), and prints a `view sweep:` line
 on the worker's stdout when it moved something. What a ceiling deferred is in that row's
-`stats.skip_reasons`, spelled `run-ceiling-reached(N)` — the same wording the repair proposer uses.
+`stats.skip_reasons`, spelled `run-ceiling-reached(N)` — the same wording the repair pass uses.
+
+```sql
+SELECT job, status, finished_at, stats FROM job_runs
+WHERE job LIKE 'views%' ORDER BY started_at DESC LIMIT 10;
+```
+
+If a view is still listed by the gardener's `stale-view` check after several passes have run, that
+row is where to look: a ceiling that keeps deferring, a fault the pass swallowed, or a sweep that
+never ran because the queue is never idle.
 
 ### Postgres backup / restore
 
@@ -844,13 +759,12 @@ that dict. So a revoked token keeps working until the machines running the old p
 |---|---|---|
 | Revoke / rotate a **token** | `STIGMERGY_TOKEN_STORE` Fly secret | **one command** — `fly secrets set` triggers the redeploy that applies it. Effective when the new machines are healthy, not before |
 | Change an identity's **audience scope** | `ops/identities.json` in the knowledge repo, **snapshotted into the image at deploy time** | a commit and a push in the knowledge repo, then `make deploy-staging` to re-bake and redeploy |
-| Change a **steward's** authority, for the WORKER and any process holding a checkout | `ops/stewards.json` in the knowledge repo | a commit and a push — **no deploy**: it is re-read at a fresh base commit on every decision |
-| Change a **steward's** authority, for the deployed `app` and `slack` groups | the same file, **snapshotted into the image at deploy time** (they hold no checkout) | a commit and a push, then `make deploy-staging` to re-bake and redeploy — the same row `ops/identities.json` occupies, for the same reason |
 
-**On the deployed `app` and `slack` groups a steward's authority is a deploy-time snapshot**,
-because those groups hold no checkout to re-read. Removing someone from `ops/stewards.json` and
-pushing does not take their approve authority away there until the next `make deploy-staging`. If
-that is not fast enough, revoke their token — the same one-command path as row 1.
+**There is no role file to revoke from.** No map grants anybody authority over the write path:
+what a person may do is decided by their token (does it resolve to an identity at all) and by that
+identity's audience scope in `ops/identities.json` (unrestricted or not — which is what
+`brain_delete` asks). Both rows above are the whole surface
+([ADR 044](../decisions/044-the-capture-is-the-approval.md) D3).
 
 **Editing `ops/identities.json` alone changes nothing about the running server**: the file it reads
 per request is the baked `/app/identities.json`, not the one in your checkout. And **there is no way
@@ -859,8 +773,11 @@ to cut off a leaked token faster than a deploy** — if that is not fast enough,
 
 ### The librarian GitHub App + the filing model's provider key
 
-Both live in Fly secrets, which are app-wide — the public server's environment carries them too,
-the accepted residual of one app for three process groups. If either is suspected:
+Both live in Fly secrets, which are app-wide. The public server's environment carries the filing
+model's key as the accepted residual of one app for three process groups; it carries the App
+deliberately, because the index webhook reads the knowledge repo's pushed files with it. What it
+cannot do with either is write: no code in that process commits or pushes
+([ADR 044](../decisions/044-the-capture-is-the-approval.md) D3). If either is suspected:
 
 1. **App** — GitHub → the App's page → *Install App* → uninstall it from the knowledge repo.
    Every push then fails, in-flight items land `failed`, and **nothing is lost**: the captures
@@ -894,7 +811,7 @@ secret), delete the old key in GitHub. App ID and installation ID are stable.
 
 `fly secrets set STIGMERGY_GITHUB_WEBHOOK_SECRET="$(openssl rand -hex 32)"`, then paste the same
 value into the webhook's Secret field in the knowledge repo's GitHub settings. Between the two
-steps the endpoint rejects pushes with the generic `401`; the nightly rebuild covers the gap.
+steps the endpoint rejects pushes with the generic `401`; the next rebuild covers the gap.
 
 ## Release gates & drills
 
@@ -931,8 +848,9 @@ gate arms are also runnable alone (`make retrieval-golden`, `make qa-golden`).
 There is a **third instrument the gate does not arm**: `make filing-golden`, which measures the
 write path — 14 golden captures through the real librarian, its gates and a real `git worktree`,
 scored per facet (`status`, `reason`, `type`, `folder`, `anchor`, `edits`, `proposals`, `decisions`,
-plus the two cost facets `attempts` and `bounces`). `proposals` is the one that scores an identity
-the librarian created unconfirmed — it replaced the two facets the retired ask-back loop had. It is
+plus the two cost facets `attempts` and `bounces`). `proposals` keeps its name and scores the
+identity a filing INTRODUCED for a name the registry does not know — it replaced the two facets the
+retired ask-back loop had. It is
 outside the release gate because it writes and costs a real agent pass per
 capture, and it is the one to run when a change touches the librarian's agent, its brief or its
 gates. It needs `gitleaks` on PATH and a Claude credential; `make filing-golden BACKEND=double` is
@@ -943,10 +861,9 @@ moved with the redesign. Full account: `evals/README.md`.
 
 Proves the durable tables survive a round trip: the four `capture.schema` names it (`capture_queue`,
 `audit_log`, `job_runs`, `ingest_errors`) plus every other table nothing can rebuild —
-`review_decisions`, `slack_submissions`, `gardener_findings`, `admin_actions`, and
-`steward_notifications`, which holds one row per (item, steward) already DMed and whose loss
-re-rings the doorbell at every steward for every open item. Against the docker compose Postgres
-(`make db-up` first):
+`repairs`, whose `content_key` column is the permanent memory that keeps an applied or refused
+repair from being derived again, `slack_submissions`, `gardener_findings` and `admin_actions`. Against the
+docker compose Postgres (`make db-up` first):
 
 ```sh
 # record the evidence you will compare against
@@ -986,7 +903,7 @@ kill -9 <that pid>                            # mid-item, no goodbye
 .venv/bin/stigmergy-queue list                  # still `claimed` — the lease is honest about the hold
 .venv/bin/stigmergy-queue reclaim --visibility-timeout 0   # force redelivery now — you killed it, so
                                                          # there is no lease left to respect (the
-                                                         # worker's own horizon is 1290s, derived
+                                                         # worker's own horizon is 900s, derived
                                                          # from the per-item budget)
 .venv/bin/stigmergy-queue show <id>             # attempts incremented; the row is `queued` again
 ```
@@ -1083,8 +1000,7 @@ serving auth open. The mirror-image symptom is a *just-revoked token that still 
 machines have not been replaced yet (see Revocation). Like the 421, these write no audit row.
 
 **`ask`/`search_brain` failing `UndefinedColumn` right after a deploy.** Index schema skew —
-the deploy shipped DDL the staging `pages_index` predates. `gh workflow run index-rebuild.yml`
-(or `make rebuild-staging`) and re-ask. This is exactly why a deploy ends with one real `ask`
+the deploy shipped DDL the staging `pages_index` predates. `make rebuild-staging` and re-ask. This is exactly why a deploy ends with one real `ask`
 (see Deploy).
 
 **The server refuses to start: empty index.** Fail-closed on purpose, both transports. Build
@@ -1093,35 +1009,18 @@ it: `make index-rebuild` locally, `make rebuild-staging` for staging.
 **Every `ask` erroring at once after a registry commit.** Malformed
 `ops/entity-registry.json` — see Recovery; the one-line `python3 -c` check settles it.
 
-**The steward doorbell and ACL scope.** The doorbell does not consult the steward's own ACL
-scope — `items_for_doorbell` is management-shaped and unscoped, so a doorbell line can name
-material its recipient could not `read_page`. **Inert while every steward is unrestricted**;
-revisit before a scoped steward ever exists.
-
-**The doorbell rings for nothing / decisions fail closed.** Two shapes, and `job_runs` tells them
-apart — the pass records the miss once per process lifetime under `job = 'steward-doorbell'` with
-the reason in the stats blob (`doorbell-configuration` is a `stats->>'event'` value, never a `job`
-name — filtering on it as one returns zero rows):
-
-```sql
-SELECT started_at, stats FROM job_runs
- WHERE job = 'steward-doorbell' AND stats->>'event' = 'doorbell-configuration'
- ORDER BY started_at DESC LIMIT 20;
-```
-
-
-- the map is missing or resolves to EMPTY. Commit and push it (`{"*": ["steward@example.com"]}` is
-  the one in use); the worker picks it up on its next item, the `app`/`slack` groups at the next
-  deploy;
-- the deployment has **no source of stewards at all** — no checkout and no baked snapshot, so
-  nothing resolves to a steward, no bell rings and every review decision fails closed.
-  `make deploy-staging` bakes `ops/stewards.json` into the image and `fly.toml` passes
-  `--stewards /app/stewards.json`.
+**`brain_delete` refuses with "there is nothing for you to remove at those paths".** The caller's
+identity is audience-RESTRICTED in `ops/identities.json`, and a removal needs an unrestricted one
+(see Removing pages). The sentence is deliberately anonymous — it is the same one for a caller who
+may not act and for a path that does not exist — so it never confirms a page or a referrer. The fix
+is to run the removal under an unrestricted identity, or from the console; widening somebody's
+scope is a knowledge-repo commit plus a redeploy (see Revocation).
 
 **A capture attributed to the wrong identity over stdio.** The knowledge repo's own `.mcp.json`
-declares two servers (`stigmergy` = `steward`, unrestricted; `stigmergy-ana` = `ana`, finance-scoped)
-and a client session picks one on its own. Address the tool explicitly ("use the `stigmergy` MCP
-server's `brain_submit`"); check with `stigmergy-queue list` (it prints `submitted_by`). There is no
+declares two servers — `stigmergy` and `stigmergy-ana` — each pinned to its own `--identity` (an
+unrestricted one and a scoped one), and a client session picks one on its own. Address the tool
+explicitly ("use the `stigmergy` MCP server's `brain_submit`"); check with `stigmergy-queue list`
+(it prints `submitted_by`). There is no
 re-attribution tool by design — resubmit under the right identity and let the duplicate be refused.
 (The librarian's own agent never loads that file: it runs with an empty MCP server list and strict
 MCP config, because a file in the repo can declare any command.)
@@ -1188,7 +1087,7 @@ never a lost capture. Add the scope and reinstall the app to fix the feedback.
 
 ```sql
 SELECT job, status, finished_at, stats FROM job_runs
-WHERE job IN ('gardener', 'repair-propose', 'digest', 'digest-dry-run', 'capture-purge',
+WHERE job IN ('gardener', 'repair', 'digest', 'digest-dry-run', 'capture-purge',
               'capture-purge-dry-run', 'webhook-index-upsert')
 ORDER BY started_at DESC LIMIT 10;
 ```

@@ -13,9 +13,9 @@ class BoltSlackGateway:
 
     async def _call(self, method, *, tolerate: dict | None = None, **kwargs):
         """`tolerate` maps a Slack ERROR CODE to the value that code should return instead of
-        raising — an honest negative (`users_not_found`) or an already-in-the-wanted-state
-        redelivery (`already_reacted`). Membership decides, never truthiness, so a tolerated code
-        whose value is `None` returns `None` rather than falling through to a raise. Every other
+        raising — an already-in-the-wanted-state redelivery (`already_reacted`, `no_reaction`), or
+        an honest "no such thing" negative. Membership decides, never truthiness, so a tolerated
+        code whose value is `None` returns `None` rather than raising. Every other
         failure — the SDK's own or a timeout — still becomes this package's `SlackApiError`,
         CARRYING the code where the failure had one: a caller deciding whether a retry could ever
         work must not have to parse the SDK's prose back out of `str(ex)`."""
@@ -76,16 +76,6 @@ class BoltSlackGateway:
         return await self._call(self._client.reactions_remove, channel=channel_id,
                                 timestamp=message_ts, name=name,
                                 tolerate={"no_reaction": {"ok": True}})
-
-    async def users_lookup_by_email(self, email: str) -> dict | None:
-        """`users_not_found` is Slack's honest "no workspace member has this email" — translated
-        to `None`, the distinction `SlackGateway.users_lookup_by_email`'s contract requires; every
-        OTHER SDK failure still becomes `SlackApiError`."""
-        return await self._call(self._client.users_lookupByEmail, email=email,
-                                tolerate={"users_not_found": None})
-
-    async def views_open(self, *, trigger_id: str, view: dict) -> dict:
-        return await self._call(self._client.views_open, trigger_id=trigger_id, view=view)
 
 
 def build_gateway(bot_token: str) -> BoltSlackGateway:

@@ -5,9 +5,13 @@ lives here, and each half has to keep saying what the other assumes.
 `test_frozen_linter.py` build. Those exist because CODE PARSES the artifact — the linter's output
 is read by a gate, the meeting brief's rules are enforced field by field — so a stale copy would
 mean CI enforcing a contract the agent is no longer given. Nothing here parses the repair skill:
-it is prose handed to a model, and every claim the code makes about a proposal is checked against
-the proposal rather than against the brief. ADR 039 D4 records the drift risk as accepted for v1
-and names the trigger for revisiting it: the op vocabulary growing past three.
+it is prose handed to a model, and every claim the code makes about a repair is checked against the
+repair rather than against the brief. ADR 039 D4 records the drift risk as accepted for v1 and
+names the trigger for revisiting it: the op vocabulary growing past three.
+
+What ADR 044 changed is how much a drifted brief COSTS. There is no longer a person between the
+model's answer and `main`, so a clause the brief lost is not a steward reading a worse proposal —
+it is a commit made under a rule the model was never given.
 
 So the halves split by what they can promise:
 
@@ -23,7 +27,8 @@ import re
 import pytest
 
 from stigmergy.librarian import config, edits
-from stigmergy.repair import proposer
+from stigmergy.repair import brief
+from stigmergy.repair import run as repair_run
 
 _PLATFORM_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -46,7 +51,7 @@ def _knowledge_repo() -> pathlib.Path:
 
 
 def _live_skill() -> pathlib.Path:
-    return _knowledge_repo() / proposer.SKILL_RELPATH.replace("/", os.sep)
+    return _knowledge_repo() / brief.SKILL_RELPATH.replace("/", os.sep)
 
 
 def _skill_text_or_skip() -> str:
@@ -65,13 +70,16 @@ def test_the_code_owned_header_states_the_frame_the_skill_cannot_widen():
     rewriting its procedure. Each clause below is load-bearing on its own, so each is asserted on
     its own rather than as one "the header is non-empty" check:
 
-    the two tools and their READ-ness; the op vocabulary, spelled from `edits.EDIT_KINDS` rather
+    the two tools and their READ-ness; the ADR 044 clause that says nobody will read the answer
+    before it lands, which is what makes "a change you are not sure of is a change you do not
+    return" a rule rather than advice; the op vocabulary, spelled from `edits.EDIT_KINDS` rather
     than typed; the propose-only-from-what-you-read rule; the finding-is-a-hint rule that makes an
     empty answer correct; and the fence rule, which is the one an injected page body would most
     like to see missing."""
-    header = _flowed(proposer.SYSTEM_HEADER)
+    header = _flowed(repair_run.SYSTEM_HEADER)
 
-    assert "PROPOSE and never perform" in header
+    assert "DECLARE and never perform" in header
+    assert "Nobody reads it first" in header
     assert "two tools, both READS" in header and "search_pages" in header and "read_page" in header
     for kind in edits.EDIT_KINDS:
         assert kind in header, f"the header does not name the {kind!r} op"
@@ -88,28 +96,36 @@ def test_the_system_prompt_is_the_header_and_then_the_skill_and_names_where_the_
     (a procedure cannot pre-empt a rule it is quoted underneath), the relpath is named so a reader
     of a transcript can find the file, and YAML frontmatter is dropped — it is loader metadata, and
     an `allowed-tools` key in it would read as a second, unenforced tool list."""
-    prompt = proposer.build_system_prompt(
+    prompt = repair_run.build_system_prompt(
         "---\nname: repair-proposer\nallowed-tools: [Bash]\n---\n\n# the procedure\n\nBODY MARKER\n")
 
-    assert prompt.startswith(proposer.SYSTEM_HEADER[:40])   # raw, not flowed: the ORDER is the claim
+    assert prompt.startswith(repair_run.SYSTEM_HEADER[:40])   # raw, not flowed: the ORDER is the claim
     assert prompt.index("BODY MARKER") > prompt.index("SECURITY")
-    assert proposer.SKILL_RELPATH in prompt
+    assert brief.SKILL_RELPATH in prompt
     assert "allowed-tools" not in prompt
 
 
 # ── the SKILL half: what the knowledge repo owns, when it is on this machine ───────────────────
 def test_the_knowledge_repo_carries_the_skill_where_the_code_looks_for_it():
     """The relpath is a CONTRACT between two repositories and it is spelled in exactly one place
-    here (`proposer.SKILL_RELPATH`). A missing skill is a named refusal at run time, not a default,
+    here (`brief.SKILL_RELPATH`). A missing skill is a named refusal at run time, not a default,
     so getting this path wrong makes the whole loop inert rather than degraded."""
     _skill_text_or_skip()
-    assert proposer.read_skill(str(_knowledge_repo())).strip(), (
+    assert brief.read_skill(str(_knowledge_repo())).strip(), (
         "the skill exists and reads as empty — `read_skill` refuses this, and so does the loop")
 
 
 @pytest.mark.parametrize("phrase", [
     # the role, which is the whole of what distinguishes this agent from a fixer
     "never perform",
+    # ── ADR 044: nobody is asked, and the brief has to say so twice over ────────────────────────
+    # There is no reader between the answer and `main`. A brief that still described an Approve
+    # button would have the model calibrating its caution against a check that no longer exists.
+    "Nobody reads it before it lands",
+    # And the memory's PERMANENCE, which is `store.known_content_keys` in prose: a repair that
+    # landed, and a repair a gate refused, are both remembered forever. A model told otherwise
+    # would reasonably expect a second chance at a shape it should instead re-cut now.
+    "or once refused by a gate — is never derived a second time",
     # the three op kinds, each with its own "when it fits"
     "backlink", "overlap", "contradiction",
     # the three checks that reach the BATCH road, by slug — a fourth would need code AND brief to
@@ -216,4 +232,4 @@ def test_the_skill_is_within_the_ceiling_the_code_reads_it_under():
     """The size cap is asked BEFORE the bytes are read, so a brief that outgrew it fails the whole
     pass rather than being truncated into a procedure missing its last rules."""
     _skill_text_or_skip()
-    assert _live_skill().stat().st_size <= proposer.MAX_SKILL_BYTES
+    assert _live_skill().stat().st_size <= brief.MAX_SKILL_BYTES

@@ -26,20 +26,20 @@ QUEUED = "queued"
 CLAIMED = "claimed"
 FILED = "filed"
 REJECTED = "rejected"
-# LEGACY, read-only. A steward closed the row by hand, back when a capture could park on a
-# person. Nothing writes it since the parked states retired: rows carrying it stay readable and
-# purgeable, because rewriting a closed row's history would lie about what happened to it.
+# LEGACY, read-only. A human closed the row by hand, back when a capture could park on a person.
+# Nothing writes it since the parked states retired: rows carrying it stay readable and purgeable,
+# because rewriting a closed row's history would lie about what happened to it.
 RESOLVED = "resolved"
 FAILED = "failed"
 
 STATUSES = (QUEUED, CLAIMED, FILED, REJECTED, RESOLVED, FAILED)
 
-# The two states a capture used to wait on a person in, RETIRED: a name nothing resolves to is
-# proposed as an entity and filed now (`librarian.identity`), and the steward confirms it from the
-# inbox afterwards. Rows still in either state are returned to `queued` at startup
-# (`_CAPTURE_QUEUE_PARKED_MIGRATION`) and re-filed under that rule; the status CHECK is swapped so
-# the words cannot come back. Named rather than deleted so the migration and the CHECK guard spell
-# them once.
+# The two states a capture used to wait on a person in, RETIRED: a name nothing resolves to
+# becomes an entity the librarian writes in the same commit that files the capture, confirmed by
+# whoever captured (`librarian.identity`). Rows still in either state are returned to `queued` at
+# startup (`_CAPTURE_QUEUE_PARKED_MIGRATION`) and re-filed under that rule; the status CHECK is
+# swapped so the words cannot come back. Named rather than deleted so the migration and the CHECK
+# guard spell them once.
 RETIRED_STATUSES = ("needs_input", "triage")
 
 # Terminal = will not move again on its own; retention purges terminal rows only.
@@ -56,16 +56,21 @@ REASON_SECRET = "secret"
 REASON_PII = "pii"
 REASON_DUPLICATE = "duplicate"
 REASON_STEERING = "steering"
-# LEGACY, read-only: a steward declined a parked row by hand, when rows could park. Kept so the
-# rows that carry it keep reading as a judgment call rather than a match — `queue._MATERIAL_WITHHELD`
-# fails CLOSED on a `rejected` row with NO code. Not in `WITHHELD_REASONS`.
+# LEGACY, read-only: a human declined a parked row by hand, when rows could park. The value is
+# the word those stored rows carry and cannot be renamed. Kept so the rows that carry it keep
+# reading as a judgment call rather than a match — `queue._MATERIAL_WITHHELD` fails CLOSED on a
+# `rejected` row with NO code. Not in `WITHHELD_REASONS`.
 REASON_STEWARD = "steward"
 # A drafted page whose frontmatter cannot be re-serialized after server-owned fields are stripped
 # and restamped: content-caused, which is what routes it to `rejected` rather than `failed`.
 REASON_MALFORMED_FRONTMATTER = "malformed-frontmatter"
+# A removal the worker could not perform as asked: a page that is not there, one the deletion lane
+# may not touch, a plan too large, or a body the sweep writer could not reconcile. Content-caused —
+# the person named those pages — which is what routes it to `rejected` rather than `failed`.
+REASON_UNREMOVABLE = "unremovable"
 
-REJECTION_REASONS = (REASON_SECRET, REASON_PII, REASON_DUPLICATE,
-                     REASON_STEERING, REASON_STEWARD, REASON_MALFORMED_FRONTMATTER)
+REJECTION_REASONS = (REASON_SECRET, REASON_PII, REASON_DUPLICATE, REASON_STEERING,
+                     REASON_STEWARD, REASON_MALFORMED_FRONTMATTER, REASON_UNREMOVABLE)
 # The key the code travels under inside the `report` JSONB column.
 REASON_CODE_KEY = "reason_code"
 
@@ -156,10 +161,10 @@ def base_report(*, status: str, summary: str, **facts) -> dict:
 MIGRATION_ACTOR = "migration"
 MIGRATION_EVENT = "requeued"
 MIGRATION_NOTE = ("the parked states retired — a capture about a name the registry does not know "
-                  "is filed with the entity proposed, for a steward to confirm; re-filed under "
+                  "is filed with that entity born, confirmed by whoever captured; re-filed under "
                   "that rule")
 
-# ── what a steward types beside a decision ────────────────────────────────────────────────────
+# ── what a person types beside an act ─────────────────────────────────────────────────────────
 # One sentence quoted inside a sentence code composes — past this it reads as a document that
 # lost its formatting.
 MAX_NOTE_CHARS = 500
@@ -180,20 +185,44 @@ def clean_note(text: str, width: int = MAX_NOTE_CHARS) -> str:
 DURABLE_TABLES = ("capture_queue", "audit_log", "job_runs", "ingest_errors")
 
 # ── the submission contract ───────────────────────────────────────────────────────────────────
-# A kind names the SHAPE of the material and which reader claims the row, never a topic.
-KINDS = ("raw", "page", "meeting", "drive")
+# A kind names the SHAPE of the material and which reader claims the row, never a topic. ONE
+# vocabulary for every door (ADR 044 D4): no operator door has a kind of its own, so nothing here
+# is narrower for `brain_submit` than for anyone else.
 RAW = "raw"
+PAGE = "page"
 MEETING = "meeting"
-# A Drive-fetched document: original bytes at blob_refs[1], the text manifest the row's material
-# and dedup key at blob_refs[0]; the worker converts.
-DRIVE = "drive"
+# A document's TEXT, as the client already holds it — an agent with a Drive connector, a person
+# with a file open. Nothing is fetched or converted server-side; the worker files a synthesis page
+# beside the verbatim `sources/documents/` part(s).
+DOCUMENT = "document"
+SUBMITTABLE_KINDS = (RAW, PAGE, MEETING, DOCUMENT)
 
-# The kinds `brain_submit` may enqueue, where `kind` is MODEL-CHOSEN. Listed explicitly rather than
-# left to `KINDS`: the drop CLIs are the only doors onto the meeting and drive flows.
-MCP_SUBMIT_KINDS = ("raw", "page")
+# The one kind that is not material at all: a person's REMOVAL. Its "material" is the reason they
+# gave and its `hints` carry the paths, and the worker performs it rather than filing it (ADR 044
+# D3) — one writer for the corpus, and it is the worker.
+#
+# It is a KIND rather than a table of its own because everything a capture gets, a removal needs
+# too: a durable row that survives a restart, a lease, an attempt count, an audited submitter, and
+# `brain_submissions` to read the outcome back from. What it is NOT is submittable: `brain_submit`
+# takes `SUBMITTABLE_KINDS`, so the only door that can queue one is the one that authorizes it.
+DELETE = "delete"
+KINDS = (*SUBMITTABLE_KINDS, DELETE)
 
-# The hard cap on captured text, in UTF-8 BYTES — what the row and the object store pay for.
-MAX_MATERIAL_BYTES = 256 * 1024
+# The cap on captured text, in UTF-8 BYTES — what the row and the object store pay for. Per kind,
+# because a transcript or a document's text is legitimately several times a pasted note. A
+# deletion's "material" is one sentence of reason, and `DELETE_REASON_CHARS` is the real bound —
+# this one only keeps the object store's arithmetic total.
+MATERIAL_CAP_BYTES = {RAW: 256 * 1024, PAGE: 256 * 1024,
+                      MEETING: 1024 * 1024, DOCUMENT: 1024 * 1024,
+                      DELETE: 4 * 1024}
+# The largest of them: what a transport's request-body limit has to fit.
+MAX_MATERIAL_BYTES = max(MATERIAL_CAP_BYTES.values())
+
+
+def max_material_bytes(kind: str) -> int:
+    """A kind's own cap — the largest for a kind this module does not know, so a refusal names a
+    real bound rather than raising `KeyError` before `prepare_submission` can refuse the kind."""
+    return MATERIAL_CAP_BYTES.get(kind, MAX_MATERIAL_BYTES)
 
 # Hand-mirrors `stigmergy.server.service.MAX_ARG_CHARS` — `capture` may not import `server`.
 MAX_HINT_CHARS = 8192
@@ -207,8 +236,8 @@ SOURCE_HINT_KEYS = ("source_client", "source_permalink", "source_channel_id",
                     "source_channel_name", "source_thread_ts", "source_participants",
                     "source_message_timestamps")
 
-# The meeting drop CLI's metadata: the date (every filed decision page's `as_of`), attendee names
-# (hints, never identities) and a source label.
+# A meeting's metadata: the date (every filed decision page's `as_of`), attendee names (hints,
+# never identities) and a source label.
 MEETING_HINT_KEYS = ("meeting_date", "attendees", "source_label")
 
 
@@ -219,25 +248,30 @@ SOURCE_PROVENANCE_HINT_KEYS = frozenset({"source_client", "source_permalink"})
 # The Slack door's name for itself, as `BrainService.door` spells it. Imported, never re-spelled.
 SLACK_DOOR = "slack"
 
-# The drive drop CLI's provenance: file id, display name (whose extension the worker converts by),
-# webViewLink, mime type and modifiedTime.
-DRIVE_HINT_KEYS = ("drive_file_id", "drive_name", "drive_url", "drive_mime", "drive_modified")
-
-# The trusted pair, refused from EVERY client door: a hint a reader will trust must not be
-# assertable from any client door. `drive_name` is required at the submit seam but trusted by
-# nothing, a different property.
-DRIVE_PROVENANCE_HINT_KEYS = frozenset({"drive_file_id", "drive_url"})
+# A document's provenance: where the submitter says it came from. It lands as `url:` on the
+# reader-facing source page with the standing the material itself has — the submitter's claim,
+# attributed to the submitter — which is why it is accepted from every door where the Slack pair
+# above is not: that pair is asserted by a transport, this one by a person (ADR 044 D4).
+DOCUMENT_HINT_KEYS = ("source_url",)
 
 # The union `normalize_hints` checks a key against.
-# A steward REGISTERING an entity (ADR 042): the two steward doors — the console's "Register an
-# entity" and `stigmergy-entities create` — submit what the steward knows as a capture carrying
-# these, and the librarian writes the entity's page from that material and the brain, born
-# confirmed by the steward. Allowed here so `queue.submit` stores them; refused at the service
-# seam for every client, because a registration is an act of authority and `brain_submit`
-# attributes material, never authority.
+# REGISTERING an entity (ADR 042, ADR 044 D1): a capture carrying these says what the person
+# introducing the entity calls it and what type it is, and the librarian writes the page from that
+# material and from what the brain already holds, born confirmed by them. Accepted from every door
+# — pinning a name is not an act of authority, because there is no authority left to hold: an
+# identity is born confirmed by whoever captured it either way.
 REGISTER_HINT_KEYS = ("register_name", "register_type", "register_aliases", "register_source")
-ALLOWED_HINT_KEYS = (HINT_KEYS + SOURCE_HINT_KEYS + MEETING_HINT_KEYS + DRIVE_HINT_KEYS
-                     + REGISTER_HINT_KEYS)
+
+# What a `delete` row carries instead of material: the pages that go, one per line, and the door
+# that queued it. A STRING like every other hint — this vocabulary is string-valued by
+# construction, and a list-valued exception for one kind would be a second shape every reader of
+# `hints` has to know about. The paths are parsed once, at the seam below, so no consumer parses
+# them a second way. `delete_source` is spelled apart from the `source_*` group and mirrors
+# `register_source`: it names the DOOR the removal came through, which is the server's own fact
+# about the row and never the submitter's claim about a document.
+DELETE_HINT_KEYS = ("delete_paths", "delete_source")
+ALLOWED_HINT_KEYS = (HINT_KEYS + SOURCE_HINT_KEYS + MEETING_HINT_KEYS + DOCUMENT_HINT_KEYS
+                     + REGISTER_HINT_KEYS + DELETE_HINT_KEYS)
 
 # Fields a client may never assert: as an argument or a hint each is an explicit error; declared in
 # a page's frontmatter each is recorded as a flagged hint and otherwise inert.
@@ -402,54 +436,28 @@ def validate_meeting_date(value: str) -> str:
     return text
 
 
-def reject_drive_provenance_hints(hints: dict | None) -> None:
-    """Fail LOUDLY on `drive_file_id`/`drive_url` from ANY client door: the one legitimate asserter
-    (`stigmergy-drive drop`) never passes through `BrainService._submit`."""
-    present, plural = _present_and_plural(hints, DRIVE_PROVENANCE_HINT_KEYS)
-    if not present:
-        return
-    raise SubmissionRejected(
-        f"{', '.join(present)} {'are' if plural else 'is'} set by the stigmergy-drive operator "
-        f"CLI itself, not by a caller — remove {'them' if plural else 'it'} and resubmit (Drive "
-        f"provenance on a reader-facing source page must come from a fetch that actually "
-        f"happened)")
-
-
-def reject_registration_hints(hints: dict | None) -> None:
-    """Fail LOUDLY on any `register_*` hint from ANY client door: the two legitimate asserters
-    (the console's Register an entity, `stigmergy-entities create`) never pass through
-    `BrainService._submit`, and a registration is a steward's act, not a submitter's suggestion."""
-    present, plural = _present_and_plural(hints, REGISTER_HINT_KEYS)
-    if not present:
-        return
-    raise SubmissionRejected(
-        f"{', '.join(present)} {'are' if plural else 'is'} set by the steward doors themselves "
-        f"(the console's Register an entity, `stigmergy-entities create`), not by a caller — "
-        f"remove {'them' if plural else 'it'} and resubmit. To introduce an entity, capture what "
-        f"you know about it: the librarian proposes it and a steward confirms")
-
-
 @dataclasses.dataclass(frozen=True)
 class Registration:
-    """What a steward asked the librarian to register, read off a capture's hints: the entity's
-    name and type as the steward spelled them, the spellings they listed, and which door asked
-    (the ledger's `source`). The capture's `submitted_by` is the steward, and therefore the
-    `approved_by` the page is born with."""
+    """What a capture asked the librarian to register, read off its hints: the entity's name and
+    type as the person spelled them, the spellings they listed, and which door asked. The
+    capture's `submitted_by` is that person, and therefore the `approved_by` the page is born
+    with — as it is for every identity a capture introduces (ADR 044 D1)."""
     name: str
     entity_type: str
     aliases: tuple
     source: str
 
 
-# The doors a registration can come from — the ledger's own spellings (`capture.decisions` names
-# the same two, and refuses any other after the push, which is too late to learn it).
-REGISTRATION_SOURCES = ("admin", "cli")
+# The doors a registration can come from. Any client door may pin what the librarian would
+# otherwise infer (ADR 044 D1) — a registration carries no authority, so there is nothing here for
+# a closed list to protect; the tuple stays as the vocabulary a door names itself with.
+REGISTRATION_SOURCES = ("mcp", "admin", "slack")
 
 
 def registration_hints(*, name: str, entity_type: str, aliases=(), source: str) -> dict:
-    """The hints a steward door submits with a registration — built here so both doors build the
-    same ones. `entity` rides along as the ordinary hint it is, so the haystack the proposal writer
-    checks a proposed name against carries the steward's spelling."""
+    """The hints a door submits with a registration — built here so every door builds the same
+    ones. `entity` rides along as the ordinary hint it is, so the haystack `librarian.identity`
+    checks a declared name against carries the submitter's own spelling."""
     if source not in REGISTRATION_SOURCES:
         raise ValueError(f"a registration comes from one of {', '.join(REGISTRATION_SOURCES)}, "
                          f"not {source!r} — the ledger records the door by that name")
@@ -469,18 +477,83 @@ def registration_from_hints(hints: dict | None) -> Registration | None:
                         aliases=aliases, source=str(client.get("register_source") or "").strip())
 
 
-def _require_drive_hints(client: dict) -> None:
-    """`kind == DRIVE` requires both hints at THIS seam, which every caller of `queue.submit`
-    crosses. `drive_name` carries the extension conversion dispatches on; missing, it falls
-    through to the `text` method and files a PDF's raw bytes as prose."""
-    if not str(client.get("drive_file_id") or "").strip():
+# A `source_url` is a URL or nothing: one line, a scheme a reader can follow. A bare path or a
+# sentence is not a place the source page could send anybody.
+_SOURCE_URL_RE = re.compile(r"^https?://\S+$")
+
+
+def _require_document_hints(client: dict) -> None:
+    """`kind == DOCUMENT` requires `title` at THIS seam, which every caller of `queue.submit`
+    crosses: the title is the source page's identity. `source_url` is optional, and a URL when
+    present — it lands as `url:` on a reader-facing page."""
+    if not str(client.get("title") or "").strip():
         raise SubmissionRejected(
-            "a drive submission requires hints['drive_file_id'] — the Drive file this capture "
-            "was fetched from")
-    if not str(client.get("drive_name") or "").strip():
+            "a document submission requires hints['title'] — the document's name, used as this "
+            "capture's source page identity")
+    url = str(client.get("source_url") or "").strip()
+    if url and not _SOURCE_URL_RE.match(url):
         raise SubmissionRejected(
-            "a drive submission requires hints['drive_name'] — the file's display name; its "
-            "extension is what the worker's conversion dispatches on")
+            "hints['source_url'] must be an http(s) URL on one line — it lands as `url:` on the "
+            "source page, where a reader follows it")
+
+
+# What a deletion may be, at every door. `MAX_DELETED_PAGES` is not a technical bound — the plan's
+# byte ceiling is — it is what ONE person's removal may mean: a page they judged stale, or a
+# handful, never a corpus sweep typed in one line. `DELETE_REASON_CHARS` bounds the sentence that
+# becomes the commit message.
+MAX_DELETED_PAGES = 10
+DELETE_REASON_CHARS = 400
+
+# Where a removal may point. Deliberately NOT `repair.deletion.DELETABLE_PREFIXES` imported: this
+# package may not import the librarian's write path, and this seam answers a narrower question —
+# "is this a corpus page at all" — before anything is queued. The applier asks the full question
+# again in the tree it commits from, which is the one that decides.
+DELETABLE_ZONE_PREFIXES = ("wiki/", "sources/", "views/")
+# The one zone a removal may never name, at every door: an identity is retired by removing what
+# made it one, never by deleting the page out from under the pages anchored to it.
+UNDELETABLE_ZONE_PREFIX = "wiki/entities/"
+
+
+def delete_paths(hints: dict | None) -> list[str]:
+    """The pages a `delete` row names, parsed from its hints — the ONE parser, so a worker and a
+    door cannot disagree about what was asked for. Order preserved, blanks dropped, duplicates
+    collapsed."""
+    raw = str(((hints or {}).get("client") or {}).get("delete_paths") or "")
+    out: list[str] = []
+    for line in raw.splitlines():
+        path = line.strip()
+        if path and path not in out:
+            out.append(path)
+    return out
+
+
+def _require_delete_hints(client: dict) -> None:
+    """`kind == DELETE` names its pages at THIS seam, which every caller of `queue.submit` crosses.
+
+    Everything here is answerable without a checkout, and that is the point: a removal a person
+    typed wrong should be refused at the door, in their session, rather than becoming a queued row
+    that fails minutes later where they are not looking. Whether the page EXISTS is not asked here
+    — the tree the worker commits from is the only place that answer is not already stale.
+    """
+    paths = delete_paths({"client": client})
+    if not paths:
+        raise SubmissionRejected(
+            "a deletion names at least one page — nothing was queued")
+    if len(paths) > MAX_DELETED_PAGES:
+        raise SubmissionRejected(
+            f"a deletion names at most {MAX_DELETED_PAGES} page(s), and this one names "
+            f"{len(paths)}. One removal is one judgment a person made about pages they read; a "
+            f"larger sweep is a series of them — nothing was queued")
+    for path in paths:
+        if path.startswith(UNDELETABLE_ZONE_PREFIX):
+            raise SubmissionRejected(
+                f"{path} is an entity page, and an identity is retired by removing what made it "
+                f"one rather than by deleting the page the anchored pages point at — nothing was "
+                f"queued")
+        if not path.startswith(DELETABLE_ZONE_PREFIXES) or ".." in path.split("/"):
+            raise SubmissionRejected(
+                f"{path} is not a corpus page: a removal names a page under "
+                f"{', '.join(DELETABLE_ZONE_PREFIXES)} — nothing was queued")
 
 
 def _require_meeting_hints(client: dict) -> None:
@@ -491,6 +564,22 @@ def _require_meeting_hints(client: dict) -> None:
             "a meeting submission requires hints['title'] — the meeting's title, used as this "
             "capture's source and meeting page identity")
     validate_meeting_date(client.get("meeting_date") or "")
+
+
+def reject_unsubmittable_kind(kind: str) -> None:
+    """Refuse a kind no door may SUBMIT. One kind qualifies — `delete` — and the reason it has to be
+    refused HERE rather than by the kind vocabulary is that the vocabulary is what the QUEUE
+    accepts, not what a submitter may ask for.
+
+    Without this, `brain_submit(kind="delete", …)` would queue a removal without ever meeting the
+    unrestricted-identity check `brain_delete` exists to run: the worker performs whatever `delete`
+    row it claims, and the row is the whole of what it knows.
+    """
+    if kind in KINDS and kind not in SUBMITTABLE_KINDS:
+        raise SubmissionRejected(
+            f"{kind!r} is not something to submit: it is what a door queues on your behalf after "
+            f"deciding you may. To remove pages, use the removal door — it asks a question this "
+            f"one cannot")
 
 
 def prepare_submission(kind: str, material: str, hints: dict | None = None) -> Submission:
@@ -507,15 +596,18 @@ def prepare_submission(kind: str, material: str, hints: dict | None = None) -> S
             "material contains unpaired surrogate characters, which are not text this can archive "
             "— re-send it as valid UTF-8")
     digest, size = material_digest(material)
-    if size > MAX_MATERIAL_BYTES:
+    cap = max_material_bytes(kind)
+    if size > cap:
         raise SubmissionRejected(
-            f"material too large: {size} bytes (max {MAX_MATERIAL_BYTES}) — submit the part "
-            "worth keeping, not the whole transcript")
+            f"material too large for a {kind}: {size} bytes (max {cap}) — submit the part worth "
+            f"keeping")
     normalized_hints = normalize_hints(hints, material)
     if kind == MEETING:
         _require_meeting_hints(normalized_hints["client"])
-    if kind == DRIVE:
-        _require_drive_hints(normalized_hints["client"])
+    if kind == DOCUMENT:
+        _require_document_hints(normalized_hints["client"])
+    if kind == DELETE:
+        _require_delete_hints(normalized_hints["client"])
     return Submission(
         kind=kind,
         material=material,

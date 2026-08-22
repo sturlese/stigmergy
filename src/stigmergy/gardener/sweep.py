@@ -95,11 +95,9 @@ ALL_SWEEP_SLUGS = ALL_MODEL_CHECK_SLUGS + EMPTY_BODY_CHECK_SLUGS + DUPLICATE_ENT
 
 # Spelled out per slug rather than derived by a blanket comprehension: the fifth entry is `info`
 # and the four are `warn`, so a severity here is a decision somebody made about that check rather
-# than something a new slug inherits by being added to a tuple. None of the five is `sla`: none
-# carries a time-bound clock, so manufactured urgency would be dishonest. `model-empty-entity-body`
-# is `info` because it is the judgment twin of an `info` deterministic check and what it invites is
-# a drafted body a steward reads before approving — `warn` would inflate the digest for a page
-# nobody is at risk from.
+# than something a new slug inherits by being added to a tuple. `model-empty-entity-body` is `info`
+# because it is the judgment twin of an `info` deterministic check and what it invites is a drafted
+# body — `warn` would inflate the digest for a page nobody is at risk from.
 MODEL_CHECK_SEVERITY = {
     CHECK_MODEL_CONTRADICTION: schema.SEVERITY_WARN,
     CHECK_MODEL_ANCHOR_FIT: schema.SEVERITY_WARN,
@@ -109,7 +107,7 @@ MODEL_CHECK_SEVERITY = {
     # `warn`, unlike its neighbour above, and the difference is what the finding costs to ignore:
     # an empty body is a page that says nothing, while two identities for one company SPLIT the
     # anchoring — each timeline is a fraction of the truth and entity-first retrieval degrades with
-    # nothing anywhere reporting that it has. Not `sla`: no clock is running on it.
+    # nothing anywhere reporting that it has.
     CHECK_MODEL_DUPLICATE_ENTITY: schema.SEVERITY_WARN,
 }
 
@@ -135,19 +133,21 @@ MODEL_SUGGESTED_ACTIONS = {
     # the two checks name one entity page and are answered by one drafted body, so an operator
     # reading one after the other must not find two accounts of the same procedure.
     CHECK_MODEL_EMPTY_ENTITY_BODY: (
-        "no command — the repair proposer drafts a body from the pages anchored to this entity; "
-        "approve it in the review lane, or edit the page by hand"),
+        "no command — the worker's repair pass drafts a body from the pages anchored to this "
+        "entity and commits it; the diff is on the Repairs page, and `git revert` is the undo"),
     # Names no command, like every action above it, and for the same reason: the answer to this
-    # check is a proposal a steward approves, not something anybody types. `entity-alias` is the
-    # repair kind that performs it — the survivor gains the absorbed entity's spellings, every page
-    # anchored to it is re-anchored, the absorbed page is marked superseded and the registry is
-    # regenerated, as one commit. Deciding they are genuinely two entities is an answer as well,
-    # and it is the one a reject records permanently.
+    # check is a repair the worker applies, not something anybody types (ADR 044 D2).
+    # `entity-alias` is the repair kind that performs it — the survivor gains the absorbed
+    # entity's spellings, every page anchored to it is re-anchored, the absorbed page is marked
+    # superseded and the registry is regenerated, as one commit. That they are genuinely two
+    # entities is an answer as well: it is what a `skipped` row records, permanently, by content
+    # key — so a pair the loop declined once is never derived again.
     CHECK_MODEL_DUPLICATE_ENTITY: (
-        "no command — read both entity pages and judge whether they are one entity under two "
-        "names; the repair proposer drafts the merge (which name survives, and every page that "
-        "moves with it), and you approve or decline it in the review lane. Declining says they are "
-        "two entities and is remembered"),
+        "no command — the worker's repair pass judges whether they are one entity under two "
+        "names and, if they are, commits the merge (which name survives, and every page that "
+        "moves with it); read the diff on the Repairs page, and `git revert` it if the two are "
+        "genuinely different companies. Judging them different is remembered either way, so the "
+        "pair is never derived twice"),
 }
 
 # The excerpt cap and the composed `detail` cap are the same figure, owned once in
@@ -266,8 +266,8 @@ report findings."""
 # A duplicate-identity finding names EXACTLY two entity pages — the pair. One figure serving as
 # both the floor and the ceiling, rather than a max of 2 beside a min of 2 that a later edit could
 # move apart: the check is a claim about a pair, so "at most two" and "at least two" are not two
-# bounds, they are one shape. A finding naming three pages is a merge decision a steward cannot
-# take as one, and one naming a single page is a claim with nothing to compare it against.
+# bounds, they are one shape. A finding naming three pages is a merge nothing can take as one act,
+# and one naming a single page is a claim with nothing to compare it against.
 DUPLICATE_ENTITY_SUBJECT_PAGES = 2
 
 # Below this there is no pair to look for and no model is asked at all — the floor is enforced
@@ -380,9 +380,9 @@ def build_empty_body_prompt(pages: list[dict]) -> str:
 
 
 # The identity block that opens each fenced entry — three lines a person wrote, inside the fence
-# with the body rather than in the header beside it. A name or an alias is untrusted text (a
-# steward types it, `birth._refuse_control_characters` is what keeps it typeable at all), and text
-# a person wrote does not belong in the structural half of a prompt.
+# with the body rather than in the header beside it. A name or an alias is untrusted text (it comes
+# from somebody's captured material, and `birth._refuse_control_characters` is what keeps it
+# typeable at all), and text a person wrote does not belong in the structural half of a prompt.
 _DUPLICATE_IDENTITY_BLOCK = "name: {name}\ntype: {type}\naliases: {aliases}"
 
 

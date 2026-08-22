@@ -329,7 +329,7 @@ def test_json_status_reports_the_visibility_timeout_derived_from_the_agent_timeo
 
     `STIGMERGY_LIBRARIAN_TIMEOUT_S=600` is not an arbitrary probe value — it is the deployed worker's
     own budget (`docs/reference/operator-runbook.md`, `fly.toml`), which is exactly the case the
-    dead variable was silently wrong for: the class default (1290) is not what a staging operator's
+    dead variable was silently wrong for: the class default (900) is not what a staging operator's
     worker actually holds. `tests/librarian/test_config.py::
     test_a_raised_agent_timeout_raises_the_derived_visibility_with_it` already pins the arithmetic
     at `Settings.from_args`; this pins that the SAME resolved number reaches the JSON surface the
@@ -342,9 +342,9 @@ def test_json_status_reports_the_visibility_timeout_derived_from_the_agent_timeo
     assert exit_code == 0
     payload, _ = json.JSONDecoder().raw_decode(out)
     # 2 agent attempts * 600s + 120s gate budget + 180s headroom — staging's derived lease
-    # (config.minimum_visibility_timeout_s(600) + config.VISIBILITY_HEADROOM_S), not the 1290s
+    # (config.minimum_visibility_timeout_s(600) + config.VISIBILITY_HEADROOM_S), not the 900s
     # class default a bare "$STIGMERGY_LIBRARIAN_VISIBILITY_TIMEOUT, default 900" would have implied.
-    assert payload["visibility_timeout_s"] == 1890
+    assert payload["visibility_timeout_s"] == 1500
     assert payload["visibility_timeout_s"] != config.DEFAULT_VISIBILITY_TIMEOUT_S
 
 

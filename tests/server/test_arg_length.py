@@ -1,18 +1,13 @@
 """Every user-controlled string argument reachable over the public HTTP boundary — `query`, the
-`filters` keys and values, `path`, `entity`, `ask`'s `question`, and `review_decide`'s four free-text
-fields (`notes`, `name`, `role`, each `alias`) — is length-checked BEFORE the DB read, the embedder
-call, or the LLM call it would otherwise trigger. Pure/unit where possible (poisoned doubles that
-raise if ever touched — the strongest proof that the check runs first); the at-limit/pass side uses
-the real `indexed` Postgres fixture, since "passes" has to mean the call actually reaches and
-completes the real work.
+`filters` keys and values, `path`, `entity`, `ask`'s `question`, and `brain_delete`'s `why` and
+each `path` — is length-checked BEFORE the DB read, the embedder call, the clone or the LLM call it
+would otherwise trigger. Pure/unit where possible (poisoned doubles that raise if ever touched —
+the strongest proof that the check runs first); the at-limit/pass side uses the real `indexed`
+Postgres fixture, since "passes" has to mean the call actually reaches and completes the real work.
 
-`notes` is the one of review's four this file can reach with a poisoned service: it is checked at the
-top of `review.review_decide`, before any row is read. `name`/`role`/`alias` are checked inside
-`_decide_entity_proposal`, downstream of a real submission row AND a passed steward guard, so their
-coverage lives with the fixtures that have both — `tests/server/test_review.py`, in its
-`test_an_over_limit_mint_argument_comes_back_as_the_checks_own_sentence` section, which also pins
-the `_alias_list` split (a long comma-separated STRING is many short aliases and must pass; one
-long single alias must not)."""
+Both halves of the escape hatch are pinned here: `check_arg_length`'s OWN marked rejection is
+echoed verbatim (it is server-authored and actionable), and any other `ValueError` — the shape a
+`pydantic_core.ValidationError` arrives in — still collapses to a class name."""
 import pytest
 
 from stigmergy.server.errors import RateLimitError
@@ -202,65 +197,81 @@ def test_ask_over_the_limit_never_constructs_the_answer_service(monkeypatch):
     assert svc.audit.rows[-1]["error_class"] == "ValueError"
 
 
-def test_review_decide_over_the_limit_notes_returns_the_checks_own_sentence(monkeypatch):
-    """OLD BEHAVIOUR: `{"error": "review_decide failed (ValueError)"}`.
+def test_brain_delete_over_the_limit_reason_returns_the_checks_own_sentence():
+    """OLD BEHAVIOUR: `{"error": "<tool> failed (ValueError)"}`.
 
-    `review.review_decide` length-checks `notes` before it reads anything, and `check_arg_length`
-    raises its MARKED `ValueError` — but the `review_decide` closure caught only `(CaptureError,
-    RateLimitError, CapabilityUnavailableError)`, so the marked rejection fell through to
-    `_failure`, which is class-name-only by design. A steward pasting an over-long note was told
-    which tool broke and nothing about what to do, while every read tool answered the same overflow
-    with the actionable sentence.
+    The write tools length-check their free text before they read anything, and
+    `check_arg_length` raises its MARKED `ValueError` — but the closure caught only
+    `(CaptureError, RateLimitError, CapabilityUnavailableError)`, so the marked rejection fell
+    through to `_failure`, which is class-name-only by design. A person pasting an over-long
+    reason was told which tool broke and nothing about what to do, while every read tool answered
+    the same overflow with the actionable sentence.
 
-    Poisoned conn/embedder: the check must fire before the submission row is read, so nothing on
-    this path may touch the database at all.
+    Poisoned conn/embedder: the check must fire before anything is read, so nothing on this path
+    may touch the database at all.
     """
     from stigmergy.server.mcp_server import build_mcp
 
     svc = poisoned_service(audit=FakeAudit())
     mcp = build_mcp(svc)
 
-    out = _call_mcp(mcp, "review_decide", item_kind="identity-proposal", item_id="acme",
-                    verdict="requeue", notes="x" * (MAX_ARG_CHARS + 1))
-    assert out == {"error": f"notes too long (max {MAX_ARG_CHARS} characters)"}
+    out = _call_mcp(mcp, "brain_delete", paths=["wiki/notes/Old.md"],
+                    why="x" * (MAX_ARG_CHARS + 1))
+    assert out == {"error": f"why too long (max {MAX_ARG_CHARS} characters)"}
     assert svc.audit.rows[-1]["error_class"] == "ValueError"
 
 
-def test_review_decide_at_the_limit_notes_reaches_the_row_read():
-    """The benign twin: an AT-limit note is never rejected for its LENGTH — the call proceeds to
-    `_row_for_item`, whose first move is to touch the (poisoned) connection. The `AssertionError`
-    that comes back is `Poison`'s own, a genuinely different failure from the length check's, so
-    "passed the guard" can never be read as "was rejected by it"."""
+def test_brain_delete_checks_every_path_it_was_handed_not_only_the_reason():
+    """The same guard, over the OTHER free-text argument: a path is a caller-controlled string
+    that reaches a clone and a commit message, so an over-long one is refused by name before any
+    of that. The sentence names `path`, not `why` — a guard that reported the wrong field would
+    send a caller to edit text that was never the problem."""
     from stigmergy.server.mcp_server import build_mcp
 
     svc = poisoned_service(audit=FakeAudit())
     mcp = build_mcp(svc)
 
-    out = _call_mcp(mcp, "review_decide", item_kind="identity-proposal", item_id="acme",
-                    verdict="requeue", notes="x" * MAX_ARG_CHARS)
-    assert out == {"error": "review_decide failed (AssertionError)"}   # reached the DB read
-    assert svc.audit.rows[-1]["error_class"] == "AssertionError"
+    out = _call_mcp(mcp, "brain_delete", paths=["wiki/notes/Old.md", "x" * (MAX_ARG_CHARS + 1)],
+                    why="a short reason")
+    assert out == {"error": f"path too long (max {MAX_ARG_CHARS} characters)"}
+
+
+def test_brain_delete_at_the_limit_reason_reaches_the_service():
+    """The benign twin: an AT-limit reason is never rejected for its LENGTH — the call proceeds
+    into the door, which then refuses it for a completely different reason, so "passed the guard"
+    can never be read as "was rejected by it"."""
+    from stigmergy.server.mcp_server import build_mcp
+
+    svc = poisoned_service(audit=FakeAudit())
+    mcp = build_mcp(svc)
+
+    out = _call_mcp(mcp, "brain_delete", paths=["wiki/notes/Old.md"], why="x" * MAX_ARG_CHARS)
+    # Past the guard and into the door's own first refusal — a genuinely different sentence from
+    # the length check's, on a service with no evidence store wired (a removal is QUEUED since ADR
+    # 044 D3, so the capture queue is what this door needs and what this service has not got).
+    assert "evidence store" in out["error"]
+    assert "too long" not in out["error"]
 
 
 def test_a_pydantic_shaped_value_error_is_still_reduced_to_a_class_name(monkeypatch):
-    """The specificity half of the escape: only `check_arg_length`'s OWN marked rejection is echoed.
-    An UNMARKED `ValueError` — the shape a `pydantic_core.ValidationError` arrives in, carrying
-    untrusted content or internal field paths — must still collapse to a class name."""
+    """The specificity half of the escape: only `check_arg_length`'s OWN marked rejection is
+    echoed. An UNMARKED `ValueError` — the shape a `pydantic_core.ValidationError` arrives in,
+    carrying untrusted content or internal field paths — must still collapse to a class name."""
     from stigmergy.server.mcp_server import build_mcp
 
     def _unmarked(*_a, **_kw):
         raise ValueError("SECRET-MARKER field path leaked from somewhere internal")
-    # The first read `_decide_identity` makes (the registry lookup behind the authorization
-    # guard), reached as a module attribute — patched here rather than raised from a double, so
-    # the ValueError arrives from exactly where a real one would.
-    monkeypatch.setattr("stigmergy.server.review._proposal_or_none", _unmarked)
+    # The door's own sequence, reached as a module attribute — patched here rather than raised
+    # from a double, so the ValueError arrives from exactly where a real one would.
+    monkeypatch.setattr("stigmergy.server.review.queue_deletion", _unmarked)
 
+    # `poisoned_service` resolves no audiences, so it is unrestricted — the one identity kind
+    # `brain_delete` authorizes (ADR 044 D3), which is what lets the call reach the door at all.
     svc = poisoned_service(audit=FakeAudit())
     mcp = build_mcp(svc)
 
-    out = _call_mcp(mcp, "review_decide", item_kind="identity-proposal", item_id="acme",
-                    verdict="requeue", notes="a short note")
-    assert out == {"error": "review_decide failed (ValueError)"}
+    out = _call_mcp(mcp, "brain_delete", paths=["wiki/notes/Old.md"], why="a short reason")
+    assert out == {"error": "brain_delete failed (ValueError)"}
     assert "SECRET-MARKER" not in out["error"]
 
 

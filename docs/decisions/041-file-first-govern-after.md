@@ -17,6 +17,7 @@
   Narrative: [`docs/reference/librarian.md`](../reference/librarian.md),
   [`docs/reference/capture.md`](../reference/capture.md),
   [`docs/reference/operator-runbook.md`](../reference/operator-runbook.md).
+- **Amended by** [ADR 044](./044-the-capture-is-the-approval.md): "file first" stands word for word. "Govern after" is withdrawn — there is nothing left to govern, because what a capture establishes is written in the commit that files it.
 
 ## Context
 

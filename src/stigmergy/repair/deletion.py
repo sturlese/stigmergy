@@ -52,7 +52,7 @@ from stigmergy.repair.errors import RepairError
 
 # The two op names, from the vocabulary module that also has to tell them apart (`content_key`
 # keys a deletion on its removals alone). Unlike the other two kinds, the KIND is not the op name:
-# one approval performs two different actions, and a steward reading `ops_preview` has to be able
+# one repair performs two different actions, and a reader of `ops_preview` has to be able
 # to tell "three pages removed" from "eleven pages rewritten" without opening the row.
 OP_DELETE = schema.DELETE_OP_NAME
 OP_SCRUB = schema.SCRUB_OP_NAME
@@ -259,7 +259,7 @@ def scrubbed(text: str, stems: set[str], *, machine_written: bool = False) -> st
         return _unlinked_body(text, stems) if machine_written else text
     # The separator is taken FROM THE FILE rather than assumed: a page whose closing `---` has no
     # newline after it would otherwise gain one, and a page that gained a byte is a page in the
-    # sweep's blast radius — a scrub op, a steward, an approval — for a change nobody made.
+    # sweep's blast radius — a scrub op, a model call, a commit — for a change nobody made.
     head = text[:len(text) - len(rest)]
     front_lines = _scrubbed_front(front.split("\n"), stems)
     body = _unlinked_body(rest, stems) if machine_written else rest
@@ -377,7 +377,7 @@ def target_refusal(worktree: str, path: str) -> tuple[str, str]:
         return "entity-page", (
             f"{path} is an entity page, and an identity is retired through governance rather than "
             f"deleted: the pages anchored to it would lose the thing they are about. Retire the "
-            f"entity with a steward, or delete the pages that are actually stale")
+            f"identity by removing what made it one, or delete the pages that are actually stale")
     if not path.startswith(DELETABLE_PREFIXES):
         return "outside-lane", (
             f"{path} is not a corpus page this kind may delete — deletion is confined to "
@@ -423,7 +423,7 @@ def page_refusal(worktree: str, path: str, *, symlink_why: str, missing_why: str
     copy is how the kinds that did not get the hardening keep the hole in silence.
 
     Each `*_why` is a `{path}` TEMPLATE rather than a finished sentence, because a refusal is read
-    by a steward and has to say what the kind asking would have done to the page. The two that
+    afterwards and has to say what the kind asking did to the page. The two that
     carry no such verb have defaults.
 
     `require_readable` picks the last check and the difference is deliberate: a kind that goes on to
@@ -458,7 +458,7 @@ def plan(worktree: str, paths) -> list[dict]:
     Deterministic and ORDERED — the deletions by path, then the scrubs by path — so two runs over
     the same bytes produce the same list rather than the same set.
 
-    Raises `RepairError`, with a sentence a steward reads verbatim, for a target this kind may not
+    Raises `RepairError`, with a sentence published verbatim, for a target this kind may not
     delete and for a page whose FRONTMATTER names a going page in a field this kind does not
     rewrite.
     """
@@ -618,7 +618,7 @@ def lane_for(ops) -> tuple[str, ...]:
 
 
 def plan_bytes(ops) -> int:
-    """How much of a steward's attention this plan is, measured in the bytes it stores."""
+    """How big this plan is, measured in the bytes it stores — the bound one repair may be."""
     return sum(len(str(o.get("planned_after", "")).encode("utf-8")) for o in (ops or ()))
 
 
@@ -641,7 +641,7 @@ def oversize_reason(ops, ceiling: int) -> str:
 
 
 # ── the validator both ends run ───────────────────────────────────────────────────────────────
-# The two bounds on a WRITTEN sweep, as finding codes a steward reads: the writer owns the body
+# The two bounds on a WRITTEN sweep, as finding codes a reader acts on: the writer owns the body
 # and nothing else, and afterwards nothing it wrote may still name a page that is going.
 FRONTMATTER_REWRITTEN_CODE = "frontmatter-rewritten"
 REFERENCE_SURVIVES_CODE = "reference-survives"
@@ -777,7 +777,7 @@ def duplicate_source_groups(worktree: str) -> list[tuple[str, list[str]]]:
 
 
 def duplicate_rationale(worktree: str, survivor: str, doomed: str) -> str:
-    """What a steward reads beside Approve — composed by CODE from the two facts that decided it,
+    """The repair's own explanation — composed by CODE from the two facts that decided it,
     because no model was asked and a sentence claiming otherwise would be a lie about provenance."""
     inbound = _inbound_counts(worktree)
     doomed_links, survivor_links = inbound.get(doomed, 0), inbound.get(survivor, 0)
@@ -844,7 +844,9 @@ def apply_declared(worktree: str, ops) -> tuple[list[str], list[gates.Finding]]:
     does NOT rewrite now refers to a going page — the latecomer that would otherwise survive the
     deletion as a dead link. Either refuses the whole plan: the corpus moved, delete again. On the
     act road the plan was made against this very tree moments ago, so both are a formality that
-    costs one walk; on the inbox road they are the whole contract.
+    costs one walk. On the QUEUED road — a removal somebody asked for minutes ago, applied by the
+    worker in a fresh clone — they are the whole contract: the corpus has moved since, and the
+    only honest answer to a page that started referring to a going page in between is a refusal.
     """
     findings = validate(worktree, ops)
     if findings:

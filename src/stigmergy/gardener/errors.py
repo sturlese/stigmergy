@@ -3,8 +3,8 @@ line and a non-zero exit — no traceback reaches an operator's terminal."""
 
 
 class GardenerError(RuntimeError):
-    """A caller-facing refusal about a precondition for RUNNING the tool at all: a bad `--repo`,
-    a bad setting, or an `sla` finding whose notice cannot post."""
+    """A caller-facing refusal about a precondition for RUNNING the tool at all: a bad `--repo`
+    or a bad setting."""
 
 
 class SweepGarbage(RuntimeError):

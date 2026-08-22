@@ -14,6 +14,7 @@
   Narrative: [`docs/reference/librarian.md`](../reference/librarian.md),
   [`docs/reference/operator-runbook.md`](../reference/operator-runbook.md),
   [`docs/reference/admin-console.md`](../reference/admin-console.md).
+- **Amended by** [ADR 044](./044-the-capture-is-the-approval.md): it stands, with the steward who registers becoming any submitter. `approved_by:` names the person whose capture introduced the identity.
 
 ## Context
 

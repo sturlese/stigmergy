@@ -4,10 +4,9 @@ Two operator commands over the corpus: `stigmergy-gardener` finds what needs a h
 says so; `stigmergy-digest` posts what happened to Slack.
 Design record: [ADR 024](../decisions/024-gardener-digest.md) — it holds the decisions this
 document only shows the results of.
-The review inbox is covered in [`server.md`](./server.md#the-review-tools)
-and its Slack surface in [`slack.md`](./slack.md#the-steward-doorbell-and-the-review-surface);
-view staleness is covered in [`views.md`](./views.md). This document describes what these two
-commands add on top of them. Code maps, one per command:
+What a finding's path to zero looks like is [`repair.md`](./repair.md); view staleness is covered
+in [`views.md`](./views.md). This document describes what these two commands add on top of them.
+Code maps, one per command:
 [`src/stigmergy/gardener/index.md`](../../src/stigmergy/gardener/index.md) and
 [`src/stigmergy/digest/index.md`](../../src/stigmergy/digest/index.md).
 
@@ -17,9 +16,9 @@ stigmergy-gardener                                  stigmergy-digest
   │    pages_index / capture_queue / the registry /  │    completed gardener run's findings —
   │    the repo checkout                             │    reused, never re-derived)
   ├─ model editorial sweep    (sweep.py)             └─ corpus deltas          (capture_queue
-  │    changed-since-watermark pages +                    pages filed, review_decisions
-  │    a rotating sample of unchanged ones,               identity approvals)
-  │    PydanticAI, no checkout, no tools
+  │    changed-since-watermark pages +                    + repairs: pages filed, the
+  │    a rotating sample of unchanged ones,               identities those filings introduced,
+  │    PydanticAI, no checkout, no tools                  and the repairs that landed)
   ├─ model empty-body pass    (sweep.py)
   │    EVERY entity page in the checkout,
   │    batched, minus the ones already
@@ -29,29 +28,28 @@ stigmergy-gardener                                  stigmergy-digest
   │    same zone, in ONE call — a pair split
   │    across batches is invisible; no tools
   ├─ persist: gardener_findings + job_runs          every page NAMED is ACL-scoped to the posting
-  ├─ print: severity-grouped report, or --json      channel (server.acl.visible, slack.channels.
-  └─ sla-severity findings → ONE Slack notice       channel_audiences) — the digest broadcasts
-       (same channel as the digest, ACL-scoped;     --dry-run: byte-identical preview, posts nothing
-        NO check produces one today — see below)          │
+  └─ print: severity-grouped report, or --json      channel (server.acl.visible, slack.channels.
+        │                                           channel_audiences) — the digest broadcasts
+        │                                           --dry-run: byte-identical preview, posts nothing
         │                                                  │
-        └──────────────────────── gardener.yml (daily cron; gardener only) ─────────────────────────┘
+        └────────── the worker's night shift (daily, idle branch; gardener only) ──────────────────┘
 ```
 
-Both commands are **findings-only**: neither fixes, writes, opens a PR or issue, edits the
-registry, or touches an inbox. `stigmergy-gardener` reports; `stigmergy-digest` broadcasts what was
-already reported plus the corpus's own deltas. Every existing lane — the review
-inbox (`review_queue`/`review_decide`), an entity-registry edit, `stigmergy-views regenerate`, an
-ordinary correction filed through the 🧠 gesture — is still how anything a finding names actually
-gets fixed.
+Both commands are **findings-only**: neither fixes, writes, opens a PR or issue, or edits the
+registry. `stigmergy-gardener` reports; `stigmergy-digest` broadcasts what was already reported
+plus the corpus's own deltas. Every other lane — the worker's repair pass, its view sweep, a
+person's own `brain_delete`, an ordinary correction filed through the 🧠 gesture — is how anything
+a finding names actually gets fixed.
 
-**A finding now has one more road to zero, and it starts in a different package.**
-`stigmergy-repair propose` reads the latest completed gardener run and, for the three findings a
-link or a callout can answer (`model-unlinked-mention`, `model-contradiction`, `orphan-page`), has
-a model draft a concrete strictly-additive edit that a steward approves ONE at a time — over MCP or
-in the console's Repairs tab — before any code applies it. None of that reaches back here: this
-package still detects and fixes nothing, and it neither imports nor calls the one that proposes.
+**A finding's road to zero starts in a different package.** The librarian worker reads the latest
+completed gardener run on its idle branch and, for the six findings this vocabulary can answer,
+derives a concrete change, validates it against a real checkout, proves it through the nine gates
+and pushes it — nobody is asked, and the reading happens afterwards, from the diff the ledger
+stored. None of that reaches back here: this package still detects and fixes nothing, and it
+neither imports nor calls the one that repairs.
 The narrative is [repair.md](./repair.md), decided in
-[ADR 039](../decisions/039-governed-repair-loop.md).
+[ADR 039](../decisions/039-governed-repair-loop.md) and amended by
+[ADR 044](../decisions/044-the-capture-is-the-approval.md) D2.
 
 ## The ten deterministic checks
 
@@ -95,26 +93,25 @@ the irreversible, the gardener flags conventions.**
 
 **`anchored-to-superseded-entity` is the residual of an applied merge, counted where it accrues.** A merge moves the absorbed entity's aliases and never its name, so the absorbed id stays registered and a capture filed later spelling that name anchors to the retired identity — and the repair loop can never re-propose the pair (its `content_key` is a permanent decision). The population excludes the entity zone and the machine zones on purpose: the absorbed page's own self-anchor and its member-set-of-one view are BY DESIGN and would otherwise be two permanent, unfixable findings per merge. The count is exactly zero the moment a merge lands; what it measures afterwards is the accumulation the filing-time fix (issue #77's other half) exists to end.
 
-**`entity-placeholder-body` is one of the two checks with a repair kind of its own.** Entity birth
-is identity-only by design (ADR 016): `stigmergy-entities create` copies `ops/templates/entity.md`
-verbatim, so a minted page carries the template's angle-marked placeholders until somebody writes
-it. Nothing counted those pages before — the orphan check exempts entity pages by type, and no
-other check reads a body — so an identity with no content was invisible to every health pass. The
-finding is `info` and its repair is `entity-body` ([repair.md](./repair.md)): the proposer drafts
-that page's body from the pages anchored to the entity, and a steward approves the draft. The rule
+**`entity-placeholder-body` is one of the two checks with a repair kind of its own.** An entity
+page written today is born with a body — `entities.birth.render_page` refuses one that says nothing
+about the entity and strips the template's stubs
+([ADR 042](../decisions/042-an-entity-is-born-written.md)) — so what this check finds is a page
+born under the older contract, carrying `ops/templates/entity.md`'s angle-marked placeholders
+verbatim, or one whose body is blank below its title. Nothing counted those pages before this
+check — the orphan check exempts entity pages by type, and no other check reads a body — so an
+identity with no content was invisible to every health pass. The finding is `info` and its repair
+is `entity-body` ([repair.md](./repair.md)): the worker's repair pass drafts that page's body from
+the pages anchored to the entity, proves the diff through the nine gates and pushes it, and the
+draft is read afterwards on the ledger. The rule
 is deliberately literal — a body line that is wholly wrapped in angle brackets — so a one-line HTML
 element (`<details>`) reads as a placeholder. That false positive is accepted: the finding is
-`info`, and the repair it invites is a draft a human reads before it lands.
+`info`, and the repair it invites is bounded by the same gates every other diff passes.
 
 Its literal-ness is also its gap, and the gap is wide: a body somebody WROTE that says nothing —
 `Cofers is a company we work with.` — carries no angle markers and passes this check, and every
 other deterministic one. That half is the model pass's, `model-empty-entity-body`, described under
 "The model passes" below; the two are disjoint by construction and share one repair.
-
-**None of the ten checks is `sla` severity.** The `sla` severity band itself exists — the schema
-carries it (`SEVERITIES`), the report prints an `sla` section and the notice-composing code is
-live — but nothing produces one, so in practice the SLA notice has **no producer**: see "The SLA
-notice", below.
 
 Checks 4 (anchor concentration) and 6 (company-wide fraction) read the queue's real `finished_at`
 timestamp, never a page's own `updated`/`as_of` — those describe when a page was last authored, not
@@ -130,10 +127,12 @@ distribution any filing-time gate could see; the company-wide escape hatch was t
 with nothing standing behind it but "the gardener will detect it." These two checks are that
 detection.
 
-**Dead vocabulary can never be silenced by running anything.** `stigmergy-entities` only mints — no
-retire, merge or un-birth verb exists — so this finding recurs on every run until either a page
-anchors to the entity or someone hand-edits the registry outside any governed lane. That is a real
-property of the check, not a gap in its copy.
+**Dead vocabulary can never be silenced by running anything.** Nothing in this platform retires an
+identity: `wiki/entities/` is outside what a deletion may touch, by construction, and an
+`entity-alias` merge keeps the absorbed page (marked `superseded_by:`) and therefore its registry
+entry. So this finding recurs on every run until either a page anchors to the entity, or its page
+leaves `wiki/entities/` in the knowledge repo by hand. That is a real property of the check, not a
+gap in its copy.
 
 ## The model passes — "only what the tool can't see"
 
@@ -154,13 +153,13 @@ about a pair.
 
 **The editorial sweep** judges four things a mechanical check cannot, each its own check slug
 (`sweep.ALL_MODEL_CHECK_SLUGS`: `model-contradiction`,
-`model-anchor-fit`, `model-unlinked-mention`, `model-superseded-canon`), all `warn` — none carries
-a real time-bound clock, so none is `sla`. Its input is bounded
+`model-anchor-fit`, `model-unlinked-mention`, `model-superseded-canon`), all `warn`. Its input is
+bounded
 on purpose, on every axis: the NEWEST `STIGMERGY_GARDENER_SWEEP_CHANGED_CEILING` (default 30)
 pages filed since the last run's watermark, plus a rotating sample of
 `STIGMERGY_GARDENER_SWEEP_SAMPLE` (default 10) unchanged pages, each body clamped to
 `sweep.MAX_SWEEP_PAGE_CHARS` — so the prompt is settings-shaped, never corpus-shaped, even on a
-first run or after a cron outage, and a failed night re-presents a BOUNDED population rather than
+first run or after an outage, and a failed night re-presents a BOUNDED population rather than
 one its own frozen watermark keeps growing. A changed page past the ceiling is deferred, counted
 (`changed_deferred`, plus a skip reason naming the knob) and never lost: it joins the unchanged
 pool, where the rotation reaches it. The pass is deliberately NOT batched instead — its checks
@@ -242,6 +241,19 @@ it carries its own concrete cheap-class default, so "model is configuration" rea
 than "model is whatever the shared one happens to be". Escalating past that default is an
 evidence-driven decision from reading real weeks of findings, not a guess made up front.
 
+**On a deployment that default is not usable, and the worker says so at startup.** Since the garden
+pass moved into the librarian worker ([ADR 044](../decisions/044-the-capture-is-the-approval.md)
+D6), it runs where `stigmergy-librarian-boot` has stripped `OPENAI_API_KEY` — deliberately, because
+that key belongs to the read path's embedder and Fly secrets are app-wide. The cheap-class default
+is a BARE model id, which resolves through the OpenAI Responses API, so it authenticates with
+nothing there. Set `STIGMERGY_GARDENER_MODEL` to a provider-prefixed model whose key the worker
+holds; the filing model's own provider is the obvious one. A garden pass whose model this worker cannot
+authenticate FAILS BY NAME and records a `job_runs` error row an operator reads on the console's
+Jobs page — rather than refusing to boot, because filing must never depend on maintenance. The
+alternative is the failure that hides: the deterministic checks need no model and would keep working, so every
+night would record a `partial` run with real findings while two of the three model passes had never
+once run.
+
 An outage of ANY pass (a hard model-call failure, or nothing surviving even the one retry) never
 takes the deterministic findings from the same run down with it, and never takes another pass down
 either — they fail independently and are reported independently. Any failure commits `partial`
@@ -266,35 +278,34 @@ checked 412 pages, 38 entities — 10 deterministic checks, plus a model sweep o
 and 10 sampled unchanged page(s), and a body sweep over 24 entity page(s), and an identity sweep
 over 38 registered entity(ies)
 
-19 finding(s): 0 sla, 5 warn, 14 info
+19 finding(s): 5 warn, 14 info
 
-most of what follows is a judgment call, not a one-paste fix: only `stale-view` names a runnable
-command below. Everything else names what to go look at.
+nothing below is a one-paste fix: every `action:` names what to go look at, or says who is already
+taking care of it. This report runs no command and suggests none.
 
-## SLA (0)
-none this run
 ## WARN (5)
 [WARN] anchor-concentration        acme-corp — 14 of the last 18 filings (78%) anchored here, above the 60% threshold  [deterministic]
   action: no command — read a few of the recent filings anchored to Acme Corp and judge whether that's genuinely how lopsided the work has been, or whether unrelated material is defaulting here because picking the right anchor felt like more effort
 [WARN] stale-view                  acme-corp — the view no longer matches the corpus — its member set or the backlinks it cites have changed since it was last generated  [deterministic]
-  action: `stigmergy-views regenerate --entity acme-corp`
+  action: no command — the librarian worker regenerates it on its next idle pass; a view still listed here after several is worth checking the worker's job runs for
 ...
 ## INFO (14)
 ...
 ```
 
-Sections print **SLA first, then WARN, then INFO** — worst news first — and a severity with zero
+Sections print **WARN first, then INFO** — worst news first — and a severity with zero
 findings this run still prints its header (with its count) and an explicit "none this run", never
 a silently absent section. Within a group, findings sort by check slug then subject, so two runs
 over an unchanged corpus produce byte-identical output. Each finding is two lines: the finding
 itself (severity tag, slug, subject, the specific numbers that make it self-explanatory, and
-`[deterministic]` or `[model: {model_id}]`), then its `action:` — a backtick-quoted command when
-one genuinely exists (`stale-view` only, with the backticks baked into the stored value so the
-report and `--json` carry the identical string), a plain sentence otherwise. Nothing here is a
-repair tool; the preamble says so once, up front, rather than leaving a reader to discover it
-finding by finding. `stigmergy-repair propose` reading these same findings afterwards does not
-soften that: an `action:` line still names what to go look at, and what the proposer produces is a
-question for a steward, never a fix this report performed. `--json` emits one object per finding
+`[deterministic]` or `[model: {model_id}]`), then its `action:` — a plain sentence, always. **No
+finding names a command any more.** The last one that did was `stale-view`, and what replaced its
+command is the truth about it: the librarian worker's view sweep converges that zone and there is
+no second road, so telling an operator to run something would be an executable promise nothing
+keeps. Nothing here is a repair tool; the preamble says so once, up front, rather than leaving a
+reader to discover it finding by finding. The worker's repair pass reading these same findings
+afterwards does not soften that: an `action:` line still names what to go look at, never a fix this
+report performed. `--json` emits one object per finding
 with the same fields plus
 `id`/`run_id`/`created_at`/`model_id`, `suggested_action` always populated (never `null` for a
 sentence-only check — an absent field would read as "nothing to do," which is false).
@@ -309,34 +320,19 @@ the entity zone — would be the same silent miss these checks exist to end, one
 `#`/`##` markdown headers are correct here: the reader is a terminal, never Slack. That is the
 opposite convention from the digest, below.
 
-## The SLA notice
+## Two severities, and nothing that pages anybody
 
-**Stated plainly: this mechanism has no producer.** Every one of the ten
-deterministic checks is `info` or `warn`, and so is every one of the six model
-slugs. Nothing in this codebase constructs a finding with `SEVERITY_SLA`. The machinery below is
-therefore live code with a dead input — and not by accident: the
-severity band, the notice-composing code and `stigmergy-gardener`'s own loud-failure-on-post-error
-posture all stay, on purpose, so a future check can be given `sla` severity without anyone having
-to rebuild the notice path — but as things stand, no gardener run posts one.
+The vocabulary is `info` and `warn` (`gardener.schema.SEVERITIES`), printed in
+`SEVERITY_ORDER` and spelled off those two names by every reader — the terminal report, the
+digest's corpus-health section, the console's severity chips. Every deterministic check and every
+model slug picks one of the two explicitly, at its own definition, rather than inheriting a default.
 
-A run that produces at least one `sla` finding posts exactly **one** Slack message, however many
-`sla` findings fired, to the same channel the digest broadcasts to (`STIGMERGY_DIGEST_CHANNEL_ID`,
-reused rather than a second channel setting). It says what broke, since when, and the command that
-shows it — never `🔔`, which means "a decision is waiting in `review_queue`" everywhere else in
-this codebase and no `review_decide` verdict ever closes an SLA finding; `⚠️ SLA:` instead, always
-paired with the plain word so the fact survives a client that renders no emoji at all. A run with
-only `info`/`warn` findings posts nothing — the absence of a Slack event, not an empty state
-needing a sentence, exactly like the doorbell posting nothing when no item is open.
-
-The notice is ACL-scoped exactly like the digest's own sections (ADR 024 D5): a finding whose
-wording names more than one page has its notice wording redacted unless EVERY one of those pages is
-visible to the posting channel's audiences (never per-page), a fixed sentence taking the place of
-the page path while its severity and its place in the count stay exactly where they were.
-`stigmergy-gardener` fails loudly (nonzero exit) if an `sla` finding fires and the notice itself
-cannot be posted (no bot token, no channel configured, a malformed `ops/slack-channels.json`, a real
-`SlackApiError`) — the findings are already saved either way; only the notice is at risk. A run
-with no `sla` finding at all never resolves the channels file, or anything else Slack-shaped, in
-the first place — a malformed one cannot fail a run that was never going to post.
+**`stigmergy-gardener` notifies nobody, and holds nothing to notify with.** There is no severity
+that pages a person and no Slack credential in a gardener process: the package imports no Slack
+gateway, no channels file and no ACL predicate, and `tests/test_architecture.py` pins that as its
+import edge. A finding reaches a person two ways — `stigmergy-digest`'s corpus-health section, and
+the console's Gardener page — and what answers one is the worker's repair pass
+([ADR 044](../decisions/044-the-capture-is-the-approval.md)), not a human woken up by a message.
 
 ## The digest's two sections
 
@@ -345,29 +341,38 @@ overrides it; 7 days on a genuine first run), two sections, in this order:
 
 1. **Corpus health** — the latest COMPLETED gardener run (`status IN ('ok', 'partial')` — a run
    whose sweep failed still has complete, trustworthy deterministic findings) whose `finished_at`
-   falls inside the window: its finding counts by severity, SLA/WARN broken down by check, INFO as
+   falls inside the window: its finding counts by severity, WARN broken down by check, INFO as
    a bare count with a pointer to the full report. Two honest alternatives when there is nothing to
    show: no gardener run has EVER completed, or the latest one predates this window (both name what
    to run next, never silence).
-2. **Corpus deltas** — pages filed in-window (count + titles) and entity approvals in-window
-   (a count of `review_decisions` approvals under `identity-proposal`, plus the legacy
-   `entity-proposal` kind so a window straddling ADR 041 does not silently under-count — the
-   approval event, which is what
-   this system can actually timestamp; the commit itself carries no ledger row of its own, so
-   the section counts approvals, not writes. All four deciding doors write that row, the
-   `stigmergy-entities` CLI included, so the count is complete (issue #51) — it was not before, and
-   under-reported by exactly the CLI's share with nothing saying so. The rendered line says "approved" rather
-   than "born" for exactly that reason: an approved-never-minted proposal would otherwise count as
-   a birth forever).
+2. **Corpus deltas** — three facts: pages filed in-window (count + titles), entities born
+   in-window, and repairs applied in-window. The last two are COUNTS only.
+
+   A birth is a filing: the librarian's report names the identities its own capture introduced
+   (`report.entities_born`), so the number is the sum of
+   `jsonb_array_length(report -> 'entities_born')` over the window's FILED captures
+   ([ADR 044](../decisions/044-the-capture-is-the-approval.md)). There is no ledger to read and no
+   second table that could disagree with the commits, and the line reads `N entities born` because
+   that is now exact — every counted birth is a page in the repo.
+
+   A repair is counted off the ledger the worker writes, `applied` rows ONLY, grouped by KIND
+   (`edits`, `entity-body`, `delete`, `entity-alias`, sorted so two weeks can be compared). A
+   `failed` row belongs on the console beside the sentence that refused it, where somebody can act
+   on it — not in a weekly post to a channel that cannot.
+
+   Neither the identities nor the repaired pages are NAMED, and that is the same decision twice: a
+   page a channel may not see would be named through its entity, or through the repair that edited
+   it, and the count is the honest half.
 
 **Every page the digest NAMES passes `server.acl.visible()` at the posting channel's own resolved
 audiences** (`sections._visible_pages`, the one place this package calls it) — never the
 operator's unscoped view. In practice that is section 2's filed-page list: a page the channel
 cannot see is absent from both the count and the titles, because a count and a list that disagree
 are their own kind of dishonest report. Section 1 needs no filter because it names no page at all
-— only counts by severity and check slug — and the entity-approval number is a count of decision
-rows, not of pages. The digest is the one gardener-adjacent surface that broadcasts, so it is the
-one that needed this from birth (ADR 024 D5); until the first labelled page exists the filter is
+— only counts by severity and check slug — and neither does the rest of section 2: the
+entities-born number is a count taken off the filings' own reports, and the repairs number a count
+off the ledger, by kind. Which is exactly why they are counts. The digest is the one gardener-adjacent surface that
+broadcasts, so it is the one that needed this from birth (ADR 024 D5); until the first labelled page exists the filter is
 indistinguishable from no scoping at all, and it becomes load-bearing the moment one exists.
 
 **The digest is Slack mrkdwn, composed as such from the start — never CommonMark, never
@@ -388,31 +393,37 @@ returned string. A zero-activity window still renders every section, with its ow
 line — "silence is not an outcome" applies here exactly as it does to the gardener's own severity
 sections.
 
-## How the two commands relate to each other, and to the crons
+## How the two commands relate to each other, and to the night shift
 
 `stigmergy-gardener` and `stigmergy-digest` are independent, fully-runnable operator commands.
-**The digest is command-only: no cron at all.** A schedule buys nothing it does not already have —
-`stigmergy-digest` run by hand next month still covers everything since the last post, because its
-own watermark says so; only timeliness is lost by not scheduling it.
+**The digest is command-only: it is on no schedule at all.** A schedule buys nothing it does not
+already have — `stigmergy-digest` run by hand next month still covers everything since the last
+post, because its own watermark says so; only timeliness is lost by not scheduling it.
 
-The gardener's daily cron lives in its own workflow, `gardener.yml` — shipped here as a template
-and **run from the knowledge repo**, whose Actions logs are private (this report names entity ids
-and page paths; see the runbook). It runs
-daily at ~05:07 UTC, after `index-rebuild` (04:17) and `retention-purge` (04:42), so the corpus
-view the gardener reads is the morning's, not last night's. It checks out the knowledge repo
-read-only and runs one command — `stigmergy-gardener --repo stigmergy-knowledge` — persisting findings
-and posting the SLA notice (today, never — see above) in the same run. The whole job is guarded by
-`if: vars.STIGMERGY_CRONS_ENABLED == 'true'`, so a fork that inherits the file but not the deployment
-behind it skips cleanly instead of failing a scheduled run every night. A `concurrency` group
-queues a second run rather than cancelling one in flight: cancelling mid-write would discard real,
-already-computed work.
+**The gardener's daily run happens inside the librarian worker**, on its idle branch, at
+`STIGMERGY_LIBRARIAN_GARDEN_AT` (default 05:07 UTC) — see
+[ADR 044](../decisions/044-the-capture-is-the-approval.md) D6 and the
+[operator runbook](./operator-runbook.md). Three properties come from living there rather than in
+a scheduled GitHub Actions run:
 
-A fourth workflow sits an hour behind this one, `repair-propose.yml` at ~06:07 UTC, and the offset
-is the whole of the coupling: `stigmergy-repair propose` reads the latest COMPLETED gardener run,
-so it wants this morning's findings rather than yesterday's. It belongs to `stigmergy.repair`, runs
-under the same `STIGMERGY_CRONS_ENABLED` gate and the same queue-don't-cancel `concurrency` rule,
-and needs neither a Slack token nor a write credential — a pass that finds no completed run, or
-nothing proposable in one, proposes nothing and exits 0.
+- **It cannot delay a filing.** A pass never starts while a capture is waiting in the queue, and
+  yields between units. A cron had no way to know.
+- **It cannot silently stop.** Due-ness is read from the pass's own last `job_runs` row, so a
+  worker that restarts at 05:08 does not garden twice and one that was down all night does not
+  garden at 23:00. The failure mode this replaced was a job guarded by a repository variable: unset
+  meant every run was green-and-skipped, and "the crons stopped running" looked exactly like "the
+  crons are fine".
+- **The report stays private without an arrangement.** This report names entity ids and page paths.
+  Running it inside the deployment means there is no Actions log to keep private in the first
+  place, which is what the "run it from the knowledge repo" rule used to buy.
+
+It needs no Slack credential, and it holds no push credential either: it persists findings and
+returns them. What ANSWERS those findings is the worker's repair pass, on its own interval — a lane
+that does push, which is exactly why it lives inside the deployment that already holds the App key
+([repair.md](./repair.md), [ADR 044](../decisions/044-the-capture-is-the-approval.md) D2). Its
+coupling to this report is a watermark rather than an offset: it answers the latest COMPLETED
+gardener run, once, and a pass that finds no completed run — or nothing answerable in one — records
+that it did nothing and carries on.
 
 ## Findings-only, provably
 

@@ -4,8 +4,8 @@ Cheapest-first: material -> retry collapse -> already-filed -> secrets/PII over 
 worktree -> agent -> declared edits -> stamp -> gates -> [one corrective retry] -> commit -> push.
 The scan runs over the MATERIAL because a capture containing a secret bounces WHOLE. Terminal
 states split by CAUSE, not by gate: content `rejected`, system `failed`. A name nothing resolves
-to does not stop the page: the agent proposes the entity in its account, `identity.write_proposals`
-creates it in the same commit with `approved_by` empty, and a steward confirms it afterwards.
+to does not stop the page: the agent declares the entity in its account, and
+`identity.write_births` writes it in the same commit, confirmed by whoever captured (ADR 044).
 """
 import asyncio
 import dataclasses
@@ -15,15 +15,12 @@ import json
 import logging
 import os
 import re
-import tempfile
 from dataclasses import dataclass, field
 
-from stigmergy import review_kinds
-from stigmergy.capture import decisions, queue, schema
+from stigmergy.capture import queue, schema
 from stigmergy.capture.errors import CaptureError
 
 # `MAX_BODY_LINES`/`SPLIT_CHUNK_LINES` are IMPORTED: the linter and the splitter must agree.
-from stigmergy.kernel import converters
 from stigmergy.kernel.normalize import slugify
 from stigmergy.kernel.page import MAX_BODY_LINES, SPLIT_CHUNK_LINES
 from stigmergy.librarian import (
@@ -37,7 +34,6 @@ from stigmergy.librarian import (
     gather,
     gitcmd,
     identity,
-    pricing,
     report,
 )
 from stigmergy.librarian import agent as agent_module
@@ -46,7 +42,6 @@ from stigmergy.librarian.errors import (
     AgentError,
     GitError,
     LeaseLostError,
-    LibrarianConfigError,
     LibrarianError,
     OutcomeShapeError,
     StaleBaseError,
@@ -80,22 +75,15 @@ class Result:
 @dataclass
 class AgentPasses:
     """Agent passes STARTED and their summed cost — mutable and shared on purpose: `process_item`
-    stamps both onto any `LibrarianError` on the way out. `conversion_cost_usd` is the DRIVE
-    road's pre-agent model spend — the vision OCR pass (issue #110) — carried here so every exit
-    (filed, refused, fault) bills it exactly once."""
+    stamps both onto any `LibrarianError` on the way out."""
     count: int = 0
     cost_usd: float = 0.0
-    conversion_cost_usd: float = 0.0
 
 
 def _stamp_cost(result: "Result", passes: "AgentPasses") -> "Result":
-    """`0.0` is a real answer: a park re-file or a pre-agent refusal spent nothing.
-    `cost_usd` is the item's WHOLE model spend; when conversion paid a vision pass, its share is
-    also named on its own key, so an operator can tell an expensive OCR from an expensive
-    filing."""
-    result.report["cost_usd"] = round(passes.cost_usd + passes.conversion_cost_usd, 6)
-    if passes.conversion_cost_usd:
-        result.report["conversion_cost_usd"] = round(passes.conversion_cost_usd, 6)
+    """`0.0` is a real answer: a park re-file or a pre-agent refusal spent nothing. `cost_usd` is
+    the item's WHOLE model spend."""
+    result.report["cost_usd"] = round(passes.cost_usd, 6)
     return result
 
 
@@ -143,7 +131,7 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
     anchoring = getattr(ctx.outcome, "anchoring", None) or {}
     kind = str(anchoring.get("kind", "")).lower() if isinstance(anchoring, dict) else ""
     # `ctx.registry`, never `deps.registry`: the former is the registry this commit PUBLISHES,
-    # proposals included, and an entity born in this commit must stamp like any other.
+    # births included, and an entity born in this commit must stamp like any other.
     entity, unresolved = gates.resolve_entity_ids(anchoring, ctx.registry)
     if kind == "entity" and (unresolved or not entity):
         entity = []
@@ -152,8 +140,8 @@ def _stamp(ctx: gates.GateContext, deps: Deps, item: dict, *, cite_stem: str = "
     for path in ctx.in_lane_new_pages():
         if path in ctx.provenance_pages:
             continue    # stamped by `_stamp_attached_sources`, under the provenance group
-        if path in ctx.proposed_entity_pages:
-            continue    # an identity page carries its OWN anchor; `_declare_proposals` told the gates
+        if path in ctx.born_entity_pages:
+            continue    # an identity page carries its OWN anchor; `_declare_births` told the gates
         full = os.path.join(ctx.worktree, path)
         try:
             with open(full, encoding="utf-8") as f:
@@ -199,27 +187,19 @@ def _subject(title: str) -> str:
 
 
 def _commit_message(item: dict, outcome, page_path: str, *, n_sources: int = 0,
-                    proposed=()) -> str:
+                    born=()) -> str:
     """One capture, one commit, one filed page — enforced by `_cross_check_outcome`. The type in
     the subject comes from the FOLDER the page landed in: the folder is the fact. An identity the
-    commit CREATED unconfirmed is named in the body, so `git log` answers "where did this entity
-    come from" with the capture that proposed it."""
+    commit CREATED is named in the body, so `git log` answers "where did this entity come from"
+    with the capture that introduced it."""
     page_type = page_policy.type_for_folder(page_path) or "note"
     body = f"Filed by the librarian from capture #{item['id']}."
     if n_sources:
         body += f" {n_sources} source page(s) — the captured thread, verbatim — ride in it too."
-    registered = [_subject(str(e.get("name", ""))) for e in proposed
-                  if e.get("name") and e.get("confirmed_by")]
-    names = [_subject(str(e.get("name", ""))) for e in proposed
-             if e.get("name") and not e.get("confirmed_by")]
-    if registered:
-        body += (f" Registers {len(registered)} new entity page(s) — {', '.join(registered)} — "
-                 f"born confirmed by the steward who asked for it; the registry is regenerated in "
-                 f"this same commit.")
+    names = [_subject(str(e.get("name", ""))) for e in born if e.get("name")]
     if names:
-        body += (f" Proposes {len(names)} new entity page(s) — {', '.join(names)} — with "
-                 f"approved_by empty, for a steward to confirm; the registry is regenerated in "
-                 f"this same commit.")
+        body += (f" Introduces {len(names)} new entity page(s) — {', '.join(names)} — born "
+                 f"confirmed by the submitter; the registry is regenerated in this same commit.")
     return (f"feat({page_type}): {_subject(getattr(outcome, 'title', ''))}\n\n"
             f"{body}\n\n"
             f"Submitted-by: {item['submitted_by']}\n")
@@ -308,11 +288,9 @@ def _resolve_filing_base(item: dict, deps: Deps, *, log_noun: str, stale_tail: s
                                      acl_config=base_inputs.load_acl(deps.repo, base))
 
 
-def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None,
-                 conversion_cost_usd: float = 0.0) -> Result:
+def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None) -> Result:
     """Take one claimed queue row to a terminal state. Never raises for an ordinary refusal —
-    every outcome is a `Result`; only an unexpected error propagates. `conversion_cost_usd` is
-    the drive road's pre-agent vision spend, billed on every exit through `_stamp_cost`."""
+    every outcome is a `Result`; only an unexpected error propagates."""
     material, early = _pre_agent(conn, item, deps, material=material)
     if early is not None:
         return early
@@ -320,7 +298,7 @@ def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None,
 
     base, deps = _resolve_filing_base(item, deps, log_noun="submission",
                                       stale_tail=_STALE_BASE_TAIL_ORDINARY)
-    passes = AgentPasses(conversion_cost_usd=conversion_cost_usd)
+    passes = AgentPasses()
     # The contract linter is materialized from THIS item's base commit, not the operator's disk.
     with base_inputs.linter_at(deps.repo, base) as linter_path, \
             gitcmd.ephemeral_worktree(deps.repo, base.sha, settings.worktree_root) as worktree:
@@ -328,11 +306,179 @@ def process_item(conn, item: dict, deps: Deps, *, material: "str | None" = None,
             return _run_in_worktree(conn, item, deps, material, worktree, passes,
                                     linter_path=linter_path)
         except LibrarianError as ex:
-            # Annotate, then re-raise unchanged: the worker owns the `failed` decision. The
-            # conversion spend rides along — a fault after a paid OCR still paid for the OCR.
-            ex.at_agent_attempt(passes.count,
-                                cost_usd=passes.cost_usd + passes.conversion_cost_usd)
+            # Annotate, then re-raise unchanged: the worker owns the `failed` decision.
+            ex.at_agent_attempt(passes.count, cost_usd=passes.cost_usd)
             raise
+
+
+# ── the removal flow: a person's own deletion, performed by the ONE writer (ADR 044 D3) ───────
+# The third kind that does not ride `process_item`, and the only one whose material is not material
+# at all: a `delete` row carries the REASON a person gave, and its hints carry the pages. What it
+# shares with every other row is everything that makes a queue worth having — a durable row, a
+# lease, an attempt count, an audited submitter, and `brain_submissions` to read the outcome from.
+#
+# The judgment was made at the door: only an identity that can see the whole corpus may queue one,
+# because a removal touches every page that refers to the ones it names. Nothing here re-decides
+# that. What runs here is the part that needs a checkout and a credential — and this process is
+# the only one that has either.
+_STALE_BASE_TAIL_DELETE = (
+    "against a commit the remote may have moved past, so the pages it would remove and the pages "
+    "it would rewrite are both read from a stale tree. The removal is left in the queue")
+
+
+def process_delete_item(conn, item: dict, deps: Deps) -> Result:
+    """Take one claimed `delete` row to a terminal state.
+
+    The sequence, and why each step is where it is:
+
+    1. **`_pre_agent`, unchanged.** The reason is text a person wrote, so it is scanned for secrets
+       and personal data exactly as any capture's material is — a token pasted into "why" would
+       otherwise land in a commit message, where no gate looks.
+    2. **Plan against THIS item's base**, in a fresh worktree: which pages go, and which pages
+       refer to them. A refusal here is the person's to act on (a page that is not there, a path
+       the lane may not touch), so it is `rejected` with the lane's own sentence, never `failed`.
+    3. **A model writes the pages that stay** (`repair.sweep`), because dropping a reference is a
+       prose problem: a sentence that cited a removed page still has to read.
+    4. **The nine gates judge the diff**, told the two facts only this caller knows — which paths
+       it may remove, and the exact bytes it computed for every page it rewrites.
+    5. **Commit and push**, through the same lease-fenced seam every filing uses. The trailer names
+       the person: this is the one write in the system a human decided (ADR 043 D2).
+
+    The per-page diffs go into the row's `report`, and that is the whole of ADR 043 D5 in the new
+    shape: nobody read that prose before it landed, so the reading happens afterwards, wherever the
+    row is read back.
+    """
+    from stigmergy.repair import brief as repair_brief
+    from stigmergy.repair import deletion as repair_deletion
+    from stigmergy.repair import sweep as repair_sweep
+    from stigmergy.repair.errors import RepairError
+    from stigmergy.repair.settings import RepairSettings
+
+    material, early = _pre_agent(conn, item, deps)
+    if early is not None:
+        return early
+    settings = deps.settings
+    paths = schema.delete_paths(item.get("hints"))
+    base, deps = _resolve_filing_base(item, deps, log_noun="removal",
+                                      stale_tail=_STALE_BASE_TAIL_DELETE)
+    repair_settings = RepairSettings.from_env()
+
+    with base_inputs.linter_at(deps.repo, base) as linter_path, \
+            gitcmd.ephemeral_worktree(deps.repo, base.sha, settings.worktree_root) as worktree:
+        spend: list = []
+        try:
+            ops = repair_deletion.plan(worktree, paths)
+            oversize = repair_deletion.oversize_reason(ops, repair_settings.max_plan_bytes)
+            if oversize:
+                raise RepairError(oversize)
+            ops = repair_sweep.write_sync(worktree, ops,
+                                          skill_text=repair_brief.read_skill(worktree),
+                                          model_name=repair_settings.model, spend=spend)
+            diffs = repair_deletion.unified_diffs(worktree, ops)
+            edited, findings = repair_deletion.apply_declared(worktree, ops)
+        except RepairError as ex:
+            # Every sentence this lane raises is written to be published (its own module
+            # docstrings), so it travels verbatim into a report the person who asked reads back.
+            return Result(schema.REJECTED, "", report.rejected_unremovable(reason=str(ex)))
+        if findings:
+            return Result(schema.REJECTED, "", report.rejected_unremovable(
+                reason=f"the pages moved under this removal "
+                       f"({', '.join(sorted({f.code for f in findings}))}) — nothing was deleted"))
+        return _commit_delete(conn, item, deps, worktree, ops, diffs, edited, material,
+                              linter_path=linter_path, model_calls=len(spend))
+
+
+def _commit_delete(conn, item: dict, deps: Deps, worktree: str, ops: list, diffs: dict,
+                   edited: list, material: str, *, linter_path: str, model_calls: int) -> Result:
+    """The gates, the commit and the push for a performed removal.
+
+    `material=""` and `outcome=None` are honest: nothing was captured and no filing agent wrote
+    here — the ops came off a row a person typed. Every gate that reads either is scoped to CREATED
+    pages, and this diff has none.
+    """
+    from stigmergy.repair import deletion as repair_deletion
+
+    settings = deps.settings
+    ctx = gates.GateContext(
+        worktree=worktree, entries=gitcmd.diff_entries(worktree),
+        added=gitcmd.added_lines(worktree),
+        material="", outcome=None, registry=deps.registry,
+        linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin,
+        # The three caller-scoped facts this flow is allowed to declare, each derived from the ops
+        # that were just performed: the lane the plan spans, the paths it may REMOVE, the bytes it
+        # computed for every page it rewrites, and — among those — the machine-zone pages whose
+        # provenance stamps it only ever removes a link from.
+        write_prefixes=repair_deletion.lane_for(ops),
+        deletions_allowed=frozenset(repair_deletion.deleted_paths(ops)),
+        expected_bytes=repair_deletion.expected_bytes(ops),
+        provenance_pages=repair_deletion.provenance_scrubs(ops))
+    veto = gates.vetoes(gates.run_gates(ctx))
+    if veto:
+        return Result(schema.REJECTED, "", report.rejected_unremovable(
+            reason=f"the gates refused this removal, so nothing was committed or pushed: "
+                   f"{'; '.join(f'{f.gate}/{f.code}' for f in veto)}"))
+    surviving = _surviving_dead_links(worktree, linter_path, ops)
+    if surviving:
+        return Result(schema.REJECTED, "", report.rejected_unremovable(reason=surviving))
+
+    message = _delete_commit_message(item, ops, material)
+    sha = _commit_and_push(conn, item, deps, ctx, worktree, message, what="this removal")
+    return Result(schema.FILED, f"{repair_deletion.deleted_paths(ops)[0]}@{sha}",
+                  report.filed_delete(deleted=repair_deletion.deleted_paths(ops),
+                                      rewritten=diffs, commit=sha, model_calls=model_calls))
+
+
+def _surviving_dead_links(worktree: str, linter_path: str, ops: list) -> str:
+    """The knowledge repo's OWN linter, over the whole tree, asked one question: does anything
+    still link to a page this sweep removed? Returns the refusal, or `""`.
+
+    `gate_contract` filters the linter's findings to the pages a diff TOUCHED, which is right for
+    every other flow and blind for this one — a deletion's blast radius is the whole graph, and a
+    page the sweep never planned is exactly where a missed reference would sit. Scoped to the
+    deleted stems rather than vetoing on ANY error: a corpus that already carries an unrelated
+    contract error is not this removal's fault.
+    """
+    from stigmergy.repair import deletion as repair_deletion
+
+    stems = {repair_deletion.page_stem(path) for path in repair_deletion.deleted_paths(ops)}
+    report_json = gates.lint_report(worktree, linter_path)
+    surviving = set()
+    for finding in report_json.get("findings", []):
+        if finding.get("check") != gates.DEAD_LINKS_CHECK or finding.get("severity") != "error":
+            continue
+        target = gates.dead_link_target(
+            gates.Finding("contract", gates.DEAD_LINKS_CHECK, str(finding.get("message", ""))))
+        if target and repair_deletion.link_stem(target) in stems:
+            surviving.add((str(finding.get("file", "")), target))
+    if not surviving:
+        return ""
+    named = ", ".join(f"{path} still links [[{target}]]" for path, target in sorted(surviving))
+    return (f"this removal would leave the corpus with a dead link, so nothing was committed or "
+            f"pushed: {named}. The sweep did not plan a rewrite of that page — if it happens "
+            f"twice, the reference is spelled in a shape the sweep does not read")
+
+
+def _delete_commit_message(item: dict, ops: list, reason: str) -> str:
+    """The commit a removal lands as. `Approved-by:` names the person who asked for it — this is
+    the ONE write in the system a human decided, and the trailer is half of how `git log` answers
+    who authorized a change to the corpus (the other half is the App author line).
+
+    `reason` is the MATERIAL the flow already read and already scanned for secrets, handed in
+    rather than re-read off the row here: the bytes that go into a permanent commit message must be
+    the same bytes `_pre_agent` cleared, and a second read is a second chance for the two to be
+    different text.
+    """
+    from stigmergy.repair import deletion as repair_deletion
+
+    removed = repair_deletion.deleted_paths(ops)
+    stems = [repair_deletion.page_stem(path) for path in removed]
+    first = stems[0] if stems else "the knowledge repo"
+    subject = (f"chore(repair): delete {len(removed)} page(s) — {first}"
+               + ("…" if len(stems) > 1 else ""))
+    reason = " ".join(str(reason or "").split())
+    actor = " ".join(str(item.get("submitted_by") or "").split())
+    return (f"{subject}\n\n{reason}\n\n"
+            f"Capture #{item['id']}.\nApproved-by: {actor}")
 
 
 def _run_in_worktree(conn, item: dict, deps: Deps, material: str, worktree: str,
@@ -479,21 +625,20 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
             return None, written_page, outcome
         # The plan's own `path` is NOT carried forward: `_file` reads `page_path` off the DIFF.
 
-    # The identities the account proposes, created BEFORE the diff the gates judge is taken, so
+    # The identities the account introduces, created BEFORE the diff the gates judge is taken, so
     # the entity pages and the regenerated registry land in the same diff as the note — and the
     # gates resolve against the registry this commit will PUBLISH.
-    proposals = identity.write_proposals(
+    births = identity.write_births(
         worktree, outcome=outcome, base_registry=deps.registry, material=material,
-        hints=(item.get("hints") or {}).get("client", {}),
-        declined_ids=_declined_identity_ids(conn), today=deps.as_of(),
+        hints=(item.get("hints") or {}).get("client", {}), today=deps.as_of(),
         registration=schema.registration_from_hints(item.get("hints")),
         approver=str(item.get("submitted_by") or ""),
         related=[outcome.title] if outcome.title else ())
-    if isinstance(proposals, list):
-        return None, proposals, outcome
+    if isinstance(births, list):
+        return None, births, outcome
 
     # With the attachment ON, the lane widens by exactly the attachment's own folder; with
-    # proposals, by exactly the identity zone and the registry file.
+    # births, by exactly the identity zone and the registry file.
     write_prefixes = gates.ALLOWED_WRITE_PREFIXES
     creatable_types = frozenset(page_policy.FAST_LANE_TYPES)
     extra_folder_types = {}
@@ -505,12 +650,12 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
         worktree=worktree,
         entries=gitcmd.diff_entries(worktree),
         added=gitcmd.added_lines(worktree),
-        material=material, outcome=outcome, registry=proposals.registry,
+        material=material, outcome=outcome, registry=births.registry,
         # The linter materialized from this item's base commit — NOT `settings.linter_path`.
         linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin,
         write_prefixes=write_prefixes, creatable_types=creatable_types,
         extra_folder_types=extra_folder_types)
-    _declare_proposals(ctx, proposals)
+    _declare_births(ctx, births)
 
     if not ctx.entries:
         raise AgentError("code wrote nothing for a capture the agent decided to file"
@@ -546,63 +691,31 @@ def _one_pass(conn, item: dict, deps: Deps, material: str, worktree: str,
     if not gates.vetoes(findings):
         return (_file(conn, item, deps, ctx, outcome, findings, worktree, edited=edited,
                       source_pages=tuple(written_sources["paths"]) if written_sources else (),
-                      proposals=proposals),
+                      births=births),
                 [], outcome)
     return None, findings, outcome
 
 
-def _declare_proposals(ctx: gates.GateContext, proposals: identity.Proposals) -> None:
-    """Tell the gates what `identity.write_proposals` did — the lane, the byte proofs, and which
-    entity-zone entries are this run's own. Told, never inferred: a gate that worked out on its
-    own which entity page was "probably ours" would be a gate the agent could talk to."""
-    if not proposals.touched():
+def _declare_births(ctx: gates.GateContext, births: identity.Births) -> None:
+    """Tell the gates what `identity.write_births` did — the lane, the byte proofs, which
+    entity-zone entries are this run's own, and who each one names. Told, never inferred: a gate
+    that worked out on its own which entity page was "probably ours" would be a gate the agent
+    could talk to."""
+    if not births.touched():
         return
-    ctx.write_prefixes = ctx.write_prefixes + proposals.lane
+    ctx.write_prefixes = ctx.write_prefixes + births.lane
     ctx.creatable_types = ctx.creatable_types | {page_policy.ENTITY_PAGE_TYPE}
     ctx.extra_folder_types = {**ctx.extra_folder_types,
                               identity.ENTITY_ZONE_PREFIX.rstrip("/"): page_policy.ENTITY_PAGE_TYPE}
-    ctx.derived_files = ctx.derived_files | proposals.derived_files
-    ctx.expected_bytes = {**ctx.expected_bytes, **proposals.expected_bytes}
-    ctx.proposed_entity_pages = frozenset(proposals.entity_pages)
-    ctx.confirmed_entity_pages = dict(proposals.confirmed)
-    for path, entity_id in proposals.entity_pages.items():
+    ctx.derived_files = ctx.derived_files | births.derived_files
+    ctx.expected_bytes = {**ctx.expected_bytes, **births.expected_bytes}
+    ctx.born_entity_pages = frozenset(births.entity_pages)
+    ctx.confirmed_entity_pages = dict(births.confirmed)
+    for path, entity_id in births.entity_pages.items():
         # What `gate_frontmatter` re-reads the page against: its own anchor and its own state.
         ctx.stamped_by_path[path] = {"status": page_policy.FILED_STATUS, "entity": [entity_id],
-                                     "approved_by": proposals.confirmed.get(path, "")}
+                                     "approved_by": births.confirmed.get(path, "")}
 
-
-def _record_registrations(conn, item, proposals, sha: str) -> None:
-    """An entity born confirmed through a steward's registration is recorded in the governance
-    ledger as that steward's approval (ADR 042) — the same row the inbox's Approve writes, so
-    "entities born" counts every door the same way and the librarian's decline memory sees the
-    identity as decided. After the push, like every door: a ledger row for a commit that did not
-    land would be a decision about nothing."""
-    if proposals is None or not proposals.confirmed:
-        return
-    registration = schema.registration_from_hints(item.get("hints"))
-    source = registration.source if registration else ""
-    for entity_id in proposals.confirmed_ids:
-        try:
-            decisions.record_decision(
-                conn, item_kind=review_kinds.KIND_IDENTITY_PROPOSAL, item_id=entity_id,
-                verdict=decisions.APPROVE, actor=str(item.get("submitted_by") or ""),
-                source=source, extra={"commit": sha, "created": True, "capture": item.get("id")})
-        except Exception:  # noqa: BLE001 — the commit has LANDED; a ledger fault is logged, never
-            # allowed to report a filed capture as failed. The page and the registry say the
-            # entity is confirmed; the row is what the digest and the decline memory would miss.
-            log.error("item %s: the registration of %r landed in %s but its ledger row could not "
-                      "be written", item.get("id"), entity_id, sha[:12], exc_info=True)
-
-
-def _declined_identity_ids(conn) -> set[str]:
-    """Every identity a steward declined, by registry id, read from the governance ledger — so the
-    librarian never proposes the same name twice. The ledger is the ONE memory of a decision
-    (`capture.decisions`), and reading it here is what keeps a declined proposal from coming back
-    on the next capture that mentions the name."""
-    latest = decisions.latest_decisions(conn)
-    return {item_id for (kind, item_id), decided in latest.items()
-            if kind == review_kinds.KIND_IDENTITY_PROPOSAL
-            and (decided or {}).get("verdict") == decisions.REJECT}
 
 
 # Nothing in the account can name a path: `page.FOLDER_BY_TYPE` decides the folder, the title the
@@ -778,7 +891,7 @@ def _cross_check_outcome(ctx: gates.GateContext) -> list:
     past `gate_anchoring`. `ctx.provenance_pages` is excluded, or attached captures are all vetoed.
     """
     new_pages = [p for p in ctx.in_lane_new_pages()
-                 if p not in ctx.provenance_pages and p not in ctx.proposed_entity_pages]
+                 if p not in ctx.provenance_pages and p not in ctx.born_entity_pages]
     out = []
     if not new_pages:
         out.append(gates.Finding(
@@ -832,26 +945,25 @@ def _commit_and_push(conn, item, deps, ctx, worktree, message, *, what: str) -> 
 
 
 def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
-          source_pages=(), proposals=None) -> Result:
+          source_pages=(), births=None) -> Result:
     """The gates passed: commit, push, and say what happened. `page_path` comes from the DIFF,
     never the outcome. `source_pages` arrives in PART order from the writer's own plan, and is
     excluded when picking `page_path` because `sources/` sorts before `wiki/`; the identity pages
-    this run proposed are excluded for the same reason — the note is the page this capture filed.
+    this run created are excluded for the same reason — the note is the page this capture filed.
     """
     page_path = [p for p in ctx.in_lane_new_pages()
-                 if p not in ctx.provenance_pages and p not in ctx.proposed_entity_pages][0]
-    proposed = proposals.entities if proposals is not None else []
-    proposed_aliases = proposals.aliases if proposals is not None else []
+                 if p not in ctx.provenance_pages and p not in ctx.born_entity_pages][0]
+    born = births.entities if births is not None else []
+    added_aliases = births.aliases if births is not None else []
     message = _commit_message(item, outcome, page_path, n_sources=len(source_pages),
-                              proposed=proposed)
+                              born=born)
     sha = _commit_and_push(conn, item, deps, ctx, worktree, message, what="this item")
-    _record_registrations(conn, item, proposals, sha)
 
     notes = [report.injection_finding(c) for c in _injection_categories(outcome)]
     notes += [f.message for f in findings if f.severity == gates.SEVERITY_NOTE]
     return Result(
         schema.FILED, f"{page_path}@{sha}",
-        # `ctx.registry`, the registry this commit PUBLISHED: a proposed entity's name renders
+        # `ctx.registry`, the registry this commit PUBLISHED: a newborn entity's name renders
         # from it, where `deps.registry` (the base commit's) would print the bare id.
         report.filed(page_path=page_path, commit=sha,
                      anchoring=outcome.anchoring or {}, registry=ctx.registry,
@@ -861,8 +973,8 @@ def _file(conn, item, deps, ctx, outcome, findings, worktree, *, edited=(),
                      agent_rationale=getattr(outcome, "summary", ""),
                      findings=notes,
                      source_pages=list(source_pages),
-                     entities_proposed=proposed, aliases_proposed=proposed_aliases,
-                     entities_updated=proposals.updates if proposals is not None else []),
+                     entities_born=born, aliases_added=added_aliases,
+                     entities_updated=births.updates if births is not None else []),
         findings=notes)
 
 
@@ -961,7 +1073,7 @@ PROCESSING_ERRORS = (AgentError, GitError, WorktreeError, LeaseLostError, Captur
 # capture leaves none. With the parameter OFF the fast lane builds the ctx it always would.
 
 SLACK_SOURCE_PREFIX = "sources/slack/"
-DRIVE_SOURCE_PREFIX = "sources/drive/"
+DOCUMENT_SOURCE_PREFIX = "sources/documents/"
 
 
 @dataclass(frozen=True)
@@ -978,15 +1090,17 @@ class SourceAttachment:
 
 
 def _source_attachment(item: dict) -> "SourceAttachment | None":
-    """The parameter's ON/OFF switch, decided per item from facts a DOOR asserted server-side;
-    `None` for every ordinary capture. Two ON positions: the Slack door (the `source_client` hint)
-    and the drive flow (the row's own `kind`, unreachable through `brain_submit`).
+    """The parameter's ON/OFF switch, decided per item from the row's own `kind` or from a fact
+    a DOOR asserted server-side; `None` for every ordinary capture. Two ON positions: a
+    `document` (the kind says the material has documentary existence of its own; `source_url` is
+    the submitter's claim of where, attributed like the material — ADR 044 D4) and the Slack door
+    (the `source_client` hint, which only that transport may assert).
     """
     client = (item.get("hints") or {}).get("client") or {}
-    if item.get("kind") == schema.DRIVE:
-        return SourceAttachment(prefix=DRIVE_SOURCE_PREFIX, source_kind="google-drive",
-                                tags=("source", "drive-document"),
-                                url=str(client.get("drive_url") or ""), suffix="document")
+    if item.get("kind") == schema.DOCUMENT:
+        return SourceAttachment(prefix=DOCUMENT_SOURCE_PREFIX, source_kind="upload",
+                                tags=("source", "document"),
+                                url=str(client.get("source_url") or ""), suffix="document")
     if client.get("source_client") != schema.SLACK_DOOR:
         return None
     return SourceAttachment(prefix=SLACK_SOURCE_PREFIX, source_kind="slack",
@@ -1050,148 +1164,6 @@ def _stamp_attached_sources(ctx: gates.GateContext, deps: Deps, item: dict,
         _stamp_one_source(ctx, path, submitted_by=item["submitted_by"], as_of=deps.as_of(),
                           digest=digest, extracted_at=extracted_at,
                           page_id=str(ids_by_path.get(path) or ""))
-
-
-# The drive flow: conversion at the worker, then the fast lane with the attachment ON. The
-# drive-specific code is the bytes→text step below plus the `_source_attachment` drive branch. A
-# conversion fault is a NAMED stage (`conversion`), never a submitter-blaming report.
-
-# A text-layer PDF yields well over this per page; a scanned one almost nothing. The form-feed
-# count is pdftotext's own page marker, so the heuristic needs no second parse.
-DRIVE_VISION_MIN_CHARS_PER_PAGE = 200
-# Below this many characters TOTAL the extraction is unusable: refuse rather than run an agent
-# pass over empty text.
-DRIVE_MIN_TEXT_CHARS = 50
-
-
-class _ConversionRefused(Exception):
-    """A drive conversion that cannot proceed. `str(self)` is the WIRE sentence and reaches the
-    submitter — no paths, no `str(exception)`; `log_detail` is the operator's."""
-
-    def __init__(self, wire: str, log_detail: str = ""):
-        super().__init__(wire)
-        self.log_detail = log_detail or wire
-
-
-def process_drive_item(conn, item: dict, deps: Deps) -> Result:
-    """`process_item`'s sibling for `kind == "drive"`: convert first, then delegate to the SAME
-    fast-lane path over the extracted text. Never raises for a refusal."""
-    try:
-        material, conversion_cost = _drive_material(deps, item)
-    except _ConversionRefused as ex:
-        log.error("item %s: drive conversion refused — %s", item.get("id"), ex.log_detail)
-        return failure_result(item, "conversion", str(ex))
-    return process_item(conn, item, deps, material=material,
-                        conversion_cost_usd=conversion_cost)
-
-
-def _drive_material(deps: Deps, item: dict) -> tuple[str, float]:
-    """The extracted text of a drive capture's original bytes — `blob_refs[1]`; `blob_refs[0]` is
-    the manifest — plus what extracting it COST: the deterministic converters spend nothing, the
-    vision fallback is a model pass and its dollars must reach the item's `cost_usd` (issue
-    #110). Deterministic converters first, vision as the bounded fallback."""
-    refs = item.get("blob_refs") or []
-    if len(refs) < 2:
-        raise _ConversionRefused(
-            "this drive capture carries no original-bytes blob — it was not enqueued by "
-            "stigmergy-drive; re-drop the file with the CLI")
-    client = (item.get("hints") or {}).get("client") or {}
-    name = str(client.get("drive_name") or "document")
-    ext = os.path.splitext(name)[1].lower()
-    method = converters.method_for_ext(ext)
-    data = deps.evidence.get(refs[1])
-
-    with tempfile.TemporaryDirectory(prefix="stigmergy-drive-conv-") as tmp:
-        path = os.path.join(tmp, "doc" + ext)
-        with open(path, "wb") as f:
-            f.write(data)
-        try:
-            text = converters.extract(path, method)["text"]
-        except Exception as ex:  # noqa: BLE001 — every converter failure becomes one named stage
-            raise _ConversionRefused(
-                f"the {method} converter could not extract text from {name!r} — the file may be "
-                f"corrupt or not what its extension claims; the operator's log has the detail",
-                log_detail=f"{ex.__class__.__name__}: {ex}") from ex
-        text, conversion_cost = _with_vision_fallback(path, method, text, name)
-
-    if not text.strip():
-        raise _ConversionRefused(
-            f"no text could be extracted from {name!r} — the document appears to carry none")
-    n_bytes = len(text.encode("utf-8"))
-    if n_bytes > schema.MAX_MATERIAL_BYTES:
-        raise _ConversionRefused(
-            f"the extracted text of {name!r} is {n_bytes:,} bytes, over the material cap of "
-            f"{schema.MAX_MATERIAL_BYTES:,} — the brain files documents, not databases; split "
-            f"the document and re-drop the part worth keeping")
-    return text, conversion_cost
-
-
-def _vision_spend(ocr: dict) -> float:
-    """One OCR pass's dollars, priced by the CONFIGURED model id exactly as a filing pass is —
-    and `0.0` with a LOUD line when no price is configured: the fallback must degrade, never
-    refuse a capture over bookkeeping (the same posture as `pydantic_backend._fault_cost`)."""
-    usage = ocr.get("usage") or {}
-    tokens_in = int(usage.get("input_tokens") or 0)
-    tokens_out = int(usage.get("output_tokens") or 0)
-    if not (tokens_in or tokens_out):
-        return 0.0
-    model = str(ocr.get("model") or "")
-    try:
-        return pricing.compute_cost_usd(model, input_tokens=tokens_in,
-                                        output_tokens=tokens_out)
-    except LibrarianConfigError:
-        log.warning("vision OCR by %r spent %d in / %d out tokens with no configured price — "
-                    "reported as $0.00; add a row to $%s or librarian/pricing.PRICES", model,
-                    tokens_in, tokens_out, pricing.PRICING_ENV)
-        return 0.0
-
-
-def _with_vision_fallback(path: str, method: str, text: str, name: str) -> tuple[str, float]:
-    """ONE bounded OCR pass for a PDF whose text layer came back thin, decided by CODE. Keeps
-    whichever extraction is LONGER, so degraded vision output cannot lose real text. Returns the
-    text AND the pass's dollars — an OCR the item paid for is billed even when the text layer
-    wins (issue #110): the spend happened, whichever text shipped."""
-    if method != "pdf":
-        return text, 0.0
-    stripped = text.strip()
-    pages = text.count("\f") + 1
-    if len(stripped) >= DRIVE_VISION_MIN_CHARS_PER_PAGE * pages:
-        return text, 0.0
-    config_error = converters.vision_config_error()
-    if config_error:
-        # The reason is `converters`' own sentence, so a prefixed-but-keyless VISION_MODEL names
-        # ITS provider's variable instead of sending the operator to GEMINI_API_KEY — advice
-        # that could never fix it (a message with a command in it is an executable promise).
-        if len(stripped) < DRIVE_MIN_TEXT_CHARS:
-            raise _ConversionRefused(
-                f"{name!r} looks like a scanned PDF (no usable text layer) and {config_error}; "
-                f"or drop a text-layer export instead")
-        log.warning("drive conversion: %r yields %d chars over %d page(s) — thin, and %s; "
-                    "proceeding with the text layer", name, len(stripped), pages, config_error)
-        return text, 0.0
-    try:
-        ocr = converters.vision_extract(path)
-    except Exception as ex:  # noqa: BLE001 — vision failing must degrade, not crash the item
-        log.warning("drive conversion: vision fallback for %r failed (%s: %s)", name,
-                    ex.__class__.__name__, ex)
-        if len(stripped) < DRIVE_MIN_TEXT_CHARS:
-            raise _ConversionRefused(
-                f"{name!r} looks like a scanned PDF and the vision OCR fallback failed — the "
-                f"operator's log has the detail; requeue to retry") from ex
-        return text, 0.0
-    spend = _vision_spend(ocr)
-    ocr_text = (ocr.get("text") or "").strip()
-    if ocr.get("truncated"):
-        # The structured half of the in-text cut note: the OPERATOR learns from this line, not
-        # from a sentence inside untrusted-adjacent text.
-        log.warning("drive conversion: %r OCR covered its first %s page(s) only — the "
-                    "%d-page ceiling; the transcription says so in-line", name,
-                    ocr.get("pages"), converters.MAX_VISION_PAGES)
-    if len(ocr_text) > len(stripped):
-        log.info("drive conversion: %r OCR'd by %s (%d chars over the text layer's %d)", name,
-                 ocr.get("model", "vision"), len(ocr_text), len(stripped))
-        return ocr_text, spend
-    return text, spend
 
 
 # The meeting flow: a page SET (source + meeting + N decisions), atomically or nothing. A SEPARATE
@@ -1574,20 +1546,20 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
     if isinstance(written, list):
         return None, written, outcome
 
-    # The identities the account proposes — the same writer the ordinary flow uses, so a meeting
+    # The identities the account introduces — the same writer the ordinary flow uses, so a meeting
     # whose decisions are about something new lands with that something created beside them.
     # `related` names pages by STEM, which is what a wikilink resolves by: the decision pages
     # this set wrote (slugified, never their titles), or the meeting page when there is none.
     decision_stems = [os.path.basename(path)[:-len(".md")]
                       for path in written.get("decisions_by_path", {})]
-    proposals = identity.write_proposals(
+    births = identity.write_births(
         worktree, outcome=outcome, base_registry=deps.registry, material=material,
-        hints=meeting_meta, declined_ids=_declined_identity_ids(conn), today=deps.as_of(),
+        hints=meeting_meta, today=deps.as_of(),
         registration=schema.registration_from_hints(item.get("hints")),
         approver=str(item.get("submitted_by") or ""),
         related=decision_stems or [written["meeting_stem"]])
-    if isinstance(proposals, list):
-        return None, proposals, outcome
+    if isinstance(births, list):
+        return None, births, outcome
 
     # `edits_allowed` keeps its `True` default: this flow HAS an edit mechanism now, the same one
     # the fast lane has — declared in the account, performed by `edits.apply_declared` below,
@@ -1596,11 +1568,11 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
         worktree=worktree,
         entries=gitcmd.diff_entries(worktree),
         added=gitcmd.added_lines(worktree),
-        material=material, outcome=outcome, registry=proposals.registry,
+        material=material, outcome=outcome, registry=births.registry,
         linter_path=linter_path, gitleaks_bin=settings.gitleaks_bin,
         write_prefixes=MEETING_WRITE_PREFIXES, creatable_types=MEETING_CREATABLE_TYPES,
         extra_folder_types=dict(MEETING_EXTRA_FOLDER_TYPES))
-    _declare_proposals(ctx, proposals)
+    _declare_births(ctx, births)
 
     if not ctx.entries:
         raise AgentError("the meeting flow wrote nothing for a transcript it decided to file")
@@ -1626,7 +1598,7 @@ def _one_meeting_pass(conn, item, deps, material, meeting_meta, worktree, correc
                 + _cross_check_meeting_outcome(ctx, outcome))
     if not gates.vetoes(findings):
         return (_file_meeting(conn, item, deps, ctx, outcome, findings, worktree,
-                              written, edited=edited, proposals=proposals),
+                              written, edited=edited, births=births),
                 [], outcome)
     return None, findings, outcome
 
@@ -1651,7 +1623,7 @@ def _cross_check_meeting_outcome(ctx: gates.GateContext, outcome) -> list:
     filename carries a date, and a date-bearing name in body prose is style rather than safety, so
     the gardener's `date-bearing-body-link` check flags it over the committed corpus instead."""
     out = []
-    new_pages = set(ctx.in_lane_new_pages()) - ctx.proposed_entity_pages
+    new_pages = set(ctx.in_lane_new_pages()) - ctx.born_entity_pages
     source_pages, meeting_pages, decision_pages = (set(_source_pages(ctx)), set(_meeting_pages(ctx)),
                                                     set(_decision_pages(ctx)))
     other = new_pages - source_pages - meeting_pages - decision_pages
@@ -1746,7 +1718,7 @@ def _meeting_commit_message(item: dict, outcome, n_decisions: int) -> str:
 
 
 def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
-                  *, edited=(), proposals=None) -> Result:
+                  *, edited=(), births=None) -> Result:
     """The gates passed over the whole SET: one commit, push, report. `written` carries the
     code-computed source parts and the decision-path-to-anchoring map; `edited` is what
     `edits.apply_declared` actually changed on pages that already existed — the one surface a human
@@ -1757,7 +1729,6 @@ def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
     meeting_page = meeting_pages[0]
     message = _meeting_commit_message(item, outcome, len(decision_pages))
     sha = _commit_and_push(conn, item, deps, ctx, worktree, message, what="this meeting")
-    _record_registrations(conn, item, proposals, sha)
 
     decisions_by_path = written.get("decisions_by_path", {})
     decisions = [{"path": path, "anchoring": (decisions_by_path.get(path) or {}).get("anchoring", {})}
@@ -1788,9 +1759,9 @@ def _file_meeting(conn, item, deps, ctx, outcome, findings, worktree, written,
                              decisions=decisions, commit=sha, pages_edited=list(edited),
                              agent_rationale=getattr(outcome, "summary", ""),
                              registry=ctx.registry,
-                             entities_proposed=proposals.entities if proposals else [],
-                             aliases_proposed=proposals.aliases if proposals else [],
-                             entities_updated=proposals.updates if proposals else []),
+                             entities_born=births.entities if births else [],
+                             aliases_added=births.aliases if births else [],
+                             entities_updated=births.updates if births else []),
         findings=notes)
 
 

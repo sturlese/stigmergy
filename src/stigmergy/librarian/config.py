@@ -10,8 +10,8 @@ import os
 import tempfile
 from dataclasses import dataclass
 
-from stigmergy.capture import queue
-from stigmergy.kernel import converters
+from stigmergy.capture import queue, retention
+from stigmergy.librarian import schedule
 from stigmergy.librarian.errors import LibrarianConfigError
 
 # The default filing model. PROVIDER-PREFIXED (pydantic-ai reads a bare name as an OpenAI model)
@@ -39,16 +39,6 @@ MAX_AGENT_ATTEMPTS = 2
 # the commit, the push retries, and up to two gathers for a `wants_gathered` backend.
 GATE_BUDGET_S = 120
 
-# The drive road's conversion, the term the lease was missing (issue #113): a scanned deck pays
-# a bounded rasterization, a page-count read and one vision model request BEFORE its first agent
-# pass, and a lease derived without them redelivers an item that is still converting — safe (the
-# attempts fence makes the loser discard) but a second worker repeats the expensive work.
-# IMPORTED from the kernel's own clocks, never retyped: a term that drifted from the ceilings it
-# stands for would be the lie this derivation exists to prevent. Items that convert nothing
-# simply finish earlier; a lease must outlive the WORST legitimate case.
-CONVERSION_BUDGET_S = (converters.PDF_RASTER_TIMEOUT_S + converters.PDFINFO_TIMEOUT_S
-                       + converters.VISION_CALL_TIMEOUT_S)
-
 # Headroom on top of the worst case. Being wrong in this direction costs a slower recovery from
 # a genuine crash; being wrong in the other direction files a capture twice.
 VISIBILITY_HEADROOM_S = 180
@@ -68,8 +58,9 @@ DEFAULT_POLL_INTERVAL_S = 3.0
 # its OWN clock — an empty queue polls every few seconds, and the pass costs a corpus parse.
 VIEW_SWEEP_INTERVAL_ENV = "STIGMERGY_LIBRARIAN_VIEW_SWEEP_INTERVAL_S"
 DEFAULT_VIEW_SWEEP_INTERVAL_S = 900.0
-# `0` is a real setting, not a broken one: it turns the pass off, leaving the post-meeting hook and
-# `stigmergy-views regenerate` as the only roads — what this deployment had before the pass existed.
+# `0` is a real setting, not a broken one: it turns the pass off, leaving the post-meeting hook as
+# the only road — which converges nothing else, so `views/` then goes stale and stays stale. The
+# switch to reach for while somebody investigates something, never a steady state.
 VIEW_SWEEP_OFF = 0.0
 
 # How many entities ONE pass may regenerate or remove. #69's lesson, applied to a second unattended
@@ -78,6 +69,32 @@ VIEW_SWEEP_OFF = 0.0
 # still divergent when the next one starts.
 VIEW_SWEEP_CEILING_ENV = "STIGMERGY_LIBRARIAN_VIEW_SWEEP_CEILING"
 DEFAULT_VIEW_SWEEP_CEILING = 10
+
+# The worker's SECOND maintenance pass (ADR 044): it answers the gardener's findings by deriving
+# repairs and applying them. Same idle branch, same "on its own clock" reasoning, and a longer
+# default because what it answers arrives once a night — a pass costs model calls, and there is
+# nothing new to answer between two gardener runs. The pass has its own watermark on top of this
+# interval, so a shorter one does not mean re-answering the same findings; it means noticing a new
+# gardener run sooner.
+REPAIR_INTERVAL_ENV = "STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S"
+DEFAULT_REPAIR_INTERVAL_S = 3600.0
+
+# The night shift's two daily passes (ADR 044 D6), as "HH:MM" UTC. They replaced scheduled crons
+# calling an HTTP endpoint with a token: a pass that runs INSIDE the worker cannot fire while a
+# capture is being filed, and needs no credential that could be used for anything else.
+# `librarian.schedule` owns the due-ness arithmetic; these are only the times and the switch.
+GARDEN_AT_ENV = "STIGMERGY_LIBRARIAN_GARDEN_AT"
+RETENTION_AT_ENV = "STIGMERGY_LIBRARIAN_RETENTION_AT"
+# The one spelling that turns a daily pass off. Deliberately a word rather than an empty string:
+# an unset variable must mean "the default", so "I did not configure this" and "I do not want this"
+# cannot be the same value.
+DAILY_OFF = "off"
+# How long a terminal row keeps its payload. Shared with `stigmergy-capture purge`'s own default,
+# so the nightly pass and the hand-run command cannot disagree about what "the window" is.
+RETENTION_DAYS_ENV = "STIGMERGY_RETENTION_DAYS"
+# `0` turns the pass off, exactly as `VIEW_SWEEP_OFF` does — and it is the setting a deployment
+# uses to stop the corpus repairing itself while somebody investigates something.
+REPAIR_PASS_OFF = 0.0
 
 # The retry-collapse window (`dedup`'s level 1): identical content from the same submitter
 # inside this many seconds is a RETRY of one capture, not a second one.
@@ -109,8 +126,6 @@ _TRUTHY = ("1", "true", "yes")
 ACL_RELPATH = "ops/acl.json"
 REGISTRY_RELPATH = "ops/entity-registry.json"
 LINTER_RELPATH = ".claude/tools/stigmergy_lint.py"
-# The doorbell's scope->steward-emails map, read at the base commit like the three above.
-STEWARDS_RELPATH = "ops/stewards.json"
 
 
 def _in_repo(repo: str, relpath: str) -> str:
@@ -141,18 +156,18 @@ def is_repo_checkout(path: str) -> bool:
 
     `.git` is a DIRECTORY in an ordinary clone but a FILE (a `gitdir:` pointer) in a
     `git worktree add` checkout, so `isdir` alone is the bug: it refuses a genuine worktree. That
-    was a real disagreement, not a hypothetical — `stigmergy-entities` refused a worktree
-    `stigmergy-views` accepted, for the same directory.
+    was a real disagreement, not a hypothetical — one operator CLI refused a worktree another
+    accepted, for the same directory.
 
     Bare `exists` is the OTHER bug: it accepts a stray file named `.git` — a leftover, a note, a
-    binary — and the caller then commits with the steward's own identity into a directory git does
+    binary — and the caller then commits with the operator's own identity into a directory git does
     not manage. So the FILE case has to look like what git writes: a `gitdir:` pointer. Unreadable
     or binary answers `False`, never raises.
 
     A PREDICATE, deliberately, rather than a resolver that raises: a caller in `entities` may not
     interpolate a foreign exception's text into its refusal (`tests/test_architecture.py`'s
     `test_an_entities_refusal_never_splices_a_caught_exceptions_text`, because `server.review`
-    echoes those refusals to a steward verbatim). Each CLI therefore writes its own sentence
+    echoes those refusals to a caller verbatim). Each CLI therefore writes its own sentence
     around the path it already holds, and only the JUDGEMENT is shared.
     """
     dot_git = os.path.join(path, ".git")
@@ -184,10 +199,10 @@ def minimum_visibility_timeout_s(*, timeout_s: int = DEFAULT_TIMEOUT_S) -> int:
 
     The GATHER is assumed to fit inside `VISIBILITY_HEADROOM_S` rather than being a term here: it
     is the one per-item cost that grows with the size of the knowledge repo. Re-measure at roughly
-    5,000 pages, and past that add a corpus-derived term to `GATE_BUDGET_S`. Drive CONVERSION is
-    its own term (issue #113): its worst case is the kernel's three vision clocks, not headroom.
+    5,000 pages, and past that add a corpus-derived term to `GATE_BUDGET_S`. Nothing converts
+    before the first agent pass any more: a document arrives as text (ADR 044 D4).
     """
-    return MAX_AGENT_ATTEMPTS * int(timeout_s) + GATE_BUDGET_S + CONVERSION_BUDGET_S
+    return MAX_AGENT_ATTEMPTS * int(timeout_s) + GATE_BUDGET_S
 
 
 DEFAULT_VISIBILITY_TIMEOUT_S = minimum_visibility_timeout_s() + VISIBILITY_HEADROOM_S
@@ -272,6 +287,15 @@ class Settings:
     view_sweep_interval_s: float = DEFAULT_VIEW_SWEEP_INTERVAL_S
     view_sweep_ceiling: int = DEFAULT_VIEW_SWEEP_CEILING
 
+    # the periodic repair pass (see the constants above); its own ceilings live in
+    # `repair.settings`, which the pass reads from the environment when it runs
+    repair_interval_s: float = DEFAULT_REPAIR_INTERVAL_S
+
+    # the night shift's daily passes — "HH:MM" UTC, or DAILY_OFF
+    garden_at: str = schedule.DEFAULT_GARDEN_AT
+    retention_at: str = schedule.DEFAULT_RETENTION_AT
+    retention_days: int = retention.DEFAULT_RETENTION_DAYS
+
     # the gates
     gitleaks_bin: str = "gitleaks"      # resolved on PATH; existence checked ONCE at startup
     worktree_root: str = ""             # "" -> a per-run temp dir under the system temp
@@ -324,6 +348,11 @@ class Settings:
                                                        cls.view_sweep_interval_s)),
             view_sweep_ceiling=int(os.environ.get(VIEW_SWEEP_CEILING_ENV,
                                                   cls.view_sweep_ceiling)),
+            repair_interval_s=float(os.environ.get(REPAIR_INTERVAL_ENV,
+                                                   cls.repair_interval_s)),
+            garden_at=os.environ.get(GARDEN_AT_ENV, cls.garden_at),
+            retention_at=os.environ.get(RETENTION_AT_ENV, cls.retention_at),
+            retention_days=int(os.environ.get(RETENTION_DAYS_ENV, cls.retention_days)),
             gitleaks_bin=os.environ.get("STIGMERGY_GITLEAKS_BIN", cls.gitleaks_bin),
             worktree_root=os.environ.get("STIGMERGY_LIBRARIAN_WORKTREE_ROOT", cls.worktree_root),
             refused_diff_root=os.environ.get(REFUSED_DIFF_ROOT_ENV, cls.refused_diff_root),
@@ -380,10 +409,27 @@ class Settings:
                 f"Set ${VIEW_SWEEP_CEILING_ENV} to 1 or more (default "
                 f"{DEFAULT_VIEW_SWEEP_CEILING}), or turn the sweep off with "
                 f"${VIEW_SWEEP_INTERVAL_ENV}={VIEW_SWEEP_OFF:g}")
+        # The repair pass's own domain, and BOTH halves of the sweep's argument apply to it
+        # unchanged — a negative interval makes every idle tick due, and one below the poll
+        # interval means every idle tick anyway. What it costs here is not a corpus parse but a
+        # gardener read per poll, and, on any tick where a new gardener run exists, model calls.
+        if float(self.repair_interval_s) < REPAIR_PASS_OFF:
+            raise LibrarianConfigError(
+                f"repair_interval_s is {self.repair_interval_s}, which would run the periodic "
+                f"repair pass on every idle poll. Set ${REPAIR_INTERVAL_ENV} to a positive number "
+                f"of seconds (default {DEFAULT_REPAIR_INTERVAL_S}), or to {REPAIR_PASS_OFF:g} to "
+                f"turn the pass off")
+        if REPAIR_PASS_OFF < float(self.repair_interval_s) < float(self.poll_interval_s):
+            raise LibrarianConfigError(
+                f"repair_interval_s is {self.repair_interval_s}, which is below the "
+                f"{self.poll_interval_s}s poll interval — the pass is due at most once per idle "
+                f"poll, so anything under that asks the gardener's tables on EVERY one. Set "
+                f"${REPAIR_INTERVAL_ENV} to at least {self.poll_interval_s:g} (default "
+                f"{DEFAULT_REPAIR_INTERVAL_S}), or to {REPAIR_PASS_OFF:g} to turn the pass off")
 
     # ── the three repo-sourced inputs: where they live IN A CHECKOUT ──────────────────────────
     # Locations, not reads — the fast lane opens none of them, reading all three at `base.sha`.
-    # These exist for the steward tooling and operator messages, off the same RELPATHs.
+    # These exist for the operator tooling and its messages, off the same RELPATHs.
     @property
     def acl_path(self) -> str:
         return _in_repo(self.repo, ACL_RELPATH)

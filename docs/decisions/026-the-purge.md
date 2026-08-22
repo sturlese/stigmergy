@@ -1,6 +1,7 @@
 # ADR 026 — the purge: the inherited organs come out, a kernel stays
 
 Status: accepted.
+**Amended by** [ADR 044](./044-the-capture-is-the-approval.md) D6: D6 here closed the digest's cron and it stays closed — the digest is a command. What changed is the other half of the sentence: the purge's own "daily cron" is now a daily pass inside the librarian worker, at `STIGMERGY_LIBRARIAN_RETENTION_AT`.
 
 ## Context
 

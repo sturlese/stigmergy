@@ -280,7 +280,7 @@ def test_failed_system_reads_differently_from_every_rejected_shape():
     assert out["status"] == schema.FAILED
     assert "3" in out["summary"]
     assert "not your capture" in out["summary"]
-    assert "steward" in out["summary"]
+    assert "operator" in out["summary"]
     # never the "fix this and resubmit" framing a rejected reason uses
     assert "Remove it and resubmit" not in out["summary"]
 
@@ -469,56 +469,58 @@ def test_filed_meeting_with_zero_decisions_says_so_rather_than_omitting_the_line
     assert out["filed_meeting"]["decisions"] == []
 
 
-# ── proposals: the page landed AND a person still confirms the name ─────────────────────────
-def test_filed_with_a_proposed_entity_says_so_beside_the_anchor_and_carries_the_fact_set():
-    """A filing that created an identity unconfirmed must tell the submitter both halves: the page
-    is anchored NOW, and a steward still confirms, merges or declines the name. "filed" alone would
-    read as "the registry agreed"."""
+# ── births: the page landed AND the capture introduced these identities ──────────────────────
+def test_filed_with_a_born_entity_says_so_beside_the_anchor_and_carries_the_fact_set():
+    """OLD BEHAVIOUR: the sentence said the identity was "created unconfirmed" and that a steward
+    still "confirms, merges or declines" it. ADR 044: the capture is the approval, so the submitter
+    is told what their capture INTRODUCED and who confirmed it — them — with nothing left pending.
+    "filed" alone would still hide that the registry grew."""
     reg = _registry()
     _register(reg, "scircle", "Scircle")
     out = report.filed(page_path="wiki/notes/S.md", commit="abc123",
                        anchoring={"kind": "entity", "entities": ["Scircle"]}, links=[],
                        overlaps=[], findings=[], registry=reg,
-                       entities_proposed=[{"id": "scircle", "name": "Scircle",
-                                           "type": "organization"}],
-                       aliases_proposed=[{"entity": "acme-corp", "alias": "Acme Corporation"}])
+                       entities_born=[{"id": "scircle", "name": "Scircle",
+                                       "type": "organization", "confirmed_by": "marc"}],
+                       aliases_added=[{"entity": "acme-corp", "alias": "Acme Corporation"}])
     assert out["anchored_to"] == "Scircle (`scircle`)"
-    assert "It proposes 1 new entity: Scircle (`scircle`)" in out["summary"]
-    assert "created unconfirmed" in out["summary"]
-    assert "confirms, merges or declines" in out["summary"]
-    assert 'It proposes 1 new spelling: "Acme Corporation" for `acme-corp`' in out["summary"]
-    assert out["entities_proposed"] == [{"id": "scircle", "name": "Scircle", "type": "organization"}]
-    assert out["aliases_proposed"] == [{"entity": "acme-corp", "alias": "Acme Corporation"}]
+    assert "It introduces 1 new entity: Scircle (`scircle`)" in out["summary"]
+    assert "the identity is confirmed by you" in out["summary"]
+    assert "unconfirmed" not in out["summary"]
+    assert 'It teaches the registry 1 new spelling: "Acme Corporation" for `acme-corp`' in out["summary"]
+    assert out["entities_born"] == [{"id": "scircle", "name": "Scircle", "type": "organization",
+                                     "confirmed_by": "marc"}]
+    assert out["aliases_added"] == [{"entity": "acme-corp", "alias": "Acme Corporation"}]
     prose = report.render_prose(out)
-    assert "entities_proposed Scircle (scircle)" in prose
-    assert "aliases_proposed Acme Corporation -> acme-corp" in prose
+    assert "entities_born Scircle (scircle)" in prose
+    assert "aliases_added Acme Corporation -> acme-corp" in prose
 
 
-def test_an_ordinary_filing_carries_empty_proposal_lists_and_an_unchanged_sentence():
-    """The benign twin: nothing proposed, nothing added — the common case reads as it always did,
+def test_an_ordinary_filing_carries_empty_birth_lists_and_an_unchanged_sentence():
+    """The benign twin: nothing born, nothing added — the common case reads as it always did,
     and the two keys are present (empty) so a reader never has to `.get()` them."""
     out = report.filed(page_path="wiki/notes/X.md", commit="abc123",
                        anchoring={"kind": "entity", "entities": ["Acme Corp"]}, links=[],
                        overlaps=[], findings=[], registry=_registry())
-    assert out["entities_proposed"] == [] and out["aliases_proposed"] == []
-    assert "proposes" not in out["summary"]
-    assert "entities_proposed" not in report.render_prose(out)
+    assert out["entities_born"] == [] and out["aliases_added"] == []
+    assert "introduces" not in out["summary"]
+    assert "entities_born" not in report.render_prose(out)
 
 
-def test_filed_meeting_names_its_proposals_in_the_rendered_block_and_the_fact_set():
+def test_filed_meeting_names_its_births_in_the_rendered_block_and_the_fact_set():
     out = report.filed_meeting(
         source_pages=["sources/meetings/q3-sync-transcript.md"],
         meeting_page="wiki/meetings/2026-07-29-q3-sync.md", decisions=[], commit="cafefeed",
-        entities_proposed=[{"id": "scircle", "name": "Scircle", "type": "organization"}])
-    assert "It proposes 1 new entity: Scircle (`scircle`)" in out["summary"]
-    assert out["entities_proposed"][0]["id"] == "scircle"
-    assert out["aliases_proposed"] == []
+        entities_born=[{"id": "scircle", "name": "Scircle", "type": "organization"}])
+    assert "It introduces 1 new entity: Scircle (`scircle`)" in out["summary"]
+    assert out["entities_born"][0]["id"] == "scircle"
+    assert out["aliases_added"] == []
 
 
-def test_a_proposed_name_is_cleaned_through_the_identity_cleaner_never_echoed_raw():
+def test_a_born_name_is_cleaned_through_the_identity_cleaner_never_echoed_raw():
     out = report.filed(page_path="wiki/notes/X.md", commit="abc123",
                        anchoring={"kind": "company", "reason": "r"}, links=[], overlaps=[],
                        findings=[],
-                       entities_proposed=[{"id": "x", "name": "Evil\x1b[31m `$(rm)`",
-                                           "type": "organization"}])
+                       entities_born=[{"id": "x", "name": "Evil\x1b[31m `$(rm)`",
+                                       "type": "organization"}])
     assert "\x1b" not in out["summary"] and "$(" not in out["summary"]

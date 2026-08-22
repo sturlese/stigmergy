@@ -9,6 +9,138 @@ While the version stays below `1.0.0` the contracts described in
 without a decision record in [`docs/decisions/`](./docs/decisions) is *behaviour*: this project
 treats its test suite as the contract.
 
+## [Unreleased]
+
+**The capture is the approval** ([ADR 044](./docs/decisions/044-the-capture-is-the-approval.md), #134).
+Every write used to end in a queue somebody had to come back to: an entity waited to be approved, a
+spelling waited to be approved, a repair waited to be approved, and the doorbell existed to nag the
+person who had already made the decision by capturing. Nothing waits any more. A person's capture IS
+their approval — the librarian writes what it establishes in the commit that files it — and every
+kind of material enters at the same door.
+
+### ⚠ BREAKING CHANGES
+- **`stigmergy-meeting` and `stigmergy-drive` are gone.** A meeting and a document enter at
+  `brain_submit` with `kind="meeting"` / `kind="document"`: the client holds the text, and the
+  worker files it. `kernel/converters.py`, the Drive client and `CONVERSION_BUDGET_S` go with them;
+  the librarian's lease default drops to 900 s (1500 s on staging) now that no capture carries a
+  conversion budget
+- **`review_queue` and `review_decide` are gone from the MCP server** — eight tools where there were
+  ten. There is no queue to read and no verdict to cast: what a capture establishes is written when
+  it files
+- **An entity page's `approved_by:` names the person whose capture introduced the identity, and is
+  never empty.** The proposed state is gone from the page, from `ops/entity-registry.json` (an entry
+  is `{name, type, aliases, approved_by}` — no `proposed`, no `proposed_aliases`) and from the
+  librarian's report (`entities_born` / `aliases_added` where it said proposals). An alias the
+  material used for a registered entity is written straight to `aliases:`
+- **`stigmergy-entities` is gone** — the CLI, the clone path, the decision fold and the entry point.
+  Registering an entity is a capture like any other: the console's **Register an entity**, or
+  `brain_submit`. `stigmergy.entities` is now the pure rules the librarian births through
+- **The steward is gone as a concept**: no `deploy/stewards.json`, no `--stewards` flag, no
+  `steward_notifications` table, no Slack doorbell, no console Inbox. `brain_delete` authorizes on
+  the caller's unrestricted reach, which is what the flag stood for
+- the knowledge repo changes with it: `ops/stewards.json` deleted, the contract linter refuses an
+  empty `approved_by:`, and the entity template's own comment no longer describes a waiting state
+
+- **A repair is not proposed to anybody: the worker derives it, applies it and records what
+  happened.** `repair_proposals` becomes `repairs` (a rename, so a deployment keeps its history),
+  the statuses are `applied` · `failed` · `skipped`, and every applied row carries the unified
+  `diff` that landed — because nobody read it first. What stands where the approval stood: the
+  ledger's permanent `content_key` memory (an applied or refused repair is never derived again),
+  two ceilings per pass (`STIGMERGY_REPAIR_CEILING`, default 20, and `STIGMERGY_REPAIR_MERGE_CEILING`,
+  default 3), and the nine gates
+- **`stigmergy-repair` is gone**, and so is the `repair-propose` cron. The pass runs on the
+  librarian worker's idle branch
+  (`STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S`, default 3600, `0` turns it off), only when a completed
+  gardener run is newer than the last pass, one commit and one worktree per repair
+- the console's Repairs page is READ-ONLY: `POST /admin/api/repairs/{id}/approve` and `/reject` are
+  gone, and what the page is for now is the reading nobody gave a repair beforehand
+- a repair's commit carries `Repair: <check> #<finding>`; `Approved-by:` is reserved for the one
+  repair a person performs — a deletion they asked for
+- the gardener's `sla` severity band and its Slack notice are gone: nothing produced one, and the
+  findings it would have paged somebody about are answered by the worker
+- **One writer.** `brain_delete` no longer clones, sweeps, gates and pushes inside the call: it
+  authorizes (an unrestricted identity, one fixed refusal whether or not the paths exist) and
+  QUEUES a `capture_queue` row of the new kind `delete`. The librarian worker performs it — plan, a
+  model writing the bodies of the pages that referred to the removed ones, the nine gates, a
+  whole-tree dead-link check, one commit carrying `Approved-by: <the person who asked>`. The
+  per-page diffs land in the row's report and are read back through `brain_submissions`,
+  ACL-scoped and fenced
+- **The API process holds no git credential at all.** `Settings.librarian_repo_url` and
+  `STIGMERGY_LIBRARIAN_REPO_URL` are gone from `server/settings.py`; `fly.toml`'s `[env]` block is
+  the worker's alone in practice as well as in its comment
+- `brain_submit` refuses `kind="delete"` by name: the queue's vocabulary is wider than what any
+  door may submit, and the door that queues a removal is the door that authorized it
+- **`stigmergy-views` is gone.** The worker's own sweep is the only road to a regenerated view, and
+  it now runs on the first idle tick AFTER the worker did something as well as on its interval — so
+  a rollup never describes a page that just went. The gardener's `stale-view` finding names no
+  command, because there is none to name
+- **Nothing runs in GitHub Actions any more: the night shift lives in the worker.** The three cron
+  templates under `deploy/workflows/` are deleted, along with `STIGMERGY_CRONS_ENABLED`,
+  `STIGMERGY_PLATFORM_REF`/`_REPO` as cron settings, and the Actions secrets an adopter had to
+  arrange on their knowledge repo. The gardener and the retention purge are daily passes on the
+  librarian worker's idle branch, at `STIGMERGY_LIBRARIAN_GARDEN_AT` (default `05:07` UTC) and
+  `STIGMERGY_LIBRARIAN_RETENTION_AT` (default `04:42`); either takes `off`. Due-ness is read from
+  the pass's own last `job_runs` row, so a restart does not run a pass twice and a worker that was
+  down all night does not run a 05:07 pass at 23:00 — the failure mode the crons had was the
+  opposite one, where an unset repository variable made every scheduled run green-and-skipped
+- **The admin console holds no credential for another service.** `STIGMERGY_ADMIN_GITHUB_TOKEN`
+  and `STIGMERGY_ADMIN_GITHUB_REPO` are gone with `admin/github.py`, the four `POST
+  /admin/api/crons/*` routes and the Jobs page's levers; `GET /admin/api/crons` becomes
+  `GET /admin/api/jobs`, a pure read of `job_runs`. A fine-grained PAT with Actions read+write is
+  not a credential to keep for a page that only reports
+- **The index rebuild is the one pass that stays a command**, and the console says so instead of
+  offering a button: the deployed worker's environment has no embedding key by construction
+  (`bootstrap.READ_PATH_ONLY_ENV` strips it), so nothing in the write path can rebuild the index
+
+### Changed
+- `brain_submit` takes `kind` in `raw` · `page` · `meeting` · `document`; a `document` also takes
+  `source_url`, and its text is filed as a synthesis page beside a verbatim `sources/documents/`
+  part in one commit. A `meeting` rides the distiller as before
+- the HTTP transport's body ceiling is derived from the material cap (three parts plus headroom) and
+  pinned below the MCP SDK's own 4 MiB, so the outer ceiling is always the one that answers
+- the gates speak in births: `born_entity_pages`, and the refusals `unborn-entity-page`,
+  `not-an-entity-page`, `not-confirmed-by-its-submitter`
+- the admin console loses its Inbox tab; the dashboard leads with captures filed, Captures' detail
+  names the identities a capture introduced, and Entities is the registry browser plus Register
+- the weekly digest counts births from the report's `entities_born`
+- the librarian worker's idle branch carries FOUR maintenance passes, in one place
+  (`librarian/schedule.py`): the view sweep and the repair pass on their intervals, the gardener
+  and the retention purge on daily UTC times. None of them starts while a capture is waiting, and
+  each yields between units — maintenance cannot delay a filing
+- the admin console's Jobs page reads `job_runs` and nothing else; its Gardener and Index pages
+  lose their Run-now buttons and name the command instead
+
+### Removed
+The surfaces below are gone with no replacement and no compatibility shim. Each is listed with
+what to do instead, because a deployment upgrading across this release will find them missing.
+
+| Gone | Instead |
+|---|---|
+| `review_queue`, `review_decide` (MCP) | nothing — what a capture establishes is written when it files |
+| `stigmergy-meeting`, `stigmergy-drive` | `brain_submit` with `kind="meeting"` / `kind="document"` |
+| `stigmergy-entities` | the console's **Register an entity**, or `brain_submit` |
+| `stigmergy-repair` | the worker's repair pass; read the console's Repairs page |
+| `stigmergy-views` | the worker's view sweep |
+| `POST /admin/api/repairs/{id}/approve` · `/reject` | nothing — a repair is applied and recorded, never proposed |
+| `POST /admin/api/crons/{workflow_file}/dispatch` · `/enable` · `/disable` | nothing — the passes schedule themselves |
+| `GET /admin/api/crons` | `GET /admin/api/jobs` |
+| `deploy/workflows/` (3 templates) | nothing to copy anywhere: the passes run in the worker |
+| `review_decisions`, `steward_notifications` (tables) | drop them; nothing reads them |
+| `repair_proposals` (table) | renamed `repairs` in place, so history survives |
+| `ops/stewards.json` (knowledge repo) | `brain_delete` authorizes on the caller's unrestricted reach |
+| `STIGMERGY_ADMIN_GITHUB_TOKEN`, `STIGMERGY_ADMIN_GITHUB_REPO` | nothing — the console reaches no other service |
+| `STIGMERGY_CRONS_ENABLED`, and `STIGMERGY_PLATFORM_REF`/`_REPO` as Actions variables | nothing — there is no Actions job left |
+| `STIGMERGY_LIBRARIAN_REPO_URL` in `server/settings.py` | still read by `stigmergy-librarian-boot`, and there only |
+| `STIGMERGY_STEWARDS_PATH` | nothing |
+| `CONVERSION_BUDGET_S`, `kernel/converters.py`, the Drive client | nothing — every kind arrives as text |
+
+### Added
+- `STIGMERGY_LIBRARIAN_GARDEN_AT` (default `05:07` UTC) and `STIGMERGY_LIBRARIAN_RETENTION_AT`
+  (default `04:42`) — when each daily pass runs; either takes `off`. `STIGMERGY_RETENTION_DAYS`
+  (default 30) is now named as a variable rather than only as a CLI flag
+- `STIGMERGY_REPAIR_CEILING` (20) and `STIGMERGY_REPAIR_MERGE_CEILING` (3) — what one repair pass
+  may change
+
 ## [0.8.0] - 2026-08-21
 
 **An entity is born written, and keeps being written** ([ADR 042](./docs/decisions/042-an-entity-is-born-written.md), #131).
@@ -560,7 +692,8 @@ previous one — there isn't one.
 - **An admin console** at `/admin` on the existing app process group — steward drain, remote
   control of the crons, and an activity view. Inert until its token hash is configured.
 - **Seventeen CLIs**, a `docker-compose` stack for the whole thing, and cron templates in
-  [`deploy/workflows/`](./deploy/workflows) to copy into your own knowledge repo.
+  `deploy/workflows/` to copy into your own knowledge repo (the directory is gone as of ADR 044 —
+  the link with it; what this release shipped stands as written).
 
 ### Notes
 

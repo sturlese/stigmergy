@@ -1,13 +1,15 @@
 # The page contract: `entity:`, the anchor field
 
 The narrative doc for `entity:` — the field that carries a page's *aboutness* — and, at the end, for
-the two fields that carry an **entity page's own lifecycle** (`approved_by:`, `proposed_aliases:`).
+the one field that carries an **entity page's own lifecycle** (`approved_by:`).
 It sits beside [`brain-page-contract.md`](brain-page-contract.md),
 which documents the wider `sources/` frontmatter dialect (`entity: initech # resolved from
 the folder path`); this file is the one place the FAST-LANE anchor rule itself is written down.
 Design records: [ADR 008](../decisions/008-entity-registry.md) (the
 registry itself), [ADR 016](../decisions/016-human-loop-and-entity-governance.md) (the routing an
-unresolved anchor used to take).
+unresolved anchor used to take),
+[ADR 044](../decisions/044-the-capture-is-the-approval.md) (the capture is the approval, so the
+lifecycle has one state).
 
 ## The ruling: aboutness, never mention
 
@@ -65,8 +67,8 @@ would anchor to it, and the `entity` filter would match half the corpus.
   ownerless content accumulates. Seven rows, one per WRITER — see
   [`librarian.md`](./librarian.md#three-types-the-fast-lane-may-create-seven-it-knows). An `entity`
   page is the one a capture's own commit can still contain, and never as a DRAFT: the agent declares
-  the identity, code writes the page — unconfirmed, or confirmed by the steward who registered that
-  entity through the capture — and the lifecycle fields below say which.
+  the identity, code writes the page, and it is born CONFIRMED by the person whose capture it was —
+  the lifecycle field below is where their name lands.
 - **An absent `entity` key at all** is a pre-contract page — filed, or extracted, before this
   field existed. Detectable (a linter pass can simply ask whether the key exists), and a one-time
   backfill cleared them from the knowledge repo. That is a claim about the CONTENT repo, which lives
@@ -130,63 +132,64 @@ A **company-wide** anchoring outcome still needs a written reason — but the re
 *filing decision*, so it stays in the submission report; the page's `entity: []` states an
 *identity* (or the absence of one) and carries no prose.
 
-**Steward edits**: `entity` is **not** in the trust-field group
-(`capture.schema.ATTRIBUTION_FIELDS`) — a steward hand-editing an existing page's own aboutness
-is legitimate governance, not a forged trust claim.
+**Hand edits**: `entity` is **not** in the trust-field group
+(`capture.schema.ATTRIBUTION_FIELDS`) — a person editing an existing page's own aboutness in the
+knowledge repo is doing ordinary editorial work, not making a forged trust claim.
 
-## `approved_by:` and `proposed_aliases:` — an entity page's lifecycle
+## `approved_by:` — an entity page's lifecycle
 
-These two live on `type: entity` pages **only**. They exist because an identity can now be created
-by the librarian while it files a capture, which means a page can be in the corpus — resolving,
-anchoring, searchable — before any person has agreed it should be. The page is where that fact is
-recorded; `ops/entity-registry.json` is a derived view of it, and the review inbox a derived view of
-the registry. `entities.generator.APPROVED_BY_KEY` / `PROPOSED_ALIASES_KEY` are the one spelling of
-each name.
+This field lives on `type: entity` pages **only**. It exists because an identity is created by the
+librarian while it files a capture, which means the page enters the corpus in the same commit as
+the note that is about it — and the field records who stands behind it. The capture IS the
+approval ([ADR 044](../decisions/044-the-capture-is-the-approval.md)): the person who captured is
+the person named here, so there is no waiting state, no second field, and nothing to confirm
+afterwards. `ops/entity-registry.json` is a derived view of the page;
+`entities.generator.APPROVED_BY_KEY` is the one spelling of the name.
 
-### `approved_by:` — who confirmed this identity
+### `approved_by:` — who introduced this identity
 
-A **scalar string**, with three readings and no fourth:
+A **scalar string**, with two readings and no third:
 
 | Value | Reading | Written by |
 |---|---|---|
-| `approved_by: ""` | **PROPOSED.** The librarian created this page from a capture that was about the thing, and no steward has confirmed the identity. The empty string IS the mark — silence would be indistinguishable from an old page | `librarian.identity.write_proposals`, and only ever this value |
-| `approved_by: ana@example.com` | **CONFIRMED**, by that person | a steward's decision (`entities.decide.approve_entity` / `merge_entity`), or — at BIRTH — `librarian.identity.write_proposals` naming the steward who registered this entity through the capture the page was written from ([ADR 042](../decisions/042-an-entity-is-born-written.md)) |
-| the key is **absent** | confirmed before the field existed. Pages written under the older contract are never migrated, and read as confirmed | nothing — it is what an old page already says |
+| `approved_by: ana@example.com` | **introduced by that person** — the `submitted_by` of the capture the page was written from: the token's email over HTTP, the `--identity` over stdio, the reacting user's resolved email from Slack, the console's actor for a registration | `librarian.identity.write_births`, in the commit that files the capture |
+| the key is **absent** | a page written before the field existed. Pages under the older contract are never migrated, and read the same way | nothing — it is what an old page already says |
 
-Absent-means-confirmed is deliberate and is the only reading that is safe: a repository whose entity
-pages predate the field must not wake up one morning with every identity in the review inbox.
+The empty string is not a third reading. The knowledge repo's contract linter raises a `lifecycle`
+error for `approved_by: ""`, as it does for a non-string value: an identity nobody is named for is
+an identity nobody stands behind. The fix it states is to name the person, or to drop the field on
+a page that predates it.
 
 The value is a **name, not a permission**: nothing downstream authorizes on it. What it answers is
-"who stands behind this identity", the same question `git log`'s author line and the commit's
-`Decided-by:` trailer answer — three records of one fact, because a database and a repository can
-be separated.
+"who stands behind this identity", the same question `git log`'s author line and the filing
+commit's `Submitted-by:` trailer answer — three records of one fact, because a database and a
+repository can be separated.
 
-Two vetoes hold the empty-string spelling. `gates.gate_identity` refuses a created entity page whose
-`approved_by` is absent or non-empty (`approved-on-arrival`) — an identity that arrived confirmed is
-an identity nobody confirmed — and the knowledge repo's own contract linter raises a `lifecycle`
-error for a non-string value. The registration road does not weaken that: for a page born confirmed
-the gate is told, per path, WHICH steward may appear there, and any other name is
-`not-confirmed-by-its-steward`. A confirmed birth is never a page the gate merely let through.
+`gates.gate_identity` is the veto that holds it. A created entity page must be one this run
+introduced, and its `approved_by` must name EXACTLY the submitter the birth code was told
+(`not-confirmed-by-its-submitter`); a page that named nobody, or somebody else, would be an
+identity nobody stands behind. The gate is told that name by code, per path, and never from the
+model's account.
 
-### `proposed_aliases:` — spellings waiting on a steward
+### A spelling is an alias, not a state
 
-A **list of strings**, on a REGISTERED entity's page: the spellings the librarian appended because a
-capture used them for this entity, each waiting on Approve (it moves into `aliases:`) or Decline (it
-is dropped). They resolve while they wait, exactly as `aliases:` does — that is the point, since the
-capture that proposed one is already anchored — and the registry carries them under the same name.
+There is no `proposed_aliases:` field. A spelling the material uses for a REGISTERED entity is
+appended to that entity's own `aliases:` list in the commit that files the capture, byte-proven
+like every other planned edit, and it resolves from that moment. A page still carrying
+`proposed_aliases` is a `lifecycle` error in the knowledge repo's linter, with the fix being to
+move the spellings into `aliases`.
 
-The list is empty or absent on an entity nothing has proposed a spelling for. A spelling that is
-already the entity's own title or one of its `aliases:` is a **linter error**, not a duplicate to
-tolerate: a spelling the registry already resolves needs no proposal, and leaving it there would put
-a decision in the inbox that changes nothing whichever way it goes.
+### It is checked against the derived view
 
-### Both are checked against the derived view
-
-The contract linter compares each page's lifecycle to `ops/entity-registry.json` and errors when
-they disagree — a page proposed while the registry registers it confirmed, or a `proposed_aliases`
-list the registry does not carry — naming `stigmergy-entities regenerate` as the fix. The reason is
-not tidiness: the review inbox is built from the REGISTRY, so a drifted registry shows a steward
-proposals that do not exist and hides ones that do.
+`ops/entity-registry.json` is derived from the entity pages, so the two can only disagree if
+somebody hand-edited one of them. Both sides check that. The knowledge repo's own contract linter
+compares each page's name, type and aliases against the registry and reports a disagreement as a
+`warn` — the librarian worker regenerates the file from the pages on its next pass over the
+identity zone, and neither side is edited by hand. The platform's own `entities.generator.check`
+compares the same view plus who introduced each identity, and the librarian runs it at the base
+commit BEFORE it introduces anything: an identity born into a registry that already disagrees with
+its pages would be regenerated into a file the commit was not meant to rewrite, so the capture is
+refused with that sentence instead.
 
 ### The body an entity page is born with
 

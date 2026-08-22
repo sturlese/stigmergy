@@ -1,6 +1,7 @@
 # ADR 028 — The Drive door: a caller, not a flow
 
 Status: accepted · 2026-08-03
+**Superseded by** [ADR 044](./044-the-capture-is-the-approval.md) D4: there is no Drive door. A document reaches the brain as text a client already holds, through `brain_submit(kind="document")` — no Google credential exists server-side. The two standing rules this ADR set (door never mirror; caller not flow) outlived the door itself and still hold.
 
 Two standing rules box this in. **Door, never mirror**: extracted text lands as a `sources/`
 page, the ORIGINAL BYTES go to the evidence plane too, and the binary stays in Drive.

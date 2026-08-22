@@ -1,20 +1,16 @@
 """`gardener.run.run_gardener` — the orchestrator: runs every check, persists a `job_runs` row
-plus this run's findings in one transaction, posts the SLA notice when warranted, and returns the
-durable, re-fetched result.
+plus this run's findings in one transaction, and returns the durable, re-fetched result.
 """
 import asyncio
 import datetime
-import logging
 import os
 
-from psycopg import errors as pg_errors
 from pydantic_ai.exceptions import AgentRunError
 
 from stigmergy.gardener import checks, run, schema, sweep
 from stigmergy.gardener import settings as settings_module
 from stigmergy.gardener.errors import GardenerError
 from stigmergy.gardener.settings import GardenerSettings
-from stigmergy.slack.gateway import FakeSlackGateway
 from tests.gardener import support
 
 
@@ -45,10 +41,9 @@ def _seed_minimal_corpus(conn, repo) -> None:
     support.rebuild_index(conn, repo)
 
 
-def _run(conn, repo, *, settings=None, gateway=None, channels_path=""):
+def _run(conn, repo, *, settings=None):
     return asyncio.run(run.run_gardener(
-        conn, repo=repo, settings=settings or GardenerSettings.from_args(),
-        channels_path=channels_path, gateway=gateway))
+        conn, repo=repo, settings=settings or GardenerSettings.from_args()))
 
 
 # ── run + persist + report shape ────────────────────────────────────────────────────────────────
@@ -226,162 +221,23 @@ def test_run_gardener_anchor_concentration_honors_its_own_env_override(conn, rep
 
 
 
-def test_run_gardener_posts_nothing_when_only_info_and_warn_findings_fire(conn, repo):
-    _seed_minimal_corpus(conn, repo)   # produces info + warn, no sla
-    gateway = FakeSlackGateway()
-    settings = GardenerSettings(digest_channel_id="C0123456789")
-
-    result = _run(conn, repo, settings=settings, gateway=gateway)
-
-    assert result.notice_posted is False
-    assert result.notice_error == ""
-    assert gateway.posted == []
-
-
-def test_run_gardener_records_a_notice_error_but_still_returns_the_full_report(conn, repo, monkeypatch):
-    """The findings are already committed before the notice is attempted — a missing bot token
-    (`gateway=None`) must never make the run withhold an already-successful result."""
-    support.write_registry(repo, {})
-    support.write_page(repo, "wiki", "notes/x.md",
-                       frontmatter={"type": "note", "title": "X", "entity": [],
-                                   "status": "developing", "updated": _days_ago(1)})
-    support.rebuild_index(conn, repo)
-    support.force_one_sla_finding(monkeypatch)
-    settings = GardenerSettings(digest_channel_id="C0123456789")
-
-    result = _run(conn, repo, settings=settings, gateway=None)
-
-    assert result.notice_posted is False
-    assert "SLACK_BOT_TOKEN" in result.notice_error
-    assert any(f["severity"] == "sla" for f in result.findings)
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM gardener_findings WHERE run_id = %s", (result.run_id,))
-        assert cur.fetchone()[0] == len(result.findings)   # persisted regardless
-
-
-def test_run_gardener_records_a_notice_error_when_the_channel_is_unset(conn, repo, monkeypatch):
-    support.write_registry(repo, {})
-    support.write_page(repo, "wiki", "notes/x.md",
-                       frontmatter={"type": "note", "title": "X", "entity": [],
-                                   "status": "developing", "updated": _days_ago(1)})
-    support.rebuild_index(conn, repo)
-    support.force_one_sla_finding(monkeypatch)
-    gateway = FakeSlackGateway()
-
-    result = _run(conn, repo, settings=GardenerSettings(digest_channel_id=""), gateway=gateway)
-
-    assert result.notice_posted is False
-    assert "STIGMERGY_DIGEST_CHANNEL_ID" in result.notice_error
-    assert gateway.posted == []
-
-
-def test_run_gardener_survives_a_database_failure_inside_the_notice_block(conn, repo, monkeypatch,
-                                                                         caplog):
-    """**Old behaviour: the run died and the operator lost an already-persisted report.** The
-    guard named `GardenerError`/`SlackApiError`/`IdentityError` only, while
-    `notice.scope_findings_to_channel` runs a `SELECT ... FROM pages_index` inside that very
-    block — so a psycopg error escaped `run_gardener`, and the CLI printed "the run failed" over
-    findings that were already committed.
-
-    The CLASS NAME, never `str(ex)`: a psycopg error quotes the statement that failed, and that
-    statement carries page paths and ACL labels to an operator's terminal — the rule
-    `_run_sweep_pass` already applies to its own `stats["error"]`, one function up.
-
-    **Second old behaviour: that redaction destroyed the only account of the fault.** The class
-    name is all the operator's terminal may learn; the arm now ALSO logs with `exc_info=True`, so
-    the diagnosis survives somewhere. Without it the module imported `logging`, defined `log` and
-    never called it, and a broken notice was undebuggable past its class name.
-    """
-    _seed_minimal_corpus(conn, repo)
-    support.force_one_sla_finding(monkeypatch)
-
-    def _boom(*_a, **_kw):
-        raise pg_errors.UndefinedTable(
-            'relation "pages_index" does not exist\n'
-            'LINE 1: SELECT path, acl FROM pages_index WHERE path = ANY(...)')
-
-    monkeypatch.setattr(run.notice, "scope_findings_to_channel", _boom)
-    gateway = FakeSlackGateway()
-
-    with caplog.at_level(logging.ERROR, logger="stigmergy.gardener.run"):
-        result = _run(conn, repo, settings=GardenerSettings(digest_channel_id="C0123456789"),
-                      gateway=gateway)
-
-    assert any(rec.exc_info and "notice block failed" in rec.getMessage()
-               for rec in caplog.records), (
-        "the class name is the operator's copy — the log has to hold the diagnosis")
-    assert result.notice_posted is False
-    assert result.notice_error == "UndefinedTable"
-    assert "pages_index" not in result.notice_error   # no page path reaches the terminal
-    assert gateway.posted == []
-    # …and the whole point: the report is intact, returned AND persisted.
-    assert any(f["severity"] == "sla" for f in result.findings)
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM gardener_findings WHERE run_id = %s", (result.run_id,))
-        assert cur.fetchone()[0] == len(result.findings)
-
-
-
-def test_run_gardener_the_benign_twin_a_channel_carrying_the_label_posts_full_detail(conn, repo, monkeypatch):
-    """The identical scenario as above, this time with a channel that DOES carry `leadership` —
-    the benign twin every defense needs, because a redaction test alone measures the gate's
-    sensitivity and never its specificity."""
-    support.write_registry(repo, {})
-    path = support.write_page(repo, "wiki", "leadership/pricing-floor.md",
-                              frontmatter={"type": "note", "title": "t", "entity": [],
-                                          "status": "developing", "updated": _days_ago(1),
-                                          "acl": ["leadership"]})
-    support.rebuild_index(conn, repo)
-    support.force_one_sla_finding(monkeypatch, subject=path)
-    channels_path = support.write_channels_file(repo, {"C0123456789": ["leadership"]})
-    gateway = FakeSlackGateway()
-    settings = GardenerSettings(digest_channel_id="C0123456789")
-
-    result = _run(conn, repo, settings=settings, gateway=gateway, channels_path=channels_path)
-
-    assert result.notice_posted is True
-    text = gateway.posted[0].text
-    assert path in text
-    assert "redacted" not in text
-
-
-# ── a malformed channels file must not fail a run with nothing to post, and must fail CLEANLY
-# (report intact, `notice_error` set) when it does ──────────────────────────────────────────────
-def test_run_gardener_survives_a_malformed_channels_file_when_nothing_needs_to_post(conn, repo):
-    """`channels.channel_audiences` used to be resolved unconditionally, before the SLA
-    short-circuit — an info/warn-only run (which never touches Slack at all) failed anyway on a
-    malformed `ops/slack-channels.json`, contradicting `post_sla_notice`'s own docstring ("an
-    info/warn-only run never needs Slack configured"). No `digest_channel_id`/gateway configured
-    either, on purpose — this run needs NONE of it."""
-    _seed_minimal_corpus(conn, repo)   # info + warn only, no sla
-    channels_path = support.write_malformed_channels_file(repo)
-
-    result = _run(conn, repo, channels_path=channels_path)
-
-    assert result.notice_posted is False
-    assert result.notice_error == ""
-    assert len(result.findings) == 3
-
-
-
 # ── the no-write proof, gardener's own half. The architectural half (nothing in this package
 # imports a writer) lives in tests/test_architecture.py ─────────────────────────────────────────
-def test_run_gardener_writes_nothing_but_its_own_findings_and_job_runs_row(conn, repo, monkeypatch):
+def test_run_gardener_writes_nothing_but_its_own_findings_and_job_runs_row(conn, repo):
     _seed_minimal_corpus(conn, repo)
-    support.force_one_sla_finding(monkeypatch)
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM capture_queue")
         capture_before = cur.fetchone()[0]
-        cur.execute("SELECT count(*) FROM review_decisions")
-        decisions_before = cur.fetchone()[0]
+        cur.execute("SELECT count(*) FROM repairs")
+        repairs_before = cur.fetchone()[0]
 
-    _run(conn, repo, settings=GardenerSettings())   # no channel configured; sla finding present
+    _run(conn, repo, settings=GardenerSettings())
 
     with conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM capture_queue")
         assert cur.fetchone()[0] == capture_before
-        cur.execute("SELECT count(*) FROM review_decisions")
-        assert cur.fetchone()[0] == decisions_before
+        cur.execute("SELECT count(*) FROM repairs")
+        assert cur.fetchone()[0] == repairs_before
 
 
 # ── the model sweep, wired end to end ───────────────────────────────────────────────────────────

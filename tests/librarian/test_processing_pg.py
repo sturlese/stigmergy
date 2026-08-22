@@ -20,8 +20,7 @@ import unicodedata
 
 import pytest
 
-from stigmergy import review_kinds
-from stigmergy.capture import decisions, queue, schema
+from stigmergy.capture import queue, schema
 from stigmergy.librarian import double as double_module
 from stigmergy.librarian import page as page_policy
 from stigmergy.librarian import processing, worker
@@ -111,14 +110,14 @@ def test_a_company_wide_capture_files_with_entity_empty_on_the_page_and_the_reas
     assert reason not in text          # the reason justifies a FILING decision, never the page's
 
 
-def test_a_capture_about_an_unregistered_entity_proposes_it_and_files_anchored_to_the_newborn(
+def test_a_capture_about_an_unregistered_entity_introduces_it_and_files_anchored_to_the_newborn(
         rig, clean_queue):
     """OLD BEHAVIOUR: a capture about a name the registry did not know was PARKED on a question to
     its submitter (`needs_input`), delivered to a tool result nobody polls; two of five captures on
-    staging were lost to the button beside it. Nothing parks now. The agent proposes the entity in
-    its account, code creates the page with `approved_by` EMPTY and regenerates the registry in the
-    SAME commit as the note, the note lands anchored to the newborn id, and the submitter's report
-    says both halves: filed, and a steward still confirms the name."""
+    staging were lost to the button beside it. Then it filed with the identity waiting on a steward
+    (`approved_by: ""`, `proposed: true`). ADR 044: the capture IS the approval — code creates the
+    page with `approved_by` naming the SUBMITTER and regenerates the registry in the SAME commit as
+    the note, the note lands anchored to the newborn id, and nothing waits on anybody."""
     env, deps = rig
     before = support.branch_sha(env.bare)
 
@@ -133,25 +132,29 @@ def test_a_capture_about_an_unregistered_entity_proposes_it_and_files_anchored_t
     note = support.read_filed_page(env.bare, sha, page_path)
     assert 'entity: ["globex-corp"]' in note
     entity_page = support.read_filed_page(env.bare, sha, "wiki/entities/Globex Corp.md")
-    assert 'approved_by: ""' in entity_page and 'entity: ["globex-corp"]' in entity_page
+    assert f'approved_by: "{support.DEFAULT_SUBMITTER}"' in entity_page
+    assert 'entity: ["globex-corp"]' in entity_page
     assert "proposed by the offline double" in entity_page     # every section filled, not a stub
     registry = json.loads(support.read_filed_page(env.bare, sha, "ops/entity-registry.json"))
-    assert registry["entities"]["globex-corp"]["proposed"] is True
-    assert registry["entities"]["acme-corp"]["proposed"] is False
+    assert registry["entities"]["globex-corp"]["approved_by"] == support.DEFAULT_SUBMITTER
+    assert "proposed" not in registry["entities"]["globex-corp"]
     # the submitter reads both halves
     assert result.report["anchored_to"] == "Globex Corp (`globex-corp`)"
-    assert result.report["entities_proposed"] == [
-        {"id": "globex-corp", "name": "Globex Corp", "type": "organization"}]
-    assert "It proposes 1 new entity: Globex Corp (`globex-corp`)" in result.report["summary"]
-    assert "a steward confirms, merges or declines" in result.report["summary"]
-    assert "Proposes 1 new entity page(s) — Globex Corp" in support.commit_message_body(env.bare, sha)
+    assert result.report["entities_born"] == [
+        {"id": "globex-corp", "name": "Globex Corp", "type": "organization",
+         "confirmed_by": support.DEFAULT_SUBMITTER}]
+    assert "It introduces 1 new entity: Globex Corp (`globex-corp`)" in result.report["summary"]
+    assert "the identity is confirmed by you" in result.report["summary"]
+    body = support.commit_message_body(env.bare, sha)
+    assert "Introduces 1 new entity page(s) — Globex Corp" in body
+    assert "born confirmed by the submitter" in body
 
     row = _row(clean_queue, item["id"])
     assert row["status"] == schema.FILED
 
 
-def test_several_unregistered_names_are_proposed_together_in_one_commit(rig, clean_queue):
-    """Issue #32's shape, on the proposing road: a capture naming TWO new things creates both —
+def test_several_unregistered_names_are_born_together_in_one_commit(rig, clean_queue):
+    """Issue #32's shape, on the identity road: a capture naming TWO new things creates both —
     each its own page, each its own registry entry — in the one commit, and the report names both.
     A person and an organization, so the type travels too."""
     env, deps = rig
@@ -165,16 +168,19 @@ def test_several_unregistered_names_are_proposed_together_in_one_commit(rig, cle
     registry = json.loads(support.read_filed_page(env.bare, sha, "ops/entity-registry.json"))
     assert registry["entities"]["jack-reeve"]["type"] == "person"
     assert registry["entities"]["acme-capital"]["type"] == "organization"
-    assert [e["id"] for e in result.report["entities_proposed"]] == ["jack-reeve", "acme-capital"]
-    assert "It proposes 2 new entities" in result.report["summary"]
+    # one capture, one approver, however many identities it introduced
+    assert {registry["entities"][cid]["approved_by"] for cid in ("jack-reeve", "acme-capital")} == {
+        support.DEFAULT_SUBMITTER}
+    assert [e["id"] for e in result.report["entities_born"]] == ["jack-reeve", "acme-capital"]
+    assert "It introduces 2 new entities" in result.report["summary"]
 
 
-def test_a_spelling_the_material_uses_for_a_registered_entity_is_proposed_as_its_alias(
+def test_a_spelling_the_material_uses_for_a_registered_entity_is_added_to_its_aliases(
         rig, clean_queue):
-    """The other proposal: the material says "Acme Corporation" for the registered `Acme Corp`. The
-    note anchors to the registered entity as always, and the spelling is appended to that entity's
-    page as a PROPOSED alias — regenerated into the registry, so the next capture using it resolves
-    without asking — for a steward to confirm or decline."""
+    """OLD BEHAVIOUR: the spelling was appended to a second frontmatter list, `proposed_aliases:`,
+    for a steward to confirm or decline. ADR 044: a spelling the material uses IS one of the
+    entity's names, so it goes straight onto `aliases:` and is regenerated into the registry — the
+    next capture using it resolves without asking anybody."""
     env, deps = rig
     _, result = _file(clean_queue, deps,
                       "DOUBLE:alias=Acme Corporation\nAcme Corporation renewed the contract.")
@@ -183,17 +189,18 @@ def test_a_spelling_the_material_uses_for_a_registered_entity_is_proposed_as_its
     page_path, sha = result.result_ref.rsplit("@", 1)
     assert 'entity: ["acme-corp"]' in support.read_filed_page(env.bare, sha, page_path)
     entity_page = support.read_filed_page(env.bare, sha, "wiki/entities/Acme Corp.md")
-    assert 'proposed_aliases: ["Acme Corporation"]' in entity_page
-    assert 'aliases: ["Acme"]' in entity_page                       # the approved list untouched
+    assert 'aliases: ["Acme", "Acme Corporation"]' in entity_page
+    assert "proposed_aliases" not in entity_page
     registry = json.loads(support.read_filed_page(env.bare, sha, "ops/entity-registry.json"))
-    assert registry["entities"]["acme-corp"]["proposed_aliases"] == ["Acme Corporation"]
-    assert result.report["aliases_proposed"] == [{"entity": "acme-corp", "alias": "Acme Corporation"}]
-    assert 'It proposes 1 new spelling: "Acme Corporation" for `acme-corp`' in result.report["summary"]
+    assert registry["entities"]["acme-corp"]["aliases"] == ["Acme", "Acme Corporation"]
+    assert result.report["aliases_added"] == [{"entity": "acme-corp", "alias": "Acme Corporation"}]
+    assert ('It teaches the registry 1 new spelling: "Acme Corporation" for `acme-corp`'
+            in result.report["summary"])
 
 
 def test_a_proposal_that_collides_with_a_registered_spelling_is_refused_and_the_retry_anchors_there(
         rig, clean_queue):
-    """The identity gate's main refusal, through the whole retry loop: pass one proposes the
+    """The identity gate's main refusal, through the whole retry loop: pass one declares the
     registered entity under a legal form, the brief names the id to anchor to instead, pass two
     anchors there. One commit, no twin entity, the registry untouched."""
     env, deps = rig
@@ -205,10 +212,10 @@ def test_a_proposal_that_collides_with_a_registered_spelling_is_refused_and_the_
     assert not any(path.startswith("wiki/entities/") for path in changed), changed
     assert "ops/entity-registry.json" not in changed
     assert result.report["anchored_to"] == "Acme Corp (`acme-corp`)"
-    assert result.report["entities_proposed"] == []
+    assert result.report["entities_born"] == []
 
 
-def test_a_proposed_name_the_material_never_uses_is_the_librarians_fault(rig, clean_queue):
+def test_a_declared_name_the_material_never_uses_is_the_librarians_fault(rig, clean_queue):
     """An entity the capture never mentions is an invention, refused on every pass, and nothing
     lands — `failed`, naming the identity stage, with the submitter told their material is fine."""
     env, deps = rig
@@ -220,29 +227,6 @@ def test_a_proposed_name_the_material_never_uses_is_the_librarians_fault(rig, cl
     assert support.branch_sha(env.bare) == before
 
 
-def test_an_identity_a_steward_declined_is_never_proposed_again(rig, clean_queue):
-    """The ledger is the one memory of a decision, and the librarian reads it: a name a steward
-    declined as an entity is refused as a proposal from then on, or the same inbox item would come
-    back on every capture that mentions the name."""
-    from stigmergy import review_kinds
-    from stigmergy.capture import decisions
-
-    env, deps = rig
-    # A name no other test proposes: the ledger is append-only and shared across this session's
-    # tests, so a decline recorded here would refuse every later proposal of the same name.
-    decisions.record_decision(clean_queue, item_kind=review_kinds.KIND_IDENTITY_PROPOSAL,
-                              item_id="vandelay-imports", verdict=decisions.REJECT,
-                              actor="steward@example.com", source=decisions.SOURCE_ADMIN,
-                              notes="not an entity")
-    before = support.branch_sha(env.bare)
-
-    _, result = _file(clean_queue, deps, "DOUBLE:propose=Vandelay Imports\n" + ACME_MATERIAL)
-
-    assert result.status == schema.FAILED, result.report.get("summary")
-    assert "declined" in result.report["summary"]
-    assert support.branch_sha(env.bare) == before
-
-
 class _UnresolvableAnchorAgent:
     """Wraps the double and rewrites its DECLARED anchoring outcome to a name the registry does
     not know, while leaving the page itself untouched — the attack `gate_anchoring`'s `unresolved`
@@ -250,8 +234,8 @@ class _UnresolvableAnchorAgent:
     page's body, so this wrapper mutates exactly that and nothing else. (It used to rewrite a
     wikilink on the page as well. That is vestigial now the gate reads no links.)
 
-    The proposing test above proves the COOPERATIVE half of "nothing is filed ownerless": an agent
-    that correctly recognizes a new name proposes the entity. It proves nothing about what happens
+    The birth test above proves the COOPERATIVE half of "nothing is filed ownerless": an agent
+    that correctly recognizes a new name introduces the entity. It proves nothing about what happens
     if the agent (or a document that talked it into lying) instead CLAIMS an anchor it does not
     have —
     the double's own anchor is always real (`DoubleAgent._registry_entity` reads the actual
@@ -380,7 +364,7 @@ def test_an_anchoring_veto_beside_a_real_fault_still_fails(rig, clean_queue):
 def test_both_roads_from_an_unknown_name_record_the_same_injection_finding(rig, clean_queue):
     """Two paths, and they must not disagree about what happened even though their DESTINATIONS
     differ: a capture whose material tried to steer the librarian records a finding when it FILES
-    (proposing the unknown entity) and when it FAILS (claiming an anchor the gate refuses).
+    (introducing the unknown entity) and when it FAILS (claiming an anchor the gate refuses).
 
     Asserted on the REPORT rather than on `Result.findings`, because the report is what
     `queue.finish` persists and `brain_submissions` returns: a finding recorded only on the object
@@ -390,13 +374,13 @@ def test_both_roads_from_an_unknown_name_record_the_same_injection_finding(rig, 
     _, base_deps = rig
     steered = f"{ACME_MATERIAL} {payloads.STEER_REVEAL_CREDENTIALS}"
 
-    _, proposed = _file(clean_queue, base_deps, f"DOUBLE:propose=Globex Corp\n{steered}")
+    _, born = _file(clean_queue, base_deps, f"DOUBLE:propose=Globex Corp\n{steered}")
     deps = dataclasses.replace(base_deps, agent=_UnresolvableAnchorAgent(base_deps.agent))
     # Different opening words: the first road FILED its note, and the double titles a page from
     # the material's first words, so the same material again would collide with that page.
     _, vetoed = _file(clean_queue, deps, f"A second capture, same steering attempt. {steered}")
 
-    for label, result, expected_status in (("proposed", proposed, schema.FILED),
+    for label, result, expected_status in (("born", born, schema.FILED),
                                            ("veto", vetoed, schema.FAILED)):
         assert result.status == expected_status, (label, result.report.get("summary"))
         assert any("reveal-credentials" in f for f in result.report["findings"]), label
@@ -408,7 +392,7 @@ def test_both_roads_from_an_unknown_name_record_the_same_injection_finding(rig, 
 def test_a_governed_type_written_into_the_lane_is_the_librarians_fault_never_filed(
         rig, clean_queue, governed_type):
     """OLD BEHAVIOUR: the double declared the type cooperatively (`triage-type`) and the capture
-    parked on a steward. The agent is told the three creatable types and how to PROPOSE an entity
+    parked on a steward. The agent is told the three creatable types and how to INTRODUCE an entity
     for anything else, so a page of a governed type in the lane is the librarian's own fault:
     refused on both passes, `failed`, nothing committed."""
     env, deps = rig
@@ -1200,52 +1184,47 @@ def test_a_resubmission_outside_the_window_is_still_the_level_two_rejection(rig,
 #   `test_the_page_itself_still_carries_the_verdict_vocabulary_the_linter_validates`
 
 
-# ── a steward's registration (ADR 042): the capture births the entity CONFIRMED ──────────────────
+# ── a registration (ADR 042/044): the capture births the entity CONFIRMED by its submitter ──────
 def _registration_hints(name="Globex Corp", entity_type="organization", aliases=("Globex",)):
     return schema.registration_hints(name=name, entity_type=entity_type, aliases=aliases,
                                      source="admin")
 
 
-def test_a_stewards_registration_births_the_entity_confirmed_and_records_the_approval(rig, clean_queue):
-    """OLD BEHAVIOUR: a steward registered an entity through `stigmergy-entities create` or the
-    console, and a script copied the template with the name filled in — twelve of the first brain's
-    nineteen entity pages had nothing said about the entity. Now the steward's account is a capture
-    carrying the registration: the agent writes the page from it, the page lands in the same
-    commit as the note with `approved_by` naming the steward, the registry entry is NOT proposed,
-    the ledger carries the steward's approval (written after the push, like every door's), and
-    the report says "registers", not "proposes"."""
+def test_a_registration_births_the_entity_confirmed_by_the_person_who_asked(rig, clean_queue):
+    """OLD BEHAVIOUR (twice over): a script copied the entity template with the name filled in, and
+    then — briefly — only a registration was born confirmed while every other identity waited on a
+    steward. Now the account is a capture like any other: the agent writes the page from it, the
+    page lands in the same commit as the note with `approved_by` naming the SUBMITTER, the registry
+    entry carries the same name, and the report says what their capture introduced."""
     env, deps = rig
-    steward = "steward@example.com"
+    submitter = "steward@example.com"
 
     item, result = _file(clean_queue, deps, "DOUBLE:propose=Globex Corp\n" + ACME_MATERIAL,
-                         submitted_by=steward, hints=_registration_hints())
+                         submitted_by=submitter, hints=_registration_hints())
 
     assert result.status == schema.FILED, result.report.get("summary")
     page_path, sha = result.result_ref.rsplit("@", 1)
     changed = support.changed_paths(env.bare, sha)
     assert "wiki/entities/Globex Corp.md" in changed and "ops/entity-registry.json" in changed
     entity_page = support.read_filed_page(env.bare, sha, "wiki/entities/Globex Corp.md")
-    assert f'approved_by: "{steward}"' in entity_page
+    assert f'approved_by: "{submitter}"' in entity_page
     assert "proposed by the offline double" in entity_page        # written, never a stub
     registry = json.loads(support.read_filed_page(env.bare, sha, "ops/entity-registry.json"))
     entry = registry["entities"]["globex-corp"]
-    assert entry["proposed"] is False and entry["approved_by"] == steward
-    assert result.report["entities_proposed"] == [
-        {"id": "globex-corp", "name": "Globex Corp", "type": "organization", "confirmed_by": steward}]
-    assert "It registers 1 new entity: Globex Corp (`globex-corp`), confirmed by" in result.report["summary"]
-    assert "It proposes" not in result.report["summary"]
-    decided = decisions.latest_decision_for(clean_queue, item_kind=review_kinds.KIND_IDENTITY_PROPOSAL,
-                                            item_id="globex-corp")
-    assert decided["verdict"] == decisions.APPROVE and decided["actor"] == steward
-    assert decided["source"] == decisions.SOURCE_ADMIN
-    assert decided["extra"] == {"commit": sha, "created": True, "capture": item["id"]}
+    assert entry["approved_by"] == submitter
+    assert "proposed" not in entry and "proposed_aliases" not in entry
+    assert result.report["entities_born"] == [
+        {"id": "globex-corp", "name": "Globex Corp", "type": "organization",
+         "confirmed_by": submitter}]
+    assert "It introduces 1 new entity: Globex Corp (`globex-corp`)" in result.report["summary"]
+    assert "confirmed by you" in result.report["summary"]
     assert _row(clean_queue, item["id"])["status"] == schema.FILED
 
 
 def test_a_registration_the_agent_ignores_fails_by_name_and_commits_nothing(rig, clean_queue):
-    """The steward asked for Globex Corp and the account proposed nothing, twice (the double
-    proposes only on its directive, so the corrective retry changes nothing): the row ends
-    `failed` naming the entity, the remote is untouched, and no ledger row claims a birth."""
+    """The capture asked for Globex Corp and the account introduced nothing, twice (the double
+    introduces only on its directive, so the corrective retry changes nothing): the row ends
+    `failed` naming the entity and the remote is untouched."""
     env, deps = rig
     before = support.branch_sha(env.bare)
 
@@ -1255,8 +1234,6 @@ def test_a_registration_the_agent_ignores_fails_by_name_and_commits_nothing(rig,
     assert result.status == schema.FAILED, result.report.get("summary")
     assert "registration-missing" in result.report["summary"] or "Globex Corp" in result.report["summary"]
     assert support.branch_sha(env.bare) == before
-    assert decisions.latest_decision_for(clean_queue, item_kind=review_kinds.KIND_IDENTITY_PROPOSAL,
-                                         item_id="globex-corp") is None
 
 
 # ── the spine accretes (ADR 042): a filing adds what it established to a registered entity ───────
@@ -1283,5 +1260,5 @@ def test_a_capture_that_establishes_something_about_a_registered_entity_appends_
     assert f"- [[{ACME_TITLE}]] — the note that established it" in after
     assert result.report["entities_updated"] == [{"entity": "acme-corp", "facts": 2, "connections": 1}]
     assert "It adds 2 facts and 1 connection to the page of `acme-corp`." in result.report["summary"]
-    assert result.report["entities_proposed"] == []
+    assert result.report["entities_born"] == []
     assert _row(clean_queue, item["id"])["status"] == schema.FILED

@@ -51,17 +51,17 @@ def _render_health(health: dict) -> list[str]:
 
     counts = health["counts_by_severity"]
     lines.append(f"Latest gardener run: {run_date} — {total} {_plural(total, 'finding')}: "
-                f"{counts[gardener_schema.SEVERITY_SLA]} sla, "
                 f"{counts[gardener_schema.SEVERITY_WARN]} warn, "
                 f"{counts[gardener_schema.SEVERITY_INFO]} info")
     if incomplete_line:
         lines.append(incomplete_line)
-    for severity in (gardener_schema.SEVERITY_SLA, gardener_schema.SEVERITY_WARN):
-        by_check = health["checks_by_severity"].get(severity) or {}
-        if not by_check:
-            continue
-        parts = ", ".join(f"{escape_mrkdwn(chk)} ({n})" for chk, n in sorted(by_check.items()))
-        lines.append(f"• {severity}: {parts}")
+    # WARN is broken down by check; INFO gets a bare count below. A digest is a broadcast, not the
+    # report — the loud half is named, the quiet half is pointed at.
+    warn_by_check = health["checks_by_severity"].get(gardener_schema.SEVERITY_WARN) or {}
+    if warn_by_check:
+        parts = ", ".join(f"{escape_mrkdwn(chk)} ({n})"
+                          for chk, n in sorted(warn_by_check.items()))
+        lines.append(f"• {gardener_schema.SEVERITY_WARN}: {parts}")
     info_count = counts[gardener_schema.SEVERITY_INFO]
     if info_count:
         lines.append(f"• info: {info_count} (full breakdown: `stigmergy-gardener`)")
@@ -80,10 +80,20 @@ def _render_deltas(deltas: dict) -> list[str]:
         lines.append(f"• {n_pages} {_plural(n_pages, 'page')} filed — {titles}")
 
     n_entities = deltas["entities_born_count"]
-    # "approved", not "born": this counts `review_decisions` APPROVALS, and an approved proposal
-    # can exist without a mint — the label has to be exact even where the count cannot be.
-    noun = "birth" if n_entities == 1 else "births"
-    lines.append(f"• {n_entities} entity {noun} approved")
+    # "born" is exact now (ADR 044): this sums what the window's FILINGS actually wrote, so every
+    # counted birth is a page in the repo. It said "approved" while the count came off a ledger of
+    # verdicts, where an approval could exist without a page.
+    noun = "entity" if n_entities == 1 else "entities"
+    lines.append(f"• {n_entities} {noun} born")
+
+    n_repairs = deltas.get("repairs_applied_count", 0)
+    by_kind = deltas.get("repairs_by_kind") or {}
+    # By KIND rather than by page: a repair's pages are corpus text this broadcast cannot scope to
+    # the destination channel, and the kinds are a closed vocabulary code owns. Sorted, because a
+    # digest whose lines reorder between weeks is one nobody can compare.
+    detail = ", ".join(f"{kind} {count}" for kind, count in sorted(by_kind.items()))
+    lines.append(f"• {n_repairs} {_plural(n_repairs, 'repair')} applied"
+                 + (f" — {detail}" if detail else ""))
     return lines
 
 

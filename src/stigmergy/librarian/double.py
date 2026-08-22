@@ -233,7 +233,7 @@ class DoubleAgent:
             "summary": (f"{name} is an entity the captured material names and the registry did "
                         f"not know; the offline double proposes it with every field filled."),
             "facts": [f"Named in the capture filed as {note_title}",
-                      "Proposed by the librarian, awaiting a steward's confirmation"],
+                      "Introduced by the capture that named it"],
             "connections": [f"[[{note_title}]] — the note that introduced it"],
         }
 

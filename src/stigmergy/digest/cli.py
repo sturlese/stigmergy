@@ -12,7 +12,6 @@ import asyncio
 import os
 import sys
 
-from stigmergy.capture import decisions
 from stigmergy.capture import schema as capture_schema
 from stigmergy.digest import run
 from stigmergy.digest.errors import DigestError
@@ -36,7 +35,6 @@ def _connect(args):
     conn = store.connect(args.dsn)
     # Every table the two sections read, or this run's own job_runs row needs.
     capture_schema.ensure_capture_schema(conn)
-    decisions.ensure_decisions_schema(conn)
     ensure_gardener_schema(conn)
     return conn
 

@@ -47,17 +47,7 @@ class SlackContext:
     _show_it_here_tokens: dict = field(default_factory=dict)
     # Injectable so a test can bound it small without minting thousands of real tokens.
     _show_it_here_max_tokens: int = SHOW_IT_HERE_MAX_TOKENS
-    # Has `doorbell.poll_once` already recorded a deployment-wide "nothing can ever ring" fault?
-    # ONE flag for the three mutually-exclusive causes (`Settings` is frozen at startup): logged
-    # and recorded once per process lifetime, never once per item per pass.
-    _stewards_empty_warned: bool = False
-    # `doorbell._load_stewards_cached`'s TTL cache for `ops/stewards.json` — uncached, every poll
-    # pass is a real `git fetch`. LOCAL to the doorbell's notifications; `review.is_steward`'s
-    # authorization check stays on its own always-fresh read: a revoked steward's approval must
-    # never succeed off a stale cache, and neither must the mint modal open off one.
-    _stewards_cache: dict = field(default_factory=dict)
-    # Injectable clock, the same seam `UsersInfoCache(clock=...)` uses; only
-    # `doorbell._load_stewards_cached` reads it.
+    # Injectable clock, the same seam `UsersInfoCache(clock=...)` uses.
     _clock: object = time.monotonic
 
     async def resolve_slack_identity(self, *, event_team_id: str, slack_user_id: str):

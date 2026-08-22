@@ -1,20 +1,16 @@
 """The entity registry — curated identity the automatic canonicalization defers to.
 
-On-disk shape: `{"entities": {"<id>": {"name", "type", "aliases": [], "proposed", "approved_by",
-"proposed_aliases": []}}}`. Every anchoring decision consults it FIRST — a string rule never mints
-identity. Plain, diffable JSON, DERIVED from `wiki/entities/*.md` by `entities.generator` and
-written by nothing else.
+On-disk shape: `{"entities": {"<id>": {"name", "type", "aliases": [], "approved_by"}}}`. Every
+anchoring decision consults it FIRST — a string rule never mints identity. Plain, diffable JSON,
+DERIVED from `wiki/entities/*.md` by `entities.generator` and written by nothing else.
 
-**Two lifecycle facts ride beside the identity, because a proposal is part of the registry
-before a person has confirmed it.** The librarian files a capture about a name nothing resolves
-to by creating the entity page itself, with `approved_by` EMPTY, so the note lands anchored and
-later captures naming the same thing anchor to the same id (consistency, not contamination); a
-steward then approves, merges or declines it from the inbox. `proposed` is that state, as a
-boolean so no reader has to know which spelling of "nobody yet" the page used; `approved_by` is
-the person, once there is one. `proposed_aliases` is the same idea for one spelling: a registered
-entity the material called by a name the registry had not seen. Both kinds of proposal RESOLVE —
-`index_entity` keys them exactly like approved spellings — because the point of proposing rather
-than parking is that nothing waits on the decision.
+**One lifecycle fact rides beside the identity: who introduced it.** The librarian files a capture
+about a name nothing resolves to by creating the entity page itself, born CONFIRMED by the person
+whose capture it was ([ADR 044](../../../docs/decisions/044-the-capture-is-the-approval.md)), so the
+note lands anchored and later captures naming the same thing anchor to the same id. `approved_by`
+is that person; empty on a page written before the field existed, and never a waiting state — there
+is none. A spelling the material uses for a registered entity is one of its `aliases`, added in the
+same commit.
 
 **TWO lookups, because the registry is asked two different questions** (`kernel.normalize`'s
 docstring carries the argument in full):
@@ -39,15 +35,12 @@ from stigmergy.kernel.normalize import normalize, resolution_key
 REGISTRY_FILE = "entity-registry.json"
 
 # The registry's own spelling of an entry's keys. `entities.generator` reads the PAGE-side
-# vocabulary (`approved_by:` on the frontmatter, `proposed_aliases:`) and builds entries through
-# `entry()` below, so the two vocabularies meet in exactly one function.
-PROPOSED_KEY = "proposed"
+# vocabulary (`approved_by:` on the frontmatter) and builds entries through `entry()` below, so the
+# two vocabularies meet in exactly one function.
 APPROVED_BY_KEY = "approved_by"
-PROPOSED_ALIASES_KEY = "proposed_aliases"
 
 
-def entry(name: str, entity_type: str, aliases=(), *, proposed: bool = False,
-          approved_by: str = "", proposed_aliases=()) -> dict:
+def entry(name: str, entity_type: str, aliases=(), *, approved_by: str = "") -> dict:
     """THE one constructor of a registry entry.
 
     Every writer of `Registry.entities` — the file reader here, the page-derived builder in
@@ -56,8 +49,7 @@ def entry(name: str, entity_type: str, aliases=(), *, proposed: bool = False,
     treats a half-built entry as approved.
     """
     return {"name": str(name), "type": str(entity_type), "aliases": list(aliases or ()),
-            PROPOSED_KEY: bool(proposed), APPROVED_BY_KEY: str(approved_by or ""),
-            PROPOSED_ALIASES_KEY: list(proposed_aliases or ())}
+            APPROVED_BY_KEY: str(approved_by or "")}
 
 
 @dataclass
@@ -84,21 +76,6 @@ class Registry:
         e = self.entities.get(canonical)
         return e.get("type") if e else None
 
-    def is_proposed(self, canonical: str) -> bool:
-        """Is this identity still waiting on a person? `False` for an id the registry does not
-        hold — an unknown id is refused elsewhere, by name, never folded into "proposed"."""
-        e = self.entities.get(canonical)
-        return bool(e and e.get(PROPOSED_KEY))
-
-    def proposed_ids(self) -> list[str]:
-        """Every identity a steward has not confirmed, sorted — the inbox's read."""
-        return sorted(cid for cid, e in self.entities.items() if e.get(PROPOSED_KEY))
-
-    def proposed_alias_pairs(self) -> list[tuple[str, str]]:
-        """`(id, alias)` for every spelling waiting on a person, sorted — the inbox's other read."""
-        return sorted((cid, str(alias)) for cid, e in self.entities.items()
-                      for alias in (e.get(PROPOSED_ALIASES_KEY) or ()))
-
 
 def index_entity(reg: Registry, canonical_id: str, entry: dict) -> None:
     """Key one already-stored entity into BOTH lookup maps.
@@ -108,13 +85,10 @@ def index_entity(reg: Registry, canonical_id: str, entry: dict) -> None:
     indexers would be two answers to "does this name resolve", and the generator's own docstring has
     promised for as long as it existed that it indexes "exactly as `load_registry` does".
 
-    The id, the display name, every alias AND every proposed alias are keyed, and later entries
-    win — the precedence the file has always had. A proposed spelling resolves on purpose: the
-    librarian wrote it because the material uses it, and the next capture using it must anchor to
-    the same entity rather than propose the spelling a second time.
+    The id, the display name and every alias are keyed, and later entries win — the precedence the
+    file has always had.
     """
-    for alias in (canonical_id, entry.get("name", ""), *(entry.get("aliases") or ()),
-                  *(entry.get(PROPOSED_ALIASES_KEY) or ())):
+    for alias in (canonical_id, entry.get("name", ""), *(entry.get("aliases") or ())):
         text = str(alias)
         collision = normalize(text)
         if collision:
@@ -143,8 +117,8 @@ def registry_from_text(text: str | None, origin: str) -> Registry:
     the server refuses. `origin` only names the source in the error, since there is no path to
     give when the bytes came from the index.
 
-    A file written before the lifecycle keys existed carries none of them, and reads as APPROVED:
-    every entity in it was born through a steward's door. Absent is not proposed.
+    A file written before `approved_by` existed carries no approver, and reads as confirmed by
+    nobody in particular — there is no waiting state for it to fall into.
     """
     reg = Registry()
     if text is None:
@@ -160,9 +134,7 @@ def registry_from_text(text: str | None, origin: str) -> Registry:
             raise ValueError(f"registry {origin}: entity {cid!r} needs at least a 'name'")
         reg.entities[cid] = entry(
             e["name"], e.get("type", "organization"), e.get("aliases", []),
-            proposed=bool(e.get(PROPOSED_KEY, False)),
-            approved_by=str(e.get(APPROVED_BY_KEY) or ""),
-            proposed_aliases=list(e.get(PROPOSED_ALIASES_KEY) or []))
+            approved_by=str(e.get(APPROVED_BY_KEY) or ""))
         index_entity(reg, cid, reg.entities[cid])
     return reg
 
@@ -171,20 +143,20 @@ def registry_text(reg: Registry) -> str:
     """The exact bytes `save_registry` writes, as a STRING.
 
     Split out from the write for one caller and one reason: the repair loop's `entity-alias` kind
-    has to know what the regenerated registry WILL say before it writes anything, because a
-    proposal stores the bytes a steward approves and the apply byte-compares against them. Building
+    has to know what the regenerated registry WILL say before it writes anything, because the
+    declared repair stores those bytes and the apply byte-compares against them — the corpus can
+    move between deriving a repair and committing it, and a mismatch must be a refusal rather than
+    a silently different registry. Building
     that string a second way would be a second writer of this file format, which is the one thing
     `ops/entity-registry.json` may not have — so the prediction and the write share this function.
 
     Sorting and the separators live HERE, which is what makes `generator.regenerate` idempotent.
-    Every key is written on every entry, the lifecycle ones included: a reader that has to `.get()`
-    a default is a reader that can be wrong about which default.
+    Every key is written on every entry, `approved_by` included: a reader that has to `.get()` a
+    default is a reader that can be wrong about which default.
     """
     data = {"entities": {cid: {"name": e["name"], "type": e["type"],
                                "aliases": sorted(set(e["aliases"])),
-                               PROPOSED_KEY: bool(e.get(PROPOSED_KEY, False)),
-                               APPROVED_BY_KEY: str(e.get(APPROVED_BY_KEY) or ""),
-                               PROPOSED_ALIASES_KEY: sorted(set(e.get(PROPOSED_ALIASES_KEY) or ()))}
+                               APPROVED_BY_KEY: str(e.get(APPROVED_BY_KEY) or "")}
                          for cid, e in sorted(reg.entities.items())}}
     return json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 

@@ -3,11 +3,9 @@
 
 import { api } from "../api.js";
 import { chartCard, fillDays, hbars, stackedColumns } from "../charts.js";
-import { jobConsequence } from "../copy.js";
 import { getMeta, windowDays } from "../state.js";
 import { agoFrom, banner, el, fmtAge, fmtDay, fmtWhen, icon, mono, pill, render, severityPill, skeletons, table, tile, wordPill } from "../ui.js";
 import { loading } from "./common.js";
-import { dispatchFlow } from "./jobs.js";
 
 const OPS_FILE = {
   "ops/entity-registry.json": { label: "Entity registry", what: "the vocabulary captures anchor to — who can be named" },
@@ -24,7 +22,6 @@ export async function indexView(host) {
     const zones = Object.entries(data.zones);
     const pages = zones.reduce((a, [, n]) => a + n, 0);
     // the workflow row comes from the server's own table; no button when it is not listed there
-    const indexRebuildWorkflow = (getMeta().workflows || []).find((w) => w.file === "index-rebuild.yml");
     const webhook = metrics.job_history["webhook-index-upsert"] || [];
     const perDay = fillDays(Object.values(webhook.reduce((acc, r) => {
       const day = (r.started_at || "").slice(0, 10);
@@ -61,10 +58,11 @@ export async function indexView(host) {
           el("div", { class: "card-title" }, el("h2", {}, "Substrate check"),
             el("div", { class: "sub" }, "lints the LIVE index in-process: duplicate page ids, orphan continuation parts, arm-invisible pages, dangling supersessions, unregistered anchors — against the registry copy this server serves. Run it after registry changes.")),
           el("div", { class: "spacer" }),
-          el("button", { class: "btn small", type: "button", onclick: () => checkFlow(checkHost) }, icon("shield", 14), "Run the check"),
-          indexRebuildWorkflow ? el("button", { class: "btn small primary", type: "button", disabled: !getMeta().github.configured,
-            onclick: () => dispatchFlow(indexRebuildWorkflow, jobConsequence(indexRebuildWorkflow.file, indexRebuildWorkflow.title)) }, icon("play", 14), "Rebuild now") : null),
-        !getMeta().github.configured ? el("div", { class: "sub" }, "Rebuild now needs the GitHub token (Jobs page) — or ", mono("make rebuild-staging"), " from a terminal") : null,
+          el("button", { class: "btn small", type: "button", onclick: () => checkFlow(checkHost) }, icon("shield", 14), "Run the check")),
+        // No Rebuild button, and not because one was dropped: a rebuild needs an embedding key,
+        // and no process serving this console has one (the read path's key is stripped from the
+        // worker by design). The command is the honest answer.
+        el("div", { class: "sub" }, "A rebuild needs the embedding key, which no process behind this console holds — run ", mono(rebuildCommand()), " from a terminal, or ", mono("make rebuild-staging"), "."),
         checkHost),
       el("section", { class: "card" },
         el("div", { class: "card-head" }, el("div", { class: "card-title" }, el("h2", {}, "Recent webhook deliveries"), el("div", { class: "sub" }, "each push to the knowledge repo upserts the pages it changed"))),
@@ -95,4 +93,12 @@ async function checkFlow(checkHost) {
   } catch (ex) {
     render(checkHost, banner("error", ex.message));
   }
+}
+
+// The command the page names, taken from `meta().jobs` so the console and the service cannot
+// disagree about it — a page that names a command is making a promise, and this is the one string
+// that keeps it.
+function rebuildCommand() {
+  const row = (getMeta().jobs || []).find((j) => j.file === "index-rebuild");
+  return (row && row.command) || "stigmergy-index --repo $STIGMERGY_REPO";
 }

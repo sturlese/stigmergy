@@ -27,9 +27,10 @@ def _clean(text: str, width: int = 0) -> str:
     return textutil.clamp(textutil.sanitize(str(text or "")).replace("\n", " "), width)
 
 
-# An IDENTITY field is not prose: a proposed entity's name and id come off captured material and
-# are offered as the argument of a shell command (`stigmergy-entities approve <id>`), and
-# `sanitize` strips control characters only.
+# An IDENTITY field is not prose: a newborn entity's name and id come off CAPTURED MATERIAL and
+# land in a report a person reads in a terminal, pastes into a shell and searches the repo by —
+# and `sanitize` strips control characters only. The set below is what would change the meaning of
+# any of those, so it is stripped whether or not a command happens to exist today.
 _UNSAFE_IN_IDENTITY = set('/\\:*?"<>|[]#^') | set("'`$;&(){}!~\n\r\t")
 
 
@@ -123,7 +124,7 @@ def _resolution_note(anchoring: dict, registry=None) -> str:
 
 def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps: list,
           findings: list, pages_edited: list = (), agent_rationale: str = "", registry=None,
-          source_pages: list = (), entities_proposed: list = (), aliases_proposed: list = (),
+          source_pages: list = (), entities_born: list = (), aliases_added: list = (),
           entities_updated: list = ()) -> dict:
     """The ordinary success: page, commit and anchor, plus the not-searchable-yet clause in the same
     sentence. `pages_edited` is what code actually wrote from the agent's declared edits, while
@@ -133,9 +134,9 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
     never folded into `anchored_to`: that field names the identity a read path branches on, and a
     rationale glued onto it would make one field two facts.
 
-    `entities_proposed` / `aliases_proposed` are the identities this filing CREATED unconfirmed
-    (`librarian.identity`): the submitter is told the page landed AND that a steward still confirms
-    the name, because "filed" alone would read as "the registry agreed".
+    `entities_born` / `aliases_added` are the identities this filing CREATED
+    (`librarian.identity`): the submitter is told the page landed AND which identities their own
+    capture introduced, because "filed" alone would hide that the registry grew.
     """
     anchor = _anchor_phrase(anchoring, registry)
     resolution = _resolution_note(anchoring, registry)
@@ -155,9 +156,9 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
     if source_paths:
         summary += (f" The captured material itself is filed verbatim at "
                     f"{_listed(source_paths)}, and the page cites it in `sources:`.")
-    proposed, proposed_aliases = _proposed_lists(entities_proposed, aliases_proposed)
+    born, added_aliases = _birth_lists(entities_born, aliases_added)
     updated = _updated_list(entities_updated)
-    summary += proposals_clause(proposed, proposed_aliases, updated)
+    summary += births_clause(born, added_aliases, updated)
     return base_report(
         status=schema.FILED, summary=summary,
         page_path=page_path, commit=commit, anchored_to=anchor,
@@ -167,12 +168,12 @@ def filed(*, page_path: str, commit: str, anchoring: dict, links: list, overlaps
         pages_edited=[_clean(path, 200) for path in _as_list(pages_edited)],
         agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
         findings=list(_as_list(findings)),
-        entities_proposed=proposed, aliases_proposed=proposed_aliases,
+        entities_born=born, aliases_added=added_aliases,
         entities_updated=updated,
         **({"source_pages": source_paths} if source_paths else {}))
 
 
-# ── proposals: what a filing created unconfirmed ──────────────────────────────────────────────
+# ── births: the identities a filing created ───────────────────────────────────────────────────
 def _updated_list(entities_updated) -> list:
     return [{"entity": _clean_identity((u or {}).get("entity", ""), 80),
              "facts": int((u or {}).get("facts") or 0),
@@ -180,48 +181,39 @@ def _updated_list(entities_updated) -> list:
             for u in _as_list(entities_updated) if isinstance(u, dict)]
 
 
-def _proposed_lists(entities_proposed, aliases_proposed) -> tuple[list, list]:
+def _birth_lists(entities_born, aliases_added) -> tuple[list, list]:
     """The two lists as the report carries them — cleaned, identity fields through the identity
     cleaner, never a raw object from the worker."""
-    proposed = []
-    for e in _as_list(entities_proposed):
+    born = []
+    for e in _as_list(entities_born):
         if not isinstance(e, dict):
             continue
         entry = {"id": _clean_identity(e.get("id", ""), 80),
                  "name": _clean_identity(e.get("name", ""), 120),
                  "type": _clean(e.get("type", ""), 40)}
-        # Present only on an entity a steward REGISTERED through this capture (ADR 042) — born
-        # confirmed by them; an ordinary proposal keeps the three-field shape every reader knows.
+        # Who the identity is confirmed by — the capture's own submitter, on every entity (ADR 044).
         if e.get("confirmed_by"):
             entry["confirmed_by"] = _clean_identity(e["confirmed_by"], 120)
-        proposed.append(entry)
+        born.append(entry)
     aliases = [{"entity": _clean_identity((a or {}).get("entity", ""), 80),
                 "alias": _clean_identity((a or {}).get("alias", ""), 120)}
-               for a in _as_list(aliases_proposed) if isinstance(a, dict)]
-    return proposed, aliases
+               for a in _as_list(aliases_added) if isinstance(a, dict)]
+    return born, aliases
 
 
-def proposals_clause(proposed: list, proposed_aliases: list, updated: list = ()) -> str:
-    """The sentence telling a submitter the page landed AND an identity still waits on a person.
-    Empty when nothing was proposed, so an ordinary filing's sentence is unchanged."""
+def births_clause(born: list, added_aliases: list, updated: list = ()) -> str:
+    """The sentence telling a submitter the page landed AND which identities their capture
+    introduced. Empty when nothing was created, so an ordinary filing's sentence is unchanged."""
     parts = []
-    registered = [e for e in proposed if e.get("confirmed_by")]
-    proposed = [e for e in proposed if not e.get("confirmed_by")]
-    if registered:
-        named = _listed([f"{e['name']} (`{e['id']}`), confirmed by {e['confirmed_by']}"
-                         for e in registered])
-        parts.append(f"It registers {_plural(len(registered), 'new entity', 'new entities')}: "
+    if born:
+        named = _listed([f"{e['name']} (`{e['id']}`)" for e in born])
+        parts.append(f"It introduces {_plural(len(born), 'new entity', 'new entities')}: "
                      f"{named} — the page is written from the material and what the brain held, "
-                     f"and the identity is born confirmed, as the steward asked.")
-    if proposed:
-        named = _listed([f"{e['name']} (`{e['id']}`)" for e in proposed])
-        parts.append(f"It proposes {_plural(len(proposed), 'new entity', 'new entities')}: "
-                     f"{named} — created unconfirmed, so the page is anchored now and a steward "
-                     f"confirms, merges or declines the identity from the inbox.")
-    if proposed_aliases:
-        named = _listed([f"\"{a['alias']}\" for `{a['entity']}`" for a in proposed_aliases])
-        parts.append(f"It proposes {_plural(len(proposed_aliases), 'new spelling')}: {named} — "
-                     f"the spelling resolves now, and a steward confirms or declines it.")
+                     f"and the identity is confirmed by you.")
+    if added_aliases:
+        named = _listed([f"\"{a['alias']}\" for `{a['entity']}`" for a in added_aliases])
+        parts.append(f"It teaches the registry {_plural(len(added_aliases), 'new spelling')}: "
+                     f"{named} — resolving from now on.")
     for u in updated:
         added = [w for w in (_plural(int(u.get("facts") or 0), "fact") if u.get("facts") else "",
                              _plural(int(u.get("connections") or 0), "connection")
@@ -234,7 +226,7 @@ def proposals_clause(proposed: list, proposed_aliases: list, updated: list = ())
 # ── filed_meeting: the report for a page SET ──────────────────────────────────────────────────
 def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, commit: str,
                   pages_edited: list = (), agent_rationale: str = "", registry=None,
-                  entities_proposed: list = (), aliases_proposed: list = (),
+                  entities_born: list = (), aliases_added: list = (),
                   entities_updated: list = ()) -> dict:
     """`filed`'s sibling for a page SET: N >= 1 source pages, a meeting page, and N decision pages,
     each with its OWN anchor outcome. `decisions` is `[{"path": ..., "anchoring": ...}]`, and
@@ -276,11 +268,11 @@ def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, com
     lines.append(f"  overlaps_flagged  {NONE_LABEL}")
     lines.append(f"  pages_edited      {_listed(edited_paths)}")
     lines.append(f"  agent_rationale   {_clean(agent_rationale, RATIONALE_WIDTH) or NONE_LABEL}")
-    proposed, proposed_aliases = _proposed_lists(entities_proposed, aliases_proposed)
+    born, added_aliases = _birth_lists(entities_born, aliases_added)
     updated = _updated_list(entities_updated)
-    if proposed or proposed_aliases or updated:
+    if born or added_aliases or updated:
         lines.append("")
-        lines.append("  " + proposals_clause(proposed, proposed_aliases, updated).strip())
+        lines.append("  " + births_clause(born, added_aliases, updated).strip())
     return base_report(
         status=schema.FILED, summary="\n".join(lines), page_path=meeting_page, commit=commit,
         agent_rationale=_clean(agent_rationale, RATIONALE_WIDTH),
@@ -288,7 +280,7 @@ def filed_meeting(*, source_pages: list, meeting_page: str, decisions: list, com
         # The structured sibling of the rendered lines above, for a caller that branches on facts.
         filed_meeting={"source_pages": [_clean(p, 200) for p in source_pages],
                       "meeting_page": meeting_page, "decisions": decision_rows},
-        entities_proposed=proposed, aliases_proposed=proposed_aliases, entities_updated=updated)
+        entities_born=born, aliases_added=added_aliases, entities_updated=updated)
 
 
 def filed_retry(*, original_id: int, page_path: str, commit: str) -> dict:
@@ -299,6 +291,28 @@ def filed_retry(*, original_id: int, page_path: str, commit: str) -> dict:
                f"capture, so nothing new was written.")
     return base_report(status=schema.FILED, summary=summary, page_path=page_path, commit=commit,
                        retry_of=original_id)
+
+
+def filed_delete(*, deleted: list, rewritten: dict, commit: str, model_calls: int = 0) -> dict:
+    """A removal that landed. The one report that carries page BYTES: nobody read the prose the
+    sweep wrote before it was pushed (ADR 043 D5), so the per-page diff travels in the row and the
+    read surfaces show it — ACL-scoped and fenced by whoever renders it, exactly as
+    `brain_delete`'s own response used to be.
+
+    `deleted` is the pages that stopped existing and `rewritten` is `{path: unified diff}` for the
+    pages that no longer point at them. Both are needed: a reader who saw only the diffs would not
+    know what went, and one who saw only the paths would not know what a model wrote in their name.
+    """
+    n_gone, n_rewritten = len(deleted or ()), len(rewritten or {})
+    summary = (
+        f"{schema.FILED} — removed {n_gone} {_plural(n_gone, 'page')} and rewrote {n_rewritten} "
+        f"that referred to them, as commit {commit[:12]}. Nobody read the rewritten prose before "
+        f"it landed: the diffs on this row are that reading, and `git revert` in the knowledge "
+        f"repo is the undo.")
+    return base_report(status=schema.FILED, summary=summary, commit=commit,
+                       deleted=[_clean(p) for p in (deleted or ())],
+                       rewritten={_clean(path): text for path, text in (rewritten or {}).items()},
+                       model_calls=int(model_calls))
 
 
 # ── rejected ──────────────────────────────────────────────────────────────────────────────────
@@ -316,6 +330,15 @@ def rejected_duplicate(*, page_path: str, as_of: str) -> dict:
                f"{_clean(page_path)} (filed {as_of}); nothing new was created. If this capture "
                f"adds new information, resubmit just what's different.")
     return _rejected(schema.REASON_DUPLICATE, summary, page_path=page_path)
+
+
+def rejected_unremovable(*, reason: str) -> dict:
+    """A removal the worker could not perform. `reason` is the deletion lane's own sentence — it
+    names repo-relative paths and what it could not do, and it is written to be published, which is
+    what lets it travel verbatim into a report the person who asked reads back."""
+    summary = (f"{schema.REJECTED} — this removal was not performed: {_clean(reason, 600)} "
+               f"Nothing was deleted and nothing was committed.")
+    return _rejected(schema.REASON_UNREMOVABLE, summary)
 
 
 def rejected_secret(*, line: str, rule_id: str, where: str = "your material") -> dict:
@@ -391,8 +414,8 @@ def failed_system(*, attempts: int, stage: str, reason: str, agent_attempts: int
                f"(queue delivery {attempts}{inside}; last problem: {_clean(stage, 40)} — "
                f"{_clean(reason, 200)}); nothing was filed and nothing was committed. Your "
                f"material is fine and is still archived — this is the librarian failing, not your "
-               f"capture. Nothing further happens automatically: a steward needs to look at the "
-               f"fault. Resubmitting may work, since the librarian is not deterministic, but it "
+               f"capture. Nothing further happens automatically: an operator needs to look at "
+               f"the fault. Resubmitting may work, since the librarian is not deterministic, but it "
                f"will not fix the fault.")
     return base_report(status=schema.FAILED, summary=summary,
                        stage=stage, deliveries=attempts, agent_attempts=agent_attempts,
@@ -423,14 +446,14 @@ def render_prose(report: dict) -> str:
         lines.append(f"  overlaps_flagged {_listed(report.get('overlaps_flagged'))}")
         lines.append(f"  pages_edited     {_listed(report.get('pages_edited'))}")
         lines.append(f"  agent_rationale  {report.get('agent_rationale') or NONE_LABEL}")
-        proposed = report.get("entities_proposed") or []
-        if proposed:
-            lines.append("  entities_proposed "
-                         + _listed([f"{e.get('name')} ({e.get('id')})" for e in proposed]))
-        if report.get("aliases_proposed"):
-            lines.append("  aliases_proposed "
+        born = report.get("entities_born") or []
+        if born:
+            lines.append("  entities_born "
+                         + _listed([f"{e.get('name')} ({e.get('id')})" for e in born]))
+        if report.get("aliases_added"):
+            lines.append("  aliases_added "
                          + _listed([f"{a.get('alias')} -> {a.get('entity')}"
-                                    for a in report["aliases_proposed"]]))
+                                    for a in report["aliases_added"]]))
     elif status == schema.FILED:
         # The meeting case, explicit rather than a fallthrough: nothing is left to append.
         pass

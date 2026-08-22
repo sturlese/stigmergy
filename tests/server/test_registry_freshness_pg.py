@@ -180,7 +180,7 @@ def test_a_push_that_does_not_touch_the_registry_leaves_the_baked_file_answering
     assert out["entity"]["name"] == "Cofers"
     bare = _service(conn, fx).describe_entity("ferrovial-nexus")
     assert bare["entity"] == {"id": "ferrovial-nexus", "name": "", "type": "", "aliases": [],
-                              "proposed": False, "approved_by": "", "proposed_aliases": [],
+                              "approved_by": "",
                               "page": bare["entity"]["page"]}
 
 

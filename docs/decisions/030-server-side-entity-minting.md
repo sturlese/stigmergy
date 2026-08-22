@@ -9,6 +9,7 @@ which deferred exactly this decision to its own record ("web-native entity birth
 authorship decision (operator identity vs App bot) that deserves its own ADR"). This is that ADR.
 Requested and argued before it was written; unblocked by steward resolution reaching the
 deployed groups.
+**Superseded by** [ADR 044](./044-the-capture-is-the-approval.md): the server-side decision doors are gone whole. An entity is born from a capture, confirmed by whoever captured, in the commit that files the page.
 
 ## Context
 

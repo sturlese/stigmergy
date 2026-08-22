@@ -1,11 +1,15 @@
 """Fixtures for the admin-console suite.
 
-Real Postgres through `tests.testdb` (never a faked queue — the house rule), with exactly the two
-NETWORK edges faked: the GitHub gateway (a recording fake with the real gateway's four methods)
-and, where a digest posts, the digest suite's own fake-gateway posture (here: `gateway=None` plus
-env, since only dry-run runs in this suite). Since ADR 030, `entity_approve` reaches real git too
-(`entities.remote.decide_via_clone`) — `build_bare_knowledge_repo`/`require_gitleaks` below are this
-package's OWN, minimal fixture for that, never a faked commit (this repo's own testing doctrine).
+Real Postgres through `tests.testdb` (never a faked queue — the house rule), with exactly ONE
+network edge faked: where a digest posts (the digest suite's own posture — `gateway=None` plus
+env, since only dry-run runs in this suite). The console reaches no other service at all: the
+GitHub Actions gateway it once drove the crons through is gone with them (ADR 044 — the night
+shift runs in the librarian worker), so there is no second fake here to keep honest.
+
+No console mutation writes to the knowledge repo any more either (registering an entity and
+removing pages both QUEUE, and the worker writes), so the real bare remote
+`build_bare_knowledge_repo` builds is here for one thing — publishing a registry snapshot the way
+the librarian's own commits do, never a hand-written one.
 
 The composed-branch fixtures drive the REAL `routes.compose` product over `httpx.ASGITransport`
 — real middleware order, real 404/401/421 paths, no uvicorn needed (nothing here exercises the
@@ -41,7 +45,7 @@ def conn():
     connection = testdb.connect_or_skip("admin")
     capture_schema.ensure_capture_schema(connection)
     ensure_audit_table(connection)
-    review.ensure_review_schema(connection)
+    review.ensure_repair_schema(connection)
     ensure_gardener_schema(connection)
     repair_schema.ensure_repair_schema(connection)
     ensure_admin_schema(connection)
@@ -61,7 +65,7 @@ def clean_tables(conn):
     with conn.cursor() as cur:
         cur.execute(
             "TRUNCATE capture_queue, job_runs, ingest_errors, audit_log, admin_actions,"
-            " gardener_findings, review_decisions, repair_proposals RESTART IDENTITY")
+            " gardener_findings, repairs RESTART IDENTITY")
     # The registry snapshot is what the inbox and the Entities desk read: a test that published
     # one must not hand its proposals to the next.
     index_store.clear_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH)
@@ -77,50 +81,6 @@ def admin_settings():
 @pytest.fixture()
 def server_settings():
     return Settings()
-
-
-class FakeGateway:
-    """The real gateway's four methods, recording instead of calling GitHub."""
-
-    def __init__(self):
-        self.calls = []
-        self.fail_with = None   # set to an exception to make every method raise it
-
-    def _record(self, *call):
-        if self.fail_with is not None:
-            raise self.fail_with
-        self.calls.append(call)
-
-    def workflows(self):
-        self._record("workflows")
-        return [
-            {"id": 1, "name": "index-rebuild", "path": ".github/workflows/index-rebuild.yml",
-             "state": "active"},
-            {"id": 2, "name": "retention-purge", "path": ".github/workflows/retention-purge.yml",
-             "state": "active"},
-            {"id": 3, "name": "gardener", "path": ".github/workflows/gardener.yml",
-             "state": "disabled_manually"},
-            {"id": 4, "name": "repair-propose",
-             "path": ".github/workflows/repair-propose.yml", "state": "active"},
-        ]
-
-    def runs(self, workflow_file, *, limit=10):
-        self._record("runs", workflow_file, limit)
-        return [{"id": 77, "status": "completed", "conclusion": "success", "event": "schedule",
-                 "created_at": "2026-08-03T04:17:11Z", "updated_at": "2026-08-03T04:19:02Z",
-                 "html_url": "https://github.com/example/actions/runs/77",
-                 "display_title": "nightly"}]
-
-    def dispatch(self, workflow_file, *, ref="main", inputs=None):
-        self._record("dispatch", workflow_file, ref, inputs)
-
-    def set_enabled(self, workflow_file, *, enabled):
-        self._record("set_enabled", workflow_file, enabled)
-
-
-@pytest.fixture()
-def fake_gateway():
-    return FakeGateway()
 
 
 def submit_one(conn, *, material=None, submitted_by="steward@example.com", kind="raw", hints=None):
@@ -197,44 +157,73 @@ def build_bare_knowledge_repo(root: str) -> str:
     return bare
 
 
-def propose_repair(conn, *, path="wiki/notes/Renewals.md", link="Existing Note", kind="backlink",
-                   note="", rationale="neither page links the other") -> int:
-    """One PENDING `repair_proposals` row, through the package's own writers — `target_paths` and
-    `content_key` are DERIVED exactly as `repair.proposer` derives them, so no fixture here can
-    seed a row whose two stored facts disagree (the disagreement `remote._cross_check` exists to
-    catch is worth reaching by tampering, never by a careless fixture)."""
+# The diff every landed fixture row carries. Short, and deliberately a real unified diff: the
+# console's Repairs page exists to show the reading nobody gave the change before it was pushed
+# (ADR 044), so a fixture row with an empty `diff` would let that page look right while showing
+# nothing.
+LANDED_DIFF = ("diff --git a/wiki/notes/Renewals.md b/wiki/notes/Renewals.md\n"
+               "--- a/wiki/notes/Renewals.md\n+++ b/wiki/notes/Renewals.md\n"
+               "@@ -7,1 +7,1 @@\n-related: []\n+related: [\"[[Existing Note]]\"]\n")
+LANDED_COMMIT = "0123456789abcdef0123456789abcdef01234567"
+
+
+def landed_repair(conn, *, path="wiki/notes/Renewals.md", link="Existing Note", kind="backlink",
+                  note="", rationale="neither page links the other", key="") -> int:
+    """One APPLIED `repairs` row, through the package's own writer — `target_paths` and
+    `content_key` are DERIVED exactly as `repair.run` derives them, so no fixture here can seed a
+    row whose two stored facts disagree (the disagreement `apply._cross_check` exists to catch is
+    worth reaching by tampering, never by a careless fixture).
+
+    APPLIED rather than pending, because there is no pending any more (ADR 044): the console reads
+    what the worker already did, and every row it lists is an attempt that is over.
+    """
     ops = [{"op": kind, "path": path, "link": link, "note": note}]
-    return repair_store.insert_proposal(
+    return repair_store.record_applied(
         conn, run_id=0, finding_ids=[1], target_paths=repair_schema.target_paths(ops), ops=ops,
-        rationale=rationale, content_key=repair_schema.content_key(ops), model_id="fake")
+        rationale=rationale, content_key=key or repair_schema.content_key(ops),
+        commit=LANDED_COMMIT, diff=LANDED_DIFF, model_id="fake")
 
 
-def propose_entity_body(conn, *, path="wiki/entities/Meridian Partners.md",
-                        body="## What / Who\n\nA freight broker.\n", role="",
-                        rationale="the page is still its template") -> int:
-    """One PENDING `entity-body` row — the second kind, whose op carries PROSE rather than a link.
-    Derived through the same writers for the same reason as its sibling above."""
+def landed_entity_body(conn, *, path="wiki/entities/Meridian Partners.md",
+                       body="## What / Who\n\nA freight broker.\n", role="",
+                       rationale="the page's body said nothing about the entity") -> int:
+    """One APPLIED `entity-body` row — the second kind, whose op carries PROSE rather than a link.
+    Written through the same writer for the same reason as its sibling above."""
     ops = [{"op": repair_schema.KIND_ENTITY_BODY, "path": path, "body_markdown": body,
             "role": role}]
-    return repair_store.insert_proposal(
+    return repair_store.record_applied(
         conn, run_id=0, finding_ids=[1], target_paths=repair_schema.target_paths(ops), ops=ops,
         rationale=rationale, kind=repair_schema.KIND_ENTITY_BODY,
         content_key=repair_schema.content_key(ops, kind=repair_schema.KIND_ENTITY_BODY),
-        model_id="fake")
+        commit=LANDED_COMMIT, diff=LANDED_DIFF, model_id="fake")
 
 
-def propose_delete(conn, *, doomed="wiki/notes/Old Memo.md",
-                   scrubbed="wiki/decisions/Refunds.md",
-                   rationale="the memo was superseded") -> int:
-    """One PENDING `delete` row — the third kind, whose ops carry whole PAGES. Derived through the
-    same writers for the same reason as its two siblings above."""
+def landed_delete(conn, *, doomed="wiki/notes/Old Memo.md",
+                  scrubbed="wiki/decisions/Refunds.md",
+                  rationale="the memo was superseded") -> int:
+    """One APPLIED `delete` row — the third kind, whose ops carry whole PAGES. Written through the
+    same writer for the same reason as its two siblings above."""
     ops = [{"op": repair_schema.DELETE_OP_NAME, "path": doomed},
            {"op": repair_schema.SCRUB_OP_NAME, "path": scrubbed, "expected_before_hash": "0" * 64,
             "planned_after": "---\ntype: decision\n---\n\n# Refunds\n\nNo link any more.\n"}]
-    return repair_store.insert_proposal(
+    return repair_store.record_applied(
         conn, run_id=0, finding_ids=[], target_paths=repair_schema.target_paths(ops), ops=ops,
         rationale=rationale, kind=repair_schema.KIND_DELETE,
-        content_key=repair_schema.content_key(ops, kind=repair_schema.KIND_DELETE), model_id="")
+        content_key=repair_schema.content_key(ops, kind=repair_schema.KIND_DELETE),
+        commit=LANDED_COMMIT, diff=LANDED_DIFF, model_id="")
+
+
+def refused_repair(conn, *, path="wiki/decisions/Refunds.md", link="Existing Note",
+                   error="the gates refused this repair (secrets/generic-api-key). Nothing was "
+                         "pushed.") -> int:
+    """One FAILED `repairs` row — the outcome the console's Repairs page exists to make findable.
+    Its `error` is the whole of what anybody will ever know about why that finding stopped being
+    answered, because the row is never retried."""
+    ops = [{"op": "backlink", "path": path, "link": link, "note": ""}]
+    return repair_store.record_failed(
+        conn, run_id=0, finding_ids=[2], target_paths=repair_schema.target_paths(ops), ops=ops,
+        rationale="the two pages cover the same ground", error=error,
+        content_key=repair_schema.content_key(ops), model_id="fake")
 
 
 @pytest.fixture()
@@ -243,30 +232,16 @@ def entity_mint_repo(tmp_path) -> str:
     return build_bare_knowledge_repo(str(tmp_path / "git"))
 
 
-@pytest.fixture()
-def require_gitleaks():
-    """Skip on a laptop with no gitleaks on PATH; FAIL in CI (`$STIGMERGY_TEST_DSN` set) rather than
-    let a secrets gate silently never run — the same posture `tests/entities/conftest.py` and
-    `tests/server/conftest.py` each hold for their own `entity_approve`-adjacent git suites.
-    `mint.mint` always scans (`refuse_secrets`), so every test that mints for real needs this."""
-    from tests.librarian import support
-    if support.gitleaks_available():
-        return
-    if testdb.required():
-        pytest.fail("$STIGMERGY_TEST_DSN is set (CI mode) but gitleaks is not on PATH — refusing to "
-                   "skip the admin console's entity-mint suite silently. Install gitleaks BEFORE "
-                   "the test step (see .github/workflows/ci.yml).")
-    pytest.skip("gitleaks not on PATH (brew install gitleaks) — entity_approve's secrets gate "
-               "cannot be exercised without it")
-
-
 @pytest.fixture(autouse=True)
 def no_real_github_app(monkeypatch):
-    """`entity_approve` walks the same `entities.remote.decide_via_clone` door a `librarian_repo_url`
-    pointed at a real `https://` remote would authenticate through — same guard
-    `tests/server/conftest.py` applies to its own package: no test here may mint a real GitHub
-    installation token out of an operator's `.env`. Harmless for every OTHER admin suite in this
-    package, which never sets `librarian_repo_url` at all."""
+    """No test in this package may mint a real GitHub installation token out of an operator's
+    `.env` — the same structural guard `tests/librarian/conftest.py` and `tests/server/conftest.py`
+    each apply to their own package, and for the reason `tests.testdb` refuses a non-test DSN: the
+    property has to hold whatever an operator keeps in their environment.
+
+    Nothing here reaches the App today: every console mutation queues, and the fixtures' bare
+    remote is a local path. The guard stays because the accident it prevents — a `make test` that
+    pushes to a company's live knowledge repo — is not one to re-learn if a road back opens."""
     from stigmergy.librarian import githubapp
     for name in (githubapp.APP_ID_ENV, githubapp.INSTALLATION_ID_ENV,
                 githubapp.PRIVATE_KEY_ENV, githubapp.PRIVATE_KEY_FILE_ENV):
@@ -274,15 +249,16 @@ def no_real_github_app(monkeypatch):
 
 
 # ── what the librarian leaves behind: proposals, pushed to the bare remote and published ──────
-def _proposed_page(name: str, entity_type: str, aliases, proposed_aliases=()) -> str:
+def _entity_page(name: str, entity_type: str, aliases, approved_by: str) -> str:
+    """One entity page as the librarian writes it (ADR 044): born confirmed by the person whose
+    capture introduced it, with every spelling the material used among its own `aliases`."""
     from stigmergy.entities import generator
     listed = "[" + ", ".join(f'"{a}"' for a in aliases) + "]"
-    pending = "[" + ", ".join(f'"{a}"' for a in proposed_aliases) + "]"
     return (f'---\ntype: entity\ntitle: "{name}"\nentity_type: {entity_type}\nrole: ""\n'
             f'status: developing\naliases: {listed}\ncreated: 2026-08-20\nupdated: 2026-08-20\n'
             f'tags: [entity, {entity_type}]\nentity: ["{generator.canonical_id_for(name)}"]\n'
-            f'related: []\nsources: []\napproved_by: ""\nproposed_aliases: {pending}\n---\n\n'
-            f"# {name}\n\n## What / Who\n\n{name} is a {entity_type} the librarian proposed.\n")
+            f'related: []\nsources: []\napproved_by: "{approved_by}"\n---\n\n'
+            f"# {name}\n\n## What / Who\n\n{name} is a {entity_type} a capture introduced.\n")
 
 
 def _with_clone(bare: str, work) -> None:
@@ -309,10 +285,11 @@ def publish_registry(bare: str, conn) -> None:
     index_store.write_ops_file(conn, index_store.ENTITY_REGISTRY_RELPATH, text, "test")
 
 
-def propose_identity(bare: str, conn, name: str = "Globex Robotics", *,
-                     entity_type: str = "organization", aliases=(), proposed_aliases=()) -> str:
-    """One proposed entity page (plus a note anchored to it) on the bare remote, and the
-    snapshot published. Returns the entity id."""
+def introduce_entity(bare: str, conn, name: str = "Globex Robotics", *,
+                     entity_type: str = "organization", aliases=(),
+                     approved_by: str = "ana@example.com") -> str:
+    """One entity page a capture introduced (plus that note, anchored to it) on the bare remote,
+    and the snapshot published. Returns the entity id."""
     from stigmergy.entities import generator
     entity_id = generator.canonical_id_for(name)
 
@@ -320,7 +297,7 @@ def propose_identity(bare: str, conn, name: str = "Globex Robotics", *,
         os.makedirs(os.path.join(clone, "wiki", "entities"), exist_ok=True)
         os.makedirs(os.path.join(clone, "wiki", "notes"), exist_ok=True)
         with open(os.path.join(clone, "wiki", "entities", f"{name}.md"), "w", encoding="utf-8") as f:
-            f.write(_proposed_page(name, entity_type, aliases, proposed_aliases))
+            f.write(_entity_page(name, entity_type, aliases, approved_by))
         with open(os.path.join(clone, "wiki", "notes", f"{name} kickoff.md"), "w",
                   encoding="utf-8") as f:
             f.write(f'---\ntype: note\ntitle: "{name} kickoff"\nstatus: developing\n'
@@ -332,18 +309,16 @@ def propose_identity(bare: str, conn, name: str = "Globex Robotics", *,
 
 
 def register_entity(bare: str, conn, name: str, *, entity_type: str = "organization",
-                    aliases=(), proposed_aliases=()) -> str:
-    """A CONFIRMED entity page on the bare remote (the merge target, or an alias proposal's
-    owner), and the snapshot published. Returns the entity id."""
+                    aliases=(), approved_by: str = "steward@example.com") -> str:
+    """An entity page on the bare remote with no note beside it — the registry entry alone, for a
+    test that needs a name to already resolve. The snapshot is published. Returns the entity id."""
     from stigmergy.entities import generator
     entity_id = generator.canonical_id_for(name)
 
     def work(clone):
         os.makedirs(os.path.join(clone, "wiki", "entities"), exist_ok=True)
-        text = _proposed_page(name, entity_type, aliases, proposed_aliases).replace(
-            'approved_by: ""', 'approved_by: "steward@example.com"')
         with open(os.path.join(clone, "wiki", "entities", f"{name}.md"), "w", encoding="utf-8") as f:
-            f.write(text)
+            f.write(_entity_page(name, entity_type, aliases, approved_by))
     _with_clone(bare, work)
     publish_registry(bare, conn)
     return entity_id

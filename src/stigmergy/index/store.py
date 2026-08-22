@@ -107,10 +107,7 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
 ENTITY_REGISTRY_RELPATH = "ops/entity-registry.json"
 IDENTITIES_RELPATH = "ops/identities.json"
 SLACK_CHANNELS_RELPATH = "ops/slack-channels.json"
-# Every file this cache carries, in the order a rebuild reconciles them. `ops/stewards.json` is
-# deliberately NOT here — its deployed reader (`server.review.load_stewards`) answers an
-# AUTHORIZATION question per decision and prefers a live `origin/main` read wherever a checkout
-# exists; issue #88's comment records that its deployed staleness still deserves its own decision.
+# Every file this cache carries, in the order a rebuild reconciles them.
 OPS_FILE_RELPATHS = (ENTITY_REGISTRY_RELPATH, IDENTITIES_RELPATH, SLACK_CHANNELS_RELPATH)
 
 # What a rebuild does when its checkout does not carry the file — the one per-file policy in this
@@ -304,7 +301,7 @@ def read_ops_file_meta(conn: psycopg.Connection, relpath: str) -> dict | None:
 
 def ensure_ops_file_table(conn: psycopg.Connection) -> None:
     """Create the ops-file cache if it is not there yet — called once per process at the same
-    startup seam `ensure_audit_table` and `ensure_review_schema` are called from, and by
+    startup seam `ensure_audit_table` and `ensure_repair_schema` are called from, and by
     `init_schema` on the rebuild road.
 
     Why startup and not only on the write path: `CREATE TABLE IF NOT EXISTS` is NOT race-free in

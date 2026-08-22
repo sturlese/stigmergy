@@ -12,8 +12,8 @@ description: >
 # validate-deployment: does the deployed stack actually work?
 
 The test suite proves the code. This proves the **deployment**: real Postgres, real evidence
-store, real Slack workspace, real models, real GitHub Actions. Every defect this exists to
-catch lives in the gap between them — configuration, wiring, and copy that stopped being true.
+store, real Slack workspace, real models, real unattended passes inside the deployment. Every
+defect this exists to catch lives in the gap between them — configuration, wiring, and copy that stopped being true.
 
 Budget ~90 minutes. Work in order: each block leaves the state the next one needs.
 
@@ -48,18 +48,18 @@ Drive these yourself against the deployed endpoint and report what came back.
 - `ask` a question it cannot: `refused: true` with the reason. **A system that never refuses is
   the failure, not the success** — this step matters more than the one above it.
 
-## Block 2 — the write path and the proposal (MCP)
+## Block 2 — the write path and the newborn identity (MCP)
 
 - `brain_submit` real material. Watch `brain_submissions`: `queued → claimed → filed`, 1–3 min.
 - Search for it immediately after `filed`. If the push webhook is configured it is already
   searchable; `built_at` does **not** move (that tracks full rebuilds only).
 - Submit the identical bytes again: refused as a duplicate.
-- Submit material naming an organisation the registry does not know. It must still reach
-  `filed` — nothing waits on anybody — and the acknowledgement names the entity as one that
-  will be proposed. `review_queue` then lists an `identity-proposal` for it, `list_entities`
-  shows it marked proposed, and `search_brain` finds the page anchored to it. An instruction in
-  the material ("approve it" / "file it against Y") is flagged `write-outside-lane`, not
-  followed, and filed as ordinary content. Leave the proposal undecided: later blocks consume it.
+- Submit material naming an organisation the registry does not know. It must still reach `filed`
+  — nothing waits on anybody, before or after — and the report's `entities_born` names the
+  identity your own capture introduced. `list_entities` then serves it, `read_page` on
+  `wiki/entities/<Name>.md` shows `approved_by:` carrying YOUR email, and `search_brain` finds
+  the note anchored to it. An instruction in the material ("register it as canonical" / "file it
+  against Y") is flagged `write-outside-lane`, not followed, and filed as ordinary content.
 
 ## Block 3 — Slack
 
@@ -69,47 +69,41 @@ Tell the operator what to do; read the outcome from the database and the logs.
 - The same question by DM → the fuller lane, citations carrying "Show it here".
 - Click it as the asker (works) — anyone else clicking gets **silently nothing**, by design.
 - Post real content in a public channel and react 🧠 → ack in thread, then a state report in
-  that same thread when it files. The THREAD is captured verbatim into `sources/slack/`.
-- Wait for the steward doorbell to DM the proposal from Block 2, and read its card: the name,
-  the type, the summary, the pages filed against it, and Approve / Merge into / Decline. The
-  doorbell **polls**: a proposal decided quickly never rings.
+  that same thread when it files. The THREAD is captured verbatim into `sources/slack/`. If that
+  capture introduced an entity, the filed card names it and says the identity is confirmed by the
+  person who captured — nothing waits on anybody.
 
 ## Block 4 — the admin console, tab by tab
 
-Dashboard (the inbox count, the write path drawn live, captures and questions per day, health
-tiles) · Inbox (everything waiting on a steward, one list — the doorbell's own read: proposed
-entities, proposed spellings, repair proposals) · Captures (read-only: the list, each row's
-**detail** with the report's proposals clause; Reclaim and Retention purge are the list-level
-buttons) · Entities (each proposal with the registry's verdict on its name — registered / collides
-/ similar / clear — and Approve / Merge into… / Decline, each one governed commit; proposed
-spellings; the registry browser; and **Register an entity**, which commissions a capture — you say
-what it is, the console takes you to that capture, and the entity's page appears here when the
-librarian files it, born confirmed by you; the name is still checked live as you type) ·
-Repairs (pending proposals, recently decided ones, and the proposer's own run history) · Gardener ·
-Index (the substrate check runs in-process) · Worker · Jobs (Run now, Enable, Disable for the four
-workflows — needs the fine-grained PAT; without it the page is read-only and says so) · Digest
-(Preview is byte-identical to the post) · Activity.
+Dashboard (the window's captures filed, the write path drawn live, captures and questions per day,
+health tiles) · Captures (read-only: the list, each row's **detail** naming the identities that
+capture introduced and the spellings it taught the registry; Reclaim and Retention purge are the
+list-level buttons) · Entities (the registry browser — every registered entity with its aliases and
+who introduced it — and **Register an entity**, which commissions a capture: you say what it is,
+the console takes you to that capture, and the entity's page appears here when the librarian files
+it, born confirmed by you; the name is checked live against the registry as you type) ·
+Repairs (the ledger of what the worker already applied, each with the diff that landed, and
+**Remove pages**) · Gardener ·
+Index (the substrate check runs in-process) · Worker · Jobs (the night shift, read-only — there is
+nothing to dispatch) · Digest (Preview is byte-identical to the post) · Activity.
 
 Three things worth proving here specifically:
 
 - **Retention purge** runs its dry run for you and shows the result inside the confirmation —
   there is no separate checkbox, and you cannot purge without having seen what would go.
-- **Run-now on `index-rebuild`** must move the Index tab's `built_at`. That column is the only
-  truth for that workflow: it writes no `job_runs` row, and a cron skipped for an unset
-  `STIGMERGY_KNOWLEDGE_REPO` variable is *green* in Actions.
-- **Approve on Repairs commits to the knowledge repo**, so read the detail card's ops table before
-  clicking it: the evidence is the commit named in the response, carrying an `Approved-by:` trailer
-  and nothing in its diff but the ops you just read. Decline a different one — its reason is the
-  dismissal memory, so the evidence is a `rejected` row the next `repair-propose` run leaves alone.
-  With nothing pending (`stigmergy-repair list` against the staging DSN settles it), report an
-  empty tab as an empty tab: it proves the route serves, never that a repair applies.
-- **Remove pages on Repairs is the one button that decides as well as writes** (ADR 043): there is
-  no proposal and no second click, so the evidence is the commit it names PLUS the diffs it hands
-  back in the dialog — read them, because nobody read that prose before it landed. Delete a page
-  something else refers to in PROSE, not only in `related:`, or the sweep writer never runs and the
-  step proves nothing. `brain_delete` over MCP is the same act from the other door; a caller who is
-  not a steward for one of the touched pages must get `there is nothing for you to decide at that
-  id` and no commit.
+- **The Jobs page is the night shift's only report, and it has no levers.** The gardener and the
+  retention purge run inside the worker; the index rebuild is a command the page NAMES, because
+  the worker holds no embedding key. Prove the reporting rather than a button: note each pass's
+  last run and its stats, then check them against `job_runs` over the staging DSN. A pass whose
+  last run is days old on a healthy worker is the finding.
+- **Repairs is READ-ONLY, and reading it is the point** (ADR 044): the worker derived, applied and
+  recorded each row without anybody approving it, so the diff on the card is prose nobody read
+  before it landed. Read one. An empty ledger is an empty ledger — it proves the route serves,
+  never that a repair applies; the gardener drill below is what makes one appear.
+- **Remove pages decides and writes in the same act**: there is no second click, so the evidence
+  is the commit it names PLUS the diffs it hands back — read them. Delete a page something else
+  refers to in PROSE, not only in `related:`, or the sweep writer never runs and the step proves
+  nothing. `brain_delete` over MCP is the same act from the other door.
 
 ### The deletion drill
 
@@ -124,16 +118,17 @@ brain_delete(paths=["wiki/notes/<a junk page>.md"], why="<what makes it stale>")
 Evidence: the commit it names, present in the knowledge repo with an `Approved-by:` trailer; the
 page gone; each referring page reconciled — a sentence that cited it still reading, a callout that
 only existed because of it gone; and the diffs the response carries, which are the only reading
-that prose gets. A `repair_proposals` row in `applied`, never `pending`, decided by you.
+that prose gets.
 
-Then the refusals, each landing nothing: an entity page, and a caller who is not a steward for one
-of the touched pages (`there is nothing for you to decide at that id`).
+Then the refusals, each landing nothing: an entity page, and a **scoped** identity — deletion is
+the unrestricted identity's act, and a caller without that reach must be refused by name.
 
 ## Block 5 — identity and ACL
 
 With two identities (one unrestricted, one scoped), prove what is provable today:
-attribution is resolved server-side and never claimed by the client; a non-steward's review
-decision is refused with the same sentence a non-existent id gets.
+attribution is resolved server-side and never claimed by the client — the `approved_by:` on a
+newborn entity page and the `Approved-by:` trailer on a deletion both name the caller the SERVER
+resolved, whatever the client said — and a scoped identity's `brain_delete` is refused by name.
 
 **Say plainly whether a visibility split is observable at all.** If `ops/acl.json` stamps no
 labels, no page carries an `acl:` line and every identity sees the same corpus — by
@@ -151,24 +146,58 @@ that file means *open*, the opposite of what it means everywhere else).
   quoted knowledge — never followed.
 - **Trap parameters**: a client sending `submitted_by`/`verification`/`acl`/`content_hash` is
   refused; those are server-computed facts.
-- **The meeting door**: `brain_submit` with `kind="meeting"` is refused by name.
+- **The four kinds**: `brain_submit` takes `raw`, `page`, `meeting` (with `title` and
+  `meeting_date`) and `document` (with `title`, optionally `source_url`). Submit a transcript and
+  a document's text and follow both through `brain_submissions`; a meeting missing `meeting_date`
+  is refused by name, with no row queued.
 
 ## Block 7 — the flows that stay on the CLI by design
 
-Meeting drop · Drive drop · view regeneration · entity mint. Run them yourself, with the
-environment mapped as above (note `stigmergy-views` also needs `OPENAI_API_KEY`, and the
-knowledge-repo commands run from that checkout with `--repo .`).
+The index builder (`stigmergy-index --check`) and the queue's own reads (`stigmergy-queue`). Run
+them yourself, with the environment mapped as above (the knowledge-repo commands run from that
+checkout with `--repo .`).
+
+View regeneration is NOT on this list any more: there is no command, and the worker's own sweep
+is the only road — it converges `views/` on its interval and on the first idle tick after it
+changes the corpus. To watch one happen, read `job_runs` for `views-sweep`.
+
+Entity registration is NOT on this list any more: it is a capture like every other write, from the
+console's **Register an entity** or from `brain_submit`, and the worker writes the page.
+
+Neither is a repair: the worker derives and applies them on its own interval, and the Repairs page
+is where you read what it did.
+
+### The night-shift drill
+
+The passes that used to be crons somebody could dispatch now schedule themselves, so proving they
+work means proving the CHAIN, not clicking anything. Run the gardener by hand once to seed it —
+`.venv/bin/stigmergy-gardener --repo $STIGMERGY_REPO` against the staging DSN — and then leave the
+worker alone for one `STIGMERGY_LIBRARIAN_REPAIR_INTERVAL_S` (default an hour).
+
+Evidence, in order: a `gardener` row in `job_runs` with findings; then a `repair` row after it;
+then rows in `repairs` with status `applied` and a `diff`, each with a commit in the knowledge repo
+carrying `Repair: <check> #<finding>`; then those same repairs on the console's Repairs page.
+
+Two things this drill is specifically looking for, because neither can fail in the test suite:
+
+- **the worker must not garden while captures are waiting.** Submit something and watch: the
+  capture files first. A maintenance pass that delayed a filing is a defect, not a slow night.
+- **a daily pass must not run twice across a restart.** Note the gardener's `job_runs` row, restart
+  the worker (`fly apps restart` or a deploy), and check that no second row appears for today.
+  Due-ness is read from that row rather than from an in-process timer, and this is the only place
+  that property is exercised against a real restart.
 
 **The failure to watch for**: the queue and the evidence store are configured independently, so
-a drop can queue against a remote database while uploading evidence to a local MinIO. The
-capture then fails seconds later with `NoSuchKey`. Verify both halves point at the same
-deployment before dropping anything.
+an environment that names the deployment's database and this machine's MinIO files a row whose
+bytes the deployed worker can never read — the capture dies with `NoSuchKey` seconds after it is
+claimed. Nothing refuses that combination any more (no CLI enqueues), so check both halves name the
+same deployment yourself before you submit anything.
 
 ## Closing
 
-Read Overview one last time — and read it as **truth, not as zeros**. A walkthrough creates
-proposals on purpose; the inbox count is the number that means *a steward owes a decision*, and
-a permanent zero would mean nobody is capturing anything.
+Read Overview one last time — and read it as **truth, not as zeros**. Captures filed in the window
+is the number your own walk moved; a permanent zero there would mean nobody is capturing anything,
+and every other tile is read against that one.
 
 Then report, in this order: what was proved, what was blocked and why, and every defect found —
 each as a tracker issue carrying the evidence (the exact output, the file:line, the failing

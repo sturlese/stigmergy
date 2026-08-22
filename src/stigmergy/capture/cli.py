@@ -1,10 +1,10 @@
-"""`stigmergy-queue` — the steward's view of the write path, without a SQL client.
+"""`stigmergy-queue` — the operator's view of the write path, without a SQL client.
 
 Five subcommands (`list`, `show`, `claim`, `reclaim`, `purge`), each a thin skin over the library —
-the same seams the server and the librarian call. Nothing here decides a capture's fate: a capture
-files on its own, and what the librarian proposed is decided through `stigmergy-entities`. `claim`
-deliberately processes nothing (draining is the librarian's job) and holding a claim is how a dead
-worker is simulated.
+the same seams the server and the librarian call. Nothing here decides a capture's fate, and
+nothing here is waiting to: a capture files on its own, and the identity it introduces is born
+confirmed by whoever captured. `claim` deliberately processes nothing (draining is the librarian's
+job) and holding a claim is how a dead worker is simulated.
 
 Errors here are LOCAL and may be specific — generic over HTTP, specific in a local CLI. This
 module is the ONLY place in `stigmergy.capture` that opens a database connection or reads the
@@ -12,15 +12,14 @@ environment: the library takes `conn` as an argument.
 """
 import argparse
 import json
-import os
 import sys
 import time
 
 import psycopg
 
 from stigmergy import text as textutil
-from stigmergy.capture import evidence, queue, retention, schema
-from stigmergy.capture.errors import CaptureError, SubmissionRejected
+from stigmergy.capture import queue, retention, schema
+from stigmergy.capture.errors import CaptureError
 from stigmergy.capture.render import (
     RECLAIM_NOW,
     clean_for_terminal,
@@ -36,8 +35,8 @@ _DUMP = {"ensure_ascii": False, "indent": 2}
 # so the reverse import would be a cycle — the duplication is declared instead, and
 # `tests/capture/test_cli.py` pins this number to
 # `librarian.config.DEFAULT_VISIBILITY_TIMEOUT_S` so it cannot drift from the arithmetic it
-# copies (2 agent attempts × 300s + 120s gates + 390s conversion + 180s headroom).
-WORKER_DEFAULT_LEASE_S = 1290
+# copies (2 agent attempts × 300s + 120s gates + 180s headroom).
+WORKER_DEFAULT_LEASE_S = 900
 
 # `list`'s `kind` column width, computed from `schema.KINDS` so the next kind cannot break the
 # column's alignment (a hand-picked width did, when `meeting` joined).
@@ -46,45 +45,6 @@ _KIND_WIDTH = max(len(k) for k in schema.KINDS)
 # Ctrl-C exits 130 (128 + SIGINT) — what CPython already returns uncaught, minus the traceback.
 # Not 0: an interrupted `claim --hold` leaves a real orphaned lease behind.
 EXIT_INTERRUPTED = 130
-
-# ── the drop doors' shared configuration guard ────────────────────────────────────────────────
-# Below BOTH drop CLIs, so no future door can skip it. Distinct from `main`'s catch-all 2: a
-# wrapper must be able to tell "refused by policy, nothing happened" from "infrastructure down".
-EXIT_SPLIT_STORES = 3
-
-# The operator identity `--submitted-by` defaults to. Single-operator traffic: one env var is
-# the whole of "configured" — there is no identity service to resolve against, and every drop
-# door answers to the SAME one.
-OPERATOR_EMAIL_ENV = "STIGMERGY_MEETING_OPERATOR_EMAIL"
-
-
-def add_split_stores_flag(parser) -> None:
-    """The escape hatch, spelled once. The predicate is a heuristic — a tailnet-reachable store is
-    conceivable — so an override exists; it is loud, never silent."""
-    parser.add_argument("--allow-split-stores", action="store_true",
-                        help="proceed even when the queue is remote and the evidence store is on "
-                             "this machine — the combination that files a row whose bytes the "
-                             "worker can never read")
-
-
-def refuse_split_stores(args, prog: str, ev) -> int:
-    """`0` to proceed, `EXIT_SPLIT_STORES` when the queue and the evidence plane provably belong
-    to different deployments and the operator has not said they mean it. Called FIRST in a drop,
-    before anything is read, fetched, uploaded or inserted; building the store does no I/O, so
-    asking it where it points is free."""
-    reason = evidence.split_stores_reason(
-        db_host=store.host_of_dsn(getattr(args, "dsn", None) or store.dsn()),
-        endpoint_url=ev.endpoint_url)
-    if not reason:
-        return 0
-    if not getattr(args, "allow_split_stores", False):
-        print(f"{prog}: {reason}", file=sys.stderr)
-        return EXIT_SPLIT_STORES
-    print(f"{prog}: --allow-split-stores: {reason.splitlines()[0]} Proceeding anyway — expect "
-          f"`stigmergy-queue show <id>` to report an evidence failure once it is claimed.",
-          file=sys.stderr)
-    return 0
-
 
 def connect(dsn: str | None):
     """The connection every operator CLI in this package opens, schema included: each of them may
@@ -97,56 +57,6 @@ def connect(dsn: str | None):
 def _connect(args):
     """`stigmergy-queue`'s own call, taking the parsed namespace its `main` holds."""
     return connect(args.dsn)
-
-
-def add_submitted_by_flag(parser) -> None:
-    """`--submitted-by`, spelled once for every drop door — the flag and its default are the same
-    fact on all of them."""
-    parser.add_argument("--submitted-by", default="",
-                        help=f"defaults to ${OPERATOR_EMAIL_ENV}; who this drop is attributed to")
-
-
-def resolve_submitted_by(args) -> str:
-    """The operator identity a drop is attributed to, or a refusal. Attribution is never taken
-    from the material: an operator CLI has no identity service to resolve against, so the flag or
-    the environment is the whole of it."""
-    submitted_by = args.submitted_by or os.environ.get(OPERATOR_EMAIL_ENV, "")
-    if not submitted_by:
-        raise SubmissionRejected(
-            f"--submitted-by is required (or set ${OPERATOR_EMAIL_ENV}) — attribution comes from "
-            f"a resolved identity on every other capture surface, and this operator CLI has none "
-            f"to resolve. Nothing was uploaded and nothing was queued.")
-    return submitted_by
-
-
-def drop_interrupted(prog: str, during: str = "") -> int:
-    """Ctrl-C during a drop: what may and may not be left behind, in the one paragraph both doors
-    tell it in. The insert is a single statement, so the queue is never half-written; an upload
-    that already finished leaves an object no row points at, which is inert."""
-    said = f" {during}" if during else ""
-    print(f"{prog}: interrupted{said} — no queue row was written (the insert is a single "
-          f"statement), but if the upload had already finished, an evidence object with nothing "
-          f"pointing at it may exist; that costs nothing and nothing will ever read it without a "
-          f"row. Re-run `{prog} drop` when ready.", file=sys.stderr)
-    return EXIT_INTERRUPTED
-
-
-def drop_main(argv, *, parser: argparse.ArgumentParser, prog: str, during: str = "") -> int:
-    """Every drop door's entry point: parse, dispatch, and map the three failure classes to the
-    exit codes a wrapper reads — 1 a named refusal, 130 an interruption, 2 the stack being down.
-    `during` names what the door was in the middle of, for the interrupt sentence."""
-    args = parser.parse_args(argv)
-    try:
-        return args.fn(args)
-    except CaptureError as ex:
-        print(f"{prog}: {ex}", file=sys.stderr)
-        return 1
-    except KeyboardInterrupt:
-        return drop_interrupted(prog, during)
-    except Exception as ex:  # noqa: BLE001 — a local operator needs the real reason
-        print(f"{prog}: cannot reach the queue database or evidence store ({ex}); is the stack up "
-              f"(`make db-up`)?", file=sys.stderr)
-        return 2
 
 
 # ── list ──────────────────────────────────────────────────────────────────────────────────────

@@ -104,16 +104,16 @@ def fence(body: str) -> str:
 # boundary: a wrong type reaching a consumer raises AFTER the commit and push, leaving the page
 # on `main`, the row `failed`, and the submitter told nothing was filed.
 # The one decision there is. The librarian no longer parks a capture on an identity question: a
-# name nothing resolves to is PROPOSED in the same account (`new_entities`) and anchored to, code
-# creates the entity page beside the note (`librarian.identity`), and a steward confirms the
-# identity afterwards. `DECISIONS` stays a tuple because the structured schemas spell it as a
-# `Literal` and the parsers refuse anything outside it.
+# name nothing resolves to is DECLARED in the same account (`new_entities`) and anchored to, and
+# code writes the entity page beside the note (`librarian.identity`), confirmed by whoever
+# captured — the capture is the approval (ADR 044). `DECISIONS` stays a tuple because the
+# structured schemas spell it as a `Literal` and the parsers refuse anything outside it.
 DECISIONS = ("file",)
 
-# What a proposed entity carries — a complete page, not a name: `name` and `entity_type` make it
+# What a declared entity carries — a complete page, not a name: `name` and `entity_type` make it
 # an identity, `summary` is its "What / Who" paragraph, and the rest fills the template's sections
-# so a steward approves a finished page rather than a stub. `aliases` are the spellings the
-# MATERIAL uses for it. A proposed ALIAS names a registered entity and one spelling.
+# so the page LANDS finished rather than as a stub nobody comes back to. `aliases` are the
+# spellings the MATERIAL uses for it. A declared ALIAS names a registered entity and one spelling.
 NEW_ENTITY_FIELDS = ("name", "entity_type", "role", "aliases", "summary", "facts", "connections")
 NEW_ALIAS_FIELDS = ("entity", "alias")
 MAX_NEW_ENTITIES = 10
@@ -380,8 +380,8 @@ def _parse_new_entities(raw: dict, *, shape: _Shape) -> tuple:
         for required, why in (("name", "an entity is a name before it is anything else"),
                               ("entity_type", "it becomes the page's `entity_type` and the "
                                               "registry's `type`"),
-                              ("summary", "it is the page's What / Who paragraph, which a steward "
-                                          "reads before approving the identity")):
+                              ("summary", "it is the page's What / Who paragraph, and it lands "
+                                          "as written — nobody edits it afterwards")):
             if not _declared(item.get(required)):
                 shape.add("missing-field",
                           f"proposes a new entity with no `{label}.{required}` — {why}")
@@ -811,8 +811,8 @@ def build_prompt(*, material: str, hints: dict, submitted_by: str, corrective: s
         parts.append(f"\n{flow_note}")
     registration = capture_schema.registration_from_hints({"client": hints or {}})
     if registration is not None:
-        # Server-composed, like `flow_note`: the registration keys are set by a steward door and
-        # refused from every client, so this paragraph is TOLD, never fenced as data.
+        # Server-composed, like `flow_note`: the registration keys are set by the door that
+        # decided, and refused from every client, so this paragraph is TOLD, never fenced as data.
         parts.append(registration_note(registration))
     client_hints = {k: v for k, v in (hints or {}).items()
                     if v and k not in capture_schema.REGISTER_HINT_KEYS}
@@ -838,20 +838,20 @@ def build_prompt(*, material: str, hints: dict, submitted_by: str, corrective: s
 
 
 def registration_note(registration) -> str:
-    """What the brief says when a steward is REGISTERING an entity through this capture (ADR 042):
-    the material is what the steward knows, the brain may know more, and the account must propose
+    """What the brief says when the capture is REGISTERING an entity (ADR 042): the material is
+    what the person introducing it knows, the brain may know more, and the account must declare
     that entity — or say the registry already has it. A twin is the one thing it may not create."""
     spellings = (f", also spelled {', '.join(repr(a) for a in registration.aliases)}"
                  if registration.aliases else "")
     return (
-        f"\nREGISTRATION: a steward is introducing the entity {registration.name!r} "
+        f"\nREGISTRATION: this capture is introducing the entity {registration.name!r} "
         f"({registration.entity_type or 'type unspecified'}{spellings}) to this brain, and this "
         f"capture is what they know about it. Your account MUST propose it in `new_entities` under "
         f"exactly that name and type, and the page is yours to write: search the brain for the name "
         f"first, and write `summary`, `facts` and `connections` from what the material and the "
         f"existing pages establish — nothing more, nothing invented. Anchor the page you file to "
         f"it. If the registry ALREADY resolves that name to an entity, do not propose a twin: anchor "
-        f"to that entity, and put the steward's spelling in `new_aliases` if the registry lacks it.")
+        f"to that entity, and put the capture's spelling in `new_aliases` if the registry lacks it.")
 
 
 # NOT a `config.Settings` property: `Settings` is the leaf of this package's import graph, and

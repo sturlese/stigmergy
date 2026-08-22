@@ -72,8 +72,9 @@ def build_finding(*, check: str, severity: str, subject: str, detail: str,
             suggested_action: str, source: str = SOURCE_DETERMINISTIC,
             subjects: list[str] | None = None, **extra) -> dict:
     """The one place a finding dict is assembled — shared by every check here and by
-    `gardener.sweep.to_finding` (`model_id` and the `_notice_*` keys ride through `**extra`).
-    `store.py` persists the seven named keys plus `model_id` and nothing else.
+    `gardener.sweep.to_finding` (`model_id` rides through `**extra`). `store.py` persists the
+    seven named keys plus `model_id` and nothing else, so anything else `**extra` carries stays
+    in memory for the run that put it there.
 
     `subject` is the DISPLAY string and `subjects` the same fact as data. Omitted, it derives from
     `subject` — one page, named once — and an EMPTY subject derives to `[]` rather than `[""]`:
@@ -215,9 +216,13 @@ def check_stale_views(repo: str) -> list[dict]:
             check=CHECK_STALE_VIEW, severity=SEVERITY_WARN, subject=entity_id,
             detail="the view no longer matches the corpus — its member set or the backlinks it "
                    "cites have changed since it was last generated",
-            # Backticks baked into the stored string, so `--json` and the printed report carry
-            # the identical value; the runnable command is the text between them.
-            suggested_action=f"`stigmergy-views regenerate --entity {entity_id}`",
+            # No command: the worker's own sweep converges `views/` from state, and it runs on
+            # every idle branch (ADR 044 D3). A finding that told an operator to run something
+            # would be an executable promise nothing keeps — what this one says is that it will
+            # take care of itself, and roughly when.
+            suggested_action="no command — the librarian worker regenerates it on its next idle "
+                             "pass; a view still listed here after several is worth checking the "
+                             "worker's job runs for",
         )
         for entity_id in view_staleness.list_stale_entities(repo)
     ]
@@ -320,7 +325,7 @@ def check_dead_vocabulary(repo: str, registry: Registry) -> list[dict]:
             check=CHECK_DEAD_VOCABULARY, severity=SEVERITY_INFO, subject=entity_id,
             detail="registered in the entity registry, zero pages anchored to it",
             suggested_action=(
-                "no command retires an entity — `stigmergy-entities` only mints (no un-birth/"
+                "no command retires an entity — a birth has no inverse (no un-birth/"
                 "retire/merge verb exists in `stigmergy.entities.cli`); decide by hand whether this "
                 "was created too early or should be merged/retired by editing the registry "
                 "directly"),
@@ -532,8 +537,8 @@ def is_placeholder_line(line: str) -> bool:
     Deliberately literal, and it has a known false positive: a body line that is a whole one-line
     HTML element (`<details>`, `<!-- a comment -->`) reads as a placeholder here. That is ACCEPTED
     v1 behaviour rather than engineered around — the finding is `info`, the repair it invites is a
-    drafted body a steward reads before approving, and a heuristic that tried to tell markup from
-    a placeholder would be a second, worse parser of somebody's prose. The mirror-image gap is
+    drafted body the worker commits with its diff on the ledger, and a heuristic that tried to tell
+    markup from a placeholder would be a second, worse parser of somebody's prose. The mirror-image gap is
     equally deliberate: a placeholder carried under a list bullet (`- <fact…>`) is not a
     placeholder LINE and does not fire.
     """
@@ -642,8 +647,9 @@ def check_entity_placeholder_bodies(pages: list[dict]) -> list[dict]:
     and to the model's empty-body pass alike — a page list, never a repo path, so this check is a
     pure function of what the walk found. One INFO finding per page whose body still carries at
     least one placeholder line."""
-    action = ("no command — the repair proposer drafts a body from the pages anchored to this "
-              "entity; approve it in the review lane, or edit the page by hand")
+    action = ("no command — the worker's repair pass drafts a body from the pages anchored to "
+              "this entity and commits it; read the diff on the Repairs page, or edit the page "
+              "by hand")
     findings = []
     for page in pages:
         placeholders = placeholder_lines(page["body"])

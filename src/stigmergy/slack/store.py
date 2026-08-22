@@ -1,5 +1,5 @@
 """`slack_submissions` — the mapping that turns Slack into a push channel for ask-back, plus the
-dedup key the 🧠 gesture needs, and the steward doorbell's delivery bookkeeping.
+dedup key the 🧠 gesture needs.
 
 This module is `stigmergy.slack`'s ONLY door into `stigmergy.capture`, and only into `.schema`.
 The dedup key is per (thread, reactor): a redelivered or re-added reaction collides on the UNIQUE
@@ -149,34 +149,9 @@ BEGIN
 END $$
 """
 
-# One row per (item, steward) the doorbell has ever DMed, carrying the state it was notified at:
-# one notification per pair, re-sent only when that state differs from the item's current one.
-# `channel_id`/`message_ts` are WHERE that DM landed — Slack's own coordinates for one message, so
-# the card can be edited in place once the item is decided.
-_STEWARD_NOTIFICATIONS_DDL = """
-CREATE TABLE IF NOT EXISTS steward_notifications (
-    id BIGSERIAL PRIMARY KEY,
-    item_kind TEXT NOT NULL,
-    item_id TEXT NOT NULL,
-    steward_email TEXT NOT NULL,
-    state TEXT NOT NULL DEFAULT '',
-    channel_id TEXT NOT NULL DEFAULT '',
-    message_ts TEXT NOT NULL DEFAULT '',
-    notified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT steward_notifications_item_key UNIQUE (item_kind, item_id, steward_email)
-)
-"""
-# `ADD COLUMN IF NOT EXISTS` because `CREATE TABLE IF NOT EXISTS` never adds a column to a table
-# that already exists — every database that has run this application before keeps the old shape
-# otherwise. `NOT NULL DEFAULT ''` and never NULL: `open_notifications` compares this column, and
-# `NULL <> ''` is NULL, so a nullable spelling would filter those rows out in silence.
-_STEWARD_NOTIFICATIONS_CARD_COLUMNS = (
-    "ALTER TABLE steward_notifications ADD COLUMN IF NOT EXISTS channel_id TEXT NOT NULL DEFAULT ''",
-    "ALTER TABLE steward_notifications ADD COLUMN IF NOT EXISTS message_ts TEXT NOT NULL DEFAULT ''",
-)
-
-_ALL_DDL = (_DDL, _DEDUP_KEY_MIGRATION, _INDEX_THREAD, _INDEX_SUBMISSION,
-           _STEWARD_NOTIFICATIONS_DDL, *_STEWARD_NOTIFICATIONS_CARD_COLUMNS)
+# Every statement `ensure_slack_schema` runs, in order — the table first, because the collapse
+# pre-check below needs it to exist before the dedup key is added.
+_SCHEMA_DDL = (_DDL, _DEDUP_KEY_MIGRATION, _INDEX_THREAD, _INDEX_SUBMISSION)
 
 
 def _log_pending_dedup_collapse(cur) -> None:
@@ -208,7 +183,7 @@ def ensure_slack_schema(conn) -> None:
     with startup_ddl_lock(conn) as cur:
         cur.execute(_DDL)
         _log_pending_dedup_collapse(cur)
-        for statement in _ALL_DDL[1:]:
+        for statement in _SCHEMA_DDL[1:]:
             cur.execute(statement)
 
 
@@ -286,129 +261,3 @@ def mark_reported(conn, reservation_id: int, status: str) -> None:
                     (status, reservation_id))
 
 
-# ── the steward doorbell's own delivery bookkeeping ─────────────────────────────────────────────
-# `state` carries THREE namespaces in one column, and they are kept apart by these prefixes: a real
-# item state signature (`doorbell._state_signature`, unprefixed), an outcome that never became a
-# message at all, and a card this doorbell has already closed. They live HERE, with the column that
-# stores them, so the reader below and the doorbell that writes them cannot drift apart — no real
-# item state begins with either literal.
-UNDELIVERABLE_PREFIX = "undeliverable:"
-CLOSED_PREFIX = "closed:"
-
-# The one `closed:` state that is not a verdict: a card Slack says can never be edited again
-# (`doorbell.TERMINAL_EDIT_CODES`). It shares the namespace deliberately — the pass must stop
-# revisiting it for exactly the same reason a genuinely closed card is left alone — and no verdict
-# is spelled this way, so the two can never be confused when the column is read back.
-CLOSED_UNREACHABLE = f"{CLOSED_PREFIX}unreachable"
-
-_NOTIFICATION_FOR_PAIR = """
-SELECT state, channel_id, message_ts
-FROM steward_notifications
-WHERE item_kind = %s AND item_id = %s AND steward_email = %s
-"""
-
-
-def last_notification(conn, *, item_kind: str, item_id: str, steward_email: str) -> dict | None:
-    """What this (item, steward) pair was last told, and WHERE that message landed — `None` if the
-    pair has never been notified.
-
-    The shared read behind both questions the doorbell asks of this row: whether the state has moved
-    (send again?) and whether a card is still standing at the recorded coordinates (supersede it
-    first?). One statement rather than two, because the second question only ever arises about the
-    row the first one just looked at.
-    """
-    with conn.cursor() as cur:
-        cur.execute(_NOTIFICATION_FOR_PAIR, (item_kind, item_id, steward_email))
-        columns = [c.name for c in cur.description]
-        row = cur.fetchone()
-    return dict(zip(columns, row, strict=True)) if row else None
-
-
-def last_notified_state(conn, *, item_kind: str, item_id: str, steward_email: str) -> str | None:
-    """The state this (item, steward) pair was last DMed at, or `None` if never notified — the
-    state-only half of `last_notification`, for the callers that record an outcome rather than
-    a card (an undeliverable notification never became a message, so it has no coordinates)."""
-    row = last_notification(conn, item_kind=item_kind, item_id=item_id,
-                            steward_email=steward_email)
-    return row["state"] if row else None
-
-
-def is_live_card(row: dict) -> bool:
-    """Whether this row still points at a message that can be edited: a real item state (neither
-    namespace prefix), and both of Slack's coordinates stored.
-
-    The row-level twin of `_OPEN_NOTIFICATIONS`' WHERE clause below, which asks the same question
-    of the whole table. They are two spellings of one rule ON PURPOSE — a `LIKE` filter cannot be
-    called on a dict in hand and a Python predicate cannot keep the closing pass from reading every
-    row ever written — so they are kept side by side, and `tests/slack/test_store_pg.py` drives
-    both over the same rows.
-    """
-    state = row.get("state") or ""
-    return (bool(row.get("channel_id")) and bool(row.get("message_ts"))
-            and not state.startswith((CLOSED_PREFIX, UNDELIVERABLE_PREFIX)))
-
-
-_MARK_NOTIFIED = """
-INSERT INTO steward_notifications (item_kind, item_id, steward_email, state, channel_id,
-                                   message_ts)
-VALUES (%s, %s, %s, %s, %s, %s)
-ON CONFLICT (item_kind, item_id, steward_email)
-DO UPDATE SET state = EXCLUDED.state, notified_at = now(),
-              channel_id = COALESCE(NULLIF(EXCLUDED.channel_id, ''),
-                                    steward_notifications.channel_id),
-              message_ts = COALESCE(NULLIF(EXCLUDED.message_ts, ''),
-                                    steward_notifications.message_ts)
-"""
-
-
-def mark_notified(conn, *, item_kind: str, item_id: str, steward_email: str, state: str,
-                  channel_id: str = "", message_ts: str = "") -> None:
-    """Record that this (item, steward) pair has been DMed at `state`. Call it ONLY after the send
-    succeeded, so a failed post leaves nothing recorded and the next poll pass retries it.
-
-    `channel_id`/`message_ts` are the card's coordinates and are supplied ONCE, by the send that
-    created it. Every later call re-marks the same row for some other reason — a state change, an
-    undeliverable outcome, the closing pass — and passes neither, so the update PRESERVES what is
-    already stored: writing `EXCLUDED.channel_id` unconditionally would blank the pointer on the
-    first state-only re-mark, and the card could never be edited again.
-    """
-    with conn.cursor() as cur:
-        cur.execute(_MARK_NOTIFIED,
-                    (item_kind, item_id, steward_email, state, channel_id, message_ts))
-
-
-# Only cards that are still LIVE and still reachable: not already closed, not an undeliverable
-# outcome (which never became a message), and carrying BOTH coordinates — `chat.update` needs the
-# channel as much as the ts, and every row written before this table had them reads as `''` and can
-# only age out, since no API call recovers where a message went.
-#
-# The two prefixes are BOUND, not interpolated: they are module constants today, but a `LIKE`
-# pattern built by string formatting is one edit away from carrying a `%` or a quote that changes
-# what the statement means, and this filter is the only thing standing between the closing pass and
-# rewriting DMs it has already finished with.
-_OPEN_NOTIFICATIONS = """
-SELECT item_kind, item_id, steward_email, state, channel_id, message_ts, notified_at
-FROM steward_notifications
-WHERE state NOT LIKE %(closed)s
-  AND state NOT LIKE %(undeliverable)s
-  AND message_ts <> ''
-  AND channel_id <> ''
-ORDER BY id
-"""
-_OPEN_NOTIFICATIONS_PARAMS = {"closed": f"{CLOSED_PREFIX}%",
-                              "undeliverable": f"{UNDELIVERABLE_PREFIX}%"}
-
-
-def open_notifications(conn) -> list[dict]:
-    """Every doorbell card that could still be edited. Read-only, like every other read here.
-
-    `notified_at` rides along because it dates the CARD: a decided item can be re-opened (a
-    `requeue` verdict puts the row back in the queue and the librarian may park it again), and the
-    ledger keeps the old verdict forever, so "is this card stale" is a comparison against this
-    timestamp and not merely "does a decision exist". `mark_notified` moves it on every re-mark,
-    which is what makes the newer card outlive the older decision.
-    """
-    with conn.cursor() as cur:
-        cur.execute(_OPEN_NOTIFICATIONS, _OPEN_NOTIFICATIONS_PARAMS)
-        columns = [c.name for c in cur.description]
-        return [dict(zip(columns, row, strict=True)) for row in cur.fetchall()]

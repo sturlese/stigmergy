@@ -2401,12 +2401,14 @@ def test_a_dotfile_named_as_a_derived_file_is_still_refused(tmp_path):
     assert [f.code for f in gates.gate_zone(ctx)] == ["not-a-page"]
 
 
-# ── the identity gate: the entity zone holds only what this run proposed ─────────────────────
-# `librarian.identity.write_proposals` is the ONE writer of `wiki/entities/` inside a filing, and
-# it tells the gates what it wrote (`proposed_entity_pages`, and `expected_bytes` for a proposed
-# spelling appended to a registered page). The gate's job is to refuse everything else in the zone, and to refuse a
-# proposal that arrived already approved — an identity nobody approved.
+# ── the identity gate: the entity zone holds only what this run created ──────────────────────
+# `librarian.identity.write_births` is the ONE writer of `wiki/entities/` inside a filing, and it
+# tells the gates what it wrote (`born_entity_pages`, `confirmed_entity_pages` for who introduced
+# each of them, and `expected_bytes` for a spelling appended to a registered page). The gate's job
+# is to refuse everything else in the zone, and to refuse a created page whose `approved_by` is not
+# exactly the person whose capture introduced it — an identity nobody stands behind.
 _ENTITY_PAGE = "wiki/entities/Scircle.md"
+_SUBMITTER = "marc@example.com"
 
 
 def _write_entity_page(tmp_path, text: str, path: str = _ENTITY_PAGE) -> None:
@@ -2415,65 +2417,75 @@ def _write_entity_page(tmp_path, text: str, path: str = _ENTITY_PAGE) -> None:
     page.write_text(text, encoding="utf-8")
 
 
-_PROPOSED = ('---\ntype: entity\ntitle: "Scircle"\nstatus: developing\nentity_type: organization\n'
-             'aliases: []\ncreated: 2026-08-20\nupdated: 2026-08-20\ntags: [entity, organization]\n'
-             'entity: ["scircle"]\nrelated: []\nsources: []\napproved_by: ""\n---\n\n# Scircle\n')
+def _born_page(approver: str = _SUBMITTER, *, approved_by_line: "str | None" = None) -> str:
+    line = f'approved_by: "{approver}"' if approved_by_line is None else approved_by_line
+    return ('---\ntype: entity\ntitle: "Scircle"\nstatus: developing\n'
+            'entity_type: organization\naliases: []\ncreated: 2026-08-20\nupdated: 2026-08-20\n'
+            'tags: [entity, organization]\nentity: ["scircle"]\nrelated: []\nsources: []\n'
+            + (f"{line}\n" if line else "") + "---\n\n# Scircle\n")
 
 
-def test_a_proposed_entity_page_the_run_declared_passes_the_identity_gate(tmp_path):
+_BORN = _born_page()
+# What `_declare_births` tells the gates about one page this run created.
+_TOLD = {"born_entity_pages": frozenset({_ENTITY_PAGE}),
+         "confirmed_entity_pages": {_ENTITY_PAGE: _SUBMITTER}}
+
+
+def test_an_entity_page_this_run_declared_passes_the_identity_gate(tmp_path):
     """The benign twin first."""
-    _write_entity_page(tmp_path, _PROPOSED)
-    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", _ENTITY_PAGE, new_mode="100644")],
-               proposed_entity_pages=frozenset({_ENTITY_PAGE}))
+    _write_entity_page(tmp_path, _BORN)
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", _ENTITY_PAGE, new_mode="100644")], **_TOLD)
     assert gates.gate_identity(ctx) == []
 
 
-def test_an_entity_page_nobody_proposed_is_refused_unrepairably(tmp_path):
+def test_an_entity_page_nobody_declared_is_refused_unrepairably(tmp_path):
     """The agent's own write tool refuses the zone; this gate is the PROOF, over the diff, that
     nothing reached it by another road. `repairable=False`: no agent could have done this
     legitimately, so the diff is preserved rather than retried."""
-    _write_entity_page(tmp_path, _PROPOSED)
+    _write_entity_page(tmp_path, _BORN)
     ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", _ENTITY_PAGE, new_mode="100644")])
     findings = gates.gate_identity(ctx)
-    assert [f.code for f in findings] == ["unproposed-entity-page"]
+    assert [f.code for f in findings] == ["unborn-entity-page"]
     assert findings[0].repairable is False and findings[0].locator == _ENTITY_PAGE
 
 
-@pytest.mark.parametrize("front_line, why", [
-    ('approved_by: "marc"', "arrived approved"),
+@pytest.mark.parametrize("approved_by_line, why", [
+    ('approved_by: "somebody@example.com"', "names somebody who did not capture it"),
+    ('approved_by: ""', "names nobody at all"),
     ("", "carries no approved_by at all"),
 ])
-def test_a_proposal_that_does_not_say_approved_by_empty_is_refused(tmp_path, front_line, why):
-    """EMPTY is the one spelling of "a steward has not confirmed this". A page that arrives
-    approved is an identity nobody approved; one without the key would read as a steward-born
-    page (absent is legacy-approved, `generator.read_entity_pages`' rule)."""
-    text = _PROPOSED.replace('approved_by: ""\n', f"{front_line}\n" if front_line else "")
-    _write_entity_page(tmp_path, text)
-    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", _ENTITY_PAGE, new_mode="100644")],
-               proposed_entity_pages=frozenset({_ENTITY_PAGE}))
-    assert [f.code for f in gates.gate_identity(ctx)] == ["approved-on-arrival"], why
+def test_a_created_entity_page_must_name_exactly_the_submitter(tmp_path, approved_by_line, why):
+    """OLD BEHAVIOUR: `approved_by: ""` was the ONE spelling a created page was allowed — an
+    identity waiting on a steward — and any name on arrival was `approved-on-arrival`. ADR 044:
+    the capture is the approval, so the page must name EXACTLY the person whose capture introduced
+    it. Empty is now the refusal it used to be the only pass for: an identity nobody stands behind.
+    """
+    _write_entity_page(tmp_path, _born_page(approved_by_line=approved_by_line))
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", _ENTITY_PAGE, new_mode="100644")], **_TOLD)
+    findings = gates.gate_identity(ctx)
+    assert [f.code for f in findings] == ["not-confirmed-by-its-submitter"], why
+    assert findings[0].repairable is False
 
 
-def test_a_proposed_page_that_is_not_an_entity_page_is_refused(tmp_path):
-    _write_entity_page(tmp_path, _PROPOSED.replace("type: entity", "type: note"))
-    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", _ENTITY_PAGE, new_mode="100644")],
-               proposed_entity_pages=frozenset({_ENTITY_PAGE}))
+def test_a_created_page_that_is_not_an_entity_page_is_refused(tmp_path):
+    _write_entity_page(tmp_path, _BORN.replace("type: entity", "type: note"))
+    ctx = _ctx(tmp_path, [gitcmd.DiffEntry("A", _ENTITY_PAGE, new_mode="100644")], **_TOLD)
     assert [f.code for f in gates.gate_identity(ctx)] == ["not-an-entity-page"]
 
 
 def test_an_entity_page_edit_is_admitted_only_with_a_proof_code_produced(tmp_path):
-    """A registered entity page changes in a filing in exactly one way — a proposed spelling
-    appended — and that edit is planned by `identity.write_proposals` as bytes. An `M` in the zone
-    nothing planned is refused; `gate_body_rewrite` does the byte comparing, this gate makes sure
-    the proof was asked for at all. (Before the repair loop's own road was admitted, the gate
+    """A registered entity page changes in a filing in exactly one way — a spelling the material
+    uses appended — and that edit is planned by `identity.write_births` as bytes. An `M` in the
+    zone nothing planned is refused; `gate_body_rewrite` does the byte comparing, this gate makes
+    sure the proof was asked for at all. (Before the repair loop's own road was admitted, the gate
     demanded a separate `alias_edited_pages` label on top of the bytes — and refused every
     steward-approved `entity-body` and merge repair, which edit this zone through their own
     code-side permissions.)"""
-    _write_entity_page(tmp_path, _PROPOSED)
+    _write_entity_page(tmp_path, _BORN)
     entry = gitcmd.DiffEntry("M", _ENTITY_PAGE, new_mode="100644")
     unplanned = _ctx(tmp_path, [entry])
     assert [f.code for f in gates.gate_identity(unplanned)] == ["unplanned-entity-edit"]
-    planned = _ctx(tmp_path, [entry], expected_bytes={_ENTITY_PAGE: _PROPOSED})
+    planned = _ctx(tmp_path, [entry], expected_bytes={_ENTITY_PAGE: _BORN})
     assert gates.gate_identity(planned) == []
 
 
@@ -2483,15 +2495,15 @@ def test_a_steward_approved_repair_may_edit_an_entity_page_through_its_own_permi
     deletion sweep plans every byte it writes (`expected_bytes`). Both are set by code the steward's
     approval drives, never from an outcome, so the identity gate admits them — and only them: the
     permission names a path, so a second entity page in the same diff is still refused."""
-    _write_entity_page(tmp_path, _PROPOSED)
+    _write_entity_page(tmp_path, _BORN)
     other = "wiki/entities/Other.md"
-    _write_entity_page(tmp_path, _PROPOSED, path=other)
+    _write_entity_page(tmp_path, _BORN, path=other)
     entries = [gitcmd.DiffEntry("M", _ENTITY_PAGE, new_mode="100644"),
                gitcmd.DiffEntry("M", other, new_mode="100644")]
     body = _ctx(tmp_path, entries, body_rewrite_allowed=frozenset({_ENTITY_PAGE}))
     assert [(f.code, f.locator) for f in gates.gate_identity(body)] == [("unplanned-entity-edit", other)]
     planned = _ctx(tmp_path, entries, body_rewrite_allowed=frozenset({_ENTITY_PAGE}),
-                   expected_bytes={other: _PROPOSED})
+                   expected_bytes={other: _BORN})
     assert gates.gate_identity(planned) == []
 
 
@@ -2505,15 +2517,15 @@ def test_the_identity_gate_runs_with_every_other_gate():
     assert gates.gate_identity in gates.ALL_GATES
 
 
-def test_a_proposed_page_is_judged_as_an_entity_page_whatever_the_outcome_declared(tmp_path):
+def test_a_born_page_is_judged_as_an_entity_page_whatever_the_outcome_declared(tmp_path):
     """`_check_created_type` reads the OUTCOME's `page_type` for a created page — the note's type,
     which is `note`. An entity page code wrote beside the note is declared by the run, not by the
-    outcome, or every proposal would be vetoed as a `type-folder-mismatch`."""
-    _write_entity_page(tmp_path, _PROPOSED)
+    outcome, or every birth would be vetoed as a `type-folder-mismatch`."""
+    _write_entity_page(tmp_path, _BORN)
     lane = dict(outcome=SimpleNamespace(page_type="note"),
                 creatable_types=frozenset(page_policy.FAST_LANE_TYPES) | {"entity"},
                 extra_folder_types={"wiki/entities": "entity"})
-    declared = _ctx(tmp_path, [], proposed_entity_pages=frozenset({_ENTITY_PAGE}), **lane)
+    declared = _ctx(tmp_path, [], born_entity_pages=frozenset({_ENTITY_PAGE}), **lane)
     assert gates._check_created_type(declared, _ENTITY_PAGE) == []
     undeclared = _ctx(tmp_path, [], **lane)
     assert [f.code for f in gates._check_created_type(undeclared, _ENTITY_PAGE)] == [
@@ -2528,29 +2540,3 @@ def test_a_derived_file_is_not_a_new_page(tmp_path):
                write_prefixes=gates.ALLOWED_WRITE_PREFIXES + ("ops/entity-registry.json",),
                derived_files=frozenset({"ops/entity-registry.json"}))
     assert ctx.in_lane_new_pages() == ["wiki/notes/New.md"]
-
-
-def test_an_entity_page_a_steward_registered_must_carry_exactly_that_steward(tmp_path):
-    """ADR 042: a proposal born through a steward's registration arrives CONFIRMED — `approved_by`
-    names the steward the caller told the gate about, and no one else. Every other created entity
-    page still has to arrive with it empty (the test above), so the two rules are asserted side by
-    side: the registered page passes with its steward, is refused with nobody, and is refused with
-    somebody else."""
-    confirmed = _PROPOSED.replace('approved_by: ""', 'approved_by: "steward@example.com"')
-    entry = gitcmd.DiffEntry("A", _ENTITY_PAGE, new_mode="100644")
-    told = {"proposed_entity_pages": frozenset({_ENTITY_PAGE}),
-            "confirmed_entity_pages": {_ENTITY_PAGE: "steward@example.com"}}
-
-    _write_entity_page(tmp_path, confirmed)
-    assert gates.gate_identity(_ctx(tmp_path, [entry], **told)) == []
-
-    _write_entity_page(tmp_path, _PROPOSED)
-    assert [f.code for f in gates.gate_identity(_ctx(tmp_path, [entry], **told))] == ["not-confirmed-by-its-steward"]
-
-    _write_entity_page(tmp_path, confirmed.replace("steward@example.com", "somebody@example.com"))
-    assert [f.code for f in gates.gate_identity(_ctx(tmp_path, [entry], **told))] == ["not-confirmed-by-its-steward"]
-
-    # and a confirmed page the caller did NOT declare as a registration is the old refusal
-    _write_entity_page(tmp_path, confirmed)
-    plain = _ctx(tmp_path, [entry], proposed_entity_pages=frozenset({_ENTITY_PAGE}))
-    assert [f.code for f in gates.gate_identity(plain)] == ["approved-on-arrival"]

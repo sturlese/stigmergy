@@ -1,7 +1,7 @@
 """`stigmergy.digest` — the week's learning in one Slack post.
 
-Owns no table: it READS `gardener_findings`/`job_runs`, `capture_queue`/`pages_index` and
-`review_decisions`, and WRITES exactly one thing — its own `job_runs` row, the watermark the next
+Owns no table: it READS `gardener_findings`/`job_runs` and `capture_queue`/`pages_index`, and
+WRITES exactly one thing — its own `job_runs` row, the watermark the next
 default run's window starts from. `stigmergy-digest` assembles two deterministic sections and
 posts them, or previews with `--dry-run`.
 

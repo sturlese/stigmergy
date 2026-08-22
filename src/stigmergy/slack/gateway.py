@@ -80,18 +80,6 @@ class SlackGateway(Protocol):
         `SlackApiError`."""
         ...
 
-    async def users_lookup_by_email(self, email: str) -> dict | None:
-        """The doorbell's reverse lookup (`ops/stewards.json` names stewards by EMAIL; a DM needs
-        a user id). Returns `users_info`'s shape, or `None` when no workspace member has that
-        email — Slack's `users_not_found` is an honest negative the doorbell must be able to
-        record, so only an actual API failure raises `SlackApiError`."""
-        ...
-
-    async def views_open(self, *, trigger_id: str, view: dict) -> dict:
-        """Open a Block Kit modal. `trigger_id` is single-use and expires quickly, so a failed
-        open cannot be retried with the same one."""
-        ...
-
 
 @dataclass
 class _Posted:
@@ -196,23 +184,11 @@ class FakeSlackGateway:
         self.reactions_removed: list[_Reaction] = []
         self._next_ts = 1000
 
-        # The doorbell's reverse email lookup, and the review surface's modals.
-        self.emails: dict[str, str] = {}                  # email -> user_id (reverse of `users`)
-        self.fail_lookup_by_email: set[str] = set()        # emails whose lookup ALWAYS raises
-        self.opened_views: list[dict] = []
-        self.fail_views_open_count = 0
-
     # ── seeding helpers (tests set these up, then drive a handler) ───────────
     def seed_user(self, user_id: str, email: str | None, *, display_name: str = "") -> None:
         self.users[user_id] = email
         if display_name:
             self.display_names[user_id] = display_name
-
-    def seed_email(self, email: str, user_id: str) -> None:
-        """The reverse of `seed_user`: a member findable by email; also seeds `users[user_id]` so
-        a subsequent `users_info` on the same id agrees."""
-        self.emails[email] = user_id
-        self.users.setdefault(user_id, email)
 
     def seed_channel(self, channel_id: str, *, is_private: bool = False, is_im: bool = False,
                      is_mpim: bool = False, name: str = "") -> None:
@@ -296,18 +272,3 @@ class FakeSlackGateway:
             raise SlackApiError("reactions.remove failed")
         self.reactions_removed.append(_Reaction(channel_id, message_ts, name))
         return {"ok": True}
-
-    async def users_lookup_by_email(self, email: str) -> dict | None:
-        if email in self.fail_lookup_by_email:
-            raise SlackApiError(f"users.lookupByEmail failed for {email}")
-        user_id = self.emails.get(email)
-        if user_id is None:
-            return None
-        return {"user": {"id": user_id, "profile": {"email": email}}}
-
-    async def views_open(self, *, trigger_id: str, view: dict) -> dict:
-        if self.fail_views_open_count > 0:
-            self.fail_views_open_count -= 1
-            raise SlackApiError("views.open failed")
-        self.opened_views.append({"trigger_id": trigger_id, "view": view})
-        return {"ok": True, "view": {**view, "id": f"V{len(self.opened_views):04d}"}}

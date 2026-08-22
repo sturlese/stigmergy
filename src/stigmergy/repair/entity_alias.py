@@ -8,7 +8,7 @@ readable — knowing that these two names were once two entities is the whole re
 
 **The model picks the survivor; code computes the sweep.** Which of two names is canonical is a
 judgment — the legal name is often the less-used one, and a backlink count answers a different
-question — so it belongs to an agent reading both pages, and its rationale is what a steward reads
+question — so it belongs to an agent reading both pages, and its rationale is what a reader gets
 beside Approve. Which pages change, and what bytes each ends up with, is authority: a model never
 computes a file list (#72's deletion lesson, where an error is a wrong write).
 
@@ -108,7 +108,7 @@ def entity_page_refusal(worktree: str, path: str) -> tuple[str, str]:
 
 
 # This kind's own half of `deletion.page_refusal`'s sentences — what a MERGE would have done to the
-# page, which is what a steward has to read. `require_readable` above is this kind's one real
+# page, which is what anyone reading this afterwards has. `require_readable` above is this kind's one real
 # difference from the delete kind's confinement check: every op here rewrites frontmatter the plan
 # has to parse first, so a file that cannot be read as text is as missing as an absent one.
 _SYMLINK_WHY = "{path} is a symlink and not a page — a merge would rewrite the thing it points at"
@@ -211,8 +211,8 @@ def anchored_paths(worktree: str, absorbed_id: str, *, excluding=()) -> list[str
     any modified in-lane page the caller has not declared a provenance page — and a merge has no
     claim to declare one. `delete` does declare them (`deletion.provenance_scrubs`) and that is
     right for ITS operation: a scrub only REMOVES a dead link, while this rewrites a value. Left
-    in, the veto arrives AFTER a steward has approved, the row lands `failed`, and because
-    `known_content_keys` excludes failed rows the pair is proposed again the next night — forever.
+    in, the veto arrives after the merge is derived, the row lands `failed`, and its key is
+    remembered — so the pair is never derived again and the finding stops being answered.
 
     A `sources/` page never reaches here at all: `page.stamp_source_fields` leaves `entity` absent
     by contract, so no source page names an id.
@@ -282,7 +282,7 @@ def plan(worktree: str, survivor_path: str, absorbed_path: str) -> list[dict]:
     then the registry — because the apply's proof is `recomputed == stored`, and two runs over the
     same bytes have to produce the same LIST rather than the same set.
 
-    Raises `RepairError`, with a sentence a steward reads verbatim, for anything this cannot do:
+    Raises `RepairError`, with a sentence published verbatim, for anything this cannot do:
     a page that is not an entity page, a pair that is one page, an entity the registry does not
     register, or an alias the contract linter would refuse.
     """
@@ -340,7 +340,7 @@ def plan(worktree: str, survivor_path: str, absorbed_path: str) -> list[dict]:
             f"{survivor_path} and {absorbed_path} already say what this merge would say — the "
             f"survivor already links the absorbed page and carries its spellings, the absorbed "
             f"page is already marked superseded, and nothing is still anchored to it. There is "
-            f"nothing here for a steward to approve")
+            f"nothing left here to repair")
     return ops
 
 
@@ -356,7 +356,7 @@ def _registered(worktree: str):
     inherited deliberately rather than worked around: those are exactly the states in which
     `stigmergy-entities regenerate` refuses to run, so a merge planned against one would store a
     registry prediction the apply could never produce. The `EntityError` is re-worded here because
-    it reaches a steward through the review lane and this package's refusals are `RepairError`.
+    it is published and this package's refusals are `RepairError`.
     """
     try:
         return generator.read_entity_pages(worktree)
@@ -450,7 +450,7 @@ def lane_for(ops) -> tuple[str, ...]:
 
 
 def plan_bytes(ops) -> int:
-    """How much of a steward's attention this plan is — `deletion.plan_bytes`, reused rather than
+    """How big this plan is — `deletion.plan_bytes`, reused rather than
     re-derived, so the two non-additive kinds cannot disagree about the measurement behind the
     ceiling they deliberately SHARE (`oversize_reason` below states the sharing; two
     implementations behind one number is what drifts)."""
@@ -591,9 +591,9 @@ def apply_declared(worktree: str, ops) -> tuple[list[str], list[gates.Finding]]:
         # round trip (`json.dumps` writes U+0085 raw; PyYAML folds it back to a space), so an
         # alias only a YAML escape can spell survives the plan and comes back different from the
         # regenerate. The byte-compare is what turns that from a silently wrong registry into a
-        # refusal a steward can read.
+        # refusal a person can read.
         return [], [_finding(REGISTRY_DRIFT_CODE,
-                             f"the registry {generator.FIX_COMMAND} produced is not the registry "
-                             f"this merge planned, so the approval does not describe what would "
-                             f"land", REGISTRY_RELPATH)]
+                             "the registry this regeneration produced is not the registry "
+                             "this merge planned, so the approval does not describe what would "
+                             "land", REGISTRY_RELPATH)]
     return schema.target_paths(ops), []

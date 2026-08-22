@@ -41,7 +41,6 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))       # so `tests.adversarial_payloads` resolves — see its docstring
 
 from stigmergy.capture import (  # noqa: E402
-    decisions,
     evidence,
     latency,  # noqa: E402
     queue,
@@ -51,7 +50,6 @@ from stigmergy.entities import generator  # noqa: E402
 from stigmergy.index import store  # noqa: E402
 from stigmergy.kernel import registry as registry_module  # noqa: E402
 from stigmergy.librarian import gitcmd  # noqa: E402
-from stigmergy.review_kinds import KIND_IDENTITY_PROPOSAL  # noqa: E402
 from tests import adversarial_payloads as payloads  # noqa: E402
 
 # The bare remote the composition publishes: loopback only, anonymous, push-enabled.
@@ -81,14 +79,13 @@ SECRET = f"Acme Corp handed us their CI token to debug the webhook: {payloads.GI
 
 # A name the seeded registry does not carry. Nothing parks on it: the librarian creates the entity
 # page with `approved_by` EMPTY, regenerates the registry and files the note anchored to the
-# newborn, all in ONE commit — and phase 5c has a steward confirm it afterwards.
+# newborn, all in ONE commit, born confirmed by whoever captured (ADR 044).
 PROPOSES_AN_ENTITY = "DOUBLE:propose=Globex Corp\nA note about the Globex Corp pilot.\n"
 PROPOSED_ID = "globex-corp"
 PROPOSED_NAME = "Globex Corp"
 PROPOSED_PAGE = f"{generator.ENTITIES_RELDIR}/{PROPOSED_NAME}.md"
 # Who confirms it in phase 5c. A second identity from the submitter on purpose: `approved_by` on
 # the page must name the person who DECIDED, never the person who captured the material.
-STEWARD = "e2e.steward@stigmergy.test"
 
 # The meeting flow, folded into the SAME drain — `worker.process_next` dispatches by `kind`, so
 # this needs no second worker and no second phase.
@@ -100,7 +97,7 @@ MEETING_MATERIAL = (
 
 
 def submit_meeting(conn, evidence_store, material: str) -> dict:
-    """`stigmergy-meeting drop`'s own enqueue seam, called directly rather than via subprocess."""
+    """The meeting kind's own enqueue seam — what `brain_submit(kind="meeting")` calls — used directly."""
     hints = {"title": MEETING_TITLE, "meeting_date": MEETING_DATE,
              "source_label": "granola-manual"}
     return queue.submit(conn, evidence_store, kind=schema.MEETING, material=material, hints=hints,
@@ -439,15 +436,16 @@ def main() -> int:
               and "@" in meeting["result_ref"], meeting["result_ref"])
 
         # OLD BEHAVIOUR: this capture parked on a question to its submitter and produced no page
-        # and no commit. It files now, and the name it is about is proposed beside it.
+        # and no commit; then it filed with the identity waiting on a steward. It files now and the
+        # identity is born confirmed by whoever captured (ADR 044).
         proposes = rows["proposes"]
         check("the capture about an unregistered entity was FILED, not parked",
               proposes["status"] == schema.FILED, proposes["report"].get("summary", "")[:120])
-        check("...and its report names the identity a steward still has to confirm",
-              [e.get("id") for e in proposes["report"].get("entities_proposed") or []]
+        check("...and its report names the identity its own capture introduced",
+              [e.get("id") for e in proposes["report"].get("entities_born") or []]
               == [PROPOSED_ID]
-              and "a steward confirms, merges or declines" in proposes["report"].get("summary", ""),
-              json.dumps(proposes["report"].get("entities_proposed")))
+              and "confirmed by you" in proposes["report"].get("summary", ""),
+              json.dumps(proposes["report"].get("entities_born")))
         check("...anchored to the entity born in the same commit",
               proposes["report"].get("anchored_to") == f"{PROPOSED_NAME} (`{PROPOSED_ID}`)",
               proposes["report"].get("anchored_to", ""))
@@ -542,59 +540,19 @@ def main() -> int:
         entity_page = gitcmd.run("show", f"{proposed_sha}:{PROPOSED_PAGE}", cwd=str(verify),
                                  check=False).stdout
         # The empty string IS the proposal mark: a page with a name in `approved_by` is confirmed,
-        # and one with nothing there is waiting on a steward.
-        check(f"{PROPOSED_PAGE} is on the remote in the note's OWN commit, unconfirmed",
+        # and the name on it is the submitter's: the capture is the approval.
+        check(f"{PROPOSED_PAGE} is on the remote in the note's OWN commit, confirmed by its "
+              f"submitter",
               entity_page.startswith("---")
-              and f'{generator.APPROVED_BY_KEY}: ""' in entity_page, f"{len(entity_page)} bytes")
-        before_entry = json.loads(gitcmd.run(
+              and f'{generator.APPROVED_BY_KEY}: "{SUBMITTER}"' in entity_page,
+              f"{len(entity_page)} bytes")
+        entry = json.loads(gitcmd.run(
             "show", f"{proposed_sha}:{generator.REGISTRY_RELPATH}", cwd=str(verify),
             check=False).stdout)["entities"][PROPOSED_ID]
-        check("...and the registry regenerated beside it carries the entry as proposed",
-              before_entry[registry_module.PROPOSED_KEY] is True
-              and before_entry[registry_module.APPROVED_BY_KEY] == "",
-              json.dumps(before_entry))
-
-        # The steward's own door, driven as a steward drives it: their clone, their identity, one
-        # pushed commit, one ledger row. `--by` is attribution; `preflight` still wants the clone's
-        # git identity, which a real steward has from their global config and a throwaway has not.
-        steward_checkout = clone_checkout(workdir, "steward")
-        gitcmd.run("config", "user.name", "e2e-steward", cwd=str(steward_checkout))
-        gitcmd.run("config", "user.email", STEWARD, cwd=str(steward_checkout))
-        approved = subprocess.run(
-            [*console_command("stigmergy-entities", "stigmergy.entities.cli"),
-             "--dsn", store.dsn(), "--repo", str(steward_checkout), "--json",
-             "approve", PROPOSED_ID, "--by", STEWARD],
-            cwd=str(ROOT), capture_output=True, text=True, env=child_env())
-        stderr_tail = (approved.stderr.strip().splitlines() or ["(no stderr)"])[-1]
-        check("`stigmergy-entities approve` confirmed it from the steward's own clone",
-              approved.returncode == 0, f"rc={approved.returncode}; {stderr_tail}")
-        decision = json.loads(approved.stdout) if approved.returncode == 0 else {}
-        check("...landing ONE more commit on the bare remote",
-              decision.get("commit", "\0") in remote_commits(verify),
-              decision.get("commit", "(none)")[:12])
-        check("...recorded in the review ledger as the steward's approval, so the librarian will "
-              "not re-propose it",
-              (decisions.latest_decision_for(conn, item_kind=KIND_IDENTITY_PROPOSAL,
-                                             item_id=PROPOSED_ID) or {}).get("verdict")
-              == decisions.APPROVE,
-              json.dumps(decisions.latest_decision_for(conn, item_kind=KIND_IDENTITY_PROPOSAL,
-                                                       item_id=PROPOSED_ID), default=str)[:160])
-
-        # A clone that has only ever seen the remote: the registry is DERIVED from the pages, so
-        # this is the one read that proves the page and the entry moved together.
-        confirmed = clone_checkout(workdir, "confirmed")
-        after_entry = json.loads(
-            (confirmed / generator.REGISTRY_RELPATH).read_text(encoding="utf-8")
-        )["entities"][PROPOSED_ID]
-        check("...and a fresh clone reads the entry as no longer proposed, approved by the steward",
-              after_entry[registry_module.PROPOSED_KEY] is False
-              and after_entry[registry_module.APPROVED_BY_KEY] == STEWARD,
-              json.dumps(after_entry))
-        confirmed_page = (confirmed / PROPOSED_PAGE).read_text(encoding="utf-8")
-        check("...derived from the entity page, which now names who confirmed it",
-              f'{generator.APPROVED_BY_KEY}: ""' not in confirmed_page
-              and STEWARD in confirmed_page,
-              f"{len(confirmed_page)} bytes")
+        check("...and the registry regenerated beside it names the same person",
+              entry[registry_module.APPROVED_BY_KEY] == SUBMITTER
+              and sorted(entry) == ["aliases", "approved_by", "name", "type"],
+              json.dumps(entry))
 
         print("\n-- phase 6: the latency measurement --", flush=True)
         status = read_status()

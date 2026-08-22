@@ -53,7 +53,7 @@ class _TimingOutClient:
 def test_reactions_add_treats_already_reacted_as_success_not_a_failure():
     """Event redelivery can retry an add that already landed — `already_reacted` is Slack's own
     honest "already in the state we wanted" answer, not an API failure, so it never reaches a
-    caller as `SlackApiError` (mirroring `users_lookup_by_email`'s `users_not_found` collapse)."""
+    caller as `SlackApiError` (the `tolerate` map's whole purpose)."""
     gateway = BoltSlackGateway(_StubClient("already_reacted"))
     result = _run(gateway.reactions_add("C1", "1.1", "hourglass_flowing_sand"))
     assert result == {"ok": True}

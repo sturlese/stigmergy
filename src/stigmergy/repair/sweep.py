@@ -7,7 +7,7 @@ announced an overlap with it, a markdown link at it. A bracket scanner unlinked 
 left every such sentence standing, syntactically correct and saying something that had stopped
 being true (the case ADR 043 records). So the bodies are written, in ONE model call over the whole
 referring set — a question about how a set of pages refers to something must see the set — and
-code proves the bounds a steward would check by eye:
+code proves the bounds a reader would otherwise have to check by eye:
 
   · the set of pages written IS the set of AUTHORED pages that refer to a going page — none
     outside it, none missing, none twice. A `views/` page is regenerated wholesale and a
@@ -75,9 +75,9 @@ MAX_REMOVED_PAGE_CHARS = 12_000
 REMOVED_LINE = "removed: "
 
 # How much of a model-supplied PATH a refusal quotes. The reasons below are read by a person and
-# stored in `repair_proposals.error`, and a `path` the model chose is untrusted text like any other
+# stored in `repairs.error`, and a `path` the model chose is untrusted text like any other
 # — control characters stripped, whitespace collapsed, clamped, exactly as every other
-# steward-facing sentence in this package treats one.
+# published sentence in this package treats one.
 MAX_REASON_PATH_CHARS = 200
 
 # A markdown link WITH its text, for the double's unlinking. The TARGET half is
@@ -320,7 +320,7 @@ def _dropped_unreferencing_lines(original: str, body: str, stems: set[str]) -> l
 # ── the road: one call, one retry, or a refusal naming the page ──────────────────────────────
 async def write(worktree: str, ops, *, skill_text: str, model_name: str | None = None,
                 spend: list | None = None) -> list[dict]:
-    """The plan with its bodies written, or a `RepairError` a steward reads verbatim.
+    """The plan with its bodies written, or a `RepairError` that is published verbatim.
 
     A plan that rewrites no page returns as it came: nothing refers to the going pages, so there
     is nothing to write and no model is asked. Otherwise ONE call over the whole referring set,

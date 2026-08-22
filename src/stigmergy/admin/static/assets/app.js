@@ -3,7 +3,7 @@
 
 import { api, clearToken, onUnauthorized, storedToken, storeToken } from "./api.js";
 import { page as pageCopy } from "./copy.js";
-import { notify, setMeta, setWindowDays, subscribe, windowDays } from "./state.js";
+import { setMeta, setWindowDays, windowDays } from "./state.js";
 import {
   banner, clear, el, explainer, icon, keyLegend, mountToasts, svg, themePicker, toast,
 } from "./ui.js";
@@ -11,9 +11,8 @@ import { activityView } from "./views/activity.js";
 import { captureDetailView, capturesView } from "./views/captures.js";
 import { dashboardView } from "./views/dashboard.js";
 import { digestView } from "./views/digest.js";
-import { entitiesView, entityDetailView } from "./views/entities.js";
+import { entitiesView } from "./views/entities.js";
 import { gardenerView } from "./views/gardener.js";
-import { inboxView } from "./views/inbox.js";
 import { indexView } from "./views/index.js";
 import { jobsView } from "./views/jobs.js";
 import { repairDetailView, repairsView } from "./views/repairs.js";
@@ -25,10 +24,9 @@ const GROUPS = [
     { hash: "dashboard", icon: "dashboard", render: dashboardView, window: true },
   ] },
   { label: "work", routes: [
-    { hash: "inbox", icon: "inbox", render: inboxView, badge: "inbox" },
     { hash: "captures", icon: "captures", render: capturesView, window: true },
     { hash: "entities", icon: "entities", render: entitiesView },
-    { hash: "repairs", icon: "repairs", render: repairsView, window: true },
+    { hash: "repairs", icon: "repairs", render: repairsView },
   ] },
   { label: "health", routes: [
     { hash: "gardener", icon: "gardener", render: gardenerView, window: true },
@@ -43,27 +41,24 @@ const GROUPS = [
 ];
 const ROUTES = GROUPS.flatMap((g) => g.routes);
 
-// `id` turns the matched segment into what the view's API takes: a row id for captures and
-// repairs, the registry id AS TYPED for an entity — `Number("acme-corp")` is `NaN`, and a proposal
-// opened from the inbox once asked the API for `entities/NaN`.
+// `id` turns the matched segment into what the view's API takes. Each route names its OWN parser
+// rather than sharing one: the segments are not all row numbers, and a blanket `Number(...)` once
+// turned a non-numeric id into `NaN` and asked the API for it.
 const DETAIL_ROUTES = [
   { pattern: /^captures\/(\d+)$/, parent: "captures", render: captureDetailView, id: Number },
-  { pattern: /^entities\/([^/]+)$/, parent: "entities", render: entityDetailView, id: decodeURIComponent },
   { pattern: /^repairs\/(\d+)$/, parent: "repairs", render: repairDetailView, id: Number },
 ];
 
 // The old tab names keep working — a bookmark must not land on the dashboard by surprise.
-const ALIASES = { overview: "dashboard", queue: "captures", crons: "jobs" };
+const ALIASES = { overview: "dashboard", queue: "captures" };
 
-// Why a steward was signed out, carried across the reload a 401 forces (sessionStorage, one shot).
+// Why the operator was signed out, carried across the reload a 401 forces (sessionStorage, one shot).
 const SIGNOUT_KEY = "stigmergy-ops-signout";
 
 const app = document.getElementById("app");
 let cleanup = null;
 let contentHost = null;
 let navButtons = new Map();
-let badgeNode = null;
-let badgeTimer = null;
 // A navigation token: a view that resolves after the next navigation started hands its cleanup
 // back to be run at once, so a fast second click can never leave the first view's poll alive.
 let navSeq = 0;
@@ -76,8 +71,8 @@ function currentRoute() {
     const match = raw.match(d.pattern);
     if (match) return { parent: d.parent, detail: true, render: (host) => d.render(host, d.id(match[1])) };
   }
-  // A page may carry a sub-path of its own (`#/inbox/identity` is the inbox, filtered); the page
-  // reads it off the hash itself, so only the head picks the route.
+  // A page may carry a sub-path of its own, read off the hash by the page itself; only the head
+  // picks the route.
   const route = ROUTES.find((r) => r.hash === raw.split("/")[0]);
   return route ? { parent: route.hash, render: route.render, window: route.window }
     : { parent: "dashboard", render: dashboardView, window: true };
@@ -113,7 +108,6 @@ async function navigate() {
   }
   cleanup = done;
   window.scrollTo({ top: 0 });
-  notify();
 }
 
 function windowPicker() {
@@ -125,19 +119,6 @@ function windowPicker() {
     }, `${days}d`));
   }
   return wrap;
-}
-
-async function refreshBadge(force = false) {
-  // The periodic refresh skips a hidden tab (no point polling a page nobody is looking at); the
-  // first load and a view change always fetch, or the badge would read "…" until the tab was
-  // focused once.
-  if (!badgeNode || (document.hidden && !force)) return;
-  try {
-    const inbox = await api.get("inbox");
-    badgeNode.textContent = String(inbox.count);
-    badgeNode.classList.toggle("zero", inbox.count === 0);
-    badgeNode.title = `${inbox.count} waiting on a human`;
-  } catch { /* the badge is a convenience; the inbox page says what is wrong */ }
 }
 
 function brandMark() {
@@ -155,12 +136,8 @@ function renderShell() {
     group.label ? el("div", { class: "eyebrow" }, group.label) : null,
     ...group.routes.map((route) => {
       const copy = pageCopy(route.hash);
-      const children = [icon(route.icon), copy.title];
-      if (route.badge === "inbox") {
-        badgeNode = el("span", { class: "badge zero" }, "…");
-        children.push(badgeNode);
-      }
-      const button = el("a", { class: "nav-item", href: `#/${route.hash}`, title: copy.purpose }, ...children);
+      const button = el("a", { class: "nav-item", href: `#/${route.hash}`, title: copy.purpose },
+        icon(route.icon), copy.title);
       navButtons.set(route.hash, button);
       return button;
     })));
@@ -197,9 +174,6 @@ function renderShell() {
     sessionStorage.setItem(SIGNOUT_KEY, "You were signed out — the token was refused. It may have been rotated or revoked; ask for the current one, or mint a new pair with stigmergy-admin-token.");
     window.location.reload();
   });
-  subscribe(() => refreshBadge(true));
-  refreshBadge(true);
-  badgeTimer = setInterval(() => refreshBadge(), 60000);
   navigate();
 }
 
@@ -259,5 +233,4 @@ async function boot() {
   }
 }
 
-window.addEventListener("beforeunload", () => { if (badgeTimer) clearInterval(badgeTimer); });
 boot();

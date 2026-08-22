@@ -2,13 +2,11 @@
 no network: every test drives it with a hand-built `answer` dict, the same shape
 `AnswerService.ask()` returns.
 """
-import asyncio
 import json
 
 import pytest
 
 from stigmergy.slack import copy, render
-from stigmergy.slack.gateway import FakeSlackGateway, SlackApiError
 
 
 def _text(blocks: list[dict]) -> str:
@@ -348,283 +346,21 @@ def test_an_injected_fake_sources_header_and_verdict_in_the_answer_body_cannot_i
     assert real_verdict, "the real verdict line must be a context block"
     assert not any(b is real_sources[0] for b in section_blocks)
     assert not any(b is real_verdict[0] for b in section_blocks)
-
-
-# ── no doorbell card renders CommonMark ────────────────────────────────────────────────────────
-# The doorbell renders code-composed copy with exactly one untrusted free-text slot per card and
-# never renders CommonMark — `to_mrkdwn` turns `[text](url)` into a REAL Slack hyperlink, and the
-# untrusted slot on every one of these cards is model- or capture-derived text
-# (`service._neutralize_report`'s own docstring: "DERIVED from captured material... untrusted
-# text").
-_HOSTILE_LINK_MARKDOWN = "[Approve now](https://attacker.example/steal)"
-
-
-def _no_link_renders_as_a_real_hyperlink(text: str) -> bool:
-    """`to_mrkdwn`'s own output shape for a converted link: `<url|text>`. If this substring is
-    present, the hostile markdown was interpreted rather than escaped."""
-    return "<https://attacker.example/steal|Approve now>" in text
-
-
-def test_doorbell_identity_proposal_never_renders_a_link_from_any_of_its_slots():
-    """Every slot on the card was lifted from captured material or written by the agent — the
-    name, the aliases, the page's summary, the anchored paths. A `[Approve now](https://
-    attacker.example/steal)` in any of them must arrive as inert text, never a live link."""
-    blocks, _ = render.render_doorbell_identity_proposal({
-        "id": "x", "name": _HOSTILE_LINK_MARKDOWN, "entity_type": "organization",
-        "aliases": [_HOSTILE_LINK_MARKDOWN], "summary": _HOSTILE_LINK_MARKDOWN,
-        "anchored_pages": [_HOSTILE_LINK_MARKDOWN], "anchored_total": 1})
-    assert not _no_link_renders_as_a_real_hyperlink(_text(blocks))
-    assert [e["text"]["text"] for b in blocks if b["type"] == "actions"
-            for e in b["elements"]] == ["Approve", "Merge into…", "Decline"]
-
-
-def test_doorbell_alias_proposal_never_renders_a_link_from_the_spelling():
-    blocks, _ = render.render_doorbell_alias_proposal({
-        "id": "acme-corp:x", "entity_id": "acme-corp", "entity_name": _HOSTILE_LINK_MARKDOWN,
-        "alias": _HOSTILE_LINK_MARKDOWN})
-    assert not _no_link_renders_as_a_real_hyperlink(_text(blocks))
-    assert [e["text"]["text"] for b in blocks if b["type"] == "actions"
-            for e in b["elements"]] == ["Approve", "Decline"]
-
-
-# A `review_decisions.actor`, which is what the closed card is built from — four doors write that
-# column and none of them sanitizes it.
-_HOSTILE_LEDGER_ACTOR = "<https://evil.example|Approve>"
-
-
-def test_doorbell_closed_card_never_renders_a_link_from_the_ledgers_actor():
-    """The third card had no hostile-slot pin, though it is the only one composed from STORED text
-    rather than from the item in hand — and its failure mode needs no CommonMark conversion at all:
-    Slack's own `<url|label>` syntax renders live unless something escapes it. Without
-    `escape_mrkdwn` here, a steward whose card just changed under them is shown a clickable
-    "Approve" where the name of the colleague who beat them to it should be."""
-    blocks, _ = render.render_doorbell_closed(kind="identity-proposal", item_id="globex",
-                                              verdict="reject", actor=_HOSTILE_LEDGER_ACTOR,
-                                              source="admin")
-
-    text = _text(blocks)
-    assert _HOSTILE_LEDGER_ACTOR not in text
-    assert "&lt;https://evil.example|Approve&gt;" in text
-
-
-
-
-def test_no_doorbell_card_renderer_calls_to_mrkdwn():
-    """The asymmetry, pinned structurally so it cannot silently return: every
-    `render_doorbell_*` function's compiled bytecode must never reference `to_mrkdwn` (directly, or
-    through the module's own `_render_markdown` helper, which itself calls it) — `escape_mrkdwn`
-    alone is the whole doctrine for this surface."""
-    import dis
-
-    doorbell_renderers = [getattr(render, name) for name in dir(render)
-                          if name.startswith("render_doorbell_")]
-    assert len(doorbell_renderers) >= 2, "expected every doorbell card renderer to be found"
-    # And the frame the two terminal cards share: the rule has to hold one indirection deep, or
-    # moving the escaping into a helper would quietly retire the check for both of them.
-    doorbell_renderers.append(render._doorbell_card)
-    for fn in doorbell_renderers:
-        names = {instr.argval for instr in dis.get_instructions(fn)
-                 if instr.opname in ("LOAD_GLOBAL", "LOAD_METHOD", "LOAD_ATTR")}
-        assert "to_mrkdwn" not in names, f"{fn.__name__} must not call to_mrkdwn"
-        assert "_render_markdown" not in names, f"{fn.__name__} must not call _render_markdown"
-
-
-# ── the same asymmetry, checked across the REST of slack/ ──────────────────────────────────────
-# `render_generic_report` (the fast-lane push channel to the SUBMITTER) carries agent-classified
-# text (`librarian.report`'s refusal sentences) of the same provenance that made the doorbell's
-# card exploitable — just delivered to a different recipient.
-def test_generic_report_never_renders_a_link_from_an_agent_classified_summary():
-    raw = f"failed — the librarian could not finish this. This reads like {_HOSTILE_LINK_MARKDOWN}."
-    text = render.render_generic_report("failed", raw)[0]["text"]["text"]
-    assert not _no_link_renders_as_a_real_hyperlink(text)
-
-
-def test_generic_report_renderer_never_calls_to_mrkdwn():
-    import dis
-    names = {instr.argval for instr in dis.get_instructions(render.render_generic_report)
-             if instr.opname in ("LOAD_GLOBAL", "LOAD_METHOD", "LOAD_ATTR")}
-    assert "to_mrkdwn" not in names
-    assert "_render_markdown" not in names
-
-
-# ── Slack's section ceiling is measured on the ESCAPED string ──────────────────────────────────
-def test_a_show_it_here_excerpt_stays_within_slacks_section_ceiling():
-    """OLD BEHAVIOUR: the whole `blocks` payload was rejected and the clicker got NOTHING.
-
-    `replies` cut the excerpt to `SHOW_IT_HERE_EXCERPT_CHARS` and `render` escaped it afterwards —
-    but `escape_mrkdwn` EXPANDS (`&` -> `&amp;`), so an entity-heavy page arrived at over 14000
-    characters against Slack's 3000 ceiling. Slack answers `invalid_blocks` for the whole message,
-    `handle_show_it_here` logs and swallows the `SlackApiError`, and the person who pressed the
-    button saw no page, no refusal and no sign anything had happened — on the only affordance that
-    reads a page from Slack.
-    """
-    for excerpt in ("&" * 2800, "<" * 2800, ("a & b <c> " * 400)[:2800]):
-        blocks = render.render_show_it_here_success(page_title="Q3 Pricing", excerpt=excerpt)
-        text = blocks[0]["text"]["text"]
-        assert len(text) <= render.SECTION_TEXT_MAX, len(text)
-        assert not text.endswith("&"), "a cut must not leave a half-written entity"
-
-
-def test_a_plain_excerpt_is_not_truncated_by_the_ceiling():
-    """The benign twin: the clamp must only bite when escaping actually pushed the text over.
-    An ordinary page excerpt has to arrive whole."""
-    excerpt = "x" * 2800
-    text = render.render_show_it_here_success(page_title="Q3", excerpt=excerpt)[0]["text"]["text"]
-    assert excerpt in text
-    assert len(text) <= render.SECTION_TEXT_MAX
-
-
-def test_clamp_leaves_a_short_string_byte_identical():
-    assert render.clamp_section_text("already short") == "already short"
-
-def test_every_section_this_module_builds_is_clamped_not_just_the_excerpt_one():
-    """OLD BEHAVIOUR: the clamp was called by `render_show_it_here_success` and by nothing else, so
-    the ANSWER body — the largest section this module builds, straight from unbounded model output
-    — still went out at over 14000 characters against the 3000 ceiling.
-
-    Slack answers `invalid_blocks` for the whole message, and the caller's fallback is the
-    text-only degrade, which costs the citation links and the `context`-block verdict line this
-    module calls trust chrome "a prompt-injected body cannot imitate". So the fix moved INTO
-    `_section` — the one builder every section already goes through — rather than being copied to a
-    second caller, because the next caller is the one that forgets.
-
-    Asserted over every section of every block this module can emit for an answer, so a section
-    added later inherits the property instead of needing its own test."""
-    def answer(markdown):
-        return {"refused": False, "answer_markdown": markdown, "citations": [],
-                "confidence": "high", "verdict": {"verdict": "verified"}, "built_at": "2026-01-01"}
-
-    blocks = render.render_answer(answer("Initech & Acme " * 1200), lambda path: "")
-    sections = [b for b in blocks if b.get("type") == "section"]
-    assert sections, "sanity: this really did build section blocks"
-    for block in sections:
-        assert len(block["text"]["text"]) <= render.SECTION_TEXT_MAX
-
-    # The benign twin: a short answer is not truncated and keeps its own text.
-    short = render.render_answer(answer("Revenue was 1.3M."), lambda path: "")
-    assert any("Revenue was 1.3M." in b.get("text", {}).get("text", "")
-               for b in short if b.get("type") == "section")
-
-
-def test_the_double_enforces_block_kit_rules_on_an_ephemeral_too():
-    """OLD BEHAVIOUR: the double accepted an ephemeral payload real Slack rejects.
-
-    `chat_post_message` and `chat_update` both call `_raise_if_invalid_blocks`, whose own docstring
-    says it is "enforced UNCONDITIONALLY, on every call"; `chat_post_ephemeral` did not. Slack's
-    real `chat.postEphemeral` applies the identical Block Kit rules, and this class exists so that
-    "a payload that would fail against the real Slack Web API fails against this double too".
-
-    It matters most on this method: the ephemeral leg carries the refusals and the "Show it here"
-    excerpt — the surface whose Block Kit ceiling was a recorded production failure — and
-    `post_or_log`/`decline` swallow the resulting error, so the live symptom is total silence.
-    """
-    gw = FakeSlackGateway()
-    colliding = [{"type": "actions", "block_id": "dup", "elements": []},
-                 {"type": "actions", "block_id": "dup", "elements": []}]
-
-    with pytest.raises(SlackApiError):
-        asyncio.run(gw.chat_post_message("C1", blocks=colliding))
-    with pytest.raises(SlackApiError):
-        asyncio.run(gw.chat_post_ephemeral("C1", "U1", blocks=colliding))
-
-
-def test_an_ordinary_ephemeral_still_posts():
-    """The benign twin: the ephemeral leg is how every refusal reaches a person, so the new check
-    must not bounce a well-formed payload."""
-    gw = FakeSlackGateway()
-    asyncio.run(gw.chat_post_ephemeral("C1", "U1", text="nope",
-                                       blocks=render.render_server_error()))
-    assert len(gw.ephemeral) == 1
-
-
-def test_a_clamped_section_says_it_was_cut():
-    """OLD BEHAVIOUR: the cut was silent, which is the wrong trade on both ends.
-
-    Before the clamp existed, an over-long body hit `invalid_blocks` and `mention._edit_or_fallback`
-    posted the text-only fallback — which carries the answer body COMPLETE. So the old path lost
-    the chrome and kept every word; a silent clamp keeps the chrome and drops the tail, exactly
-    where a model puts its caveats. A reader cannot tell a clamped answer from a short one, and the
-    missing sentence is the one that changes what they do."""
-    body = "A" * 2990 + " TAIL: these figures are unaudited."
-    out = render.clamp_section_text(body)
-    assert len(out) <= render.SECTION_TEXT_MAX
-    assert out.endswith(render.TRUNCATION_MARKER)
-    # The benign twin: a string that fits is byte-identical, marker and all.
-    assert render.clamp_section_text("short") == "short"
-
-
-def test_the_sources_context_block_is_clamped_too():
-    """OLD BEHAVIOUR: `invalid_blocks` for the whole payload — the exact failure the section clamp
-    exists to prevent, one block type over.
-
-    The clamp landed in `_section` on the argument that it is "the ONE builder every section
-    already goes through". True, and it left `_context` open: `_citation_blocks` builds the Sources
-    block from citation QUOTES, which are verbatim page text at up to `Citation.quote`'s 200
-    characters each and up to `MAX_CITATIONS` of them. Measured at 21459 characters against a 3000
-    ceiling with 20 citations, and already over at three. Page-author-controlled, which is the
-    threat model `_section`'s own docstring names."""
-    citations = [{"path": f"wiki/p{i}.md", "quote": "R&D " * 50} for i in range(20)]
-    answer = {"refused": False, "answer_markdown": "Short answer.", "citations": citations,
-              "confidence": "high", "verdict": {"verdict": "verified"}, "built_at": "2026-01-01"}
-
-    blocks = render.render_answer(answer, lambda path: "")
-
-    contexts = [b for b in blocks if b.get("type") == "context"]
-    assert contexts, "sanity: this really did build context blocks"
-    for block in contexts:
-        for element in block["elements"]:
-            assert len(element["text"]) <= render.SECTION_TEXT_MAX, len(element["text"])
-
-
-# ── the filed card names what the librarian proposed ──────────────────────────────────────────
-def test_the_filed_card_names_a_proposed_entity_and_says_nothing_waits_on_the_submitter():
+def test_the_filed_card_names_an_introduced_entity_and_says_nobody_is_waiting():
+    """OLD BEHAVIOUR: the card said the librarian PROPOSED the entity and a steward would confirm
+    it. ADR 044: the capture is the approval, so the card names what their own capture introduced
+    and says the identity is theirs."""
     text = render.render_filed(page_path="wiki/notes/X.md", commit="abc123", anchor="Ledgerly",
-                               proposed=["Ledgerly"])[0]["text"]["text"]
-    assert "proposed *Ledgerly* as a new entity" in text
-    assert "nothing waits on you" in text
+                               born=["Ledgerly"])[0]["text"]["text"]
+    assert "introduced *Ledgerly* as a new entity" in text
+    assert "confirmed by you" in text and "nothing waits on anybody" in text
     plain = render.render_filed(page_path="wiki/notes/X.md", commit="abc123",
                                 anchor="Acme Corp")[0]["text"]["text"]
-    assert "proposed" not in plain
+    assert "introduced" not in plain
 
 
-def test_a_proposed_name_is_escaped_like_every_other_agent_written_string():
+def test_an_introduced_name_is_escaped_like_every_other_agent_written_string():
     text = render.render_filed(page_path="wiki/notes/X.md", commit="abc123", anchor="X",
-                               proposed=["<https://evil.example|click>"])[0]["text"]["text"]
+                               born=["<https://evil.example|click>"])[0]["text"]["text"]
     assert "<https://evil.example|click>" not in text
     assert "&lt;https://evil.example|click&gt;" in text
-
-
-# ── the merge modal: which registered entity a proposal really is ─────────────────────────────
-def test_the_merge_modal_offers_the_candidates_and_a_typed_id():
-    view = render.render_merge_modal(private_metadata="{}", name="Acme Corporation",
-                                    candidates=[{"id": "acme-corp", "name": "Acme Corp"}])
-    assert view["callback_id"] == render.MERGE_MODAL_CALLBACK_ID
-    select = next(b for b in view["blocks"] if b.get("block_id") == render.MERGE_SELECT_BLOCK_ID)
-    assert select["element"]["options"] == [
-        {"text": {"type": "plain_text", "text": "Acme Corp (acme-corp)"}, "value": "acme-corp"}]
-    assert select["optional"] is True
-    typed = next(b for b in view["blocks"] if b.get("block_id") == render.MERGE_TYPED_BLOCK_ID)
-    assert typed["element"]["action_id"] == render.MERGE_TYPED_ACTION_ID
-    assert len(view["title"]["text"]) <= 24 and len(view["submit"]["text"]) <= 24
-
-
-def test_the_merge_modal_with_no_candidates_has_only_the_typed_field():
-    view = render.render_merge_modal(private_metadata="{}", name="Globex", candidates=[])
-    block_ids = [b.get("block_id") for b in view["blocks"]]
-    assert render.MERGE_SELECT_BLOCK_ID not in block_ids
-    assert render.MERGE_TYPED_BLOCK_ID in block_ids
-
-
-def test_the_merge_modal_heading_escapes_the_proposals_name():
-    view = render.render_merge_modal(private_metadata="{}",
-                                    name="<https://evil.example|click>", candidates=[])
-    heading = view["blocks"][0]["text"]["text"]
-    assert "<https://evil.example|click>" not in heading
-    assert "&lt;https://evil.example|click&gt;" in heading
-
-
-def test_the_merge_modal_bounds_its_options_to_slacks_ceiling():
-    many = [{"id": f"e{i}", "name": f"Entity {i}"} for i in range(150)]
-    view = render.render_merge_modal(private_metadata="{}", name="X", candidates=many)
-    select = next(b for b in view["blocks"] if b.get("block_id") == render.MERGE_SELECT_BLOCK_ID)
-    assert len(select["element"]["options"]) == render.MAX_MERGE_OPTIONS

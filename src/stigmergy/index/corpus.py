@@ -183,9 +183,9 @@ def _mentions_text(fm: dict) -> str:
 
 
 def _entity_meta_text(fm: dict, page_type: str) -> str:
-    """An entity page's own `role`/`aliases`, folded into the tsv source so steward-authored
-    metadata is lexically findable. Changes what MATCHES, never how a match is scored; only
-    `type: entity` pages contribute."""
+    """An entity page's own `role`/`aliases`, folded into the tsv source so metadata that lives
+    in the frontmatter — where no body-text extractor looks — is lexically findable. Changes what
+    MATCHES, never how a match is scored; only `type: entity` pages contribute."""
     if page_type != "entity":
         return ""
     role = str(fm.get("role", "") or "")

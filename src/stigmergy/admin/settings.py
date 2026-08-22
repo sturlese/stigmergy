@@ -13,18 +13,10 @@ from stigmergy.server.errors import StartupError
 
 TOKEN_HASH_ENV = "STIGMERGY_ADMIN_TOKEN_HASH"
 ACTOR_ENV = "STIGMERGY_ADMIN_ACTOR"
-GITHUB_TOKEN_ENV = "STIGMERGY_ADMIN_GITHUB_TOKEN"
-GITHUB_REPO_ENV = "STIGMERGY_ADMIN_GITHUB_REPO"
 CHANNELS_PATH_ENV = "STIGMERGY_ADMIN_CHANNELS_PATH"
 
 # Attribution, not authorization — the default `--by` every mutation form is prefilled with.
 DEFAULT_ACTOR = "admin-console"
-
-# Deliberately its own variable, not a reuse of `$STIGMERGY_GITHUB_REPO` (the index webhook's
-# repo — same repository in practice, different fact). No default: guessing an `<owner>/<repo>`
-# wrong would point the cron buttons at somebody else's repository; unset means the crons tab is
-# simply not configured.
-DEFAULT_WORKFLOWS_REPO = ""
 
 # `hash_token` produces lowercase sha256 hex, 64 chars. Any other non-empty value is refused at
 # startup rather than serving a console no token can ever open.
@@ -35,17 +27,10 @@ _SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 class AdminSettings:
     token_hash: str = ""
     actor: str = DEFAULT_ACTOR
-    github_token: str = ""
-    github_repo: str = DEFAULT_WORKFLOWS_REPO
     channels_path: str = ""
 
     def configured(self) -> bool:
         return bool(self.token_hash)
-
-    def github_configured(self) -> bool:
-        """Both halves or neither: a token with no repository builds `/repos//actions/...` and
-        fails at the API instead of failing here, where the operator can read why."""
-        return bool(self.github_token and self.github_repo)
 
     @classmethod
     def from_env(cls, env: dict | None = None) -> "AdminSettings":
@@ -60,7 +45,5 @@ class AdminSettings:
         return cls(
             token_hash=token_hash,
             actor=(source.get(ACTOR_ENV) or "").strip() or DEFAULT_ACTOR,
-            github_token=(source.get(GITHUB_TOKEN_ENV) or "").strip(),
-            github_repo=(source.get(GITHUB_REPO_ENV) or "").strip() or DEFAULT_WORKFLOWS_REPO,
             channels_path=(source.get(CHANNELS_PATH_ENV) or "").strip(),
         )

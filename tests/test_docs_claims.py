@@ -192,10 +192,12 @@ def test_the_guards_see_the_model_seam_family():
 
 
 def test_every_environment_variable_the_reference_docs_name_is_read_somewhere():
-    """`src/` and `tests/` are where Python reads one; `.github/workflows/` and the cron templates
-    in `deploy/workflows/` are where Actions does
-    (`STIGMERGY_READONLY_PAT` is a repository secret and appears in no Python at all). A variable
-    in none of the three is one an operator would set to no effect."""
+    """`src/` and `tests/` are where Python reads one; `.github/workflows/` is where this repo's
+    own CI does (`STIGMERGY_READONLY_PAT` is a repository secret and appears in no Python at all).
+    A variable in neither is one an operator would set to no effect.
+
+    There is no third place any more: `deploy/workflows/` held cron templates that read a handful
+    of variables Python never did, and ADR 044 moved every unattended pass into the worker."""
     def declared(paths) -> set[str]:
         return {name for path in paths if path.is_file()
                 for name in _ENV_NAME_RE.findall(
@@ -203,8 +205,7 @@ def test_every_environment_variable_the_reference_docs_name_is_read_somewhere():
 
     read = (declared((ROOT / "src").rglob("*.py"))
             | declared((ROOT / "tests").rglob("*.py"))
-            | declared((ROOT / ".github" / "workflows").rglob("*.yml"))
-            | declared((ROOT / "deploy" / "workflows").rglob("*.yml")))
+            | declared((ROOT / ".github" / "workflows").rglob("*.yml")))
     assert read, "no STIGMERGY_* variable found in the code — this check lost its source of truth"
 
     ghosts = sorted({f"{_rel(doc)}: {name}"

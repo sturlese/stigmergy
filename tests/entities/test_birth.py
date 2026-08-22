@@ -109,7 +109,7 @@ def test_an_alias_that_collides_with_a_different_entity_is_refused():
 
 def test_an_id_that_collides_is_refused_even_when_the_name_does_not():
     """Ordered name -> id -> aliases (module docstring): an id colliding via a DIFFERENT name is
-    the case where `--id` really is the problem, and the message says so.
+    the case where the id really is the problem, and the message says so.
 
     Constructed so the two matchers genuinely disagree: `slugify` (the id) and `normalize` (the
     name-collision matcher) fold differently — `slugify` drops `!` entirely while `normalize`
@@ -119,7 +119,7 @@ def test_an_id_that_collides_is_refused_even_when_the_name_does_not():
     """
     name = "Acme!!!"
     assert generator.canonical_id_for(name) == "acme"          # the id this name WOULD take
-    with pytest.raises(CollisionError, match="--id"):
+    with pytest.raises(CollisionError, match="given as the id"):
         _prepare(canonical_id="acme", name=name, entity_type="organization")
 
 
@@ -359,7 +359,7 @@ def test_a_minted_entity_page_anchors_to_its_own_registry_id():
 
 def test_the_self_anchor_is_the_DERIVED_id_the_registry_will_regenerate():
     """The anchor must be the id `generator.canonical_id_for` derives from the NAME — the same one
-    the next `stigmergy-entities regenerate` will produce from the page. Anchoring to anything else
+    the next regeneration of `ops/entity-registry.json` will produce from the page. Anchoring to anything else
     would put an id on the page that the registry does not contain, and `gate_anchoring` would
     then refuse every later page trying to anchor through it. Uses a multi-word name so the
     derived slug is visibly not the name."""

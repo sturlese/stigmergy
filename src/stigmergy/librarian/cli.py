@@ -22,8 +22,8 @@ import sys
 
 import psycopg
 
-from stigmergy.capture import decisions, latency, schema
 from stigmergy.capture import evidence as evidence_plane
+from stigmergy.capture import latency, schema
 from stigmergy.capture import queue as capture_queue
 from stigmergy.capture.render import (  # imported, never retyped — see `_report_interrupt`, `_cmd_status`
     RECLAIM_NOW,
@@ -58,10 +58,6 @@ def _connect(args):
     conn = store.connect(args.dsn)
     if getattr(args, "ensure_schema", True):
         schema.ensure_capture_schema(conn)   # idempotent; the CLI may be the first thing to run
-        # The worker READS the governance ledger on every item (a declined identity is never
-        # proposed twice), so the ledger must exist before the first claim: on a fresh database
-        # where the worker started before the server, every capture failed `UndefinedTable`.
-        decisions.ensure_decisions_schema(conn)
     return conn
 
 

@@ -50,7 +50,7 @@ kill_timeout = "300s"
   # EXPLICIT path for the same reason `--identities` already is one:
   # this process never receives `--repo`, so `ask`'s entity-first resolution would silently never
   # fire without it (`scripts/deploy_staging.sh` bakes the file to this exact path).
-  app = "stigmergy-server --transport http --host 0.0.0.0 --port 8080 --identities /app/identities.json --entity-registry /app/entity-registry.json --stewards /app/stewards.json"
+  app = "stigmergy-server --transport http --host 0.0.0.0 --port 8080 --identities /app/identities.json --entity-registry /app/entity-registry.json"
   # NOT `stigmergy-librarian run` directly. A container starts with no knowledge repo in it, so
   # `stigmergy-librarian-boot` clones it with the App's identity, verifies the checkout IS
   # `origin/main` — the worker reads the ACL config, the entity registry and the contract linter
@@ -62,7 +62,7 @@ kill_timeout = "300s"
   # mirror the `app` command above; the three Slack secrets
   # (SLACK_APP_TOKEN/SLACK_BOT_TOKEN/SLACK_TEAM_ID) and $STIGMERGY_INDEX_DSN come from the
   # environment, never from a flag here.
-  slack = "stigmergy-slack --identities /app/identities.json --entity-registry /app/entity-registry.json --stewards /app/stewards.json"
+  slack = "stigmergy-slack --identities /app/identities.json --entity-registry /app/entity-registry.json"
 
 [env]
   # Non-secret only. OPENAI_API_KEY, STIGMERGY_INDEX_DSN, STIGMERGY_TOKEN_STORE, the STIGMERGY_EVIDENCE_*
@@ -86,7 +86,10 @@ kill_timeout = "300s"
   # nothing here turns it on.
   STIGMERGY_ADMIN_CHANNELS_PATH = "/app/slack-channels.json"
 
-  # ── the worker group's configuration (inert for the server, which reads none of it) ──────────
+  # ── the worker group's configuration ─────────────────────────────────────────────────────────
+  # `[env]` is app-wide, so every process group sees these — and since ADR 044 D3 the server group
+  # READS none of them. It holds no git credential and writes nothing to the corpus: a removal is
+  # queued at `brain_delete` and performed by the worker, which is the one writer there is.
   # The knowledge repo it clones and files into — yours to set. https, not ssh: the App
   # authenticates over https through `stigmergy-librarian-credential`, and an ssh key would be a
   # second credential to manage.
@@ -105,6 +108,15 @@ kill_timeout = "300s"
   # precedence over `[env]` — plus that provider's own key (for example `openrouter:z-ai/glm-5.2`
   # with OPENROUTER_API_KEY), leaving this template pristine.
   STIGMERGY_LIBRARIAN_MODEL = "anthropic:claude-sonnet-5"
+  # The gardener's model, and it MUST be set here rather than left to its own default. Its default
+  # is a bare id, which resolves through the OpenAI Responses API — and `stigmergy-librarian-boot`
+  # strips OPENAI_API_KEY from the worker before exec'ing it, on purpose (it belongs to the READ
+  # path's embedder, and Fly secrets are app-wide). Since the night shift moved into the worker
+  # (ADR 044 D6) the gardener runs THERE, so the only provider key it can reach is the app-wide
+  # ANTHROPIC one. An unset value fails the nightly pass by name, with the reason in its
+  # `job_runs` row — rather than recording a `partial` run every night for a model half that
+  # never ran, or stopping a worker that has captures to file.
+  STIGMERGY_GARDENER_MODEL = "anthropic:claude-sonnet-5"
   # Tuned BY MEASUREMENT (ADR 028): the default 300s was calibrated for paste-sized captures; a
   # real figure-dense Drive deck (7.7 KB extracted, overlapping an entity with existing coverage)
   # exceeded it twice while a simpler deck filed just under it. Deck-sized documents earn a

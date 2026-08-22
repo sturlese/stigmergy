@@ -4,6 +4,7 @@ Status: accepted. Narrative:
 [`docs/reference/gardener-digest.md`](../reference/gardener-digest.md). Code maps:
 [`src/stigmergy/gardener/index.md`](../../src/stigmergy/gardener/index.md),
 [`src/stigmergy/digest/index.md`](../../src/stigmergy/digest/index.md).
+**Amended by** [ADR 044](./044-the-capture-is-the-approval.md) D6: the gardener's daily run moved from a GitHub Actions cron into the librarian worker's idle branch. What it DOES is untouched — findings-only, no Slack credential, no write path; the digest stays command-only, as D6 of [ADR 026](./026-the-purge.md) decided.
 
 ## Context
 

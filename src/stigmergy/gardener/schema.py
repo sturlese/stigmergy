@@ -10,12 +10,13 @@ from stigmergy.capture.schema import startup_ddl_lock
 JOB_NAME = "gardener"
 
 # ── severity ──────────────────────────────────────────────────────────────────────────────────
+# A closed, ordered vocabulary, and every reader of it — `report.py`'s grouped sections,
+# `digest.render`/`digest.sections`, the admin console's chips — spells it off these names.
 SEVERITY_INFO = "info"
 SEVERITY_WARN = "warn"
-SEVERITY_SLA = "sla"
-SEVERITIES = (SEVERITY_INFO, SEVERITY_WARN, SEVERITY_SLA)
-# Report order: SLA first, then WARN, then INFO — worst news first.
-SEVERITY_ORDER = (SEVERITY_SLA, SEVERITY_WARN, SEVERITY_INFO)
+SEVERITIES = (SEVERITY_INFO, SEVERITY_WARN)
+# Report order: WARN, then INFO — worst news first.
+SEVERITY_ORDER = (SEVERITY_WARN, SEVERITY_INFO)
 
 # ── source — the column's CHECK constraint accepts exactly these two ─────────────────────────
 SOURCE_DETERMINISTIC = "deterministic"
@@ -32,6 +33,10 @@ MAX_MODEL_DETAIL_CHARS = 200
 
 # The two CHECK constraints are the vocabularies above, spelled for SQL — a value the code can
 # produce and the column would reject is the drift these constants exist to make impossible.
+# One direction only: `CREATE TABLE IF NOT EXISTS` never narrows a constraint on a table that
+# already exists, so an already-deployed database keeps whatever vocabulary it was created with.
+# That is safe while the change is a REMOVAL (nothing can write the retired value any more) and is
+# the reason ADDING one needs a migration rather than an edit here.
 # `repr`, not `capture.schema.sql_literals`: that helper SORTS, and these CHECKs are already
 # committed to databases in DECLARATION order — sorting would change the constraint's definition
 # string. Safe only because both vocabularies are lowercase identifiers with no quote or backslash.

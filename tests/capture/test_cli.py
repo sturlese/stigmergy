@@ -493,10 +493,10 @@ def test_cli_a_database_fault_inside_a_subcommand_exits_2_instead_of_a_traceback
 
     Only the connect was guarded. Everything the stack can do to a live connection happens inside
     the command body instead: Postgres restarting, the container being stopped mid-`list`, a
-    dropped socket, an evidence store going away during `resolve`. Both drop doors already wrap
-    their whole dispatch (`drop_main`), so the same operator saw a clean sentence from
-    `stigmergy-meeting` and a stack trace from `stigmergy-queue` for the identical fault — and
-    exit 1 told a wrapper "your input was refused" when the truth was "the stack is down".
+    dropped socket, an evidence store going away during `resolve`. The drop CLIs of the time
+    wrapped their whole dispatch, so the same operator saw a clean sentence from one of them and
+    a stack trace from `stigmergy-queue` for the identical fault — and exit 1 told a wrapper
+    "your input was refused" when the truth was "the stack is down".
     """
     def boom(_conn, _args):
         raise psycopg.OperationalError("consuming input failed: server closed the connection")

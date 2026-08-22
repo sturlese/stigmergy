@@ -65,7 +65,7 @@ def _first_registry_entity() -> str:
 
 
 # TWO anchors, because the double reaches them by two different roads: an ordinary capture takes the
-# registry's first entry, while a proposing one anchors to the identity it just proposed — an id the
+# registry's first entry, while an introducing one anchors to the identity it just created — an id the
 # fixture's registry does not carry at all until the filing's own commit publishes it. DERIVED
 # through the generator's own `canonical_id_for`, never typed: an id is `slugify(name)` and a
 # literal here would silently stop describing the double the day either rule moved.
@@ -125,7 +125,7 @@ def test_a_proposing_capture_is_scored_as_ONE_phase_that_filed(rig, tmp_path):
     """**REPLACES the two-phase ask-back test (ADR 041).** A capture naming something the registry
     does not know used to park, wait for a reply through `BrainService.reply`, and be scored twice.
     It files in one pass now: the entity page, the regenerated registry and the note land in a
-    single commit, and a steward confirms the identity afterwards from an inbox no measurement
+    single commit, born confirmed by whoever captured — no inbox, and no measurement
     touches.
 
     Driven end to end rather than asserted on the scorer, because the composition is the thing that

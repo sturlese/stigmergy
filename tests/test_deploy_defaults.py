@@ -30,10 +30,9 @@ EMPTY_DEFAULTS = {
     "identities.json": {},
     "entity-registry.json": {"entities": {}},
     "slack-channels.json": {},
-    # the deployed app/slack groups hold no checkout, so the steward map has to ride
-    # the image like the three above. Empty means "nobody is on call" — which is the fail-closed
-    # posture every reader already takes, not a broken deploy.
-    "stewards.json": {},
+    # The deployed app/slack groups hold no checkout, so every ops control file a running process
+    # trusts has to ride the image. Empty means "resolves nobody" — the fail-closed posture every
+    # reader already takes, not a broken deploy.
 }
 
 _RESYNC = (
@@ -54,15 +53,23 @@ def test_the_committed_deploy_file_is_the_empty_default(name):
         f"deploy/{name} is not empty. {_RESYNC}")
 
 
-# The one directory `deploy/` is allowed to contain. It holds the four cron workflows an
-# operator copies into their own knowledge repo — deliberately NOT under `.github/workflows/`,
-# where GitHub would register them on this public repo and show three "Disabled" rows.
+# Which subdirectories `deploy/` is allowed to contain: NONE, today. It held `workflows/` — the
+# cron templates an operator copied into their own knowledge repo — until ADR 044 moved every
+# unattended pass inside the deployment and left nothing to schedule anywhere else.
 #
-# `_staged_run` seeds a tracked file into every directory named here before it runs the real
-# script, so this declaration has a RUNTIME counterpart instead of being a statement about a tree
-# nobody exercises. Extending the set therefore extends what the deploy script is proven to leave
-# alone, in the same edit.
-EXPECTED_SUBDIRS = {"workflows"}
+# The set is kept (rather than deleted with its last member) because it is the guard that makes the
+# NEXT subdirectory a decision instead of an accident: `workflows/` itself arrived here unreviewed,
+# under a check that could only see files.
+EXPECTED_SUBDIRS: set[str] = set()
+
+# What `_staged_run` seeds under the staged `deploy/`, so the script's "leave tracked files alone"
+# property is exercised whether or not the real tree currently has a subdirectory. It is
+# deliberately NOT derived from `EXPECTED_SUBDIRS` any more: it was, and when that set emptied the
+# runtime test would have kept passing while asserting nothing — a permanently-green test reads as
+# coverage. Every declared subdirectory is seeded too, so extending the set still extends what the
+# script is proven to leave alone, in the same edit.
+PROBE_SUBDIR = "probe-tracked-dir"
+SEEDED_SUBDIRS = frozenset({PROBE_SUBDIR}) | frozenset(EXPECTED_SUBDIRS)
 
 SIBLING_MARKER = "tracked.yml"
 
@@ -98,14 +105,13 @@ _ROSTER = {"someone@example.com": ["everyone", "finance"]}
 _REGISTRY = {"entities": {"acme-corp": {"name": "Acme Corp"}}}
 # Real-looking because the point of these tests is that real data does not survive the script:
 # a steward map is a list of people's email addresses, exactly like the identity roster.
-_STEWARDS = {"*": ["steward@example.com"], "wiki/finance/": ["cfo@example.com"]}
 _CHANNELS = {"everyone": "C0123456789"}
 
 
 def _staged_run(tmp_path):
     """Run the real deploy script against a fake knowledge repo and a stubbed `fly`.
 
-    Returns (deploy_dir, roster_fly_saw, stewards_fly_saw) — the directory as the script left it,
+    Returns (deploy_dir, roster_fly_saw) — the directory as the script left it,
     and the two people-bearing files the stub read at `fly deploy` time.
     """
     scripts = tmp_path / "scripts"
@@ -116,7 +122,7 @@ def _staged_run(tmp_path):
     # not, and that single difference is why the script's `rm -rf` on this directory went
     # unnoticed: there was nothing here to destroy, so the destruction was invisible to the one
     # test positioned to see it.
-    for sub in sorted(EXPECTED_SUBDIRS):
+    for sub in sorted(SEEDED_SUBDIRS):
         (tmp_path / "deploy" / sub).mkdir(parents=True)
         (tmp_path / "deploy" / sub / SIBLING_MARKER).write_text(_sibling_body(sub),
                                                                 encoding="utf-8")
@@ -126,7 +132,6 @@ def _staged_run(tmp_path):
     (ops / "identities.json").write_text(json.dumps(_ROSTER), encoding="utf-8")
     (ops / "entity-registry.json").write_text(json.dumps(_REGISTRY), encoding="utf-8")
     (ops / "slack-channels.json").write_text(json.dumps(_CHANNELS), encoding="utf-8")
-    (ops / "stewards.json").write_text(json.dumps(_STEWARDS), encoding="utf-8")
 
     # The stub copies what it was given aside on `deploy`, so the test can assert the bake
     # actually happened rather than inferring it from the restore.
@@ -136,21 +141,20 @@ def _staged_run(tmp_path):
     fly.write_text(
         "#!/usr/bin/env bash\n"
         'if [ "$1" = "deploy" ]; then cp deploy/identities.json "$SEEN"; '
-        'cp deploy/stewards.json "$SEEN_STEWARDS"; fi\n'
+        'fi\n'
         "exit 0\n", encoding="utf-8")
     fly.chmod(0o755)
 
     seen = tmp_path / "seen-by-fly.json"
-    seen_stewards = tmp_path / "seen-by-fly-stewards.json"
     env = {**os.environ,
            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
            "STIGMERGY_REPO": str(tmp_path / "knowledge"),
            "SEEN": str(seen),
-           "SEEN_STEWARDS": str(seen_stewards)}
+           }
     proc = subprocess.run(["bash", str(scripts / "deploy_staging.sh")],
                           capture_output=True, text=True, env=env, timeout=60)
     assert proc.returncode == 0, f"the deploy script failed:\n{proc.stdout}\n{proc.stderr}"
-    return tmp_path / "deploy", seen, seen_stewards
+    return tmp_path / "deploy", seen
 
 
 def test_a_deploy_leaves_no_real_roster_behind_in_the_tracked_deploy_dir(tmp_path):
@@ -159,7 +163,7 @@ def test_a_deploy_leaves_no_real_roster_behind_in_the_tracked_deploy_dir(tmp_pat
     identity roster (email -> ACL audiences) in the working tree, one `git add -A` from being
     committed. The suite only noticed afterwards, and on a public repo the push IS the disclosure.
     """
-    deploy_dir, _, _ = _staged_run(tmp_path)
+    deploy_dir, _ = _staged_run(tmp_path)
     for name, empty in EMPTY_DEFAULTS.items():
         got = json.loads((deploy_dir / name).read_text(encoding="utf-8"))
         assert got == empty, (
@@ -171,33 +175,34 @@ def test_the_deploy_itself_still_sees_the_real_roster(tmp_path):
     has to run with the real files in place, or the deployed image ships an empty roster and every
     identity resolves to nothing.
     """
-    _, seen, seen_stewards = _staged_run(tmp_path)
+    _, seen = _staged_run(tmp_path)
     assert seen.is_file(), "`fly deploy` never ran, so this proves nothing about the bake"
     assert json.loads(seen.read_text(encoding="utf-8")) == _ROSTER
     # The steward map is the second file here that is a list of real people, and the one that
     # decides who may APPROVE. Asserting it separately is what keeps the restore guard above from
     # being vacuous for it: without this, the staged run never wrote one, the script took its
     # `{}` branch, and `{} == {}` proved nothing.
-    assert json.loads(seen_stewards.read_text(encoding="utf-8")) == _STEWARDS
 
 
 def test_a_deploy_leaves_tracked_files_it_never_baked_untouched(tmp_path):
     """The fix for the second defect in this script, same shape as the first one above.
 
     OLD BEHAVIOUR: the script opened with `rm -rf "$DEPLOY_DIR"`, and `restore_deploy_defaults`
-    knew only the four JSON files. So one `make deploy-staging` deleted `deploy/workflows/`
+    knew only the JSON files above. So one `make deploy-staging` deleted `deploy/workflows/`
     — a README and four cron templates, all tracked — from the working tree, with nothing in the
     script able to put them back. The next `git add -A` commits that deletion, and `git add -A`
     is exactly what someone runs after deploying.
 
-    It stayed invisible because the two halves of the check never met: `EXPECTED_SUBDIRS` declared
-    `workflows/` but ran no script, and the test that ran the script ran it against a `tmp_path`
-    where the directory had never existed. `_staged_run` now seeds one from that same declaration,
-    which is the join that was missing.
+    It stayed invisible because the two halves of the check never met: the declaration of what
+    `deploy/` may contain ran no script, and the test that ran the script ran it against a
+    `tmp_path` where the directory had never existed. `_staged_run` seeds one now, which is the
+    join that was missing — and it seeds `PROBE_SUBDIR` unconditionally, so this stays a real
+    assertion in a tree that currently has no tracked subdirectory to lose.
     """
-    deploy_dir, _, _ = _staged_run(tmp_path)
+    deploy_dir, _ = _staged_run(tmp_path)
 
-    for sub in sorted(EXPECTED_SUBDIRS):
+    assert SEEDED_SUBDIRS, "nothing was seeded — this test would pass without asserting anything"
+    for sub in sorted(SEEDED_SUBDIRS):
         survivor = deploy_dir / sub / SIBLING_MARKER
         assert survivor.is_file(), (
             f"the deploy script destroyed deploy/{sub}/{SIBLING_MARKER}. It is tracked, nothing in "
@@ -213,7 +218,7 @@ def test_the_scripts_restored_defaults_are_the_ones_this_file_asserts(tmp_path):
     file calls the empty default are checked against each other, not written down twice and hoped
     to agree.
     """
-    deploy_dir, _, _ = _staged_run(tmp_path)
+    deploy_dir, _ = _staged_run(tmp_path)
     restored = {p.name: json.loads(p.read_text(encoding="utf-8"))
                 for p in sorted(deploy_dir.iterdir()) if p.is_file()}
     assert restored == EMPTY_DEFAULTS

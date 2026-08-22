@@ -9,10 +9,10 @@ else (lifespan included) flows to the inner app untouched.
 Gate order on the admin side: foreign `Host` -> 421, `/admin/api/*` without the admin bearer
 token -> generic 401, security headers on every response, static assets included.
 
-**The two Approve handlers and `metrics` run their service call in a worker thread**
-(`run_in_threadpool`), and they are the only ones that do. The approves reach code that clones the
-knowledge repo, runs the eight gates — `git` and `gitleaks` subprocesses — and pushes: seconds of
-blocking work, on the event loop of a process that is also serving the MCP tools; `metrics` is a
+**The handlers that touch the knowledge repo and `metrics` run their service call in a worker
+thread** (`run_in_threadpool`), and they are the only ones that do. A repair approve and a page
+removal clone the repo, run the nine gates — `git` and `gitleaks` subprocesses — and push: seconds
+of blocking work, on the event loop of a process that is also serving the MCP tools; `metrics` is a
 dozen aggregate queries the dashboard polls. The rejects stay inline because each is one
 statement. `AdminService`'s "no cursor across an `await`" invariant is untouched: the whole
 synchronous call happens inside the one thread, and the connection is the same autocommit one
@@ -30,7 +30,6 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from stigmergy.admin import auth
-from stigmergy.admin.github import ActionsError, ActionsGateway
 from stigmergy.admin.schema import ensure_admin_schema
 from stigmergy.admin.service import (
     DEFAULT_METRICS_DAYS,
@@ -42,7 +41,6 @@ from stigmergy.admin.service import (
 from stigmergy.admin.settings import AdminSettings
 from stigmergy.gardener.schema import ensure_gardener_schema
 from stigmergy.repair.schema import ensure_repair_schema
-from stigmergy.server import review
 
 log = logging.getLogger(__name__)
 
@@ -62,10 +60,10 @@ _MISDIRECTED = {"error": "misdirected request"}
 
 
 def compose(inner, *, conn, server_settings, admin_settings: AdminSettings | None = None,
-            gateway=None, evidence=None):
-    """Build the branch. `admin_settings`/`gateway` are injectable for tests; production
-    resolves both from the environment (a malformed token hash raises `StartupError` at startup —
-    fail closed and loudly)."""
+            evidence=None):
+    """Build the branch. `admin_settings` is injectable for tests; production resolves it from the
+    environment (a malformed token hash raises `StartupError` at startup — fail closed and
+    loudly)."""
     settings = admin_settings if admin_settings is not None else AdminSettings.from_env()
     if not settings.configured():
         return _Branch(inner, None)
@@ -76,12 +74,9 @@ def compose(inner, *, conn, server_settings, admin_settings: AdminSettings | Non
     ensure_admin_schema(conn)
     ensure_gardener_schema(conn)
     ensure_repair_schema(conn)
-    review.ensure_review_schema(conn)
 
-    if gateway is None and settings.github_configured():
-        gateway = ActionsGateway(settings.github_token, settings.github_repo)
     service = AdminService(conn, server_settings=server_settings, admin_settings=settings,
-                           gateway=gateway, evidence=evidence)
+                           evidence=evidence)
     public_hosts = _public_hosts_from_env()
     admin_app = _AdminGate(_build_admin_app(service), settings, public_hosts)
     return _Branch(inner, admin_app)
@@ -193,8 +188,6 @@ def _json_endpoint(fn):
             return JSONResponse({"error": str(ex)}, status_code=404)
         except AdminRefused as ex:
             return JSONResponse({"error": str(ex)}, status_code=409)
-        except ActionsError as ex:
-            return JSONResponse({"error": str(ex)}, status_code=502)
         except Exception as ex:  # noqa: BLE001 — the class name is the whole disclosure
             log.exception("admin endpoint failed (path=%s)", request.url.path)
             return JSONResponse(
@@ -296,10 +289,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
         return service.index_substrate_check()
 
     @_json_endpoint
-    async def inbox(_request):
-        return service.inbox()
-
-    @_json_endpoint
     async def metrics(request):
         try:
             days = int(request.query_params.get("days", str(DEFAULT_METRICS_DAYS)))
@@ -311,10 +300,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
         return await run_in_threadpool(service.metrics, days=days)
 
     @_json_endpoint
-    async def entities_list(_request):
-        return service.entities_list()
-
-    @_json_endpoint
     async def entities_registry(_request):
         return service.entities_registry()
 
@@ -322,20 +307,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
     async def entities_resolve(request):
         data = await _body(request)
         return service.entities_resolve(data.get("names"))
-
-    @_json_endpoint
-    async def entities_show(request):
-        return service.entities_show(request.path_params["id"])
-
-    @_json_endpoint
-    async def entities_decide(request):
-        # Off the event loop: a decision clones the knowledge repo and pushes — the MCP tools
-        # share this process.
-        data = await _body(request)
-        return await run_in_threadpool(
-            service.entity_decide, _str(data, "item_kind"), _str(data, "item_id"),
-            actor=_str(data, "actor"), verdict=_str(data, "verdict"), into=_str(data, "into"),
-            notes=_str(data, "notes"))
 
     @_json_endpoint
     async def entities_create(request):
@@ -354,12 +325,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
         return service.repair_show(request.path_params["id"])
 
     @_json_endpoint
-    async def repairs_approve(request):
-        data = await _body(request)
-        return await run_in_threadpool(service.repair_approve, request.path_params["id"],
-                                       actor=_str(data, "actor"))
-
-    @_json_endpoint
     async def pages_delete(request):
         data = await _body(request)
         paths = [p for p in (data.get("paths") or []) if str(p).strip()]
@@ -370,20 +335,6 @@ def _build_admin_app(service: AdminService) -> Starlette:
                                        why=_str(data, "why"))
 
     @_json_endpoint
-    async def repairs_reject(request):
-        data = await _body(request)
-        reason = _str(data, "reason")
-        if not reason.strip():
-            # The same shape `queue_reject` holds, and a stronger reason for it: a rejected row is
-            # the dismissal memory the proposer skips against, so a reason-less decline is a
-            # permanent "somebody said no" with nothing about why.
-            raise AdminBadRequest("'reason' is required — a rejected proposal is what stops the "
-                                  "proposer suggesting this repair again, and the reason is all a "
-                                  "later steward will have")
-        return service.repair_reject(request.path_params["id"], actor=_str(data, "actor"),
-                                     reason=reason)
-
-    @_json_endpoint
     async def activity(_request):
         return service.activity()
 
@@ -392,29 +343,8 @@ def _build_admin_app(service: AdminService) -> Starlette:
         return service.worker_status()
 
     @_json_endpoint
-    async def crons(_request):
-        return service.crons_state()
-
-    @_json_endpoint
-    async def cron_dispatch(request):
-        data = await _body(request)
-        inputs = data.get("inputs") or {}
-        if not isinstance(inputs, dict):
-            raise AdminBadRequest("'inputs' must be a JSON object")
-        return service.cron_dispatch(request.path_params["workflow_file"],
-                                     actor=_str(data, "actor"), inputs=inputs)
-
-    @_json_endpoint
-    async def cron_enable(request):
-        data = await _body(request)
-        return service.cron_set_enabled(request.path_params["workflow_file"],
-                                        actor=_str(data, "actor"), enabled=True)
-
-    @_json_endpoint
-    async def cron_disable(request):
-        data = await _body(request)
-        return service.cron_set_enabled(request.path_params["workflow_file"],
-                                        actor=_str(data, "actor"), enabled=False)
+    async def jobs(_request):
+        return service.jobs_state()
 
     routes = [
         Route(ADMIN_PREFIX, root, methods=["GET"]),
@@ -432,24 +362,15 @@ def _build_admin_app(service: AdminService) -> Starlette:
         Route(API_PREFIX + "digest/post", digest_post, methods=["POST"]),
         Route(API_PREFIX + "index", index_state, methods=["GET"]),
         Route(API_PREFIX + "index/check", index_check, methods=["POST"]),
-        Route(API_PREFIX + "inbox", inbox, methods=["GET"]),
         Route(API_PREFIX + "metrics", metrics, methods=["GET"]),
-        Route(API_PREFIX + "entities", entities_list, methods=["GET"]),
         Route(API_PREFIX + "entities/registry", entities_registry, methods=["GET"]),
         Route(API_PREFIX + "entities/resolve", entities_resolve, methods=["POST"]),
-        Route(API_PREFIX + "entities/decide", entities_decide, methods=["POST"]),
         Route(API_PREFIX + "entities/create", entities_create, methods=["POST"]),
-        Route(API_PREFIX + "entities/{id}", entities_show, methods=["GET"]),
         Route(API_PREFIX + "repairs", repairs_list, methods=["GET"]),
         Route(API_PREFIX + "repairs/{id:int}", repairs_show, methods=["GET"]),
-        Route(API_PREFIX + "repairs/{id:int}/approve", repairs_approve, methods=["POST"]),
-        Route(API_PREFIX + "repairs/{id:int}/reject", repairs_reject, methods=["POST"]),
         Route(API_PREFIX + "pages/delete", pages_delete, methods=["POST"]),
         Route(API_PREFIX + "activity", activity, methods=["GET"]),
         Route(API_PREFIX + "worker", worker, methods=["GET"]),
-        Route(API_PREFIX + "crons", crons, methods=["GET"]),
-        Route(API_PREFIX + "crons/{workflow_file}/dispatch", cron_dispatch, methods=["POST"]),
-        Route(API_PREFIX + "crons/{workflow_file}/enable", cron_enable, methods=["POST"]),
-        Route(API_PREFIX + "crons/{workflow_file}/disable", cron_disable, methods=["POST"]),
+        Route(API_PREFIX + "jobs", jobs, methods=["GET"]),
     ]
     return Starlette(routes=routes)

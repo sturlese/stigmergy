@@ -683,14 +683,15 @@ def test_resolve_entities_answers_the_registry_and_says_no_when_the_answer_is_no
 
 def test_a_near_miss_the_registry_cannot_resolve_comes_back_as_a_candidate_to_judge(toolbox):
     """The other direction, and the one issue #77 is about: a spelling the registry does not carry
-    is not "not registered, propose" by reflex — it is a JUDGMENT the agent has to make, and it can only
-    make it about candidates it can see.
+    is not "not registered, introduce it" by reflex — it is a JUDGMENT the agent has to make, and it
+    can only make it about candidates it can see.
 
     `Acme Corp Holdings` resolves to nothing (`canonical_id` folds accents and punctuation and
     deliberately not a qualifier or a legal form — see `kernel.normalize`), so the tool answers
     `resolved: false` AND hands over the registered `acme-corp` as a near miss. Anchoring is still
-    declaring that id and still meeting `gate_anchoring`; a genuinely new thing is a proposal. What
-    changed is that the candidate reaches the agent at all.
+    declaring that id and still meeting `gate_anchoring`; a genuinely new thing is declared in
+    `new_entities` and born in the same commit. What changed is that the candidate reaches the
+    agent at all.
     """
     payload = toolbox.resolve_entities(["Acme Corp Holdings"])
 
@@ -715,8 +716,8 @@ def test_a_registered_entity_with_no_page_yet_resolves_with_page_null(tmp_path):
     An entity is minted in `ops/entity-registry.json` by the steward flow; its page is written
     separately, and until it is, the registry knows the entity and the checkout has no page for it.
     `null` is not `resolved: false` — a model must be able to tell "this is an entity, anchor to it"
-    from "this is not registered, propose" — so it is asserted as its own outcome rather than folded
-    into either neighbour.
+    from "this is not registered, introduce it" — so it is asserted as its own outcome rather than
+    folded into either neighbour.
     """
     env = support.build_repo(str(tmp_path / "git"))
     registry_path = pathlib.Path(env.repo, *config.REGISTRY_RELPATH.split("/"))

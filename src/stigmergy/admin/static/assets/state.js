@@ -6,10 +6,9 @@ const WINDOW_KEY = "stigmergy-ops-window-days";
 let META = {
   actor_default: "admin-console", github: { configured: false }, workflows: [], entity_types: [],
   statuses: [], terminal_statuses: [], legacy_statuses: [], repair_kinds: [],
-  gardener_severities: [], item_kinds: [], decision_sources: [],
+  gardener_severities: [],
   metrics: { default_days: 30, max_days: 365 },
 };
-const listeners = new Set();
 
 export function setMeta(meta) {
   META = { ...META, ...meta };
@@ -26,13 +25,4 @@ export function windowDays() {
 
 export function setWindowDays(days) {
   sessionStorage.setItem(WINDOW_KEY, String(days));
-}
-
-export function subscribe(fn) {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
-}
-
-export function notify() {
-  for (const fn of listeners) fn();
 }

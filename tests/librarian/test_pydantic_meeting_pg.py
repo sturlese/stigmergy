@@ -271,20 +271,21 @@ def test_a_complete_distillation_that_cannot_anchor_and_proposes_nothing_is_the_
     assert result.report["cost_usd"] > 0
 
 
-def test_a_distillation_that_proposes_the_new_entity_files_the_set_with_the_entity_beside_it(
+def test_a_distillation_that_introduces_the_new_entity_files_the_set_with_the_entity_beside_it(
         tmp_path, clean_queue, require_gitleaks):
-    """The proposal, through a real `Agent.run` on the meeting flow: the account names the new
-    entity in `new_entities`, every decision anchors to it, and the commit carries the source page,
-    the meeting page, the decisions AND the proposed entity page — with the registry regenerated so
-    `entity: ["ledgerly"]` resolves on every decision."""
-    proposed = NewEntity(name=_UNREGISTERED, entity_type="organization",
+    """The birth, through a real `Agent.run` on the meeting flow: the account names the new entity
+    in `new_entities`, every decision anchors to it, and the commit carries the source page, the
+    meeting page, the decisions AND the newborn entity page — with the registry regenerated so
+    `entity: ["ledgerly"]` resolves on every decision, and the identity confirmed by whoever
+    submitted the meeting (ADR 044)."""
+    declared = NewEntity(name=_UNREGISTERED, entity_type="organization",
                          role="a prospect discussed at the sync", aliases=[],
                          summary="Ledgerly is a prospect the Q3 sync discussed.",
                          facts=["Discussed at the Q3 sync"], connections=[])
     env, deps, _ = _rig(tmp_path,
                         lambda: _test_model(_account(anchor_to=_UNREGISTERED,
                                                      link_entity=_UNREGISTERED, decisions=2,
-                                                     new_entities=[proposed])))
+                                                     new_entities=[declared])))
 
     support.submit_meeting(clean_queue, deps, f"{_TRANSCRIPT} Ledgerly came up as a prospect.")
     _, result = worker.process_next(clean_queue, deps)
@@ -296,8 +297,9 @@ def test_a_distillation_that_proposes_the_new_entity_files_the_set_with_the_enti
     for row in result.report["filed_meeting"]["decisions"]:
         page = support.read_filed_page(env.bare, sha, row["path"])
         assert 'entity: ["ledgerly"]' in page
-    assert result.report["entities_proposed"] == [
-        {"id": "ledgerly", "name": "Ledgerly", "type": "organization"}]
+    assert result.report["entities_born"] == [
+        {"id": "ledgerly", "name": "Ledgerly", "type": "organization",
+         "confirmed_by": support.DEFAULT_SUBMITTER}]
     assert result.report["cost_usd"] > 0
 
 

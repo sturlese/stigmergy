@@ -11,10 +11,12 @@ or the backlinks it is allowed to cite. This package is the ONLY writer of
 **Staleness is fixed by CONVERGENCE, not by a trigger per door.** The librarian worker runs
 `regenerate.sweep` periodically on its idle branch: it asks the corpus which entities diverge from
 `views/` right now and fixes those, so a view is never stale whatever wrote the page — an ordinary
-capture, a Slack or Drive drop, an applied repair, an entity mint, a hand edit. Three entry
-points, one guarantee and two latency optimisations on top of it: the periodic sweep (the
-guarantee), the post-meeting hook in `librarian.processing` (best-effort, same run as the filing),
-and `stigmergy-views regenerate` (the operator's).
+capture, a 🧠 gesture, a submitted meeting or document, an applied repair, a page REMOVED, an entity
+born, a hand edit. Two entry points, one guarantee and one latency optimisation on top of it: the
+worker's sweep (the guarantee) and the post-meeting hook in `librarian.processing` (best-effort,
+same run as the filing). There is no operator command — ADR 044 D3 removed it — and what replaces
+it is that the sweep also runs on the first idle tick AFTER the worker did something, so the wait
+is a poll interval rather than a sweep interval.
 
 A view's `acl` is the **INTERSECTION** of its members' audiences (`kernel.acl.view_acl`), never
 their union — a rollup must not widen access to what it summarizes. Backlinks are a governed but
@@ -29,13 +31,12 @@ agent's budget (`UsageLimitExceeded`).
 
 | Module | What it is |
 |---|---|
-| `cli.py` | `stigmergy-views regenerate` with a required target (`--entity` / `--stale` / `--all` / `--sweep`) plus `--force` |
 | `regenerate.py` | Orchestration: `regenerate_entity` (one entity, one commit), `run` (the shared batch base — one `job_runs` row per batch, the per-run ceiling, the cooperative `should_stop`) and `sweep` (the semantic wrapper: `run` over the union population off one corpus parse, under the deployment-wide advisory lock `VIEW_SWEEP_LOCK_KEY`). Owns `RegenOutcome`, `RunResult` and the whole `skip_reasons` vocabulary, because nothing here is deferred or skipped silently: `RUN_CEILING_REASON`, `STOPPED_EARLY_REASON` and `BRANCH_MOVED_REASON` (the three ways a batch stops early), `UNUSABLE_ID_REASON` (an id no view file can be named from) and `SWEEP_IN_FLIGHT_REASON` (another sweeper holds the lock) |
 | `staleness.py` | The READ-ONLY half: `view_relpath`/`view_path`, `ViewSignals` with `existing_signals`/`current_signals`/`view_is_current` (the staleness definition itself), `existing_member_hash` (the existence probe), `existing_view_ids`, `list_stale_entities`, `list_all_anchored_entities`, `list_sweep_entities` (the union). Imports neither `writer` nor `synthesis` |
 | `skeleton.py` | The deterministic half: `members_of`, `member_hash`, `backlinks_of`/`backlink_hash`, timeline and backlinks rendering, `entity_own_page` |
 | `synthesis.py` | The bounded agent: `build_view_agent`, `write_synthesis` (count-bounded by `VIEW_LIMITS` AND wall-clocked by `SYNTHESIS_TIMEOUT_S` — a hung provider call becomes a withheld synthesis, never a hung worker loop), `FakeViewWriter`, `ViewContext` and its `read_page` tool |
 | `render.py` | Assembles skeleton + synthesis into one page; owns the frontmatter shape, `WITHHELD_BLOCK`, `SYNTHESIS_CAPTION` |
-| `writer.py` | The one commit path: `commit_and_push` (App-bot authored), the steward-clone guards `ensure_on_branch`/`ensure_clean`. The origin's `owner/name` comes from `librarian.githubapp.repo_slug`, the ONE parser, never a copy here |
+| `writer.py` | The one commit path: `commit_and_push` (App-bot authored), the operator-clone guards `ensure_on_branch`/`ensure_clean`. The origin's `owner/name` comes from `librarian.githubapp.repo_slug`, the ONE parser, never a copy here |
 | `errors.py` | `ViewError`. `writer.ViewWriteError` is a `librarian.errors.GitError` subclass, caught via `LibrarianError` |
 
 Downstream: `librarian.processing` imports `views.regenerate` (the post-meeting hook) and so does
@@ -85,7 +86,7 @@ Downstream: `librarian.processing` imports `views.regenerate` (the post-meeting 
 
 - Never let `views/` count as its own member zone (`MEMBER_ZONES`) — the staleness hash would
   change on every write and never converge.
-- Never import `stigmergy.entities` (the worker would transitively depend on the steward's CLI
+- Never import `stigmergy.entities` (the worker would transitively depend on the identity rules
   package), nor `stigmergy.server`/`answer`/`capture` beyond `capture.ops` — pinned in
   `tests/test_architecture.py`.
 - Never put a write path into `staleness.py` — the gardener imports it and must never load the
@@ -94,8 +95,8 @@ Downstream: `librarian.processing` imports `views.regenerate` (the post-meeting 
   (`WITHHELD_BLOCK`), never a frontmatter value.
 - Never treat a view-regeneration fault as a meeting-filing fault: the worker's hook is
   best-effort, caught and recorded, never re-raised.
-- Never run the steward guards on the worker path (`guarded=False` — its ephemeral worktree is
-  always detached and clean) or skip them on the steward path.
+- Never run the clone guards on the worker path (`guarded=False` — its ephemeral worktree is
+  always detached and clean) or skip them on an operator's own clone.
 
 ## Contracts
 

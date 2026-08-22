@@ -3,13 +3,7 @@ a test that only proves a gate fires measures sensitivity, never specificity).""
 import pytest
 
 from stigmergy.admin import auth
-from stigmergy.admin.settings import (
-    ACTOR_ENV,
-    GITHUB_REPO_ENV,
-    GITHUB_TOKEN_ENV,
-    TOKEN_HASH_ENV,
-    AdminSettings,
-)
+from stigmergy.admin.settings import ACTOR_ENV, TOKEN_HASH_ENV, AdminSettings
 from stigmergy.server.errors import StartupError
 from stigmergy.server.identity import hash_token
 
@@ -17,30 +11,34 @@ from stigmergy.server.identity import hash_token
 def test_unset_env_means_not_configured():
     settings = AdminSettings.from_env({})
     assert not settings.configured()
-    assert not settings.github_configured()
     assert settings.actor == "admin-console"
-    # No default repository, deliberately: a guessed `<owner>/<repo>` would point one operator's
-    # cron buttons at somebody else's repository. Unset is unconfigured.
-    assert settings.github_repo == ""
 
 
-def test_a_github_token_without_a_repository_is_not_configured():
-    """Both halves or neither. A token with no repository builds `/repos//actions/...` and fails
-    at the API, where the operator cannot see why — so it fails here instead."""
-    settings = AdminSettings.from_env({GITHUB_TOKEN_ENV: "ghp_x"})
-    assert not settings.github_configured()
-    settings = AdminSettings.from_env({GITHUB_TOKEN_ENV: "ghp_x", GITHUB_REPO_ENV: "acme/brain"})
-    assert settings.github_configured()
+def test_the_console_holds_no_credential_for_another_service():
+    """The console's whole credential surface is its own token hash, and that is a property worth
+    a test rather than an observation: it used to carry a fine-grained GitHub PAT with Actions
+    read+write, so that a browser could dispatch the nightly crons. ADR 044 moved those passes
+    into the librarian worker, and the PAT went with them — a token that can start a workflow in
+    somebody's repository is not a credential to keep for a page that now only reads rows.
+
+    Written over the resolved settings rather than over the source file, so a re-added field fails
+    here whatever it is named."""
+    settings = AdminSettings.from_env({TOKEN_HASH_ENV: hash_token("t"),
+                                       "STIGMERGY_ADMIN_GITHUB_TOKEN": "ghp_x",
+                                       "STIGMERGY_ADMIN_GITHUB_REPO": "acme/brain"})
+    carried = {name: value for name, value in vars(settings).items()
+               if isinstance(value, str) and value in ("ghp_x", "acme/brain")}
+    assert not carried, (
+        f"AdminSettings picked up {sorted(carried)} from the environment — the console's only "
+        f"credential is its own token hash")
 
 
 def test_a_real_hash_configures_the_console():
     digest = hash_token("some-token")
-    settings = AdminSettings.from_env({TOKEN_HASH_ENV: digest, ACTOR_ENV: "steward",
-                                       GITHUB_TOKEN_ENV: "ghp_x", GITHUB_REPO_ENV: "a/b"})
-    assert settings.configured() and settings.github_configured()
+    settings = AdminSettings.from_env({TOKEN_HASH_ENV: digest, ACTOR_ENV: "steward"})
+    assert settings.configured()
     assert settings.token_hash == digest
     assert settings.actor == "steward"
-    assert settings.github_repo == "a/b"
 
 
 def test_a_malformed_hash_refuses_at_startup_not_silently():

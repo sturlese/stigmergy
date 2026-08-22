@@ -6,7 +6,7 @@
 # What this script does NOT do: create a Fly app, set Fly secrets, or create/touch the Supabase
 # project or the R2 bucket. Those are one-time operator setup steps, documented in the runbook —
 # this script only bakes the versioned ops files (identities, entity registry, slack channels,
-# stewards) from your knowledge-repo checkout into the `deploy/` staging directory, then runs
+# from your knowledge-repo checkout into the `deploy/` staging directory, then runs
 # `fly deploy` against an
 # ALREADY-created app.
 set -euo pipefail
@@ -25,16 +25,15 @@ DEPLOY_DIR="$HERE/deploy"
 #
 # ONE list, `name:empty-default`, and that is the point of it: the set this script CLEARS on the
 # way in and the set it RESTORES on the way out have to be the same set. They were not. The script
-# used to clear by deleting the whole directory, while the trap only ever knew these four files —
-# so when `deploy/workflows/` arrived beside them (four cron templates and a README, all
-# tracked), one `make deploy-staging` deleted them from the working tree and nothing here could
-# put them back. Blast radius larger than the repair, silently, for as long as it took someone to
+# used to clear by deleting the whole directory, while the trap only ever knew the files below —
+# so when a subdirectory arrived beside them (`deploy/workflows/`, cron templates and a README, all
+# tracked, since deleted with the crons themselves), one `make deploy-staging` deleted them from
+# the working tree and nothing here could put them back. Blast radius larger than the repair, silently, for as long as it took someone to
 # run a deploy and read `git status`. Derived from one list, the two cannot drift apart again.
 BAKED=(
   'identities.json:{}'
   'entity-registry.json:{"entities": {}}'
   'slack-channels.json:{}'
-  'stewards.json:{}'
 )
 
 restore_deploy_defaults() {
@@ -85,20 +84,6 @@ else
        "the safe empty default (not a failure)" >&2
 fi
 
-# the `app` and `slack` groups hold NO checkout, so `review.load_stewards`' read at
-# `origin/main` had nothing to read — the doorbell never rang and every entity-proposal decision
-# failed closed on a deployment whose steward was correctly configured. Baked like the three files
-# above, and the trade is the one `identities.json` already accepted: a redeploy to change it. The
-# worker, which HAS a checkout, still reads the repo at each item's base commit.
-if [ -f "$STIGMERGY_REPO/ops/stewards.json" ]; then
-  cp "$STIGMERGY_REPO/ops/stewards.json" "$DEPLOY_DIR/stewards.json"
-  echo "deploy: baked $STIGMERGY_REPO/ops/stewards.json -> deploy/stewards.json"
-else
-  echo '{}' > "$DEPLOY_DIR/stewards.json"
-  echo "deploy: no $STIGMERGY_REPO/ops/stewards.json yet — no scope resolves to a steward, so the" \
-       "doorbell records an undeliverable and every review decision fails closed (not a failure," \
-       "but nothing will be decidable until the map exists)" >&2
-fi
 
 cd "$HERE"
 fly deploy

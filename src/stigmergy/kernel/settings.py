@@ -6,8 +6,8 @@ import os
 _VALID_BACKENDS = ("openai", "fake", "fake-flawed")
 
 # The provider prefix → its key variable, for every family this stack PREFLIGHTS: the
-# librarian's startup check and the vision-OCR gate both read THIS map (the librarian's
-# `pydantic_backend` re-exports it, and its parametrized tests run off it). It lives HERE, not
+# librarian's startup check reads THIS map (the librarian's `pydantic_backend` re-exports it,
+# and its parametrized tests run off it). It lives HERE, not
 # in `kernel.llm`, so a keyless module can consult it without loading the agent framework. An
 # unlisted prefix is refused nowhere — pydantic-ai supports providers this table has not heard
 # of, and every check that consults it says so.

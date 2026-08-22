@@ -13,8 +13,6 @@ from pydantic_ai.exceptions import AgentRunError
 
 from stigmergy.digest import cli as digest_cli
 from stigmergy.gardener import cli, sweep
-from stigmergy.gardener.settings import SLACK_BOT_TOKEN_ENV
-from stigmergy.slack.bolt_gateway import BoltSlackGateway
 from tests.gardener import support
 
 
@@ -26,17 +24,6 @@ def _days_ago(n: int) -> str:
     # in the code. Do not simplify this back to `date.today()`.
     return (datetime.datetime.now(datetime.UTC).date() - datetime.timedelta(days=n)).isoformat()
 
-
-# ── _gateway: the real-vs-none construction, without ever posting ─────────────────────────────
-def test_gateway_is_none_when_no_bot_token_is_configured(monkeypatch):
-    monkeypatch.delenv(SLACK_BOT_TOKEN_ENV, raising=False)
-    assert cli._gateway() is None
-
-
-def test_gateway_constructs_a_real_gateway_when_a_bot_token_is_configured(monkeypatch):
-    monkeypatch.setenv(SLACK_BOT_TOKEN_ENV, "xoxb-test-token")
-    gateway = cli._gateway()
-    assert isinstance(gateway, BoltSlackGateway)
 
 
 # ── connection failure: local and specific, mirroring capture.cli's own posture ────
@@ -57,7 +44,7 @@ def test_unreachable_database_prints_a_clean_message_and_exits_config(capsys):
 # OTHER test in this file, which already proves the mature-database case works. ─────────────────
 def test_connect_ensures_every_schema_a_fresh_database_is_missing(conn, capsys, repo):
     with conn.cursor() as cur:
-        cur.execute("DROP TABLE IF EXISTS review_decisions CASCADE")
+        cur.execute("DROP TABLE IF EXISTS gardener_findings CASCADE")
     support.write_registry(repo, {})
     support.write_page(repo, "wiki", "notes/orphan.md",
                        frontmatter={"type": "note", "title": "Orphan", "entity": [],
@@ -71,8 +58,8 @@ def test_connect_ensures_every_schema_a_fresh_database_is_missing(conn, capsys, 
     assert captured.err == ""
     assert "orphan-page" in captured.out
     with conn.cursor() as cur:
-        cur.execute("SELECT to_regclass('review_decisions')")
-        assert cur.fetchone()[0] == "review_decisions"
+        cur.execute("SELECT to_regclass('gardener_findings')")
+        assert cur.fetchone()[0] == "gardener_findings"
 
 
 # ── the twin both CLIs declare in prose (`gardener/cli.py::_connect`: "Same shape and order as
@@ -95,7 +82,7 @@ def test_the_two_cli_connect_twins_ensure_the_same_schemas():
     ensured = _ensure_calls(cli)
     # Pinned before it is compared: two empty sets are equal, so an extractor that silently stopped
     # seeing calls would otherwise read as agreement.
-    assert ensured == {"ensure_capture_schema", "ensure_decisions_schema", "ensure_gardener_schema"}
+    assert ensured == {"ensure_capture_schema", "ensure_gardener_schema"}
     assert ensured == _ensure_calls(digest_cli)
 
 
@@ -166,8 +153,8 @@ def test_happy_path_prints_the_severity_grouped_report_and_exits_zero(conn, caps
     assert rc == 0
     assert out.startswith("# Gardener report — run #")
     assert "checked 1 pages, 0 entities — 10 deterministic checks" in out
-    assert "1 finding(s): 0 sla, 0 warn, 1 info" in out
-    assert "## SLA (0)" in out
+    assert "1 finding(s): 0 warn, 1 info" in out
+    assert "## WARN (0)" in out
     assert "orphan-page" in out
     assert "wiki/notes/orphan.md" in out
 
@@ -267,28 +254,6 @@ def test_json_flag_carries_model_id_for_a_model_sourced_finding(conn, capsys, re
     assert len(model_rows) == 1
     from stigmergy.gardener.settings import DEFAULT_GARDENER_MODEL
     assert model_rows[0]["model_id"] == DEFAULT_GARDENER_MODEL
-
-
-
-# ── a malformed channels file, end to end through the CLI ───────────────────────────────────────
-def test_malformed_channels_file_does_not_fail_a_run_with_nothing_to_post(conn, capsys, repo):
-    """`channels.channel_audiences` used to be resolved unconditionally, before the SLA
-    short-circuit — an info/warn-only run (which never touches Slack at all) used to fail
-    outright on a malformed `ops/slack-channels.json`, and lose its own report doing so (the
-    `IdentityError` propagated past this module's own `print(report...)` calls in `_run`)."""
-    support.write_registry(repo, {})
-    support.write_page(repo, "wiki", "notes/orphan.md",
-                       frontmatter={"type": "note", "title": "Orphan", "entity": [],
-                                   "status": "developing", "updated": _days_ago(1)})
-    support.rebuild_index(conn, repo)
-    support.write_malformed_channels_file(repo)   # default --channels path: <repo>/ops/slack-channels.json
-
-    rc = cli.main(["--repo", repo])
-
-    captured = capsys.readouterr()
-    assert rc == 0
-    assert captured.err == ""
-    assert "orphan-page" in captured.out
 
 
 

@@ -251,37 +251,24 @@ def submit(conn, deps: processing.Deps, material: str, *, submitted_by: str = DE
                         submitted_by=submitted_by)
 
 
-def submit_drive(conn, deps: processing.Deps, document_bytes: bytes, *,
-                 submitted_by: str = DEFAULT_SUBMITTER, drive_name: str = "notes.md",
-                 drive_url: str = "https://drive.google.com/file/d/TESTID123456/view",
-                 with_bytes_blob: bool = True) -> dict:
-    """`submit`'s drive-kind sibling — exactly what `stigmergy.capture.drive_cli._cmd_drop`
-    enqueues: a deterministic manifest as the row's material, the ORIGINAL BYTES as
-    `blob_refs[1]` (`extra_blob_refs`), and the drive hints. `with_bytes_blob=False` builds the
-    malformed row the conversion stage must refuse honestly (a drive row nothing but the CLI
-    should ever produce — but the worker cannot assume that)."""
-    import hashlib as _hashlib
-    digest = _hashlib.sha256(document_bytes).hexdigest()
-    manifest = ("Drive capture manifest\n"
-                f"file: {drive_name}\n"
-                "drive_file_id: TESTID123456\n"
-                f"url: {drive_url}\n"
-                "mime: application/pdf\n"
-                f"bytes_sha256: {digest}\n"
-                f"bytes: {len(document_bytes)}\n")
-    hints = {"title": drive_name.rsplit(".", 1)[0], "drive_file_id": "TESTID123456",
-             "drive_name": drive_name, "drive_url": drive_url,
-             "drive_mime": "application/pdf", "drive_modified": "2026-08-01T00:00:00.000Z"}
-    extra = (deps.evidence.put(document_bytes),) if with_bytes_blob else ()
-    return queue.submit(conn, deps.evidence, kind=schema.DRIVE, material=manifest, hints=hints,
-                        submitted_by=submitted_by, extra_blob_refs=extra)
+def submit_document(conn, deps: processing.Deps, text: str, *,
+                    submitted_by: str = DEFAULT_SUBMITTER, title: str = "notes",
+                    source_url: str = "https://drive.google.com/file/d/TESTID123456/view") -> dict:
+    """`submit`'s document-kind sibling — exactly what `brain_submit(kind="document")` enqueues:
+    the document's TEXT as the row's material and the two hints a document takes (`title`, and
+    `source_url` when the submitter says where it came from; `""` sends none)."""
+    hints = {"title": title}
+    if source_url:
+        hints["source_url"] = source_url
+    return queue.submit(conn, deps.evidence, kind=schema.DOCUMENT, material=text, hints=hints,
+                        submitted_by=submitted_by)
 
 
 def submit_meeting(conn, deps: processing.Deps, material: str, *,
                    submitted_by: str = DEFAULT_SUBMITTER, title: str = "Q3 sync",
                    meeting_date: str = "2026-07-29", attendees: str = "") -> dict:
-    """`submit`'s meeting-kind sibling — the drop CLI's own hints (title, meeting_date,
-    attendees), enqueued the same way `stigmergy.capture.meeting_cli._cmd_drop` does."""
+    """`submit`'s meeting-kind sibling — the hints a meeting takes (title, meeting_date,
+    attendees), enqueued exactly as `brain_submit(kind="meeting")` does."""
     hints = {"title": title, "meeting_date": meeting_date, "source_label": "granola-manual"}
     if attendees:
         hints["attendees"] = attendees

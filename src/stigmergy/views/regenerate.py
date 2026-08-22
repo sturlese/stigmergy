@@ -31,7 +31,7 @@ from stigmergy.views.staleness import (
 
 JOB_NAME = "views"
 # The periodic convergence pass's own job name, so an operator reading `job_runs` can tell a
-# maintenance pass from an operator's `stigmergy-views regenerate` and from the post-meeting hook.
+# maintenance pass from the post-meeting hook.
 SWEEP_JOB_NAME = f"{JOB_NAME}-sweep"
 
 # The convergence pass's mutual-exclusion key. Two sweepers are a supported SHAPE (two workers on
@@ -73,7 +73,7 @@ class RegenOutcome:
 @dataclass(frozen=True)
 class _RemovalCause:
     """Why a view was removed, in the two lengths its two readers need: `tail` closes the commit
-    subject somebody skims in `git log`, `message` is the sentence a steward reads on the terminal
+    subject somebody skims in `git log`, `message` is the sentence an operator reads on the terminal
     and in `--json`. ONE object per cause, so the log and the report can never name different
     causes for the same write — which is what happened while the CLI had to guess: it knew a
     removal had occurred and not which road led there, so it stated one of the two as fact for
@@ -114,7 +114,7 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
                             force: bool = False, guarded: bool = True,
                             rows=None) -> RegenOutcome:
     """One entity, one call, one commit (or none, on a no-op/refusal). `guarded=True` (the CLI's
-    steward-clone path) runs the dirty-tree/wrong-branch checks before writing anything;
+    operator-clone path) runs the dirty-tree/wrong-branch checks before writing anything;
     `guarded=False` (the librarian worker, whose ephemeral worktree is always a fresh checkout)
     skips them, since neither condition is reachable there.
 
@@ -153,7 +153,7 @@ async def regenerate_entity(repo: str, entity_id: str, *, registry: Registry, br
     # choke point nothing may escape `views/` through), and a raise inside a batch loop that
     # catches only `KeyboardInterrupt` costs the WHOLE pass, every interval, forever. Refused by
     # name instead — never filtered out of the population, which would converge the pass and leave
-    # the steward who typed the id waiting for a rollup nobody is building.
+    # the person who typed the id waiting for a rollup nobody is building.
     if not is_usable_view_id(entity_id):
         return RegenOutcome(
             entity_id=entity_id, entity_name=entity_id, action="refused-unusable-id",
@@ -412,13 +412,13 @@ async def sweep(repo: str, conn, *, registry: Registry, branch: str = "main", fo
     """The CONVERGENCE pass: `run` over the union population, off one corpus parse, ONE AT A TIME
     across the whole deployment.
 
-    The semantic wrapper both unattended and operator callers reach for — the librarian worker's
-    idle pass and `stigmergy-views regenerate --sweep` — so "which population converges `views/`"
-    is answered once, here, and never at a call site. Everything else (the commits, the `job_runs`
+    The ONE population that converges `views/`, answered here and never at a call site — the
+    worker's idle pass is its only caller now, and a second one would have to come through this
+    function rather than build a population of its own. Everything else (the commits, the `job_runs`
     row, the ceiling) is `run`'s, unchanged.
 
     It is state-based rather than triggered: it asks the corpus what is divergent NOW, so it covers
-    every door that ever wrote a page — an ordinary capture, a Slack or Drive drop, an applied
+    every door that ever wrote a page — an ordinary capture, a Slack drop, an applied
     repair, an entity mint, a hand edit — without any of them having to remember to call it.
 
     **The advisory lock is here rather than at the call sites** because two sweepers is a supported

@@ -2,14 +2,14 @@
 
 `test_filing_scorer.py` proves the scorer discriminates; every `observed` dict there is written by
 hand. That is exactly the shape of a yardstick that lies: rename `pages_edited` in `report.py`, or
-write the proposed identities under a key the instrument does not read, and the scorer tests stay
+write the identities it introduced under a key the instrument does not read, and the scorer tests stay
 green while the facet reports 0.00 for every backend forever — a number that reads as a failing
 model and is actually a broken instrument. It would be discovered after paying for a real run, and
 nothing in the table would say so.
 
 That is not hypothetical, and this file is where it was caught twice. The plural collapse retired
 `report.needs_input`'s singular ask key and the two park cases here had to move; ADR 041 then
-retired `needs_input` itself, and `proposals` reads `entities_proposed` off the SAME reports that
+retired `needs_input` itself, and `proposals` reads `entities_born` off the SAME reports that
 carry `page_path` and `pages_edited` — a rename there is exactly as invisible and exactly as
 expensive, so the cases that moved were replaced rather than dropped.
 
@@ -240,10 +240,10 @@ def test_the_duplicate_refusal_carries_the_reason_code_F04_is_scored_on(filed, e
 def test_the_identity_a_filing_proposed_is_observed_off_the_reports_own_key(filed, expectations):
     """**REPLACES the two park cases.** `report.needs_input` used to carry the names a capture had
     stopped on; ADR 041 removed the function with the state, and the same judgment now arrives as
-    `entities_proposed` on an ORDINARY `report.filed` — the identities the filing created
+    `entities_born` on an ORDINARY `report.filed` — the identities the filing created
     unconfirmed, in the commit that landed the page.
 
-    That move is the reason this test exists rather than a scorer-level one. `entities_proposed` is
+    That move is the reason this test exists rather than a scorer-level one. `entities_born` is
     one key on a report the instrument already reads for four other facets, so a rename there is
     silent: `proposals` would score 0.00 for every backend forever while the table read as a model
     that never recognises anything, which is precisely the shape of the failure this file is for.
@@ -255,7 +255,7 @@ def test_the_identity_a_filing_proposed_is_observed_off_the_reports_own_key(file
     rep = report_module.filed(
         page_path=NOTE, commit=sha, anchoring={"kind": "entity", "entities": ["Halcyon Grid"]},
         links=[], overlaps=[], findings=[],
-        entities_proposed=[{"id": "halcyon-grid", "name": "Halcyon Grid", "type": "organization"}])
+        entities_born=[{"id": "halcyon-grid", "name": "Halcyon Grid", "type": "organization"}])
 
     observed = _observe(_result(schema.FILED, f"{NOTE}@{sha}", rep), 1, env)
 
@@ -281,35 +281,35 @@ def test_a_filing_that_proposed_nothing_observes_an_empty_list_rather_than_a_mis
                                   observed)["proposals"] is False
 
 
-def test_a_proposed_SPELLING_is_observed_beside_the_score_and_never_inside_it(filed):
+def test_an_ADDED_SPELLING_is_observed_beside_the_score_and_never_inside_it(filed):
     """The near miss a red `proposals` cell needs in front of it, and the one thing that must not be
-    folded into the facet: a filing that read the name as a REGISTERED entity's spelling proposed an
-    alias instead of an identity. That is a different — and often correct — outcome, so it is
-    reported and never scored. Folding it in would let a backend that recognised nothing new score
-    the facet by proposing spellings."""
+    folded into the facet: a filing that read the name as a REGISTERED entity's spelling taught the
+    registry an alias instead of introducing an identity. That is a different — and often correct —
+    outcome, so it is reported and never scored. Folding it in would let a backend that recognised
+    nothing new score the facet by adding spellings."""
     env, sha = filed
     rep = report_module.filed(
         page_path=NOTE, commit=sha, anchoring={"kind": "entity", "entities": ["Northwind Freight"]},
         links=[], overlaps=[], findings=[],
-        aliases_proposed=[{"entity": "northwind-freight", "alias": "Northwind"}])
+        aliases_added=[{"entity": "northwind-freight", "alias": "Northwind"}])
 
     observed = _observe(_result(schema.FILED, f"{NOTE}@{sha}", rep), 1, env)
 
-    assert observed["proposed_aliases"] == ["northwind-freight: Northwind"]
+    assert observed["added_aliases"] == ["northwind-freight: Northwind"]
     assert observed["proposals"] == []
     assert run_filing.score_phase({"proposals": ["Northwind"]}, observed)["proposals"] is False
 
 
 # ── the meeting: a page SET, each decision anchoring on its own ────────────────────────────────
 
-def _meeting_report(sha, *, entities_proposed=()):
+def _meeting_report(sha, *, entities_born=()):
     return report_module.filed_meeting(
         source_pages=[SOURCE], meeting_page=MEETING, commit=sha,
         decisions=[{"path": ENTITY_DECISION,
                     "anchoring": {"kind": "entity", "entities": ["Northwind Freight"]}},
                    {"path": COMPANY_DECISION,
                     "anchoring": {"kind": "company", "reason": "applies everywhere"}}],
-        entities_proposed=list(entities_proposed))
+        entities_born=list(entities_born))
 
 
 def test_a_filed_meeting_meets_F08s_expectation_with_each_decisions_own_anchor(filed,
@@ -334,7 +334,7 @@ def test_a_filed_meeting_meets_F08s_expectation_with_each_decisions_own_anchor(f
 def test_a_meeting_proposes_through_the_same_key_the_fast_lane_does(filed, expectations):
     """The meeting half of the proposal observation, and the point ADR 041 argues: the same input
     must not behave differently per door. `filed_meeting` is a different builder from `filed` and it
-    carries `entities_proposed` under the same name, so one read serves both flows — which is what
+    carries `entities_born` under the same name, so one read serves both flows — which is what
     lets F09 be scored on the facet F02 is scored on rather than on a meeting-shaped variant of it.
 
     Only the `proposals` cell of F09's expectation is asserted, and that is a property of THIS
@@ -344,7 +344,7 @@ def test_a_meeting_proposes_through_the_same_key_the_fast_lane_does(filed, expec
     """
     env, sha = filed
     entry = expectations["F09-meeting-proposes"]
-    rep = _meeting_report(sha, entities_proposed=[{"id": "project-wren", "name": "Project Wren",
+    rep = _meeting_report(sha, entities_born=[{"id": "project-wren", "name": "Project Wren",
                                                    "type": "project"}])
 
     observed = _observe(_result(schema.FILED, f"{MEETING}@{sha}", rep), 1, env)

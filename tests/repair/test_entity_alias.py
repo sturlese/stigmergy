@@ -2,7 +2,7 @@
 
 No database, no git history, no gates — `test_deletion.py`'s posture, and for the same reason: this
 kind's whole safety argument is that `plan` is a deterministic function of what is on disk, so it
-has to be provable against a directory. The APPLY through a real clone and the eight gates is
+has to be provable against a directory. The APPLY through a real clone and the nine gates is
 `test_remote_pg.py`'s; the propose road is `test_propose_entity_alias_pg.py`'s.
 
 **The constraint this file exists to pin, and it is not a choice.** The knowledge repo's own

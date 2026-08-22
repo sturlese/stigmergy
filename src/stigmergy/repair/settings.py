@@ -1,13 +1,13 @@
-"""Runtime configuration for `stigmergy-repair` — env-tunable, read in ONE place.
+"""Runtime configuration for the repair pass — env-tunable, read in ONE place.
 
 `RepairSettings.from_env` is the only function in this package that consults the environment, and
 modules never read it at import time (`tests/test_architecture.py`). `dsn` is deliberately not
 here: a connection argument, not tunable behaviour.
 
-The bounds below are the proposer's blast radius, and they belong to code rather than to the
-skill: a brief can be argued with and a constant cannot. `MAX_OPS_PER_PROPOSAL` is what keeps one
-approval from being a corpus-wide rewrite — a steward approves ONE proposal, and this is how much
-one proposal is allowed to be.
+The bounds below are the loop's blast radius, and they belong to code rather than to the skill: a
+brief can be argued with and a constant cannot. They carry more weight than they used to, because
+nobody reads a repair before it lands (ADR 044) — `MAX_OPS_PER_PROPOSAL` is what keeps ONE repair
+from being a corpus-wide rewrite, and the two ceilings below keep one PASS from being one.
 """
 import os
 from dataclasses import dataclass
@@ -41,13 +41,20 @@ DEFAULT_BATCH_SIZE = 3
 # extra digit would buy.
 MAX_BATCH_SIZE = 32
 
-# What ONE run may put in front of stewards. `MAX_OPS_PER_PROPOSAL` bounds one approval; this
-# bounds how many approvals a night can ask for, which is the other half of the same argument: a
-# gardener run that suddenly reports four hundred findings would otherwise cost four hundred model
-# calls and produce an inbox nobody reads. The surplus is not lost — it is proposed by the next
-# run, once these have been decided.
-MAX_PROPOSALS_ENV = "STIGMERGY_REPAIR_MAX_PROPOSALS"
-DEFAULT_MAX_PROPOSALS_PER_RUN = 20
+# What ONE pass may LAND. `MAX_OPS_PER_PROPOSAL` bounds one repair; this bounds how many commits a
+# pass may push, which is the other half of the same argument: a gardener run that suddenly reports
+# four hundred findings would otherwise cost four hundred model calls and four hundred commits in
+# an afternoon. The surplus is not lost — the next pass sees it, and what this one deferred is
+# counted in its `job_runs` stats rather than dropped in silence.
+MAX_REPAIRS_ENV = "STIGMERGY_REPAIR_CEILING"
+DEFAULT_MAX_REPAIRS_PER_RUN = 20
+
+# The same bound for the ONE kind that retires an identity. A merge is the least reversible repair
+# this loop can make — a page marked superseded and every mention re-anchored — so a pass that went
+# wrong about what is a duplicate should be wrong about three entities, not twenty. Deliberately a
+# second number rather than a fraction of the first: what makes a merge different is not its size.
+MAX_MERGES_ENV = "STIGMERGY_REPAIR_MERGE_CEILING"
+DEFAULT_MAX_MERGES_PER_RUN = 3
 
 # How much ONE approval may be, measured in the bytes its stored plan carries. Shared by the TWO
 # kinds whose ops hold whole PAGES — a `delete` sweep carries every page it would rewrite, and an
@@ -60,7 +67,7 @@ DEFAULT_MAX_PLAN_BYTES = 100_000
 
 # What a zero or negative value would do to THIS package's arithmetic — the sentence
 # `gardener.settings.int_setting` interpolates, written for the bounds it guards here.
-_POSITIVE_COUNT_WHY = ("a zero or negative bound would either refuse every proposal or send an "
+_POSITIVE_COUNT_WHY = ("a zero or negative bound would either refuse every repair or send an "
                        "empty batch to the model.")
 
 
@@ -102,7 +109,8 @@ class RepairSettings:
     model: str = DEFAULT_REPAIR_MODEL
     max_ops_per_proposal: int = DEFAULT_MAX_OPS_PER_PROPOSAL
     batch_size: int = DEFAULT_BATCH_SIZE
-    max_proposals_per_run: int = DEFAULT_MAX_PROPOSALS_PER_RUN
+    max_repairs_per_run: int = DEFAULT_MAX_REPAIRS_PER_RUN
+    max_merges_per_run: int = DEFAULT_MAX_MERGES_PER_RUN
     max_plan_bytes: int = DEFAULT_MAX_PLAN_BYTES
 
     @classmethod
@@ -115,6 +123,7 @@ class RepairSettings:
             max_ops_per_proposal=_int_setting(MAX_OPS_ENV, DEFAULT_MAX_OPS_PER_PROPOSAL),
             batch_size=_int_setting(BATCH_SIZE_ENV, DEFAULT_BATCH_SIZE,
                                     maximum=MAX_BATCH_SIZE),
-            max_proposals_per_run=_int_setting(MAX_PROPOSALS_ENV, DEFAULT_MAX_PROPOSALS_PER_RUN),
+            max_repairs_per_run=_int_setting(MAX_REPAIRS_ENV, DEFAULT_MAX_REPAIRS_PER_RUN),
+            max_merges_per_run=_int_setting(MAX_MERGES_ENV, DEFAULT_MAX_MERGES_PER_RUN),
             max_plan_bytes=_int_setting(MAX_PLAN_BYTES_ENV, DEFAULT_MAX_PLAN_BYTES),
         )

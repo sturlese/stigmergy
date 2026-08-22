@@ -3,6 +3,7 @@
 Status: accepted. Narrative:
 [`docs/reference/admin-console.md`](../reference/admin-console.md). Code map:
 [`src/stigmergy/admin/index.md`](../../src/stigmergy/admin/index.md).
+**Amended by** [ADR 044](./044-the-capture-is-the-approval.md) D6: the console's cron remote control is gone with the crons. The Jobs page reads `job_runs` and offers nothing to dispatch, and the fine-grained GitHub PAT it needed is no longer a credential this system holds. "No scheduled runs outside GitHub Actions" became no scheduled runs outside the deployment.
 
 ## Context
 

@@ -9,15 +9,14 @@ from starlette.responses import JSONResponse
 
 from stigmergy.admin.routes import compose
 from stigmergy.admin.settings import AdminSettings
+from stigmergy.capture import ops
 from stigmergy.capture import schema as capture_schema
+from stigmergy.gardener.schema import JOB_NAME as GARDENER_JOB
 from stigmergy.server.settings import Settings
 from tests.admin.conftest import (
     ADMIN_TOKEN,
     finish_one,
-    propose_identity,
-    propose_repair,
-    register_entity,
-    remote_registry,
+    landed_repair,
     submit_one,
 )
 
@@ -28,9 +27,9 @@ async def _inner(scope, receive, send):
 
 
 @pytest.fixture()
-def app(conn, server_settings, admin_settings, fake_gateway):
+def app(conn, server_settings, admin_settings):
     return compose(_inner, conn=conn, server_settings=server_settings,
-                   admin_settings=admin_settings, gateway=fake_gateway)
+                   admin_settings=admin_settings)
 
 
 def _request(app, method, path, *, token=ADMIN_TOKEN, headers=None, json_body=None):
@@ -153,18 +152,17 @@ def test_queue_flow_over_http_is_read_only(conn, app):
 
 def test_the_error_mapping_carries_the_librarys_sentences(conn, app):
     assert _request(app, "GET", "/admin/api/queue/424242").status_code == 404
-    assert _request(app, "GET", "/admin/api/entities/ghost").status_code == 404
+    assert _request(app, "GET", "/admin/api/repairs/424242").status_code == 404
     bad = _request(app, "GET", "/admin/api/queue?status=bogus")
     assert bad.status_code == 400 and "unknown status" in bad.json()["error"]
-    # `app` carries no knowledge-repo URL: a decision is refused by name as a 409, nothing written
-    refused = _request(app, "POST", "/admin/api/entities/decide",
-                       json_body={"actor": "steward", "item_kind": "identity-proposal",
-                                  "item_id": "globex", "verdict": "approve"})
-    assert refused.status_code == 409 and "STIGMERGY_LIBRARIAN_REPO_URL" in refused.json()["error"]
-    bad_verdict = _request(app, "POST", "/admin/api/entities/decide",
-                           json_body={"actor": "steward", "item_kind": "identity-proposal",
-                                      "item_id": "globex", "verdict": "requeue"})
-    assert bad_verdict.status_code == 400
+    # `app` carries no evidence store: a removal is refused by name as a 409, nothing queued
+    refused = _request(app, "POST", "/admin/api/pages/delete",
+                       json_body={"actor": "steward", "paths": ["wiki/notes/Old.md"],
+                                  "why": "superseded"})
+    assert refused.status_code == 409 and "evidence store" in refused.json()["error"]
+    no_paths = _request(app, "POST", "/admin/api/pages/delete",
+                        json_body={"actor": "steward", "paths": [], "why": "superseded"})
+    assert no_paths.status_code == 400
 
 
 def test_a_malformed_body_is_a_400_not_a_traceback(conn, app):
@@ -172,7 +170,7 @@ def test_a_malformed_body_is_a_400_not_a_traceback(conn, app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                      base_url="http://localhost") as client:
             return await client.post(
-                "/admin/api/entities/decide", content=b"not json",
+                "/admin/api/pages/delete", content=b"not json",
                 headers={"Authorization": f"Bearer {ADMIN_TOKEN}",
                          "Content-Type": "application/json"})
     response = asyncio.run(go())
@@ -180,53 +178,12 @@ def test_a_malformed_body_is_a_400_not_a_traceback(conn, app):
     assert response.json() == {"error": "request body must be valid JSON"}
 
 
-# ── the entities surface over HTTP ───────────────────────────────────────────────────────────
-def test_entities_list_and_show_over_http(conn, app, entity_mint_repo):
-    """The list carries the two proposal kinds and the registry's verdict on each identity; the
-    detail route takes the entity's registry id — a string, never a capture number."""
-    register_entity(entity_mint_repo, conn, "Acme Corp", aliases=["Acme Corporation"])
-    propose_identity(entity_mint_repo, conn, "Acme Corporation")
-
-    listed = _request(app, "GET", "/admin/api/entities").json()
-    assert [p["id"] for p in listed["proposals"]] == ["acme-corporation"]
-    assert listed["proposals"][0]["check"]["verdict"] == "registered"
-    assert listed["aliases"] == []
-    shown = _request(app, "GET", "/admin/api/entities/acme-corporation").json()
-    assert shown["name"] == "Acme Corporation"
-    assert shown["merge_candidates"] == [{"id": "acme-corp", "name": "Acme Corp"}]
-
-
-def test_entities_decide_lands_over_http(conn, admin_settings, fake_gateway, entity_mint_repo,
-                                         require_gitleaks):
-    """The wire-level end-to-end proof: POSTing the desk's own field shape through the REAL
-    `compose` product lands a merge for real and reports the commit, over HTTP."""
-    app = compose(_inner, conn=conn, server_settings=Settings(librarian_repo_url=entity_mint_repo),
-                  admin_settings=admin_settings, gateway=fake_gateway)
-    register_entity(entity_mint_repo, conn, "Acme Corp")
-    propose_identity(entity_mint_repo, conn, "Acme Corporation")
-
-    response = _request(app, "POST", "/admin/api/entities/decide", json_body={
-        "actor": "steward@example.com", "item_kind": "identity-proposal",
-        "item_id": "acme-corporation", "verdict": "merge", "into": "acme-corp",
-    })
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["recorded"] == "merge" and len(body["commit"]) == 40
-    assert "Acme Corporation" in remote_registry(entity_mint_repo)["acme-corp"]["aliases"]
-    with conn.cursor() as cur:
-        cur.execute("SELECT verdict, extra FROM review_decisions WHERE item_id = %s",
-                    ("acme-corporation",))
-        verdict, extra = cur.fetchone()
-    assert verdict == "merge" and extra["into"] == "acme-corp"
-
-
-def test_entities_create_commissions_over_http(conn, admin_settings, fake_gateway):
+def test_entities_create_commissions_over_http(conn, admin_settings):
     """ADR 042: the route queues the steward's account as a capture carrying the registration
     and answers with the row — no commit, no ledger row, the librarian does the writing."""
     from stigmergy.capture.evidence import MemoryEvidenceStore
     app = compose(_inner, conn=conn, server_settings=Settings(), admin_settings=admin_settings,
-                  gateway=fake_gateway, evidence=MemoryEvidenceStore())
+                  evidence=MemoryEvidenceStore())
 
     response = _request(app, "POST", "/admin/api/entities/create", json_body={
         "actor": "steward@example.com", "name": "Stark Industries", "entity_type": "organization",
@@ -243,16 +200,13 @@ def test_entities_create_commissions_over_http(conn, admin_settings, fake_gatewa
     assert capture_schema.registration_from_hints(hints).name == "Stark Industries"
 
 
-def test_entities_decide_and_create_require_the_token(conn, app):
-    for path, body in (("/admin/api/entities/decide",
-                        {"actor": "x", "item_kind": "identity-proposal", "item_id": "globex",
-                         "verdict": "approve"}),
-                       ("/admin/api/entities/create",
-                        {"actor": "x", "name": "Acme Corp", "entity_type": "organization"})):
-        refused = _request(app, "POST", path, token=None, json_body=body)
-        assert refused.status_code == 401, path
+def test_entities_create_requires_the_token(conn, app):
+    refused = _request(app, "POST", "/admin/api/entities/create", token=None,
+                       json_body={"actor": "x", "name": "Acme Corp",
+                                  "entity_type": "organization"})
+    assert refused.status_code == 401
     with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM review_decisions")
+        cur.execute("SELECT count(*) FROM capture_queue")
         assert cur.fetchone()[0] == 0, "an unauthorized request must never reach the door"
 
 
@@ -269,24 +223,21 @@ def test_entities_create_error_mapping_over_http(conn, app):
     assert "evidence store" in refused.json()["error"]
 
 
-# ── crons over HTTP: the wire shape ───────────────────────────────────────────────────────────
-def test_cron_dispatch_and_the_allowlist_over_http(app, fake_gateway):
-    ok = _request(app, "POST", "/admin/api/crons/gardener.yml/dispatch",
-                  json_body={"actor": "steward"})
+# ── the night shift over HTTP: the wire shape ─────────────────────────────────────────────────
+def test_the_jobs_endpoint_is_read_only_over_http(app, conn):
+    """One GET, and nothing else. The three POSTs this page used to expose — dispatch, enable,
+    disable — are gone with the crons themselves (ADR 044), so the assertion is not only that the
+    read works but that the writes are NOT routed: a console that still accepted a dispatch would
+    be accepting it for a workflow file that no longer exists anywhere."""
+    ops.record_job_run(conn, GARDENER_JOB, status="ok", stats={"findings": 1})
+    ok = _request(app, "GET", "/admin/api/jobs")
     assert ok.status_code == 200
-    assert ("dispatch", "gardener.yml", "main", None) in fake_gateway.calls
-    refused = _request(app, "POST", "/admin/api/crons/rm-rf.yml/dispatch",
-                       json_body={"actor": "steward"})
-    assert refused.status_code == 400
-
-
-def test_a_github_failure_is_a_502_with_the_gateways_sentence(app, fake_gateway):
-    from stigmergy.admin.github import ActionsError
-    fake_gateway.fail_with = ActionsError("GitHub answered 403 for PUT x", status=403)
-    response = _request(app, "POST", "/admin/api/crons/gardener.yml/enable",
-                        json_body={"actor": "steward"})
-    assert response.status_code == 502
-    assert "403" in response.json()["error"]
+    files = [job["file"] for job in ok.json()["jobs"]]
+    assert files == ["gardener", "retention-purge", "index-rebuild"]
+    for path in ("/admin/api/jobs/gardener/dispatch", "/admin/api/crons/gardener.yml/dispatch",
+                 "/admin/api/crons/gardener.yml/enable", "/admin/api/crons/gardener.yml/disable"):
+        gone = _request(app, "POST", path, json_body={"actor": "steward"})
+        assert gone.status_code == 404, f"{path} still answers — a cron lever survived the removal"
 
 
 def test_an_unexpected_failure_names_the_class_only(conn, app, monkeypatch):
@@ -301,61 +252,43 @@ def test_an_unexpected_failure_names_the_class_only(conn, app, monkeypatch):
     assert response.json() == {"error": "the operation failed (RuntimeError)"}
 
 
-# ── repairs over HTTP (ADR 039) ───────────────────────────────────────────────────────────────
+# ── repairs over HTTP: a read-only page (ADR 044) ─────────────────────────────────────────────
 def test_repairs_list_and_show_over_http(conn, app):
-    proposal_id = propose_repair(conn)
+    """The two routes that survive, and there are no others: nothing on this page decides anything
+    any more, so the console reads what the worker already did."""
+    repair_id = landed_repair(conn)
 
     listed = _request(app, "GET", "/admin/api/repairs")
-    shown = _request(app, "GET", f"/admin/api/repairs/{proposal_id}")
+    shown = _request(app, "GET", f"/admin/api/repairs/{repair_id}")
 
     assert listed.status_code == 200
-    assert [row["id"] for row in listed.json()["pending"]] == [proposal_id]
+    assert [row["id"] for row in listed.json()["recent"]] == [repair_id]
     assert shown.status_code == 200
     assert shown.json()["ops"][0]["path"] == "wiki/notes/Renewals.md"
+    assert shown.json()["diff"].startswith("diff --git"), (
+        "the diff is the whole reason this route exists — nobody read the change before it landed")
     assert _request(app, "GET", "/admin/api/repairs/999999").status_code == 404
 
 
-def test_repairs_reject_requires_a_reason_and_records_it(conn, app):
-    proposal_id = propose_repair(conn)
+@pytest.mark.parametrize("verb, path", [
+    ("POST", "/admin/api/repairs/{id}/approve"),
+    ("POST", "/admin/api/repairs/{id}/reject"),
+])
+def test_the_doors_that_decided_a_repair_are_gone_from_the_router(conn, app, verb, path):
+    """Asked of the ROUTER rather than of the code that used to be behind it. A repair is applied
+    by the worker without anybody being asked (ADR 044), so a console still offering Approve and
+    Decline would be offering a decision that changes nothing — and a route left mapped to a
+    handler nobody calls is how one comes back."""
+    repair_id = landed_repair(conn)
 
-    blank = _request(app, "POST", f"/admin/api/repairs/{proposal_id}/reject",
-                     json_body={"actor": "steward@example.com", "reason": "   "})
-    given = _request(app, "POST", f"/admin/api/repairs/{proposal_id}/reject",
-                     json_body={"actor": "steward@example.com", "reason": "already linked"})
+    response = _request(app, verb, path.format(id=repair_id),
+                        json_body={"actor": "steward@example.com", "reason": "no"})
 
-    assert blank.status_code == 400
-    assert given.status_code == 200
-    with conn.cursor() as cur:
-        cur.execute("SELECT status, notes FROM repair_proposals WHERE id = %s", (proposal_id,))
-        assert cur.fetchone() == ("rejected", "already linked")
-
-
-def test_repairs_approve_requires_the_token_and_never_reaches_the_apply_without_it(conn, app,
-                                                                                   monkeypatch):
-    """The benign twin lives at the service level (`test_repair_approve_applies_and_records_both_
-    ledgers`); what THIS pins is that an unauthorized POST is refused by the gate, before any of it
-    — no clone, no decision, no ledger row."""
-    from stigmergy.repair import remote as repair_remote
-
-    def never(*_a, **_k):
-        raise AssertionError("apply_via_clone ran on an unauthorized request")
-
-    monkeypatch.setattr(repair_remote, "apply_via_clone", never)
-    proposal_id = propose_repair(conn)
-
-    refused = _request(app, "POST", f"/admin/api/repairs/{proposal_id}/approve", token=None,
-                       json_body={"actor": "mallory"})
-
-    assert refused.status_code == 401
-    with conn.cursor() as cur:
-        cur.execute("SELECT status FROM repair_proposals WHERE id = %s", (proposal_id,))
-        assert cur.fetchone()[0] == "pending"
-        cur.execute("SELECT count(*) FROM review_decisions")
-        assert cur.fetchone()[0] == 0
+    assert response.status_code == 404
 
 
-# ── the two approvals that clone, and where they run ──────────────────────────────────────────
-# Both Approve handlers reach code that clones a repo, runs the eight gates and pushes — seconds of
+# ── the handler that clones, and where it runs ────────────────────────────────────────────────
+# Removing pages reaches code that clones a repo, runs the nine gates and pushes — seconds of
 # blocking work, and `gitleaks`/`git` are subprocesses. On the event loop that stalls EVERY other
 # request the process is serving, the MCP tools included, for as long as the push takes.
 def _on_the_event_loop_probe(monkeypatch, method: str):
@@ -374,23 +307,17 @@ def _on_the_event_loop_probe(monkeypatch, method: str):
     monkeypatch.setattr(AdminService, method, probe)
 
 
-@pytest.mark.parametrize("method, path, body", [
-    ("repair_approve", "/admin/api/repairs/{id}/approve", {"actor": "steward@example.com"}),
-    ("entity_decide", "/admin/api/entities/decide",
-     {"actor": "steward@example.com", "item_kind": "identity-proposal", "item_id": "globex",
-      "verdict": "approve"}),
-])
-def test_an_approve_that_clones_never_runs_on_the_event_loop(conn, app, monkeypatch, method, path,
-                                                             body):
-    """Red before the fix: both handlers awaited nothing and called the blocking service method
+def test_the_deletion_that_clones_never_runs_on_the_event_loop(conn, app, monkeypatch):
+    """Red before the fix: the handler awaited nothing and called the blocking service method
     inline, so the whole clone-gate-push sat on the loop and every concurrent request waited on it.
 
     The response SHAPE is asserted too: moving the call to a worker thread must not change what the
     route returns, or the console's own JavaScript stops reading it."""
-    proposal_id = propose_repair(conn)
-    _on_the_event_loop_probe(monkeypatch, method)
+    _on_the_event_loop_probe(monkeypatch, "pages_delete")
 
-    response = _request(app, "POST", path.format(id=proposal_id), json_body=body)
+    response = _request(app, "POST", "/admin/api/pages/delete",
+                        json_body={"actor": "marc@example.com", "paths": ["wiki/notes/Old.md"],
+                                   "why": "stale"})
 
     assert response.status_code == 200
     assert response.json() == {"on_the_event_loop": False}
@@ -398,14 +325,14 @@ def test_an_approve_that_clones_never_runs_on_the_event_loop(conn, app, monkeypa
 
 def test_pages_delete_needs_the_token_and_a_non_empty_paths_list(conn, app, monkeypatch):
     """The console's most consequential control (ADR 043 D2): its token IS the authorization, so
-    the tokenless call must never reach the sequence at all — and an empty `paths` is a 400 rather
-    than a clone that finds nothing to do."""
+    the tokenless call must never reach the queueing seam at all — and an empty `paths` is a 400
+    rather than a row the worker would claim and find nothing to do with."""
     from stigmergy.server import review as server_review
 
     def never(*_a, **_k):
-        raise AssertionError("a deletion ran for a request that should have been refused")
+        raise AssertionError("a removal was queued for a request that should have been refused")
 
-    monkeypatch.setattr(server_review, "delete_and_record", never)
+    monkeypatch.setattr(server_review, "queue_deletion", never)
 
     tokenless = _request(app, "POST", "/admin/api/pages/delete", token=None,
                          json_body={"actor": "ops@example.com", "paths": ["wiki/notes/X.md"],
@@ -418,25 +345,39 @@ def test_pages_delete_needs_the_token_and_a_non_empty_paths_list(conn, app, monk
     assert "paths" in empty.json()["error"]
 
 
-def test_pages_delete_on_an_unconfigured_deployment_is_the_409(conn, app):
-    """The same deployment shape the approve route meets before a knowledge-repo URL is
-    configured: a refusal naming the variable, never a 500 naming a class."""
+def test_pages_delete_on_a_deployment_with_no_evidence_store_is_the_409(conn, app):
+    """The deployment shape a console served by a process whose object store is unconfigured is in:
+    a removal is a queued capture, and a capture needs somewhere to archive its material. The
+    refusal names what is missing, and it is a 409 — never a 500 naming a class."""
     response = _request(app, "POST", "/admin/api/pages/delete",
                         json_body={"actor": "ops@example.com", "paths": ["wiki/notes/X.md"],
                                    "why": "stale"})
 
     assert response.status_code == 409
-    assert "STIGMERGY_LIBRARIAN_REPO_URL" in response.json()["error"]
+    assert "evidence store" in response.json()["error"]
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        assert cur.fetchone()[0] == 0
 
 
-def test_repairs_approve_on_an_unconfigured_deployment_is_the_409(conn, app):
-    """`app` carries a default `Settings()` — no `librarian_repo_url` — so this is the deployment
-    shape an operator meets before configuring one, and it must read as a refusal with the reason
-    rather than a 500 naming a class."""
-    proposal_id = propose_repair(conn)
+def test_pages_delete_over_http_queues_the_removal_when_the_queue_is_wired(conn, server_settings,
+                                                                          admin_settings):
+    """The benign twin for both refusals above, over the real route: with the queue wired, the
+    console's Remove lands a `delete` row attributed to the operator who pressed it. Without this,
+    the two 409s would only measure how easily this route says no."""
+    from stigmergy.capture.evidence import MemoryEvidenceStore
 
-    response = _request(app, "POST", f"/admin/api/repairs/{proposal_id}/approve",
-                        json_body={"actor": "steward@example.com"})
+    wired = compose(_inner, conn=conn, server_settings=server_settings,
+                    admin_settings=admin_settings,
+                    evidence=MemoryEvidenceStore())
 
-    assert response.status_code == 409
-    assert "STIGMERGY_LIBRARIAN_REPO_URL" in response.json()["error"]
+    response = _request(wired, "POST", "/admin/api/pages/delete",
+                        json_body={"actor": "ops@example.com", "paths": ["wiki/notes/Old.md"],
+                                   "why": "superseded"})
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["status"] == capture_schema.QUEUED
+    with conn.cursor() as cur:
+        cur.execute("SELECT kind, submitted_by FROM capture_queue WHERE id = %s",
+                    (response.json()["id"],))
+        assert cur.fetchone() == (capture_schema.DELETE, "ops@example.com")

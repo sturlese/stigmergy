@@ -133,8 +133,8 @@ def test_a_legacy_resolved_row_still_reports_the_stewards_own_sentence(indexed, 
     assert "handled by hand" in text
 
 
-def test_the_filed_card_names_the_entity_the_librarian_proposed(indexed, clean_tables):
-    """The report's `entities_proposed` (what `report.filed` records when the librarian created an
+def test_the_filed_card_names_the_entity_the_capture_introduced(indexed, clean_tables):
+    """The report's `entities_born` (what `report.filed` records when a capture introduced an
     identity for this capture) reaches the submitter's thread, with the promise that nothing waits
     on them."""
     conn, fixture = indexed
@@ -144,15 +144,15 @@ def test_the_filed_card_names_the_entity_the_librarian_proposed(indexed, clean_t
     rep = report.filed(page_path="wiki/notes/Ledgerly kickoff.md", commit="abc1234",
                        anchoring={"kind": "entity", "entities": ["Ledgerly"], "reason": ""},
                        links=[], overlaps=[], findings=[],
-                       entities_proposed=[{"id": "ledgerly", "name": "Ledgerly",
+                       entities_born=[{"id": "ledgerly", "name": "Ledgerly",
                                            "type": "organization"}])
     _claim_and_finish(conn, submission_id, status=capture_schema.FILED, report_dict=rep,
                       result_ref="wiki/notes/Ledgerly kickoff.md@abc1234")
 
     assert _run(poller.poll_once(ctx)) == 1
     text = gw.posted[0].blocks[0]["text"]["text"]
-    assert "proposed *Ledgerly* as a new entity" in text
-    assert "nothing waits on you" in text
+    assert "introduced *Ledgerly* as a new entity" in text
+    assert "confirmed by you" in text
 
 
 def test_a_status_is_reported_exactly_once_even_across_multiple_polls(indexed, clean_tables):

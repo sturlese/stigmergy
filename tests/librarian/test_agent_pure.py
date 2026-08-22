@@ -638,14 +638,15 @@ def test_the_hints_are_still_labelled_as_suggestions_and_still_reach_the_agent()
     assert "Pricing" in prompt
 
 
-# ── proposals: the account's two new lists, bounded at the boundary like every other field ────
-# A name the registry does not know is no longer a park: the account PROPOSES the entity and
-# `librarian.identity` creates it. The boundary's job is the same as for every field — coerce,
-# bound, refuse a half-declaration correctably — and `decision: "triage"` is nothing at all now.
+# ── births: the account's two new lists, bounded at the boundary like every other field ───────
+# A name the registry does not know is no longer a park: the account DECLARES the entity and
+# `librarian.identity` creates it, confirmed by the submitter (ADR 044). The boundary's job is the
+# same as for every field — coerce, bound, refuse a half-declaration correctably — and
+# `decision: "triage"` is nothing at all now.
 def test_triage_is_no_longer_a_decision_the_boundary_knows():
     """OLD BEHAVIOUR: `{"decision": "triage", "triage": {"kind": "unresolved-entity", ...}}` parked
     the capture on a question to its submitter. There is no park: a capture about a name nothing
-    resolves to proposes the entity and files. An account still saying `triage` is a shape fault
+    resolves to declares the entity and files. An account still saying `triage` is a shape fault
     the corrective retry can fix, never a silent route to nowhere."""
     with pytest.raises(OutcomeShapeError) as raised:
         agent.parse_outcome({"decision": "triage",
@@ -675,7 +676,7 @@ def test_a_complete_proposal_round_trips_with_every_field_and_its_lists_as_tuple
 
 def test_the_prose_fields_of_a_proposal_are_truncated_never_refused_and_the_lists_are_bounded():
     """A summary past the prose ceiling is a sentence that got long, not a fault — `_prose`'s rule.
-    A LIST past its ceiling is a shape fault: a capture proposing eleven new entities is several
+    A LIST past its ceiling is a shape fault: a capture declaring eleven new entities is several
     captures, and the refusal says so rather than creating eleven pages."""
     long_summary = "x" * (agent.MAX_PROSE_LEN + 50)
     outcome = agent.parse_outcome({

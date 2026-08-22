@@ -1,7 +1,8 @@
 """Non-fixture test support for the digest suite. Reuses `tests.gardener.support` for the shared
 connection/schema bootstrap and the corpus/queue fixtures — the SAME tables this package reads —
 rather than re-deriving any of it; adds only what is specific to the digest: the Slack channels
-file, review_decisions (governed-birth) rows, and gardener `job_runs`+`gardener_findings` fixtures
+file, the filed reports that name what a capture introduced, and gardener
+`job_runs`+`gardener_findings` fixtures
 shaped for the digest's OWN corpus-health read.
 
 Deliberately a plain module, not a `conftest.py` — the same reasoning `tests/gardener/support.py`
@@ -9,7 +10,6 @@ gives for itself: fixtures are per-package pytest wiring, this is plain code any
 """
 from stigmergy.capture import ops as capture_ops
 from stigmergy.gardener.schema import JOB_NAME as GARDENER_JOB_NAME
-from stigmergy.server import review
 from tests.gardener import support as gardener_support
 
 STEWARD = gardener_support.STEWARD
@@ -20,34 +20,35 @@ write_page = gardener_support.write_page
 rebuild_index = gardener_support.rebuild_index
 seed_filed_capture = gardener_support.seed_filed_capture
 unique_claim = gardener_support.unique_claim
-# These three live in `tests.gardener.support` — the SLA notice's own channel-scoping tests need
-# them too, one package over — and are re-exported here unchanged for this package's call sites.
-write_labelled_page = gardener_support.write_labelled_page
-unlabelled_page = gardener_support.unlabelled_page
-write_channels_file = gardener_support.write_channels_file
 
 
-# ── review_decisions: entities born — the governed-birth log ────────────────────────────────────
-def seed_entity_approval(conn, *, created_days_ago: int = 0, item_id: str = "1",
-                         verdict: str = review.APPROVE,
-                         item_kind: str = review.KIND_IDENTITY_PROPOSAL) -> int:
-    """One `review_decisions` row shaped like the one `server.review.decide_and_record` writes for
-    an approved identity proposal — `item_kind=KIND_IDENTITY_PROPOSAL`, `item_id` the entity id
-    (`stigmergy.digest.sections`'s own module docstring explains why this governed-birth log is a
-    COUNT source, never a names source). `item_kind` is a parameter so the legacy kind the
-    parked-capture mint door wrote before ADR 041 can be seeded too."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO review_decisions (item_kind, item_id, verdict, actor, notes, extra) "
-            "VALUES (%s, %s, %s, %s, '', NULL) RETURNING id",
-            (item_kind, item_id, verdict, STEWARD))
-        decision_id = cur.fetchone()[0]
-    if created_days_ago:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE review_decisions SET created_at = now() - make_interval(days => %s) "
-                "WHERE id = %s", (created_days_ago, decision_id))
-    return decision_id
+# ── pages_index rows with and without an ACL label — the pair the broadcast-scoping tests need.
+# Both go through the SAME real-file + `rebuild_index` path every other fixture page uses, never a
+# hand-crafted row a parsing bug could silently disagree with ───────────────────────────────────
+def write_labelled_page(root: str, relpath: str, *, title: str, acl: list) -> str:
+    return write_page(root, "wiki", relpath,
+                      frontmatter={"type": "note", "title": title, "entity": [],
+                                  "status": "developing",
+                                  "updated": "2026-07-01", "acl": acl})
+
+
+def unlabelled_page(root: str, relpath: str, *, title: str) -> str:
+    return write_page(root, "wiki", relpath,
+                      frontmatter={"type": "note", "title": title, "entity": [],
+                                  "status": "developing", "updated": "2026-07-01"})
+
+
+# ── entities born — counted off the filings that introduced them (ADR 044) ─────────────────────
+def seed_entity_births(conn, *, count: int = 1, finished_days_ago: int = 0,
+                       result_ref: str = "wiki/notes/x.md@abc1234") -> int:
+    """A FILED capture whose report names the identities that capture introduced — the shape
+    `librarian.report.filed` produces (`entities_born`), and the only place a birth is recorded
+    since ADR 044: an entity is born when a capture introduces it, so the digest counts the
+    filings rather than a second table that could disagree with the commits."""
+    born = [{"id": f"e{n}", "name": f"Entity {n}", "type": "organization",
+             "confirmed_by": STEWARD} for n in range(count)]
+    return seed_filed_capture(conn, result_ref=result_ref, finished_days_ago=finished_days_ago,
+                              report={"entities_born": born})
 
 
 # ── gardener job_runs + gardener_findings: the corpus-health source ─────────────────────────────
@@ -87,3 +88,31 @@ def seed_gardener_run(conn, *, findings: list[dict] | None = None,
                      "suggested_action": f.get("suggested_action", ""),
                      "model_id": f.get("model_id", "")})
     return run_id
+
+
+# ── repairs applied — the third corpus delta (ADR 044) ────────────────────────────────────────
+def seed_applied_repair(conn, *, kind: str = "edits", created_days_ago: int = 1,
+                        content_key: str = "") -> int:
+    """One `applied` row in the repair ledger, aged like every other fixture here.
+
+    Written through `repair.store` rather than by hand: the digest counts a column that store owns,
+    and a hand-built INSERT would keep passing after the column moved. `content_key` is unique per
+    row by default because the ledger's index says it must be.
+
+    Backdated by a day by DEFAULT, and that is not decoration: every window in this suite is
+    captured at import time, so a row stamped `now()` lands after the upper bound and reads as a
+    row outside the window — which is indistinguishable from a broken query."""
+    import uuid
+
+    from stigmergy.repair import store as repair_store
+
+    repair_id = repair_store.record_applied(
+        conn, run_id=0, finding_ids=[], target_paths=["wiki/notes/x.md"],
+        ops=[{"op": "backlink", "path": "wiki/notes/x.md", "link": "Y", "note": ""}],
+        rationale="a fixture repair", content_key=content_key or f"key-{uuid.uuid4().hex}",
+        commit="cafebabe", diff="--- a\n+++ b\n", kind=kind)
+    if created_days_ago:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE repairs SET created_at = now() - make_interval(days => %s) "
+                        "WHERE id = %s", (created_days_ago, repair_id))
+    return repair_id

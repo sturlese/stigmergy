@@ -13,7 +13,7 @@ per facet, each facet with its own denominator:
   - anchor     the page's server-stamped `entity:` — resolved registry ids; `[]` is the
                company-wide answer, distinguished from a wrong entity
   - edits      which OTHER pages the commit changed, scored by containment (`_edits_match`)
-  - proposals  for a name the registry does not know: the identity the filing PROPOSED for it
+  - proposals  for a name the registry does not know: the identity the filing INTRODUCED
   - decisions  for a meeting: one decision page per decision, each with its OWN anchor
 
 Every capture is ONE scored phase (ADR 041). Nothing parks, nothing is asked, nothing is re-filed:
@@ -764,14 +764,14 @@ def _observe(result, attempts: int, *, env, support, split_frontmatter) -> dict:
         "edits": list(report.get("pages_edited") or []),
         # The identities this filing CREATED unconfirmed, by the NAME the account chose — the id
         # is `slugify(name)` and would score the spelling, which `_proposals_match` exists not to.
-        "proposals": [str(e.get("name", "")) for e in (report.get("entities_proposed") or [])
+        "proposals": [str(e.get("name", "")) for e in (report.get("entities_born") or [])
                       if isinstance(e, dict) and e.get("name")],
         # Reported, never scored. A filing that recognised the name as a registered entity's
-        # SPELLING proposed an alias instead of an identity, and that is the near miss a reader of
-        # a red `proposals` cell needs in front of them.
-        "proposed_aliases": [f"{a.get('entity', '')}: {a.get('alias', '')}"
-                             for a in (report.get("aliases_proposed") or [])
-                             if isinstance(a, dict) and a.get("alias")],
+        # SPELLING taught the registry an alias instead of introducing an identity, and that is the
+        # near miss a reader of a red `proposals` cell needs in front of them.
+        "added_aliases": [f"{a.get('entity', '')}: {a.get('alias', '')}"
+                          for a in (report.get("aliases_added") or [])
+                          if isinstance(a, dict) and a.get("alias")],
         # Diagnostics for a miss, chosen so two reports from the same backend diff to nothing but
         # `wall_s` and `cost_usd`. Do not add the report's summary sentence: it embeds the commit
         # sha, which differs on every run.

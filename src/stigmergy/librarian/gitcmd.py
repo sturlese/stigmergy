@@ -101,7 +101,7 @@ def base_ref(repo: str, branch: str, *, timeout_s: float | None = None) -> BaseR
     not fatal — the push path handles the race.
 
     `timeout_s` bounds every leg, and is `None` for the worker (a lease, and all night). It is not
-    optional for a caller inside an HTTP request: `server.review.load_stewards` runs this fetch
+    optional for a caller inside an HTTP request: a server-side reader runs this fetch
     inside an AUTHORIZATION check, where an unreachable remote must fail rather than stall.
     """
     if run("remote", cwd=repo, check=False, timeout=timeout_s).stdout.strip():
@@ -264,6 +264,32 @@ def diff_entries(worktree: str) -> list[DiffEntry]:
                                  old_mode=parts[0], new_mode=parts[1]))
     blobs = _worktree_blobs(worktree, [entry.path for entry in entries])
     return [replace(entry, blob=blobs.get(entry.path, "")) for entry in entries]
+
+
+# How much of a diff is worth keeping as TEXT. A repair's diff is stored so a person can read
+# afterwards what nobody read before it landed (ADR 044) — and a diff nobody can scroll is not a
+# reading either, while a multi-megabyte one in a JSON column is a page that never loads. Clipped
+# with a line saying so, never silently truncated: a diff that stops mid-hunk and says nothing
+# reads as the whole change.
+DIFF_TEXT_CEILING_BYTES = 200_000
+DIFF_CLIPPED_NOTE = "\n… diff clipped at {ceiling} bytes; `git show` in the knowledge repo has all of it\n"
+
+
+def working_diff(worktree: str, *, ceiling: int = DIFF_TEXT_CEILING_BYTES) -> str:
+    """The unified diff of everything not yet committed in `worktree`, as text.
+
+    Read BEFORE the commit and never after: `git diff HEAD` answers nothing once the tree is
+    clean. `--intent-to-add` for the reason `diff_entries` runs it — an untracked new file is
+    invisible to `git diff` without it — and `--no-color`/`--find-renames=0` so the stored text is
+    the same shape whatever the reader's git config says.
+    """
+    run("add", "--intent-to-add", "--all", cwd=worktree)
+    out = run(*_QUOTE_PATH_OFF, "diff", "--no-color", "--find-renames=0", "HEAD",
+              cwd=worktree).stdout
+    if len(out.encode("utf-8")) <= ceiling:
+        return out
+    return out.encode("utf-8")[:ceiling].decode("utf-8", "ignore") + DIFF_CLIPPED_NOTE.format(
+        ceiling=ceiling)
 
 
 def _worktree_blobs(worktree: str, paths: list[str]) -> dict[str, str]:
@@ -435,7 +461,7 @@ def push(worktree: str, *, branch: str, remote_url: str = "", config_env: dict |
 
     `timeout_s` bounds EVERY leg of the loop, not only the first push: a retry that reached an
     unbounded fetch would be a budget with a hole in it. `None` is the worker's shape (a lease, and
-    all night); `repair.remote` passes its own, because it pushes inside an HTTP request.
+    all night); `repair.apply` passes its own, because a deletion pushes inside an HTTP request.
     """
     target = remote_url or "origin"
     env = dict(config_env or {})

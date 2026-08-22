@@ -99,7 +99,7 @@ def load(path: str | None):
     Returns the reader's normalized config, or `None` when there is no file at all (open
     corpus). Raises `LibrarianConfigError` on anything malformed: called ONCE at worker startup,
     never per item. The fast lane does not use this entry point — it reads `ops/acl.json` at the
-    commit it files against (`base_inputs.load_acl`); this stays for the steward tooling, whose
+    commit it files against (`base_inputs.load_acl`); this stays for the operator tooling, whose
     only shape is a path to a checkout.
     """
     if not path or not os.path.exists(path):

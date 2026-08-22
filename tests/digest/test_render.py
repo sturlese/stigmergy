@@ -19,17 +19,18 @@ def _health_stale(*, last_run_date, days_before_window) -> dict:
             "days_before_window": days_before_window}
 
 
-def _health_ok(*, run_date, sla=0, warn=0, info=0, checks_by_severity=None,
+def _health_ok(*, run_date, warn=0, info=0, checks_by_severity=None,
               model_passes_incomplete=()) -> dict:
-    return {"state": "ok", "run_date": run_date, "total": sla + warn + info,
-            "counts_by_severity": {"sla": sla, "warn": warn, "info": info},
+    return {"state": "ok", "run_date": run_date, "total": warn + info,
+            "counts_by_severity": {"warn": warn, "info": info},
             "checks_by_severity": checks_by_severity or {},
             "model_passes_incomplete": list(model_passes_incomplete)}
 
 
-def _deltas(*, pages_count=0, titles=None, entities=0) -> dict:
+def _deltas(*, pages_count=0, titles=None, entities=0, repairs=0, by_kind=None) -> dict:
     return {"pages_filed_count": pages_count, "pages_filed_titles": titles or [],
-            "entities_born_count": entities}
+            "entities_born_count": entities, "repairs_applied_count": repairs,
+            "repairs_by_kind": by_kind or {}}
 
 
 # ── determinism ─────────────────────────────────────────────────────────────────────────────────
@@ -79,7 +80,6 @@ def test_health_zero_findings_this_run():
                       deltas=_deltas())
     assert ("Latest gardener run: 2026-07-31 — 0 findings: every check came back clean") in body
     # no per-severity bullets when the whole run is clean
-    assert "• sla:" not in body
     assert "• warn:" not in body
     assert "• info:" not in body
 
@@ -97,13 +97,13 @@ def test_health_pluralizes_its_finding_count_like_every_sibling_count_in_this_bo
     one = build_body(since=SINCE, until=UNTIL, deltas=_deltas(),
                      health=_health_ok(run_date=datetime.date(2026, 7, 31), warn=1,
                                        checks_by_severity={"warn": {"stale-view": 1}}))
-    assert "— 1 finding: 0 sla, 1 warn, 0 info" in one
+    assert "— 1 finding: 1 warn, 0 info" in one
     assert "finding(s)" not in one
 
     two = build_body(since=SINCE, until=UNTIL, deltas=_deltas(),
                      health=_health_ok(run_date=datetime.date(2026, 7, 31), warn=2,
                                        checks_by_severity={"warn": {"stale-view": 2}}))
-    assert "— 2 findings: 0 sla, 2 warn, 0 info" in two
+    assert "— 2 findings: 2 warn, 0 info" in two
 
     # the clean-run branch is the second count, and 0 is plural
     clean = build_body(since=SINCE, until=UNTIL, deltas=_deltas(),
@@ -112,15 +112,12 @@ def test_health_pluralizes_its_finding_count_like_every_sibling_count_in_this_bo
     assert "finding(s)" not in clean
 
 
-def test_health_populated_run_breaks_down_sla_and_warn_by_check_never_info():
-    health = _health_ok(run_date=datetime.date(2026, 7, 31), sla=2, warn=5, info=14,
-                        checks_by_severity={
-                            "sla": {"contradiction-sla-open": 1, "contradiction-sla-orphaned": 1},
-                            "warn": {"stale-view": 3, "aging-seed": 2}})
+def test_health_populated_run_breaks_down_warn_by_check_never_info():
+    health = _health_ok(run_date=datetime.date(2026, 7, 31), warn=5, info=14,
+                        checks_by_severity={"warn": {"stale-view": 3, "aging-seed": 2}})
     body = build_body(since=SINCE, until=UNTIL, health=health,
                       deltas=_deltas())
-    assert "Latest gardener run: 2026-07-31 — 21 findings: 2 sla, 5 warn, 14 info" in body
-    assert "• sla: contradiction-sla-open (1), contradiction-sla-orphaned (1)" in body
+    assert "Latest gardener run: 2026-07-31 — 19 findings: 5 warn, 14 info" in body
     assert "• warn: aging-seed (2), stale-view (3)" in body
     assert "• info: 14 (full breakdown: `stigmergy-gardener`)" in body
 
@@ -130,8 +127,7 @@ def test_health_omits_a_severity_bullet_line_when_that_severity_is_zero_but_othe
                         checks_by_severity={"warn": {"stale-view": 3}})
     body = build_body(since=SINCE, until=UNTIL, health=health,
                       deltas=_deltas())
-    assert "0 sla, 3 warn, 0 info" in body
-    assert "• sla:" not in body
+    assert "3 warn, 0 info" in body
     assert "• warn: stale-view (3)" in body
     assert "• info:" not in body
 
@@ -170,19 +166,18 @@ def test_health_the_benign_twin_a_completed_sweep_prints_no_note():
 
 
 # ── corpus deltas ───────────────────────────────────────────────────────────────────────────────
-# "N entities born" would overclaim: `entities_born_count` counts `review_decisions` APPROVALS.
-# Every minting door writes that ledger, but they do not all fill `extra`
-# (`sections.gather_corpus_deltas`'s own docstring), so the row set is a count and never a list of
-# names. The wording is "N entity birth(s) approved" instead — the count is the best available
-# data either way; only the label changed.
+# "N entities born" is exact (ADR 044): `entities_born_count` sums what the window's FILINGS
+# wrote, and the librarian is the only writer of an entity page — so every counted birth is a page
+# that exists. It is still a COUNT and never a list of names: the report carries the names, but a
+# digest that named them would be publishing identities past the destination channel's audiences.
 def test_deltas_populated():
     deltas = _deltas(pages_count=3, titles=["Q3 Pricing Floor", "Renewal Terms", "Beta Pilot"],
                      entities=1)
     body = build_body(since=SINCE, until=UNTIL, health=_health_never_run(),
                       deltas=deltas)
     assert ('• 3 pages filed — "Q3 Pricing Floor", "Renewal Terms", "Beta Pilot"') in body
-    assert "• 1 entity birth approved" in body
-    assert "born" not in body
+    assert "• 1 entity born" in body
+    assert "approved" not in body
 
 
 def test_deltas_singular_page_for_exactly_one():
@@ -193,20 +188,20 @@ def test_deltas_singular_page_for_exactly_one():
     body = build_body(since=SINCE, until=UNTIL, health=_health_never_run(),
                       deltas=_deltas(pages_count=1, titles=["Q3 Pricing Floor"], entities=1))
     assert '• 1 page filed — "Q3 Pricing Floor"' in body
-    assert "• 1 entity birth approved" in body
+    assert "• 1 entity born" in body
 
 
 def test_deltas_zero_activity():
     body = build_body(since=SINCE, until=UNTIL, health=_health_never_run(),
                       deltas=_deltas())
     assert "• 0 pages filed" in body
-    assert "• 0 entity births approved" in body
+    assert "• 0 entities born" in body
 
 
 def test_deltas_plural_entities_for_more_than_one():
     body = build_body(since=SINCE, until=UNTIL, health=_health_never_run(),
                       deltas=_deltas(entities=2))
-    assert "• 2 entity births approved" in body
+    assert "• 2 entities born" in body
 
 
 # ── Slack mrkdwn discipline ─────────────────────────────────────────────────────────────────────
@@ -241,3 +236,36 @@ def test_build_body_never_includes_a_dry_run_wrapper_of_its_own():
                       deltas=_deltas())
     assert "dry run" not in body.lower()
     assert "---" not in body
+
+
+# ── repairs applied ─────────────────────────────────────────────────────────────────────────────
+# By KIND and never by page, for the reason the birth count is a count: a repair names the pages it
+# edited, and this broadcast has no way to scope those to the destination channel's audiences. The
+# kinds are a closed vocabulary code owns and carry no corpus text at all.
+def test_the_repairs_line_counts_what_landed_and_names_the_kinds():
+    body = build_body(since=SINCE, until=UNTIL, health=_health_never_run(),
+                      deltas=_deltas(repairs=3, by_kind={"edits": 2, "entity-body": 1}))
+    assert "• 3 repairs applied" in body
+    assert "edits 2, entity-body 1" in body
+
+
+def test_the_repairs_line_is_singular_for_exactly_one():
+    body = build_body(since=SINCE, until=UNTIL, health=_health_never_run(),
+                      deltas=_deltas(repairs=1, by_kind={"delete": 1}))
+    assert "• 1 repair applied" in body
+
+
+def test_a_quiet_week_says_zero_rather_than_dropping_the_line():
+    """The line is the only place a reader learns the loop ran at all. A week with no repairs is
+    information — a corpus with nothing to fix, or a pass that has stopped running — and dropping
+    the line would make those two look identical."""
+    body = build_body(since=SINCE, until=UNTIL, health=_health_never_run(), deltas=_deltas())
+    assert "• 0 repairs applied" in body
+
+
+def test_the_kinds_are_sorted_so_two_weeks_can_be_compared():
+    """A digest whose lines reorder between weeks is one nobody can read as a series."""
+    body = build_body(since=SINCE, until=UNTIL, health=_health_never_run(),
+                      deltas=_deltas(repairs=3, by_kind={"entity-alias": 1, "delete": 1,
+                                                         "edits": 1}))
+    assert "delete 1, edits 1, entity-alias 1" in body
