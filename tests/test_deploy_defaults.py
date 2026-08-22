@@ -19,6 +19,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -224,3 +225,78 @@ def test_the_scripts_restored_defaults_are_the_ones_this_file_asserts(tmp_path):
     restored = {p.name: json.loads(p.read_text(encoding="utf-8"))
                 for p in sorted(deploy_dir.iterdir()) if p.is_file()}
     assert restored == EMPTY_DEFAULTS
+
+
+# ── the preflight: a file the server would refuse to read never becomes an image ───────────────
+# Since ADR 045 D7 there is one value shape for a principal's groups, and a leftover `"*"`
+# invalidates the WHOLE file rather than one entry — so an image shipped ahead of the roster
+# rewrite 401s every request. This is the check that stops that, and it has three outcomes.
+
+def _run_deploy(tmp_path, *, roster, on_path: str = "") -> subprocess.CompletedProcess:
+    """`_staged_run`'s rig with a caller-chosen roster, returning the process rather than
+    asserting success — these tests are about the exit code."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    shutil.copy2(DEPLOY_SCRIPT, scripts / "deploy_staging.sh")
+    ops = tmp_path / "knowledge" / "ops"
+    ops.mkdir(parents=True)
+    (ops / "identities.json").write_text(json.dumps(roster), encoding="utf-8")
+    (ops / "entity-registry.json").write_text(json.dumps(_REGISTRY), encoding="utf-8")
+    (ops / "slack-channels.json").write_text(json.dumps(_CHANNELS), encoding="utf-8")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fly = bin_dir / "fly"
+    fly.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    fly.chmod(0o755)
+    path = f"{bin_dir}{os.pathsep}{on_path}{os.pathsep}{os.environ['PATH']}" if on_path else \
+        f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
+    env = {**os.environ, "PATH": path, "STIGMERGY_REPO": str(tmp_path / "knowledge")}
+    # `cwd=tmp_path`, not the repo root: the script probes `.venv/bin/python` RELATIVE to the
+    # working directory, so a run from the checkout would find this suite's own venv and none of
+    # these tests could tell the three outcomes apart. CI runs from the checkout and has no
+    # `.venv` at all, which is the shape that made the original defect visible there and nowhere
+    # else.
+    return subprocess.run(["bash", str(scripts / "deploy_staging.sh")], cwd=str(tmp_path),
+                          capture_output=True, text=True, env=env, timeout=60)
+
+
+def _interpreter_dir() -> str:
+    """The directory of an interpreter that CAN import stigmergy — this suite's own."""
+    return str(pathlib.Path(sys.executable).parent)
+
+
+def test_a_retired_roster_spelling_stops_the_deploy_and_names_the_line_to_write(tmp_path):
+    """The refusal, on the case every deployment meets exactly once. The message is the parser's
+    own, so an operator is told what to write rather than that something is wrong."""
+    proc = _run_deploy(tmp_path, roster={"someone@example.com": "*"},
+                       on_path=_interpreter_dir())
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert '["brain-admins"]' in proc.stderr, proc.stderr
+    assert "refusing to bake" in proc.stderr
+
+
+def test_the_benign_twin_a_roster_in_the_current_shape_deploys(tmp_path):
+    """The specificity half: the preflight must let the shape every real roster now uses through,
+    or it would block every deploy and read as a passing check."""
+    proc = _run_deploy(tmp_path, roster=_ROSTER, on_path=_interpreter_dir())
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "refusing to bake" not in proc.stderr
+
+
+def test_a_check_that_cannot_RUN_says_so_loudly_and_lets_the_deploy_through(tmp_path):
+    """The third outcome, and the one this check shipped broken on. It invoked `.venv/bin/python`
+    by name, which exists on the author's machine and nowhere else — so CI, where the script is
+    copied to a temp directory, got "no such file" and every deploy test went red.
+
+    "I could not look" must not read as "I looked and it is broken": this script is run standalone
+    by its own tests, so failing closed on its own absence would block a deploy for a reason that
+    has nothing to do with the roster. It warns instead — loudly, because a check that stops
+    running must be impossible to miss."""
+    proc = _run_deploy(tmp_path, roster={"someone@example.com": "*"}, on_path="/nonexistent")
+
+    # A roster the check WOULD have refused, and the deploy still proceeds — which is only
+    # acceptable because the operator is told, in these words.
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "were NOT" in proc.stderr and "unvalidated" in proc.stderr, proc.stderr
