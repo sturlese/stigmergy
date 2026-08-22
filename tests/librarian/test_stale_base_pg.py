@@ -95,7 +95,7 @@ def test_the_benign_twin_a_laptop_files_normally_against_its_local_branch(rig, c
 def test_an_ordinary_config_error_mid_run_still_becomes_a_failed_row_not_a_propagated_raise(
         rig, clean_queue, monkeypatch):
     """`worker.process_next`'s own docstring: a config fault that is NOT `StaleBaseError` is
-    softened into a `failed` Result (the ACL file or the linter changing on disk under a
+    softened into a `failed` Result (the registry or the linter changing on disk under a
     long-lived loop) — proven by making `base_inputs.load_registry` raise a plain
     `LibrarianConfigError` for this one delivery, which is a real code path this exact exception
     class reaches for real (a malformed `ops/acl.json`), not a stand-in for the mechanism."""

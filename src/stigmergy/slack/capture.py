@@ -213,8 +213,8 @@ async def handle_reaction_added(ctx, *, reaction: str, team_id: str, channel_id:
                                             text=copy.server_error()),
             what=f"capture server-error ephemeral in {channel_id}")
         return False
-    probe = ctx.build_service(email, audiences)
     try:
+        probe = ctx.build_service(email, audiences)
         capture_acl = probe.check_submit_audience(channel_groups or None)
     except SubmitRefused:
         log.info("slack capture: %s is not in the groups %s files at — refused", email, channel_id)
@@ -224,6 +224,22 @@ async def handle_reaction_added(ctx, *, reaction: str, team_id: str, channel_id:
                 blocks=render.render_not_in_this_channels_groups(channel_name),
                 text=copy.not_in_this_channels_groups(channel_name), thread_ts=thread_ts),
             what=f"channel-audience refusal in {channel_id}")
+        return False
+    except Exception:  # noqa: BLE001 — see below; the reactor must be told SOMETHING
+        # Guarded like every other seam in this function, and for its reason: unguarded, an error
+        # here escapes into `app.on_reaction_added`'s outer handler and the reactor sees the ⏳
+        # appear, vanish, and nothing else. Two classes are reachable and neither is a
+        # `SubmitRefused`: `RateLimitError` (a server error, since `check_submit_audience` goes
+        # through the audited `_call` seam) and a failure of the `audit_log` write inside that
+        # seam's own `finally`. Do not narrow this back to those two by name — the point is that
+        # the reactor is told, whatever went wrong.
+        log.error("slack capture: the audience check failed for %s in %s",
+                  email, channel_id, exc_info=True)
+        await ctx.post_or_log(
+            ctx.gateway.chat_post_ephemeral(channel_id, slack_user_id,
+                                            blocks=render.render_server_error(),
+                                            text=copy.server_error(), thread_ts=thread_ts),
+            what=f"capture server-error ephemeral in {channel_id}")
         return False
 
     # reserve + submit + attach are ONE transaction. A crash between `submit` succeeding and

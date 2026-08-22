@@ -18,7 +18,7 @@ from stigmergy.index import rank, search, store
 from stigmergy.index.backends.embedder import embedder_for_model
 from stigmergy.index.errors import EmptyIndexError
 from stigmergy.kernel.normalize import resolution_key
-from stigmergy.server import entity_aliases, identity, review
+from stigmergy.server import entity_aliases, identity, ops_files, review
 from stigmergy.server.acl import visible
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
 from stigmergy.server.errors import (
@@ -647,6 +647,24 @@ class BrainService:
         # naming the same groups in different orders would otherwise defeat both dedup levels and
         # file the same material twice.
         labels = sorted(labels)
+        # A group NOBODY holds is a page nobody can ever read, and a filed page's audience cannot
+        # be changed. The shape rules above cannot see it — `["finanace"]` is a legal name — and
+        # `visible()` cannot either: it returns True unconditionally for an unrestricted caller,
+        # which is precisely the caller whose typo is silent. The roster is already parsed on this
+        # request, so the cross-check is free. It echoes the caller's OWN word back and never
+        # enumerates the groups that do exist.
+        try:
+            unknown = sorted(set(labels) - ops_files.known_groups(
+                self.conn, self.settings.identities_path))
+        except (IdentityError, OSError) as ex:
+            raise CaptureError(
+                f"the group roster could not be read, so an audience cannot be checked "
+                f"against it ({ex.__class__.__name__}) — nothing was queued") from ex
+        if unknown:
+            raise CaptureError(
+                f"no identity holds {', '.join(repr(g) for g in unknown)}, so a capture filed "
+                f"there would be readable by nobody — and a filed page's audience cannot be "
+                f"changed afterwards. Check the spelling, or omit `audience` to file it open")
         if not visible(labels, self.audiences):
             raise CaptureError(NOT_YOURS_TO_FILE_AT.format(
                 holds=", ".join(sorted(self.audiences)) if self.audiences else "none"))

@@ -4,6 +4,7 @@ import dataclasses
 
 import pytest
 
+from stigmergy.server.errors import RateLimitError
 from stigmergy.slack import copy
 from stigmergy.slack.capture import (
     DONE_REACTION,
@@ -690,3 +691,56 @@ def test_the_filed_card_goes_back_to_the_channel_that_set_the_audience(indexed, 
         "these being the same fact")
     assert reported_to == FINANCE_CHANNEL, (
         "the report goes somewhere other than the channel that set the audience")
+
+
+def test_a_reactor_holding_no_group_still_captures_from_a_PUBLIC_channel(indexed, clean_tables):
+    """The twin of the channel-groups refusal, on the identity the refusal is about. Bob holds no
+    group: he cannot capture from `#finance`, and he must still be able to capture from an
+    unlisted channel — otherwise the door refuses the person it is trying to onboard, and the
+    refusal test above reads as a passing security test while the feature is broken."""
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    _seed_thread(gw, UNLISTED_CHANNEL, "400.1")
+    gw.seed_user("U_BOB", "bob@example.com", display_name="Bob")
+    ctx = build_context(fixture, conn, gateway=gw)
+
+    queued = _run(handle_reaction_added(
+        ctx, reaction="brain", team_id=TEAM_ID, channel_id=UNLISTED_CHANNEL,
+        message_ts="400.1", slack_user_id="U_BOB",
+        identity_result=Resolved(email="bob@example.com", audiences=frozenset())))
+
+    assert queued is True
+    assert _acl_of(conn) is None
+
+
+def test_an_audience_check_that_FAILS_tells_the_reactor_instead_of_vanishing(indexed,
+                                                                             clean_tables):
+    """The seam's own guard. `check_submit_audience` goes through the audited `_call`, so it can
+    raise a `RateLimitError` — a server error, not a `SubmitRefused` — and the audit write in that
+    seam's `finally` can fail too. Unguarded, either escapes the handler and the reactor sees the
+    ⏳ appear, vanish, and nothing else: no capture, no refusal, no acknowledgement at all."""
+    conn, fixture = indexed
+    gw = FakeSlackGateway()
+    _seed_thread(gw, FINANCE_CHANNEL, "500.1")
+    ctx = build_context(fixture, conn, gateway=gw)
+
+    def _boom(_audience):
+        raise RateLimitError("30 requests per minute")
+
+    original = type(ctx).build_service
+    def _probing(self, email, audiences, **kw):
+        service = original(self, email, audiences, **kw)
+        service.check_submit_audience = _boom
+        return service
+    ctx.build_service = _probing.__get__(ctx, type(ctx))
+
+    queued = _run(handle_reaction_added(
+        ctx, reaction="brain", team_id=TEAM_ID, channel_id=FINANCE_CHANNEL,
+        message_ts="500.1", slack_user_id="U_ANA",
+        identity_result=Resolved(email="ana@example.com", audiences=frozenset({"finance"}))))
+
+    assert queued is False
+    assert gw.ephemeral, "the reactor was told nothing at all"
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM capture_queue")
+        assert cur.fetchone()[0] == 0

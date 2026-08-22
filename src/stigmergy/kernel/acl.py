@@ -42,7 +42,7 @@ def flows_into(content_acl: list[str] | None, page_acl: list[str] | None) -> boo
     whether an AUDIENCE may, so it needs containment — sharing one label with a page's audience
     would leak to the rest of it.
 
-    The four callers are every seam where a model reads one governed page while writing another
+    Its callers are every seam where a model reads one governed page while writing another
     (the filing port, the meeting distiller's corpus context, the repair proposer, the view
     synthesis), plus the write-lane check in `gate_zone` and the view's own member and backlink
     feeds. Its default posture is fail-closed: called with `page_acl=None` — an open page, the

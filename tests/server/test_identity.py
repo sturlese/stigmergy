@@ -278,7 +278,10 @@ def test_a_group_name_carrying_a_comma_fails_closed(tmp_path):
     """A label list is CSV-serialized on at least one road, so one comma inside a name would
     silently become two groups at enforcement time."""
     path = _write(tmp_path, {"steward": ["finance,leadership"]})
-    with pytest.raises(IdentityError, match="invalid group"):
+    # Matched on the COMMA branch's own sentence, not on the generic `invalid group` the charset
+    # rule also emits — otherwise deleting the comma branch would leave this green, and the CSV
+    # reason `check_group_names` documents as existing "for its own reason" would be unpinned.
+    with pytest.raises(IdentityError, match="must not contain ','"):
         resolve_audiences(path, "steward")
 
 

@@ -331,7 +331,9 @@ def test_the_benign_twin_an_all_open_entity_renders_every_member(tmp_path):
 
     outcome = asyncio.run(regenerate.regenerate_entity(clone, "acme-corp", registry=registry))
     page = open(os.path.join(clone, "views", "acme-corp.md")).read()
-    assert outcome.member_count == len(skeleton.members_of(clone, "acme-corp"))
+    # A LITERAL, not `len(members_of(...))`: comparing production against itself passes at zero.
+    # The fixture is the entity page plus its two decisions.
+    assert outcome.member_count == 3, outcome
     assert "Decision 1" in page and "Decision 2" in page, page
 
 

@@ -148,11 +148,13 @@ def backlinks_of(repo: str, entity_page: Member | None, *,
     """Pages whose wikilinks resolve to the entity's OWN page. Scans every indexed zone (`views/`
     included — another entity's view may legitimately link here).
 
-    A backlink is a governed source OUTSIDE the member set: `flows_into` gates whether it
-    renders, and is NEVER folded into the intersection itself — a backlink must never NARROW
-    `view_acl`, only be excluded from this list. The `None` default fail-closes to showing only
-    equally-open backlinks. The match is against RESOLVED link paths, exact even on an ambiguous
-    stem.
+    A backlink is a governed source OUTSIDE the member set, so it passes the same gate a member
+    does and never contributes to the page's own audience: a backlink is excluded from this list,
+    never a reason to narrow anything. **Production always passes `None`** — a view is open
+    (ADR 045 D5) — and the parameter stays because it is `flows_into`'s own argument and its truth
+    table is worth exercising at other audiences rather than only at the one this caller uses. The
+    `None` default is also the fail-closed one: it admits equally-open backlinks and nothing else.
+    The match is against RESOLVED link paths, exact even on an ambiguous stem.
 
     `exclude_path` is the view being generated: it always links its own entity page and always
     passes the filter, so without the exclusion the rollup cites itself and the count runs one

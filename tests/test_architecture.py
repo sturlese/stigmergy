@@ -22,6 +22,7 @@ that needs a stigmergy import has stopped being the bottom of the stack, and wha
 belongs somewhere else.
 """
 import ast
+import dataclasses
 import pathlib
 import re
 import subprocess
@@ -3158,6 +3159,18 @@ _TOLD_PERMISSIONS = {
     # just wrote; `repair/apply.py` says so for the machine-zone pages a sweep rewrites, which is
     # the first thing in this system that modifies one at all.
     "provenance_pages": ("librarian/processing.py", "repair/apply.py"),
+    # ADR 045 D6. It suspends `gate_zone`'s audience check for the identity zone, so it IS a
+    # permission and not evidence: the pages it names are exempt from a rule everything else
+    # obeys. One granter — the birth writer's own caller, which knows which paths this run wrote
+    # as identity (an alias taught, a spine grown) rather than as knowledge. A path prefix here
+    # would have handed the exemption to callers that never earned it, which is what every other
+    # entry in this table exists to prevent.
+    "identity_writes": ("librarian/processing.py",),
+    # Found by the widened harvester above, having been invisible to it for as long as it existed.
+    # It is a permission and not evidence: `gate_identity` refuses EVERY created page in the
+    # identity zone, and being in this set is the only thing that lifts the refusal — so a caller
+    # that could set it could write an identity the agent invented.
+    "born_entity_pages": ("librarian/processing.py",),
 }
 
 
@@ -3233,6 +3246,11 @@ _GATE_CONTEXT_DATA_KEYWORDS = frozenset({
     "worktree", "entries", "added", "material", "outcome", "registry", "linter_path",
     "gitleaks_bin", "subprocess_timeout_s", "stamped", "findings", "write_prefixes",
     "creatable_types", "extra_folder_types", "page_declared", "stamped_by_path", "edits_allowed",
+    # `identity_writes` and `born_entity_pages` are PERMISSIONS and are in `_TOLD_PERMISSIONS`
+    # below, not here. `confirmed_entity_pages` is evidence beside the second of them: it suspends
+    # nothing, it is the VALUE `gate_identity` proves `approved_by:` equals, and a wrong value
+    # makes a run refuse rather than pass.
+    "confirmed_entity_pages",
     # `acl` is EVIDENCE, not a permission, and the distinction is the whole point of this test:
     # a permission tells a gate to suspend a proof, and this tells `gate_zone` the fact it judges
     # AGAINST — the audience the door filed this capture at (ADR 045 D2). It can only ever make a
@@ -3242,19 +3260,59 @@ _GATE_CONTEXT_DATA_KEYWORDS = frozenset({
 })
 
 
+# Every field a `GateContext` HAS, so the harvester below can tell an attribute grant on one from
+# an attribute assignment on any other object. Read off the dataclass rather than listed, or this
+# becomes a second copy of the field set that goes stale the way the harvester itself did.
+def _gate_context_fields() -> set[str]:
+    from stigmergy.librarian.gates import GateContext
+    return {f.name for f in dataclasses.fields(GateContext)}
+
+
 def _gate_context_keywords() -> set[str]:
-    """Every keyword argument any module in this system passes to `GateContext(...)`."""
+    """Every `GateContext` field any module in this system SETS — as a keyword argument to the
+    constructor, or by assigning the attribute on a context it built earlier.
+
+    **Both, because both happen, and the second one is how a field slipped past this test.**
+    `identity_writes` is granted only as `ctx.identity_writes = …` in `librarian/processing.py`,
+    exactly as `provenance_pages` and `write_prefixes` already were — so a harvester that read
+    only the constructor called it "not used" and the classification below waved it through
+    unclassified. `_grants_keyword` had understood attribute grants all along; this one did not,
+    and a checker strictly narrower than the rule it feeds is a checker with a hole in it.
+    """
+    fields = _gate_context_fields()
     out: set[str] = set()
     for path in ALL_STIGMERGY_SOURCES:
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if not isinstance(node, ast.Call):
+            if isinstance(node, ast.Call):
+                func = node.func
+                name = (func.attr if isinstance(func, ast.Attribute)
+                        else func.id if isinstance(func, ast.Name) else "")
+                if name == "GateContext":
+                    out |= {kw.arg for kw in node.keywords if kw.arg}
                 continue
-            func = node.func
-            name = (func.attr if isinstance(func, ast.Attribute)
-                    else func.id if isinstance(func, ast.Name) else "")
-            if name == "GateContext":
-                out |= {kw.arg for kw in node.keywords if kw.arg}
+            targets = (node.targets if isinstance(node, ast.Assign)
+                       else [node.target] if isinstance(node, (ast.AugAssign, ast.AnnAssign))
+                       else [])
+            out |= {t.attr for t in targets
+                    if isinstance(t, ast.Attribute) and t.attr in fields}
     return out
+
+
+def test_the_gate_context_keyword_harvester_sees_an_ATTRIBUTE_grant(tmp_path):
+    """**The red proof for the widening above**, on the shape that slipped through: a module that
+    never calls `GateContext(...)` and sets one of its fields on a context it was handed."""
+    granter = tmp_path / "attribute_granter.py"
+    granter.write_text("def widen(ctx):\n    ctx.identity_writes = frozenset({'a'})\n",
+                       encoding="utf-8")
+    fields = _gate_context_fields()
+    found = set()
+    for node in ast.walk(ast.parse(granter.read_text(encoding="utf-8"))):
+        targets = node.targets if isinstance(node, ast.Assign) else []
+        found |= {t.attr for t in targets
+                  if isinstance(t, ast.Attribute) and t.attr in fields}
+    assert found == {"identity_writes"}, (
+        "the harvester's attribute half went blind — a field granted this way would be "
+        "unclassified and unnoticed, which is how `identity_writes` shipped without a decision")
 
 
 def test_every_gate_context_keyword_is_either_evidence_or_a_pinned_permission():

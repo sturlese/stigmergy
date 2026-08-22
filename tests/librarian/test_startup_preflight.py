@@ -127,7 +127,7 @@ def test_startup_checks_runs_the_push_identity_check_for_the_double_backend_too(
 # Found by the traceback sweep, and one more occurrence of the raw-traceback defect class here.
 # `registry.load_registry` raises a bare `ValueError`, which is neither a `LibrarianConfigError` nor a
 # `LibrarianError` — so `cli.main`, which catches those, printed a Python stack trace at an operator
-# for a one-character mistake in a config file. `acl_rules._guard_delegation` already fixed exactly
+# for a one-character mistake in a config file. `base_inputs`' own re-raise already fixed exactly
 # this for the file loaded on the line above it.
 def test_a_malformed_entity_registry_refuses_with_a_sentence_and_not_a_traceback(rig):
     env, deps = rig

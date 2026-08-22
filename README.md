@@ -40,9 +40,15 @@ registry already knows joins that entity's `aliases:` instead of becoming a twin
 proposed, nothing waits, and one writer still owns the registry.
 
 **Not everyone may read everything.** A team wiki holds salaries, board material and a customer's
-confidential figures. Visibility is enforced at one point (`acl.visible()`), on every read surface,
-by an architecture test that refuses to let a new reader skip it — and an unknown page and a
-forbidden page return the same string, because *which* one it was is itself a leak.
+confidential figures. Who may read a page is decided by the person who captured it, at the door
+they captured through — the channel they posted in, or the groups they named — never by where the
+page ends up sitting, because the folder is the page's *type* and an audience is metadata, not a
+location. That decision travels on the capture and is stamped on everything it writes, the
+verbatim source page included. Enforcement is one point (`acl.visible()`), on every read surface,
+held by an architecture test that refuses to let a new reader skip it — and an unknown page and a
+forbidden page return the same string, because *which* one it was is itself a leak. A model, in
+turn, never reads what the page it is writing could not cite, so the link that quietly carries a
+restricted title into an open page cannot be written in the first place.
 
 ## Why it is built this way
 
@@ -146,9 +152,10 @@ it (ES/EN, every hit showing its ranking factors). `stigmergy-server --identity 
 over stdio; `--transport http --port <p>` serves streamable HTTP with per-request bearer-token auth.
 
 **`acl.visible()` is the one enforcement point.** Every read surface filters through it, and an
-architecture test holds the line: any module reading `pages_index` either names an ACL predicate or
-sits on a named exception list. Existence leaks count as leaks — an unknown page and a forbidden
-page return the same string, deliberately.
+architecture test holds the line: any module reading `pages_index` — or reading the checkout on
+behalf of a page a model is writing — either names a predicate or sits on a named exception list.
+Existence leaks count as leaks — an unknown page and a forbidden page return the same string,
+deliberately.
 
 `ask(question)` is the answer path: an evidence-gathering agent calls three read tools (`search`,
 `read_page`, `describe_entity`) under the caller's identity and writes a cited answer; then a

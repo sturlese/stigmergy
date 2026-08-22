@@ -67,7 +67,11 @@ Two predicates remain, and there is no table of rules.
 no rules file left for a path rule to live in.
 
 **D2 — the label is the door's, and the door is a person choosing.** Slack takes the channel's
-groups (`ops/slack-channels.json`; a channel not listed is public, and public is open);
+groups (`ops/slack-channels.json`; a channel not listed is public, and public is open). **A
+channel's groups are a labelling convention, not a read boundary**: 🧠 capture is public-channel
+only, so the whole workspace can already read what the brain then files at `["finance"]`. The
+brain is deliberately stricter than its source — that is the safe direction — and an operator must
+not read the channel map as an access control over Slack itself, which it is not.
 `brain_submit` takes an `audience` argument (omitted = open); the console's *Register* is open.
 Authorization at the door is **`visible()` itself** — you may file only what you could read
 afterwards — so it is the one read predicate applied to the writer rather than a second rule. The
@@ -98,9 +102,14 @@ widened, correctly, but it **collapsed**: one leadership note anchored to a popu
 that entity's view vanish for everyone else. `kernel.acl.view_acl` is deleted.
 
 **D6 — an entity is the shared vocabulary: born open, kept open.** An entity page never carries
-`acl:`. A birth from restricted material writes identity and What / Who **only** — facts and
-connections belong to the material and stay on the anchored, restricted page — and
-`entity_updates` from a restricted capture are dropped and reported.
+`acl:`. A birth from restricted material writes identity and What / Who **only** — facts,
+connections and the `related:` link back to the capture's own page all belong to the material and
+stay with it — and `entity_updates` from a restricted capture are dropped and reported. Two things
+this publishes on purpose, both worth saying out loud rather than leaving to be discovered: the
+one sentence of What / Who, and the entity's **aliases**. A codename alias is an association the
+restricted material established, and putting it in the shared vocabulary is what stops the same
+thing existing twice under two spellings — but it is a disclosure, and an operator choosing to
+restrict something should know it is the one they are making.
 
 **D7 — identity is a list of groups, in one shape.** `ops/identities.json` maps identity to
 `[group, …]`; `"*"` and the bare-string spelling go. Unrestricted is membership of
@@ -129,7 +138,16 @@ the signal that would change the answer:
   onto a third page.
 - **The repair proposer runs at OPEN and therefore never repairs a restricted page.** A repair has
   no capture behind it, so there is no human act naming an audience for it; running it at open is
-  the fail-closed answer, and the price is a lost convenience rather than a lost invariant.
+  the fail-closed answer, and the price is a lost convenience rather than a lost invariant. The
+  findings feed is filtered to match, and what it drops is counted into the pass's own
+  `skip_reasons` — a lost convenience nobody can observe is a lost invariant.
+- **The gardener's model sweep reads every page body with no audience at all**, and its findings
+  are durable. It is the one place in this system where a model sees the whole corpus. Acceptable
+  today because every surface that reads a finding is an operator surface — the terminal, the
+  console, `job_runs` — and an operator is inside the trust boundary by construction; the one
+  consumer that is NOT an operator, the repair proposer, filters the feed to its own audience.
+  The signal that changes the answer: a finding reaching any reader-facing surface, or a scoped
+  identity gaining access to one.
 
 ## What this deliberately does NOT do
 

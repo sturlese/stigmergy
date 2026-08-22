@@ -89,11 +89,17 @@ def test_a_channel_is_NEVER_unrestricted_even_listed_as_brain_admins(tmp_path):
     The obvious next refactor is to unify the two readers, and this is the regression that would
     cause: a channel meaning "sees the whole corpus" makes the digest (`digest.sections`) and
     every public-channel answer broadcast every restricted page into Slack."""
+    from stigmergy.server.identity import resolve_audiences
+
+    same_bytes = json.dumps({"C_OPS": ["brain-admins"]})
     path = tmp_path / "admins.json"
-    path.write_text(json.dumps({"C_OPS": ["brain-admins"]}))
-    scope = channel_audiences(str(path), "C_OPS")
-    assert scope == {"brain-admins"}
-    assert scope is not None
+    path.write_text(same_bytes)
+
+    # The SAME bytes down both roads. The identity road collapses `brain-admins` to `None` —
+    # unrestricted, sees everything — and the channel road must not: contrasting them is the
+    # assertion, where `scope is not None` was dead beside the equality above it.
+    assert resolve_audiences(str(path), "C_OPS") is None
+    assert channel_audiences(str(path), "C_OPS") == {"brain-admins"}
 
 
 def test_default_path_joins_ops_slack_channels_json_under_the_repo():

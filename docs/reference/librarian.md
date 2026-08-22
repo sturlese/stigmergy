@@ -410,7 +410,7 @@ whether the page is in this run's own AUDIENCE ([ADR 045](../decisions/045-audie
 D3). Both refusals return the same sentence — "you may not read that" and "there is no such page"
 must not be distinguishable, or the tool is an existence oracle for a model that will report what
 it found. The containment half is an allow-list — a `.md` page in a content zone, or a
-per-type template at `ops/templates/<type>.md` — because containment alone would admit `.git/config`
+per-type template at `ops/templates/<type>.md` — because containment alone would admit `.git/config` and the identity roster.
 A dropped page is logged at WARNING.
 
 Page excerpts and tool results are captured material coming back into a prompt, so both render

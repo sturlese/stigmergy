@@ -3,6 +3,7 @@ real from a fixture repo (`index.build.rebuild`) — never from a hand-crafted r
 could silently disagree with.
 """
 import datetime
+import os
 
 from stigmergy.gardener import checks
 from tests.gardener import support
@@ -252,3 +253,103 @@ def test_a_page_anchored_to_both_a_live_and_a_retired_id_names_only_the_retired_
     assert "cofers-holdings" in findings[0]["detail"]
     assert "'cofers'" not in findings[0]["detail"]
 
+
+
+# ── link-to-narrower-page: the one upward link a human can still write ────────────────────────
+# Since ADR 045 D3 a model cannot LEARN of a page it may not link to, so what remains is a name
+# the capture's own material supplied. Reported and never repaired — all three repairs would edit
+# somebody's words — which makes this finding the whole of the signal for that residual.
+
+def _note(repo, stem: str, *, acl=None, body: str = "") -> None:
+    front = {"type": "note", "title": stem.replace("-", " ").title(), "entity": [],
+             "status": "developing", "updated": _days_ago(1)}
+    if acl is not None:
+        front["acl"] = acl
+    support.write_page(repo, "wiki", f"notes/{stem}.md", frontmatter=front, body=body)
+
+
+def test_link_to_narrower_fires_when_an_open_page_links_a_restricted_one(conn, repo):
+    _note(repo, "board-terms", acl=["leadership"])
+    _note(repo, "team-update", body="Background in [[board-terms]].")
+    support.rebuild_index(conn, repo)
+
+    findings = checks.check_link_to_narrower_page(conn)
+
+    assert [f["subject"] for f in findings] == ["wiki/notes/team-update.md"]
+    f = findings[0]
+    assert f["check"] == checks.CHECK_LINK_TO_NARROWER_PAGE
+    assert f["severity"] == "warn"
+    assert "wiki/notes/board-terms.md" in f["subjects"]
+    assert "see the title and cannot open it" in f["detail"]
+
+
+def test_link_to_narrower_the_benign_twin_a_restricted_page_may_link_an_open_one(conn, repo):
+    """Downward is fine and must stay fire-free: everyone who can read the restricted page can
+    already read the open one. A rule that fired here would make every restricted page a finding
+    the moment it cited anything."""
+    _note(repo, "public-policy")
+    _note(repo, "board-terms", acl=["leadership"], body="Per [[public-policy]].")
+    support.rebuild_index(conn, repo)
+
+    assert checks.check_link_to_narrower_page(conn) == []
+
+
+def test_link_to_narrower_fires_on_a_SHARED_label_because_this_is_containment(conn, repo):
+    """The case that tells `flows_into` from `visible()`, and the one a re-implementation with an
+    intersection would get backwards.
+
+    The offender is the page with MORE labels: `[finance, leadership]` linking `[finance]` is read
+    by everyone holding either group, and the leadership-only half of that audience cannot open
+    the target. Under `visible()` the two share a label and every individual reader is fine, which
+    is exactly why an audience needs containment and a person needs intersection."""
+    _note(repo, "finance-only", acl=["finance"])
+    _note(repo, "joint-review", acl=["finance", "leadership"], body="See [[finance-only]].")
+    support.rebuild_index(conn, repo)
+
+    findings = checks.check_link_to_narrower_page(conn)
+
+    assert [f["subject"] for f in findings] == ["wiki/notes/joint-review.md"]
+
+
+def test_link_to_narrower_the_twin_the_page_with_FEWER_labels_may_link_the_wider_one(conn, repo):
+    """The other half of the same pair, and the one that must stay silent: `[finance]` linking
+    `[finance, leadership]` is fine — every reader of the source holds `finance`, and the target
+    admits them."""
+    _note(repo, "joint-review", acl=["finance", "leadership"])
+    _note(repo, "finance-only", acl=["finance"], body="See [[joint-review]].")
+    support.rebuild_index(conn, repo)
+
+    assert checks.check_link_to_narrower_page(conn) == []
+
+
+def test_link_to_narrower_says_something_DIFFERENT_about_an_unreadable_page(conn, repo):
+    """`acl = {}` is what the index stores for a page whose frontmatter it could not read — its
+    fail-closed reading, "visible to nobody". It is not somebody's audience decision, and a
+    finding that called it one would assert something false about that page."""
+    support.write_page(repo, "wiki", "notes/broken.md",
+                       frontmatter={"type": "note", "title": "Broken", "entity": [],
+                                   "status": "developing", "updated": _days_ago(1)})
+    path = os.path.join(repo, "wiki", "notes", "broken.md")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("---\ntype: note\nacl: [oops\n---\n\n# Broken\n\nbody\n")
+    _note(repo, "pointer", body="See [[broken]].")
+    support.rebuild_index(conn, repo)
+
+    findings = checks.check_link_to_narrower_page(conn)
+
+    assert [f["subject"] for f in findings] == ["wiki/notes/pointer.md"]
+    assert "cannot read the frontmatter of" in findings[0]["detail"], findings[0]["detail"]
+
+
+def test_link_to_narrower_never_names_a_VIEW_as_the_offender(conn, repo):
+    """A view is derived: nobody can reword its sentence, and the suggested action would be
+    impossible to follow. It is excluded as a SOURCE and stays available as a target."""
+    _note(repo, "board-terms", acl=["leadership"])
+    support.write_registry(repo, {"acme-corp": {"name": "Acme Corp", "type": "organization"}})
+    support.write_page(repo, "views", "acme-corp.md",
+                       frontmatter={"type": "view", "title": "Acme Corp — view",
+                                   "entity": ["acme-corp"], "tier": 3},
+                       body="Timeline mentions [[board-terms]].")
+    support.rebuild_index(conn, repo)
+
+    assert [f["subject"] for f in checks.check_link_to_narrower_page(conn)] == []

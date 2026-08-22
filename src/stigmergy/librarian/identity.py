@@ -201,6 +201,13 @@ def write_births(worktree: str, *, outcome, base_registry: Registry, material: s
                 existing_pages=existing_paths + list(planned_pages))
             declared_facts = tuple(declared.get("facts", ()) or ())
             declared_connections = tuple(declared.get("connections", ()) or ())
+            # ONE local, governing BOTH halves of what this restricted birth may carry — the
+            # body's Connections fallback and the frontmatter's `related:` — because they are the
+            # same fact written twice and a second `if` is how one of them gets missed. It was:
+            # the fallback was dropped and `related` went to the renderer anyway, so the OPEN
+            # entity page published the restricted page's title in its frontmatter. A title is
+            # the whole of what a link leaks; a meeting would have published every decision's.
+            page_related = related if acl is None else ()
             if acl is None:
                 body = birth.prepare_body(
                     summary=declared.get("summary", ""), facts=declared_facts,
@@ -210,9 +217,12 @@ def write_births(worktree: str, *, outcome, base_registry: Registry, material: s
                                  or [f"[[{name_of}]] — the page this entity was introduced from"
                                      for name_of in related]))
             else:
-                # Identity and What / Who, and nothing else (D6). The `related` fallback is
-                # dropped too: it would link the OPEN entity page to the restricted page this
-                # capture filed — an upward link, written by the system itself.
+                # Identity and What / Who, and nothing else (D6). The body's Connections
+                # fallback and the frontmatter `related:` both go with it (`page_related` above):
+                # either would link the OPEN entity page to the restricted page this capture
+                # filed — an upward link, written by the system itself, on the one page D6 keeps
+                # open on purpose. An entity page is `ORPHAN_EXEMPT_TYPES` in the gardener, so an
+                # empty `related:` costs no orphan finding; there is nothing to trade here.
                 body = birth.prepare_body(summary=declared.get("summary", ""))
                 if declared_facts or declared_connections:
                     births.withheld.append({"entity": cid, "facts": len(declared_facts),
@@ -236,7 +246,7 @@ def write_births(worktree: str, *, outcome, base_registry: Registry, material: s
         # registration and an ordinary capture alike (ADR 044 D1). The approver is the submitter,
         # resolved by the server, never anything the account said.
         text = birth.render_page(template, proposal, today=today, approved_by=approver,
-                                 body=body, related=related)
+                                 body=body, related=page_related)
         planned_pages[proposal.relpath] = text
         entry = registry_module.entry(proposal.name, proposal.entity_type, proposal.aliases,
                                       approved_by=approver)

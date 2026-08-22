@@ -14,7 +14,7 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 | `settings.py` | `resolve_backend()` — the ONE parse+validation of `$CLEAN_LLM` (`openai`/`fake`/`fake-flawed`), read at call time — plus `PROVIDER_KEY_ENV`/`provider_of`, the one provider→key table and prefix predicate (framework-free, so keyless modules can consult them; the librarian's preflight re-exports both) |
 | `page.py` | `MAX_BODY_LINES` / `SPLIT_CHUNK_LINES` — the page-as-chunk contract — and `_yaml(v)`, the frontmatter scalar emitter: plain only when the value provably round-trips through `yaml.safe_load`, quoted-and-escaped otherwise |
 | `frontmatter.py` | `split_frontmatter(text) -> (dict, body)` — tolerant: malformed or absent frontmatter degrades to `({}, text)`, never an exception |
-| `acl.py` | The audience VOCABULARY — what two label lists mean when they meet, never who is asking. `flows_into(content_acl, page_acl)` (may this content be written into, or rendered onto, a page with that label — containment, fail-closed) and `view_acl` (members INTERSECTION, retired by ADR 045 D5). Where a label COMES FROM is not here: the door decides it and the capture's queue row carries it |
+| `acl.py` | The audience VOCABULARY — what two label lists mean when they meet, never who is asking. `flows_into(content_acl, page_acl)` — may this content be written into, or rendered onto, a page with that label? Containment, fail-closed, and the whole of this module. Where a label COMES FROM is not here: the door decides it and the capture's queue row carries it |
 | `registry.py` | `Registry`, `load_registry` / `registry_from_text` / `save_registry` / `index_entity` — `ops/entity-registry.json`'s one reader/writer, plus `title` / `type_of` and the TWO lookups the registry is asked for: `canonical_id` (which entity does this text MEAN — filing) and `collision_id` (would this new name be confused with one we have — the mint gate). Missing file = empty registry; malformed = loud error. The reader is split path-from-text because the registry also reaches a reader as BYTES now (the index's snapshot, which `index.check` lints through this same parse) |
 | `normalize.py` | `resolution_key(name)` (accents, case and punctuation folded — and nothing that is a judgment), `normalize(name)` (that plus the legal-suffix table: the COLLISION key), `slugify(s)` (≤60 chars) |
 | `fsutil.py` | `write_text_atomic(path, text)` — tmp file + same-directory `os.replace`, so a concurrent reader never sees a partial |
@@ -62,9 +62,9 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 ## Contracts
 
 - ACL truth table: `flows_into` — open content flows anywhere; nothing labelled flows into an
-  open page; otherwise every group of the PAGE must be a group of the CONTENT. `view_acl`:
-  members without labels don't restrict, all-`None` yields `None` (open), an empty intersection
-  is restrictive by construction. One dialect throughout: `None` is open, `[]` is nobody, and
+  open page; otherwise every group of the PAGE must be a group of the CONTENT. `view_acl` was here too, computing a view's own label as
+  the intersection of its members'; ADR 045 D5 retired it, because the intersection collapsed a
+  view to nobody the moment two members disagreed. One dialect throughout: `None` is open, `[]` is nobody, and
   nothing here collapses one into the other.
 - `normalize.py`'s suite is `tests/kernel/test_normalize.py`, added with the split that gave it a
   second key; `frontmatter.py`'s lives in `tests/kernel/test_frontmatter.py`. Every case there is

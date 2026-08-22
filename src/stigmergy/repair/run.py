@@ -1208,6 +1208,22 @@ async def _repair_run(conn, *, settings, repo: str, branch: str, worktree_root: 
         skill_text = read_skill(reading)
         if fresh:
             ctx = ProposerContext(reading)
+            # The findings feed is an INPUT to a model, and it is not one this loop's corpus scope
+            # covers: a finding's subject comes from `pages_index`, which sees the whole corpus,
+            # and its `detail` quotes that page. The WHOLE finding goes when any subject is out of
+            # scope — a partially-dropped one still carries the excerpt, which is one sentence
+            # about the whole subject set.
+            readable = {row.path for row in ctx.corpus().rows}
+
+            def _all_readable(finding) -> bool:
+                return all(p in readable for p in (finding.get("subjects") or []) if p)
+
+            unreadable = sorted({p for f in fresh if not _all_readable(f)
+                                 for p in (f.get("subjects") or []) if p and p not in readable})
+            fresh = [f for f in fresh if _all_readable(f)]
+            if unreadable:
+                skip_reasons.append(
+                    UNREADABLE_SUBJECT_REASON.format(paths=", ".join(unreadable)))
             # The additive road first, then the body road on what is left of the run's budget. The
             # order is not a priority claim — it is that the ceiling is ONE number for the pass,
             # and something has to be asked first for "what is left" to mean anything.
@@ -1379,6 +1395,20 @@ def _apply_one(conn, repair: dict, *, result: RepairRunResult, repo: str, branch
 
 # The one wording for "this run stopped at its ceiling", shared by both roads: an operator reading
 # `job_runs.stats` must not have to learn two spellings of the same fact.
+# A finding whose subject the proposer may not read. Its `detail` is a MODEL'S SENTENCE about
+# that page, quoting an excerpt of it verbatim (`gardener.sweep`), and the gardener's own sweep
+# reads every page body with no audience at all — so the findings ledger is the one road by which
+# a restricted page's path and text can reach a prompt this loop writes OPEN pages from. Counted
+# rather than silently dropped: ADR 045's third residual promises "a lost convenience", and a
+# lost convenience nobody can observe is a lost invariant.
+UNREADABLE_SUBJECT_REASON = (
+    "unreadable-subject({paths}) — this loop cannot read those pages, so nothing about them "
+    "reaches a prompt. Two causes, deliberately not told apart: the page is gone from the base "
+    "commit, or it is out of this loop's audience (ADR 045 D3 — a repair has no capture behind "
+    "it, so it runs at open and a restricted page is not repaired). The paths are named because "
+    "`job_runs` is an operator surface, and an operator is inside the trust boundary by "
+    "construction — the same argument the gardener's own findings rest on")
+
 RUN_CEILING_REASON = (
     "run-ceiling-reached({ceiling}): this run stopped at its proposal ceiling — {dropped} "
     "proposal(s) from the last batch and {unseen} further finding(s) were not proposed; the next "

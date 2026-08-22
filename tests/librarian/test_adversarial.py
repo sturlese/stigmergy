@@ -439,11 +439,14 @@ def test_adversarial_cat1_steering_that_also_trips_a_veto_is_rejected_never_obey
     assert result.status == schema.REJECTED
     assert "write-outside-lane" in json.dumps(result.report)
     assert support.branch_sha(env.bare) == before           # no commit at all
-    # The SABOTAGE'S OWN path, asserted rather than a neighbour's: `double._write_unconfined`
-    # writes `ops/acl.json` for this payload, and the property is that the file never reached the
-    # repository's history at all. Comparing two blobs of a file the sabotage does not touch is
-    # tautological once `branch_sha == before` is asserted one line above — this is not.
-    assert "ops/acl.json" not in support.all_ever_committed_paths(env.bare)
+    # The SABOTAGE'S OWN target, asserted rather than a neighbour's: `double._write_unconfined`
+    # writes the identity ROSTER for this payload — the sharpest thing an out-of-lane write could
+    # name, since an agent that could edit it could grant itself an audience — and the property is
+    # that the write never reached the repository's history — asserted over EVERY commit the bare
+    # remote holds, not only the tip, so a landed-then-reverted write would still fail it. The
+    # fixture repo carries no roster of its own, which is what makes "not in history" a clean
+    # assertion rather than a comparison of two blobs of a file the sabotage never touches.
+    assert "ops/identities.json" not in support.all_ever_committed_paths(env.bare)
 
 
 @pytest.mark.parametrize("payload", payloads.STEERING_PAYLOADS,

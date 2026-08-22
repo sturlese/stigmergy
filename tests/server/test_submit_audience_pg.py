@@ -51,9 +51,9 @@ def test_the_refusal_names_the_callers_own_groups_and_not_the_ones_asked_for(ind
     """It echoes what the caller already holds, never the requested set: which groups EXIST is not
     this message's to confirm."""
     with pytest.raises(CaptureError) as caught:
-        _service(indexed, ANA).submit("raw", "Probing.", audience=["leadership"])
+        _service(indexed, ANA).submit("raw", "Probing.", audience=["eng"])
     assert "finance" in str(caught.value)
-    assert "leadership" not in str(caught.value)
+    assert "eng" not in str(caught.value)
 
 
 def test_a_refused_submission_queues_nothing(indexed):
@@ -73,9 +73,8 @@ def test_a_refused_submission_queues_nothing(indexed):
 def test_an_unrestricted_caller_may_file_at_any_group(indexed):
     """Passes by construction — `visible()` shows an unrestricted client every page — so the door
     needs no special case for the identity that already reads everything."""
-    ack = _service(indexed, STEWARD).submit("raw", "Board pack summary.",
-                                                  audience=["leadership"])
-    assert ack["acl"] == ["leadership"]
+    ack = _service(indexed, STEWARD).submit("raw", "Board pack summary.", audience=["eng"])
+    assert ack["acl"] == ["eng"]
 
 
 def test_a_caller_may_file_at_several_groups_when_they_hold_one_of_them(indexed):
@@ -94,10 +93,10 @@ def test_the_stored_label_is_canonical_whatever_order_the_caller_used(indexed):
     """Two callers naming the same groups in different orders must produce the SAME row value, or
     dedup's `IS NOT DISTINCT FROM` sees two audiences and files the material twice."""
     first = _service(indexed, STEWARD).submit("raw", "One ordering.",
-                                              audience=["leadership", "finance"])
+                                              audience=["eng", "finance"])
     second = _service(indexed, STEWARD).submit("raw", "The other ordering.",
-                                               audience=["finance", "leadership"])
-    assert first["acl"] == second["acl"] == ["finance", "leadership"]
+                                               audience=["finance", "eng"])
+    assert first["acl"] == second["acl"] == ["eng", "finance"]
 
 
 # ── the benign twin: the ordinary capture nobody labels ───────────────────────────────────────
@@ -173,10 +172,15 @@ def test_your_own_submissions_name_only_pages_you_could_read(indexed):
     ana = _service(indexed, ANA)
     ack = ana.submit("raw", "A payroll note for the finance folder.", audience=["finance"])
 
+    # Through the READ this test is about, not through the predicate the door just applied to the
+    # same values — that would only re-run `visible()` on its own answer.
+    rows = ana.submissions(limit=50)["submissions"]
+    mine = next(r for r in rows if r["id"] == ack["id"])
+    assert mine["submitted_by"] == ANA
+
     with conn.cursor() as cur:
         cur.execute("SELECT acl FROM capture_queue WHERE id = %s", (ack["id"],))
         row_acl = cur.fetchone()[0]
-
     from stigmergy.server.acl import visible
     assert visible(row_acl, ana.audiences), (
         "a submitter's own row carries an audience they cannot read — `brain_submissions` would "
@@ -190,3 +194,65 @@ def test_a_scoped_identity_sees_only_its_own_rows(indexed):
     mine = _service(indexed, ANA).submissions(limit=50)
     assert mine["scope"] == "own"
     assert all(row["submitted_by"] == ANA for row in mine["submissions"]), mine
+
+
+def test_a_principal_holding_NO_group_may_still_file_open(indexed):
+    """**The sharpest missing twin.** The ADR says "a caller with no groups may file open and
+    nothing else", and every other test of that sentence used an identity that holds one. The
+    half that matters for a newcomer — who holds nothing on their first day — is that they can
+    still capture. A door that refused them would make the brain unusable for exactly the people
+    it is trying to onboard, and would read as a passing security test."""
+    conn, fx = indexed
+    from stigmergy.capture.evidence import MemoryEvidenceStore
+    from tests.server.conftest import make_service
+    newcomer = make_service(fx, conn, ANA, evidence=MemoryEvidenceStore())
+    newcomer.audiences = set()          # authenticated, holds nothing
+
+    ack = newcomer.submit("raw", "My first note, about Initech.")
+
+    assert ack["acl"] is None
+    assert _row_acl(indexed, ack["id"]) is None
+
+
+def test_and_that_same_principal_may_file_at_NOTHING_else(indexed):
+    """Its sensitivity half, on the same identity: holding no group means open is the only
+    audience available, so the two tests together say the whole sentence."""
+    conn, fx = indexed
+    from stigmergy.capture.evidence import MemoryEvidenceStore
+    from tests.server.conftest import make_service
+    newcomer = make_service(fx, conn, ANA, evidence=MemoryEvidenceStore())
+    newcomer.audiences = set()
+
+    with pytest.raises(CaptureError, match="could not read afterwards"):
+        newcomer.submit("raw", "Something for finance.", audience=["finance"])
+
+
+# ── a group nobody holds is a page nobody can ever read ───────────────────────────────────────
+def test_an_audience_naming_a_group_nobody_holds_is_refused(indexed):
+    """The typo the shape rules cannot see and `visible()` will not catch: `["finanace"]` is a
+    legal group NAME, and for an unrestricted caller `visible()` returns True unconditionally — so
+    the page files at a label no identity holds and is readable by nobody, permanently, since a
+    filed page's audience cannot be changed. The unrestricted caller is precisely the one whose
+    typo is silent: a scoped caller is protected by accident, because they must share a label with
+    what they name."""
+    with pytest.raises(CaptureError, match="readable by nobody"):
+        _service(indexed, STEWARD).submit("raw", "For a group that does not exist.",
+                                          audience=["finanace"])
+
+
+def test_that_refusal_echoes_the_callers_own_word_and_no_others(indexed):
+    """It names what the caller typed — already theirs — and never enumerates the groups that DO
+    exist, which would make a refused submit a roster oracle."""
+    with pytest.raises(CaptureError) as caught:
+        _service(indexed, STEWARD).submit("raw", "Hi.", audience=["nosuchgroup"])
+    message = str(caught.value)
+    assert "nosuchgroup" in message
+    assert "finance" not in message and "eng" not in message, message
+
+
+def test_the_benign_twin_a_real_group_the_caller_is_not_in_still_files(indexed):
+    """The specificity half, and it is the intended WIDENING: an unrestricted caller may file at
+    any group that exists, including ones they are not in. A rule that refused that would make the
+    check indistinguishable from "you may only file at your own groups", which is not the rule."""
+    ack = _service(indexed, STEWARD).submit("raw", "For the engineers.", audience=["eng"])
+    assert ack["acl"] == ["eng"]

@@ -258,6 +258,19 @@ def resolve_audiences(identities_path: str, identity: str | None) -> tuple[str, 
     return audiences_from_text(text, identity, origin=identities_path)
 
 
+def known_groups_from_text(text: str, *, origin: str) -> set[str]:
+    """Every group the roster grants to anybody — the vocabulary that EXISTS.
+
+    The door needs it because shape validation is not enough: `audience=["finanace"]` is a legal
+    group name, and for an UNRESTRICTED caller `visible()` returns True unconditionally, so the
+    typo files a page nobody can ever read — permanently, since a filed page's audience cannot be
+    changed. A scoped caller is protected from this by accident (they must share a label with what
+    they name); the unrestricted caller, whose typo is the silent one, is not.
+    """
+    return {group for groups in group_map_from_text(
+        text, origin=origin, subject="identity").values() for group in groups}
+
+
 def audiences_from_text(text: str, identity: str | None, *, origin: str) -> tuple[str, ...] | None:
     """`identity` -> its group tuple, or `None` for an unrestricted one, from the roster's TEXT.
 

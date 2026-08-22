@@ -46,7 +46,7 @@ def _registry(repo: str):
 def _write(repo, outcome, *, material, hints=None, approver=SUBMITTER, acl=None):
     return identity.write_births(repo, outcome=outcome, base_registry=_registry(repo),
                                  material=material, hints=hints, today=TODAY,
-                                 related=["A Note"], approver=approver, acl=None)
+                                 related=["A Note"], approver=approver, acl=acl)
 
 
 def _read(repo: str, relpath: str) -> str:

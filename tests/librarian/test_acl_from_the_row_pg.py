@@ -321,3 +321,41 @@ def test_the_benign_twin_an_OPEN_capture_still_grows_the_spine(rig, clean_queue)
     after = support.read_filed_page(env.repo, sha, "wiki/entities/Acme Corp.md")
     assert after != before
     assert result.report["entities_updated"], result.report
+
+
+def test_a_restricted_birth_publishes_no_title_in_the_entity_pages_frontmatter(rig, clean_queue):
+    """**The leak the body check alone did not see.** `related:` is frontmatter, not body, and it
+    went to the renderer whatever the audience — so the OPEN entity page published the restricted
+    page's title, which is the whole of what a link leaks. A meeting would have published every
+    decision page's title at once.
+
+    Asserted on the frontmatter line AND on the whole page: the title must not appear anywhere,
+    or the next place it is written is a place this test does not look."""
+    env, deps = rig
+    material = _material("frontmatter-leak")
+    support.submit(clean_queue, deps, f"DOUBLE:propose=Halberd Freight\n{material}",
+                   submitted_by="scoped@stigmergy.test", acl=SCOPED)
+    _item, result = worker.process_next(clean_queue, deps)
+    assert result.status == schema.FILED, result.report.get("summary")
+    filed_path, sha = result.result_ref.rsplit("@", 1)
+
+    _entity_path, page = _entity_page(env, sha, support.paths_in_commit(env.repo, sha))
+    assert "related: []" in page, page
+    title = pathlib.Path(filed_path).stem
+    assert title not in page, f"the restricted page's title reached the open entity page:\n{page}"
+
+
+def test_the_benign_twin_an_OPEN_birth_still_links_the_page_that_introduced_it(rig, clean_queue):
+    """The specificity half: `related:` is not simply never written. A newborn page is a finished
+    page (ADR 042 D3), and for an open capture it points back at the note that introduced the
+    entity — so the fix cannot be satisfied by dropping the field for everybody."""
+    env, deps = rig
+    support.submit(clean_queue, deps, f"DOUBLE:propose=Larkspur Rail\n{_material('open-related')}",
+                   submitted_by="open@stigmergy.test")
+    _item, result = worker.process_next(clean_queue, deps)
+    assert result.status == schema.FILED, result.report.get("summary")
+    filed_path, sha = result.result_ref.rsplit("@", 1)
+
+    _entity_path, page = _entity_page(env, sha, support.paths_in_commit(env.repo, sha))
+    assert "related: []" not in page, page
+    assert pathlib.Path(filed_path).stem in page, page

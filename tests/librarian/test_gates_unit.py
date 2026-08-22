@@ -2540,3 +2540,72 @@ def test_a_derived_file_is_not_a_new_page(tmp_path):
                write_prefixes=gates.ALLOWED_WRITE_PREFIXES + ("ops/entity-registry.json",),
                derived_files=frozenset({"ops/entity-registry.json"}))
     assert ctx.in_lane_new_pages() == ["wiki/notes/New.md"]
+
+
+# ── `_page_acl`: what a gate reads off the BASE blob, and what it does when it cannot ──────────
+# The reproduction of the defect that changed this function's design. An earlier version returned
+# a sentinel that SKIPPED the audience check, on the argument that `gate_body_rewrite` refuses an
+# unreadable page anyway. True for an unreadable blob; FALSE for the case that matters — a page
+# whose frontmatter parses fine and whose `acl:` VALUE is malformed. `index.corpus` turns those
+# into a real label and RESTRICTS the page, so the gate would have waved restricted material into
+# a page the reader hides. Anything unestablishable now reads as OPEN, which is the strictest
+# answer this predicate has: `flows_into` then admits an open capture and nothing else.
+
+def _committed(tmp_path, relpath: str, text: str) -> str:
+    repo = tmp_path / "acl-base"
+    repo.mkdir(exist_ok=True)
+    if not (repo / ".git").exists():
+        gitcmd.run("init", "--quiet", "-b", "main", cwd=str(repo))
+    full = repo / pathlib.Path(relpath)
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(text, encoding="utf-8")
+    gitcmd.run("add", "-A", cwd=str(repo))
+    gitcmd.run("-c", "user.name=t", "-c", "user.email=t@t.test",
+               "commit", "--quiet", "-m", "base", cwd=str(repo))
+    return str(repo)
+
+
+@pytest.mark.parametrize("acl_line, why", [
+    ("acl: [2026]", "a list of NUMBERS — `index.corpus` stores it as the label `['2026']`"),
+    ("acl: {group: leadership}", "a mapping — neither a list nor a string"),
+    ("acl: 5", "a scalar that is not a string"),
+])
+def test_a_malformed_acl_VALUE_reads_as_open_so_the_gate_refuses(tmp_path, acl_line, why):
+    repo = _committed(tmp_path, "wiki/notes/Odd.md",
+                      f"---\ntype: note\ntitle: Odd\n{acl_line}\n---\n\n# Odd\n\nbody\n")
+    assert gates._page_acl(repo, "wiki/notes/Odd.md") is None, why
+    # ...and therefore a scoped capture may not add to it. That is the whole point: the OLD
+    # sentinel skipped this check entirely, and this page is one the index restricts.
+    entries = [gitcmd.DiffEntry("M", "wiki/notes/Odd.md", new_mode="100644")]
+    findings = gates.gate_zone(_ctx(repo, entries, acl=["leadership"]))
+    assert [f.code for f in findings] == ["edit-outside-audience"], findings
+
+
+def test_an_unparseable_frontmatter_reads_as_open_too(tmp_path):
+    repo = _committed(tmp_path, "wiki/notes/Broken.md",
+                      "---\ntype: note\nacl: [oops\n---\n\n# Broken\n\nbody\n")
+    assert gates._page_acl(repo, "wiki/notes/Broken.md") is None
+
+
+def test_a_page_absent_from_the_base_commit_reads_as_open(tmp_path):
+    repo = _committed(tmp_path, "wiki/notes/Present.md",
+                      "---\ntype: note\ntitle: Present\n---\n\n# Present\n\nbody\n")
+    assert gates._page_acl(repo, "wiki/notes/Gone.md") is None
+
+
+def test_the_benign_twin_a_well_formed_label_is_read_and_admits_its_own_audience(tmp_path):
+    """The specificity half. Every case above makes the gate refuse; this is the one that must
+    not, or the check would veto every edit to every page and read as a passing security test."""
+    repo = _committed(tmp_path, "wiki/notes/Board.md",
+                      '---\ntype: note\ntitle: Board\nacl: ["leadership"]\n---\n\n# Board\n\nb\n')
+    assert gates._page_acl(repo, "wiki/notes/Board.md") == ["leadership"]
+    entries = [gitcmd.DiffEntry("M", "wiki/notes/Board.md", new_mode="100644")]
+    assert gates.gate_zone(_ctx(repo, entries, acl=["leadership"])) == []
+
+
+def test_the_csv_string_form_is_read_as_labels(tmp_path):
+    """`server.acl.visible` still normalizes a bare CSV string, so this reader has to agree with
+    it — a page the server restricts to two groups must not read here as one label nobody holds."""
+    repo = _committed(tmp_path, "wiki/notes/Csv.md",
+                      "---\ntype: note\ntitle: Csv\nacl: finance,leadership\n---\n\n# Csv\n\nb\n")
+    assert gates._page_acl(repo, "wiki/notes/Csv.md") == ["finance", "leadership"]

@@ -78,9 +78,28 @@ def test_one_group_never_sees_another(checkout):
 
 def test_the_default_is_the_NARROW_one(checkout):
     """A caller that forgets to pass the capture's audience starves the model rather than widening
-    it — the fail-closed direction, asserted rather than assumed."""
-    assert _paths(gather.load_corpus(checkout).rows) == _paths(
-        gather.load_corpus(checkout, acl=None).rows)
+    it. Asserted against a LABELLED audience rather than against `acl=None`, which is the
+    default's own value and would make this true whatever the code did: the omitted-argument
+    corpus must be a strict subset of what a labelled capture sees.
+
+    Note which direction "wider" runs. `flows_into` is containment, so a capture at
+    `["leadership", "finance"]` sees LESS than one at `["leadership"]`: a page readable by both
+    groups may only carry material both may read. The narrowest audience is the one naming the
+    most groups, and the widest single audience in this fixture is one group."""
+    omitted = _paths(gather.load_corpus(checkout).rows)
+    labelled = _paths(gather.load_corpus(checkout, acl=["leadership"]).rows)
+    assert omitted < labelled, (omitted, labelled)
+    assert omitted == {OPEN_PAGE}
+
+
+def test_naming_MORE_groups_sees_LESS_not_more(checkout):
+    """The direction `flows_into` runs, pinned where a reader would guess wrong. A capture for
+    both `leadership` and `finance` may cite only material both audiences may read — so it sees
+    the open page and neither labelled one, while a capture for `leadership` alone sees two."""
+    both = _paths(gather.load_corpus(checkout, acl=["leadership", "finance"]).rows)
+    one = _paths(gather.load_corpus(checkout, acl=["leadership"]).rows)
+    assert both == {OPEN_PAGE}
+    assert both < one
 
 
 # ── what the model is told it may link to ─────────────────────────────────────────────────────

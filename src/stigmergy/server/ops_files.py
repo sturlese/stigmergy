@@ -39,6 +39,17 @@ def text_or_none(conn, relpath: str) -> str | None:
     return store.read_ops_file(conn, relpath)
 
 
+def known_groups(conn, identities_path: str) -> set[str]:
+    """The groups the roster grants to anybody, through the SAME preference order as the resolver
+    beside it — so the door cannot check a requested group against one copy of the roster while
+    the reader resolves the caller's own from another."""
+    text = text_or_none(conn, IDENTITIES_RELPATH)
+    if text is not None:
+        return identity_module.known_groups_from_text(text, origin=IDENTITIES_SNAPSHOT_ORIGIN)
+    with open(identities_path, encoding="utf-8") as f:
+        return identity_module.known_groups_from_text(f.read(), origin=identities_path)
+
+
 def resolve_identity_audiences(conn, identities_path: str, identity: str | None):
     """`identity` -> audience tuple (None = unrestricted), preferring the snapshot — the one
     resolution both deployed transports (HTTP per request, Slack per event) run, so they cannot
