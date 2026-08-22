@@ -487,25 +487,46 @@ middleware — inert 404s unless `$STIGMERGY_ADMIN_TOKEN_HASH` is set, and docum
 ## Identities file
 
 A versioned JSON map checked into the knowledge repo at `ops/identities.json`, **keyed by
-email**:
+email**, mapping each principal to a **list of groups** and to nothing else
+([ADR 045](../decisions/045-audience-from-the-door.md) D7):
 
 ```json
 {
-  "ops@example.com": "*",
+  "_comment": "keys beginning with _ are comments and are dropped",
+  "ops@example.com": ["brain-admins"],
   "ana@example.com": ["finance"],
-  "bob@example.com": ["sales", "leadership"]
+  "bob@example.com": ["sales", "leadership"],
+  "newcomer@example.com": []
 }
 ```
 
-`"*"` = unrestricted (sees everything), and since [ADR 044](../decisions/044-the-capture-is-the-approval.md)
-D3 it is also the whole of `brain_delete`'s authorization: a removal touches pages the caller did not
-name, so only an identity with no audience restriction may ask for one — and `brain_submit` refuses
-the `delete` kind by name, so that check cannot be side-stepped by submitting one. A list is the client's audience scope: it sees unlabeled
-pages plus pages sharing at least one label; a bare non-`*` string is accepted as the one-audience
-scope it obviously means. The resolver is **fail-closed** everywhere — no identity, an unknown
-identity, an unreadable/malformed file, or an identity whose value is neither of the shapes above
-each exits non-zero (stdio) or 401s generically (HTTP) with an actionable message; the server never
-starts open.
+Membership of **`brain-admins`** IS the unrestricted scope — the resolver returns `None` for it,
+which is the value `acl.visible()` has always read as "sees everything" — and since
+[ADR 044](../decisions/044-the-capture-is-the-approval.md) D3 it is also the whole of
+`brain_delete`'s authorization: a removal touches pages the caller did not name, so only an
+identity with no audience restriction may ask for one — and `brain_submit` refuses the `delete`
+kind by name, so that check cannot be side-stepped by submitting one. It is a group rather than a
+sigil because the identity provider that will replace this file has groups and has no sigils.
+
+Any other list is the client's scope: it reads unlabeled pages plus pages sharing at least one
+group. **An empty list is a principal who holds no group** — authenticated, reading every open
+page and no other. That is a fact about a PERSON and is not the `acl: []` of a PAGE, which means
+nobody; keeping the two apart is what ADR 045 D9 buys.
+
+**Open is the absence of a label, so `all` is a reserved word** and is refused as a group name: a
+page labelled `[all]` would be restricted to whoever holds a group by that name rather than open
+to everyone. Two spellings this file once accepted are refused too, each naming the line to write
+instead — `"*"` (write `["brain-admins"]`) and a bare label (write `["finance"]`) — because a
+roster is parsed on every request and three spellings for one fact is three things to get right.
+
+`ops/slack-channels.json` is the **same grammar** with a different principal, parsed by the same
+function (`identity.group_map_from_text`), so the roster and the channel map cannot come to
+disagree about what a group may be called.
+
+The resolver is **fail-closed** everywhere — no identity, an unknown identity, an
+unreadable/malformed file, a malformed value ANYWHERE in it (not only on the entry being looked
+up) each exits non-zero (stdio) or 401s generically (HTTP) with an actionable message; the server
+never starts open.
 
 stdio's `--identity` flag takes the SAME email keys (e.g. `--identity ops@example.com`) —
 `identity.resolve_audiences` is one resolver for both transports. HTTP resolves

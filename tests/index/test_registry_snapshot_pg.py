@@ -147,7 +147,7 @@ def test_read_answers_none_on_a_database_that_never_had_the_table(conn):
 
 
 # ── the per-file reconcile postures (issue #79) ────────────────────────────────────────────────
-IDENTITIES = {"steward@example.com": "*", "ana@example.com": ["finance"]}
+IDENTITIES = {"steward@example.com": ["brain-admins"], "ana@example.com": ["finance"]}
 
 
 def _repo_with_ops(root: str, files: dict[str, str]) -> str:

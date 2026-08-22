@@ -1278,7 +1278,7 @@ def test_a_replayed_delivery_reinstalls_what_the_branch_says_now_not_what_it_sai
     from stigmergy.index.backends.embedder import build_embedder
     old_payload = _push_payload(sha="oldsha111", commits=[{
         "added": [store.IDENTITIES_RELPATH], "modified": [], "removed": []}])
-    current = '{"steward@example.com": "*"}'    # ana was revoked since that delivery
+    current = '{"steward@example.com": ["brain-admins"]}'    # ana was revoked since that delivery
 
     webhook.process_push(snapshot, build_embedder("fake"), old_payload, _settings(),
                          opener=_fake_opener({store.IDENTITIES_RELPATH: current}))

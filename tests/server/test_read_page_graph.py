@@ -89,7 +89,7 @@ class _GraphFixture:
 
         os.makedirs(os.path.dirname(self.identities_path), exist_ok=True)
         with open(self.identities_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps({self.STEWARD: "*", self.ENG: ["eng"]}))
+            f.write(json.dumps({self.STEWARD: ["brain-admins"], self.ENG: ["eng"]}))
 
 
 @pytest.fixture(scope="module")

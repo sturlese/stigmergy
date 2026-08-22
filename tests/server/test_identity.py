@@ -21,8 +21,15 @@ def _write(tmp_path, data) -> str:
     return str(p)
 
 
-def test_unrestricted_star_resolves_to_none(tmp_path):
-    path = _write(tmp_path, {"steward": "*"})
+def test_brain_admins_membership_resolves_to_unrestricted(tmp_path):
+    """The one unrestricted spelling (ADR 045 D7): a GROUP, not a sigil, because the identity
+    provider that replaces this file has groups and has no sigils."""
+    path = _write(tmp_path, {"steward": ["brain-admins"]})
+    assert resolve_audiences(path, "steward") is None
+
+
+def test_brain_admins_beside_other_groups_still_resolves_to_unrestricted(tmp_path):
+    path = _write(tmp_path, {"steward": ["finance", "brain-admins"]})
     assert resolve_audiences(path, "steward") is None
 
 
@@ -32,24 +39,88 @@ def test_scoped_list_resolves_to_tuple(tmp_path):
     assert resolve_audiences(path, "bob") == ("sales", "leadership")
 
 
-def test_bare_label_is_a_one_audience_scope(tmp_path):
+def test_no_groups_at_all_reads_open_pages_and_nothing_else(tmp_path):
+    """A PRINCIPAL with no groups is not the `acl: []` of a PAGE (which means nobody): it is an
+    authenticated reader who holds nothing, so `visible()` shows it every page carrying no label
+    and no other. ADR 045 D9 keeps the two facts apart, and this is the one that is about a
+    person."""
+    path = _write(tmp_path, {"newcomer": []})
+    assert resolve_audiences(path, "newcomer") == ()
+
+
+def test_a_repeated_group_is_normalized_away(tmp_path):
+    path = _write(tmp_path, {"ana": ["finance", " finance ", "sales"]})
+    assert resolve_audiences(path, "ana") == ("finance", "sales")
+
+
+# ── the two retired spellings: refused by name, with the line to write instead ─────────────────
+# "A message containing a command is an executable promise": each refusal below names a
+# replacement, and its twin RUNS that replacement.
+
+def test_the_star_spelling_is_refused_and_names_the_line_to_write(tmp_path):
+    path = _write(tmp_path, {"steward": "*"})
+    with pytest.raises(IdentityError, match=r'write \["brain-admins"\] instead'):
+        resolve_audiences(path, "steward")
+
+
+def test_the_line_the_star_refusal_names_actually_resolves(tmp_path):
+    """The promise, run: what the refusal above tells an operator to write is what works."""
+    path = _write(tmp_path, {"steward": ["brain-admins"]})
+    assert resolve_audiences(path, "steward") is None
+
+
+def test_the_bare_label_spelling_is_refused_and_names_the_line_to_write(tmp_path):
     path = _write(tmp_path, {"ana": "finance"})
+    with pytest.raises(IdentityError, match=r'write \["finance"\] instead'):
+        resolve_audiences(path, "ana")
+
+
+def test_the_line_the_bare_label_refusal_names_actually_resolves(tmp_path):
+    path = _write(tmp_path, {"ana": ["finance"]})
     assert resolve_audiences(path, "ana") == ("finance",)
 
 
-def test_empty_list_is_a_nobody_scope(tmp_path):
-    path = _write(tmp_path, {"nobody": []})
-    assert resolve_audiences(path, "nobody") == ()      # sees only unlabeled (open) content
+# ── `all` is a reserved word, because open is the ABSENCE of a label ───────────────────────────
+def test_the_reserved_group_all_is_refused(tmp_path):
+    """A page labelled `[all]` would be restricted to whoever holds a group called `all` — the
+    opposite of what anybody writing it means. ADR 045 D7."""
+    path = _write(tmp_path, {"ana": ["all"]})
+    with pytest.raises(IdentityError, match="reserved group 'all'"):
+        resolve_audiences(path, "ana")
+
+
+def test_a_group_named_like_all_but_not_all_is_fine(tmp_path):
+    """The benign twin: the reservation is one exact name, not a substring match on it."""
+    path = _write(tmp_path, {"ana": ["all-hands", "allies"]})
+    assert resolve_audiences(path, "ana") == ("all-hands", "allies")
+
+
+# ── the whole file is validated, not only the entry looked up ──────────────────────────────────
+def test_a_malformed_NEIGHBOUR_refuses_the_lookup_too(tmp_path):
+    """An access-scoping file the server cannot make sense of must never answer for the entry that
+    happened to parse. Before ADR 045 each reader validated only the value it wanted."""
+    path = _write(tmp_path, {"ana": ["finance"], "bob": {"nested": True}})
+    with pytest.raises(IdentityError, match="malformed group list"):
+        resolve_audiences(path, "ana")
+
+
+def test_a_comment_key_is_dropped_rather_than_parsed_as_a_principal(tmp_path):
+    """`_`-prefixed keys let an operator say which channel `C0BL6QH7AQN` is, in the file itself.
+    Dropped, not exempted: looking the comment up is an `unknown` refusal like any other."""
+    path = _write(tmp_path, {"_comment": "the roster", "ana": ["finance"]})
+    assert resolve_audiences(path, "ana") == ("finance",)
+    with pytest.raises(IdentityError, match="unknown identity"):
+        resolve_audiences(path, "_comment")
 
 
 def test_no_identity_given_fails_closed(tmp_path):
-    path = _write(tmp_path, {"steward": "*"})
+    path = _write(tmp_path, {"steward": ["brain-admins"]})
     with pytest.raises(IdentityError, match="no identity given"):
         resolve_audiences(path, None)
 
 
 def test_unknown_identity_fails_closed_and_names_known(tmp_path):
-    path = _write(tmp_path, {"steward": "*", "ana": ["finance"]})
+    path = _write(tmp_path, {"steward": ["brain-admins"], "ana": ["finance"]})
     with pytest.raises(IdentityError, match="unknown identity 'ghost'"):
         resolve_audiences(path, "ghost")
 
@@ -77,16 +148,30 @@ def test_non_object_json_fails_closed(tmp_path):
 
 
 def test_malformed_audience_value_fails_closed(tmp_path):
-    # an identity mapped to something that is neither "*" nor a list (here: a bool) must never
-    # silently open — fail closed with an actionable message.
+    # an identity mapped to something that is not a list (here: a bool) must never silently open
+    # — fail closed with an actionable message.
     path = _write(tmp_path, {"steward": True})
-    with pytest.raises(IdentityError, match="malformed audience value"):
+    with pytest.raises(IdentityError, match="malformed group list"):
         resolve_audiences(path, "steward")
 
 
 def test_null_audience_value_fails_closed(tmp_path):
     path = _write(tmp_path, {"steward": None})
-    with pytest.raises(IdentityError, match="malformed audience value"):
+    with pytest.raises(IdentityError, match="malformed group list"):
+        resolve_audiences(path, "steward")
+
+
+def test_a_group_name_that_is_not_a_string_fails_closed(tmp_path):
+    path = _write(tmp_path, {"steward": ["finance", 7]})
+    with pytest.raises(IdentityError, match="not a string"):
+        resolve_audiences(path, "steward")
+
+
+def test_a_group_name_carrying_a_comma_fails_closed(tmp_path):
+    """A label list is CSV-serialized on at least one road, so one comma inside a name would
+    silently become two groups at enforcement time."""
+    path = _write(tmp_path, {"steward": ["finance,leadership"]})
+    with pytest.raises(IdentityError, match="invalid group"):
         resolve_audiences(path, "steward")
 
 
@@ -186,7 +271,7 @@ def test_resolve_email_for_token_success():
 def test_audiences_from_text_resolves_exactly_as_the_file_road_does(tmp_path):
     """One parse under both roads, asserted as behaviour: whatever the file road answers, the
     text road answers for the same bytes — scope, unrestricted and nobody alike."""
-    data = {"steward": "*", "ana": ["finance"], "ghost-scope": []}
+    data = {"steward": ["brain-admins"], "ana": ["finance"], "ghost-scope": []}
     path = _write(tmp_path, data)
     text = json.dumps(data)
 

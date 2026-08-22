@@ -43,7 +43,7 @@ def test_a_snapshot_wins_over_the_file_and_a_revocation_lands_without_a_deploy(
     `baked@example.com` may read finance; the snapshot (the pushed edit) no longer does — and the
     snapshot answers, so the revocation is live seconds after the push."""
     store.write_ops_file(conn, store.IDENTITIES_RELPATH,
-                         json.dumps({"other@example.com": "*"}), "pushed-sha")
+                         json.dumps({"other@example.com": ["brain-admins"]}), "pushed-sha")
 
     with pytest.raises(IdentityError, match="unknown identity"):
         ops_files.resolve_identity_audiences(conn, identities_file, "baked@example.com")

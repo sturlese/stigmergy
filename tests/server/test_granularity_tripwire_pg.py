@@ -89,7 +89,7 @@ class _GranularityFixture:
 
         os.makedirs(os.path.dirname(self.identities_path), exist_ok=True)
         with open(self.identities_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps({STEWARD: "*"}))
+            f.write(json.dumps({STEWARD: ["brain-admins"]}))
 
         # `describe_entity` resolves STRICTLY through the registry (ADR 022 D5) — without this,
         # every id below would be "unknown entity" regardless of anchoring, which would make the

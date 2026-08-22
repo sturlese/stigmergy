@@ -1,20 +1,26 @@
-"""`ops/slack-channels.json` — the channel's audience scope: `channel_id -> [labels]`, read fresh
-on every lookup (a stale read of an access-scoping file is the wrong kind of cheap), fail-closed
-on a malformed file.
+"""`ops/slack-channels.json` — the channel's groups: `channel_id -> [group, …]`, read fresh on
+every lookup (a stale read of an access-scoping file is the wrong kind of cheap), fail-closed on a
+malformed file.
 
-**The empty-set default is the load-bearing property.** Per `acl.visible()`'s truth table, an
-empty audience set sees only pages carrying no `acl` label — widening takes a deliberate edit to
-this file, being safe takes none. A channel's scope is ALWAYS a `set[str]`, never `None`: even an
-unrestricted asker gets the empty set in an unlisted channel. Until the first labelled page
-exists, that default is indistinguishable from no scoping at all — a green two-identity channel
-test is not, on its own, evidence that scoping restricts anything.
+**The empty-set default is the load-bearing property, and it now says the same thing on both
+sides.** A channel not listed is a PUBLIC channel: per `acl.visible()`'s truth table its empty
+group set reads only pages carrying no label, and per ADR 045 D2 a capture taken there is filed
+OPEN (the door stores `NULL`, never `{}` — no groups is a fact about the channel, not the `acl:
+[]` of a page, which means nobody). Widening either side takes a deliberate edit to this file;
+being safe takes none. A channel's scope is ALWAYS a `set[str]`, never `None`: Slack capture and
+Slack answering are public-channel only, so no channel is ever unrestricted.
+
+The grammar is `server.identity`'s, parsed there (ADR 045 D7) so the roster and this map cannot
+come to disagree about what a group may be called — including the reserved name `all`. The WHOLE
+file is validated on every lookup, not only the entry wanted: a malformed neighbour in an
+access-scoping file is a file the server cannot make sense of.
 
 This module never calls `acl.visible()`: it resolves ONE fact about a channel, and `BrainService`
 enforces the scope.
 """
-import json
 import os
 
+from stigmergy.server import identity as identity_module
 from stigmergy.server import ops_files
 from stigmergy.server.errors import IdentityError
 
@@ -46,25 +52,11 @@ def channel_audiences(channels_path: str, channel_id: str) -> set[str]:
 
 def channel_audiences_from_text(text: str, channel_id: str, *, origin: str) -> set[str]:
     """`channel_audiences` over the file's TEXT — the one parse under both roads, so the index's
-    snapshot and a `--channels` file cannot mean different things. An EMPTY text is malformed
-    JSON and RAISES: on this road "no scoping declared" is spelled `{}`, a committed statement,
-    never bytes that failed to arrive."""
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as ex:
-        raise IdentityError(f"slack channels malformed: {origin}: {ex}") from ex
-    if not isinstance(data, dict):
-        raise IdentityError(
-            f"slack channels malformed: {origin} "
-            '(expected an object mapping channel_id -> [audience labels])')
-    if channel_id not in data:
-        return set()
-    value = data[channel_id]
-    if not isinstance(value, list) or not all(isinstance(a, str) for a in value):
-        raise IdentityError(
-            f"channel {channel_id!r} has a malformed audience value in {origin} "
-            f"(expected a list of audience labels, got {type(value).__name__})")
-    return {s.strip() for s in value if s.strip()}
+    snapshot and a `--channels` file cannot mean different things. An EMPTY text is malformed JSON
+    and RAISES: on this road "no scoping declared" is spelled `{}`, a committed statement, never
+    bytes that failed to arrive."""
+    groups = identity_module.group_map_from_text(text, origin=origin, subject="channel")
+    return set(groups.get(channel_id, ()))
 
 
 def channel_audiences_live(conn, channels_path: str, channel_id: str) -> set[str]:
