@@ -10,7 +10,9 @@ off this module's boolean return, so every early return clears it the same way.
 import asyncio
 import logging
 
-from stigmergy.slack import copy, render
+from stigmergy.server.errors import IdentityError
+from stigmergy.server.service import SubmitRefused
+from stigmergy.slack import channels, copy, render
 from stigmergy.slack.gateway import SlackApiError
 from stigmergy.slack.identity import IdentityResult, NoAccess, Resolved, TransientFailure, UsersInfoCache
 from stigmergy.slack.store import MAX_HINT_CHARS, attach_submission, release_reservation, reserve
@@ -186,9 +188,43 @@ async def handle_reaction_added(ctx, *, reaction: str, team_id: str, channel_id:
                                             text=copy.server_error()),
             what=f"capture server-error ephemeral in {channel_id}")
         return False
+    channel_name = channel_meta.get("name", "")
     material, hints, thread_ts = await _material_and_hints(
         ctx.gateway, ctx.cache, messages, team_id=team_id, channel_id=channel_id,
-        channel_name=channel_meta.get("name", ""), permalink=permalink)
+        channel_name=channel_name, permalink=permalink)
+
+    # THE audience decision for this capture (ADR 045 D2): the groups of the channel the person
+    # reacted in. A channel not listed is public, and public is OPEN — `channel_audiences_live`
+    # returns the empty set there, and the door stores `None` rather than `{}`, because "this
+    # channel has no groups" is a fact about the channel and never the `acl: []` of a page.
+    #
+    # Asked HERE, before the dedup reservation, and not inside the transaction below: a refusal is
+    # a refusal, and running it there would spend the reservation and surface as "the capture
+    # failed", which is the wrong sentence and the wrong recovery. `resolve_submit_audience` is
+    # the SAME check `brain_submit` runs — one rule, two doors.
+    try:
+        channel_groups = sorted(channels.channel_audiences_live(
+            ctx.conn, ctx.settings.channels_path, channel_id))
+    except IdentityError:
+        log.error("slack capture: channel scope unreadable for %s", channel_id, exc_info=True)
+        await ctx.post_or_log(
+            ctx.gateway.chat_post_ephemeral(channel_id, slack_user_id,
+                                            blocks=render.render_server_error(),
+                                            text=copy.server_error()),
+            what=f"capture server-error ephemeral in {channel_id}")
+        return False
+    probe = ctx.build_service(email, audiences)
+    try:
+        capture_acl = probe.resolve_submit_audience(channel_groups or None)
+    except SubmitRefused:
+        log.info("slack capture: %s is not in the groups %s files at — refused", email, channel_id)
+        await ctx.post_or_log(
+            ctx.gateway.chat_post_ephemeral(
+                channel_id, slack_user_id,
+                blocks=render.render_not_in_this_channels_groups(channel_name),
+                text=copy.not_in_this_channels_groups(channel_name), thread_ts=thread_ts),
+            what=f"channel-audience refusal in {channel_id}")
+        return False
 
     # reserve + submit + attach are ONE transaction. A crash between `submit` succeeding and
     # `attach_submission` running (a deploy does exactly this) would otherwise commit a
@@ -208,7 +244,7 @@ async def handle_reaction_added(ctx, *, reaction: str, team_id: str, channel_id:
                          team_id, channel_id, message_ts, slack_user_id)
                 return False   # redelivered or re-added; no second row, no second post
             service = ctx.build_service(email, audiences)
-            ack = service.submit("raw", material, hints=hints)
+            ack = service.submit("raw", material, hints=hints, audience=capture_acl)
             attach_submission(ctx.conn, reservation_id, ack["id"])
     except Exception:
         if reservation_id is not None:

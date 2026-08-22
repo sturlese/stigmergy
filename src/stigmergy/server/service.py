@@ -21,16 +21,34 @@ from stigmergy.kernel.normalize import resolution_key
 from stigmergy.server import entity_aliases, identity, review
 from stigmergy.server.acl import visible
 from stigmergy.server.audit import AuditWriter, ensure_audit_table
-from stigmergy.server.errors import CapabilityUnavailableError, RegistryError, StartupError
+from stigmergy.server.errors import (
+    CapabilityUnavailableError,
+    IdentityError,
+    RegistryError,
+    StartupError,
+)
 from stigmergy.server.settings import Settings
 
-# Re-exported for `stigmergy.slack.context`; `capture.schema` stays the owner.
+# Re-exported for `stigmergy.slack`, which may import this package and not `stigmergy.capture`
+# (`tests/test_architecture.py`); `stigmergy.capture` stays the owner of both.
 SLACK_DOOR = capture_schema.SLACK_DOOR
+# The refusal `resolve_submit_audience` raises. The Slack door asks that question itself, before
+# it reserves its dedup row, so it needs the type to catch.
+SubmitRefused = CaptureError
 
 # What a caller who may not remove pages is told, whatever they named. ONE sentence for "you are
 # not allowed" and "there is no such page", so this door is no existence oracle: a scoped identity
 # probing for a page it cannot read learns nothing from the difference.
 NOT_YOURS_TO_REMOVE = "there is nothing for you to remove at those paths"
+
+# What a caller is told when they ask to file at an audience they do not hold. The door's whole
+# authorization rule is `acl.visible()` applied to the WRITER (ADR 045 D2): you may file only what
+# you could read afterwards, because a page nobody who wrote it can see is a page nobody can fix.
+# It names the groups the CALLER holds, never the ones they asked for — the request is theirs
+# already, and echoing a group set back would confirm which groups exist.
+NOT_YOURS_TO_FILE_AT = (
+    "you cannot file a capture at an audience you could not read afterwards. Your groups are "
+    "{holds} — submit with an `audience` you hold, or omit it to file open")
 
 log = logging.getLogger(__name__)
 
@@ -552,20 +570,63 @@ class BrainService:
 
     # ── the write path (the fast lane's front half) ──────────────────────────
     def submit(self, kind: str, material: str, hints: dict | None = None,
+               audience: list[str] | None = None,
                submitted_by: str | None = None, verification: str | None = None,
                acl=None, content_hash: str | None = None) -> dict:
-        """Queue a capture, attributed to THIS service's resolved identity. The four fields after
-        `hints` are server-computed and declared here ONLY so they can be REFUSED: FastMCP's
-        argument model uses `extra="ignore"`, so an undeclared field is dropped silently."""
+        """Queue a capture, attributed to THIS service's resolved identity.
+
+        `audience` is the one thing about a capture a CALLER decides (ADR 045 D2): the groups this
+        material is for, omitted to file it open. It is a REQUEST — the door resolves it, checks it
+        against the caller's own groups and stores the answer on the row — which is why `acl`, the
+        resolved label, stays in the four fields below.
+
+        Those four are server-computed and declared here ONLY so they can be REFUSED: FastMCP's
+        argument model uses `extra="ignore"`, so an undeclared field is dropped silently.
+        """
         # Built ONCE and threaded through both consumers (audit args and the refusal).
         server_owned = {"submitted_by": submitted_by, "verification": verification,
                         "acl": acl, "content_hash": content_hash}
         return self._call("brain_submit",
-                          _submit_audit_args(kind, material, hints, server_owned),
-                          lambda: self._submit(kind, material, hints, server_owned))
+                          _submit_audit_args(kind, material, hints, server_owned,
+                                             audience=audience),
+                          lambda: self._submit(kind, material, hints, server_owned,
+                                               audience=audience))
+
+    def resolve_submit_audience(self, audience) -> list[str] | None:
+        """The DOOR's audience decision for one capture: the label the row carries, or `None` for
+        open. Raises `CaptureError` when the caller may not file there.
+
+        Two checks, and the second is the whole of the authorization. The names must be a legal
+        group list (`identity.check_group_names` — the same rule the roster and the channel map are
+        held to, so a group cannot be spellable at the door and refused in the file). Then
+        `acl.visible()` — the ONE read predicate — is asked of the WRITER: you may file only what
+        you could read afterwards. An unrestricted caller passes it by construction; a caller with
+        no groups may file open and nothing else.
+
+        Public because the Slack door asks the same question BEFORE it reserves its dedup row, so
+        a refusal there reads as a refusal rather than as a capture that failed.
+        """
+        if audience is None:
+            return None
+        if isinstance(audience, str):
+            raise CaptureError(
+                f"audience must be a list of group names, not a single string — send "
+                f'["{audience}"]')
+        try:
+            labels = list(identity.check_group_names(
+                audience, origin="this submission", subject="audience",
+                remedy=identity.DOOR_REMEDY))
+        except IdentityError as ex:
+            raise CaptureError(str(ex)) from ex
+        if not labels:
+            return None
+        if not visible(labels, self.audiences):
+            raise CaptureError(NOT_YOURS_TO_FILE_AT.format(
+                holds=", ".join(sorted(self.audiences)) if self.audiences else "none"))
+        return labels
 
     def _submit(self, kind: str, material: str, hints: dict | None,
-                server_owned: dict) -> dict:
+                server_owned: dict, *, audience=None) -> dict:
         capture_schema.reject_server_owned_arguments(server_owned)
         # The two source hints the fast lane trusts — refused for every door but Slack's own.
         capture_schema.reject_source_provenance_hints(hints, door=self.door)
@@ -578,8 +639,9 @@ class BrainService:
         if not self.identity:
             # Fail-closed: the governance model rests on a named person standing behind a page.
             raise CaptureError("no resolved identity — a capture cannot be submitted unattributed")
+        acl = self.resolve_submit_audience(audience)
         ack = queue.submit(self.conn, self.evidence, kind=kind, material=material, hints=hints,
-                           submitted_by=self.identity)
+                           submitted_by=self.identity, acl=acl)
         # Echoed at once, before the librarian runs: which registered entities this material
         # names, so the submitter sees on the spot that the brain recognises them — and, when it
         # names none, that the librarian will PROPOSE what it finds. Scoped like `list_entities`:
@@ -734,15 +796,20 @@ class BrainService:
 
 
 def _submit_audit_args(kind: str, material: str, hints: dict | None,
-                       server_owned: dict) -> dict:
+                       server_owned: dict, *, audience=None) -> dict:
     """What `audit_log` records about a submit: sizes, hint KEYS and the sha256 the evidence key
-    is built from — never the captured text, and never a server-owned argument's VALUE."""
+    is built from — never the captured text, and never a server-owned argument's VALUE.
+
+    `audience` IS recorded by value, unlike the server-owned four: it is the caller's own request
+    about who may read what they filed, so "who asked to restrict what, and when" has to be
+    answerable from the audit trail rather than from the row a refusal never wrote."""
     digest, size = capture_schema.material_digest(material if isinstance(material, str) else "")
     return {
         "kind": kind,
         "material_bytes": size,
         "material_sha256": digest if size else "",
         "hint_keys": _audit_hint_keys(hints),
+        "audience": sorted({str(a) for a in audience}) if isinstance(audience, list) else None,
         "server_owned_args_present": sorted(k for k, v in server_owned.items() if v is not None),
     }
 

@@ -194,7 +194,7 @@ do to change this" differently enough that guessing costs a redeploy or a silent
 | Cached in the index, refreshed by the push webhook | `ops/entity-registry.json`, `ops/identities.json`, `ops/slack-channels.json` — `ops_file_snapshot` rows every process group reads through its database connection. The console's Index panel shows each file's freshness and source sha | a commit and a push — no deploy; the webhook writes each pushed file within seconds (fetched at the branch ref, so replays are inert), and the nightly index rebuild reconciles per file — it never clears the two access files over an absent checkout copy |
 | A Fly secret, read once at process startup | `STIGMERGY_TOKEN_STORE`, `OPENAI_API_KEY`, `STIGMERGY_INDEX_DSN`, the four `STIGMERGY_EVIDENCE_ENDPOINT`/`_BUCKET`/`_ACCESS_KEY_ID`/`_SECRET_ACCESS_KEY`, the librarian App triple, `ANTHROPIC_API_KEY`, `STIGMERGY_ADMIN_TOKEN_HASH`, the three `SLACK_*` tokens, `STIGMERGY_GITHUB_WEBHOOK_SECRET` | `fly secrets set …` — triggers the redeploy that applies it; effective once the new machines are healthy, not before |
 | A non-secret env var in `fly.toml`'s `[env]`, app-wide | `STIGMERGY_LIBRARIAN_TIMEOUT_S` — the worker's per-item agent budget, and what its lease (`config.resolved_visibility_timeout_s`) is derived from | edit `fly.toml`, then `make deploy-staging`/`fly deploy` — every process group's machines restart on the new value together. The admin console re-derives the DEPENDENT lease fresh on every request rather than caching a class default, so its meter and Reclaim horizon can never disagree with the worker's own once the new machines are up — see "A dead worker mid-item" below |
-| Committed to the knowledge repo, read at a base commit, wherever a checkout exists | `ops/acl.json`, `ops/entity-registry.json` and the contract linter — the WORKER's own reads, at each item's own base commit, distinct from the `app`/`slack` groups' baked copies above | a commit and a push — no deploy; picked up at the very next item the worker claims |
+| Committed to the knowledge repo, read at a base commit, wherever a checkout exists | `ops/entity-registry.json` and the contract linter — the WORKER's own reads, at each item's own base commit, distinct from the `app`/`slack` groups' baked copies above | a commit and a push — no deploy; picked up at the very next item the worker claims |
 
 `ops/identities.json` is the one access file that is still a deploy-time snapshot, which is why
 changing an audience scope is a redeploy (see Revocation). `ops/entity-registry.json` used to work
@@ -718,7 +718,7 @@ The queue needs one; the index does not, being a rebuildable cache. The procedur
 ### The librarian branches from the REMOTE
 
 Your local commits are invisible to it: every worktree starts from `origin/main`, fetched
-fresh, and `ops/acl.json`, `ops/entity-registry.json` and the linter are read at that same
+fresh, and `ops/entity-registry.json` and the linter are read at that same
 commit — **push it**. The `filing into <repo> against origin/main@<sha>` line the worker prints
 first is the diagnosis: if it names a sha your `git log` does not know, `git pull --rebase`.
 
@@ -1026,7 +1026,7 @@ re-attribution tool by design — resubmit under the right identity and let the 
 MCP config, because a file in the repo can declare any command.)
 
 **The librarian ignores your change / files against a sha you don't recognize.** It branches
-from `origin/main`, not your working tree — the skill, the linter, `ops/acl.json` and the
+from `origin/main`, not your working tree — the skill, the linter and the
 registry are all read at that commit. Push, or `git pull --rebase` if your `main` diverged. The
 `filing into … against origin/main@<sha>` startup line is the diagnosis.
 

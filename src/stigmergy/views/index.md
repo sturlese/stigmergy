@@ -20,7 +20,7 @@ is a poll interval rather than a sweep interval.
 
 A view's `acl` is the **INTERSECTION** of its members' audiences (`kernel.acl.view_acl`), never
 their union — a rollup must not widen access to what it summarizes. Backlinks are a governed but
-NON-member feed and pass a second gate (`kernel.acl.visible_to_view`), never folded into the
+NON-member feed and pass a second gate (`kernel.acl.flows_into`), never folded into the
 intersection. That gate is applied at generation time AND inside the staleness signal
 (`skeleton.backlink_hash` hashes the post-gate rows), because a gate that ran only at generation
 time left a narrowed source cited forever on an already-committed page — #85. The synthesis is

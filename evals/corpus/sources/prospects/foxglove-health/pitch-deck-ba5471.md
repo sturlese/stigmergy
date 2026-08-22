@@ -14,7 +14,6 @@ extraction_quality: usable
 source_format: text
 contextual_retrieval: title
 tier: 1
-acl: [all]
 verification: verified
 entity: foxglove-health
 entity_kind: prospect

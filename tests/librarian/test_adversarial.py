@@ -439,10 +439,13 @@ def test_adversarial_cat1_steering_that_also_trips_a_veto_is_rejected_never_obey
     assert result.status == schema.REJECTED
     assert "write-outside-lane" in json.dumps(result.report)
     assert support.branch_sha(env.bare) == before           # no commit at all
-    # `ops/acl.json` was never written, which is the property behind the refusal
-    assert gitcmd.run("show", f"{before}:ops/acl.json",
+    # `ops/entity-registry.json` was never written, which is the property behind the refusal —
+    # an `ops/` file the lane does not include, chosen because it is the one the fast lane CAN
+    # legitimately rewrite (a birth regenerates it), so an unchanged one is a real assertion
+    # rather than a file nothing ever touches.
+    assert gitcmd.run("show", f"{before}:ops/entity-registry.json",
                               cwd=env.repo).stdout == gitcmd.run(
-        "show", "main:ops/acl.json", cwd=env.repo).stdout
+        "show", "main:ops/entity-registry.json", cwd=env.repo).stdout
 
 
 @pytest.mark.parametrize("payload", payloads.STEERING_PAYLOADS,

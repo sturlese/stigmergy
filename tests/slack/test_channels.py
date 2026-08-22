@@ -80,6 +80,22 @@ def test_a_comment_key_names_a_channel_without_becoming_one(tmp_path):
     assert channel_audiences(str(path), "_C_FINANCE") == set()
 
 
+def test_a_channel_is_NEVER_unrestricted_even_listed_as_brain_admins(tmp_path):
+    """**The asymmetry between the two callers of one grammar, pinned.** An IDENTITY holding
+    `brain-admins` resolves to `None` — unrestricted, sees everything. A CHANNEL never does: Slack
+    capture and Slack answering are public-channel only, so `brain-admins` here is an ordinary
+    label and nothing more.
+
+    The obvious next refactor is to unify the two readers, and this is the regression that would
+    cause: a channel meaning "sees the whole corpus" makes the digest (`digest.sections`) and
+    every public-channel answer broadcast every restricted page into Slack."""
+    path = tmp_path / "admins.json"
+    path.write_text(json.dumps({"C_OPS": ["brain-admins"]}))
+    scope = channel_audiences(str(path), "C_OPS")
+    assert scope == {"brain-admins"}
+    assert scope is not None
+
+
 def test_default_path_joins_ops_slack_channels_json_under_the_repo():
     assert default_path("/repo").endswith("ops/slack-channels.json")
 

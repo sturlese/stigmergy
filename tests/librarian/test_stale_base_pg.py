@@ -96,7 +96,7 @@ def test_an_ordinary_config_error_mid_run_still_becomes_a_failed_row_not_a_propa
         rig, clean_queue, monkeypatch):
     """`worker.process_next`'s own docstring: a config fault that is NOT `StaleBaseError` is
     softened into a `failed` Result (the ACL file or the linter changing on disk under a
-    long-lived loop) — proven by making `base_inputs.load_acl` raise a plain
+    long-lived loop) — proven by making `base_inputs.load_registry` raise a plain
     `LibrarianConfigError` for this one delivery, which is a real code path this exact exception
     class reaches for real (a malformed `ops/acl.json`), not a stand-in for the mechanism."""
     from stigmergy.librarian.errors import LibrarianConfigError
@@ -106,7 +106,7 @@ def test_an_ordinary_config_error_mid_run_still_becomes_a_failed_row_not_a_propa
     def _boom(repo, base):
         raise LibrarianConfigError("acl config broke mid-run (simulated for this test)")
 
-    monkeypatch.setattr(worker.processing.base_inputs, "load_acl", _boom)
+    monkeypatch.setattr(worker.processing.base_inputs, "load_registry", _boom)
 
     ack = support.submit(clean_queue, deps, MATERIAL)
     _, result = worker.process_next(clean_queue, deps)

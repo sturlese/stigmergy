@@ -275,15 +275,28 @@ def test_reject_source_provenance_hints_names_the_keys_and_never_echoes_the_valu
     assert "evil.example" not in str(exc_info.value)
 
 
-def test_reject_source_provenance_hints_leaves_the_five_untrusted_source_hints_alone():
-    """The scope decision, falsifiable: only the two keys something downstream TRUSTS are refused
-    — `source_client` switches the attachment on, `source_permalink` lands as `url:` on a
-    reader-facing page. The other five source hints stay ordinary suggestions and must sail
-    through from any door."""
+def test_reject_source_provenance_hints_leaves_the_four_untrusted_source_hints_alone():
+    """The scope decision, falsifiable: only the keys something downstream ACTS on are refused.
+    The other four source hints stay ordinary suggestions and must sail through from any door —
+    a channel's display NAME is decoration on a card, its participants and timestamps are prose."""
     schema.reject_source_provenance_hints(
-        {"source_channel_id": "C1", "source_channel_name": "dealflow",
+        {"source_channel_name": "dealflow",
          "source_thread_ts": "1722.1", "source_participants": "Dana Ruiz",
          "source_message_timestamps": "1722.1, 1722.2"}, door="")             # must not raise
+
+
+def test_the_channel_id_is_refused_from_every_door_but_slacks_own():
+    """It became an ACCESS-CONTROL key with ADR 045 D2: the Slack door files a capture at the
+    groups of the channel it was taken in, so the channel id must be the SERVER's observation of a
+    Slack event and never a caller's assertion. Before that it was an inert suggestion nothing
+    read, which is why it sat outside this set."""
+    with pytest.raises(SubmissionRejected, match="source_channel_id"):
+        schema.reject_source_provenance_hints({"source_channel_id": "C_LEADERSHIP"}, door="")
+
+
+def test_the_benign_twin_the_slack_door_still_asserts_the_channel_id():
+    schema.reject_source_provenance_hints(
+        {"source_channel_id": "C1"}, door=schema.SLACK_DOOR)                  # must not raise
 
 
 def test_reject_source_provenance_hints_none_values_are_the_ordinary_unset_shape():
@@ -291,10 +304,13 @@ def test_reject_source_provenance_hints_none_values_are_the_ordinary_unset_shape
         {"source_client": None, "source_permalink": None}, door="")           # must not raise
 
 
-def test_source_provenance_hint_keys_is_exactly_the_pair_the_writer_trusts():
-    """Pinned so a future source hint joining the refusal must be a reviewed decision that
-    something downstream started trusting it."""
-    assert frozenset({"source_client", "source_permalink"}) == schema.SOURCE_PROVENANCE_HINT_KEYS
+def test_source_provenance_hint_keys_is_exactly_the_trio_the_writer_acts_on():
+    """Pinned so a source hint joining the refusal must be a reviewed decision that something
+    downstream started acting on it: `source_client` switches the attachment on,
+    `source_permalink` lands as `url:` on a reader-facing page, and `source_channel_id` decides
+    the audience every page of the capture is stamped with (ADR 045 D2)."""
+    assert frozenset({"source_client", "source_permalink",
+                      "source_channel_id"}) == schema.SOURCE_PROVENANCE_HINT_KEYS
 
 
 # ── normalize_hints: the client-hints allowlist + the frontmatter recording ─────────────────────

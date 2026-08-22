@@ -152,7 +152,7 @@ def confined_page(worktree: str, relpath: str) -> str:
     Three questions, all yes: the LEAF is not a symlink (checked BEFORE resolving, since a link
     back inside the worktree is contained and still not the bytes git tracks); the RESOLVED path is
     contained; the resolved relpath is on the allow-list — the content zones plus exactly
-    `ops/templates/<name>.md`, matched as THREE segments so `ops/templates/../acl.json` fails.
+    `ops/templates/<name>.md`, matched as THREE segments so `ops/templates/../identities.json` fails.
     The SHAPE test runs on the RESOLVED path, or a symlinked directory component reads any `.md`
     in the repo. Returns the resolved relpath, so the caller reads the file it was judged on.
     """

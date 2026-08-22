@@ -1,7 +1,9 @@
 {
-  "_comment": "Identities for the golden QA run (evals/run_qa.py). 'steward' holds 'brain-admins' (the unrestricted group: it sees every page, including the sales-scoped ones) and answers the answerable questions. 'analyst' holds NO group, so it reads every open page and nothing else — the acl-probe questions target sales-scoped pages, which are correctly out of scope and must be refused with no existence leak. Open is the ABSENCE of a label (ADR 045 D7), so an empty group list is the right spelling for a plain authenticated reader.",
+  "_comment": "Identities for the golden QA run (evals/run_qa.py). 'steward' holds 'brain-admins' — the unrestricted group — and answers the answerable questions. 'analyst' holds 'product' and NOT 'sales', which is what makes the acl-probe family a real measurement in BOTH directions: it reads the product-labelled page (the intersection works) and is refused the sales-labelled ones with no existence leak (the intersection excludes). A principal holding nothing would only ever prove the second. Open is the ABSENCE of a label (ADR 045 D7), so no page carries 'all' — that is a group name nobody may hold.",
   "steward": [
     "brain-admins"
   ],
-  "analyst": []
+  "analyst": [
+    "product"
+  ]
 }

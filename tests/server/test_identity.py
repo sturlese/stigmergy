@@ -95,7 +95,114 @@ def test_a_group_named_like_all_but_not_all_is_fine(tmp_path):
     assert resolve_audiences(path, "ana") == ("all-hands", "allies")
 
 
+# ── the retired sigil, refused as a VALUE and as a NAME ───────────────────────────────────────
+def test_the_sigil_wrapped_in_a_list_is_refused_by_name(tmp_path):
+    """The migration foot-gun: an operator told to "write a list" wraps the old sigil. It would
+    otherwise resolve to a group nobody can hold — the admin silently loses unrestricted access,
+    and at the door files pages nobody can read."""
+    path = _write(tmp_path, {"steward": ["*"]})
+    with pytest.raises(IdentityError, match="retired unrestricted sigil"):
+        resolve_audiences(path, "steward")
+
+
+def test_a_case_variant_of_the_unrestricted_group_is_refused_not_folded(tmp_path):
+    """Refused rather than accepted case-insensitively: folding would WIDEN on a typo, and this is
+    the one label whose typo grants the whole corpus. Refusing is the fail-closed direction and it
+    says which spelling to write."""
+    path = _write(tmp_path, {"steward": ["Brain-Admins"]})
+    with pytest.raises(IdentityError, match="differs only in case"):
+        resolve_audiences(path, "steward")
+
+
+def test_the_reservation_is_casefolded(tmp_path):
+    """`All` is the same intention as `all` with a different shift key."""
+    path = _write(tmp_path, {"ana": ["All"]})
+    with pytest.raises(IdentityError, match="reserved group"):
+        resolve_audiences(path, "ana")
+
+
+# ── the group-name grammar: narrow, because these names reach page frontmatter ────────────────
+def test_a_group_name_carrying_a_newline_is_refused(tmp_path):
+    """A group name is stamped into YAML frontmatter as an access label and, since ADR 045 D2, can
+    arrive from a model through `brain_submit(audience=…)`. A newline there is a page-contract
+    injection, and no legitimate group name needs one."""
+    path = _write(tmp_path, {"ana": ["fin\nance"]})
+    with pytest.raises(IdentityError, match="invalid group"):
+        resolve_audiences(path, "ana")
+
+
+def test_a_group_name_over_the_length_ceiling_is_refused(tmp_path):
+    path = _write(tmp_path, {"ana": ["a" * 65]})
+    with pytest.raises(IdentityError, match="invalid group"):
+        resolve_audiences(path, "ana")
+
+
+def test_too_many_groups_is_refused(tmp_path):
+    path = _write(tmp_path, {"ana": [f"g{n}" for n in range(33)]})
+    with pytest.raises(IdentityError, match="over the ceiling"):
+        resolve_audiences(path, "ana")
+
+
+def test_the_benign_twin_ordinary_group_names_pass_the_grammar(tmp_path):
+    """The specificity half of every rule above: the shapes a real roster uses must all resolve.
+    A rule that has never let anything through has been measured for sensitivity only."""
+    path = _write(tmp_path, {"ana": ["finance", "sales-emea", "eng.platform", "team_42", "g1"]})
+    assert resolve_audiences(path, "ana") == (
+        "finance", "sales-emea", "eng.platform", "team_42", "g1")
+
+
+# ── a refusal that names a replacement RUNS that replacement ──────────────────────────────────
+def test_a_bare_label_that_could_not_be_a_group_is_not_suggested_back(tmp_path):
+    """The naive message answered `"finance,sales"` with `write ["finance,sales"]`, which the
+    comma rule then refuses — a message containing a command is an executable promise, and that
+    one could not be kept. The suggestion is checked before it is offered."""
+    path = _write(tmp_path, {"ana": "finance,sales"})
+    with pytest.raises(IdentityError) as caught:
+        resolve_audiences(path, "ana")
+    assert "write [" not in str(caught.value), str(caught.value)
+
+
+def test_a_bare_label_that_COULD_be_a_group_still_gets_its_suggestion(tmp_path):
+    """The benign twin: the suggestion is withheld only when it would not work."""
+    path = _write(tmp_path, {"ana": "finance"})
+    with pytest.raises(IdentityError, match=r'write \["finance"\] instead'):
+        resolve_audiences(path, "ana")
+
+
 # ── the whole file is validated, not only the entry looked up ──────────────────────────────────
+def test_a_repeated_principal_is_refused_rather_than_last_win(tmp_path):
+    """`json.loads` keeps the last occurrence silently. A diff appending a wide line far from an
+    existing narrow one reads, in review, as one added line beside an unchanged one — and the push
+    webhook makes it live within seconds."""
+    path = _write(tmp_path, '{"ana": ["finance"], "ana": ["brain-admins"]}')
+    with pytest.raises(IdentityError, match="appears more than once"):
+        resolve_audiences(path, "ana")
+
+
+def test_two_principals_differing_only_in_case_are_refused(tmp_path):
+    """Lookups are exact, so these are two principals that look identical in review and grant
+    differently — the file's smuggling surface."""
+    path = _write(tmp_path, '{"Ana@x.com": ["finance"], "ana@x.com": ["brain-admins"]}')
+    with pytest.raises(IdentityError, match="differ only in case"):
+        resolve_audiences(path, "ana@x.com")
+
+
+def test_the_benign_twin_two_genuinely_different_principals_resolve(tmp_path):
+    path = _write(tmp_path, {"ana@x.com": ["finance"], "bob@x.com": ["brain-admins"]})
+    assert resolve_audiences(path, "ana@x.com") == ("finance",)
+    assert resolve_audiences(path, "bob@x.com") is None
+
+
+def test_a_comment_key_whose_value_is_a_group_list_is_refused(tmp_path):
+    """The ambiguous case: somebody whose entry silently does nothing. `_marc@example.com` is a
+    valid email and `stigmergy-issue-token` will issue for it, so "no principal begins with `_`"
+    is a rule this file states rather than a fact about the world."""
+    path = _write(tmp_path, {"_marc@example.com": ["finance"], "ana": ["finance"]})
+    with pytest.raises(IdentityError, match="marks a COMMENT"):
+        resolve_audiences(path, "ana")
+
+
+
 def test_a_malformed_NEIGHBOUR_refuses_the_lookup_too(tmp_path):
     """An access-scoping file the server cannot make sense of must never answer for the entry that
     happened to parse. Before ADR 045 each reader validated only the value it wanted."""

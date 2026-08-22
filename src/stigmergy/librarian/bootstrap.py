@@ -3,7 +3,7 @@
 The librarian is a second process group of the one Fly app, and a container starts with no
 knowledge repo in it. Three things have to be true before the first claim: **there is a
 checkout** (cloned with the GitHub App's own identity); **the checkout IS the base ref**
-(`HEAD == origin/<branch>` — the worker reads `ops/acl.json`, the registry and the linter at
+(`HEAD == origin/<branch>` — the worker reads the registry and the linter at
 `base.sha`, so a checkout at another commit files against inputs nobody can point at); and
 **the read path's secrets are not in the worker's environment** (Fly secrets are app-wide, and
 the write path must not silently re-couple to the read path's embedder).

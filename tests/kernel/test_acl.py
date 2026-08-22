@@ -1,74 +1,61 @@
-"""ACL resolution: config validation, first-match rules, view intersection, wiring."""
-import json
+"""`kernel.acl` — the audience vocabulary: what two label lists mean when they meet.
 
-import pytest
+`flows_into` is the load-bearing one and is asked in six places (ADR 045 D3/D5), so its truth
+table is pinned here rather than inferred from any one caller. `view_acl` is on its way out with
+D5 and keeps its own test until it goes.
 
-from stigmergy.kernel.acl import load_acl_config, resolve_acl, view_acl
-
-
-def _config(tmp_path, cfg):
-    p = tmp_path / "acl.json"
-    p.write_text(json.dumps(cfg))
-    return str(p)
-
-
-def test_load_acl_config_none_and_validation(tmp_path):
-    assert load_acl_config(None) is None
-    ok = load_acl_config(_config(tmp_path, {
-        "default": ["all"],
-        "rules": [{"unit": "Finance", "audiences": ["finance"]}]}))
-    assert ok["default"] == ["all"]
-    with pytest.raises(ValueError, match="non-empty 'audiences'"):
-        load_acl_config(_config(tmp_path, {"rules": [{"unit": "X", "audiences": []}]}))
-    with pytest.raises(ValueError, match="rule needs one of"):
-        load_acl_config(_config(tmp_path, {"rules": [{"audiences": ["a"]}]}))
-    with pytest.raises(ValueError, match="'default' must be"):
-        load_acl_config(_config(tmp_path, {"default": [], "rules": []}))
+What this file used to hold — `load_acl_config`, `resolve_acl` and the four matchers — went with
+the path resolver (ADR 045 D2): a capture's audience is the door's decision, carried on its queue
+row, so there is nothing left to resolve from a config file.
+"""
+from stigmergy.kernel.acl import flows_into, view_acl
 
 
-def test_load_acl_config_rejects_labels_that_break_csv_serialization(tmp_path):
-    """Audience labels travel comma-separated downstream — the `acl: [a, b]` flow list in page
-    frontmatter, and the `acl` column the index reads it into: a comma inside a label would
-    silently split into two audiences at enforcement time; an empty label vanishes. Both must
-    fail loudly at config load."""
-    with pytest.raises(ValueError, match="invalid audience label"):
-        load_acl_config(_config(tmp_path, {
-            "rules": [{"unit": "X", "audiences": ["sales,leadership"]}]}))
-    with pytest.raises(ValueError, match="invalid audience label"):
-        load_acl_config(_config(tmp_path, {"default": ["  "], "rules": []}))
+# ── flows_into: may this CONTENT be written into a page with THAT label ────────────────────────
+def test_open_content_flows_anywhere():
+    """Content with no label is already readable by everyone; nothing it lands on can widen it."""
+    assert flows_into(None, None) is True
+    assert flows_into(None, ["finance"]) is True
+    assert flows_into(None, []) is True
 
 
-def test_resolve_acl_first_match_wins(tmp_path):
-    cfg = load_acl_config(_config(tmp_path, {
-        "default": ["all"],
-        "rules": [
-            {"path_contains": "board", "audiences": ["leadership"]},
-            {"unit": "Clients", "audiences": ["sales", "leadership"]},
-            {"entity_kind": "prospect", "audiences": ["sales"]},
-        ]}))
-    assert resolve_acl(cfg, "/X/Clients/board minutes.pdf", "Clients", None) == ["leadership"]
-    assert resolve_acl(cfg, "/X/Clients/1. Acme/report.pdf", "Clients", "tracked") == ["sales", "leadership"]
-    assert resolve_acl(cfg, "/X/Pipeline/Evaluating/Hooli/deck.pdf", "Pipeline", "prospect") == ["sales"]
-    assert resolve_acl(cfg, "/X/Product/roadmap.md", "Product", None) == ["all"]
-    assert resolve_acl(None, "/anything", "Clients", None) is None      # ACLs off -> no field
+def test_nothing_labelled_flows_into_an_open_page():
+    """The fail-closed direction, and the one an accidental default has to land on: an open page
+    reaches everybody, so labelled material rendered there reaches an audience its author
+    restricted it from."""
+    assert flows_into(["finance"], None) is False
+    assert flows_into([], None) is False
 
 
+def test_a_page_admits_content_whose_groups_CONTAIN_its_own():
+    """Containment, not intersection — everyone who can read the page can already read the
+    source."""
+    assert flows_into(["finance"], ["finance"]) is True
+    assert flows_into(["finance", "leadership"], ["finance"]) is True
+
+
+def test_sharing_one_group_is_NOT_enough():
+    """The difference from `visible()`, which is the reason these are two functions. A PERSON
+    needs to share one label with a page. An AUDIENCE needs to be contained by it: `leadership`
+    readers of the target page would otherwise inherit `finance`-only material."""
+    assert flows_into(["finance"], ["finance", "leadership"]) is False
+
+
+def test_nobody_content_flows_only_into_a_nobody_page():
+    """`[]` is a real value meaning nobody, never "open" — the collapse ADR 045 D9 ends."""
+    assert flows_into([], []) is True
+    assert flows_into([], ["finance"]) is False
+    assert flows_into(["finance"], []) is True     # every group of `[]` is trivially in `finance`
+
+
+def test_order_and_duplicates_do_not_change_the_answer():
+    assert flows_into(["leadership", "finance", "finance"], ["finance", "leadership"]) is True
+
+
+# ── view_acl: the members' intersection (retired by D5, in the next phase) ─────────────────────
 def test_view_acl_is_intersection():
-    assert view_acl([["sales", "leadership"], ["finance", "leadership"]]) == ["leadership"]
-    assert view_acl([["sales"], None]) == ["sales"]                  # None members don't restrict
-    assert view_acl([None, None]) is None                            # open members -> open view
-    assert view_acl([["sales"], ["finance"]]) == []                  # disjoint -> restricted, never open
-
-
-# `test_visible_rule` lived here, over `kernel.acl.visible`. That predicate is gone — it had no
-# production caller, it was the fail-open half, and it sat in the module every package may import
-# (a pre-publication audit; `tests/test_contract_parity.py` carries the record and fails if one
-# comes back). The truth table it asserted is not lost: `tests/server/test_acl_visibility.py` pins
-# every one of its cases against `server.acl.visible`, which is now the only implementation.
-# Two tests used to close this file — `test_worker_stamps_pages_facts_and_result` and
-# `test_view_page_carries_intersection`. They drove an ingest worker and a legacy view builder
-# end to end, and neither exists any more. The PROPERTIES they held are still held, by tests that
-# run against what does exist: the stamped-audience half by `tests/librarian/`
-# (`acl_rules.resolve` feeding `processing._stamp`), and the intersection half by
-# `tests/views/test_render.py` plus `tests/test_contract_parity.py`'s `[]`-stays-`[]` invariant.
-# Recorded rather than dropped in silence — a check that stops running must be impossible to miss.
+    assert view_acl([None, None]) is None                       # all open -> open
+    assert view_acl([["a", "b"], ["b", "c"]]) == ["b"]           # intersection, never union
+    assert view_acl([["a"], ["b"]]) == []                        # disjoint -> nobody, not open
+    assert view_acl([None, ["a"]]) == ["a"]                      # an open member does not widen
+    assert view_acl([]) is None

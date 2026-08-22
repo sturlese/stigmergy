@@ -104,8 +104,10 @@ def test_no_other_directory_has_appeared_in_deploy():
 _ROSTER = {"someone@example.com": ["everyone", "finance"]}
 _REGISTRY = {"entities": {"acme-corp": {"name": "Acme Corp"}}}
 # Real-looking because the point of these tests is that real data does not survive the script:
-# a steward map is a list of people's email addresses, exactly like the identity roster.
-_CHANNELS = {"everyone": "C0123456789"}
+# a channel map names real channel ids against real group names, and the script's preflight now
+# parses it with the grammar the server reads it with (ADR 045 D7), so a fixture in any other
+# shape would be refused before it could be baked.
+_CHANNELS = {"C0123456789": ["finance"]}
 
 
 def _staged_run(tmp_path):

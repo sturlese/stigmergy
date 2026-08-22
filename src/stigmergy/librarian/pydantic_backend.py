@@ -561,7 +561,7 @@ class FilingToolbox:
     def read_page(self, path: str) -> dict:
         """One page in full — refused unless `gather.confined_page` allows it. That rule admits
         the content zones AND `ops/templates/*.md`, since this run writes a page's own container.
-        Everything else stays refused, `ops/`'s `acl.json` and `entity-registry.json` first. The
+        Everything else stays refused, `ops/entity-registry.json` and `ops/identities.json` first. The
         refusal names what IS readable, never the path asked."""
         resolved_rel = gather.confined_page(self.worktree, path or "")
         if not resolved_rel:

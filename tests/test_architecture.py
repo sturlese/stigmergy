@@ -920,51 +920,6 @@ def test_webhook_actually_uses_its_one_declared_librarian_exception():
         "exception too, or the boundary test is guarding an edge nothing uses")
 
 
-# ── one declared reach across a package boundary, pinned by a test ────────────────────────────────
-# `librarian.acl_rules` is an ADAPTER over `stigmergy.kernel.acl` (its docstring carries the
-# argument: the file on disk in the knowledge repo is written in a dialect the reader raises on, and
-# reimplementing resolution would be strictly worse than translating into it). To translate without a
-# second matching algorithm it reaches PRIVATE NAMES of that module — `_MATCHERS` and
-# `_check_labels`.
-#
-# That is a real coupling and it is deliberate, so it gets a test rather than a comment. Without one,
-# renaming a private name inside the kernel — which its author is entitled to do without consulting
-# anybody, that being what the underscore means — breaks the librarian at WORKER STARTUP with an
-# `AttributeError`, on a machine, at the moment an operator runs a walk. With one, it breaks a test
-# whose failure message says where to look and what the adapter needs.
-_ACL_MODEL_PRIVATE_NAMES = ("_MATCHERS", "_check_labels")
-
-
-def test_the_acl_adapters_reach_into_pipelines_private_names_is_pinned():
-    from stigmergy.kernel import acl as acl_model
-
-    missing = [name for name in _ACL_MODEL_PRIVATE_NAMES if not hasattr(acl_model, name)]
-    assert not missing, (
-        f"stigmergy.kernel.acl no longer exposes {missing} — "
-        f"`stigmergy.librarian.acl_rules` reads them to translate the knowledge repo's on-disk ACL "
-        f"dialect into the reader's, so this rename breaks the librarian at worker STARTUP rather "
-        f"than here. Either restore the names or give the adapter a public entry point (a "
-        f"data-level `load_acl_config`-equivalent that takes a dict) and update `acl_rules.load`.")
-
-
-def test_the_acl_private_names_still_have_the_shape_the_adapter_assumes():
-    """A name surviving is not enough: the adapter iterates `_MATCHERS` as a container of key names
-    and calls `_check_labels(label, audiences)` positionally. Both assumptions are pinned, because a
-    private name changed IN PLACE fails the same way a renamed one does."""
-    from stigmergy.kernel import acl as acl_model
-    from stigmergy.librarian import acl_rules
-
-    assert "path_prefix" in acl_model._MATCHERS, (
-        "`acl_rules._translate_rule` emits `path_prefix` rules and names `_MATCHERS` in its refusal "
-        "message; a matcher set without it means the translation produces rules that never match")
-    # It must accept a valid label list silently and refuse an invalid one — that is the whole of
-    # what the adapter delegates to it, and `acl_rules.load` reports the refusal as a config error.
-    acl_model._check_labels("<pinned by test_architecture>", ["leadership"])
-    with pytest.raises(ValueError):
-        acl_model._check_labels("<pinned by test_architecture>", ["a,comma"])
-    assert acl_rules._UNSUPPORTED_MATCHERS, "the adapter's own refusal list went empty"
-
-
 def _module_level_environ_or_connect_touches(path: pathlib.Path) -> list[int]:
     """Line numbers of TOP-LEVEL (module-scope) statements that touch `os.environ` or call a
     `.connect(...)` method. Mirrors this file's own established idiom for a deferred/conditional
@@ -1653,17 +1608,17 @@ _ACL_STORE_READ = re.compile(
 # link-resolver module (since deleted) read `pages_index.acl` directly while its own docstring
 # said "the SAME column `server.acl.visible()` already reads" — true prose about relying on a
 # DIFFERENT module's enforcement, with no call anywhere in that module itself. The original
-# `re.compile(r"\b(?:visible|visible_to_view)\b").search(path.read_text())` matched that sentence,
+# `re.compile(r"\b(?:visible|flows_into)\b").search(path.read_text())` matched that sentence,
 # so the module passed this file's own check without enforcing anything and without being listed
 # as an exception either: precisely the miss this test was built to make impossible, invisible to
 # the test built to catch it. `ast.parse` never produces a node for a comment at all, and a
 # docstring's TEXT is opaque to it (a `Name`/`Attribute` reference only exists where the
 # identifier is actually used as code), so this is immune by construction, not by an exclusion.
-_PREDICATE_NAMES = frozenset({"visible", "visible_to_view"})
+_PREDICATE_NAMES = frozenset({"visible", "flows_into"})
 
 
 def _uses_acl_predicate(path: pathlib.Path) -> bool:
-    """Does this module IMPORT or CALL `visible`/`visible_to_view` as code? See the comment
+    """Does this module IMPORT or CALL `visible`/`flows_into` as code? See the comment
     above `_PREDICATE_NAMES` for why this is AST-based and what real-file case made it that way."""
     tree = ast.parse(path.read_text())
     for node in ast.walk(tree):
@@ -1723,7 +1678,7 @@ def test_the_acl_store_readers_are_found_at_all():
 @pytest.mark.parametrize("path", _acl_store_readers(), ids=_rel)
 def test_every_reader_of_an_acl_bearing_store_enforces_or_is_a_named_exception(path):
     """A module that reads `pages_index` or `observations` either imports an ACL predicate
-    (`visible` / `visible_to_view`) or appears in `ACL_REACHABILITY_EXCEPTIONS` with a stated
+    (`visible` / `flows_into`) or appears in `ACL_REACHABILITY_EXCEPTIONS` with a stated
     reason.
 
     This does not prove the predicate is CALLED on every row — no import-graph test can. It
@@ -1736,7 +1691,7 @@ def test_every_reader_of_an_acl_bearing_store_enforces_or_is_a_named_exception(p
     assert _uses_acl_predicate(path), (
         f"{rel} reads an ACL-bearing store but does not import or call an ACL predicate as CODE "
         f"(a mention in a comment or a docstring does not count — see `_uses_acl_predicate`). "
-        f"Either apply `visible()`/`visible_to_view()`, or add it to ACL_REACHABILITY_EXCEPTIONS "
+        f"Either apply `visible()`/`flows_into()`, or add it to ACL_REACHABILITY_EXCEPTIONS "
         f"in this file WITH the reason — and if the reason is 'not yet', name who owns it.")
 
 
@@ -1751,7 +1706,7 @@ def test_the_acl_predicate_check_cannot_be_satisfied_by_a_comment_or_a_docstring
     prose_only = tmp_path / "prose_only_mention.py"
     prose_only.write_text(
         '"""Reuses the SAME column `server.acl.visible()` already reads elsewhere, rather than '
-        'calling visible_to_view() a second time in this module."""\n'
+        'calling flows_into() a second time in this module."""\n'
         "def resolve(conn, path):\n"
         "    cur = conn.cursor()\n"
         "    cur.execute('SELECT acl FROM pages_index WHERE path = %s', (path,))\n"
@@ -1760,7 +1715,7 @@ def test_the_acl_predicate_check_cannot_be_satisfied_by_a_comment_or_a_docstring
     assert _ACL_STORE_READ.search(prose_only.read_text()), (
         "test setup is broken: the fixture itself must look like an ACL-store reader")
     assert _uses_acl_predicate(prose_only) is False, (
-        "a docstring/comment MENTIONING visible()/visible_to_view() must not satisfy this "
+        "a docstring/comment MENTIONING visible()/flows_into() must not satisfy this "
         "check — this is the deleted link-resolver module's false pass, reproduced synthetically")
 
     real_caller = tmp_path / "real_predicate_call.py"

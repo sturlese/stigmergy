@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from stigmergy.index import corpus
-from stigmergy.kernel.acl import visible_to_view
+from stigmergy.kernel.acl import flows_into
 
 # Deliberately excludes the `views` zone itself: a view declares `entity: [<id>]` too, and
 # counting it as its own member would change the staleness hash on every write — a
@@ -134,7 +134,7 @@ def backlinks_of(repo: str, entity_page: Member | None, *,
     """Pages whose wikilinks resolve to the entity's OWN page. Scans every indexed zone (`views/`
     included — another entity's view may legitimately link here).
 
-    A backlink is a governed source OUTSIDE the member set: `visible_to_view` gates whether it
+    A backlink is a governed source OUTSIDE the member set: `flows_into` gates whether it
     renders, and is NEVER folded into the intersection itself — a backlink must never NARROW
     `view_acl`, only be excluded from this list. The `None` default fail-closes to showing only
     equally-open backlinks. The match is against RESOLVED link paths, exact even on an ambiguous
@@ -158,7 +158,7 @@ def backlinks_of(repo: str, entity_page: Member | None, *,
     rows = corpus.load_pages(repo) if rows is None else rows
     excluded = {entity_page.path, exclude_path} - {""}
     return sorted((r for r in rows if entity_page.path in r.links and r.path not in excluded
-                  and visible_to_view(r.acl, view_acl)),
+                  and flows_into(r.acl, view_acl)),
                  key=lambda r: r.path)
 
 
@@ -168,7 +168,7 @@ def backlink_hash(rows: list[corpus.PageRow]) -> str:
 
     Beside `member_hash` and never folded into it — that name says what it hashes, and a backlink
     is not a member. What it covers is the POST-GATE set: `backlinks_of` has already applied
-    `visible_to_view`, so a source whose `acl:` is narrowed to an audience the view does not have
+    `flows_into`, so a source whose `acl:` is narrowed to an audience the view does not have
     drops OUT of these rows and the hash moves, which is what makes the narrowing a regeneration.
     Hashing the pre-gate candidates instead would fire on any ACL edit anywhere, including the
     ones that change nothing on the page.

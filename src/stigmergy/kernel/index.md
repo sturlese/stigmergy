@@ -14,7 +14,7 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 | `settings.py` | `resolve_backend()` — the ONE parse+validation of `$CLEAN_LLM` (`openai`/`fake`/`fake-flawed`), read at call time — plus `PROVIDER_KEY_ENV`/`provider_of`, the one provider→key table and prefix predicate (framework-free, so keyless modules can consult them; the librarian's preflight re-exports both) |
 | `page.py` | `MAX_BODY_LINES` / `SPLIT_CHUNK_LINES` — the page-as-chunk contract — and `_yaml(v)`, the frontmatter scalar emitter: plain only when the value provably round-trips through `yaml.safe_load`, quoted-and-escaped otherwise |
 | `frontmatter.py` | `split_frontmatter(text) -> (dict, body)` — tolerant: malformed or absent frontmatter degrades to `({}, text)`, never an exception |
-| `acl.py` | `load_acl_config` / `load_acl_config_text`, `resolve_acl` (first matching rule wins), `view_acl` (members INTERSECTION — a rollup must never widen access), `visible_to_view` (the non-member read gate) |
+| `acl.py` | The audience VOCABULARY — what two label lists mean when they meet, never who is asking. `flows_into(content_acl, page_acl)` (may this content be written into, or rendered onto, a page with that label — containment, fail-closed) and `view_acl` (members INTERSECTION, retired by ADR 045 D5). Where a label COMES FROM is not here: the door decides it and the capture's queue row carries it |
 | `registry.py` | `Registry`, `load_registry` / `registry_from_text` / `save_registry` / `index_entity` — `ops/entity-registry.json`'s one reader/writer, plus `title` / `type_of` and the TWO lookups the registry is asked for: `canonical_id` (which entity does this text MEAN — filing) and `collision_id` (would this new name be confused with one we have — the mint gate). Missing file = empty registry; malformed = loud error. The reader is split path-from-text because the registry also reaches a reader as BYTES now (the index's snapshot, which `index.check` lints through this same parse) |
 | `normalize.py` | `resolution_key(name)` (accents, case and punctuation folded — and nothing that is a judgment), `normalize(name)` (that plus the legal-suffix table: the COLLISION key), `slugify(s)` (≤60 chars) |
 | `fsutil.py` | `write_text_atomic(path, text)` — tmp file + same-directory `os.replace`, so a concurrent reader never sees a partial |
@@ -32,9 +32,9 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 - `page._yaml` for any frontmatter writer — never re-derive the plain-vs-quoted decision.
 - `frontmatter.split_frontmatter` for a caller that does not need the full page contract
   (`index.corpus` deliberately keeps its own, stricter parser).
-- `acl.resolve_acl` / `view_acl` / `visible_to_view` — a caller with a differently-shaped ACL
-  source writes an adapter over these (`librarian.acl_rules` is one), never a second resolution
-  algorithm.
+- `acl.flows_into` for every seam where a model reads one governed page while writing another,
+  and for a view's member and backlink feeds — never a hand-rolled label comparison. It is
+  containment, not intersection, and getting that backwards leaks to the rest of an audience.
 - `registry.load_registry` / `registry_from_text` / `save_registry` — never a hand-rolled JSON
   parse of the registry, from a path or from bytes. `registry.index_entity` for anything that
   BUILDS a `Registry` in memory (`entities.generator._index` is the other caller): it is the one
@@ -54,9 +54,6 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 - Loading a provider SDK at module level: `llm.build_model` imports its own inside the function
   body, so a keyless offline run pays for nothing.
 - Reading the environment anywhere but at call time.
-- Renaming `acl._MATCHERS` or `acl._check_labels` casually: `librarian.acl_rules` reaches both to
-  translate its on-disk dialect, and two architecture tests pin the coupling so a rename fails a
-  test instead of breaking the librarian at worker startup.
 - "Unifying" `acl` with `stigmergy.server.acl.visible` — the server's is a deliberately STRICTER
   separate implementation (a malformed stored value hides from everyone) that mirrors this module
   rather than importing it.
@@ -64,11 +61,11 @@ pinned in `tests/test_architecture.py`; per-module suites live in `tests/kernel/
 
 ## Contracts
 
-- ACL truth table: `resolve_acl` returns the first matching rule's audiences, else the config
-  default, else `None` when ACLs are off. `view_acl`: members without ACLs don't restrict,
-  all-`None` yields `None` (open), an empty intersection is restrictive by construction.
-  `visible_to_view`: an open row renders anywhere; an open view admits only open rows; a narrowed
-  view admits a restricted row only when `set(view_acl) <= set(row_acl)`.
+- ACL truth table: `flows_into` — open content flows anywhere; nothing labelled flows into an
+  open page; otherwise every group of the PAGE must be a group of the CONTENT. `view_acl`:
+  members without labels don't restrict, all-`None` yields `None` (open), an empty intersection
+  is restrictive by construction. One dialect throughout: `None` is open, `[]` is nobody, and
+  nothing here collapses one into the other.
 - `normalize.py`'s suite is `tests/kernel/test_normalize.py`, added with the split that gave it a
   second key; `frontmatter.py`'s lives in `tests/kernel/test_frontmatter.py`. Every case there is
   written against a spelling that DISCRIMINATES the two keys — one both answer alike proves nothing

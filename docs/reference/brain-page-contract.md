@@ -61,7 +61,7 @@ extraction_quality: usable           # usable | manual_review
 source_format: pdf                   # pdf | spreadsheet | document | office | text | other
 contextual_retrieval: title          # embedding-context tier: prepend title to each chunk
 tier: 1                              # 1 primary, 2 second-hand, 3 AI-generated
-acl: [sales, leadership]             # audience labels; absent = open to all
+acl: [sales, leadership]             # audience GROUPS; absent = open, [] = nobody
 # ── the three lines below are HISTORICAL: the trust layer that produced them is deleted,
 #    nothing writes them, and nothing reads them. Pages written before it went still carry
 #    them; a value is a frozen fact about that extraction run, never a live guarantee.

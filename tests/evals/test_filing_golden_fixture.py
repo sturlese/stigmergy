@@ -672,13 +672,17 @@ def test_the_fixture_repo_holds_the_pages_provenance_claims():
     assert _SHA_RE.fullmatch(data["stigmergy_sha"] or "")
 
 
-def test_the_registry_and_the_acl_sit_where_the_librarian_reads_them(registry):
-    """Both are read by relative path out of the commit being filed against. In the wrong place
-    the registry is EMPTY, which does not fail — every capture PROPOSES a new identity for a name
-    that was registered all along, the anchor facet reports a backend that cannot anchor, and
-    `proposals` scores 1.00 for a run in which nothing was recognised at all."""
+def test_the_registry_sits_where_the_librarian_reads_it(registry):
+    """It is read by relative path out of the commit being filed against. In the wrong place the
+    registry is EMPTY, which does not fail — every capture births a new identity for a name that
+    was registered all along, the anchor facet reports a backend that cannot anchor, and
+    `proposals` scores 1.00 for a run in which nothing was recognised at all.
+
+    `ops/acl.json` used to be asserted beside it and is gone from both the fixture and the real
+    knowledge repo: a capture's audience is the door's decision on its own queue row (ADR 045 D2),
+    so no repo file decides a label and there is nothing here for the librarian to read."""
     assert (REPO / librarian_config.REGISTRY_RELPATH).is_file()
-    assert (REPO / librarian_config.ACL_RELPATH).is_file()
+    assert not (REPO / "ops" / "acl.json").exists()
     assert len(registry.entities) == FIXTURE_ENTITIES
 
 

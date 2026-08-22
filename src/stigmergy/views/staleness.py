@@ -102,7 +102,7 @@ def current_signals(repo: str, entity_id: str, members: list[skeleton.Member], *
 
     The backlink half is computed exactly as the section is RENDERED: the same audience
     (`view_acl` over the members, the value the page's own `acl:` is), the same self-exclusion,
-    and the same `visible_to_view` gate. That is what makes a narrowed or deleted source register
+    and the same `flows_into` gate. That is what makes a narrowed or deleted source register
     — it simply stops being one of these rows.
 
     An empty member set is `ViewSignals()`: no view is generated from nothing, which never equals

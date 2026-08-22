@@ -348,7 +348,7 @@ def test_a_backlink_that_stopped_qualifying_must_not_survive_a_convergence_pass(
       checks could not see it either: they read the corpus, where the link is real until the view
       is regenerated.
     - `restricted` — a steward narrows the source's `acl`. `backlinks_of` gates every backlink
-      through `kernel.acl.visible_to_view`, so the narrowed page drops OUT of the rendered rows,
+      through `kernel.acl.flows_into`, so the narrowed page drops OUT of the rendered rows,
       the hash moves, and the pass regenerates the view without it. Before the fix that gate ran
       at generation time only, so an already-committed view kept the page's STEM and PATH readable
       by everyone the view was readable by — the existence leak, not merely staleness: this

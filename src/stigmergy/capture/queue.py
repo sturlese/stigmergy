@@ -33,11 +33,12 @@ EXCERPT_CHARS = 500
 
 # What a claim hands the worker.
 _ITEM_COLUMNS = ("id", "kind", "payload", "blob_refs", "submitted_by", "hints", "status",
-                 "attempts", "created_at", "claimed_at", "finished_at", "result_ref", "error")
+                 "attempts", "created_at", "claimed_at", "finished_at", "result_ref", "error",
+                 "acl")
 
 _INSERT = """
-INSERT INTO capture_queue (kind, payload, blob_refs, submitted_by, hints, status)
-VALUES (%s, %s, %s, %s, %s, %s)
+INSERT INTO capture_queue (kind, payload, blob_refs, submitted_by, hints, status, acl)
+VALUES (%s, %s, %s, %s, %s, %s, %s)
 RETURNING id, status, created_at
 """
 
@@ -180,19 +181,25 @@ def _item(row) -> dict:
 
 # ── write path ────────────────────────────────────────────────────────────────────────────────
 def submit(conn, evidence, *, kind: str, material: str, hints: dict | None,
-           submitted_by: str, extra_blob_refs: tuple = ()) -> dict:
+           submitted_by: str, acl: list[str] | None = None,
+           extra_blob_refs: tuple = ()) -> dict:
     """Archive the material and enqueue it, in that order — validate → blob → row.
 
     `submitted_by` is the caller's RESOLVED identity, supplied by the service layer; this function
-    has no way to learn an identity from the input. `extra_blob_refs` (operator CLIs only) append
-    AFTER the material's own blob, so `blob_refs[0]` stays the text every reader assumes.
+    has no way to learn an identity from the input. `acl` is the same shape of fact one layer up:
+    the DOOR's resolved audience decision (ADR 045 D2), already checked against the submitter's own
+    groups by whoever called — `None` is open, and no caller-supplied value reaches here unchecked
+    because `schema.reject_server_owned_arguments` refuses `acl` as an argument at every door.
+    `extra_blob_refs` (operator CLIs only) append AFTER the material's own blob, so `blob_refs[0]`
+    stays the text every reader assumes.
     """
     submission = schema.prepare_submission(kind, material, hints)
     key = evidence.put(submission.material_bytes)
     blob_refs = [key, *extra_blob_refs]
     with conn.cursor() as cur:
         cur.execute(_INSERT, (submission.kind, Jsonb(submission.payload), blob_refs, submitted_by,
-                              Jsonb(submission.hints), schema.QUEUED))
+                              Jsonb(submission.hints), schema.QUEUED,
+                              list(acl) if acl else None))
         submission_id, status, created_at = cur.fetchone()
     return {
         "id": submission_id,
@@ -203,6 +210,7 @@ def submit(conn, evidence, *, kind: str, material: str, hints: dict | None,
         "content_sha256": submission.digest,
         "bytes": submission.size,
         "flagged_hints": submission.hints["flagged"],
+        "acl": list(acl) if acl else None,
     }
 
 

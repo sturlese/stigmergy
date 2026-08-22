@@ -50,6 +50,30 @@ if [ ! -f "$STIGMERGY_REPO/ops/identities.json" ]; then
   exit 2
 fi
 
+# The roster must parse under the grammar the SERVER will read it with, before the image that
+# reads it ships. Since ADR 045 D7 there is one value shape, and a leftover `"*"` invalidates the
+# WHOLE file rather than one entry — so deploying ahead of the roster rewrite is a total 401
+# outage, not a partial one. Same posture as the missing-file check above: exit 2, with the
+# parser's own sentence, which names the line to write instead.
+for ops_file in identities slack-channels; do
+  src="$STIGMERGY_REPO/ops/$ops_file.json"
+  [ -f "$src" ] || continue
+  if ! .venv/bin/python -c "
+import pathlib, sys
+from stigmergy.server.errors import IdentityError
+from stigmergy.server.identity import group_map_from_text
+try:
+    group_map_from_text(pathlib.Path(sys.argv[1]).read_text(), origin=sys.argv[1],
+                        subject=sys.argv[2])
+except IdentityError as ex:
+    print(f'deploy: {ex}', file=sys.stderr)
+    raise SystemExit(1)
+" "$src" "${ops_file%s}"; then
+    echo "deploy: refusing to bake an ops file the server would refuse to read" >&2
+    exit 2
+  fi
+done
+
 # Clear what this script writes, and NOTHING else — never the directory itself. `deploy/` also
 # holds tracked files this script knows nothing about, and the next one added re-opens the wound
 # if the delete is by directory rather than by name.

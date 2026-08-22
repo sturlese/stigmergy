@@ -315,26 +315,47 @@ def _restamp(text: str, strip_keys, stamped_lines: list[str]) -> str:
 
 def stamp_server_fields(text: str, *, submitted_by: str,
                         acl: list[str] | None, as_of: str, entity: list[str] = ()) -> str:
-    """Rewrite a page's frontmatter so every server-owned field is the SERVER's value. A falsy `acl`
-    omits the field — the page contract's spelling of "open". `entity` is ALWAYS written, since
-    `entity: []` is itself the company-wide declaration and must differ from no line at all."""
+    """Rewrite a page's frontmatter so every server-owned field is the SERVER's value.
+
+    `acl is None` omits the field — the page contract's spelling of "open". An EMPTY LIST is a
+    value, not an absence, and is written as `acl: []`: that is the corpus-wide spelling of
+    "nobody" (`server.acl.visible`), and collapsing it to "open" is precisely the two-dialect
+    defect ADR 045 D9 exists to end — the librarian's old resolver did exactly that, so the one
+    spelling `ops/acl.json` used to restrict meant its opposite once stamped. Nothing derives `[]`
+    today (a door with no groups files open, and stores `None`), which is why this is written as a
+    rule rather than as a branch anybody exercises.
+
+    `entity` is ALWAYS written, since `entity: []` is itself the company-wide declaration and must
+    differ from no line at all.
+    """
     stamped = [
         f"status: {FILED_STATUS}",
         f"as_of: {as_of}",
         f"submitted_by: {submitted_by}",
         f"entity: {_yaml_list(entity)}",
     ]
-    if acl:
+    if acl is not None:
         stamped.append(f"acl: {_yaml_list(acl)}")
     return _restamp(text, set(SERVER_OWNED_KEYS), stamped)
 
 
 def stamp_source_fields(text: str, *, submitted_by: str, as_of: str,
                         content_hash: str, extracted_at: str, tier: str = "1",
-                        page_id: str = "") -> str:
+                        page_id: str = "", acl: list[str] | None = None) -> str:
     """`stamp_server_fields`'s sibling for a `sources/` page. `content_hash` is recomputed from the
     bytes this run verified, so the page's claim and the evidence-store key cannot disagree.
-    `entity`/`acl` are absent by contract: a source page is provenance, not anchored."""
+
+    `entity` stays absent by contract: a source page is provenance, not anchored — it is a record
+    of an event and has no aboutness to declare.
+
+    **`acl` does NOT.** A provenance page carried no audience while the label was resolved from a
+    page's own path, and a meeting page listing its decision set was the leak that argument
+    produced: the distilled pages were labelled and the page naming them all was not. Under
+    ADR 045 D2 the label belongs to the CAPTURE, so every page it writes carries the same one, and
+    a source is the origin of that label rather than an exception to it — a source does not
+    restrict itself, it restricts what is distilled from it. Same dialect as everywhere:
+    `None` omits the line, `[]` is written and means nobody.
+    """
     stamped = [
         f"status: {FILED_STATUS}",
         f"as_of: {as_of}",
@@ -343,6 +364,8 @@ def stamp_source_fields(text: str, *, submitted_by: str, as_of: str,
         f'extracted_at: "{extracted_at}"',
         f"tier: {tier}",
     ]
+    if acl is not None:
+        stamped.append(f"acl: {_yaml_list(acl)}")
     if page_id:
         stamped.append(f'id: "{page_id}"')
     return _restamp(text, set(SERVER_OWNED_KEYS) | {"content_hash", "extracted_at", "tier"},
